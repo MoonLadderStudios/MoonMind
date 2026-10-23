@@ -45,17 +45,16 @@ def test_migration_chains_off_current_head() -> None:
 
 
 def test_migration_graph_keeps_single_head_at_new_revision() -> None:
+    migration = _migration()
     config = Config("api_service/migrations/alembic.ini")
     config.set_main_option("script_location", "api_service/migrations")
     script = ScriptDirectory.from_config(config)
-    # PR #4461 merged the two 386 branches (machine-capacity drain and the
-    # single-user conversion ledger) into 387_merge_386_heads_4461; the GitHub
-    # event delivery receipts migration (#3967) extended that chain, and the
-    # OpenCode validation repair (#4526), the account-free preset catalog
-    # (#4350), the legacy GitHub credential mapping (#4023), the runtime
-    # evidence retention backfill, the default-connection grants, and the
-    # remediation link target and artifact recovery extend the single head.
-    assert tuple(script.get_heads()) == ("398_instance_settings",)
+    # Later migrations can extend the chain without changing the retirement.
+    heads = script.get_heads()
+    assert len(heads) == 1
+    assert migration.revision in {
+        revision.revision for revision in script.walk_revisions(head=heads[0])
+    }
     assert script.get_revision("398_instance_settings").down_revision == (
         "397_instance_preset_catalog"
     )

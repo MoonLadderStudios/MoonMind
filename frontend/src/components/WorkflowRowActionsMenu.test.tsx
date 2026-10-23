@@ -252,8 +252,10 @@ describe('WorkflowRowActionsMenu', () => {
     await waitFor(() => expect(menu.contains(document.activeElement)).toBe(true));
     expect(document.activeElement).not.toBe(screen.getByRole('menuitem', { name: 'Force cancel' }));
     expect(document.activeElement?.className ?? '').not.toContain('danger');
-    expect(document.activeElement).toBe(
-      screen.getByRole('menuitem', { name: /^Unavailable \(\d+\)$/ }),
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole('menuitem', { name: /^Unavailable \(\d+\)$/ }),
+      ),
     );
   });
 

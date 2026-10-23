@@ -1,8 +1,7 @@
 """MoonLadderStudios/MoonMind#4356: seed-free first-run boundaries (unit).
 
 Narrow production boundaries of a fresh local instance: an empty schema plus
-ordinary API startup seeds no User or UserProfile rows, claiming the default
-administrator requires explicit operator authorization, and omitted recurring
+ordinary API startup creates no account tables, and omitted recurring
 policy inputs behave like their documented defaults.
 
 The integrated fresh and eligible-upgrade journeys (submit, observe, cancel,
@@ -12,14 +11,13 @@ default Compose install in ``tools/first_run_journey_3938.sh``.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.db.models import Base, User, UserProfile
+from api_service.db.models import Base
 
 
 def _factory(tmp_path, name="first_run_4356.db"):
@@ -42,39 +40,17 @@ async def test_fresh_schema_and_startup_seed_no_person(tmp_path) -> None:
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-        with patch("api_service.main._initialize_oidc_provider"):
+        with patch("api_service.main._initialize_operator_admission"):
             await startup_event()
         async with factory() as session:
-            users = (await session.execute(select(func.count(User.id)))).scalar()
-            profiles = (
-                await session.execute(select(func.count(UserProfile.id)))
-            ).scalar()
+            from sqlalchemy import inspect
+            connection = await session.connection()
+            tables = await connection.run_sync(lambda c: inspect(c).get_table_names())
     finally:
         await engine.dispose()
         db_base.DATABASE_URL, db_base.engine, db_base.async_session_maker = original
-    assert users == 0
-    assert profiles == 0
-
-
-@pytest.mark.asyncio
-async def test_default_admin_claim_refuses_without_operator_authorization(
-    tmp_path,
-) -> None:
-    """Whoever reaches setup first cannot claim the default administrator."""
-    from api_service.auth import (
-        DefaultAdminClaimAuthorizationError,
-        UserManager,
-        claim_default_admin,
-    )
-
-    engine, factory = _factory(tmp_path)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    async with factory() as session:
-        with pytest.raises(DefaultAdminClaimAuthorizationError):
-            await claim_default_admin(
-                session, UserManager(MagicMock()), operator_authorized=False
-            )
+    assert "user" not in tables
+    assert "user_profile" not in tables
 
 
 def test_recurring_policy_omitted_inputs_match_documented_defaults() -> None:

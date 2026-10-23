@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -14,7 +14,7 @@ from api_service.api.execution_fanout import resolve_execution_request_authority
 from api_service.api.routers.executions import (
     _expand_goal_preset_for_workflow_submission,
 )
-from api_service.db.models import Base, Preset, PresetRecent, User
+from api_service.db.models import Base, Preset, PresetRecent
 from api_service.services.presets.catalog import PresetCatalogService
 from moonmind.config.settings import settings
 from moonmind.security.execution_fanout_capabilities import (
@@ -130,6 +130,12 @@ async def test_child_preset_expansion_preserves_authority_and_valid_recent_attri
             assert authority.principal.scopes == frozenset(
                 {SCOPE_CREATE_CHILD, SCOPE_INHERIT_RUNTIME}
             )
-            assert (await session.execute(select(User))).scalars().all() == []
+            # Child expansion must not recreate retired account tables.
+            connection = await session.connection()
+            table_names = await connection.run_sync(
+                lambda conn: inspect(conn).get_table_names()
+            )
+            assert "user" not in table_names
+            assert "user_profile" not in table_names
     finally:
         await engine.dispose()

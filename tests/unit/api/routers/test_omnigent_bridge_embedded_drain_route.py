@@ -82,7 +82,7 @@ def test_drain_route_is_authenticated_mode_neutral_and_read_only() -> None:
     tree = _parse_router()
     fn = _handler_def(tree)
     referenced = {node.id for node in ast.walk(fn) if isinstance(node, ast.Name)}
-    assert "get_current_user" in referenced
+    assert "get_instance_access" in referenced
     assert "_require_bridge_enabled" in referenced
     for forbidden in (
         "_require_proxy_mode",
@@ -199,7 +199,6 @@ print("embedded-transport-drain-route: OK")
 
 
 def test_drain_route_reports_live_disposition_without_launch_modules() -> None:
-    pytest.importorskip("fastapi_users")
     pytest.importorskip("aiohttp")
     completed = subprocess.run(
         [sys.executable, "-c", _ISOLATION_PROBE],

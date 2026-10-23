@@ -71,13 +71,12 @@ from api_service.api.execution_principal import (
     execution_principal_dependency,
     resolve_execution_principal,
 )
+from api_service.api.instance_access import is_instance_operator
 from api_service.api.routers.temporal_artifacts import _resolve_recovery_principal
 from api_service.api.schemas import CreateJobRequest
 from api_service.auth_providers import (
-    get_current_user,
     get_instance_access,
     get_instance_access_optional,
-    get_instance_operator_access,
     instance_operator_principal,
 )
 from api_service.core import sync as execution_sync
@@ -94,7 +93,6 @@ from api_service.db.models import (
     TemporalExecutionCanonicalRecord,
     TemporalExecutionCloseStatus,
     TemporalExecutionRecord,
-    User,
     WorkflowCheckpointBranch,
     WorkflowCheckpointBranchArtifact,
     WorkflowCheckpointBranchOperation,
@@ -151,10 +149,9 @@ from moonmind.omnigent.workspace_sources import (
 )
 from moonmind.runtime_intent import (
     RuntimeIntentValidationError,
-    validate_runtime_tier_intent,
     has_profile_selector,
+    validate_runtime_tier_intent,
 )
-from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 from moonmind.schemas.checkpoint_branch_models import (
     CheckpointBranchApiSourceModel,
@@ -226,6 +223,7 @@ from moonmind.schemas.temporal_models import (
     WorkflowInputSnapshotDescriptorModel,
     normalize_dependency_ids,
 )
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.services.control_stop_continuation import admit_control_stop_continuation
 from moonmind.services.skill_step_inputs import validate_skill_step_inputs
 from moonmind.statuses.compat import (
@@ -246,7 +244,6 @@ from moonmind.workflows.executions.control_stop_continuation import (
     ControlStopContinuationError,
 )
 from moonmind.workflows.executions.execution_contract import (
-    workflow_requires_agent,
     WorkflowContractError,
     WorkflowInputAttachmentRef,
     WorkflowSkillSelectors,
@@ -261,6 +258,7 @@ from moonmind.workflows.executions.execution_contract import (
     strip_absent_vector_fields,
     validate_publish_mode_repository_authority,
     validate_workflow_runtime_targets,
+    workflow_requires_agent,
 )
 from moonmind.workflows.executions.model_resolver import (
     RequestedModelTierUnavailableError,
@@ -1130,7 +1128,7 @@ def _new_checkpoint_branch_turn_id() -> str:
 async def _instruction_identity(
     *,
     session: AsyncSession,
-    user: User,
+    user: OperatorAdmission,
     instructions: Any,
     branch_turn_id: str,
 ) -> tuple[str, str]:
@@ -2601,16 +2599,16 @@ async def get_temporal_client(
     return await adapter.get_client()
 
 
-def _is_execution_admin(user: User | None) -> bool:
-    return bool(user and getattr(user, "is_superuser", False))
+def _is_execution_admin(user: OperatorAdmission | None) -> bool:
+    return is_instance_operator(user)
 
 
-def _owner_id(user: User | OperatorAdmission | None) -> str | None:
+def _owner_id(user: OperatorAdmission | None) -> str | None:
     value = getattr(user, "id", None)
     return str(value) if value is not None else None
 
 
-def _execution_principal(user: User | OperatorAdmission | None) -> str:
+def _execution_principal(user: OperatorAdmission | None) -> str:
     """Single-user (#4351) execution principal with instance fallback.
 
     Permission admission shares the artifact routes' instance-operator scope,
@@ -2624,7 +2622,7 @@ def _execution_principal(user: User | OperatorAdmission | None) -> str:
 
 def _effective_execution_owner_scope(
     *,
-    user: User,
+    user: OperatorAdmission,
     owner_type: str | None,
     owner_id: str | None,
 ) -> tuple[str | None, str | None]:
@@ -2633,7 +2631,7 @@ def _effective_execution_owner_scope(
     # owner filters pass through as provenance selectors, never 403 gates.
     # State, source, and approval validation stay at their owning
     # boundaries. ``user`` remains accepted as the shared admission
-    # boundary (get_current_user).
+    # boundary (get_instance_access).
     return owner_type, owner_id
 
 
@@ -4812,7 +4810,10 @@ def _serialize_execution_list_item(record) -> ExecutionListItemModel:
 
 
 def _serialize_execution(
-    record, *, include_artifact_refs: bool = True, user: Optional["User"] = None
+    record,
+    *,
+    include_artifact_refs: bool = True,
+    user: Optional["OperatorAdmission"] = None,
 ) -> ExecutionModel:
     temporal_status = "running"
     close_status = _enum_value(record.close_status)
@@ -5831,7 +5832,7 @@ def _execution_recurrence_provenance(
 
 def _execution_record_visible_to_user(
     record: TemporalExecutionRecord,
-    user: User,
+    user: OperatorAdmission,
 ) -> bool:
     # Single-user (#4351): every instance execution is visible to the
     # admitted operator without a human-owner lookup. Record owner fields
@@ -5845,7 +5846,7 @@ async def _append_linked_continuations(
     hydrated: list[ExecutionRelatedRunModel],
     *,
     session: AsyncSession,
-    user: User | None,
+    user: OperatorAdmission | None,
 ) -> None:
     """Surface the source-side view of linked continuations (#3641 §6).
 
@@ -5905,7 +5906,7 @@ async def _hydrate_related_run_metadata(
     execution: ExecutionModel,
     *,
     session: AsyncSession | None,
-    user: User | None = None,
+    user: OperatorAdmission | None = None,
 ) -> ExecutionModel:
     if session is None:
         return execution
@@ -6466,7 +6467,7 @@ async def _hydrate_execution_report_projection(
     execution: ExecutionModel,
     *,
     session: AsyncSession | None,
-    user: User,
+    user: OperatorAdmission,
 ) -> ExecutionModel:
     if session is None or execution.entry != "user_workflow" or not execution.run_id:
         return execution
@@ -7632,7 +7633,7 @@ def _degraded_step_execution_projection_payload(
 
 
 def _build_action_capabilities(
-    record, *, user: User | None = None
+    record, *, user: OperatorAdmission | None = None
 ) -> ExecutionActionCapabilityModel:
     raw_state = str(record.state.value).strip().lower()
     workflow_type_value = _enum_value(getattr(record, "workflow_type", None))
@@ -9988,98 +9989,6 @@ def _tool_payload_name(payload: Mapping[str, Any] | None) -> str:
     return str(payload.get("name") or payload.get("id") or "").strip()
 
 
-def _normalize_user_role_name(value: Any) -> str:
-    if isinstance(value, Mapping):
-        value = value.get("name") or value.get("role") or value.get("id")
-    elif value is not None and not isinstance(value, str):
-        value = (
-            getattr(value, "name", None)
-            or getattr(value, "role", None)
-            or getattr(value, "id", None)
-            or value
-        )
-    return str(value or "").strip().lower()
-
-
-def _role_values_from_claims(claims: Any) -> list[Any]:
-    if not isinstance(claims, Mapping):
-        return []
-
-    values: list[Any] = []
-    for key in ("roles", "role_names", "groups", "role"):
-        value = claims.get(key)
-        if isinstance(value, (list, tuple, set, frozenset)):
-            values.extend(value)
-        elif value is not None:
-            values.append(value)
-
-    realm_access = claims.get("realm_access")
-    if isinstance(realm_access, Mapping):
-        realm_roles = realm_access.get("roles")
-        if isinstance(realm_roles, (list, tuple, set, frozenset)):
-            values.extend(realm_roles)
-
-    resource_access = claims.get("resource_access")
-    if isinstance(resource_access, Mapping):
-        for resource_claims in resource_access.values():
-            if not isinstance(resource_claims, Mapping):
-                continue
-            resource_roles = resource_claims.get("roles")
-            if isinstance(resource_roles, (list, tuple, set, frozenset)):
-                values.extend(resource_roles)
-
-    return values
-
-
-def _effective_user_roles(user: Any, request: Any | None = None) -> set[str]:
-    roles: set[str] = set()
-    for attr_name in ("roles", "role_names", "groups"):
-        raw = getattr(user, attr_name, None)
-        if isinstance(raw, str):
-            roles.update(
-                role for role in (_normalize_user_role_name(raw),) if role
-            )
-        elif isinstance(raw, (list, tuple, set, frozenset)):
-            roles.update(
-                role
-                for item in raw
-                for role in (_normalize_user_role_name(item),)
-                if role
-            )
-    role = _normalize_user_role_name(getattr(user, "role", None))
-    if role:
-        roles.add(role)
-    for claim_attr in ("claims", "oidc_claims", "token_claims"):
-        roles.update(
-            role
-            for value in _role_values_from_claims(getattr(user, claim_attr, None))
-            for role in (_normalize_user_role_name(value),)
-            if role
-        )
-    if request is not None:
-        request_state = getattr(request, "state", None)
-        for claim_attr in ("claims", "oidc_claims", "token_claims"):
-            roles.update(
-                role
-                for value in _role_values_from_claims(
-                    getattr(request_state, claim_attr, None)
-                )
-                for role in (_normalize_user_role_name(value),)
-                if role
-            )
-        scope = getattr(request, "scope", None)
-        if isinstance(scope, Mapping):
-            roles.update(
-                role
-                for value in _role_values_from_claims(scope.get("claims"))
-                for role in (_normalize_user_role_name(value),)
-                if role
-            )
-    if bool(getattr(user, "is_superuser", False)):
-        roles.add("admin")
-    return roles
-
-
 _PR_RESOLVER_SELECTOR_ERROR = (
     "pr-resolver requires an explicit pull request selector. In the dashboard, "
     "select the pr-resolver Skill and fill in Pull request with a PR number, PR "
@@ -10459,7 +10368,7 @@ async def _validate_model_selection_submission(
     payload: Mapping[str, Any],
     *,
     session: AsyncSession,
-    user: User,
+    user: OperatorAdmission,
     saved_payload: Mapping[str, Any] | None = None,
 ) -> None:
     from moonmind.runtime_intent import validate_model_selection_submission
@@ -10518,7 +10427,7 @@ def _snapshot_workflow_from_artifact_payload(
 async def _exact_rerun_parameters_from_snapshot(
     *,
     session: AsyncSession,
-    user: User,
+    user: OperatorAdmission,
     record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
 ) -> dict[str, Any] | None:
     """Restore exact task authority before a terminal execution is rerun."""
@@ -10541,7 +10450,7 @@ async def _exact_rerun_parameters_from_snapshot(
         artifact_service = get_temporal_artifact_service(session)
         _artifact, body = await artifact_service.read(
             artifact_id=artifact_id,
-            principal=str(getattr(user, "id", "") or "system"),
+            principal=_execution_principal(user),
             allow_restricted_raw=True,
         )
         decoded = json.loads(body.decode("utf-8"))
@@ -10630,7 +10539,7 @@ async def _exact_rerun_parameters_from_snapshot(
 async def _snapshot_source_payload_from_parameters_and_artifact(
     *,
     session: AsyncSession,
-    user: User,
+    user: OperatorAdmission,
     record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
     parameters: Mapping[str, Any],
     input_artifact_ref: str | None = None,
@@ -10761,7 +10670,7 @@ async def _persist_original_workflow_input_snapshot(
     *,
     session: AsyncSession,
     record,
-    user: User,
+    user: OperatorAdmission,
     payload: Mapping[str, Any],
     task_payload: Mapping[str, Any],
     attachment_refs: list[dict[str, Any]] | None = None,
@@ -10906,7 +10815,7 @@ async def _persist_original_workflow_input_snapshot_from_parameters(
     *,
     session: AsyncSession,
     record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
-    user: User,
+    user: OperatorAdmission,
     parameters: Mapping[str, Any],
     attachment_refs: list[dict[str, Any]] | None = None,
     source_kind: str,
@@ -11553,7 +11462,7 @@ async def _create_execution_from_workflow_request(
     *,
     request: CreateJobRequest,
     service: TemporalExecutionService,
-    user: User,
+    user: OperatorAdmission,
     session: Any = None,
     principal_context: dict[str, Any] | None = None,
 ) -> ExecutionModel | ScheduleCreatedResponse:
@@ -12702,7 +12611,7 @@ async def _get_owned_execution(
     *,
     service: TemporalExecutionService,
     workflow_id: str,
-    user: User,
+    user: OperatorAdmission,
     include_orphaned_projection: bool = False,
     use_cancel_target_fallback: bool = False,
     allow_historical: bool = False,
@@ -13304,7 +13213,7 @@ async def _handle_recurring_schedule(
     *,
     schedule: ScheduleParameters,
     request_payload: dict[str, Any],
-    user: User,
+    user: OperatorAdmission,
     session: Any,
 ) -> ScheduleCreatedResponse:
     """Delegate recurring schedule creation to RecurringWorkflowsService."""
@@ -13315,7 +13224,7 @@ async def _handle_recurring_schedule(
 
     # Single-user (#4351): no human-owner gate. The admitted operator
     # authors every scope; scope persists as history-compatible provenance.
-    # The shared admission boundary (get_current_user) owns operator access.
+    # The shared admission boundary (get_instance_access) owns operator access.
     scope_type = schedule.scope_type or "personal"
     svc = RecurringWorkflowsService(session)
     runtime_metadata = await _resolve_recurring_runtime_metadata(
@@ -13396,7 +13305,7 @@ async def _resolve_schedule_routing(
     schedule: ScheduleParameters | None,
     *,
     request_payload: dict[str, Any],
-    user: User,
+    user: OperatorAdmission,
     session: Any | None,
 ) -> _ScheduleRouteResult:
     """Shared schedule routing for both Temporal and task-shaped requests.
@@ -13455,7 +13364,7 @@ async def create_remediation_execution(
     payload: dict[str, Any] = Body(default_factory=dict),
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     _submit_enabled: None = Depends(_ensure_submit_enabled),
     principal_context: dict[str, Any] = Depends(execution_principal_dependency),
 ) -> ExecutionModel | ScheduleCreatedResponse:
@@ -14224,7 +14133,7 @@ def _remediation_item_error(exc: Exception) -> tuple[str, str]:
 async def list_remediation_collection(
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> RemediationCollectionResponseModel:
     """List only remediation relationships whose two executions are visible."""
     # describe_execution commits and rolls back the request's one session, and
@@ -14311,7 +14220,7 @@ async def list_execution_remediations(
     direction: str = Query("inbound"),
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> RemediationLinksResponseModel:
     if direction not in {"inbound", "outbound"}:
         raise HTTPException(
@@ -14349,9 +14258,7 @@ async def list_execution_remediations(
             _serialize_remediation_link_summary(
                 link,
                 actor=str(getattr(user, "email", "") or "").strip() or None,
-                actor_can_approve_high_risk=bool(
-                    getattr(user, "is_superuser", False)
-                ),
+                actor_can_approve_high_risk=bool(is_instance_operator(user)),
             )
             for link in links
         ],
@@ -14368,7 +14275,7 @@ async def create_remediation_checkpoint_branch(
     payload: RemediationCheckpointBranchRepairRequest,
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     temporal_client_adapter: TemporalClientAdapter = Depends(
         get_temporal_client_adapter
     ),
@@ -14684,7 +14591,7 @@ async def record_remediation_approval_decision(
     request_id: str,
     payload: RemediationApprovalDecisionRequest,
     service: TemporalExecutionService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> RemediationApprovalDecisionResponse:
     if payload.decision not in {"approved", "rejected"}:
         raise HTTPException(
@@ -14702,7 +14609,7 @@ async def record_remediation_approval_decision(
             decision=payload.decision,
             comment=payload.comment,
             actor=getattr(user, "email", None) or str(getattr(user, "id", "")),
-            actor_can_approve_high_risk=bool(getattr(user, "is_superuser", False)),
+            actor_can_approve_high_risk=is_instance_operator(user),
         )
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
@@ -14962,12 +14869,16 @@ def _raw_request_selects_omnigent(
     )
 
 
-@router.post("", response_model=ExecutionModel | ScheduleCreatedResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=ExecutionModel | ScheduleCreatedResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_execution(
     payload: dict[str, Any] = Body(...),
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User | OperatorAdmission | None = Depends(get_instance_access_optional),
+    user: OperatorAdmission | None = Depends(get_instance_access_optional),
     _submit_enabled: None = Depends(_ensure_submit_enabled),
     principal_context: dict[str, Any] = Depends(execution_principal_dependency),
     authorization: str | None = Header(None, alias="Authorization"),
@@ -14987,9 +14898,12 @@ async def create_execution(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
                 "code": "temporal_submit_disabled",
-                "message": "Temporal workflow submission is disabled (temporal_dashboard.submit_enabled=False). "
-                "The legacy queue execution substrate is no longer supported. "
-                "Enable Temporal submission to proceed.",
+                "message": (
+                    "Temporal workflow submission is disabled "
+                    "(temporal_dashboard.submit_enabled=False). "
+                    "The legacy queue execution substrate is no longer supported. "
+                    "Enable Temporal submission to proceed."
+                ),
             },
         )
 
@@ -15321,7 +15235,7 @@ async def list_executions(
     next_page_token: Optional[str] = Query(None, alias="nextPageToken"),
     source: Optional[str] = Query(None),
     service: TemporalExecutionService = Depends(_get_service),
-    user: User | OperatorAdmission = Depends(get_instance_access),
+    user: OperatorAdmission = Depends(get_instance_access),
     session: AsyncSession = Depends(get_async_session),
     temporal_client: Client = Depends(get_temporal_client),
 ) -> ExecutionListResponse:
@@ -15750,7 +15664,7 @@ async def get_execution_metrics(
         ge=1,
         le=_EXECUTION_METRICS_SAMPLE_SIZE_LIMIT,
     ),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     session: AsyncSession = Depends(get_async_session),
     temporal_client: Client = Depends(get_temporal_client),
 ) -> ExecutionMetricsResponse:
@@ -16025,7 +15939,7 @@ async def list_execution_facets(
     ),
     next_page_token: Optional[str] = Query(None, alias="nextPageToken"),
     source: Optional[str] = Query(None),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     temporal_client: Client = Depends(get_temporal_client),
 ) -> ExecutionFacetResponse:
     if source not in {None, _TEMPORAL_SOURCE}:
@@ -16245,7 +16159,7 @@ async def describe_execution_step_executions(
     logical_step_id: str,
     response: Response,
     service: TemporalExecutionService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     session: AsyncSession = Depends(get_async_session),
     temporal_client: Client = Depends(get_temporal_client),
 ) -> StepExecutionListModel:
@@ -16281,7 +16195,7 @@ async def describe_execution_step_executions(
     )
     row = _find_step_ledger_row(ledger, logical_step_id)
     artifact_service = get_temporal_artifact_service(session)
-    principal = str(getattr(user, "id", "") or "system")
+    principal = _execution_principal(user)
     manifest_refs = _step_execution_manifest_refs(row)
     manifest_results = await asyncio.gather(
         *(
@@ -16337,7 +16251,7 @@ async def describe_execution_step_execution(
     execution_ordinal: int,
     response: Response,
     service: TemporalExecutionService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     session: AsyncSession = Depends(get_async_session),
     temporal_client: Client = Depends(get_temporal_client),
 ) -> StepExecutionDetailModel:
@@ -16381,7 +16295,7 @@ async def describe_execution_step_execution(
     )
     row = _find_step_ledger_row(ledger, logical_step_id)
     artifact_service = get_temporal_artifact_service(session)
-    principal = str(getattr(user, "id", "") or "system")
+    principal = _execution_principal(user)
     manifest_refs = _step_execution_manifest_refs(row)
     manifest_results = await asyncio.gather(
         *(
@@ -16442,7 +16356,7 @@ async def describe_execution_steps(
     workflow_id: str,
     response: Response,
     service: TemporalExecutionService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     session: AsyncSession = Depends(get_async_session),
     temporal_client: Client = Depends(get_temporal_client),
 ) -> StepLedgerSnapshotModel:
@@ -16496,13 +16410,16 @@ async def describe_execution_steps(
 async def list_execution_checkpoints(
     workflow_id: str,
     service: TemporalExecutionService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     temporal_client_adapter: TemporalClientAdapter = Depends(
         get_temporal_client_adapter
     ),
 ) -> CheckpointListResponse:
     record = await _get_owned_execution(
-        service=service, workflow_id=workflow_id, user=user, allow_historical=True
+        service=service,
+        workflow_id=workflow_id,
+        user=user,
+        allow_historical=True,
     )
     return CheckpointListResponse(
         items=await _load_execution_checkpoint_summaries(
@@ -16521,7 +16438,7 @@ async def list_checkpoint_branches(
     active: bool = Query(True),
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> CheckpointBranchListResponse:
     await _get_owned_execution(
         service=service,
@@ -16552,7 +16469,7 @@ async def create_checkpoint_branch(
     payload: CheckpointBranchCreateRequest,
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     temporal_client_adapter: TemporalClientAdapter = Depends(
         get_temporal_client_adapter
     ),
@@ -16751,7 +16668,7 @@ async def describe_checkpoint_branch(
     branch_id: str,
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> CheckpointBranchModel:
     await _get_owned_execution(
         service=service,
@@ -16776,7 +16693,7 @@ async def record_checkpoint_branch_verification(
     payload: CheckpointBranchVerificationRequest,
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> CheckpointBranchModel:
     from api_service.services.checkpoint_branch_service import CheckpointBranchService
 
@@ -16818,7 +16735,7 @@ async def list_checkpoint_branch_turns(
     branch_id: str,
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> CheckpointBranchTurnListResponse:
     await _get_owned_execution(
         service=service,
@@ -16848,7 +16765,7 @@ async def launch_checkpoint_branch_turn(
     payload: CheckpointBranchTurnLaunchRequest,
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> CheckpointBranchTurnModel:
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
     request_digest = _scoped_operation_digest(
@@ -17000,7 +16917,7 @@ async def _record_branch_turn_operation(
     payload: CheckpointBranchContinueRequest,
     operation_name: str,
     session: AsyncSession,
-    user: User,
+    user: OperatorAdmission,
     parent_turn_id: str | None = None,
 ) -> CheckpointBranchTurnModel:
     _validate_branch_policy(
@@ -17148,7 +17065,7 @@ async def continue_checkpoint_branch(
     payload: CheckpointBranchContinueRequest,
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> CheckpointBranchTurnModel:
     record = await _get_owned_execution(
         service=service, workflow_id=workflow_id, user=user
@@ -17236,7 +17153,7 @@ async def fork_checkpoint_branch(
     payload: CheckpointBranchForkRequest,
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> CheckpointBranchModel:
     record = await _get_owned_execution(
         service=service, workflow_id=workflow_id, user=user
@@ -17459,7 +17376,7 @@ async def preview_candidate_comparison(
     payload: CheckpointBranchComparisonPreviewRequest,
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> CheckpointBranchComparisonPreviewResponse:
     """Preview comparison-requested candidate generation without side effects.
 
@@ -17606,7 +17523,7 @@ async def compare_checkpoint_branches(
     rubric_id: str = Query(default="", alias="rubricId", max_length=200),
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> CheckpointBranchCompareResponse:
     await _get_owned_execution(
         service=service,
@@ -17730,7 +17647,7 @@ async def promote_checkpoint_branch(
     payload: CheckpointBranchPromoteRequest,
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> CheckpointBranchModel:
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
     branch = await _load_checkpoint_branch(
@@ -17996,7 +17913,7 @@ async def archive_checkpoint_branch(
     payload: CheckpointBranchArchiveRequest,
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> CheckpointBranchModel:
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
     branch = await _load_checkpoint_branch(
@@ -18049,7 +17966,7 @@ async def publish_checkpoint_branch(
     payload: CheckpointBranchPublishRequest,
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> CheckpointBranchModel:
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
     branch = await _load_checkpoint_branch(
@@ -18117,7 +18034,7 @@ async def describe_execution(
     response: Response,
     source: Optional[str] = Query(None),
     service: TemporalExecutionService = Depends(_get_service),
-    user: User | OperatorAdmission | None = Depends(get_instance_access_optional),
+    user: OperatorAdmission | None = Depends(get_instance_access_optional),
     session: AsyncSession = Depends(get_async_session),
     temporal_client: Client = Depends(get_temporal_client),
     authorization: str | None = Header(None, alias="Authorization"),
@@ -18302,7 +18219,7 @@ async def resolve_workflow_chat_binding(
     workflow_id: str,
     response: Response,
     service: TemporalExecutionService = Depends(_get_service),
-    user: User | OperatorAdmission = Depends(get_instance_operator_access),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> WorkflowChatBinding:
     """Resolve the authorized, browser-safe native Workflow Chat binding.
 
@@ -18637,7 +18554,7 @@ def _captured_evidence_items(
 async def get_workflow_captured_evidence(
     workflow_id: str,
     service: TemporalExecutionService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> CapturedEvidenceModel:
     """Return the immutable MoonMind evidence captured for a Workflow (§10, #3641).
 
@@ -18678,8 +18595,10 @@ async def download_workflow_captured_evidence(
     ref: str = Query(..., alias="ref"),
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
-    recovery_principal: Annotated[str | None, Depends(_resolve_recovery_principal)] = None,
+    user: OperatorAdmission = Depends(get_instance_access),
+    recovery_principal: Annotated[
+        str | None, Depends(_resolve_recovery_principal)
+    ] = None,
 ) -> Response:
     """Stream one authorized MoonMind captured-evidence artifact (§10, #3641).
 
@@ -18745,7 +18664,7 @@ async def download_workflow_captured_evidence(
         try:
             _artifact, payload = await artifact_service.read(
                 artifact_id=artifact_id,
-                principal=str(getattr(user, "id", "") or "system"),
+                principal=_execution_principal(user),
                 allow_restricted_raw=True,
                 recovery_principal=recovery_principal,
             )
@@ -18832,7 +18751,7 @@ async def _read_continuation_evidence_bytes(
 async def _materialize_continuation_source_attachments(
     *,
     session: AsyncSession,
-    user: User,
+    user: OperatorAdmission,
     refs: list[str],
     recovery_principal: str | None = None,
 ) -> list[dict[str, Any]]:
@@ -18852,7 +18771,7 @@ async def _materialize_continuation_source_attachments(
     if not refs:
         return []
     artifact_service = get_temporal_artifact_service(session)
-    principal = str(getattr(user, "id", "") or "system")
+    principal = _execution_principal(user)
     attachments: list[dict[str, Any]] = []
     for ref in refs:
         body = await _read_continuation_evidence_bytes(
@@ -18985,9 +18904,11 @@ async def continue_in_new_workflow(
     payload: ContinueInNewWorkflowRequest,
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     _submit_enabled: None = Depends(_ensure_submit_enabled),
-    recovery_principal: Annotated[str | None, Depends(_resolve_recovery_principal)] = None,
+    recovery_principal: Annotated[
+        str | None, Depends(_resolve_recovery_principal)
+    ] = None,
 ) -> ContinueInNewWorkflowResponse:
     """Create a linked continuation Workflow from a terminal source (#3641 §3-§7).
 
@@ -19088,7 +19009,7 @@ async def continue_in_new_workflow(
             pinned_source_refs=pinned,
             source_logical_step_id=evidence.logical_step_id,
             source_step_execution_id=evidence.step_execution_id,
-            created_by=str(user.id),
+            created_by=instance_operator_principal(),
             bounded_purpose=payload.bounded_purpose,
         )
     except LinkedContinuationConflict as exc:
@@ -19142,7 +19063,8 @@ async def continue_in_new_workflow(
     if admitted is not None:
         if (
             admitted.create_idempotency_key != create_idempotency_key
-            or admitted.owner_id != str(canonical.owner_id or user.id)
+            or admitted.owner_id
+            != str(canonical.owner_id or instance_operator_principal())
             or admitted.owner_type != canonical.owner_type
             or admitted.workflow_type != canonical.workflow_type
         ):
@@ -19277,7 +19199,7 @@ async def continue_in_new_workflow(
     try:
         record = await service.create_execution(
             workflow_type=canonical.workflow_type.value,
-            owner_id=canonical.owner_id or user.id,
+            owner_id=canonical.owner_id or instance_operator_principal(),
             owner_type=canonical.owner_type.value if canonical.owner_type else "user",
             title=payload.title
             or (canonical.memo.get("title") if canonical.memo else None),
@@ -19433,7 +19355,7 @@ async def list_execution_continuations(
     direction: str = Query("outbound"),
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> LinkedContinuationLinksResponseModel:
     """List durable linked-continuation relationships for a Workflow (#3641 §6).
 
@@ -19581,7 +19503,7 @@ async def continue_remediation(
     payload: ContinueRemediationRequest,
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     starter: TemporalControlStopContinuationStarter = Depends(
         get_control_stop_continuation_starter
     ),
@@ -19595,9 +19517,7 @@ async def continue_remediation(
         tags={"outcome": "attempt"},
     )
     source = await _get_owned_execution(
-        service=service,
-        workflow_id=workflow_id,
-        user=user,
+        service=service, workflow_id=workflow_id, user=user
     )
     source_run_id = str(getattr(source, "run_id", "") or "").strip()
     if not source_run_id:
@@ -19677,13 +19597,11 @@ async def update_execution(
     response: Response,
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     _actions_enabled: None = Depends(_ensure_actions_enabled),
 ) -> UpdateExecutionResponse:
     record = await _get_owned_execution(
-        service=service,
-        workflow_id=workflow_id,
-        user=user,
+        service=service, workflow_id=workflow_id, user=user
     )
     is_task_editing_update = payload.update_name in _TASK_EDITING_UPDATE_NAMES
     recorded_plan = (
@@ -19916,7 +19834,7 @@ async def configure_integration_monitoring(
     workflow_id: str,
     payload: ConfigureIntegrationMonitoringRequest,
     service: TemporalExecutionService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> ExecutionModel:
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
 
@@ -19956,7 +19874,7 @@ async def record_integration_poll(
     workflow_id: str,
     payload: PollIntegrationRequest,
     service: TemporalExecutionService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> ExecutionModel:
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
 
@@ -19994,7 +19912,7 @@ async def signal_execution(
     payload: SignalExecutionRequest,
     response: Response,
     service: TemporalExecutionService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     _actions_enabled: None = Depends(_ensure_actions_enabled),
 ) -> ExecutionModel:
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
@@ -20035,7 +19953,7 @@ async def cancel_execution(
     response: Response,
     payload: CancelExecutionRequest | None = None,
     service: TemporalExecutionService = Depends(_get_service),
-    user: User | OperatorAdmission | None = Depends(get_instance_access_optional),
+    user: OperatorAdmission | None = Depends(get_instance_access_optional),
     _actions_enabled: None = Depends(_ensure_actions_enabled),
     authorization: str | None = Header(None, alias="Authorization"),
     execution_fanout: str | None = Header(None, alias=EXECUTION_FANOUT_HEADER),
@@ -20115,10 +20033,12 @@ async def reschedule_execution(
     payload: RescheduleExecutionRequest,
     response: Response,
     service: TemporalExecutionService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     _actions_enabled: None = Depends(_ensure_actions_enabled),
 ) -> ExecutionModel:
-    record = await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    record = await _get_owned_execution(
+        service=service, workflow_id=workflow_id, user=user
+    )
 
     if record.state != MoonMindWorkflowState.SCHEDULED:
         raise HTTPException(
@@ -20192,7 +20112,7 @@ async def rerun_execution(
     response: Response,
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     _submit_enabled: None = Depends(_ensure_submit_enabled),
 ) -> ExecutionModel:
     """Rerun an existing failed/completed workflow with the same parameters.
@@ -20252,7 +20172,7 @@ async def rerun_execution(
     try:
         record = await service.create_execution(
             workflow_type=canonical.workflow_type.value,
-            owner_id=canonical.owner_id or user.id,
+            owner_id=canonical.owner_id or instance_operator_principal(),
             owner_type=canonical.owner_type.value if canonical.owner_type else "user",
             title=canonical.memo.get("title") if canonical.memo else None,
             input_artifact_ref=canonical.input_ref,
@@ -20507,7 +20427,7 @@ async def _admit_saved_work_publication(
     *,
     canonical: TemporalExecutionCanonicalRecord,
     request: SavedWorkPublicationRequest,
-    user: User,
+    user: OperatorAdmission,
     artifact_service: Any,
 ) -> SavedWorkPublicationContract:
     """Verify saved-work ownership and freeze one publication decision (#4018).
@@ -20663,7 +20583,7 @@ async def _start_saved_work_publication(
     *,
     canonical: TemporalExecutionCanonicalRecord,
     request: SavedWorkPublicationRequest,
-    user: User,
+    user: OperatorAdmission,
     adapter: TemporalClientAdapter,
     artifact_service: Any,
     repository_connections: Any,
@@ -20740,7 +20660,7 @@ async def retry_execution_publication(
     repository_connections: Callable[[], Any] = Depends(
         _get_saved_work_repository_connections
     ),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     _submit_enabled: None = Depends(_ensure_submit_enabled),
 ) -> PublicationRecoveryResponse:
     """Start or reconcile exactly one publication-only linked workflow.
@@ -20829,7 +20749,7 @@ async def retry_execution_from_step(
     workflow_id: str,
     request: RetryFromStepRequest = Body(...),
     service: TemporalExecutionService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     temporal_client: Client = Depends(get_temporal_client),
     _submit_enabled: None = Depends(_ensure_submit_enabled),
 ) -> RetryFromStepResponse:

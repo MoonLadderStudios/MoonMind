@@ -1,4 +1,3 @@
-from moonmind.schemas.workflow_control_models import WorkflowControlBatch
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, Optional
@@ -12,11 +11,11 @@ from pydantic import (
     model_validator,
 )
 
-from moonmind.statuses.temporal_status import TemporalStatusValue
 from moonmind.runtime_intent import (
     RuntimeIntentValidationError,
     validate_runtime_tier_intent,
 )
+from moonmind.schemas.workflow_control_models import WorkflowControlBatch
 
 if TYPE_CHECKING:
     pass
@@ -33,65 +32,6 @@ class CreateJobRequest(BaseModel):
     max_attempts: int = Field(3, alias="maxAttempts", ge=1)
     schedule: Optional[Any] = Field(None, alias="schedule")
 
-class UserProfileBaseSchema(BaseModel):
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
-
-    google_api_key: Optional[str] = Field(
-        default=None,
-        alias="google_api_key_encrypted",
-    )
-    openai_api_key: Optional[str] = Field(
-        default=None,
-        alias="openai_api_key_encrypted",
-    )
-    anthropic_api_key: Optional[str] = Field(
-        default=None,
-        alias="anthropic_api_key_encrypted",
-    )
-
-    @field_validator(
-        "google_api_key",
-        "openai_api_key",
-        "anthropic_api_key",
-        mode="before",
-    )
-    @classmethod
-    def _empty_api_key_is_unset(cls, value: Any) -> Any:
-        if value == "":
-            return None
-        return value
-
-class UserProfileRead(
-    UserProfileBaseSchema
-):  # Renamed UserProfileSchema to UserProfileRead
-    id: int  # Assuming 'id' is the primary key of UserProfile model
-    user_id: uuid.UUID
-    # google_api_key is inherited from UserProfileBaseSchema
-    # Configuration for ORM mode is inherited
-    # google_api_key and openai_api_key are inherited from UserProfileBaseSchema
-    # and will be present in this schema, suitable for internal use or when keys are needed.
-
-# New schema for sanitized output, excluding sensitive API keys.
-class UserProfileReadSanitized(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    user_id: uuid.UUID
-    email: str | None = None
-    google_api_key_set: bool = False
-    openai_api_key_set: bool = False
-    anthropic_api_key_set: bool = False
-
-class UserProfileUpdate(UserProfileBaseSchema):
-    # Inherits fields from UserProfileBaseSchema, e.g., google_api_key
-    # No additional fields needed for update beyond what's in base, unless specified
-    pass
-
-# UserProfileCreateSchema remains as is, it was already defined and seems okay.
-class UserProfileCreateSchema(UserProfileBaseSchema):
-    # This schema might be used if creation requires specific fields or is different from update.
-    # For now, it's similar to UserProfileBaseSchema.
-    pass
 
 class ApiKeyStatus(BaseModel):
     """Schema for displaying API key status."""
@@ -658,11 +598,6 @@ class SkillSetCreateRequest(BaseModel):
     description: Optional[str] = None
 
 __all__ = [
-    "UserProfileBaseSchema",
-    "UserProfileRead",
-    "UserProfileReadSanitized",
-    "UserProfileUpdate",
-    "UserProfileCreateSchema",
     "ApiKeyStatus",
     "PresetAppliedMetadataSchema",
     "PresetCreateRequestSchema",

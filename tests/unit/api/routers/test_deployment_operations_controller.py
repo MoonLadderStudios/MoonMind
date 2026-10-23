@@ -13,7 +13,6 @@ import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
-from uuid import uuid4
 
 import pytest
 from fastapi import FastAPI
@@ -24,6 +23,7 @@ from api_service.api.routers.deployment_operations import (
     router,
 )
 from api_service.auth_providers import get_instance_access
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.skills import deployment_controller as controller_client
 from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
@@ -97,20 +97,19 @@ def controller_factory(
     forget_controller_modules()
 
 
-def _override_user(app: FastAPI, *, is_superuser: bool) -> None:
-    user = SimpleNamespace(
-        id=uuid4(),
-        email="operator@example.com",
-        is_active=True,
-        is_superuser=is_superuser,
+def _override_access(app: FastAPI, *, admitted: bool = True) -> None:
+    access = (
+        OperatorAdmission(via="loopback")
+        if admitted
+        else SimpleNamespace(id="retired-account", is_superuser=True)
     )
-    app.dependency_overrides[get_instance_access] = lambda user=user: user
+    app.dependency_overrides[get_instance_access] = lambda: access
 
 
-def _client(*, is_superuser: bool = True) -> tuple[TestClient, _TemporalStopped]:
+def _client(*, admitted: bool = True) -> tuple[TestClient, _TemporalStopped]:
     app = FastAPI()
     app.include_router(router)
-    _override_user(app, is_superuser=is_superuser)
+    _override_access(app, admitted=admitted)
     temporal = _TemporalStopped()
     app.dependency_overrides[_get_temporal_execution_service] = lambda: temporal
     return TestClient(app), temporal
@@ -203,7 +202,7 @@ def test_update_submission_never_constructs_a_temporal_client(controller_factory
     controller = controller_factory()
     app = FastAPI()
     app.include_router(router)
-    _override_user(app, is_superuser=True)
+    _override_access(app)
 
     def temporal_unavailable():
         raise AssertionError("an update submission must not depend on Temporal")
@@ -650,11 +649,11 @@ def test_controller_rejecting_the_api_credential_is_distinct_and_redacted(
     assert temporal.calls == []
 
 
-def test_non_admin_cannot_retry_a_controller_operation(
+def test_legacy_superuser_cannot_retry_without_operator_admission(
     controller_factory: Callable[..., InProcessController],
 ) -> None:
     controller_factory()
-    client, _temporal = _client(is_superuser=False)
+    client, _temporal = _client(admitted=False)
 
     response = client.post("/api/v1/operations/deployment/operations/op-1/retry")
 

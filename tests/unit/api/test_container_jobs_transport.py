@@ -17,7 +17,7 @@ from httpx import ASGITransport, AsyncClient
 
 from api_service.api.routers import container_jobs as http_router
 from api_service.api.routers import mcp_tools as mcp_tools_router
-from api_service.auth_providers import get_instance_operator_access
+from api_service.auth_providers import get_instance_access
 from api_service.services.container_jobs import (
     ContainerJobAuthorizationError,
     ContainerJobIdempotencyConflictError,
@@ -33,10 +33,10 @@ from moonmind.schemas.container_job_models import (
     ContainerJobStatus,
     RegistryAuthorization,
 )
+from moonmind.security.operator_admission import OperatorAdmission
 
 pytestmark = [pytest.mark.asyncio]
 
-_OWNER_ID = "11111111-1111-1111-1111-111111111111"
 _JOB_ID = "container-job:" + "0" * 32
 
 
@@ -97,7 +97,9 @@ class _FakeService:
 
 def _install_fake_service(monkeypatch, module, service) -> None:
     monkeypatch.setattr(
-        module, "ContainerJobService", lambda session, artifacts=None, capability=None: service
+        module,
+        "ContainerJobService",
+        lambda session, artifacts=None, capability=None, operator=None: service,
     )
     monkeypatch.setattr(
         module, "get_temporal_artifact_service", lambda session: None, raising=False
@@ -123,7 +125,7 @@ def mcp_app(monkeypatch) -> FastAPI:
     app = FastAPI()
     app.include_router(mcp_tools_router.router, prefix="/api")
     app.dependency_overrides[mcp_tools_router.get_mcp_caller] = lambda: (
-        SimpleNamespace(id=_OWNER_ID)
+        OperatorAdmission(via="loopback")
     )
     monkeypatch.setattr(mcp_tools_router, "_jira_registry", None)
     app.dependency_overrides[mcp_tools_router.get_async_session] = _empty_namespace
@@ -307,9 +309,7 @@ async def test_authorization_denial_is_permission_denied() -> None:
 def http_app(monkeypatch) -> FastAPI:
     app = FastAPI()
     app.include_router(http_router.router)
-    app.dependency_overrides[get_instance_operator_access] = lambda: SimpleNamespace(
-        id=_OWNER_ID
-    )
+    app.dependency_overrides[get_instance_access] = lambda: OperatorAdmission(via="loopback")
     app.dependency_overrides[http_router.get_async_session] = _empty_namespace
     return app
 

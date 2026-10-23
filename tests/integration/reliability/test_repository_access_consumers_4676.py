@@ -123,9 +123,6 @@ async def repository_consumers(tmp_path, monkeypatch, request):
         writer, "resolve_execution_evidence", lambda *_a, **_kw: (None, "uncertified")
     )
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.artifacts.is_disabled_local_mode", lambda: False
-    )
-    monkeypatch.setattr(
         TemporalArtifactService,
         "_build_store_from_settings",
         staticmethod(lambda: LocalTemporalArtifactStore(tmp_path / "blobs")),

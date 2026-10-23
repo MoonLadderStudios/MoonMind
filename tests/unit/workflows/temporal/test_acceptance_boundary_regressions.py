@@ -11,7 +11,6 @@ import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from temporalio import activity
 
-from moonmind.config.settings import settings
 from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
 from moonmind.omnigent.workspace_artifacts import WorkspaceArtifactProjector
 from moonmind.schemas.agent_runtime_models import (
@@ -103,7 +102,7 @@ async def test_published_full_report_is_readable_by_parent_only(
     tmp_path, monkeypatch, source_bound_report, requirement_count, remediation_wrapper,  # noqa: F811
     publisher_parent_client,
 ):
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     workspace = tmp_path / "workspace"
     report_path = workspace / "artifacts/verify.json"
     report_path.parent.mkdir(parents=True)
@@ -338,7 +337,7 @@ def test_handoff_identity_comes_from_workflow_and_admitted_parent(monkeypatch):
 async def test_publisher_preserves_source_bound_unverified_evidence(
     tmp_path, monkeypatch, source_bound_report, case, publisher_parent_client  # noqa: F811
 ):
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     workspace = tmp_path / "workspace"
     report_path = workspace / "artifacts/verify.json"
     report_path.parent.mkdir(parents=True)

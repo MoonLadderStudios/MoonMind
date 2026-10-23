@@ -14,8 +14,6 @@ from api_service.db.models import (
     TemporalExecutionCanonicalRecord, TemporalExecutionOwnerType, TemporalWorkflowType,
 )
 from api_service.services import single_user_conversion as conversion
-from moonmind.config.settings import settings
-from moonmind.security import auth_modes_4120
 from moonmind.workflows.temporal.artifacts import TemporalArtifactRepository
 from tests.unit.services.test_artifact_conversion import database, seed, service
 
@@ -24,10 +22,14 @@ OPERATOR = "00000000-0000-0000-0000-000000000000"
 
 
 @pytest.mark.parametrize("action", ["download", "continue"])
-@pytest.mark.parametrize("retained_owner,quarantine", [(False, False), (True, False), (True, True)])
-async def test_converted_artifact_attached_to_new_workflow(tmp_path, monkeypatch, action, retained_owner, quarantine):
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
-    monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", OPERATOR)
+@pytest.mark.parametrize(
+    "retained_owner,quarantine", [(False, False), (True, False), (True, True)]
+)
+async def test_converted_artifact_attached_to_new_workflow(
+    tmp_path, monkeypatch, action, retained_owner, quarantine
+):
+    monkeypatch.setenv("AUTH_PROVIDER", "disabled")
+    monkeypatch.setenv("DEFAULT_USER_ID", str(OPERATOR or ""))
     async with database(tmp_path) as maker:
         async with maker() as session:
             artifact_id, owner = await seed(session, tmp_path, quarantine=quarantine)

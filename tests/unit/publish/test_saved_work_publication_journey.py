@@ -27,12 +27,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from temporalio.exceptions import ActivityError, ApplicationError
 from temporalio.exceptions import CancelledError as TemporalCancelledError
+from temporalio.exceptions import RetryState
 from temporalio.exceptions import TimeoutError as TemporalTimeoutError
-from temporalio.exceptions import (
-    RetryState,
-    TimeoutType,
-    is_cancelled_exception,
-)
+from temporalio.exceptions import TimeoutType, is_cancelled_exception
 
 from api_service.db.models import Base
 from moonmind.auth import github_credentials
@@ -80,7 +77,7 @@ REPOSITORY = "dest-owner/dest-repo"
 
 @pytest.fixture(autouse=True)
 def _enforced_access(monkeypatch):
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     monkeypatch.setattr(settings.security, "high_security_mode", False)
 
 

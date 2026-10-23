@@ -14,13 +14,13 @@ maps bridge failure classes onto HTTP status codes.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
-from hashlib import sha256
 import json
 import logging
 import os
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
@@ -52,6 +52,7 @@ from api_service.api.execution_principal import (
     execution_principal_dependency,
     resolve_execution_principal,
 )
+from api_service.api.instance_access import is_instance_operator
 from api_service.api.routers.executions import _get_service as _get_execution_service
 from api_service.api.routers.omnigent_bridge_composition import (
     HostAuthProfileConflictError,
@@ -78,9 +79,12 @@ from api_service.api.workflow_chat_access import (
     workflow_chat_actor,
     workflow_chat_stream_timeout,
 )
-from api_service.auth_providers import get_current_user, instance_operator_principal
+from api_service.auth_providers import (
+    bounded_operator_stream,
+    get_instance_access,
+    instance_operator_principal,
+)
 from api_service.db.base import get_async_session
-from api_service.db.models import User
 from api_service.retrieval_capabilities import RetrievalCapabilityRegistry
 
 
@@ -105,6 +109,10 @@ from api_service.services.omnigent_policies import (
     PolicyConflict,
     PolicyNotFound,
 )
+from moonmind.omnigent.bridge_artifacts import (
+    LocalOmnigentArtifactGateway,
+    OmnigentArtifactError,
+)
 from moonmind.omnigent.bridge_config import (
     EMBEDDED_TRANSPORT_RETIRED_CODE,
     EMBEDDED_TRANSPORT_RETIRED_MESSAGE,
@@ -115,10 +123,7 @@ from moonmind.omnigent.bridge_config import (
     embedded_transport_retirement,
     resolve_bridge_config,
 )
-from moonmind.omnigent.bridge_artifacts import (
-    LocalOmnigentArtifactGateway,
-    OmnigentArtifactError,
-)
+
 # NOTE (#3955): the retired embedded host-route request payloads are plain API
 # contracts importable without the embedded launch modules, so the proxy-only
 # production path (and OpenAPI) never requires bridge_embedded at import time.
@@ -155,16 +160,30 @@ from moonmind.omnigent.bridge_store import (
     OmnigentIdempotencyError,
 )
 from moonmind.omnigent.control_plane.turn_sources import TurnSource
-from moonmind.security.operator_admission import OperatorAdmission
+from moonmind.omnigent.effective_capabilities import (
+    CAPABILITY_NAMES,
+    EffectiveCapabilitySet,
+    caller_capabilities_for_bridge,
+    resolve_bridge_row_capabilities,
+)
+from moonmind.omnigent.host_auth_contracts import (
+    HostAuthCredentialProfile,
+    HostAuthProfileError,
+)
+
 # NOTE (#3955): embedded evidence validation and the host-channel registry are
 # launch-only runtime dependencies imported lazily inside the functions that
 # need them, so importing this router never requires the retired embedded
 # launch modules (moonmind.omnigent.bridge_embedded/embedded_evidence/
 # embedded_host_channel).
 from moonmind.omnigent.host_protocol_adapter import UpstreamHostProtocolError
-from moonmind.omnigent.host_auth_contracts import (
-    HostAuthCredentialProfile,
-    HostAuthProfileError,
+from moonmind.omnigent.native_outbound_scan import (
+    NativeScanBlockedError,
+    NativeScanEnforcementError,
+    NativeScanEvidence,
+    NativeScanSurface,
+    canonical_payload_digest,
+    scan_native_outbound,
 )
 from moonmind.omnigent.native_ui import (
     NATIVE_UI_MOUNT_PREFIX,
@@ -176,9 +195,9 @@ from moonmind.omnigent.native_ui_compat import (
     CODE_COMPAT_REVIEW_REQUIRED,
     CODE_TRANSPORT_UNSUPPORTED,
     CODE_WS_SUBPROTOCOL_REJECTED,
-    NativeUiCompatibilityError,
     DISPOSITION_SERVED,
     NATIVE_HTTP_PRECONDITIONS,
+    NativeUiCompatibilityError,
     classify_native_ui_http,
     classify_native_ui_websocket,
     negotiate_ws_subprotocol,
@@ -193,14 +212,6 @@ from moonmind.omnigent.settings import (
     resolved_host_runner_token,
     resolved_native_ui_serving_enabled,
     resolved_server_url,
-)
-from moonmind.omnigent.native_outbound_scan import (
-    NativeScanBlockedError,
-    NativeScanEnforcementError,
-    NativeScanEvidence,
-    NativeScanSurface,
-    canonical_payload_digest,
-    scan_native_outbound,
 )
 from moonmind.omnigent.workflow_chat_facade import (
     CAP_RESOLVE_ELICITATION,
@@ -222,12 +233,7 @@ from moonmind.omnigent.workflow_chat_facade import (
     match_facade_operation,
     required_capability_for_event,
 )
-from moonmind.omnigent.effective_capabilities import (
-    CAPABILITY_NAMES,
-    EffectiveCapabilitySet,
-    caller_capabilities_for_bridge,
-    resolve_bridge_row_capabilities,
-)
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.utils.build_info import resolve_moonmind_build_id
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
     OmnigentAgentSelection,
@@ -397,7 +403,7 @@ def _require_bridge_enabled() -> OmnigentBridgeConfig:
 @router.get("/readiness", response_model=dict)
 async def get_omnigent_bridge_readiness(
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    _user: User = Depends(get_current_user()),
+    _user: OperatorAdmission = Depends(get_instance_access),
 ) -> dict[str, Any]:
     """Expose selected protocol and conformance gates without secret material."""
 
@@ -434,7 +440,7 @@ async def get_omnigent_bridge_readiness(
 @router.get("/embedded-transport-drain", response_model=dict)
 async def get_omnigent_embedded_transport_drain(
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    _user: User = Depends(get_current_user()),
+    _user: OperatorAdmission = Depends(get_instance_access),
 ) -> dict[str, Any]:
     """Report the live drain disposition for the retired embedded transport.
 
@@ -1136,7 +1142,7 @@ async def _embedded_auth_context(
 
 async def _resolve_bridge_binding(
     *,
-    user: User,
+    user: OperatorAdmission,
     service: Any,
     principal_context: dict[str, Any],
     payload: BridgeSessionCreateRequest,
@@ -1237,7 +1243,7 @@ async def _get_launch_default_agent_selection(
 async def create_omnigent_session(
     payload: BridgeSessionCreateRequest,
     config: OmnigentBridgeConfig = Depends(_require_mode_transition_safe),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     principal_context: dict[str, Any] = Depends(execution_principal_dependency),
     service: Any = Depends(_get_execution_service),
     proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
@@ -1322,7 +1328,7 @@ async def create_omnigent_session(
 async def get_omnigent_session(
     session_id: str,
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     service: Any = Depends(_get_execution_service),
     proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
     embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
@@ -1443,7 +1449,7 @@ async def attach_omnigent_session(
     session_id: str,
     payload: BridgeSessionCreateRequest,
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     principal_context: dict[str, Any] = Depends(execution_principal_dependency),
     service: Any = Depends(_get_execution_service),
     proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
@@ -1455,7 +1461,10 @@ async def attach_omnigent_session(
     """Reconcile an already-created provider session after a create retry."""
 
     binding = await _resolve_bridge_binding(
-        user=user, service=service, principal_context=principal_context, payload=payload
+        user=user,
+        service=service,
+        principal_context=principal_context,
+        payload=payload,
     )
     try:
         facade, _ = await _resolve_session_control_facade(
@@ -1480,7 +1489,7 @@ async def attach_omnigent_session(
 async def delete_omnigent_session(
     session_id: str,
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     service: Any = Depends(_get_execution_service),
     proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
     embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
@@ -1514,7 +1523,7 @@ async def delete_omnigent_session(
 async def _authorize_session_control(
     *,
     session_id: str,
-    user: User,
+    user: OperatorAdmission,
     service: Any,
     proxy: Any,
 ) -> None:
@@ -1657,7 +1666,7 @@ async def _revoke_session_retrieval_authority(
 async def _authorize_bridge_session_projection(
     *,
     bridge_session_id: str,
-    user: User,
+    user: OperatorAdmission,
     service: Any,
     store: OmnigentBridgeSessionStore,
 ) -> None:
@@ -1851,7 +1860,7 @@ def _projection_capabilities(row: Any) -> dict[str, bool]:
 
 
 def _effective_capabilities(
-    row: Any, user: User | OperatorAdmission
+    row: Any, user: OperatorAdmission
 ) -> EffectiveCapabilitySet:
     """Return the canonical decision filtered by actual caller authority."""
 
@@ -1950,7 +1959,7 @@ async def resolve_omnigent_bridge_session_projection(
     agent_run_id: str | None = Query(default=None, alias="agentRunId"),
     idempotency_key: str | None = Query(default=None, alias="idempotencyKey"),
     _enabled: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     service: Any = Depends(_get_execution_service),
     store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
 ) -> BridgeSessionResolution:
@@ -2100,7 +2109,7 @@ async def list_omnigent_bridge_session_events(
     cursor: int | None = Query(default=None, ge=0),
     limit: int = Query(default=100, ge=1, le=_BRIDGE_PAGE_MAX),
     _enabled: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     service: Any = Depends(_get_execution_service),
     store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
 ) -> BridgeEventPageResponse:
@@ -2147,7 +2156,7 @@ async def list_omnigent_bridge_session_events(
 async def get_omnigent_bridge_session_resources(
     bridge_session_id: str,
     _enabled: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     service: Any = Depends(_get_execution_service),
     store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
 ) -> dict[str, Any]:
@@ -2187,7 +2196,7 @@ async def stream_omnigent_bridge_session_events(
     cursor: int | None = Query(default=None, ge=0),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     _enabled: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     service: Any = Depends(_get_execution_service),
     store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
 ) -> StreamingResponse:
@@ -2261,7 +2270,10 @@ async def stream_omnigent_bridge_session_events(
                 return
             await asyncio.sleep(_BRIDGE_STREAM_POLL_SECONDS)
 
-    return StreamingResponse(_event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        bounded_operator_stream(request, user, _event_stream()),
+        media_type="text/event-stream",
+    )
 
 
 @router.post(
@@ -2274,7 +2286,7 @@ async def post_omnigent_session_event(
     payload: BridgeSessionEventRequest,
     request: Request,
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     service: Any = Depends(_get_execution_service),
     proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
     embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
@@ -2376,7 +2388,7 @@ async def post_omnigent_session_event(
             store=store,
             row=fresh_row,
             event_type=payload.type,
-            actor=str(user.id),
+            actor=instance_operator_principal(),
             idempotency_key=effective_key,
             payload_digest=scan_evidence.payload_digest,
             scan_evidence=scan_evidence,
@@ -2394,7 +2406,7 @@ async def post_omnigent_session_event(
             idempotency_key=effective_key,
             provider_session_id=fresh_provider,
             chat_binding_id=chat_binding_id,
-            actor=str(user.id),
+            actor=instance_operator_principal(),
             scan_evidence=scan_evidence,
             request_preconditions=preconditions,
         )
@@ -2414,7 +2426,7 @@ async def post_omnigent_session_event(
             session_id=fresh_provider,
             payload=payload,
             config=config,
-            actor=str(user.id),
+            actor=instance_operator_principal(),
             proxy=proxy,
             embedded_facade=embedded_facade,
             registry=registry,
@@ -2425,7 +2437,7 @@ async def post_omnigent_session_event(
             row=fresh_row,
             control_type=payload.type,
             outcome="posted",
-            actor=str(user.id),
+            actor=instance_operator_principal(),
             idempotency_key=effective_key,
             scan_evidence=scan_evidence,
             upstream_result=result,
@@ -2440,7 +2452,7 @@ async def post_omnigent_session_event(
             row=fresh_row,
             control_type=payload.type,
             outcome="delivery_unknown",
-            actor=str(user.id),
+            actor=instance_operator_principal(),
             idempotency_key=effective_key,
             scan_evidence=scan_evidence,
             request_time=request_time,
@@ -2702,7 +2714,7 @@ async def resolve_omnigent_elicitation(
     elicitation_id: str,
     payload: dict[str, Any],
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     service: Any = Depends(_get_execution_service),
     proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
     embedded: OmnigentEmbeddedHostProtocolFacade | None = Depends(
@@ -2728,10 +2740,7 @@ async def resolve_omnigent_elicitation(
             },
         )
     await _authorize_session_control(
-        session_id=session_id,
-        user=user,
-        service=service,
-        proxy=facade,
+        session_id=session_id, user=user, service=service, proxy=facade
     )
     # An approval response is a canonical turn like any other instruction
     # source (#3707 §1): claim the fenced turn command before the provider
@@ -2741,7 +2750,7 @@ async def resolve_omnigent_elicitation(
         session_id=session_id,
         event_type="resolve_elicitation",
         turn_source=TurnSource.APPROVAL_RESPONSE,
-        actor=str(user.id),
+        actor=instance_operator_principal(),
         idempotency_key=f"elicitation:{session_id}:{elicitation_id}",
         payload_digest=canonical_payload_digest(payload or {}),
     )
@@ -2750,7 +2759,7 @@ async def resolve_omnigent_elicitation(
             session_id=session_id,
             elicitation_id=elicitation_id,
             payload=payload,
-            **({"actor": str(user.id)} if facade_embedded else {}),
+            **({"actor": instance_operator_principal()} if facade_embedded else {}),
         )
     except OmnigentBridgeError as exc:
         await _settle_owned_session_turn(
@@ -2774,7 +2783,7 @@ async def resolve_omnigent_elicitation(
 )
 async def list_omnigent_agents(
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    _user: User = Depends(get_current_user()),
+    _user: OperatorAdmission = Depends(get_instance_access),
     proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
     embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
         _get_create_embedded_facade
@@ -2822,7 +2831,7 @@ async def list_omnigent_agents(
 )
 async def list_omnigent_hosts(
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    _user: User = Depends(get_current_user()),
+    _user: OperatorAdmission = Depends(get_instance_access),
     proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
     embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
         _get_create_embedded_facade
@@ -2887,7 +2896,7 @@ async def stream_upstream_omnigent_events(
     _request: Request,
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     service: Any = Depends(_get_execution_service),
     proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
     embedded_facade: OmnigentEmbeddedHostProtocolFacade | None = Depends(
@@ -2943,7 +2952,10 @@ async def stream_upstream_omnigent_events(
             }
             yield f"event: error\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
 
-    return StreamingResponse(_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        bounded_operator_stream(_request, user, _stream()),
+        media_type="text/event-stream",
+    )
 
 
 async def _owned_resource(
@@ -2951,7 +2963,7 @@ async def _owned_resource(
     operation: str,
     session_id: str,
     value: str | None,
-    user: User,
+    user: OperatorAdmission,
     service: Any,
     config: OmnigentBridgeConfig,
     proxy: OmnigentBridgeSessionProxy | None,
@@ -2978,7 +2990,7 @@ async def _owned_resource(
 async def list_omnigent_changed_files(
     session_id: str,
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     service: Any = Depends(_get_execution_service),
     proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
     embedded: OmnigentEmbeddedHostProtocolFacade | None = Depends(
@@ -3003,7 +3015,7 @@ async def list_omnigent_changed_files(
 async def list_omnigent_workspace_files(
     session_id: str,
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     service: Any = Depends(_get_execution_service),
     proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
     embedded: OmnigentEmbeddedHostProtocolFacade | None = Depends(
@@ -3032,7 +3044,7 @@ async def get_omnigent_workspace_file(
     session_id: str,
     path: str,
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     service: Any = Depends(_get_execution_service),
     proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
     embedded: OmnigentEmbeddedHostProtocolFacade | None = Depends(
@@ -3062,7 +3074,7 @@ async def get_omnigent_workspace_diff(
     session_id: str,
     path: str,
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     service: Any = Depends(_get_execution_service),
     proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
     embedded: OmnigentEmbeddedHostProtocolFacade | None = Depends(
@@ -3088,7 +3100,7 @@ async def get_omnigent_workspace_diff(
 async def list_omnigent_session_files(
     session_id: str,
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     service: Any = Depends(_get_execution_service),
     proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
     embedded: OmnigentEmbeddedHostProtocolFacade | None = Depends(
@@ -3117,7 +3129,7 @@ async def get_omnigent_session_file(
     session_id: str,
     file_id: str,
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
     service: Any = Depends(_get_execution_service),
     proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
     embedded: OmnigentEmbeddedHostProtocolFacade | None = Depends(
@@ -3139,8 +3151,8 @@ async def get_omnigent_session_file(
     return Response(content=content, media_type="application/octet-stream")
 
 
-def _require_host_auth_operator(user: User) -> None:
-    if not bool(getattr(user, "is_superuser", False)):
+def _require_host_auth_operator(user: OperatorAdmission) -> None:
+    if not is_instance_operator(user):
         raise HTTPException(
             status_code=403, detail={"code": "host_auth_operator_required"}
         )
@@ -3162,7 +3174,7 @@ def _host_auth_conflict_error(exc: HostAuthProfileConflictError) -> HTTPExceptio
 @router.put("/host-auth/profile", response_model=dict)
 async def put_embedded_host_auth_profile(
     payload: HostAuthProfilePutRequest,
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> dict[str, Any]:
     """Atomically select safe managed metadata after resolving its SecretRef."""
 
@@ -3184,7 +3196,7 @@ async def put_embedded_host_auth_profile(
 @router.post("/host-auth/rotate", response_model=dict)
 async def rotate_embedded_host_auth_profile(
     payload: HostAuthRotateRequest,
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> dict[str, Any]:
     """Validate a new generation before atomically replacing durable metadata."""
 
@@ -3203,7 +3215,7 @@ async def rotate_embedded_host_auth_profile(
 
 @router.post("/host-auth/revoke", response_model=dict)
 async def revoke_embedded_host_auth_profile(
-    user: User = Depends(get_current_user()),
+    user: OperatorAdmission = Depends(get_instance_access),
 ) -> dict[str, Any]:
     _require_host_auth_operator(user)
     try:
@@ -3620,7 +3632,7 @@ async def _resolve_and_authorize_chat_binding(
     *,
     chat_binding_id: str,
     operation: str,
-    user: User | OperatorAdmission,
+    user: OperatorAdmission,
     service: Any,
     store: OmnigentBridgeSessionStore,
 ) -> Any:
@@ -4037,7 +4049,7 @@ async def _revalidate_binding_before_mutation(
     chat_binding_id: str,
     expected_provider_session_id: str,
     expected_authority_digest: str,
-    user: User | OperatorAdmission,
+    user: OperatorAdmission,
     expected_session_epoch: Any = None,
     expected_active_turn: Any = None,
     expected_elicitation: Any = None,
@@ -4676,7 +4688,7 @@ async def _stream_workflow_chat_events(
     bridge_session_id: str,
     provider_session_id: str,
     initial_cursor: int,
-    user: User | OperatorAdmission,
+    user: OperatorAdmission,
     service: Any,
     store: OmnigentBridgeSessionStore,
 ):
@@ -4828,7 +4840,7 @@ async def workflow_chat_binding_facade(
     omnigent_path: str,
     request: Request,
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    user: User | OperatorAdmission = Depends(get_workflow_chat_access),
+    user: OperatorAdmission = Depends(get_workflow_chat_access),
     service: Any = Depends(_get_execution_service),
     store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
     proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
@@ -5490,7 +5502,7 @@ async def _dispatch_workflow_chat_facade(
     omnigent_path: str,
     request: Request,
     config: OmnigentBridgeConfig,
-    user: User | OperatorAdmission,
+    user: OperatorAdmission,
     service: Any,
     store: OmnigentBridgeSessionStore,
     proxy: OmnigentBridgeSessionProxy | None,
@@ -6568,7 +6580,7 @@ async def workflow_chat_binding_facade_ws(
     chat_binding_id: str,
     omnigent_path: str,
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-    user: User | OperatorAdmission = Depends(get_workflow_chat_access),
+    user: OperatorAdmission = Depends(get_workflow_chat_access),
     service: Any = Depends(_get_execution_service),
     store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
 ) -> None:
@@ -6944,7 +6956,7 @@ async def _stream_workflow_chat_events_websocket(
     websocket: WebSocket,
     chat_binding_id: str,
     match: Any,
-    user: User | OperatorAdmission,
+    user: OperatorAdmission,
     service: Any,
     store: OmnigentBridgeSessionStore,
 ) -> None:

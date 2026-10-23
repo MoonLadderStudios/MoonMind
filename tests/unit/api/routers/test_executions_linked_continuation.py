@@ -17,6 +17,7 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.api.routers import executions as ex
+from api_service.auth_providers import instance_operator_principal
 from api_service.db.models import (
     MoonMindWorkflowState,
     TemporalExecutionCanonicalRecord,
@@ -25,6 +26,7 @@ from api_service.db.models import (
     TemporalWorkflowType,
     WorkflowLinkedContinuationRecord,
 )
+from moonmind.security.operator_admission import OperatorAdmission
 
 
 async def _database():
@@ -188,7 +190,8 @@ async def test_continue_creates_linked_workflow_and_pins_source(
     monkeypatch, source_state
 ) -> None:
     engine, sessions = await _database()
-    user = SimpleNamespace(id=uuid4())
+    user = OperatorAdmission(via="loopback")
+    historical_owner = str(uuid4())
     plan = {
         "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
         "planDigest": "sha256:" + "a" * 64,
@@ -197,7 +200,7 @@ async def test_continue_creates_linked_workflow_and_pins_source(
         "taskInputSnapshotDigest": "sha256:" + "b" * 64,
     }
     await _seed_canonical(
-        sessions, owner_id=str(user.id), omnigent_plan=plan
+        sessions, owner_id=historical_owner, omnigent_plan=plan
     )
     _patch_collaborators(monkeypatch, source_status=source_state)
     service = _FakeService()
@@ -234,6 +237,7 @@ async def test_continue_creates_linked_workflow_and_pins_source(
     assert len(service.create_calls) == 1
     call = service.create_calls[0]
     assert call["_workflow_id"] == result.destination_workflow_id
+    assert call["owner_id"] == historical_owner
     # The create idempotency key is scoped to (source_workflow_id, source_run_id,
     # idempotency_key) like the relationship reservation, and derived as a bounded
     # digest so it fits the String(128) column even for a 512-char client key.
@@ -264,8 +268,10 @@ async def test_continue_creates_linked_workflow_and_pins_source(
         assert [r.destination_workflow_id for r in outbound] == [
             result.destination_workflow_id
         ]
-        assert outbound[0].created_by == str(user.id)
+        assert outbound[0].created_by == instance_operator_principal()
         assert outbound[0].bounded_purpose == "ship the follow-up"
+        source = await session.get(TemporalExecutionCanonicalRecord, "mm:source")
+        assert source.owner_id == historical_owner
     await engine.dispose()
 
 

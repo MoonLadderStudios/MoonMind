@@ -8,13 +8,11 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID, uuid4
 
-from fastapi_users.db import SQLAlchemyBaseUserTableUUID
 from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
     CheckConstraint,
-    Column,
     DateTime,
     Enum,
     Float,
@@ -27,6 +25,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     event,
+    false,
     func,
     literal_column,
     select,
@@ -127,42 +126,6 @@ def _provider_profile_model_tiers_default(context: Any = None) -> list[dict[str,
     )
 
 
-# Note: fastapi-users[sqlalchemy] uses GUID/UUID by default for id.
-# If you need an Integer ID, you would use SQLAlchemyBaseUserTable[int]
-# and ensure your UserManager and FastAPIUsers instances are typed accordingly.
-# For this implementation, we'll stick to UUIDs as it's more common with fastapi-users.
-class User(SQLAlchemyBaseUserTableUUID, Base):
-    __tablename__ = "user"
-    # id is inherited from SQLAlchemyBaseUserTableUUID and is a UUID type
-    # email is inherited
-    # hashed_password is inherited
-    # is_active is inherited
-    # is_superuser is inherited
-    # is_verified is inherited
-
-    hashed_password = Column(Text, nullable=True)  # Made nullable
-    # Legacy Keycloak-era mapping authority. Frozen read-only evidence after
-    # the K3 identity migration (MoonLadderStudios/MoonMind#4119): the
-    # 32-character field cannot hold a full issuer URI and is never consulted
-    # by the active resolver. Retained (with its unique pair constraint) so
-    # historical rows, old revisions, and bounded rollback reads keep working.
-    # The single active authority is ``UserExternalIdentity`` below.
-    oidc_provider = Column(String(32), index=True, nullable=True)
-    oidc_subject = Column(String(255), index=True, nullable=True)
-
-    __table_args__ = (
-        UniqueConstraint("oidc_provider", "oidc_subject", name="uq_oidc_identity"),
-    )
-    user_profile = relationship(
-        "UserProfile", back_populates="user", uselist=False
-    )  # Added relationship to UserProfile
-    external_identities = relationship(
-        "UserExternalIdentity",
-        back_populates="user",
-        cascade="all, delete-orphan",
-    )
-
-
 def _json_variant() -> JSON:
     return JSON().with_variant(JSONB(astext_type=Text()), "postgresql")
 
@@ -173,46 +136,6 @@ def mutable_json_list() -> JSON:
 
 def mutable_json_dict() -> JSON:
     return MutableDict.as_mutable(_json_variant())
-
-
-class UserExternalIdentity(Base):
-    """Single active external-identity authority (K3, #4119).
-
-    One verified OIDC ``(issuer, subject)`` pair — or one explicitly
-    namespaced trusted-proxy identity (``proxy:<namespace>:<stable-id>``) —
-    resolves to exactly one MoonMind ``User.id``. The legacy
-    ``User.oidc_provider/oidc_subject`` columns are frozen read-only evidence
-    and are never consulted by the resolver; this relation is the only mapping
-    the resolver reads, so there are never two competing active mappings.
-
-    Semantics (per OpenID Connect Core §5.7 claim stability):
-
-    * ``issuer`` is the full verified issuer URI (``Text``, never truncated).
-    * ``subject`` is matched exactly and case-sensitively; it is never
-      normalized, lowercased, or derived from email/display name.
-    * ``(issuer, subject)`` is globally unique: the same subject under two
-      issuers maps to two different users, never one merged account.
-    """
-
-    __tablename__ = "user_external_identities"
-    __table_args__ = (
-        UniqueConstraint(
-            "issuer", "subject", name="uq_user_external_identity"
-        ),
-        Index("ix_user_external_identities_user", "user_id"),
-    )
-
-    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    user_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("user.id", ondelete="CASCADE"), nullable=False
-    )
-    issuer: Mapped[str] = mapped_column(Text, nullable=False)
-    subject: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-
-    user = relationship("User", back_populates="external_identities")
 
 
 class IdentityMigrationRun(Base):
@@ -250,125 +173,6 @@ class IdentityMigrationRun(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
-
-
-class MoonmindAccountNonce(Base):
-    """One-use account-lifecycle capability record (K3, #4122).
-
-    Durable backing for the ``LifecycleStore`` protocol in
-    ``moonmind/security/account_lifecycle_4122.py``: each HMAC-bound
-    bootstrap/invite/recovery capability carries a random nonce, and
-    redemption inserts that nonce here in the same transaction as the
-    account change. The primary-key constraint is the single-use
-    enforcement — a concurrent or replayed redemption converges on the
-    winner instead of admitting a second account. No secret material is
-    stored: only the nonce, its purpose, and the bound login name.
-
-    Source issue: MoonLadderStudios/MoonMind#4122 (parent #4116; docs
-    #4130). Additive table; no existing table, column, or historical
-    revision is altered.
-    """
-
-    __tablename__ = "moonmind_account_nonces"
-
-    nonce: Mapped[str] = mapped_column(String(64), primary_key=True)
-    purpose: Mapped[str] = mapped_column(String(16), nullable=False)
-    login: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-
-
-class MoonmindSession(Base):
-    """One durable browser-session row per issued MoonMind session JWT (K4, #4121).
-
-    Single durable session/revocation mechanism behind the portable
-    ``SessionRevocationStore`` interface. ``jti`` is the JWT ``jti`` claim;
-    ``generation`` captures the user's revocation generation at mint time so
-    validation can reject tokens minted before a password reset, disable, or
-    administrative revocation even when the per-session row is unknown.
-    Logout sets ``revoked_at`` on the current row; clearing a cookie alone is
-    never revocation. Expiry is enforced from the JWT ``exp`` claim; the row
-    persists so restarts and replicas share one revocation truth.
-    """
-
-    __tablename__ = "moonmind_sessions"
-    __table_args__ = (
-        Index("ix_moonmind_sessions_user", "user_id"),
-        Index("ix_moonmind_sessions_expires", "expires_at"),
-    )
-
-    jti: Mapped[str] = mapped_column(String(64), primary_key=True)
-    user_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("user.id", ondelete="CASCADE"), nullable=False
-    )
-    generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-    expires_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
-    revoked_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    revoked_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
-
-
-class MoonmindUserSessionGeneration(Base):
-    """Per-user revocation generation for all-session invalidation (#4121).
-
-    Password reset, account disablement, administrative revocation, and key
-    rotation bump the generation; sessions minted at an older generation fail
-    closed at validation. Concurrent issuance versus disable/reset cannot
-    resurrect authority: the mint captures the live generation and the next
-    validation compares it, so a token minted before the bump never validates
-    after it.
-    """
-
-    __tablename__ = "moonmind_user_session_generations"
-    __table_args__ = ()
-
-    user_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("user.id", ondelete="CASCADE"), primary_key=True
-    )
-    generation: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default="0"
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-
-
-class UserProfile(Base):
-    __tablename__ = "user_profile"
-
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(
-        Uuid, ForeignKey("user.id"), unique=True, nullable=False
-    )  # Changed to Uuid
-
-    # Example profile field
-    google_api_key_encrypted = Column(
-        StringEncryptedType(String, get_encryption_key), nullable=True
-    )
-    openai_api_key_encrypted = Column(
-        StringEncryptedType(String, get_encryption_key), nullable=True
-    )
-    github_token_encrypted = Column(
-        StringEncryptedType(String, get_encryption_key), nullable=True
-    )
-    anthropic_api_key_encrypted = Column(
-        StringEncryptedType(String, get_encryption_key), nullable=True
-    )
-
-    agent_skill_repo_sources_enabled = Column(Boolean, nullable=False, default=True)
-    agent_skill_local_sources_enabled = Column(Boolean, nullable=False, default=False)
-
-    user = relationship("User", back_populates="user_profile")
 
 
 class RecurringWorkflowScheduleType(str, enum.Enum):
@@ -448,11 +252,7 @@ class RecurringWorkflowDefinition(Base):
     temporal_schedule_id: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True
     )
-    owner_user_id: Mapped[Optional[UUID]] = mapped_column(
-        Uuid,
-        ForeignKey("user.id", ondelete="SET NULL"),
-        nullable=True,
-    )
+    owner_user_id: Mapped[Optional[UUID]] = mapped_column(Uuid, nullable=True)
     scope_type: Mapped[RecurringWorkflowScopeType] = mapped_column(
         Enum(
             RecurringWorkflowScopeType,
@@ -478,9 +278,7 @@ class RecurringWorkflowDefinition(Base):
         server_default=text("1"),
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -717,9 +515,7 @@ class OmnigentPolicy(Base):
 
     policy_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
-    owner_user_id: Mapped[Optional[UUID]] = mapped_column(
-        Uuid, ForeignKey("user.id"), nullable=True
-    )
+    owner_user_id: Mapped[Optional[UUID]] = mapped_column(Uuid, nullable=True)
     visibility: Mapped[str] = mapped_column(
         String(32), nullable=False, default="private"
     )
@@ -1687,8 +1483,6 @@ class WorkflowCheckpointBranchArtifact(Base):
 
 __all__ = [
     "Base",
-    "User",
-    "UserProfile",
     "RecurringWorkflowDefinition",
     "RecurringWorkflowRun",
     "RecurringWorkflowRunOutcome",
@@ -3459,12 +3253,8 @@ class WorkflowRun(Base):
     branch_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     pr_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     repository: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    requested_by_user_id: Mapped[Optional[UUID]] = mapped_column(
-        Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True
-    )
-    created_by: Mapped[Optional[UUID]] = mapped_column(
-        Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True
-    )
+    requested_by_user_id: Mapped[Optional[UUID]] = mapped_column(Uuid, nullable=True)
+    created_by: Mapped[Optional[UUID]] = mapped_column(Uuid, nullable=True)
     codex_task_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     codex_queue: Mapped[Optional[str]] = mapped_column(
         String(64),
@@ -3503,9 +3293,7 @@ class WorkflowRun(Base):
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -3534,14 +3322,6 @@ class WorkflowRun(Base):
         primaryjoin=lambda: WorkflowRun.id == WorkflowCredentialAudit.workflow_run_id,
         foreign_keys=lambda: [WorkflowCredentialAudit.workflow_run_id],
         uselist=False,
-    )
-    requested_by: Mapped[Optional[User]] = relationship(
-        "User",
-        foreign_keys=lambda: [WorkflowRun.requested_by_user_id],
-    )
-    created_by_user: Mapped[Optional[User]] = relationship(
-        "User",
-        foreign_keys=lambda: [WorkflowRun.created_by],
     )
     codex_auth_volume: Mapped[Optional["CodexAuthVolume"]] = relationship(
         "CodexAuthVolume",
@@ -4064,9 +3844,7 @@ class OmnigentAgentProfile(Base):
     profile_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    owner_id: Mapped[Optional[UUID]] = mapped_column(
-        Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True
-    )
+    owner_id: Mapped[Optional[UUID]] = mapped_column(Uuid, nullable=True)
     visibility: Mapped[str] = mapped_column(
         String(32), nullable=False, default="private"
     )
@@ -4075,9 +3853,7 @@ class OmnigentAgentProfile(Base):
     default_for_runtime: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -4118,12 +3894,8 @@ class OmnigentAgentProfileVersion(Base):
     rollout_metadata: Mapped[Optional[dict[str, Any]]] = mapped_column(
         JSON, nullable=True
     )
-    created_by: Mapped[Optional[UUID]] = mapped_column(
-        Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_by: Mapped[Optional[UUID]] = mapped_column(Uuid, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class OmnigentAgentProfileAuditEvent(Base):
@@ -4141,9 +3913,7 @@ class OmnigentAgentProfileAuditEvent(Base):
     )
     action: Mapped[str] = mapped_column(String(64), nullable=False)
     version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    actor_id: Mapped[Optional[UUID]] = mapped_column(
-        Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True
-    )
+    actor_id: Mapped[Optional[UUID]] = mapped_column(Uuid, nullable=True)
     metadata_json: Mapped[dict[str, Any]] = mapped_column(
         JSON, nullable=False, default=dict
     )
@@ -4800,6 +4570,11 @@ class ContainerJobRecord(Base):
     )
     owner_id: Mapped[str] = mapped_column(String(255), nullable=False)
     owner_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Granted only by the guarded converter for this retained job. Machine
+    # callers still use the original owner and session/source restrictions.
+    operator_access_granted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
     source_json: Mapped[dict[str, Any]] = mapped_column(
         mutable_json_dict(), nullable=False

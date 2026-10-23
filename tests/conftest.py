@@ -13,10 +13,6 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-# Mirror the auth module's disabled-mode default user id to avoid importing
-# api_service.auth during global pytest collection.
-_DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000"
-
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 _SLOW_TEST_MODULES = {
@@ -161,26 +157,11 @@ def pytest_handlecrashitem(crashitem, report):
 
 
 @pytest.fixture
-def disabled_env_keys(monkeypatch):
+def provider_env_keys(monkeypatch):
     from moonmind.config.settings import settings
 
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled", raising=False)
-    monkeypatch.setattr(
-        settings.oidc, "DEFAULT_USER_ID", _DEFAULT_USER_ID, raising=False
-    )
-    monkeypatch.setattr(
-        settings.oidc, "DEFAULT_USER_EMAIL", "seed@example.com", raising=False
-    )
     monkeypatch.setattr(settings.openai, "openai_api_key", "sk-test", raising=False)
     monkeypatch.setattr(settings.google, "google_api_key", "g-test", raising=False)
-    yield
-
-
-@pytest.fixture
-def authenticated_mode(monkeypatch):
-    from moonmind.config.settings import settings
-
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc", raising=False)
     yield
 
 

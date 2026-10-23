@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import func, select
+from sqlalchemy import inspect, select
 
 from api_service.db import base, models
 from api_service.services import omnigent_execution_plan_service as writer
@@ -140,7 +140,10 @@ async def test_resolve_and_reconcile_read_admitted_artifacts_without_new_grants(
     assert request.instruction_ref == "Preserve the admitted request."
     assert await _links(supervisor.sessions) == before
     async with supervisor.sessions() as session:
-        assert await session.scalar(select(func.count()).select_from(models.User)) == 0
+        connection = await session.connection()
+        assert not await connection.run_sync(
+            lambda conn: inspect(conn).has_table("user")
+        )
 
 
 async def _command(context, resolved, *, command_id="command-1", session_id=None):

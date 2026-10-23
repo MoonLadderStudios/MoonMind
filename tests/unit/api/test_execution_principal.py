@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from api_service.api.execution_principal import resolve_execution_principal
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.executions.runtime_inheritance import (
     SCOPE_CREATE_CHILD,
     SCOPE_INHERIT_RUNTIME,
@@ -103,3 +104,32 @@ async def test_resolve_principal_superuser_skips_ownership_check() -> None:
     assert principal.is_superuser is True
     assert SCOPE_CREATE_CHILD in principal.scopes
     assert SCOPE_INHERIT_RUNTIME in principal.scopes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner_id", ["retained-person", "system", None])
+async def test_instance_operator_can_act_on_existing_workflow(owner_id) -> None:
+    principal = await resolve_execution_principal(
+        user=OperatorAdmission(via="trusted_ingress"),
+        service=_FakeService({"mm:parent": SimpleNamespace(owner_id=owner_id)}),
+        workflow_id_header="mm:parent",
+        run_id_header="run-1",
+    )
+
+    assert principal.workflow_id == "mm:parent"
+    assert principal.run_id == "run-1"
+    assert principal.scopes == {SCOPE_CREATE_CHILD, SCOPE_INHERIT_RUNTIME}
+    assert principal.user_id is None
+    assert principal.is_superuser is False
+
+
+@pytest.mark.asyncio
+async def test_instance_operator_does_not_verify_missing_workflow() -> None:
+    principal = await resolve_execution_principal(
+        user=OperatorAdmission(via="loopback"),
+        service=_FakeService({}),
+        workflow_id_header="mm:missing",
+    )
+
+    assert principal.workflow_id is None
+    assert not principal.scopes

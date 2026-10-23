@@ -30,7 +30,6 @@ from api_service.services.checkpoint_branch_turn_execution import (
     CheckpointBranchTurnLaunchError,
     build_branch_turn_execution_identity,
 )
-from moonmind.config.settings import settings
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
@@ -49,7 +48,7 @@ def auth_mode(request):
 
 @pytest_asyncio.fixture
 async def instruction_authority(tmp_path, monkeypatch, auth_mode):
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", auth_mode)
+    monkeypatch.setenv("AUTH_PROVIDER", str(auth_mode or ""))
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/instructions.db")
     sessions = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with engine.begin() as connection:

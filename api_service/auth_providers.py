@@ -1,383 +1,45 @@
+"""Shared instance admission and provider credential composition."""
+
 import asyncio
 import logging
-import os
-import uuid
+from collections.abc import AsyncGenerator
+from contextlib import aclosing
+from time import monotonic
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.auth import _DEFAULT_USER_ID
 from api_service.db.base import get_async_session
-from api_service.db.models import User
-from api_service.services.profile_service import ProfileService
+from api_service.operator_admission import require_operator
 from moonmind.auth import AuthProviderManager, EnvAuthProvider, ProfileAuthProvider
-from moonmind.config.settings import settings
-from moonmind.security.auth_modes_4120 import (
-    get_request_production_mode,
-    is_disabled_local_mode,
+from moonmind.security.operator_admission import (
+    STREAM_REVALIDATION_SECONDS,
+    OperatorAdmission,
 )
-from moonmind.security.operator_admission import OperatorAdmission
 
 logger = logging.getLogger(__name__)
 
-# Request-local proof of the existing disabled-mode admission, never a header,
-# UUID convention, persisted account flag, or caller-supplied artifact metadata.
-_DISABLED_OPERATOR_ADMISSION = object()
+_OPERATOR_ADMISSION = object()
 
 
 def get_operator_recovery_principal(request: Request) -> str | None:
-    """Carry admitted local-operator identity into protected artifact recovery."""
-    if (
-        getattr(request.state, "_disabled_operator_admission", None)
-        is _DISABLED_OPERATOR_ADMISSION
-    ):
+    """Only a server-admitted operator can use protected artifact recovery."""
+    if getattr(request.state, "_operator_admission", None) is _OPERATOR_ADMISSION:
         return "operator"
     return None
 
 
-def _extract_session_credentials(request: Request) -> tuple[str | None, str | None]:
-    """Extract the MoonMind session cookie and bearer credentials.
-
-    Both MoonMind cookie names are honored (production ``__Host-`` cookie
-    plus the separately named loopback development cookie); upstream
-    runtime cookie names are never read here. Empty strings count as
-    missing. Precedence/conflict semantics belong to the session
-    authority, not this extractor.
-    """
-    from moonmind.security.session_authority_4121 import (
-        MOONMIND_DEV_COOKIE,
-        MOONMIND_PROD_COOKIE,
-    )
-
-    cookies = getattr(request, "cookies", None) or {}
-    cookie_token = cookies.get(MOONMIND_PROD_COOKIE) or cookies.get(
-        MOONMIND_DEV_COOKIE
-    )
-    if isinstance(cookie_token, str):
-        cookie_token = cookie_token.strip() or None
-    else:
-        cookie_token = None
-    authorization = request.headers.get("authorization", "")
-    bearer_token: str | None = None
-    if isinstance(authorization, str) and authorization.strip().lower().startswith(
-        "bearer "
-    ):
-        bearer_token = authorization.strip()[7:].strip() or None
-    return cookie_token, bearer_token
-
-
-def _enforce_cookie_csrf_origin(request: Request) -> None:
-    """Enforce the CSRF origin boundary for cookie-authenticated requests.
-
-    Delegates to the qualified #4121 ``enforce_csrf_origin`` helper so
-    cookie-authenticated mutations require an ``Origin``/``Referer`` that
-    is same-origin with the configured ``MOONMIND_PUBLIC_BASE_URL``. Safe
-    methods and bearer-only flows pass through inside the helper. When no
-    public base URL is configured the deployment is local-only (see
-    ``api_service.main`` startup classification) and there is no configured
-    origin to check against, so the check is skipped; remote deployments
-    must configure the base URL. Failures map to the §8 HTTP contract.
-    """
-    from moonmind.security.session_authority_4121 import enforce_csrf_origin
-
-    base_url = os.environ.get("MOONMIND_PUBLIC_BASE_URL", "").strip()
-    if not base_url:
-        return
-    try:
-        host = request.headers.get("host")
-        if not host and request.url is not None:
-            host = request.url.hostname
-        enforce_csrf_origin(
-            method=request.method or "GET",
-            cookie_present=True,
-            origin=request.headers.get("origin"),
-            referer=request.headers.get("referer"),
-            host=host,
-            base_url=base_url,
-        )
-    except Exception as exc:
-        raise _session_http_exception(exc)
-
-
-def _session_http_exception(exc: BaseException):
-    """Map a session-authority error to the §8 HTTP contract."""
-    from moonmind.security.session_authority_4121 import http_status_for_error
-
-    status_code, code = http_status_for_error(exc)
-    mode = get_request_production_mode() or "undecided"
-    # Redacted audit event: mode + reason code only, never tokens/cookies.
-    logger.info(
-        "auth_event mode=%s reason=session_denial code=%s",
-        mode,
-        code,
-    )
-    if status_code == 403:
-        return HTTPException(status_code=status_code, detail={"code": code})
-    if status_code == 503:
-        return HTTPException(status_code=status_code, detail=code)
-    return HTTPException(status_code=status_code, detail={"code": code})
-
-
-async def _disabled_account_free_allowed(session: AsyncSession) -> bool:
-    """Migration-state gate for account-free disabled-mode access (#4346).
-
-    Returns True only when the guarded conversion ledger records a
-    completed, published fresh-init or eligible conversion: migration
-    state proves the source needed no account (or converted cleanly), so
-    ordinary disabled-mode routes may serve operator admission without resolving
-    a person. Fresh installations and successful restarts no longer require
-    live account tables. Any error -- including a missing ledger table on
-    pre-386 schemas -- fails closed to False. A later subsystem conversion
-    must not revoke already-established admission; its new access authority
-    is proved separately by that subsystem's protected conversion state.
-    """
-    try:
-        from sqlalchemy import select as _select
-
-        from api_service.services.single_user_conversion import SingleUserConversionRun
-
-        rows = (await session.execute(_select(SingleUserConversionRun))).scalars().all()
-    except Exception:
-        # No ledger evidence (or an unreadable ledger) means conversion
-        # state is unknown: deny account-free access rather than guess.
-        return False
-    for row in rows or []:
-        if str(getattr(row, "status", "")) != "complete":
-            continue
-        stored = dict(getattr(row, "result_json", None) or {})
-        if not stored.get("published", False):
-            continue
-        decision = dict(stored.get("decision", None) or {})
-        if str(decision.get("disposition", "")) in {
-            "fresh_init",
-            "eligible_conversion",
-        }:
-            return True
-    return False
-
-
-def _local_operator_uuid() -> uuid.UUID:
-    try:
-        return uuid.UUID(settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID)
-    except ValueError:
-        return uuid.UUID(_DEFAULT_USER_ID)
-
-
 def instance_operator_principal() -> str:
-    """Artifact and execution scope for account-free operator admission.
-
-    Account-free installations already own artifacts, use claims and quota
-    under the local-operator UUID string. Keeping that scope preserves raw
-    access to retained restricted output and accounting continuity. It is
-    provenance only: no ``User`` row or person is resolved.
-    """
-    return str(_local_operator_uuid())
-
-
-def _transient_disabled_operator() -> User:
-    """Transient local-operator principal for account-free disabled mode.
-
-    Never added to the session: fresh/converted installations initialize
-    without a person (#4346), so no synthetic User row is minted to
-    satisfy the boundary. Scalar attributes mirror the historical default
-    row (local administrator); relationship traversal is unavailable
-    because there is no retained account to traverse.
-    """
-    return User(
-        id=_local_operator_uuid(),
-        email=settings.oidc.DEFAULT_USER_EMAIL or "operator@localhost",
-        is_active=True,
-        is_superuser=True,
-        is_verified=True,
-    )
-
-
-async def _load_disabled_user(
-    session: AsyncSession, *, allow_transient: bool = True
-) -> User:
-    """Resolve the persisted local-mode principal, failing closed.
-
-    A present default row keeps serving exactly as before (existing
-    deployments are unaffected). When the row is absent, account-free
-    access is allowed only when conversion migration state proves a
-    completed fresh-init or eligible conversion; otherwise this boundary
-    still returns 503 ``setup_required``. No synthetic administrator is
-    ever minted: identity-store outage returns 503 ``unavailable``. Test
-    callers must use explicit dependency overrides; no environment-driven
-    test identity shortcut exists on this path.
-    """
-
-    async def _fetch() -> User | None:
-        user_id_str = settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID
-        user_uuid = uuid.UUID(user_id_str)
-        return await session.get(User, user_uuid)
-
-    try:
-        user_obj = await asyncio.wait_for(_fetch(), timeout=1.0)
-    except (Exception, asyncio.TimeoutError):
-        logger.info(
-            "auth_event mode=disabled reason=session_denial code=unavailable",
-        )
-        raise HTTPException(status_code=503, detail="unavailable")
-    if user_obj is None:
-        if allow_transient and await _disabled_account_free_allowed(session):
-            logger.info(
-                "auth_event mode=disabled reason=local_operator code=account_free",
-            )
-            return _transient_disabled_operator()
-        logger.info(
-            "auth_event mode=disabled reason=session_denial code=setup_required",
-        )
-        raise HTTPException(status_code=503, detail="setup_required")
-    # Disabled auth is single-user local mode; treat that principal as the
-    # local administrator even if the persisted row predates this policy.
-    user_obj.is_superuser = True
-    return user_obj
-
-
-async def _resolve_session_principal(
-    request: Request,
-    session: AsyncSession,
-    *,
-    optional: bool,
-) -> User | None:
-    """Validate the presented MoonMind session and return the live User."""
-    from moonmind.security.session_authority_4121 import resolve_session_user
-
-    from api_service.services.session_store import (
-        DbAccountStore,
-        DbRevocationStore,
-    )
-
-    cookie_token, bearer_token = _extract_session_credentials(request)
-    if optional and cookie_token is None and bearer_token is None:
-        # Optional boundary with no presented credential: the separately
-        # authenticated worker path authorizes below; nothing is swallowed
-        # and no session configuration is required to observe absence.
-        return None
-    if cookie_token is not None:
-        # Cookie-authenticated requests must clear the CSRF origin boundary
-        # before session validation: no HTTP middleware performs this check,
-        # so a same-site sibling origin could otherwise submit credentialed
-        # mutations with the victim's cookie. Safe methods and bearer-only
-        # flows pass through inside the helper.
-        _enforce_cookie_csrf_origin(request)
-    try:
-        config = build_moonmind_control_plane_config()
-    except HTTPException:
-        mode = get_request_production_mode() or "undecided"
-        logger.info(
-            "auth_event mode=%s reason=session_denial code=unavailable",
-            mode,
-        )
-        raise
-    except Exception as exc:
-        logger.info(
-            "auth_event mode=%s reason=session_denial code=unavailable",
-            get_request_production_mode() or "undecided",
-        )
-        raise HTTPException(status_code=503, detail="unavailable") from exc
-    account_store = DbAccountStore(session)
-    revocation_store = DbRevocationStore(session)
-    try:
-        account = await resolve_session_user(
-            cookie_token=cookie_token,
-            bearer_token=bearer_token,
-            account_store=account_store,
-            revocation=revocation_store,
-            config=config,
-            optional=optional,
-        )
-    except Exception as exc:
-        raise _session_http_exception(exc)
-    if account is None:
-        # Optional boundary with no presented credential: the separately
-        # authenticated worker path authorizes below; nothing is swallowed.
-        return None
-    try:
-        user = await session.get(User, account.user_id)
-    except Exception as exc:
-        logger.info(
-            "auth_event mode=%s reason=session_denial code=unavailable",
-            config.mode,
-        )
-        raise HTTPException(status_code=503, detail="unavailable") from exc
-    if user is None:
-        logger.info(
-            "auth_event mode=%s reason=session_denial code=auth_invalid",
-            config.mode,
-        )
-        raise HTTPException(
-            status_code=401, detail={"code": "auth_invalid"}
-        )
-    # Authoritative live flags: the persisted row decides active/admin
-    # status at request time, never upstream advisory claims.
-    if not bool(user.is_active):
-        logger.info(
-            "auth_event mode=%s reason=session_denial code=inactive",
-            config.mode,
-        )
-        raise HTTPException(status_code=403, detail={"code": "inactive"})
-    return user
-
-
-async def _strict_current_user(
-    request: Request,
-    session: AsyncSession = Depends(get_async_session),
-) -> User:
-    """Shared strict boundary: every user-facing path resolves here.
-
-    The production mode is evaluated per request (never captured at
-    import/app-construction time), so a classified mode change cannot
-    retain another provider's resolver. Authenticated modes validate
-    MoonMind sessions through the qualified #4121 authority; legacy
-    application JWTs fail closed as ``auth_invalid``.
-    """
-    if is_disabled_local_mode():
-        user = await _load_disabled_user(session)
-        request.state._disabled_operator_admission = _DISABLED_OPERATOR_ADMISSION
-        return user
-    user = await _resolve_session_principal(request, session, optional=False)
-    assert user is not None
-    return user
+    """Retained artifact/quota scope; never a person or an admission credential."""
+    return "00000000-0000-0000-0000-000000000000"
 
 
 async def get_instance_access(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
-) -> User | OperatorAdmission:
-    """Instance consumers receive admission, never an account-free User.
-
-    The published conversion ledger protects retained data. Predecessor account
-    deployments retain their existing session authority and persisted principal
-    until their owning conversion completes; no virtual person is made here.
-    """
-    if is_disabled_local_mode():
-        from api_service.operator_admission import require_operator
-
-        admission = await require_operator(request)
-        if not await _disabled_account_free_allowed(session):
-            # An incomplete conversion cannot cut over the installed access
-            # authority. Require the retained real account; never invent one.
-            return await _load_disabled_user(session, allow_transient=False)
-        request.state._disabled_operator_admission = _DISABLED_OPERATOR_ADMISSION
-        return admission
-    return await get_current_user()(request, session)
-
-
-async def get_instance_operator_access(
-    request: Request,
-    session: AsyncSession = Depends(get_async_session),  # noqa: B008 - FastAPI injection
-) -> User | OperatorAdmission:
-    """Operator-only consumer with explicit credential precedence.
-
-    Disabled-mode operator admission is transport-based, not a bearer verifier.
-    A presented machine credential must therefore fail closed on this surface,
-    even when its peer could otherwise use local/ingress admission. Machine
-    protocols verify their own credentials at their separate scoped endpoints.
-    Authenticated deployments retain normal MoonMind session verification.
-    """
-    if (is_disabled_local_mode() and "authorization" in request.headers) or any(
+) -> OperatorAdmission:
+    """Admit transport only after the guarded data conversion published."""
+    if "authorization" in request.headers or any(
         name in request.headers
         for name in (
             "x-moonmind-execution-fanout",
@@ -386,259 +48,66 @@ async def get_instance_operator_access(
             "x-moonmind-integration-token",
         )
     ):
-        raise HTTPException(status_code=401, detail={"code": "auth_invalid"})
-    return await get_instance_access(request, session)
+        raise HTTPException(
+            status_code=401, detail={"code": "auth_invalid"}
+        )
+    admission = await require_operator(request)
+    request.state.operator_admitted_at = monotonic()
+    from api_service.services.single_user_conversion import completed_guarded_upgrade
+
+    try:
+        completed = await completed_guarded_upgrade(session)
+    except Exception as exc:
+        logger.warning("Instance admission completion unavailable: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="unavailable") from exc
+    if completed is None:
+        raise HTTPException(status_code=503, detail="conversion_required")
+    request.state._operator_admission = _OPERATOR_ADMISSION
+    return admission
+
+
+async def bounded_operator_stream(
+    request: Request,
+    caller: OperatorAdmission,
+    stream: AsyncGenerator[str | bytes, None],
+) -> AsyncGenerator[str | bytes, None]:
+    """Expire cached admission even while a live source is idle or busy."""
+    async with aclosing(stream):
+        if not isinstance(caller, OperatorAdmission):
+            async for chunk in stream:
+                yield chunk
+            return
+        admitted_at = getattr(request.state, "operator_admitted_at", None)
+        while admitted_at is not None:
+            remaining = STREAM_REVALIDATION_SECONDS - (monotonic() - admitted_at)
+            if remaining <= 0:
+                return
+            deadline = asyncio.timeout(remaining)
+            try:
+                async with deadline:
+                    chunk = await anext(stream)
+            except StopAsyncIteration:
+                return
+            except TimeoutError:
+                if not deadline.expired():
+                    raise
+                return
+            if monotonic() - admitted_at >= STREAM_REVALIDATION_SECONDS:
+                return
+            yield chunk
 
 
 async def get_instance_access_optional(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
-) -> User | OperatorAdmission | None:
-    """Instance admission with the existing separately verified fan-out path.
-
-    A fan-out marker only defers authentication to its owning route. Artifact
-    consumers reject the missing admission; execution consumers must verify the
-    capability and its parent. No marker can mint operator recovery authority.
-    """
+) -> OperatorAdmission | None:
+    """Defer marked fan-out to its owning capability verifier, granting nothing."""
     if request.headers.get("x-moonmind-execution-fanout", "").strip() == "v1":
         return None
-    if is_disabled_local_mode():
-        return await get_instance_access(request, session)
-    return await _optional_current_user(request, session)
-
-
-async def _optional_current_user(
-    request: Request,
-    session: AsyncSession = Depends(get_async_session),
-) -> User | None:
-    """Optional counterpart for the separately authenticated worker path.
-
-    Missing credentials return ``None``; a bad presented credential is
-    never swallowed as anonymous success.
-
-    Workflow-scoped execution fan-out requests carry their capability in
-    the same ``Authorization: Bearer`` header plus the
-    ``X-MoonMind-Execution-Fanout: v1`` marker. The session extractor
-    would reject that bearer as ``auth_invalid`` before the route can
-    verify it, so a marked request skips person/session resolution in every
-    mode and the route authorizes via ``resolve_execution_fanout_capability``.
-    The marker itself grants no authority; other optional-user consumers must
-    reject a missing user instead of substituting operator access.
-    """
-    try:
-        marker = request.headers.get("x-moonmind-execution-fanout", "")
-    except Exception:
-        marker = ""
-    if isinstance(marker, str) and marker.strip() == "v1":
-        return None
-    if is_disabled_local_mode():
-        user = await _load_disabled_user(session)
-        request.state._disabled_operator_admission = _DISABLED_OPERATOR_ADMISSION
-        return user
-    if get_request_production_mode() == "header":
-        from moonmind.security.advanced_identity_4124 import trusted_proxy_header_name
-
-        if trusted_proxy_header_name() in request.headers:
-            from api_service.api.routers.advanced_auth_4124 import get_trusted_proxy_user
-
-            # Presence selects the existing authority, including an empty or
-            # invalid assertion. Absent assertions retain optional session and
-            # separately authenticated machine behavior. Proxy admission never
-            # mints the disabled-mode recovery sentinel.
-            return await get_trusted_proxy_user(request)
-    return await _resolve_session_principal(request, session, optional=True)
-
-
-def build_moonmind_control_plane_config(environ=None, mode=None):
-    """Resolve the MoonMind control-plane auth config explicitly (#4120 req 2).
-
-    Only MoonMind-owned inputs (AUTH_PROVIDER mode, MOONMIND_* cookie/key
-    material) are consumed. ``OMNIGENT_AUTH_*`` ambient values -- even
-    contradictory ones -- cannot select MoonMind behavior; simultaneous
-    same-origin use stays isolated through distinct cookies/keys/purposes.
-    Callers must pass the durable session secret explicitly; this helper
-    never reads runtime-server secrets.
-
-    ``mode`` accepts the startup-classified production mode so the
-    omitted-fresh path (blank storage, classified ``accounts``) resolves
-    through the same production code as explicit ``accounts``. When omitted,
-    the startup-classified mode is read via the auth-modes owner and blank
-    storage fails closed with 503 (startup owns the fresh-vs-upgrade
-    decision).
-
-    Production wiring: ``api_service.main._initialize_oidc_provider`` calls
-    :func:`resolve_moonmind_auth_config` directly with the classified
-    production mode at startup, so this helper is the request-time
-    counterpart of the same production boundary, not dead code.
-    """
-    from moonmind.security.auth_modes_4120 import default_session_key_path
-
-    if mode is not None:
-        from moonmind.security.omnigent_auth_qualification import (
-            validate_mode_selector,
-        )
-
-        effective = validate_mode_selector(str(mode).strip().lower())
-    else:
-        effective = get_request_production_mode()
-    if not effective:
-        # Omitted selector at request time: the startup classifier owns the
-        # fresh-vs-upgrade decision. Request code fails closed rather than
-        # guessing a mode.
-        raise HTTPException(status_code=503, detail="auth_undecided")
-    mode = effective
-    secret_env = (
-        os.environ.get("MOONMIND_SESSION_SECRET", "").strip()
-        or os.environ.get("JWT_SECRET", "").strip()
-    )
-    cookie_secret: bytes
-    if secret_env:
-        from moonmind.security.auth_modes_4120 import resolve_session_secret
-
-        cookie_secret = resolve_session_secret(explicit_secret=secret_env)
-    else:
-        # Durable deployment-owned key; never a per-process placeholder.
-        from moonmind.security.auth_modes_4120 import resolve_session_secret
-
-        cookie_secret = resolve_session_secret(
-            explicit_secret=None,
-            key_path=default_session_key_path(),
-            allow_generate=False,
-            for_remote_production=False,
-        )
-    runtime_environ = dict(environ) if environ is not None else dict(os.environ)
-    from moonmind.security.auth_modes_4120 import resolve_moonmind_auth_config
-
-    return resolve_moonmind_auth_config(
-        mode=mode,
-        cookie_secret=cookie_secret,
-        require_secure_cookies=os.environ.get("MOONMIND_REQUIRE_SECURE_COOKIES", "1")
-        != "0",
-        environ=runtime_environ,
-    )
-
-
-async def get_default_user_from_db(
-    session: AsyncSession = Depends(get_async_session),
-) -> User:
-    """Retrieve the default user from the database."""
-    user_id_str = settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID
-    try:
-        user_uuid = uuid.UUID(user_id_str)
-    except ValueError as exc:
-        raise HTTPException(status_code=500, detail="Invalid DEFAULT_USER_ID") from exc
-
-    user = await session.get(User, user_uuid)
-    if user is None:
-        raise HTTPException(status_code=500, detail="Default user not found")
-    return user
-
-async def _validate_oidc_cookie_user(request, session) -> User:
-    """Validate the MoonMind OIDC session cookie through shared authority.
-
-    Used by every protected endpoint in ``oidc`` mode so the browser cookie
-    minted by ``/api/v1/oidc/callback`` authenticates workflows, settings,
-    secrets, and other routes — not only the login router.
-    """
-    control_plane = build_moonmind_control_plane_config(mode="oidc")
-    token = request.cookies.get(control_plane.cookie_name) or (
-        (request.headers.get("authorization", "") or "").removeprefix("Bearer ").strip()
-        or None
-    )
-    if not token:
-        raise HTTPException(status_code=401, detail="auth_required")
-    from api_service.services.session_store import (
-        DbAccountStore,
-        DbRevocationStore,
-    )
-    from moonmind.security import omnigent_auth_qualification as _q
-
-    account_store = DbAccountStore(session)
-    revocation = DbRevocationStore(session)
-    try:
-        account = await _q.validate_moonmind_session(
-            token, account_store, revocation, control_plane
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        # Distinguish infrastructure outage (503) from bad credentials (401).
-        from moonmind.security.omnigent_auth_qualification import UnavailableError
-
-        if isinstance(exc, UnavailableError):
-            raise HTTPException(status_code=503, detail="unavailable") from exc
-        raise HTTPException(status_code=401, detail="auth_invalid") from exc
-    user = await session.get(User, account.user_id)
-    if user is None or not user.is_active:
-        raise HTTPException(status_code=401, detail="auth_invalid")
-    return user
-
-
-def get_current_user():
-    """Return the shared strict principal dependency.
-
-    A stable function reference is returned (no per-call closure and no
-    cached foreign resolver) so route registration and test dependency
-    overrides share one identity while the production mode is still
-    evaluated per request inside the dependency.
-
-    ``oidc`` and ``header`` modes dispatch to the qualified #4124
-    dependencies so the generic OIDC session cookie and the trusted-proxy
-    identity honor the same principal as their login/diagnostic flows.
-    All other modes resolve through the #4125 strict session authority
-    (``_strict_current_user``), which evaluates the production mode per
-    request and fails closed without legacy JWT acceptance.
-    """
-    from moonmind.security.auth_modes_4120 import get_request_production_mode
-
-    _mode = get_request_production_mode()
-    if _mode == "oidc":
-        # OIDC mode authenticates the MoonMind session cookie minted by the
-        # #4124 callback through the shared #4119/#4121 authority, so normal
-        # API routes honor the same principal as the login flow instead of
-        # requiring a legacy bearer token.
-        from fastapi import Depends as _Depends
-        from fastapi import Request as _Req
-        from api_service.db.base import get_async_session as _GetAsyncSession
-
-        async def _oidc_dependency(
-            request: _Req, session=_Depends(_GetAsyncSession)
-        ):
-            return await _validate_oidc_cookie_user(request, session)
-
-        return _oidc_dependency
-    if _mode == "header":
-        # Trusted-header mode authenticates every protected endpoint through
-        # the same explicitly trusted ingress + #4119 mapping as the
-        # diagnostic route, never only that route.
-        from fastapi import Request as _Req2
-
-        async def _header_dependency(request: _Req2, _session=None):
-            from api_service.api.routers.advanced_auth_4124 import (
-                get_trusted_proxy_user as _proxy_user,
-            )
-
-            return await _proxy_user(request)
-
-        return _header_dependency
-    return _strict_current_user
-
-
-def get_current_user_optional():
-    """Return the shared optional principal dependency.
-
-    Worker-token authenticated endpoints use this helper so header-only workers
-    are not blocked by FastAPI resolving a strict bearer-auth dependency first.
-    A missing credential returns ``None``; an invalid or conflicting
-    presented credential raises instead of falling back to anonymous.
-    """
-    return _optional_current_user
+    return await get_instance_access(request, session)
 
 
 async def get_auth_manager(
     db: AsyncSession = Depends(get_async_session),
 ) -> AuthProviderManager:
-    """Return an AuthProviderManager wired to the given DB session."""
-    profile_provider = ProfileAuthProvider(db, ProfileService())
-    env_provider = EnvAuthProvider()
-    return AuthProviderManager(profile_provider, env_provider)
+    return AuthProviderManager(ProfileAuthProvider(db), EnvAuthProvider())

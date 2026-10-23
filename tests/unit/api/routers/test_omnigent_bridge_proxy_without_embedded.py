@@ -16,8 +16,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parents[4]
 COMPOSITION_MODULE = (
     REPO_ROOT / "api_service/api/routers/omnigent_bridge_composition.py"
@@ -120,7 +118,6 @@ print("proxy-without-embedded-modules: OK")
 
 
 def test_proxy_composition_succeeds_with_launch_modules_unavailable() -> None:
-    pytest.importorskip("fastapi_users")
     completed = subprocess.run(
         [sys.executable, "-c", _ISOLATION_PROBE],
         cwd=REPO_ROOT,

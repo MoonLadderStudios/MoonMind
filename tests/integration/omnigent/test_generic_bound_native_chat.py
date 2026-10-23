@@ -18,7 +18,7 @@ from uuid import uuid4
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 
 from api_service.api.routers import omnigent_bridge as bridge
 from api_service.api.routers import omnigent_native_ui as ui
@@ -33,17 +33,19 @@ from api_service.db.models import (
     OmnigentSession,
     OmnigentTurnAttempt,
     ProviderProfileSlotLease,
-    User,
 )
-from api_service.services.single_user_conversion import SingleUserConversionRun
+from api_service.services.single_user_conversion import run_guarded_upgrade
 from moonmind.omnigent.bridge_proxy import OmnigentBridgeSessionProxy
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.control_plane.identities import canonical_turn_command_key
 from moonmind.omnigent.runtime_bindings import RuntimeBindingState
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
-from tests.integration.omnigent.test_generic_native_durable_journey import (
-    native_journey,  # noqa: F401
-    session_factory,  # noqa: F401
+from tests.helpers.account_source import User
+from tests.integration.omnigent.test_generic_native_durable_journey import (  # noqa: F401
+    native_journey,
+)
+from tests.integration.omnigent.test_generic_native_durable_journey import (  # noqa: F401
+    session_factory,
 )
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
@@ -148,9 +150,8 @@ def _select_request_plan_shape(journey, explicit_binding):
 async def test_attested_generic_native_binding_reads_and_sends(
     native_journey, session_factory, explicit_binding, auth_mode, monkeypatch
 ):
-    from moonmind.config.settings import settings
 
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", auth_mode)
+    monkeypatch.setenv("AUTH_PROVIDER", str(auth_mode or ""))
     journey = native_journey
     _select_request_plan_shape(journey, explicit_binding)
     await _during_active_session(
@@ -981,9 +982,8 @@ async def test_generic_native_retry_rejects_changed_snapshot_identity(
 async def test_account_free_operator_uses_live_durable_binding(
     native_journey, session_factory, monkeypatch
 ):
-    from moonmind.security import auth_modes_4120
 
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
+    monkeypatch.setenv("AUTH_PROVIDER", "disabled")
     for key in (
         "MOONMIND_PUBLIC_BASE_URL",
         "MOONMIND_TRUSTED_INGRESS",
@@ -992,17 +992,8 @@ async def test_account_free_operator_uses_live_durable_binding(
     ):
         monkeypatch.delenv(key, raising=False)
     async with session_factory() as session:
-        session.add(
-            SingleUserConversionRun(
-                preflight_digest="native-chat-fresh",
-                status="complete",
-                result_json={
-                    "published": True,
-                    "decision": {"disposition": "fresh_init"},
-                },
-            )
-        )
-        await session.commit()
+        converted = await run_guarded_upgrade(session, operator_authorized=True)
+        assert converted.published, converted
     retained_owner = str(uuid4())
 
     async def active():
@@ -1039,4 +1030,7 @@ async def test_account_free_operator_uses_live_durable_binding(
 
     await _during_active_session(native_journey, active)
     async with session_factory() as session:
-        assert (await session.execute(select(User))).scalars().all() == []
+        connection = await session.connection()
+        assert not await connection.run_sync(
+            lambda conn: inspect(conn).has_table("user")
+        )

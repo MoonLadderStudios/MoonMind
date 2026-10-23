@@ -34,7 +34,7 @@ from api_service.api.routers.omnigent_bridge import (
     _terminal_envelope,
     router,
 )
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db.models import Base
 from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
@@ -288,7 +288,7 @@ async def test_direct_compat_reads_through_workflow_detail_http_routes(store) ->
     # workflow-ownership service, bridge-enabled gate, and the durable store the
     # events were persisted into. Resolution, authorization, and serialization
     # all run through the real router code under test.
-    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+    app.dependency_overrides[get_instance_access] = lambda: SimpleNamespace(
         id=user_id, email="operator@example.com", is_superuser=False
     )
     app.dependency_overrides[_get_execution_service] = lambda: SimpleNamespace(

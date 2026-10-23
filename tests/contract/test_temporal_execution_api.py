@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
-from datetime import UTC
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -11,18 +10,13 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from temporalio.client import WorkflowExecutionStatus
 
 from api_service.api.routers.executions import get_temporal_client
-from api_service.auth_providers import (
-    get_current_user,
-    get_current_user_optional,
-    get_instance_access,
-    get_instance_access_optional,
-)
+from api_service.auth_providers import get_instance_access, get_instance_access_optional
 from api_service.db import base as db_base
 from api_service.db.models import (
     Base,
-    TemporalExecutionCanonicalRecord,
     TemporalArtifact,
     TemporalArtifactEncryption,
     TemporalArtifactLink,
@@ -31,6 +25,7 @@ from api_service.db.models import (
     TemporalArtifactStatus,
     TemporalArtifactStorageBackend,
     TemporalArtifactUploadMode,
+    TemporalExecutionCanonicalRecord,
 )
 from api_service.main import app
 from moonmind.config.settings import settings
@@ -41,10 +36,9 @@ from moonmind.workflows.temporal import (
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.service import TemporalExecutionService
-from temporalio.client import WorkflowExecutionStatus
 
-CURRENT_USER_DEP = get_current_user()
-CURRENT_USER_OPTIONAL_DEP = get_current_user_optional()
+CURRENT_USER_DEP = get_instance_access
+CURRENT_USER_OPTIONAL_DEP = get_instance_access_optional
 
 
 def _override_current_user(user) -> None:

@@ -16,7 +16,6 @@ from api_service.auth_providers import (
     instance_operator_principal,
 )
 from api_service.db.base import get_async_session
-from api_service.db.models import User
 from moonmind.schemas.temporal_artifact_models import (
     ArtifactCollectionResponse,
     ArtifactCollectionRowModel,
@@ -212,22 +211,14 @@ async def _get_temporal_artifact_service(
 
 
 async def _resolve_principal(
-    user: User | OperatorAdmission | None = Depends(get_instance_access_optional),
+    user: OperatorAdmission | None = Depends(get_instance_access_optional),
 ) -> str:
     # The optional dependency also serves separately authenticated fan-out
     # requests. A machine marker is not artifact authority, including in local
     # mode. Ordinary account-free admission carries no person identity.
-    if isinstance(user, OperatorAdmission):
-        return instance_operator_principal()
-    if user is None or getattr(user, "id", None) is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={
-                "code": "auth_required",
-                "message": "Authentication is required for artifact operations.",
-            },
-        )
-    return str(user.id)
+    if not isinstance(user, OperatorAdmission):
+        raise HTTPException(status_code=401, detail={"code": "auth_required"})
+    return instance_operator_principal()
 
 
 async def _resolve_recovery_principal(

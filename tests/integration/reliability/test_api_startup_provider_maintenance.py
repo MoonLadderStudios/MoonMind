@@ -49,7 +49,6 @@ async def test_http_serves_while_bootstrap_waits_and_lifespan_owns_cleanup(
     assert match is not None
     monkeypatch.setenv("OMNIGENT_ENABLED", enabled_setting or match[1])
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "http://unused.invalid")
-    monkeypatch.setattr(api_main.settings.oidc, "AUTH_PROVIDER", "oidc")
     monkeypatch.delattr(
         api_main.app.state, "omnigent_bootstrap_reconciliation_task", raising=False
     )
@@ -73,7 +72,7 @@ async def test_http_serves_while_bootstrap_waits_and_lifespan_owns_cleanup(
     # Keep unrelated startup integrations hermetic. The production startup,
     # lifespan, reconciliation ordering, health route and TCP server all run.
     for name in (
-        "_initialize_oidc_provider",
+        "_initialize_operator_admission",
         "_sync_preset_seed_catalog",
         "_auto_seed_provider_profiles",
         "_sync_env_managed_secrets",
@@ -84,6 +83,11 @@ async def test_http_serves_while_bootstrap_waits_and_lifespan_owns_cleanup(
         "ensure_recurring_workflow_schedules_reconciled",
     ):
         monkeypatch.setattr(api_main, name, AsyncMock())
+    monkeypatch.setattr(
+        api_main,
+        "_run_guarded_single_user_upgrade",
+        AsyncMock(return_value={"published": True}),
+    )
     monkeypatch.setattr(api_main, "_register_settings_change_subscribers", lambda: None)
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/health.db")

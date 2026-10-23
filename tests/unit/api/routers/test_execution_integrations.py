@@ -11,20 +11,15 @@ from sqlalchemy.orm import sessionmaker
 from api_service.api.routers import (
     execution_integrations as execution_integrations_router,
 )
-from api_service.auth_providers import (
-    get_current_user,
-    get_current_user_optional,
-    get_instance_access,
-    get_instance_access_optional,
-)
+from api_service.auth_providers import get_instance_access, get_instance_access_optional
 from api_service.db import base as db_base
 from api_service.db.models import Base
 from api_service.main import app
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal.client import WorkflowStartResult
 
-CURRENT_USER_DEP = get_current_user()
-CURRENT_USER_OPTIONAL_DEP = get_current_user_optional()
+CURRENT_USER_DEP = get_instance_access
+CURRENT_USER_OPTIONAL_DEP = get_instance_access_optional
 
 # ---------------------------------------------------------------------------
 # Module-scoped shared database fixture
@@ -408,8 +403,8 @@ async def test_historical_removed_integration_keeps_reads_but_cannot_advance(
 ):
     from sqlalchemy import select
     from api_service.db.models import (
-        TemporalExecutionRecord,
         TemporalExecutionCanonicalRecord,
+        TemporalExecutionRecord,
         TemporalIntegrationCorrelationRecord,
     )
     from moonmind.workflows.temporal.service import MoonMindWorkflowState
@@ -433,7 +428,9 @@ async def test_historical_removed_integration_keeps_reads_but_cannot_advance(
     )
     monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
     monkeypatch.setattr(
-        settings.workflow, "temporal_artifact_root", str(tmp_path / "artifacts")
+        settings.workflow,
+        "temporal_artifact_root",
+        str(tmp_path / "artifacts"),
     )
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
     async with _shared_client(uuid4()) as client:

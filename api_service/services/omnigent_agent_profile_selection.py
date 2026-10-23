@@ -22,7 +22,6 @@ from api_service.db.models import (
     OmnigentAgentProfileUsage,
     OmnigentAgentProfileVersion,
     OmnigentUpstreamAgentProjection,
-    User,
 )
 from api_service.services.omnigent_agent_profile_service import (
     UpstreamInventoryRefreshError,
@@ -39,6 +38,7 @@ from api_service.services.provider_profile_service import (
     _managed_secret_statuses_for_profiles,
 )
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.executions.execution_contract import (
     WorkflowContractError,
     reject_retired_vector_fields,
@@ -165,7 +165,7 @@ def _provider_materializer_error(
     return None
 
 
-def _provider_profile_visibility_filter(user: User | None) -> Any | None:
+def _provider_profile_visibility_filter(user: OperatorAdmission | None) -> Any | None:
     """Return the SQL visibility boundary shared by explicit/default selection."""
 
     # Single-user (#4349): provider profiles are instance resources.
@@ -334,7 +334,7 @@ async def resolve_agent_profile_snapshot(
     selection: Mapping[str, Any],
     consumer_type: str,
     consumer_id: str,
-    user: User | None,
+    user: OperatorAdmission | None,
     replace_existing_usage: bool = False,
     persist_usage: bool = True,
 ) -> dict[str, Any]:
@@ -687,7 +687,7 @@ async def resolve_default_agent_profile_snapshot(
     launch_policy_ref: str | None,
     consumer_type: str,
     consumer_id: str,
-    user: User | None,
+    user: OperatorAdmission | None,
     _allow_drift_recovery: bool = True,
 ) -> dict[str, Any]:
     """Resolve the deployment-managed default into explicit launch authority.
@@ -1122,7 +1122,7 @@ async def refresh_schedule_deployment_snapshot(
     *,
     parameters: Mapping[str, Any],
     consumer_id: str,
-    user: User | None,
+    user: OperatorAdmission | None,
 ) -> dict[str, Any]:
     """Advance deployment bindings only when the scheduled semantics are equal.
 
@@ -1328,7 +1328,7 @@ async def refresh_managed_bootstrap_snapshot(
     parameters: Mapping[str, Any],
     consumer_type: str,
     consumer_id: str,
-    user: User | None,
+    user: OperatorAdmission | None,
     replace_existing_usage: bool = False,
     persist_usage: bool = True,
 ) -> dict[str, Any]:

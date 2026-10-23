@@ -19,13 +19,14 @@ from api_service.api.routers.agent_runs import router
 from api_service.api.routers.temporal_artifacts import _get_temporal_artifact_service
 from api_service.auth_providers import get_instance_access
 from api_service.db import models as db_models
-from api_service.db.models import User
 from moonmind.schemas.agent_runtime_models import (
     ObservabilityEventKind,
     RunObservabilityEvent,
 )
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 from moonmind.workflows.temporal.artifacts import TemporalArtifactAuthorizationError
+from tests.helpers.account_source import User
+
 
 @pytest.fixture
 def test_user() -> User:

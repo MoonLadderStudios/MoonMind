@@ -203,18 +203,13 @@ async def test_real_conversion_preserves_content_and_ids_with_exact_digest_trans
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
     from api_service.api.schemas import PresetExpandResponseSchema, PresetResponseSchema
-    from api_service.db.models import (
-        Base,
-        Preset,
-        PresetReleaseStatus,
-        PresetScopeType,
-        User,
-    )
+    from api_service.db.models import Preset, PresetReleaseStatus, PresetScopeType
     from api_service.services.presets.catalog import (
         PresetCatalogService,
         _preset_digest,
     )
     from api_service.services.single_user_conversion import run_guarded_upgrade
+    from tests.helpers.account_source import User, create_source_schema
 
     api = PresetJourneyApi()
     state = _populate(api)
@@ -223,7 +218,7 @@ async def test_real_conversion_preserves_content_and_ids_with_exact_digest_trans
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/preset-upgrade.db")
     try:
         async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+            await conn.run_sync(create_source_schema)
         async with AsyncSession(engine, expire_on_commit=False) as session:
             owner = User(id=UUID(int=321), email="journey@example.invalid")
             session.add(owner)

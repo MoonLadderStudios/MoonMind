@@ -35,7 +35,9 @@ async def _secret(slug: str):
         ).scalar_one_or_none()
 
 @pytest.mark.asyncio
-async def test_startup_syncs_managed_secrets_from_env(monkeypatch, disabled_env_keys, tmp_path):
+async def test_startup_syncs_managed_secrets_from_env(
+    monkeypatch, provider_env_keys, tmp_path
+):
     await _seed_db(tmp_path)
     _isolate_secret_env_sources(monkeypatch, tmp_path)
 
@@ -43,9 +45,7 @@ async def test_startup_syncs_managed_secrets_from_env(monkeypatch, disabled_env_
     monkeypatch.setenv("GITHUB_PAT", "ghp-test-pat")
     monkeypatch.setenv("ATLASSIAN_API_KEY", "atl-token")
 
-    with (
-        patch("api_service.main._initialize_oidc_provider"),
-    ):
+    with (patch("api_service.main._initialize_operator_admission"),):
         await startup_event()
 
     atlassian_secret = await _secret("ATLASSIAN_API_KEY")
@@ -59,7 +59,9 @@ async def test_startup_syncs_managed_secrets_from_env(monkeypatch, disabled_env_
     assert await _secret("GITHUB_PAT") is None
 
 @pytest.mark.asyncio
-async def test_startup_updates_existing_env_managed_secret(monkeypatch, disabled_env_keys, tmp_path):
+async def test_startup_updates_existing_env_managed_secret(
+    monkeypatch, provider_env_keys, tmp_path
+):
     await _seed_db(tmp_path)
     _isolate_secret_env_sources(monkeypatch, tmp_path)
 
@@ -86,9 +88,7 @@ async def test_startup_updates_existing_env_managed_secret(monkeypatch, disabled
     monkeypatch.setenv("GITHUB_TOKEN", "new-github-token")
     monkeypatch.setenv("GITHUB_PAT", "new-github-pat")
 
-    with (
-        patch("api_service.main._initialize_oidc_provider"),
-    ):
+    with (patch("api_service.main._initialize_operator_admission"),):
         await startup_event()
 
     refreshed = await _secret("ATLASSIAN_API_KEY")
@@ -103,7 +103,7 @@ async def test_startup_updates_existing_env_managed_secret(monkeypatch, disabled
 
 @pytest.mark.asyncio
 async def test_startup_syncs_managed_secrets_from_dotenv_file(
-    monkeypatch, disabled_env_keys, tmp_path
+    monkeypatch, provider_env_keys, tmp_path
 ):
     await _seed_db(tmp_path)
     _isolate_secret_env_sources(monkeypatch, tmp_path)
@@ -114,9 +114,7 @@ async def test_startup_syncs_managed_secrets_from_dotenv_file(
     )
     monkeypatch.setattr("moonmind.config.paths.ENV_FILE", dotenv_path)
 
-    with (
-        patch("api_service.main._initialize_oidc_provider"),
-    ):
+    with (patch("api_service.main._initialize_operator_admission"),):
         await startup_event()
 
     atlassian_secret = await _secret("ATLASSIAN_API_KEY")
@@ -126,16 +124,14 @@ async def test_startup_syncs_managed_secrets_from_dotenv_file(
 
 @pytest.mark.asyncio
 async def test_startup_ignores_whitespace_only_env_tokens(
-    monkeypatch, disabled_env_keys, tmp_path
+    monkeypatch, provider_env_keys, tmp_path
 ):
     await _seed_db(tmp_path)
     _isolate_secret_env_sources(monkeypatch, tmp_path)
 
     monkeypatch.setenv("ATLASSIAN_API_KEY", "\t")
 
-    with (
-        patch("api_service.main._initialize_oidc_provider"),
-    ):
+    with (patch("api_service.main._initialize_operator_admission"),):
         await startup_event()
 
     assert await _secret("ATLASSIAN_API_KEY") is None

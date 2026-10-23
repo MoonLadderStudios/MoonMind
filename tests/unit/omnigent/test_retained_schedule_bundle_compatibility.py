@@ -1,4 +1,4 @@
-"""Retained plan-less schedules preserve disabled-mode bundle source reads.
+"""Retained plan-less schedules admit their selected immutable bundle source.
 
 Real profile selection owner persists schedule-scoped usage with a definition ID
 that is distinct from the occurrence workflow. The actual Run adapter projects
@@ -18,13 +18,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from api_service.db.models import (
     Base,
     ManagedAgentProviderProfile,
+    OmnigentAgentProfile,
+    OmnigentAgentProfileUsage,
+    OmnigentAgentProfileVersion,
+    OmnigentUpstreamAgentProjection,
     ProviderCredentialSource,
     ProviderProfileAuthState,
     RuntimeMaterializationMode,
-    OmnigentAgentProfile,
-    OmnigentAgentProfileVersion,
-    OmnigentAgentProfileUsage,
-    OmnigentUpstreamAgentProjection,
     TemporalArtifactRedactionLevel,
     TemporalExecutionCanonicalRecord,
     TemporalWorkflowType,
@@ -40,6 +40,10 @@ from moonmind.omnigent.harness_platform.catalog import (
 from moonmind.omnigent.harness_platform.catalog_service import (
     DbHarnessCatalogRepository,
     HarnessCatalogSyncResult,
+)
+from moonmind.omnigent.harness_platform.failures import (
+    HarnessPlatformError,
+    HarnessPlatformFailure,
 )
 from moonmind.omnigent.harness_platform.planning_service import (
     OmnigentExecutionPlanningService,
@@ -59,10 +63,13 @@ class SourceVerified(Exception):
 
 
 @pytest.mark.asyncio
-async def test_retained_schedule_bundle_keeps_disabled_legacy_source_read(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize(
+    "authority",
+    ("selected", "missing_step", "wrong_digest", "restricted", "quarantined"),
+)
+async def test_retained_schedule_bundle_uses_selected_source_authority(
+    tmp_path, monkeypatch, authority
 ):
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled")
     monkeypatch.setenv("AUTH_PROVIDER", "disabled")
     monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
     monkeypatch.setattr(
@@ -97,6 +104,11 @@ async def test_retained_schedule_bundle_keeps_disabled_legacy_source_read(
             bundle_ref = "artifact:" + artifact.artifact_id
             assert artifact.created_by_principal == "operator"
             assert await artifacts._repository.list_links(artifact.artifact_id) == []
+            if authority == "restricted":
+                artifact.redaction_level = TemporalArtifactRedactionLevel.RESTRICTED
+            elif authority == "quarantined":
+                artifact.metadata_json = {**artifact.metadata_json, "quarantine": True}
+            await session.commit()
 
         catalog = create_catalog_snapshot(
             endpointRef="default",
@@ -226,8 +238,8 @@ async def test_retained_schedule_bundle_keeps_disabled_legacy_source_read(
             )
             await session.flush()
             from api_service.services.omnigent_agent_profile_selection import (
-                resolve_agent_profile_snapshot,
                 compile_agent_profile_snapshot_parameters,
+                resolve_agent_profile_snapshot,
             )
 
             snapshot = await resolve_agent_profile_snapshot(
@@ -328,7 +340,37 @@ async def test_retained_schedule_bundle_keeps_disabled_legacy_source_read(
             },
             parameters=admitted_parameters,
         )
-        with pytest.raises(SourceVerified):
-            await planner.plan(request)
+        if authority == "missing_step":
+            request = request.model_copy(update={"step_execution": None})
+        elif authority == "wrong_digest":
+            async with sessions() as session:
+                version = await session.scalar(select(OmnigentAgentProfileVersion))
+                version.digest = "sha256:" + "f" * 64
+                await session.commit()
+        if authority == "selected":
+            with pytest.raises(SourceVerified):
+                await planner.plan(request)
+            async with sessions() as session:
+                artifacts = TemporalArtifactService(TemporalArtifactRepository(session))
+                retained, restored = await artifacts.read(
+                    artifact_id=artifact.artifact_id,
+                    principal="service:omnigent-generic-host",
+                    admitted_principal=f"workflow:{workflow_id}",
+                )
+                assert restored == body
+                assert retained.created_by_principal == "operator"
+        else:
+            with pytest.raises(HarnessPlatformError) as failure:
+                await planner.plan(request)
+            assert failure.value.code == (
+                HarnessPlatformFailure.OMNIGENT_AGENT_PROFILE_INVALID
+                if authority == "wrong_digest"
+                else HarnessPlatformFailure.OMNIGENT_AGENT_SOURCE_UNAVAILABLE
+            )
+            if authority in {"missing_step", "wrong_digest"}:
+                async with sessions() as session:
+                    assert await TemporalArtifactRepository(session).list_links(
+                        artifact.artifact_id
+                    ) == []
     finally:
         await engine.dispose()

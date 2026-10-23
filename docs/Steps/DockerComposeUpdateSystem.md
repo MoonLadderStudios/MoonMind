@@ -93,7 +93,7 @@ The workflow's deployment observer heartbeats while reading its registry and awa
 
 The controller uses the deployment-state directory and its image env overlay, JSON metadata, lock, and operation files. Mounted boundaries are a read-only host project at `/workspace/host_project` and narrowly writable state at `/workspace/deployment_state` where configured.
 
-The operator's `.env`, Compose overrides, project identity, credentials, bindings, and network attachments are preserved. Only controller-owned image/operation fields change, and state is written safely so interruption leaves recoverable intent rather than a truncated sole copy.
+The access preflight preserves `.env`, Compose overrides, project identity, credentials, bindings, networks, and ingress settings. Retiring an omitted, empty, or `disabled` `AUTH_PROVIDER` default is safe; active predecessor login modes require a separately verified migration. Only controller-owned image/operation fields change, written safely so interruptions preserve recoverable intent.
 
 Persist selected concrete images and the operation identity before recreating services. A pulled image alone is not an installed release.
 

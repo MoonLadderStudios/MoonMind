@@ -43,7 +43,7 @@ from tests.unit.omnigent.test_remediation_workspace import _binding, _head
 
 @pytest_asyncio.fixture(params=("accounts", "oidc", "header", "disabled"))
 async def artifacts(request, tmp_path, monkeypatch):
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", request.param)
+    monkeypatch.setenv("AUTH_PROVIDER", str(request.param or ""))
     monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
     monkeypatch.setattr(
         settings.workflow, "temporal_artifact_root", str(tmp_path / "blobs")

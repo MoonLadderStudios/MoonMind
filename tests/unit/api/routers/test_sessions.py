@@ -12,9 +12,9 @@ from typing import Iterator
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
+import pytest
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.testclient import TestClient
-import pytest
 
 from api_service.api.routers import sessions as sessions_router
 from api_service.api.routers.sessions import router
@@ -22,8 +22,8 @@ from api_service.api.routers.temporal_artifacts import (
     _get_temporal_artifact_service, _resolve_principal,
 )
 from api_service.auth_providers import get_instance_access
-from api_service.db.models import User
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
+from tests.helpers.account_source import User
 
 
 @pytest.fixture

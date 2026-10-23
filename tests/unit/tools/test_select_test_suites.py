@@ -1042,7 +1042,8 @@ def test_shared_resource_changes_require_real_docker_journey():
     "changed_path",
     [
         # Auth, admission, and route mounting.
-        "api_service/auth.py",
+        "moonmind/security/operator_admission.py",
+        "moonmind/security/deployment_auth.py",
         "api_service/auth_providers.py",
         "api_service/main.py",
         "moonmind/omnigent/bridge_security.py",
@@ -1160,7 +1161,8 @@ def test_integration_matrix_selects_only_owned_lanes(path, lanes):
     "path",
     [
         "api_service/main.py",
-        "api_service/auth.py",
+        "moonmind/security/operator_admission.py",
+        "moonmind/security/deployment_auth.py",
         "moonmind/config/settings.py",
         "moonmind/workflows/temporal/worker_runtime.py",
         "docker-compose.yaml",

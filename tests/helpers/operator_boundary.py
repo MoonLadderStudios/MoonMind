@@ -26,10 +26,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket
 from fastapi.responses import StreamingResponse
 
-from api_service.operator_admission import (
-    admit_websocket,
-    require_operator,
-)
+from api_service.operator_admission import admit_websocket, require_operator
 from moonmind.security.operator_admission import (
     OperatorAdmission,
     OperatorAdmissionError,
@@ -79,7 +76,9 @@ async def operator_control(
         "via": admission.via,
         "admitted_at": time.time(),
     }
-    logger.info("auth_event boundary=operator reason=work_admitted via=%s", admission.via)
+    logger.info(
+        "auth_event boundary=operator reason=work_admitted via=%s", admission.via
+    )
     return {"work_id": work_id, "action": action, "via": admission.via}
 
 

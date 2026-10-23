@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Iterator
-from uuid import uuid4
 
 import pytest
 from fastapi import FastAPI
@@ -21,7 +20,7 @@ from api_service.services.deployment_operations import (
     RollbackEligibilityDecision,
     RollbackImageTarget,
 )
-from moonmind.config.settings import settings
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
     DEPLOYMENT_UPDATE_TOOL_VERSION,
@@ -61,16 +60,6 @@ class _FakeExecutionService:
         return SimpleNamespace(items=self.execution_items)
 
 
-def _override_user(app: FastAPI, *, is_superuser: bool) -> None:
-    user = SimpleNamespace(
-        id=uuid4(),
-        email="operator@example.com",
-        is_active=True,
-        is_superuser=is_superuser,
-    )
-    app.dependency_overrides[get_instance_access] = lambda user=user: user
-
-
 def _override_execution_service(app: FastAPI) -> _FakeExecutionService:
     service = _FakeExecutionService()
     app.dependency_overrides[_get_temporal_execution_service] = lambda: service
@@ -84,20 +73,24 @@ def _override_deployment_service(
 
 
 @pytest.fixture
-def admin_client() -> Iterator[tuple[TestClient, _FakeExecutionService]]:
+def operator_client() -> Iterator[tuple[TestClient, _FakeExecutionService]]:
     app = FastAPI()
     app.include_router(router)
-    _override_user(app, is_superuser=True)
+    app.dependency_overrides[get_instance_access] = lambda: OperatorAdmission(
+        via="loopback"
+    )
     execution_service = _override_execution_service(app)
     with TestClient(app) as client:
         yield client, execution_service
 
 
-@pytest.fixture
-def user_client() -> Iterator[TestClient]:
+@pytest.fixture(params=[False, True], ids=["legacy-account", "legacy-superuser"])
+def unadmitted_client(request: pytest.FixtureRequest) -> Iterator[TestClient]:
     app = FastAPI()
     app.include_router(router)
-    _override_user(app, is_superuser=False)
+    app.dependency_overrides[get_instance_access] = lambda: SimpleNamespace(
+        id="retired-account", is_superuser=request.param
+    )
     _override_execution_service(app)
     with TestClient(app) as client:
         yield client
@@ -164,9 +157,9 @@ def _recent_action_service(*, eligible: bool = True) -> DeploymentOperationsServ
 
 
 def test_update_without_a_controller_returns_the_repair_route_and_no_workflow(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+    operator_client: tuple[TestClient, _FakeExecutionService],
 ) -> None:
-    client, execution_service = admin_client
+    client, execution_service = operator_client
     response = client.post(
         "/api/v1/operations/deployment/update",
         json=_valid_update_payload(),
@@ -179,27 +172,10 @@ def test_update_without_a_controller_returns_the_repair_route_and_no_workflow(
     assert execution_service.requests == []
 
 
-def test_non_admin_cannot_submit_deployment_update(
-    user_client: TestClient, monkeypatch: pytest.MonkeyPatch
+def test_account_claims_cannot_submit_deployment_update_without_admission(
+    unadmitted_client: TestClient,
 ) -> None:
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
-    response = user_client.post(
-        "/api/v1/operations/deployment/update",
-        json=_valid_update_payload(),
-    )
-
-    assert response.status_code == 403
-    assert response.json()["detail"]["code"] == "deployment_update_forbidden"
-    assert response.json()["detail"]["failureClass"] == "authorization_failure"
-
-
-def test_disabled_mode_still_enforces_admin_after_identity_resolution(
-    user_client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """#4125: disabled mode grants no bypass; a non-admin is denied like any mode."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled")
-
-    response = user_client.post(
+    response = unadmitted_client.post(
         "/api/v1/operations/deployment/update",
         json=_valid_update_payload(),
     )
@@ -230,12 +206,12 @@ def test_disabled_mode_still_enforces_admin_after_identity_resolution(
     ],
 )
 def test_invalid_deployment_update_policy_inputs_are_rejected_before_execution(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+    operator_client: tuple[TestClient, _FakeExecutionService],
     field: str,
     value: object,
     code: str,
 ) -> None:
-    client, execution_service = admin_client
+    client, execution_service = operator_client
     payload = _valid_update_payload()
     payload[field] = value
 
@@ -250,9 +226,9 @@ def test_invalid_deployment_update_policy_inputs_are_rejected_before_execution(
 
 
 def test_deployment_update_reason_is_optional(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+    operator_client: tuple[TestClient, _FakeExecutionService],
 ) -> None:
-    client, execution_service = admin_client
+    client, execution_service = operator_client
     payload = _valid_update_payload()
     payload.pop("reason")
 
@@ -268,9 +244,9 @@ def test_deployment_update_reason_is_optional(
 
 
 def test_arbitrary_shell_and_path_fields_are_not_accepted(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+    operator_client: tuple[TestClient, _FakeExecutionService],
 ) -> None:
-    client, execution_service = admin_client
+    client, execution_service = operator_client
     payload = _valid_update_payload()
     payload["command"] = "docker compose up"
     payload["composeFile"] = "/tmp/docker-compose.yaml"
@@ -288,9 +264,9 @@ def test_arbitrary_shell_and_path_fields_are_not_accepted(
 
 
 def test_current_deployment_state_returns_typed_shape(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+    operator_client: tuple[TestClient, _FakeExecutionService],
 ) -> None:
-    client, _execution_service = admin_client
+    client, _execution_service = operator_client
     response = client.get("/api/v1/operations/deployment/stacks/moonmind")
 
     assert response.status_code == 200
@@ -314,9 +290,9 @@ def test_current_deployment_state_returns_typed_shape(
 
 
 def test_deployment_state_withholds_rollback_for_missing_before_state_evidence(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+    operator_client: tuple[TestClient, _FakeExecutionService],
 ) -> None:
-    client, _execution_service = admin_client
+    client, _execution_service = operator_client
     _override_deployment_service(client.app, _recent_action_service(eligible=False))
 
     response = client.get("/api/v1/operations/deployment/stacks/moonmind")
@@ -329,9 +305,9 @@ def test_deployment_state_withholds_rollback_for_missing_before_state_evidence(
 
 
 def test_deployment_state_projects_recent_actions_from_execution_history(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+    operator_client: tuple[TestClient, _FakeExecutionService],
 ) -> None:
-    client, execution_service = admin_client
+    client, execution_service = operator_client
     execution_service.execution_items = [
         SimpleNamespace(
             workflow_id="mm:workflow-history",
@@ -388,9 +364,9 @@ def test_deployment_state_projects_recent_actions_from_execution_history(
 
 
 def test_allowed_image_targets_return_digest_guidance(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+    operator_client: tuple[TestClient, _FakeExecutionService],
 ) -> None:
-    client, _execution_service = admin_client
+    client, _execution_service = operator_client
     response = client.get(
         "/api/v1/operations/deployment/image-targets",
         params={"stack": "moonmind"},
@@ -414,10 +390,10 @@ def test_allowed_image_targets_return_digest_guidance(
     ],
 )
 def test_rollback_through_the_retired_workflow_updater_is_not_accepted(
-    admin_client: tuple[TestClient, _FakeExecutionService],
+    operator_client: tuple[TestClient, _FakeExecutionService],
     rollback_fields: dict[str, str],
 ) -> None:
-    client, execution_service = admin_client
+    client, execution_service = operator_client
 
     response = client.post(
         "/api/v1/operations/deployment/update",

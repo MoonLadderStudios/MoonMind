@@ -1,5 +1,8 @@
 """Bound startup work without weakening authoritative conversion or recovery."""
 
+from api_service.migrations.account_source import source_user_ids
+from tests.helpers.account_source import add_source_user
+
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
@@ -13,21 +16,18 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
 
 from api_service.db.models import (
-    Base,
     TemporalArtifact,
     TemporalArtifactRedactionLevel,
     TemporalArtifactUseClaim,
-    User,
 )
 from api_service.services import single_user_conversion as conversion
-from moonmind.config.settings import settings
-from moonmind.security import auth_modes_4120
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     TemporalArtifactAuthorizationError,
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from tests.helpers.account_source import User, create_source_schema
 
 pytestmark = pytest.mark.asyncio
 
@@ -37,7 +37,7 @@ async def database(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/startup.db")
     maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
+        await connection.run_sync(create_source_schema)
     try:
         yield maker
     finally:
@@ -46,7 +46,7 @@ async def database(tmp_path):
 
 async def seed(session):
     owner = uuid4()
-    session.add(User(id=owner, email=f"{owner}@example.invalid"))
+    await add_source_user(session, User(id=owner, email=f"{owner}@example.invalid"))
     artifact = TemporalArtifact(
         artifact_id=f"retained-{uuid4().hex}",
         storage_key="retained-key",
@@ -76,7 +76,7 @@ async def test_repeated_artifact_owners_are_classified_once(tmp_path, monkeypatc
     """Retained history size must not multiply identity classification work."""
     async with database(tmp_path) as maker, maker() as session:
         owner = uuid4()
-        session.add(User(id=owner, email="retained@example.invalid"))
+        await add_source_user(session, User(id=owner, email="retained@example.invalid"))
         session.add_all(
             [
                 TemporalArtifact(
@@ -375,9 +375,12 @@ async def test_uncertified_completion_does_not_bypass_inventory(
 @pytest.mark.parametrize("interrupt_repair", [False, True])
 @pytest.mark.parametrize("certified", [False, True])
 async def test_default_repairs_pending_recovery_atomically(
-    tmp_path, monkeypatch, interrupt_repair, certified,
+    tmp_path,
+    monkeypatch,
+    interrupt_repair,
+    certified,
 ):
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
 
     def artifact_service(session):
         return TemporalArtifactService(
@@ -482,12 +485,16 @@ async def test_default_repairs_pending_recovery_atomically(
 
 
 @pytest.mark.parametrize(
-    "mode, default_id", [("disabled", "other"), ("oidc", "owner"), ("disabled", "invalid")],
+    "mode, default_id",
+    [("disabled", "other"), ("oidc", "owner"), ("disabled", "invalid")],
 )
 async def test_startup_converts_later_eligible_artifact(
-    tmp_path, monkeypatch, mode, default_id,
+    tmp_path,
+    monkeypatch,
+    mode,
+    default_id,
 ):
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with database(tmp_path) as maker:
         async with maker() as session:
             _artifact_id, owner = await seed(session)
@@ -510,10 +517,18 @@ async def test_startup_converts_later_eligible_artifact(
             )
             new_id = new.artifact_id
             assert new.operator_recovery_granted is False
-        monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", mode)
-        monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", {
-            "owner": owner, "other": str(uuid4()), "invalid": "invalid-uuid",
-        }[default_id])
+        monkeypatch.setenv("AUTH_PROVIDER", str(mode or ""))
+        monkeypatch.setenv(
+            "DEFAULT_USER_ID",
+            str(
+                {
+                    "owner": owner,
+                    "other": str(uuid4()),
+                    "invalid": "invalid-uuid",
+                }[default_id]
+                or ""
+            ),
+        )
         collect = AsyncMock(wraps=conversion.collect_inventory)
         monkeypatch.setattr(conversion, "collect_inventory", collect)
         async with maker() as inspected:
@@ -547,14 +562,25 @@ async def test_startup_converts_later_eligible_artifact(
             collect.assert_not_awaited()
 
 
-@pytest.mark.parametrize("owner", [
-    None, "unknown_uuid", "another_user", "malformed", "service:",
-    "service:\t", "service:\u00a0", "SERVICE:agent",
-])
+@pytest.mark.parametrize(
+    "owner",
+    [
+        None,
+        "unknown_uuid",
+        "another_user",
+        "malformed",
+        "service:",
+        "service:\t",
+        "service:\u00a0",
+        "SERVICE:agent",
+    ],
+)
 async def test_later_unattributed_artifact_refuses_without_grant(
-    tmp_path, monkeypatch, owner,
+    tmp_path,
+    monkeypatch,
+    owner,
 ):
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with database(tmp_path) as maker:
         async with maker() as session:
             old_id, _owner = await seed(session)
@@ -566,7 +592,7 @@ async def test_later_unattributed_artifact_refuses_without_grant(
             if owner in {"unknown_uuid", "another_user"}:
                 if owner == "another_user":
                     other = User(id=uuid4(), email="another@example.invalid")
-                    writer.add(other)
+                    await add_source_user(writer, other)
                     owner = str(other.id)
                 else:
                     owner = str(uuid4())
@@ -591,11 +617,13 @@ async def test_later_unattributed_artifact_refuses_without_grant(
 
 
 async def test_disabled_direct_owner_and_machines_use_bounded_probe(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
-    default_id = str(uuid4())
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
-    monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", default_id)
+    from api_service.auth_providers import instance_operator_principal
+    default_id = instance_operator_principal()
+    monkeypatch.setenv("AUTH_PROVIDER", "disabled")
+    monkeypatch.setenv("DEFAULT_USER_ID", str(default_id or ""))
     async with database(tmp_path) as maker:
         async with maker() as session:
             assert (await conversion.run_guarded_upgrade(
@@ -640,16 +668,23 @@ async def test_disabled_direct_owner_and_machines_use_bounded_probe(
             assert (await restarted.get(TemporalArtifact, "later-0")).operator_recovery_granted is False
 
 
-@pytest.mark.parametrize("mode, configuration, eligible", [
-    ("disabled", None, True),
-    ("disabled", "zero", True),
-    ("oidc", "zero", False),
-    ("disabled", "nonzero", False),
-    ("disabled", "invalid", False),
-    ("disabled", "noncanonical", False),
-])
+@pytest.mark.parametrize(
+    "mode, configuration, eligible",
+    [
+        ("disabled", None, True),
+        ("disabled", "zero", True),
+        ("oidc", "zero", False),
+        ("disabled", "nonzero", False),
+        ("disabled", "invalid", False),
+        ("disabled", "noncanonical", False),
+    ],
+)
 async def test_mixed_history_preserves_only_reserved_deployment_scope(
-    tmp_path, monkeypatch, mode, configuration, eligible,
+    tmp_path,
+    monkeypatch,
+    mode,
+    configuration,
+    eligible,
 ):
     zero = conversion.DEPLOYMENT_SUBJECT_ID
     default_owner = str(uuid4()) if configuration == "nonzero" else zero
@@ -659,8 +694,8 @@ async def test_mixed_history_preserves_only_reserved_deployment_scope(
     }[configuration]
     if configuration == "noncanonical":
         default_owner = "0" * 32
-    monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", zero)
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "oidc")
+    monkeypatch.setenv("DEFAULT_USER_ID", str(zero or ""))
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with database(tmp_path) as maker:
         async with maker() as first:
             original_id, owner = await seed(first)
@@ -692,15 +727,15 @@ async def test_mixed_history_preserves_only_reserved_deployment_scope(
             claim = (await writer.execute(select(TemporalArtifactUseClaim))).scalar_one()
             claim_id = claim.id
             claim_expiry = claim.expires_at.replace(tzinfo=None)
-        monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", mode)
-        monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", configured)
+        monkeypatch.setenv("AUTH_PROVIDER", str(mode or ""))
+        monkeypatch.setenv("DEFAULT_USER_ID", str(configured or ""))
         async with maker() as restarted:
             result = await conversion.run_guarded_upgrade(
                 restarted, operator_authorized=True,
             )
             assert result.published is eligible, result.to_sanitized_dict()
             assert result.decision.eligible is eligible
-            assert await restarted.get(User, UUID(zero)) is None
+            assert UUID(zero) not in await source_user_ids(restarted)
             if eligible:
                 assert result.decision.person_count == 1
                 assert result.transforms["artifacts"]["recovery_grants"] == 1
@@ -733,11 +768,13 @@ async def test_mixed_history_preserves_only_reserved_deployment_scope(
 
 @pytest.mark.parametrize("scenario", ["alone", "second", "aliased", "later_collision"])
 async def test_reserved_zero_never_hides_a_real_user(
-    tmp_path, monkeypatch, scenario,
+    tmp_path,
+    monkeypatch,
+    scenario,
 ):
     zero = conversion.DEPLOYMENT_SUBJECT_ID
-    monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", zero)
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
+    monkeypatch.setenv("DEFAULT_USER_ID", str(zero or ""))
+    monkeypatch.setenv("AUTH_PROVIDER", "disabled")
     async with database(tmp_path) as maker:
         async with maker() as writer:
             owner = None
@@ -754,7 +791,7 @@ async def test_reserved_zero_never_hides_a_real_user(
                     created_by_principal=owner,
                     redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
                 ))
-            writer.add(User(id=UUID(zero), email="zero@example.invalid"))
+            await add_source_user(writer, User(id=UUID(zero), email="zero@example.invalid"))
             writer.add(TemporalArtifact(
                 artifact_id="real-zero-user", storage_key="zero-user-key",
                 created_by_principal=zero,
@@ -774,15 +811,16 @@ async def test_reserved_zero_never_hides_a_real_user(
             row = await session.get(TemporalArtifact, "real-zero-user")
             assert row.created_by_principal == zero
             assert row.operator_recovery_granted is eligible
-            assert await session.get(User, UUID(zero)) is not None
+            assert UUID(zero) in await source_user_ids(session)
 
 
 async def test_reserved_zero_eligibility_is_not_proof_of_a_real_user(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     zero = conversion.DEPLOYMENT_SUBJECT_ID
-    monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", zero)
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
+    monkeypatch.setenv("DEFAULT_USER_ID", str(zero or ""))
+    monkeypatch.setenv("AUTH_PROVIDER", "disabled")
     async with database(tmp_path) as maker:
         async with maker() as session:
             for granted in (False, True):
@@ -796,7 +834,7 @@ async def test_reserved_zero_eligibility_is_not_proof_of_a_real_user(
             # It must neither invent a grant nor revoke existing proof.
             outcome = await conversion.artifacts_transform(session, [zero])
             assert outcome == {"recovery_grants": 0, "preserved": 2}
-            assert await session.get(User, UUID(zero)) is None
+            assert UUID(zero) not in await source_user_ids(session)
             for granted in (False, True):
                 row = await session.get(TemporalArtifact, f"reserved-{granted}")
                 assert row.created_by_principal == zero

@@ -1,12 +1,4 @@
-"""Legacy profile-provider contract, updated for single-user #4349.
-
-Execution credentials resolve from provider profiles + managed-secret
-references, never from ``User``/``UserProfile``. A ``user=``-only call
-without ``profile_id`` therefore resolves to ``None`` (no implicit profile
-creation); the ``profile_id`` path below preserves the redaction contract.
-Legacy ``UserProfile`` values are converted by
-``api_service.services.profile_secret_migration``.
-"""
+"""Provider credentials resolve by profile and keep their redaction contract."""
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -18,7 +10,6 @@ from api_service.db.models import (
     ManagedSecret,
     SecretStatus,
 )
-from api_service.services.profile_service import ProfileService
 from moonmind.auth.profile_provider import ProfileAuthProvider
 
 
@@ -47,10 +38,10 @@ async def test_profile_provider_returns_secret(tmp_path):
             )
         )
         await session.commit()
-        svc = ProfileService()
-        provider = ProfileAuthProvider(session, svc)
+        provider = ProfileAuthProvider(session)
         secret = await provider.get_secret(key="GITHUB_TOKEN", profile_id="prof-legacy")
         assert secret == "tok"
         assert "redacted-sha256" in repr(secret)
         # user-only legacy input no longer provisions or resolves.
-        assert await provider.get_secret(key="GITHUB_TOKEN", user=object()) is None
+        with pytest.raises(TypeError):
+            await provider.get_secret(key="GITHUB_TOKEN", user=object())

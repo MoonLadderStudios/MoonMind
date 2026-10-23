@@ -15,14 +15,13 @@ write boundary, so no network or credentials are required:
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api_service.api.routers import issue_lifecycle as issue_lifecycle_router
-from api_service.auth_providers import get_instance_access
+from api_service.auth_providers import get_instance_access, instance_operator_principal
+from moonmind.security.operator_admission import OperatorAdmission
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -57,26 +56,20 @@ def _issue(*labels: str) -> dict:
     }
 
 
-def _client(user: SimpleNamespace, github_service: _FakeGithubService) -> TestClient:
+def _client(github_service: _FakeGithubService) -> TestClient:
     app = FastAPI()
     app.include_router(issue_lifecycle_router.router)
-    app.dependency_overrides[get_instance_access] = lambda: user
+    app.dependency_overrides[get_instance_access] = lambda: OperatorAdmission(
+        via="loopback"
+    )
     app.dependency_overrides[issue_lifecycle_router.get_github_service] = lambda: github_service
     return TestClient(app, raise_server_exceptions=False)
-
-
-def _admin() -> SimpleNamespace:
-    return SimpleNamespace(id="admin-1", email="admin@example.com", is_superuser=True)
-
-
-def _regular() -> SimpleNamespace:
-    return SimpleNamespace(id="user-1", email="user@example.com", is_superuser=False)
 
 
 def test_pending_synchronization_during_github_outage_is_unknown_not_success() -> None:
     """Outage honesty across the real context + submit boundary."""
     fake = _FakeGithubService()
-    client = _client(_regular(), fake)
+    client = _client(fake)
 
     context = client.post(
         "/api/v1/executions/issue-lifecycle/context",
@@ -98,7 +91,7 @@ def test_pending_synchronization_during_github_outage_is_unknown_not_success() -
     flaky = _FakeGithubService(
         result={"ok": False, "reasonCode": "outcome_unknown", "summary": "lost response"}
     )
-    outage_client = _client(_regular(), flaky)
+    outage_client = _client(flaky)
     submitted = outage_client.post(
         "/api/v1/executions/issue-lifecycle/actions/submit",
         json={
@@ -121,7 +114,7 @@ def test_pending_synchronization_during_github_outage_is_unknown_not_success() -
 def test_cancellation_hold_flow_publishes_auditable_decision_and_stays_blocked() -> None:
     """Hold records identity/reason, publishes via GitHub, keeps the block."""
     fake = _FakeGithubService()
-    client = _client(_regular(), fake)
+    client = _client(fake)
 
     submitted = client.post(
         "/api/v1/executions/issue-lifecycle/actions/submit",
@@ -137,7 +130,7 @@ def test_cancellation_hold_flow_publishes_auditable_decision_and_stays_blocked()
     assert submitted.status_code == 200, submitted.text
     payload = submitted.json()
     assert payload["allowed"] is True
-    assert payload["decision"]["operator"] == "user-1"
+    assert payload["decision"]["operator"] == instance_operator_principal()
     assert payload["decision"]["reason"] == "operator investigating"
     assert payload["decision"]["hold_released"] is False
     assert payload["publication"]["status"] == "published"
@@ -146,7 +139,7 @@ def test_cancellation_hold_flow_publishes_auditable_decision_and_stays_blocked()
     # deployment can observe it without a second result store.
     assert len(fake.calls) == 1
     assert "Next action" in fake.calls[0]["body"]
-    assert "user-1" in fake.calls[0]["body"]
+    assert instance_operator_principal() in fake.calls[0]["body"]
 
     # The hold keeps recovery blocked: acknowledgment-equivalent state does
     # not release admission until an explicit resolution.
@@ -168,7 +161,7 @@ def test_cancellation_hold_flow_publishes_auditable_decision_and_stays_blocked()
 def test_competing_pr_conflict_is_rejected_by_the_server() -> None:
     """Stale/conflicting submissions fail server-side, not just in the UI."""
     fake = _FakeGithubService()
-    client = _client(_admin(), fake)
+    client = _client(fake)
 
     submitted = client.post(
         "/api/v1/executions/issue-lifecycle/actions/submit",
@@ -194,7 +187,7 @@ def test_competing_pr_conflict_is_rejected_by_the_server() -> None:
 def test_prior_failed_attempt_history_survives_a_later_launch() -> None:
     """A later launch does not erase prior failure evidence."""
     fake = _FakeGithubService()
-    client = _client(_admin(), fake)
+    client = _client(fake)
 
     first = client.post(
         "/api/v1/executions/issue-lifecycle/context",

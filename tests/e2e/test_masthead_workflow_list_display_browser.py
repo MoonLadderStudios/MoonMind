@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import os
 import asyncio
+import os
 import threading
 import time
 from contextlib import contextmanager
@@ -31,10 +31,11 @@ os.environ.setdefault(
 
 from playwright.sync_api import expect, sync_playwright
 
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
-from api_service.db.models import Base, User
+from api_service.db.models import Base
 from api_service.main import app as main_app
+from tests.helpers.account_source import User
 
 
 @contextmanager
@@ -53,7 +54,7 @@ def _playwright_page(playwright_obj, *, width: int = 1366, height: int = 900):
 @pytest.fixture(scope="module")
 def server():
     test_user = User(id=uuid4(), email="mm-1114@example.com")
-    main_app.dependency_overrides[get_current_user] = lambda: test_user
+    main_app.dependency_overrides[get_instance_access] = lambda: test_user
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)

@@ -15,17 +15,50 @@ from api_service.api.routers.container_jobs import (
     container_job_owner,
     container_jobs_ready,
 )
-from api_service.auth_providers import get_instance_operator_access
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import async_session_maker, get_async_session
-from api_service.db.models import TemporalExecutionCanonicalRecord, User
+from api_service.db.models import TemporalExecutionCanonicalRecord
 from api_service.services.container_jobs import ContainerJobService
-from api_service.services.remediation_evidence import ManagedRunRemediationLogAdapter
 from api_service.services.remediation_actions import build_remediation_action_executor
+from api_service.services.remediation_evidence import ManagedRunRemediationLogAdapter
 from moonmind.config.settings import settings
-from moonmind.security.auth_modes_4120 import (
-    is_disabled_local_mode,
-    public_base_url_is_loopback,
+from moonmind.integrations.jira.errors import JiraToolError
+from moonmind.integrations.jira.tool import JiraToolService
+from moonmind.mcp.container_job_tool_registry import (
+    ContainerJobToolContext,
+    ContainerJobToolRegistry,
+    classify_container_job_error,
 )
+from moonmind.mcp.executable_tool_registry import ExecutableToolDiscoveryRegistry
+from moonmind.mcp.jira_tool_registry import JiraToolExecutionContext, JiraToolRegistry
+from moonmind.mcp.remediation_tool_registry import (
+    RemediationToolExecutionContext,
+    RemediationToolRegistry,
+)
+from moonmind.mcp.skills_on_demand_registry import (
+    SkillsOnDemandToolExecutionContext,
+    SkillsOnDemandToolRegistry,
+)
+from moonmind.mcp.tool_registry import (
+    ResourceListResponse,
+    ResourceMetadata,
+    ToolArgumentsValidationError,
+    ToolCallRequest,
+    ToolCallResponse,
+    ToolListResponse,
+    ToolNotFoundError,
+)
+from moonmind.schemas.container_job_models import (
+    ContainerJobSubmitRequest,
+    OwnerIdentity,
+)
+from moonmind.security.container_job_capabilities import (
+    ContainerJobCapabilityError,
+    ContainerJobSessionCapability,
+    container_job_matches_capability,
+    verify_container_job_session_capability,
+)
+from moonmind.security.deployment_auth import public_base_url_is_loopback
 from moonmind.security.mcp_tool_capabilities import (
     McpToolCapability,
     McpToolCapabilityError,
@@ -37,45 +70,6 @@ from moonmind.security.operator_admission import (
     validate_browser_host_and_origin,
 )
 from moonmind.statuses.workflow import TERMINAL_WORKFLOW_STATES
-from moonmind.integrations.jira.errors import JiraToolError
-from moonmind.integrations.jira.tool import JiraToolService
-from moonmind.mcp.container_job_tool_registry import (
-    ContainerJobToolContext,
-    ContainerJobToolRegistry,
-    classify_container_job_error,
-)
-from moonmind.mcp.executable_tool_registry import ExecutableToolDiscoveryRegistry
-from moonmind.schemas.container_job_models import (
-    ContainerJobSubmitRequest,
-    OwnerIdentity,
-)
-from moonmind.security.container_job_capabilities import (
-    ContainerJobCapabilityError,
-    ContainerJobSessionCapability,
-    container_job_matches_capability,
-    verify_container_job_session_capability,
-)
-from moonmind.mcp.jira_tool_registry import (
-    JiraToolExecutionContext,
-    JiraToolRegistry,
-)
-from moonmind.mcp.skills_on_demand_registry import (
-    SkillsOnDemandToolExecutionContext,
-    SkillsOnDemandToolRegistry,
-)
-from moonmind.mcp.remediation_tool_registry import (
-    RemediationToolExecutionContext,
-    RemediationToolRegistry,
-)
-from moonmind.mcp.tool_registry import (
-    ResourceListResponse,
-    ResourceMetadata,
-    ToolArgumentsValidationError,
-    ToolCallRequest,
-    ToolCallResponse,
-    ToolListResponse,
-    ToolNotFoundError,
-)
 from moonmind.workflows import get_temporal_artifact_service
 from moonmind.workflows.temporal.remediation_tools import RemediationEvidenceToolService
 
@@ -83,7 +77,7 @@ logger = logging.getLogger(__name__)
 
 MCP_TOOLS_HEADER = "X-MoonMind-Mcp-Tools"
 MCP_TOOLS_VERSION = "v1"
-McpCaller = User | OperatorAdmission | McpToolCapability
+McpCaller = OperatorAdmission | McpToolCapability
 
 
 def _validate_mcp_post_request(request: Request) -> None:
@@ -114,7 +108,6 @@ def _validate_mcp_post_request(request: Request) -> None:
             # and origin-less machine clients can still address Compose's API DNS.
             if (
                 not base_url
-                and is_disabled_local_mode()
                 and not trusted_ingress
                 and not public_base_url_is_loopback(request_base_url)
             ):
@@ -251,10 +244,10 @@ async def get_mcp_caller(
     """
     if MCP_TOOLS_HEADER.lower() in request.headers:
         return await _verify_mcp_tool_capability(request, session)
-    return await get_instance_operator_access(request, session)
+    return await get_instance_access(request, session)
 
 
-def _caller_principal(caller: User | OperatorAdmission) -> str:
+def _caller_principal(caller: OperatorAdmission) -> str:
     return container_job_owner(caller).principal_id
 
 
@@ -299,6 +292,7 @@ async def _dispatch_container_job_tool(
     session: AsyncSession,
     *,
     capability: ContainerJobSessionCapability | None = None,
+    operator: OperatorAdmission | None = None,
 ) -> Any:
     if not container_jobs_ready():
         raise HTTPException(
@@ -310,8 +304,10 @@ async def _dispatch_container_job_tool(
         )
     context = ContainerJobToolContext(
         service=ContainerJobService(
-            session, artifacts=get_temporal_artifact_service(session),
+            session,
+            artifacts=get_temporal_artifact_service(session),
             capability=capability,
+            operator=operator,
         ),
         owner=owner,
         transport="mcp",
@@ -354,7 +350,7 @@ async def _dispatch_tool_call(
                 },
             )
         return await _dispatch_container_job_tool(
-            payload, container_job_owner(caller), session
+            payload, container_job_owner(caller), session, operator=caller
         )
     if _execution_tool_registry.has_tool(payload.tool):
         raise HTTPException(

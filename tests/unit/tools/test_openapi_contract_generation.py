@@ -124,19 +124,20 @@ def test_4129_generated_client_has_no_legacy_auth_routes() -> None:
         )
 
 
-def test_4129_bearer_transport_advertises_no_removed_login_route() -> None:
-    """#4129: BearerTransport tokenUrl must not point at a removed route.
+def test_openapi_advertises_no_retired_password_login_flow() -> None:
+    """Operator admission must not advertise the retired login flow."""
 
-    Static source check only (no app import): ``tokenUrl`` is OpenAPI docs
-    metadata, and no token-issuance route remains mounted after the bundled
-    Keycloak/fastapi-users route removal.
-    """
+    result = subprocess.run(
+        [sys.executable, "tools/export_openapi.py"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
 
-    auth_source = (REPO_ROOT / "api_service" / "auth.py").read_text(
-        encoding="utf-8"
-    )
-    match = re.search(r"BearerTransport\(tokenUrl=(?P<value>.*?)\)", auth_source)
-    assert match is not None, "BearerTransport declaration not found"
-    assert "auth/jwt/login" not in match.group("value"), (
-        "BearerTransport still advertises the removed auth/jwt/login route"
-    )
+    assert result.returncode == 0, result.stderr
+    schema = json.loads(result.stdout)
+    assert "/api/v1/provider-profiles" in schema["paths"]
+    assert not any(path.startswith("/api/v1/auth/") for path in schema["paths"])
+    for scheme in schema.get("components", {}).get("securitySchemes", {}).values():
+        assert "password" not in scheme.get("flows", {})

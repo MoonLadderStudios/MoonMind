@@ -54,7 +54,7 @@ def _mutate(repo: Path) -> None:
 
 @pytest.fixture(autouse=True)
 def _enforced_access(monkeypatch):
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     monkeypatch.setattr(settings.security, "high_security_mode", False)
 
 

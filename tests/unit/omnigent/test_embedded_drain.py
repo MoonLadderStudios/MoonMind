@@ -140,7 +140,6 @@ def test_decode_rejects_non_mapping() -> None:
 
 
 def test_retained_keys_match_their_canonical_owners() -> None:
-    pytest.importorskip("fastapi_users")
     from moonmind.omnigent import bridge_store
     from moonmind.omnigent.control_plane.identities import (
         EGRESS_CLEANUP_AUTHORITY_KEY,

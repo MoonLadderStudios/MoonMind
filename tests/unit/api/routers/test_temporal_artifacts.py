@@ -17,6 +17,7 @@ from api_service.api.routers.temporal_artifacts import (
 )
 from api_service.auth_providers import get_instance_access_optional
 from api_service.db import models as db_models
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactExpiredError,
     TemporalArtifactNotFoundError,
@@ -81,10 +82,7 @@ def _build_read_policy(artifact: SimpleNamespace) -> SimpleNamespace:
     )
 
 def _override_user_dependencies(app: FastAPI) -> None:
-    mock_user = SimpleNamespace(
-        id=uuid4(), email="artifact@example.com", is_active=True
-    )
-    app.dependency_overrides[get_instance_access_optional] = lambda: mock_user
+    app.dependency_overrides[get_instance_access_optional] = lambda: OperatorAdmission(via="loopback")
 
 def _client_with_service() -> Iterator[tuple[TestClient, AsyncMock]]:
     app = FastAPI()
