@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.metadata
+import shutil
 
 import pytest
 
@@ -37,6 +38,14 @@ def test_installed_image_graph_carries_no_retired_distribution() -> None:
     assert check_dependency_vector_free(names) == []
 
 
+def test_installed_image_has_no_local_agent_toolchain() -> None:
+    names = {name.lower().replace("_", "-") for name in _installed_distribution_names()}
+    assert names.isdisjoint({"openai", "anthropic", "google-generativeai", "gitpython"})
+    assert not any(
+        shutil.which(cli) for cli in ("codex", "claude", "opencode", "gemini")
+    )
+
+
 @pytest.mark.parametrize(
     "module_name",
     [
@@ -47,7 +56,13 @@ def test_installed_image_graph_carries_no_retired_distribution() -> None:
         "requests",
         "yaml",
         "sqlalchemy",
-        "git",
+        "aiohttp",
+        "boto3",
+        "asyncpg",
+        "psycopg2",
+        "jwt",
+        "watchfiles",
+        "python_multipart",
     ],
 )
 def test_surviving_library_imports_on_installed_image_graph(module_name: str) -> None:

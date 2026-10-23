@@ -19,7 +19,6 @@ _MAX_STARTUP_ERROR_OUTPUT_CHARS = 600
 _SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)(token|password|secret|api[_-]?key)=\S+"
 )
-_DEFAULT_OAUTH_RUNNER_IMAGE = "ghcr.io/moonladderstudios/moonmind:latest"
 _DEFAULT_OAUTH_RUNNER_USER = "1000:1000"
 _TMATE_SOCKET = "/tmp/moonmind-oauth-tmate.sock"
 
@@ -95,6 +94,18 @@ def _oauth_runner_user() -> str:
         return _DEFAULT_OAUTH_RUNNER_USER
     normalized = configured.strip()
     return normalized or _DEFAULT_OAUTH_RUNNER_USER
+
+
+def _oauth_runner_image() -> str:
+    from moonmind.omnigent.harness_platform.static_hosts import (
+        resolve_static_host_image_ref,
+    )
+
+    override = os.environ.get("MOONMIND_OAUTH_RUNNER_IMAGE", "").strip()
+    if override:
+        return override
+    return resolve_static_host_image_ref()
+
 
 def _runner_environment_args(runtime_id: str, volume_mount_path: str) -> list[str]:
     args = ["-e", "HOME=/home/app"]
@@ -334,10 +345,7 @@ async def start_terminal_bridge_container(
     container_name = f"moonmind_auth_{session_id}"
     logger.info("Starting auth runner container")
 
-    runner_image = os.environ.get(
-        "MOONMIND_OAUTH_RUNNER_IMAGE",
-        _DEFAULT_OAUTH_RUNNER_IMAGE,
-    )
+    runner_image = _oauth_runner_image()
     executable = shlex.quote(command[0])
     idle_command = (
         f"command -v {executable} >/dev/null 2>&1 "
@@ -391,10 +399,7 @@ async def start_tmate_auth_runner_container(
         raise ValueError("provider bootstrap command is not configured")
 
     container_name = f"moonmind_auth_{session_id}"
-    runner_image = os.environ.get(
-        "MOONMIND_OAUTH_RUNNER_IMAGE",
-        _DEFAULT_OAUTH_RUNNER_IMAGE,
-    )
+    runner_image = _oauth_runner_image()
     executable = shlex.quote(command[0])
     idle_command = (
         "command -v tmate >/dev/null 2>&1 "
