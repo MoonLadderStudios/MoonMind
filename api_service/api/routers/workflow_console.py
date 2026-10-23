@@ -661,7 +661,6 @@ _SETTINGS_DESTINATION_PERMISSIONS: dict[
         frozenset({"settings.catalog.read"}),
         frozenset(
             {
-                "settings.user.write",
                 "settings.workspace.write",
                 "settings.system.write",
             }
@@ -1712,9 +1711,7 @@ async def get_dashboard_ui_info(
 ) -> DashboardUiInfoResponse:
     """Expose compact shell capabilities and endpoint discovery for the SPA."""
     dashboard_config = await resolve_dashboard_runtime_config(
-        "/workflows/new",
-        session=session,
-        user=_user,
+        "/workflows/new", session=session
     )
     dashboard_config.pop("initialPath", None)
     system_config = dict(dashboard_config.get("system") or {})

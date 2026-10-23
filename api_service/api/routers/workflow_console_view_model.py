@@ -1696,16 +1696,15 @@ async def resolve_dashboard_runtime_config(
     initial_path: str,
     *,
     session: AsyncSession | None,
-    user: Any = None,
 ) -> dict[str, Any]:
-    """Resolve runtime config with user/workspace setting overrides applied.
+    """Resolve runtime config with instance setting overrides applied.
 
     Falls back to the legacy ``build_runtime_config`` behavior when the session
     is unavailable or the settings catalog cannot be reached. Settings consumed:
 
-    - ``workflow.default_runtime`` (workspace scope)
-    - ``workflow.default_provider_profile_ref`` (user scope, falls back to
-      workspace and env). Refs are dropped when their diagnostics indicate the
+    - ``workflow.default_runtime``
+    - ``workflow.default_provider_profile_ref`` (falls back to the deployment
+      environment). Refs are dropped when their diagnostics indicate the
       profile is missing or disabled, so the frontend can fall back to its
       ``is_default`` lookup instead of selecting a stale ID.
     """
@@ -1718,32 +1717,19 @@ async def resolve_dashboard_runtime_config(
 
     # Local imports keep the view-model importable without DB models loaded
     # for tests that exercise build_runtime_config directly.
-    from api_service.services.settings_catalog import (
-        SettingsCatalogService,
-        coerce_settings_subject_id,
-    )
-
-    workspace_id = coerce_settings_subject_id(getattr(user, "workspace_id", None))
-    user_id = coerce_settings_subject_id(getattr(user, "id", None))
+    from api_service.services.settings_catalog import SettingsCatalogService
 
     runtime_override: str | None = None
     profile_ref: str | None = None
 
     try:
-        service = SettingsCatalogService(
-            session=session,
-            workspace_id=workspace_id,
-            user_id=user_id,
-        )
-        runtime_eff = await service.effective_value_async(
-            "workflow.default_runtime", scope="workspace"
-        )
+        service = SettingsCatalogService(session=session)
+        runtime_eff = await service.effective_value_async("workflow.default_runtime")
         if isinstance(runtime_eff.value, str) and runtime_eff.value.strip():
             runtime_override = runtime_eff.value.strip()
 
-        profile_scope = "user" if user_id is not None else "workspace"
         profile_eff = await service.effective_value_async(
-            "workflow.default_provider_profile_ref", scope=profile_scope
+            "workflow.default_provider_profile_ref"
         )
         # This is a form suggestion only. Submission preserves the configured
         # account even when unavailable, so unattended callers cannot switch it.
@@ -1758,7 +1744,7 @@ async def resolve_dashboard_runtime_config(
         # Settings overrides are best-effort. If the DB is unreachable or the
         # catalog service raises, fall back to the env/settings-only defaults
         # so the dashboard still renders. The route still has the boot payload
-        # to send back; we just don't get user/workspace personalization.
+        # to send back; we just don't get the saved instance overrides.
         logger.debug(
             "resolve_dashboard_runtime_config: falling back to defaults",
             exc_info=True,

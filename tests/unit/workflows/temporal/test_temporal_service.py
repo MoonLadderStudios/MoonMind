@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -5540,12 +5540,8 @@ async def test_check_system_paused_reads_persisted_worker_pause_state(tmp_path):
 
         assert await service.check_system_paused() is False
 
-        subject_id = UUID("00000000-0000-0000-0000-000000000000")
         session.add(
             SettingsOverride(
-                scope="workspace",
-                workspace_id=subject_id,
-                user_id=subject_id,
                 key="operations.workers.pause_state",
                 value_json={
                     "workersPaused": True,

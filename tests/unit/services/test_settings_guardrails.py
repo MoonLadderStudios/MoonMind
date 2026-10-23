@@ -34,7 +34,6 @@ from api_service.services.settings_catalog import (
     SettingsCatalogService,
     SettingsRegistry,
     _MAX_OVERRIDE_VALUE_BYTES,
-    _PERSISTED_SCOPES,
     _REGISTRY,
     _UNSAFE_FIELD_TOKENS,
     _UNSAFE_STRING_TOKENS,
@@ -61,7 +60,6 @@ def _operator_locked_registry() -> tuple[SettingRegistryEntry, ...]:
             section="user-workspace",
             value_type="boolean",
             ui="toggle",
-            scopes=("workspace",),
             order=10,
             default_value=False,
             operator_locked_value=True,
@@ -209,15 +207,20 @@ def test_section4_11_unknown_keys_rejected_by_backend_not_silently_accepted():
     """§4 — `make the frontend the authority for validation or eligibility`."""
     service = SettingsCatalogService(env={})
     with pytest.raises(KeyError):
-        service.effective_value("never.declared.key", scope="workspace")
+        service.effective_value("never.declared.key")
 
 
-def test_section4_12_no_non_persisted_scopes_accept_writes():
-    """§4 — generic-database non-goal hardening: `system`/`operator` writes
-    do not flow through the Settings overrides path."""
-    # Only `user` and `workspace` are persisted; system/operator settings are
-    # deployment-owned per §7.3.
-    assert _PERSISTED_SCOPES == {"user", "workspace"}
+def test_section4_12_one_instance_override_per_key_not_a_subject_store():
+    """§4 — overrides are one instance configuration, not per-person storage."""
+    from api_service.db.models import SettingsOverride
+
+    instance_keys = [
+        index
+        for index in SettingsOverride.__table__.indexes
+        if index.unique and [column.name for column in index.columns] == ["key"]
+    ]
+    assert len(instance_keys) == 1
+    assert "scope IS NULL" in str(instance_keys[0].dialect_options["postgresql"]["where"])
 
 
 # ===========================================================================
@@ -276,7 +279,7 @@ def test_section22_5_unknown_setting_keys_are_rejected():
     """§22.5 — unknown setting keys are rejected."""
     service = SettingsCatalogService(env={})
     with pytest.raises(KeyError):
-        service.effective_value("integrations.bogus.key", scope="workspace")
+        service.effective_value("integrations.bogus.key")
 
 
 def test_section22_6_client_supplied_descriptor_metadata_ignored():
@@ -304,7 +307,7 @@ def test_section22_7_operator_lock_blocks_normal_user_workspace_writes():
         registry=_operator_locked_registry(),
     )
     with pytest.raises(PermissionError):
-        service.ensure_write_allowed("ops.feature_flag", scope="workspace")
+        service.ensure_write_allowed("ops.feature_flag")
     assert service.write_lock_error_code("ops.feature_flag") == "operator_locked"
 
 
@@ -358,7 +361,6 @@ def test_section22_12_operations_apply_modes_require_confirmation():
     issues = service._confirmation_issues_for_changes(
         {op_entry.key: op_entry},
         {op_entry.key: op_entry.default_value or "normal"},
-        scope="workspace",
         confirmation=None,
     )
     assert any(issue.code == "requires_confirmation" for issue in issues)
@@ -394,17 +396,18 @@ def test_section29_1_unexposed_setting_cannot_be_edited():
     """§29.1 — a setting cannot be edited unless the catalog explicitly exposes it."""
     service = SettingsCatalogService(env={})
     with pytest.raises(KeyError):
-        service.ensure_write_allowed("never.exposed", scope="workspace")
+        service.ensure_write_allowed("never.exposed")
 
 
-def test_section29_2_cannot_write_at_undeclared_scope():
-    """§29.2 — a setting cannot be written at a scope not declared by its descriptor."""
-    service = SettingsCatalogService(env={})
-    workspace_only = next(
-        e for e in _REGISTRY if e.scopes == ("workspace",)
-    )
-    with pytest.raises(ValueError):
-        service.ensure_write_allowed(workspace_only.key, scope="user")
+def test_section29_2_writes_accept_no_client_chosen_scope_or_subject():
+    """§29.2 — a client cannot pick a person or scope to write under."""
+    for method in (
+        SettingsCatalogService.ensure_write_allowed,
+        SettingsCatalogService.apply_overrides,
+    ):
+        parameters = inspect.signature(method).parameters
+        assert "scope" not in parameters
+        assert "subject" not in parameters
 
 
 def test_section29_3_writes_pass_through_backend_validation():
@@ -485,7 +488,7 @@ def test_section29_10_operator_lock_blocks_user_workspace_apis():
         registry=_operator_locked_registry(),
     )
     with pytest.raises(PermissionError):
-        service.ensure_write_allowed("ops.feature_flag", scope="workspace")
+        service.ensure_write_allowed("ops.feature_flag")
 
 
 def test_section29_11_operational_commands_are_authorization_gated_and_audited():

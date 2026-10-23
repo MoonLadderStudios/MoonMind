@@ -39,7 +39,7 @@ The detailed Provider Profile create and edit form is described in [ProviderProf
 
 **Pathname owns page identity.** The pathname selects the configuration page. Query parameters may select filters or scope within a page but never select among the three pages.
 
-**Backend-owned truth.** The backend owns which settings exist and are exposed, their types and scopes, validation, sensitivity, effective values, sources, and application semantics. The frontend renders descriptors and submits intent. Provider Profile creation follows the same rule: Harness, Provider, authentication, and creation capabilities determine backend-owned presets, and Harness choices keep canonical `runtime_id` values in API payloads, because different providers materialize credentials differently and the browser cannot assume one strategy.
+**Backend-owned truth.** The backend owns which settings exist and are exposed, their types, validation, sensitivity, effective values, sources, and application semantics. The frontend renders descriptors and submits intent. Provider Profile creation follows the same rule: Harness, Provider, authentication, and creation capabilities determine backend-owned presets, and Harness choices keep canonical `runtime_id` values in API payloads, because different providers materialize credentials differently and the browser cannot assume one strategy.
 
 **Data-driven rows.** The Instance page renders ordinary settings from catalog descriptors. The frontend branches on descriptor shape (`type`, `ui`, `constraints`, `options`, `read_only`, `sensitive`), not on individual setting keys, so adding a setting does not require frontend work.
 
@@ -204,7 +204,7 @@ The collapsed summary distinguishes a confirmed recommendation, known custom ove
 
 ### 7.2 Instance
 
-This page holds descriptor-driven settings for the single-operator instance: workspace defaults, feature flags, non-secret integration defaults, authorized policy controls, and SecretRef bindings not owned by a Provider Profile. It reads and writes the backend `workspace` scope and has no user-versus-workspace switch, because MoonMind has one operator per instance. Retained user-scope overrides are handled by the backend and are not edited from this page.
+This page holds descriptor-driven settings for the single-operator instance: workspace defaults, feature flags, non-secret integration defaults, authorized policy controls, and SecretRef bindings not owned by a Provider Profile. It reads and writes the one instance configuration and sends no scope, because MoonMind has one operator per instance. The guarded upgrade reconciles retained per-user overrides; this page never edits them.
 
 This is the generated-settings surface: adding an eligible ordinary setting needs backend catalog metadata and validation, not a new React row.
 
@@ -232,17 +232,17 @@ On route load, the page is resolved from the pathname and loads only what its fi
 
 Provider creation queries are keyed to their runtime/provider/authentication identity, so a stale response cannot restore incompatible selections or authorize a submission. A failed choice query preserves unrelated profile and Managed Secret content and does not invent a manual-entry fallback the backend has not offered.
 
-Generated-settings endpoints (`api_service/api/routers/settings.py`), used by Instance with `scope=workspace`:
+Generated-settings endpoints (`api_service/api/routers/settings.py`) used by Instance:
 
 ```http
-GET    /api/v1/settings/catalog?section=user-workspace&scope=workspace
-GET    /api/v1/settings/effective?scope=workspace
-GET    /api/v1/settings/diagnostics?scope=workspace
+GET    /api/v1/settings/catalog?section=user-workspace
+GET    /api/v1/settings/effective
+GET    /api/v1/settings/diagnostics
 GET    /api/v1/settings/audit?key=<key>
 POST   /api/v1/settings/validate
 POST   /api/v1/settings/preview
-PATCH  /api/v1/settings/{scope}
-DELETE /api/v1/settings/{scope}/{key}
+PATCH  /api/v1/settings
+DELETE /api/v1/settings/{key}
 ```
 
 ---
@@ -256,7 +256,7 @@ SettingDescriptor:
   key, title, description, category, section, order
   type: boolean | string | integer | number | enum | string_list | object | secret_ref
   ui: toggle | input | number | select | tag_editor | key_value | secret_ref_picker | provider_profile_picker | readonly
-  scopes, default_value, effective_value, override_value, source, source_explanation
+  default_value, effective_value, override_value, source, source_explanation
   options, constraints, sensitive, secret_role, read_only, read_only_reason
   apply_mode, activation_state, active, pending_value, affected_process_or_worker, completion_guidance
   requires_reload, requires_worker_restart, requires_process_restart, applies_to
@@ -267,9 +267,9 @@ Several fields drive specific row behavior: `active` and `pending_value` separat
 
 Controls follow descriptor shape: toggles for booleans, selects from backend options for enums, constrained number inputs, text inputs (unless sensitivity requires a specialist control), tag editors for string lists, a safe structured editor for objects, a SecretRef picker, a Provider Profile selector backed by backend data, and a read-only value with a reason for read-only or unsupported types. A cleared number input stays empty: it means `Not set` (`null`) when the setting has no default, and is otherwise a validation error rather than a silent `0` or `null`. The Provider Profile selector lists saved profiles plus `Not set`, and keeps a saved ID that no longer matches a profile visible as not found rather than replacing it.
 
-Each row shows title, description, control or value, override state when an override is in force, pending or restart-required activation, validation, diagnostics, reset when allowed, and the affected systems once. The stable key, scope, source, apply mode, and audit link where authorized sit in the row's Details disclosure. Filtering covers text search, category, modified-only, read-only, diagnostics, source, pending application, and secret-related filters; filtering is never the authorization boundary.
+Each row shows title, description, control or value, override state when an override is in force, pending or restart-required activation, validation, diagnostics, reset when allowed, and the affected systems once. The stable key, source, apply mode, and audit link where authorized sit in the row's Details disclosure. Filtering covers text search, category, modified-only, read-only, diagnostics, source, pending application, and secret-related filters; filtering is never the authorization boundary.
 
-Before save, the page shows changed keys, old and proposed values, validation, target scope, expected versions, affected systems, application requirements, dependency warnings, and redaction behavior; the backend preview is authoritative. Drafts are keyed by setting key and scope and cleared after a successful save, explicit discard, confirmed route departure, or incompatible catalog-version change. Drafts are not persisted to local storage, since they can contain sensitive metadata.
+Before save, the page shows changed keys, old and proposed values, validation, expected versions, affected systems, application requirements, dependency warnings, and redaction behavior; the backend preview is authoritative. Drafts are keyed by setting key and cleared after a successful save, explicit discard, confirmed route departure, or incompatible catalog-version change. Drafts are not persisted to local storage, since they can contain sensitive metadata.
 
 ### 9.1 Version conflicts
 

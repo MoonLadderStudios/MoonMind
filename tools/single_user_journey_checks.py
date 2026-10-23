@@ -193,7 +193,7 @@ def operator_access(api: Api, state: dict[str, Any]) -> None:
     before = api.json("GET", "/api/presets")
     host_status, _ = api.request("GET", "/api/v1/settings/catalog",
         headers={"Host": "foreign.invalid"}, expect=(401, 403))
-    origin_status, _ = api.request("PATCH", "/api/v1/settings/workspace",
+    origin_status, _ = api.request("PATCH", "/api/v1/settings",
         headers={"Origin": "http://foreign.invalid"}, body={"changes": {}}, expect=(403,))
     if api.json("GET", "/api/presets") != before:
         raise JourneyFailure("denied access probes changed the preset catalog")
@@ -755,8 +755,14 @@ def verify_preset(
     )
 
 
-def credential(api: Api, state: dict[str, Any], *, label: str) -> None:
-    """Store a synthetic credential and bind it through an instance setting."""
+def credential(
+    api: Api, state: dict[str, Any], *, label: str, pre_upgrade_release: bool = False
+) -> None:
+    """Store a synthetic credential and bind it through an instance setting.
+
+    The account-era source release only accepts its scoped write route; the
+    upgrade converts that row into the candidate's instance configuration.
+    """
 
     slug = f"single-user-journey-{label}"
     plaintext = f"ghp_synthetic_{uuid.uuid4().hex}"
@@ -768,7 +774,7 @@ def credential(api: Api, state: dict[str, Any], *, label: str) -> None:
     )
     api.json(
         "PATCH",
-        "/api/v1/settings/workspace",
+        "/api/v1/settings/workspace" if pre_upgrade_release else "/api/v1/settings",
         body={"changes": {SETTING_KEY: f"db://{slug}"}, "reason": "journey"},
     )
     state["credential"] = {"slug": slug, "plaintext": plaintext}
@@ -781,10 +787,10 @@ def release(api: Api, state: dict[str, Any]) -> None:
     slug = state["credential"]["slug"]
     api.request(
         "DELETE",
-        f"/api/v1/settings/workspace/{SETTING_KEY}",
+        f"/api/v1/settings/{SETTING_KEY}",
         expect=(200, 204),
     )
-    _, effective = api.request("GET", "/api/v1/settings/effective?scope=workspace")
+    _, effective = api.request("GET", "/api/v1/settings/effective")
     if f"db://{slug}".encode() in effective:
         raise JourneyFailure(f"{SETTING_KEY} still resolves to db://{slug}")
     state["credential"]["released"] = True
@@ -1140,7 +1146,8 @@ def verify(
         raise JourneyFailure(f"credential {slug} is missing")
     if plaintext.encode() in listed:
         raise JourneyFailure("credential listing exposes plaintext")
-    _, effective = api.request("GET", "/api/v1/settings/effective?scope=workspace")
+    # Both the account-era source and the candidate serve this unscoped read.
+    _, effective = api.request("GET", "/api/v1/settings/effective")
     if f"db://{slug}".encode() not in effective:
         raise JourneyFailure(f"{SETTING_KEY} no longer resolves to db://{slug}")
     _, usage = api.request("GET", f"/api/v1/secrets/{quote(slug)}/usage")
@@ -1666,7 +1673,12 @@ def main(argv: list[str] | None = None) -> int:
                 timeout=args.timeout,
             )
         elif args.phase == "credential":
-            credential(api, state, label=args.label)
+            credential(
+                api,
+                state,
+                label=args.label,
+                pre_upgrade_release=args.pre_upgrade_release,
+            )
         elif args.phase == "verify":
             verify(api, state, pre_upgrade_release=args.pre_upgrade_release)
         elif args.phase == "vector_free":

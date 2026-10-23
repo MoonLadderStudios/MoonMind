@@ -13,7 +13,6 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
-from uuid import uuid4
 
 import pytest
 
@@ -46,7 +45,6 @@ def _provider_intent(
 ) -> ProviderProfileRefreshIntent:
     return ProviderProfileRefreshIntent(
         key=key,
-        scope="workspace",
         apply_mode=apply_mode,
         refresh_target="provider_profile_manager",
         affected_systems=affected_systems,
@@ -61,7 +59,6 @@ def _worker_intent(
     return WorkerReloadIntent(
         intent=intent,
         key="skills.policy_mode",
-        scope="workspace",
         apply_mode=apply_mode,
         refresh_target="worker_reloaders",
         affected_systems=("workflow_runtime", "skills"),
@@ -74,7 +71,6 @@ def _operational_intent(
 ) -> OperationalRefreshIntent:
     return OperationalRefreshIntent(
         key="workflow.operation_mode",
-        scope="workspace",
         apply_mode=apply_mode,
         refresh_target="operational_controls",
         affected_systems=("operations",),
@@ -199,7 +195,7 @@ async def test_worker_reload_broadcast_hook_invokes_broadcaster_with_intent_payl
     assert payload["intent"] == "soft_reload"
     assert payload["key"] == "skills.policy_mode"
     assert payload["apply_mode"] == "worker_reload"
-    assert payload["scope"] == "workspace"
+    assert "scope" not in payload
     assert "workflow_runtime" in payload["affected_systems"]
 
 
@@ -356,10 +352,8 @@ async def test_register_default_subscribers_invokes_provider_hook_on_event(caplo
 
     event = SettingsChangeEvent(
         key="workflow.default_provider_profile_ref",
-        scope="workspace",
-        source="workspace_override",
+        source="instance_override",
         apply_mode="next_launch",
-        actor_user_id=uuid4(),
         changed_at=datetime.now(timezone.utc),
         affected_systems=["workflow_creation", "workflow_runtime", "provider_profiles"],
         refresh_targets=[

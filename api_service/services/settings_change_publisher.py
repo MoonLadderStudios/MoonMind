@@ -99,7 +99,6 @@ class SettingsChangePublisher:
                 "exception_class": exc.__class__.__name__,
                 "exception_message": str(exc)[:512],
                 "key": event.key,
-                "scope": event.scope,
                 "source": event.source,
                 "apply_mode": event.apply_mode,
                 "refresh_targets": sorted(event.refresh_targets),

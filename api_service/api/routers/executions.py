@@ -8209,27 +8209,17 @@ async def _load_provider_profile_for_runtime(
 async def _workflow_creation_defaults(
     *,
     session: Any,
-    user: Any,
     payloads: Sequence[Mapping[str, Any]],
     task_payload: Mapping[str, Any],
     parameter_payload: Mapping[str, Any],
     agent_profile: object = None,
 ) -> WorkflowCreationDefaults:
     """Resolve submission fallbacks once, preserving explicit account intent."""
-    from api_service.services.settings_catalog import (
-        SettingsCatalogService,
-        coerce_settings_subject_id,
-    )
+    from api_service.services.settings_catalog import SettingsCatalogService
 
-    user_id = coerce_settings_subject_id(getattr(user, "id", None))
-    catalog = SettingsCatalogService(
-        session=session,
-        workspace_id=coerce_settings_subject_id(getattr(user, "workspace_id", None)),
-        user_id=user_id,
-    )
-    defaults = await catalog.workflow_creation_defaults(
-        scope="user" if user_id is not None else "workspace"
-    )
+    defaults = await SettingsCatalogService(
+        session=session
+    ).workflow_creation_defaults()
     # Account-free work still needs the saved runtime for its admission route.
     if (
         not workflow_requires_agent(task_payload, parameter_payload)
@@ -11763,7 +11753,6 @@ async def _create_execution_from_workflow_request(
         task_payload=task_payload,
         parameter_payload=payload,
         session=session,
-        user=user,
         payloads=(_coerce_mapping(task_payload.get("runtime")), task_payload, payload),
     )
     default_profile_ref = creation_defaults.provider_profile_ref
@@ -12863,7 +12852,6 @@ async def _resolve_recurring_runtime_selection(
         task_payload=task_payload,
         parameter_payload=parameter_payload,
         session=session,
-        user=user,
         payloads=(
             raw_runtime_payload,
             task_payload,
@@ -15107,7 +15095,6 @@ async def create_execution(
                 task_payload=task_payload,
                 parameter_payload=initial_parameters,
                 session=session,
-                user=user,
                 payloads=(runtime_payload, task_payload, initial_parameters, payload),
                 agent_profile=agent_profile_selection,
             )

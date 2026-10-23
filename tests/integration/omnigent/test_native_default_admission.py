@@ -98,8 +98,7 @@ async def test_saved_profile_default_and_explicit_backend_admit_same_plan_owner(
         app.dependency_overrides[_get_service] = lambda: service
         app.dependency_overrides[get_async_session] = lambda: session
         user = _override_user_dependencies(app, is_superuser=True)
-        await SettingsCatalogService(session=session, user_id=user.id).apply_overrides(
-            scope="workspace",
+        await SettingsCatalogService(session=session).apply_overrides(
             changes={"workflow.default_provider_profile_ref": PROFILE},
         )
         admitted = []

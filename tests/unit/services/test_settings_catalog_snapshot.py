@@ -1,6 +1,6 @@
 """Snapshot test for settings catalog drift detection.
 
-Fails if any registry entry's key, type, scopes, or section changes without
+Fails if any registry entry's key, type, or section changes without
 updating the snapshot file intentionally.  Updating the snapshot is the
 explicit developer action that replaces a migration entry for test purposes.
 
@@ -23,7 +23,6 @@ def _build_catalog_shape() -> dict:
     return {
         entry.key: {
             "type": entry.type,
-            "scopes": sorted(entry.scopes),
             "section": entry.section,
         }
         for category_entries in catalog.categories.values()
@@ -32,7 +31,7 @@ def _build_catalog_shape() -> dict:
 
 
 def test_catalog_snapshot_no_drift():
-    """Catalog keys, types, scopes, and sections must match the committed snapshot.
+    """Catalog keys, types, and sections must match the committed snapshot.
 
     To update the snapshot after an intentional catalog change:
         python - <<'EOF'

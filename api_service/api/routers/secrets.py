@@ -207,7 +207,6 @@ async def update_secret_status(
         slug,
         new_status,
         actor_user_id=_uuid_attr(getattr(user, "id", None)),
-        workspace_id=_uuid_attr(getattr(user, "workspace_id", None)),
         request_id=request.request_id,
     )
     if not secret:
@@ -247,12 +246,7 @@ async def get_secret_usage(
     db: AsyncSession = Depends(get_async_session),
     user: Any = Depends(get_instance_access),
 ) -> SecretUsageResponse:
-    result = await SecretsService.list_secret_usage(
-        db,
-        slug,
-        workspace_id=_uuid_attr(getattr(user, "workspace_id", None)),
-        user_id=_uuid_attr(getattr(user, "id", None)),
-    )
+    result = await SecretsService.list_secret_usage(db, slug)
     return SecretUsageResponse.model_validate(redact_sensitive_payload(result))
 
 @router.get(

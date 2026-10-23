@@ -709,12 +709,9 @@ class TemporalExecutionService:
         Used by API guard to prevent new workflow submissions (DOC-REQ-001/004/005).
         """
 
-        system_id = UUID("00000000-0000-0000-0000-000000000000")
         result = await self._session.execute(
             select(SettingsOverride.value_json).where(
-                SettingsOverride.scope == "workspace",
-                SettingsOverride.workspace_id == system_id,
-                SettingsOverride.user_id == system_id,
+                SettingsOverride.scope.is_(None),
                 SettingsOverride.key == "operations.workers.pause_state",
             )
         )

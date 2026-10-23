@@ -742,7 +742,7 @@ else
   # Work saved by the old release uses the request that release accepts.
   checks populate before-upgrade --pre-upgrade-release
   cancel_from_dashboard before-upgrade
-  checks credential before-upgrade
+  checks credential before-upgrade --pre-upgrade-release
   checks verify before-upgrade --pre-upgrade-release
 
   echo "Upgrading $PROJECT_NAME in place from $UPGRADE_FROM_REVISION to $CANDIDATE_REVISION ($CANDIDATE_IMAGE)..." | redact

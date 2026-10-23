@@ -48,7 +48,7 @@ Right after the database is created and the application starts, the
 operator can read the catalog without any prior writes:
 
 ```http
-GET /api/v1/settings/catalog?section=user-workspace&scope=workspace
+GET /api/v1/settings/catalog?section=user-workspace
 ```
 
 Expectations:
@@ -95,11 +95,11 @@ operations only ever reference the SecretRef.
 
 ## 3. Reference the SecretRef from a Settings override (§5.3, §10.4)
 
-The operator goes back to **Settings → User / Workspace** and points
+The operator goes back to **Settings → Instance** and points
 `integrations.github.token_ref` at the SecretRef returned in §2:
 
 ```http
-PATCH /api/v1/settings/workspace
+PATCH /api/v1/settings
 {
   "changes": {"integrations.github.token_ref": "db://github-pat-local"},
   "expected_versions": {"integrations.github.token_ref": 1}
@@ -109,11 +109,11 @@ PATCH /api/v1/settings/workspace
 Expectations:
 
 - The response contains a `setting_changed` change event with
-  `source="workspace_override"` and `apply_mode="next_launch"`. (§19.2)
-- A new row is written to `settings_overrides` for the workspace scope.
+  `source="instance_override"` and `apply_mode="next_launch"`. (§19.2)
+- A new instance row (no scope or subject) is written to `settings_overrides`.
 - A row is written to `settings_audit_events` with `redacted=True` (because
   the descriptor declares `audit.redact=True`). (§21.1, §21.2, §22.8)
-- The settings catalog now reports `source="workspace_override"` and
+- The settings catalog now reports `source="instance_override"` and
   `source_explanation` non-empty. (§29.8)
 
 The override row stores `db://github-pat-local` as a reference — never the
@@ -133,7 +133,7 @@ GET /api/v1/secrets/github-pat-local/usage
 Expectations:
 
 - The response lists a `setting_override` consumer pointing at
-  `integrations.github.token_ref` with `scope="workspace"`. (§14.4)
+  `integrations.github.token_ref` named `Instance setting …`. (§14.4)
 - The response never includes the underlying plaintext value.
 
 This step is the operator's confidence-check that the SecretRef they just
@@ -146,7 +146,7 @@ saved is wired into the correct Settings binding.
 The operator decides the GitHub binding was a test and resets it:
 
 ```http
-DELETE /api/v1/settings/workspace/integrations.github.token_ref
+DELETE /api/v1/settings/integrations.github.token_ref
 ```
 
 Expectations:
