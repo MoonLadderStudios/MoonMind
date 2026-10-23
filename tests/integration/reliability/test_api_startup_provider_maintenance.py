@@ -83,6 +83,11 @@ async def test_http_serves_while_bootstrap_waits_and_lifespan_owns_cleanup(
         "ensure_recurring_workflow_schedules_reconciled",
     ):
         monkeypatch.setattr(api_main, name, AsyncMock())
+    monkeypatch.setattr(
+        api_main,
+        "_run_guarded_single_user_upgrade",
+        AsyncMock(return_value={"published": True}),
+    )
     monkeypatch.setattr(api_main, "_register_settings_change_subscribers", lambda: None)
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/health.db")
