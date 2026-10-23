@@ -131,8 +131,6 @@ jobs:
           file: ./api_service/Dockerfile
           target: api-runtime
           build-args: |
-            INSTALL_CODEX_CLI=true
-            INSTALL_GEMINI_CLI=true
             MOONMIND_BUILD_ID=${{ needs.metadata.outputs.version_tag }}
             MOONMIND_BUILD_SHA=${{ github.sha }}
           platforms: ${{ matrix.platform }}

@@ -17,8 +17,6 @@ real image-selection and pull composition (not from the GHCR helper alone):
   per-job ephemeral ``--config`` auth dirs, immediate post-pull cleanup).
 - Compose/bootstrap: ``docker-compose.yaml`` image refs and stock-image
   acquisition via bare ``docker pull``; no source PAT.
-- legacy worker container path: ``moonmind/agents/codex_worker/worker.py``
-  ``_ensure_container_image`` via bare ``docker pull``; no source PAT.
 
 These tests drive the real composition (container-job backend acquire paths
 and the Omnigent pull helper) with a source PAT A present and assert it never

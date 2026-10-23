@@ -1,2 +1,0 @@
-# This file is intentionally left blank as all dependencies
-# are now part of the Python standard library.
