@@ -775,11 +775,11 @@ durable metadata. A lifecycle failure marks that maintenance run
 degraded and is retried by the next schedule rather than overwriting successful
 workspace cleanup evidence.
 
-Each sweep pages through expired and soft-deleted artifacts, deletion intents,
-and tombstones for up to 40 minutes while progress continues. It heartbeats
-during pending operations and between candidates and pages. A stalled page ends
-the pass; unresolved intents still report a backlog. The next hourly pass
-resumes remaining work.
+Each sweep pages through expiry, deletion intents, and tombstones for up to
+40 minutes while progress continues. Soft and hard deletions commit per candidate
+to release locks; metadata purge commits bounded pages. Heartbeats continue
+during pending operations and between candidates. A stalled page ends the pass;
+unresolved intents report a backlog for the next hourly pass.
 
 Retention class is assigned when an artifact is created or linked. When the
 mapping shortens a link type's class, a migration applies the new class to
@@ -788,11 +788,11 @@ evidence does not keep its longer expiry. As with linking, the new expiry
 counts from the latest such link, never earlier than creation. Such migrations
 only change expiry; the sweep still enforces every protection before deleting.
 
-Saved schedules retain their exact input, plan, manifest, and recorded execution
-authority references, including while paused or disabled. Unreferenced inputs
-return to ordinary retention. Admission and lifecycle deletion share artifact
-row locks, so a schedule cannot commit an input that cleanup already removed.
-This protection neither grants read access nor creates operator pins.
+Saved schedules retain exact input, plan, manifest, and recorded authority
+references, including paused or disabled definitions. Unreferenced inputs return
+to ordinary retention. Admission and deletion share artifact row locks, so cleanup
+cannot invalidate a newly committed schedule. Shared storage aliases lock in
+artifact-ID order. This protection adds neither read access nor operator pins.
 
 Current raw and normalized journals referenced by non-terminal Omnigent bridge
 sessions remain recovery data. Their ordinary retention resumes when the
