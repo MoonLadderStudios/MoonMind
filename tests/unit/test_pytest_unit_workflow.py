@@ -1030,8 +1030,7 @@ def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> N
     assert "needs.select-test-suites.outputs.api_component" in job_if
     assert "needs.select-test-suites.outputs.temporal_boundary" in job_if
     assert "needs.select-test-suites.outputs.reliability_journey" in job_if
-    # Unit-fast retains setup/reporting room around its longer test step;
-    # API/component, Temporal and reliability keep their existing bounds.
+    # Each selected row reserves setup/reporting room around its test step.
     assert job["timeout-minutes"] == "${{ matrix.job_minutes }}"
     strategy = job["strategy"]
     # Native matrix fail-fast for PR/merge-group validation, disabled for
@@ -1056,9 +1055,19 @@ def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> N
     # pytest-split groups are 1-based (MoonLadderStudios/MoonMind#4366):
     # suite reliability-shard-N runs --group N.
     assert shards == ["1", "2", "3", "4"]
-    rows = {entry["suite"]: entry for entry in json.loads(select_suites([]).as_outputs()["backend_matrix"])["include"]}
+    rows = {
+        entry["suite"]: entry
+        for entry in json.loads(select_suites([]).as_outputs()["backend_matrix"])[
+            "include"
+        ]
+    }
     assert rows["unit-fast"]["job_minutes"] == 18
-    assert rows["api-component"]["job_minutes"] == 15
+    assert rows["api-component"]["job_minutes"] == 18
+    api_step = next(
+        step for step in job["steps"] if step["name"] == "Run API/component suite"
+    )
+    assert api_step["timeout-minutes"] + 6 <= rows["api-component"]["job_minutes"]
+    assert "--timeout 120" in api_step["run"]
     assert rows["temporal-boundary"]["job_minutes"] == 15
     for shard in (
         "reliability-shard-1",

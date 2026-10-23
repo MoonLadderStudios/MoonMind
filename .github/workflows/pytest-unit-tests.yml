@@ -299,11 +299,10 @@ jobs:
     # (always() compose down wrapped in timeout 100s).
     # The PR ceiling stays above the heaviest duration-balanced partition
     # load (~500s) plus collection/shutdown overhead.
-    # Fast lanes (MoonLadderStudios/MoonMind#4369): unit-fast uses a 60s
-    # per-test timeout under a 12-minute native test-step bound; API/component
-    # and Temporal use 120s, each under an explicit 7-minute step bound. Per-test exceptions for a
-    # justified slow case use the installed pytest-timeout per-test marker,
-    # never a raised global default. Each row writes a
+    # Unit-fast and API/component have 12-minute test-step bounds; Temporal
+    # has seven minutes. Per-test timeouts stay 60s for unit-fast and 120s
+    # for API/component and Temporal. Justified slow cases use the installed
+    # pytest-timeout per-test marker. Each row writes a
     # uniquely named junit report and attempted cancellation diagnostics.
     needs: select-test-suites
     if: >-
@@ -312,10 +311,10 @@ jobs:
       needs.select-test-suites.outputs.temporal_boundary == 'true' ||
       needs.select-test-suites.outputs.reliability_journey == 'true'
     runs-on: ubuntu-latest
-    # Unit-fast gets 18 minutes: its 12-minute test step leaves six minutes
+    # Unit-fast and API/component get 18 minutes: a 12-minute step leaves six
     # for setup and reporting. Normal summary/upload steps each have a
     # 2-minute cap; extra failure diagnostics remain best-effort at the job
-    # deadline. API/component and Temporal retain 15-minute job bounds;
+    # deadline. Temporal retains a 15-minute job bound;
     # reliability retains 20 minutes for setup, its 12-minute test step,
     # and bounded diagnostics/cleanup.
     timeout-minutes: ${{ matrix.job_minutes }}
@@ -448,11 +447,10 @@ jobs:
       - name: Run API/component suite
         id: run-api
         if: matrix.suite == 'api-component' && needs.select-test-suites.outputs.api_component == 'true'
-        # Fast-lane hard bound (MoonLadderStudios/MoonMind#4369): 7-minute
-        # native test-step ceiling over the 120s per-test pytest timeout. The
-        # per-invocation faulthandler dump (90s) writes every thread's stack
-        # into the teed log before that terminating deadline.
-        timeout-minutes: 7
+        # The growing suite reached 79% with no failures at seven minutes.
+        # Leave room to finish while retaining the 120s per-test timeout
+        # and the earlier 90s faulthandler diagnostics.
+        timeout-minutes: 12
         env:
           PYTHONUNBUFFERED: "1"
         run: |
