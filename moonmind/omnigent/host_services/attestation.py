@@ -8,10 +8,7 @@ import logging
 from typing import Any
 
 from moonmind.omnigent.bridge_artifacts import OmnigentArtifactGateway
-from moonmind.omnigent.codex_login import (
-    CODEX_LOGIN_SESSION_PROBE,
-    record_ended_codex_login,
-)
+from moonmind.omnigent.codex_login import CODEX_LOGIN_SESSION_PROBE
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
@@ -1292,9 +1289,6 @@ class DockerOmnigentHostAttestor:
                 )
                 if code == 0 and verdict.strip() == "ended":
                     profile_id = str(handle.get("providerProfileRef") or "")
-                    await record_ended_codex_login(
-                        profile_id, int(handle["credentialGeneration"])
-                    )
                     raise HarnessPlatformError(
                         f"The ChatGPT login stored for Provider Profile {profile_id} "
                         "has ended and cannot be refreshed. Reconnect OAuth in "
