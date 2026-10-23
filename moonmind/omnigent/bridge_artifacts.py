@@ -263,17 +263,22 @@ async def _frozen_planning_input_refs(
     except (ValueError, UnicodeDecodeError) as exc:
         raise OmnigentArtifactError("frozen task-input snapshot is invalid") from exc
     source = frozen.get("source") if isinstance(frozen, dict) else None
-    if not isinstance(source, dict) or source.get("kind") != "schedule":
+    if not isinstance(source, dict):
         if planning_parameters is not None:
             raise OmnigentArtifactError("scheduled planning lacks a schedule snapshot")
         return set()
-    definition_id = str(source.get("definitionId") or "").strip()
-    if not definition_id:
-        raise OmnigentArtifactError("schedule snapshot lacks definition authority")
-    target = frozen.get("target")
+    scheduled = source.get("kind") == "schedule"
+    target = frozen.get("target") if scheduled else frozen.get("draft")
     if not isinstance(target, dict):
-        raise OmnigentArtifactError("schedule snapshot lacks its frozen target")
+        if scheduled or planning_parameters is not None:
+            raise OmnigentArtifactError("schedule snapshot lacks its frozen target")
+        return set()
+    if scheduled and not str(source.get("definitionId") or "").strip():
+        raise OmnigentArtifactError("schedule snapshot lacks definition authority")
     if planning_parameters is not None:
+        if not scheduled:
+            raise OmnigentArtifactError("scheduled planning lacks a schedule snapshot")
+        definition_id = str(source["definitionId"]).strip()
         system = planning_parameters.get("system")
         recurrence = system.get("recurrence") if isinstance(system, Mapping) else None
         if (

@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
@@ -80,6 +80,7 @@ from moonmind.workflows.executions.runtime_capabilities import (
 from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
     TemporalArtifactAuthorizationError,
+    TemporalArtifactError,
     TemporalArtifactNotFoundError,
     TemporalArtifactRepository,
     TemporalArtifactService,
@@ -147,6 +148,11 @@ from moonmind.workflows.executions.provider_profile_projection import (
     PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
     build_provider_profile_projection,
 )
+
+if TYPE_CHECKING:
+    from api_service.services.omnigent_execution_plan_service import (
+        PersistedOmnigentExecutionPlan,
+    )
 
 TERMINAL_STATES: frozenset[MoonMindWorkflowState] = TERMINAL_WORKFLOW_STATES
 SEND_MESSAGE_SCAN_LOCATION = "execution.send_message.message"
@@ -2182,6 +2188,7 @@ class TemporalExecutionService:
         _run_id: str | None = None,
         _recovery_artifact_source: TemporalExecutionCanonicalRecord | None = None,
         _publication_identity_source: TemporalExecutionCanonicalRecord | None = None,
+        _admitted_execution_plan: PersistedOmnigentExecutionPlan | None = None,
     ) -> TemporalExecutionRecord:
         # --- Worker Pause API Guard (DOC-REQ-001, DOC-REQ-005, FR-005) ---
         if not _skip_pause_guard and await self.check_system_paused():
@@ -2526,6 +2533,35 @@ class TemporalExecutionService:
             updated_at=now,
             closed_at=None,
         )
+        admitted_input_links: list[TemporalArtifactLink] = []
+        if _admitted_execution_plan is not None:
+            from api_service.services.omnigent_execution_plan_service import (
+                PersistedOmnigentExecutionPlan,
+            )
+            from moonmind.omnigent.bridge_artifacts import (
+                OmnigentArtifactError,
+                link_verified_execution_plan_inputs,
+            )
+            from moonmind.schemas.agent_runtime_models import (
+                OmnigentExecutionPlanBinding,
+            )
+
+            # Only the trusted producer's compiler result supplies delegation;
+            # a plan ref in authored parameters is not permission to read it.
+            if (
+                workflow_type_enum is not TemporalWorkflowType.USER_WORKFLOW
+                or not isinstance(
+                    _admitted_execution_plan, PersistedOmnigentExecutionPlan
+                )
+                or OmnigentExecutionPlanBinding.model_validate(
+                    params.get("omnigentExecutionPlan")
+                )
+                != _admitted_execution_plan.binding
+            ):
+                raise TemporalExecutionValidationError(
+                    "Execution input delegation conflicts with admitted plan authority"
+                )
+
         self._session.add(record)
         if normalized_depends_on:
             await self._write_dependency_edges(
@@ -2536,6 +2572,45 @@ class TemporalExecutionService:
             self._session.add(remediation_link)
         recovery_input_links: list[TemporalArtifactLink] = []
         try:
+            if _admitted_execution_plan is not None:
+                # The canonical unique create identity chooses the winner
+                # before it may delegate. Competing same-key API requests use
+                # the same workflow ID and must not contribute losing inputs.
+                await self._session.flush()
+                admission_sessions = async_sessionmaker(
+                    bind=await self._session.connection(),
+                    expire_on_commit=False,
+                    join_transaction_mode="create_savepoint",
+                )
+                # The artifact owner retains its validation, link and read-use
+                # accounting. Its commits release only nested savepoints; this
+                # canonical transaction commits the record and entire closure
+                # together, or rolls both back on any admission failure.
+                try:
+                    await link_verified_execution_plan_inputs(
+                        session_factory=admission_sessions,
+                        plan=_admitted_execution_plan.envelope,
+                        binding=_admitted_execution_plan.binding,
+                        workflow_id=workflow_id,
+                        run_id=run_id,
+                        namespace=self._namespace,
+                    )
+                except (OmnigentArtifactError, TemporalArtifactError) as exc:
+                    raise TemporalExecutionValidationError(str(exc)) from exc
+                admitted_input_links = list(
+                    (
+                        await self._session.execute(
+                            select(TemporalArtifactLink).where(
+                                TemporalArtifactLink.namespace == self._namespace,
+                                TemporalArtifactLink.workflow_id == workflow_id,
+                                TemporalArtifactLink.run_id == run_id,
+                                TemporalArtifactLink.link_type == "input.execution_plan",
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
             if _recovery_artifact_source is not None:
                 # Recovery inherits the admitted source inputs and retained step
                 # evidence, but has a new execution identity. Commit their links
@@ -2657,7 +2732,7 @@ class TemporalExecutionService:
                 # via _sync_projection_best_effort, so no projection lifecycle
                 # field is written outside mutate_execution_projection.
                 record.run_id = start_run_id
-                for input_link in recovery_input_links:
+                for input_link in [*admitted_input_links, *recovery_input_links]:
                     input_link.run_id = start_run_id
                 if remediation_link is not None:
                     remediation_link.remediation_run_id = start_run_id

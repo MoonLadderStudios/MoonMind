@@ -10296,6 +10296,10 @@ def _build_original_workflow_input_snapshot_payload(
     workspace_value = payload.get("workspace")
     if isinstance(workspace_value, Mapping):
         draft["workspace"] = copy.deepcopy(dict(workspace_value))
+    for key in ("inputArtifactRef", "planArtifactRef"):
+        ref = payload.get(key) or task_payload.get(key)
+        if ref:
+            draft[key] = ref
     return {
         "snapshotVersion": _WORKFLOW_INPUT_SNAPSHOT_VERSION,
         "source": {
@@ -10352,6 +10356,10 @@ def _snapshot_source_payload_from_parameters(
     workspace_value = parameters.get("workspaceSpec") or parameters.get("workspace")
     if isinstance(workspace_value, Mapping):
         payload["workspace"] = copy.deepcopy(dict(workspace_value))
+    for key in ("inputArtifactRef", "planArtifactRef"):
+        ref = parameters.get(key) or task.get(key)
+        if ref:
+            payload[key] = ref
     return payload, task
 
 
@@ -12384,6 +12392,12 @@ async def _create_execution_from_workflow_request(
         snapshot_source, snapshot_task = _snapshot_source_payload_from_parameters(
             initial_parameters
         )
+        for key, ref in (
+            ("inputArtifactRef", input_artifact_ref),
+            ("planArtifactRef", plan_artifact_ref),
+        ):
+            if ref:
+                snapshot_source[key] = ref
         if not snapshot_task:
             raise _invalid_workflow_request(
                 "Omnigent execution requires an immutable task input snapshot."
@@ -12489,6 +12503,7 @@ async def _create_execution_from_workflow_request(
             start_delay=start_delay,
             scheduled_for=scheduled_for_dt,
             _workflow_id=reserved_workflow_id,
+            _admitted_execution_plan=persisted_omnigent_plan,
         )
     except ProviderProfileRuntimeMismatchError as exc:
         # Provider Profiles are runtime-owned: the shared invariant is

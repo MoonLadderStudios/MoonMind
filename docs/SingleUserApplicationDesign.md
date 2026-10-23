@@ -172,12 +172,14 @@ authorized for its execution. It does not inherit access to every instance
 resource because the person who launched it owns the instance. A runtime bridge
 remains bound to the intended runtime session, not an arbitrary upstream proxy.
 
-Scheduled occurrences receive execution links to their frozen input and plan
-artifacts before planning. The verified execution plan and original task-input
-snapshot identify those inputs; current parameters cannot substitute another
-artifact. Activity identity supplies the workflow and run receiving access.
-Retries reuse the links, while an authorized recovery execution can retain the
-same frozen inputs under its new identity.
+API-created executions receive their verified plan and Skill input links before
+Temporal starts; scheduled occurrences receive them in admission before planning.
+The canonical create transaction commits the execution and grants together, so a
+duplicate request cannot contribute different inputs to the winning execution.
+The compiler result and original task-input snapshot identify the inputs; current
+parameters cannot substitute another artifact. The original principal must retain
+read authority for frozen planning pointers. Retries reuse the links, and an
+authorized recovery execution can retain frozen inputs under its new identity.
 
 Existing signing, revocation, and credential-materialization mechanisms remain
 where they serve these machine contracts. Removing application login is not a
