@@ -1245,6 +1245,21 @@ def _api_target(tmp_path):
             ["http://127.0.0.1:8123"],
         ),
         (
+            {},
+            [{"target": 8000, "published": "7000", "host_ip": "0.0.0.0"}],
+            ["http://127.0.0.1:7000"],
+        ),
+        (
+            {},
+            [{"target": 8000, "published": "7000"}],
+            ["http://127.0.0.1:7000"],
+        ),
+        (
+            {},
+            [{"target": 8000, "published": "7000", "host_ip": "::"}],
+            ["http://[::1]:7000"],
+        ),
+        (
             {"MOONMIND_PUBLIC_BASE_URL": "https://operator.example:9443"},
             [{"target": 8000, "published": "8123", "host_ip": "127.0.0.1"}],
             ["https://operator.example:9443"],

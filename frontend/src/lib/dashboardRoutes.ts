@@ -28,7 +28,6 @@ export type DashboardUiInfo = {
   limits?: Record<string, unknown>;
   endpoints?: Record<string, unknown>;
   dashboardConfig?: unknown;
-  settingsPermissions?: unknown;
   workerPause?: unknown;
   destinations?: DashboardDestinationInfo[];
 };
@@ -383,12 +382,6 @@ function objectValue(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function stringArrayValue(value: unknown): string[] | null {
-  return Array.isArray(value) && value.every((item) => typeof item === 'string')
-    ? [...value]
-    : null;
-}
-
 export function payloadForDashboardRoute(
   payload: BootPayload,
   route: DashboardRoute,
@@ -420,10 +413,6 @@ export function payloadForDashboardRoute(
       shardHealth: '/api/workflows/codex/shards',
     };
     initialData.runtimeConfig = initialData.runtimeConfig ?? nextDashboardConfig;
-    initialData.settingsPermissions =
-      stringArrayValue(uiInfo?.settingsPermissions) ??
-      stringArrayValue(initialData.settingsPermissions) ??
-      [];
   }
 
   return {
