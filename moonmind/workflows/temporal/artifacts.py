@@ -1161,6 +1161,7 @@ class TemporalArtifactRepository:
                 db_models.TemporalArtifact.storage_backend == storage_backend,
                 db_models.TemporalArtifact.storage_key == storage_key,
             )
+            .order_by(db_models.TemporalArtifact.artifact_id)
             .with_for_update()
         )
         await self._session.execute(stmt)
@@ -4317,6 +4318,15 @@ class TemporalArtifactService:
         artifact_id: str,
         principal: str,
     ) -> db_models.TemporalArtifact:
+        artifact = await self._repository.get_artifact(artifact_id)
+        self._assert_mutation_access(artifact, principal=principal)
+        # Storage identities are immutable. Lock the whole group before its
+        # target row so another owner taking artifact IDs in order cannot
+        # hold an earlier alias while this operation holds only the target.
+        await self._repository.lock_storage_references(
+            storage_backend=artifact.storage_backend,
+            storage_key=artifact.storage_key,
+        )
         artifact = await self._repository.get_artifact_for_update(artifact_id)
         self._assert_mutation_access(artifact, principal=principal)
         if await self._repository.has_schedule_reference(artifact_id):
@@ -4330,10 +4340,6 @@ class TemporalArtifactService:
                 "artifact must be soft-deleted before hard delete"
             )
 
-        await self._repository.lock_storage_references(
-            storage_backend=artifact.storage_backend,
-            storage_key=artifact.storage_key,
-        )
         # Recheck under the shared protocol: a use claim admitted just before
         # this lock must block physical deletion rather than race it.
         reference_now = datetime.now(UTC)
@@ -4495,6 +4501,7 @@ class TemporalArtifactService:
             )
             if artifact.status is db_models.TemporalArtifactStatus.DELETED:
                 artifact.last_lifecycle_run_id = lifecycle_run_id
+                await self._repository.commit()
                 continue
             # Recheck protection at the sweep boundary: expiry eligibility
             # alone never removes content under a live claim or operator pin.
@@ -4509,15 +4516,20 @@ class TemporalArtifactService:
             ):
                 skipped_in_use += 1
                 artifact.last_lifecycle_run_id = lifecycle_run_id
+                await self._repository.commit()
                 continue
             if await self._repository.get_pin(artifact.artifact_id) is not None:
                 skipped_in_use += 1
                 artifact.last_lifecycle_run_id = lifecycle_run_id
+                await self._repository.commit()
                 continue
             artifact.status = db_models.TemporalArtifactStatus.DELETED
             artifact.deleted_at = sweep_now
             soft_deleted += 1
             artifact.last_lifecycle_run_id = lifecycle_run_id
+            # Do not carry expiry-order locks into the next candidate: a
+            # schedule admits several inputs in artifact-ID order.
+            await self._repository.commit()
 
         cutoff = sweep_now - self._lifecycle.hard_delete_after
         hard_candidates = await self._repository.list_deleted_for_hard_delete(
@@ -4542,6 +4554,7 @@ class TemporalArtifactService:
             ):
                 skipped_in_use += 1
                 artifact.last_lifecycle_run_id = lifecycle_run_id
+                await self._repository.commit()
                 continue
             artifact.hard_deleted_at = sweep_now
             artifact.tombstoned_at = sweep_now
@@ -4570,9 +4583,7 @@ class TemporalArtifactService:
                     storage_backend=artifact.storage_backend,
                     storage_key=artifact.storage_key,
                 ):
-                    await self._repository.clear_deletion_intent(
-                        artifact.artifact_id
-                    )
+                    await self._repository.clear_deletion_intent(artifact.artifact_id)
                     await self._repository.commit()
                     hard_deleted += 1
                     continue
@@ -4588,6 +4599,9 @@ class TemporalArtifactService:
                 await self._repository.clear_deletion_intent(artifact.artifact_id)
                 await self._repository.commit()
             hard_deleted += 1
+            # Shared-live and protected outcomes must release their alias
+            # group too; no later candidate may reverse that lock order.
+            await self._repository.commit()
 
         reconciled, intent_count = await self._reconcile_deletion_intent_page(
             principal=principal, limit=page_size, on_progress=on_progress

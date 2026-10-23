@@ -1,19 +1,30 @@
 """Real PostgreSQL schedule admission and garbage collection share row locks."""
 
 import asyncio
+import hashlib
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy.exc import DBAPIError
 
 from api_service.db import models
-from api_service.services.recurring_workflows_service import RecurringWorkflowsService
+from api_service.services.recurring_workflows_service import (
+    RecurringWorkflowsService,
+    RecurringWorkflowValidationError,
+)
 from moonmind.config.settings import settings
-from moonmind.workflows.temporal.artifacts import TemporalArtifactStateError
+from moonmind.workflows.temporal.artifacts import (
+    TemporalArtifactRepository,
+    TemporalArtifactStateError,
+)
 from tests.support.isolated_postgres import isolated_postgres
-from tests.unit.workflows.temporal.test_saved_work_retention_4017 import _service
+from tests.unit.workflows.temporal.test_saved_work_retention_4017 import (
+    _complete_artifact,
+    _service,
+)
 from tests.unit.workflows.temporal.test_schedule_input_retention import (
     FUTURE,
     PAST,
@@ -74,8 +85,11 @@ def target(artifact_id):
 
 
 async def write_schedule(
-    session, artifact_id, temporal, tmp_path, *, definition_id=None
+    session, artifact_id, temporal, tmp_path, *, definition_id=None, plan_id=None
 ):
+    payload = target(artifact_id)
+    if plan_id is not None:
+        payload["planArtifactRef"] = plan_id
     service = RecurringWorkflowsService(
         session,
         temporal_client_adapter=temporal,
@@ -87,7 +101,7 @@ async def write_schedule(
         )
         return await service.update_definition(
             definition,
-            target=target(artifact_id),
+            target=payload,
             actor=SimpleNamespace(id="operator"),
         )
     return await service.create_definition(
@@ -100,7 +114,7 @@ async def write_schedule(
         scope_type="personal",
         scope_ref=None,
         owner_user_id=None,
-        target=target(artifact_id),
+        target=payload,
         policy={},
         actor=SimpleNamespace(id="operator"),
     )
@@ -303,3 +317,230 @@ async def test_postgres_saved_reference_blocks_destructive_and_metadata_deletion
             principal="service:sweeper", time_budget=timedelta(seconds=10), now=FUTURE
         )
         assert result.purged_count == 1
+
+
+async def test_multi_input_schedule_and_expiry_page_do_not_deadlock(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(settings.workflow, "default_runtime", "codex_cli")
+    async with context(tmp_path) as sessions:
+        async with sessions() as session:
+            service = _service(session, tmp_path)
+            artifacts = [await expired_input(service) for _ in range(2)]
+            first_id, second_id = sorted(item.artifact_id for item in artifacts)
+            for artifact in artifacts:
+                artifact.expires_at = PAST + (
+                    timedelta(hours=1)
+                    if artifact.artifact_id == first_id
+                    else timedelta()
+                )
+            await session.commit()
+        collector_has_second, writer_has_first = asyncio.Event(), asyncio.Event()
+        original_lock = TemporalArtifactRepository.get_artifact_for_update
+
+        async def interleaved_lock(repository, artifact_id):
+            artifact = await original_lock(repository, artifact_id)
+            role = repository._session.info.get("retention_race_role")
+            if role == "collector" and artifact_id == second_id:
+                collector_has_second.set()
+                await writer_has_first.wait()
+            elif role == "writer" and artifact_id == first_id:
+                writer_has_first.set()
+            return artifact
+
+        monkeypatch.setattr(
+            TemporalArtifactRepository, "get_artifact_for_update", interleaved_lock
+        )
+
+        async def collect():
+            async with sessions() as session:
+                session.info["retention_race_role"] = "collector"
+                return await _service(session, tmp_path).sweep_lifecycle(
+                    principal="service:sweeper", now=FUTURE
+                )
+
+        async def write():
+            async with sessions() as session:
+                session.info["retention_race_role"] = "writer"
+                return await write_schedule(
+                    session, first_id, adapter(), tmp_path, plan_id=second_id
+                )
+
+        collector = asyncio.create_task(collect())
+        await asyncio.wait_for(collector_has_second.wait(), timeout=15)
+        writer = asyncio.create_task(write())
+        collected, written = await asyncio.wait_for(
+            asyncio.gather(collector, writer, return_exceptions=True), timeout=20
+        )
+        assert not isinstance(collected, DBAPIError), str(collected)
+        assert not isinstance(written, DBAPIError), str(written)
+        assert collected.soft_deleted_count == 2
+        assert isinstance(written, RecurringWorkflowValidationError)
+
+
+async def shared_input_pair(service, tag):
+    payload = ('{"instructions":"' + tag + '"}').encode()
+    pair = [
+        await _complete_artifact(
+            service,
+            principal="operator",
+            payload=payload,
+            content_type="application/json",
+            content_addressed_scope="retention-race",
+            size_bytes=len(payload),
+            sha256=hashlib.sha256(payload).hexdigest(),
+        )
+        for _ in range(2)
+    ]
+    live, deleted = sorted(pair, key=lambda item: item.artifact_id)
+    live.expires_at = None
+    await service.soft_delete(artifact_id=deleted.artifact_id, principal="operator")
+    deleted.deleted_at = PAST
+    await service._repository.commit()
+    return live, deleted
+
+
+async def test_shared_blob_hard_sweep_and_multi_input_schedule_do_not_deadlock(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(settings.workflow, "default_runtime", "codex_cli")
+    async with context(tmp_path) as sessions:
+        async with sessions() as session:
+            service = _service(session, tmp_path)
+            pairs = [await shared_input_pair(service, tag) for tag in ("a", "b")]
+            (first, first_deleted), (second, _second_deleted) = sorted(
+                pairs, key=lambda pair: pair[0].artifact_id
+            )
+            first_deleted.deleted_at = PAST + timedelta(hours=1)
+            await session.commit()
+            first_id, second_id = first.artifact_id, second.artifact_id
+            second_key = second.storage_key
+        collector_has_second, writer_has_first = asyncio.Event(), asyncio.Event()
+        original_group = TemporalArtifactRepository.lock_storage_references
+        original_lock = TemporalArtifactRepository.get_artifact_for_update
+
+        async def interleaved_group(repository, **kwargs):
+            await original_group(repository, **kwargs)
+            if (
+                repository._session.info.get("retention_race_role") == "collector"
+                and kwargs["storage_key"] == second_key
+            ):
+                collector_has_second.set()
+                await writer_has_first.wait()
+
+        async def observe_writer_lock(repository, artifact_id):
+            artifact = await original_lock(repository, artifact_id)
+            if (
+                repository._session.info.get("retention_race_role") == "writer"
+                and artifact_id == first_id
+            ):
+                writer_has_first.set()
+            return artifact
+
+        monkeypatch.setattr(
+            TemporalArtifactRepository, "lock_storage_references", interleaved_group
+        )
+        monkeypatch.setattr(
+            TemporalArtifactRepository, "get_artifact_for_update", observe_writer_lock
+        )
+
+        async def collect():
+            async with sessions() as session:
+                session.info["retention_race_role"] = "collector"
+                return await _service(session, tmp_path).sweep_lifecycle(
+                    principal="service:sweeper", now=FUTURE
+                )
+
+        async def write():
+            async with sessions() as session:
+                session.info["retention_race_role"] = "writer"
+                return await write_schedule(
+                    session, first_id, adapter(), tmp_path, plan_id=second_id
+                )
+
+        collector = asyncio.create_task(collect())
+        await asyncio.wait_for(collector_has_second.wait(), timeout=15)
+        writer = asyncio.create_task(write())
+        collected, written = await asyncio.wait_for(
+            asyncio.gather(collector, writer, return_exceptions=True), timeout=20
+        )
+        assert not isinstance(collected, DBAPIError), str(collected)
+        assert not isinstance(written, DBAPIError), str(written)
+        assert collected.hard_deleted_count == 2
+        assert written.target["inputArtifactRef"] == first_id
+        async with sessions() as session:
+            reader = _service(session, tmp_path)
+            for artifact_id in (first_id, second_id):
+                assert (
+                    await reader.read(artifact_id=artifact_id, principal="operator")
+                )[1]
+
+
+async def test_explicit_shared_delete_and_schedule_admission_do_not_deadlock(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(settings.workflow, "default_runtime", "codex_cli")
+    async with context(tmp_path) as sessions:
+        async with sessions() as session:
+            live, deleted = await shared_input_pair(_service(session, tmp_path), "held")
+            first_id, deleted_id = live.artifact_id, deleted.artifact_id
+        deleter_ready, writer_has_first = asyncio.Event(), asyncio.Event()
+        group_requested = asyncio.Event()
+        original_group = TemporalArtifactRepository.lock_storage_references
+        original_lock = TemporalArtifactRepository.get_artifact_for_update
+
+        async def interleaved_group(repository, **kwargs):
+            if repository._session.info.get("retention_race_role") == "deleter":
+                group_requested.set()
+                deleter_ready.set()
+                await writer_has_first.wait()
+            await original_group(repository, **kwargs)
+
+        async def interleaved_lock(repository, artifact_id):
+            artifact = await original_lock(repository, artifact_id)
+            role = repository._session.info.get("retention_race_role")
+            if role == "deleter" and artifact_id == deleted_id:
+                deleter_ready.set()
+                if not group_requested.is_set():
+                    await writer_has_first.wait()
+            elif role == "writer" and artifact_id == first_id:
+                writer_has_first.set()
+            return artifact
+
+        monkeypatch.setattr(
+            TemporalArtifactRepository, "lock_storage_references", interleaved_group
+        )
+        monkeypatch.setattr(
+            TemporalArtifactRepository, "get_artifact_for_update", interleaved_lock
+        )
+
+        async def remove():
+            async with sessions() as session:
+                session.info["retention_race_role"] = "deleter"
+                return await _service(session, tmp_path).hard_delete(
+                    artifact_id=deleted_id, principal="operator"
+                )
+
+        async def write():
+            async with sessions() as session:
+                session.info["retention_race_role"] = "writer"
+                return await write_schedule(
+                    session, first_id, adapter(), tmp_path, plan_id=deleted_id
+                )
+
+        deleter = asyncio.create_task(remove())
+        await asyncio.wait_for(deleter_ready.wait(), timeout=15)
+        writer = asyncio.create_task(write())
+        removed, written = await asyncio.wait_for(
+            asyncio.gather(deleter, writer, return_exceptions=True), timeout=20
+        )
+        assert not isinstance(removed, DBAPIError), str(removed)
+        assert not isinstance(written, DBAPIError), str(written)
+        assert removed.hard_deleted_at is not None
+        assert isinstance(written, RecurringWorkflowValidationError)
+        async with sessions() as session:
+            assert (
+                await _service(session, tmp_path).read(
+                    artifact_id=first_id, principal="operator"
+                )
+            )[1]
