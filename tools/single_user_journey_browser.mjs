@@ -80,6 +80,13 @@ try {
   const workflowPath = (execution) => `/workflows/${encodeURIComponent(execution.workflowId)}`;
 
   if (mode === "view") {
+    const instanceRequests = [];
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.origin === new URL(base).origin && url.pathname.startsWith("/api/")) {
+        instanceRequests.push(url);
+      }
+    });
     await visit("/workflows/new", () =>
       page.getByLabel("Instructions").first().waitFor({ state: "visible" }),
     );
@@ -94,8 +101,34 @@ try {
       );
     }
     await visit("/settings", () =>
-      page.locator("main, #root, [data-dashboard-root]").first().waitFor({ state: "visible" }),
+      page.getByRole("heading", { name: "Providers & Secrets", exact: true }).waitFor({ state: "visible" }),
     );
+    const catalogResponse = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === "/api/v1/settings/catalog" && response.ok(),
+    );
+    await visit("/settings/instance", async () => {
+      await page.getByRole("heading", { name: "Instance", exact: true }).waitFor({ state: "visible" });
+      const catalog = await (await catalogResponse).json();
+      const descriptors = Object.values(catalog.categories || {}).flat();
+      if (!descriptors.length) throw new Error("Instance settings catalog is empty");
+      await page.getByText(descriptors[0].title, { exact: true }).first().waitFor({ state: "visible" });
+      if (await page.getByLabel("Settings scope", { exact: true }).count()) {
+        throw new Error("Instance settings still has a human-scope selector");
+      }
+    });
+    const info = await page.request.get(base + "/api/ui/info");
+    if (!info.ok() || "settingsPermissions" in await info.json()) {
+      throw new Error("dashboard boot did not use the instance contract");
+    }
+    for (const url of instanceRequests) {
+      const catalogRequest = /^\/api\/(?:v1\/)?(?:settings|presets)(?:\/|$)/.test(url.pathname);
+      const humanScope = ["personal", "user", "workspace", "global"].includes(url.searchParams.get("scope"));
+      if ((catalogRequest && ["scope", "scopeRef", "scope_ref"].some((key) => url.searchParams.has(key))) ||
+          humanScope || ["user_id", "workspace_id"].some((key) => url.searchParams.has(key)) ||
+          /^\/api\/(?:me|users|auth)(?:\/|$)/.test(url.pathname)) {
+        throw new Error(`dashboard made a person-partitioned request: ${url.pathname}`);
+      }
+    }
     const hostileHost = await page.request.get(base + "/api/v1/settings/catalog", {
       headers: { Host: "foreign.invalid" },
     });

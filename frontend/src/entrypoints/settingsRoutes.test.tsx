@@ -124,12 +124,6 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
       page: 'settings-providers-secrets',
       apiBase: '/api',
       initialData: {
-        settingsPermissions: [
-          'provider_profiles.read',
-          'provider_profiles.write',
-          'secrets.metadata.read',
-          'settings.effective.read',
-        ],
       },
     } as BootPayload);
 
@@ -149,7 +143,7 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
     renderRoute(InstanceSettingsPage, {
       page: 'settings-instance',
       apiBase: '/api',
-      initialData: { settingsPermissions: ['settings.catalog.read'] },
+      initialData: { },
     } as BootPayload);
 
     expect(await screen.findByRole('heading', { name: 'Instance' })).toBeTruthy();
@@ -165,16 +159,15 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
     expect(screen.queryByRole('heading', { name: 'Provider Profiles' })).toBeNull();
     expect(screen.queryByLabelText('Worker Operations')).toBeNull();
     expect(screen.queryByLabelText('Settings scope')).toBeNull();
-    expect(screen.queryByRole('button', { name: /View audit for/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /View audit for/ })).toBeTruthy();
   });
 
-  it('maps settings.audit.read to an on-demand Instance audit request', async () => {
+  it('loads Instance audit on demand for the admitted operator', async () => {
     window.history.replaceState({}, '', '/settings/instance');
     renderRoute(InstanceSettingsPage, {
       page: 'settings-instance',
       apiBase: '/api',
       initialData: {
-        settingsPermissions: ['settings.catalog.read', 'settings.audit.read'],
       },
     } as BootPayload);
 
@@ -199,7 +192,6 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
       page: 'settings-operations',
       apiBase: '/api',
       initialData: {
-        settingsPermissions: ['operations.read', 'operations.invoke'],
         workerPause: {
           get: '/api/system/worker-pause',
           post: '/api/system/worker-pause',
@@ -215,20 +207,6 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
     expect(requestedUrls.some((url) => url.startsWith('/api/v1/settings/catalog'))).toBe(false);
     expect(screen.queryByRole('heading', { name: 'Provider Profiles' })).toBeNull();
     expect(screen.queryByLabelText('Generated user and workspace settings')).toBeNull();
-  });
-
-  it('shows an intentional unavailable state for a direct unauthorized route without fetching', () => {
-    window.history.replaceState({}, '', '/settings/providers-secrets');
-    renderRoute(ProvidersSecretsSettingsPage, {
-      page: 'settings-providers-secrets',
-      apiBase: '/api',
-      initialData: { settingsPermissions: [] },
-    } as BootPayload);
-
-    expect(screen.getByRole('heading', { name: 'Providers & Secrets' })).toBeTruthy();
-    expect(screen.getByRole('region', { name: 'Providers & Secrets unavailable' })).toBeTruthy();
-    expect(requestedUrls).toEqual([]);
-    expect(window.location.pathname).toBe('/settings/providers-secrets');
   });
 
   it('preserves an accessible region when a sibling query on the same page fails', async () => {
@@ -251,7 +229,6 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
       page: 'settings-providers-secrets',
       apiBase: '/api',
       initialData: {
-        settingsPermissions: ['provider_profiles.read', 'secrets.metadata.read'],
       },
     } as BootPayload);
 
@@ -259,28 +236,7 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
     expect(screen.getByRole('heading', { name: 'Managed Secrets' })).toBeTruthy();
   });
 
-  it('keeps Operations inspection available while disabling commands for read-only users', async () => {
-    window.history.replaceState({}, '', '/settings/operations');
-    renderRoute(OperationsSettingsPage, {
-      page: 'settings-operations',
-      apiBase: '/api',
-      initialData: {
-        settingsPermissions: ['operations.read'],
-        workerPause: {
-          get: '/api/system/worker-pause',
-          post: '/api/system/worker-pause',
-          shardHealth: '/api/v1/operations/codex/shards',
-        },
-      },
-    } as BootPayload);
-
-    expect(await screen.findByText(/commands are read-only/i)).toBeTruthy();
-    await waitFor(() => {
-      expect((screen.getByRole('button', { name: 'Update MoonMind' }) as HTMLButtonElement).disabled).toBe(true);
-    });
-  });
-
-  it('resolves the bare Settings entry to the first destination the user can inspect', async () => {
+  it('resolves the bare Settings entry to Providers & Secrets without a person permission list', async () => {
     window.history.replaceState({}, '', '/settings');
     renderWithClient(
       <BrowserRouter>
@@ -288,24 +244,24 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
           payload={{
             page: 'settings-entry',
             apiBase: '/api',
-            initialData: { settingsPermissions: ['operations.read'] },
+            initialData: { },
           } as BootPayload}
         />
       </BrowserRouter>,
     );
 
-    await waitFor(() => expect(window.location.pathname).toBe('/settings/operations'));
+    await waitFor(() => expect(window.location.pathname).toBe('/settings/providers-secrets'));
   });
 
   describe('MoonLadderStudios/MoonMind#3816 retired ?section= page identity', () => {
     it.each([
-      ['?section=providers-secrets', ['settings.catalog.read'], '/settings/instance'],
-      ['?section=user-workspace', ['provider_profiles.read'], '/settings/providers-secrets'],
-      ['?section=operations', ['provider_profiles.read'], '/settings/providers-secrets'],
-      ['?section=unknown-alias', ['operations.read'], '/settings/operations'],
+      ['?section=providers-secrets', '/settings/providers-secrets'],
+      ['?section=user-workspace', '/settings/providers-secrets'],
+      ['?section=operations', '/settings/providers-secrets'],
+      ['?section=unknown-alias', '/settings/providers-secrets'],
     ])(
       'ignores the retired %s page identity when resolving the Settings entry',
-      async (search, settingsPermissions, expectedPath) => {
+      async (search, expectedPath) => {
         window.history.replaceState({}, '', `/settings${search}`);
         renderWithClient(
           <BrowserRouter>
@@ -313,7 +269,7 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
               payload={{
                 page: 'settings-entry',
                 apiBase: '/api',
-                initialData: { settingsPermissions },
+                initialData: {},
               } as BootPayload}
             />
           </BrowserRouter>,
@@ -332,7 +288,7 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
             payload={{
               page: 'settings-entry',
               apiBase: '/api',
-              initialData: { settingsPermissions: ['provider_profiles.read'] },
+              initialData: { },
             } as BootPayload}
           />
         </BrowserRouter>,
@@ -352,13 +308,13 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
             payload={{
               page: 'settings-entry',
               apiBase: '/api',
-              initialData: { settingsPermissions: ['settings.catalog.read'] },
+              initialData: { },
             } as BootPayload}
           />
         </BrowserRouter>,
       );
 
-      await waitFor(() => expect(window.location.pathname).toBe('/settings/instance'));
+      await waitFor(() => expect(window.location.pathname).toBe('/settings/providers-secrets'));
       expect(window.location.search).toBe('');
     });
   });

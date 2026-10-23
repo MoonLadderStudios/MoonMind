@@ -37,7 +37,7 @@ const skills = {
 const uiInfo = {
   app: 'moonmind', apiBase: '/api',
   features: { skills: true, workflowList: true, workflowLiveUpdates: false },
-  limits: {}, endpoints: {}, settingsPermissions: [],
+  limits: {}, endpoints: {},
   dashboardConfig: {
     pollIntervalsMs: { list: 60_000, detail: 60_000 },
     features: { temporalDashboard: { listEnabled: true } },

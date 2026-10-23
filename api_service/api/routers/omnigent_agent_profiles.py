@@ -22,9 +22,6 @@ from api_service.api.routers.omnigent_bridge import (
     _get_bridge_proxy,
     _require_bridge_enabled,
 )
-from api_service.api.routers.provider_profiles import (
-    _require_provider_profile_permission,
-)
 from api_service.api.routers.temporal_artifacts import (
     _get_temporal_artifact_service,
     _resolve_recovery_principal,
@@ -792,7 +789,6 @@ async def list_profiles(
     session: AsyncSession = Depends(get_async_session),
     current_user: Any = Depends(get_instance_access),
 ) -> list[dict[str, Any]]:
-    _require_provider_profile_permission(current_user, "provider_profiles.read")
     profiles = list(
         (
             await session.execute(
@@ -836,7 +832,6 @@ async def create_profile(
     session: AsyncSession = Depends(get_async_session),
     current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     if not _ID.fullmatch(body.profile_id):
         raise HTTPException(422, "profileId must be a stable lowercase identifier")
     if await session.get(OmnigentAgentProfile, body.profile_id):
@@ -893,7 +888,6 @@ async def create_guided_profile(
         opencode_support_enabled,
     )
 
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     if not _ID.fullmatch(body.profile_id):
         raise HTTPException(422, "profileId must be a stable lowercase identifier")
     if await session.get(OmnigentAgentProfile, body.profile_id):
@@ -1067,7 +1061,6 @@ async def get_profile(
     session: AsyncSession = Depends(get_async_session),
     current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
-    _require_provider_profile_permission(current_user, "provider_profiles.read")
     profile, versions = await _load(session, profile_id)
     if profile.visibility == "private" and not _owns_profile(profile, current_user):
         raise HTTPException(404, "agent profile not found")
@@ -1081,7 +1074,6 @@ async def create_version(
     session: AsyncSession = Depends(get_async_session),
     current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     profile, versions = await _load(session, profile_id)
     _assert_owner(profile, current_user)
     document = _normalized(body.document)
@@ -1131,7 +1123,6 @@ async def clone_profile(
     session: AsyncSession = Depends(get_async_session),
     current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     source, versions = await _load(session, profile_id)
     if source.visibility == "private" and not _owns_profile(source, current_user):
         raise HTTPException(404, "agent profile not found")
@@ -1189,7 +1180,6 @@ async def activate(
     session: AsyncSession = Depends(get_async_session),
     current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     profile, versions = await _load(session, profile_id)
     _assert_owner(profile, current_user)
     target = next((v for v in versions if v.version == version), None)
@@ -1221,7 +1211,6 @@ async def validate_profile(
     recovery_principal: Annotated[str | None, Depends(_resolve_recovery_principal)] = None,
 ) -> dict[str, Any]:
     """Perform bounded, credential-free readiness validation before activation."""
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     profile, versions = await _load(session, profile_id)
     _assert_owner(profile, current_user)
     target_number = (
@@ -1288,7 +1277,6 @@ async def smoke_validate_profile(
     workflow-success guarantee, so it never mutates the version's activation
     validation result.
     """
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     profile, versions = await _load(session, profile_id)
     _assert_owner(profile, current_user)
     target_number = (
@@ -1375,7 +1363,6 @@ async def import_profile_bundle(
 ) -> dict[str, Any]:
     """Publish one validated immutable bundle through the authorized facade."""
 
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     profile, versions = await _load(session, profile_id)
     _assert_owner(profile, current_user)
     target_number = (
@@ -1508,7 +1495,6 @@ async def make_default(
     session: AsyncSession = Depends(get_async_session),
     current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     profile, versions = await _load(session, profile_id)
     _assert_owner(profile, current_user)
     if profile.state != "active" or profile.active_version is None:
@@ -1530,7 +1516,6 @@ async def audit_history(
     session: AsyncSession = Depends(get_async_session),
     current_user: Any = Depends(get_instance_access),
 ) -> list[dict[str, Any]]:
-    _require_provider_profile_permission(current_user, "provider_profiles.read")
     profile, _ = await _load(session, profile_id)
     if profile.visibility == "private" and not _owns_profile(profile, current_user):
         raise HTTPException(404, "agent profile not found")
@@ -1561,7 +1546,6 @@ async def profile_usage(
     session: AsyncSession = Depends(get_async_session),
     current_user: Any = Depends(get_instance_access),
 ) -> list[dict[str, Any]]:
-    _require_provider_profile_permission(current_user, "provider_profiles.read")
     profile, _ = await _load(session, profile_id)
     if profile.visibility == "private" and not _owns_profile(profile, current_user):
         raise HTTPException(404, "agent profile not found")
@@ -1596,7 +1580,6 @@ async def resolve_snapshot(
     bridge_proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
 ) -> dict[str, Any]:
     """Resolve and persist the exact immutable selection at an authoring boundary."""
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     profile, versions = await _load(session, profile_id)
     if profile.visibility == "private" and not _owns_profile(profile, current_user):
         raise HTTPException(404, "agent profile not found")
@@ -1766,7 +1749,6 @@ async def delete_profile(
     session: AsyncSession = Depends(get_async_session),
     current_user: Any = Depends(get_instance_access),
 ) -> None:
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     profile, _ = await _load(session, profile_id)
     _assert_owner(profile, current_user)
     usage_count = int(
@@ -1800,7 +1782,6 @@ async def lifecycle(
     session: AsyncSession = Depends(get_async_session),
     current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     profile, versions = await _load(session, profile_id)
     _assert_owner(profile, current_user)
     profile.state = "disabled" if action == "disable" else "deprecated"

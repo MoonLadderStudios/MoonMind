@@ -411,7 +411,7 @@ function displayAuditValue(
   return displayValue(value);
 }
 
-export function GeneratedSettingsSection({ canReadAudit }: { canReadAudit: boolean }) {
+export function GeneratedSettingsSection() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('all');
@@ -433,7 +433,7 @@ export function GeneratedSettingsSection({ canReadAudit }: { canReadAudit: boole
   const auditQuery = useQuery({
     queryKey: ['settings-audit', selectedAuditKey],
     queryFn: () => fetchSettingAudit(selectedAuditKey ?? ''),
-    enabled: canReadAudit && selectedAuditKey !== null,
+    enabled: selectedAuditKey !== null,
   });
   const categories = useMemo(
     () => Array.from(new Set(descriptors.map((descriptor) => descriptor.category))).sort(),
@@ -574,7 +574,7 @@ export function GeneratedSettingsSection({ canReadAudit }: { canReadAudit: boole
         </div>
       ) : null}
 
-      {canReadAudit && selectedAuditDescriptor ? (
+      {selectedAuditDescriptor ? (
         <section
           id="settings-audit-panel"
           aria-label={`Audit history for ${selectedAuditDescriptor.title}`}
@@ -590,7 +590,7 @@ export function GeneratedSettingsSection({ canReadAudit }: { canReadAudit: boole
               </p>
               {selectedAuditDescriptor.audit.redact ? (
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-500">
-                  This setting&apos;s audit policy may redact values based on your permissions.
+                  This setting&apos;s audit policy redacts sensitive values.
                 </p>
               ) : null}
             </div>
@@ -848,18 +848,16 @@ export function GeneratedSettingsSection({ canReadAudit }: { canReadAudit: boole
                     {renderControl(descriptor, currentValue, updatePending)}
                     <div className="flex flex-wrap items-center justify-end gap-3">
                       <div className="flex flex-wrap justify-end gap-2">
-                        {canReadAudit ? (
-                          <Button variant="ghost"
-                            type="button"
-                            className="text-sm"
-                            onClick={() => setSelectedAuditKey(descriptor.key)}
-                            aria-controls="settings-audit-panel"
-                            aria-expanded={selectedAuditKey === descriptor.key}
-                            aria-label={`View audit for ${descriptor.title}`}
-                          >
-                            View audit
-                          </Button>
-                        ) : null}
+                        <Button variant="ghost"
+                          type="button"
+                          className="text-sm"
+                          onClick={() => setSelectedAuditKey(descriptor.key)}
+                          aria-controls="settings-audit-panel"
+                          aria-expanded={selectedAuditKey === descriptor.key}
+                          aria-label={`View audit for ${descriptor.title}`}
+                        >
+                          View audit
+                        </Button>
                         {canReset(descriptor) ? (
                           <Button variant="ghost"
                             type="button"

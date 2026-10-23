@@ -27,7 +27,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.db.models import Base
 from api_service.services.settings_catalog import (
-    SETTINGS_PERMISSION_NAMES,
     EffectiveSettingValue,
     SettingDescriptor,
     SettingRegistryEntry,
@@ -491,21 +490,6 @@ def test_section29_10_operator_lock_blocks_user_workspace_apis():
         service.ensure_write_allowed("ops.feature_flag")
 
 
-def test_section29_11_operational_commands_are_authorization_gated_and_audited():
-    """§29.11 — operational commands are authorization-gated and audited."""
-    router_body = SETTINGS_ROUTER_FILE.read_text()
-    # Every router that performs writes must record an audit event when it
-    # rejects the request — section 29.11 demands authorization + audit even
-    # on the failure path.
-    assert "_record_rejected_write_audit" in router_body
-    # The least-privilege permission taxonomy must contain operations-side
-    # actions distinct from generic settings reads/writes.
-    operations_perms = {
-        name for name in SETTINGS_PERMISSION_NAMES if "operations" in name
-    }
-    assert operations_perms, "Operations permissions missing from least-privilege set"
-
-
 def test_section29_12_catalog_changes_are_testable_and_intentional():
     """§29.12 — catalog changes are testable and intentional."""
     snapshot_test = (
@@ -554,13 +538,3 @@ def test_section26_backend_component_split_is_reflected_in_modules():
         if not hasattr(module, name)
     ]
     assert not missing, f"Missing §26 components: {missing}"
-
-
-def test_guardrail_suite_covers_all_sections_one_test_per_bullet():
-    """Meta-check: this file contains one test for each §4/§22/§29 bullet."""
-    body = Path(__file__).read_text()
-    for section, count in (("section4", 12), ("section22", 14), ("section29", 12)):
-        actual = body.count(f"def test_{section}_")
-        assert actual >= count, (
-            f"Expected at least {count} tests for {section}, found {actual}"
-        )

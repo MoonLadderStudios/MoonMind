@@ -128,7 +128,7 @@ async def test_conversion_preserves_effective_values_nulls_refs_and_inheritance(
         assert events[TOKEN].new_value_json == "db://operator-token"
         assert events[TOKEN].user_id is None
         history = await service.list_audit_events(
-            permissions={"settings.audit.read", "secrets.metadata.read"}, key=TOKEN
+            key=TOKEN
         )
         assert [item.event_type for item in history] == ["settings.override.converted"]
 

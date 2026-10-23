@@ -5,7 +5,6 @@ from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from api_service.api.routers.secrets import router
@@ -13,6 +12,7 @@ from api_service.db.base import get_async_session
 from api_service.db.models import Base, SecretStatus
 from api_service.auth_providers import get_instance_access
 from api_service.services.secrets import SecretsService
+from moonmind.security.operator_admission import OperatorAdmission
 
 app = FastAPI()
 app.include_router(router, prefix="/api/v1/secrets")
@@ -25,29 +25,16 @@ mock_db_session = AsyncMock()
 _CURRENT_USER_DEP = get_instance_access
 
 
-def _superuser():
-    return SimpleNamespace(
-        id=None, workspace_id=None, is_superuser=True, settings_permissions=set()
-    )
+def _operator():
+    return OperatorAdmission(via="loopback")
 
 
-def _user_without_permissions():
-    return SimpleNamespace(
-        id=None, workspace_id=None, is_superuser=False, settings_permissions=set()
-    )
 
 
-def _user_with_disable_only():
-    return SimpleNamespace(
-        id=None,
-        workspace_id=None,
-        is_superuser=False,
-        settings_permissions={"secrets.disable"},
-    )
 
 
 app.dependency_overrides[get_async_session] = lambda: mock_db_session
-app.dependency_overrides[_CURRENT_USER_DEP] = _superuser
+app.dependency_overrides[_CURRENT_USER_DEP] = _operator
 
 client = TestClient(app)
 
@@ -272,29 +259,11 @@ def test_secret_usage_endpoint_redacts_missing_secret_diagnostics(
     )
 
 
-def _restore_superuser_dep():
-    app.dependency_overrides[_CURRENT_USER_DEP] = _superuser
+def _restore_operator_dep():
+    app.dependency_overrides[_CURRENT_USER_DEP] = _operator
 
 
-def test_update_secret_status_denied_without_disable_or_rotate_permissions(
-    mock_secrets_service,
-):
-    app.dependency_overrides[_CURRENT_USER_DEP] = _user_without_permissions
-    try:
-        resp = client.put(
-            "/api/v1/secrets/TEST_API_KEY/status",
-            json={"status": "active"},
-        )
-    finally:
-        _restore_superuser_dep()
-
-    assert resp.status_code == 403
-    body = resp.json()
-    assert "secrets.disable" in body["detail"] or "secrets.rotate" in body["detail"]
-    mock_secrets_service.set_status.assert_not_called()
-
-
-def test_update_secret_status_allows_re_enable_with_disable_permission(
+def test_update_secret_status_allows_operator_to_re_enable(
     mock_secrets_service,
 ):
     from api_service.db.models import ManagedSecret
@@ -308,14 +277,14 @@ def test_update_secret_status_allows_re_enable_with_disable_permission(
     )
     mock_secrets_service.set_status.return_value = mock_secret
 
-    app.dependency_overrides[_CURRENT_USER_DEP] = _user_with_disable_only
+    app.dependency_overrides[_CURRENT_USER_DEP] = _operator
     try:
         resp = client.put(
             "/api/v1/secrets/TEST_API_KEY/status",
             json={"status": "active"},
         )
     finally:
-        _restore_superuser_dep()
+        _restore_operator_dep()
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "active"
@@ -330,7 +299,7 @@ def test_update_secret_status_allows_re_enable_with_disable_permission(
 
 real_app = FastAPI()
 real_app.include_router(router, prefix="/api/v1/secrets")
-real_app.dependency_overrides[_CURRENT_USER_DEP] = _superuser
+real_app.dependency_overrides[_CURRENT_USER_DEP] = _operator
 
 
 @pytest_asyncio.fixture
