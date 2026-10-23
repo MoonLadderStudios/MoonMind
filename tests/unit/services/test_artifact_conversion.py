@@ -25,7 +25,7 @@ from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore, TemporalArtifactAuthorizationError,
     TemporalArtifactRepository, TemporalArtifactService, TemporalArtifactStateError,
 )
-from tests.helpers.account_source import User, create_source_schema
+from tests.helpers.account_source import User, add_source_user, create_source_schema
 
 pytestmark = pytest.mark.asyncio
 
@@ -182,12 +182,13 @@ async def test_unknown_workflow_parent_refuses_without_artifact_mutation(tmp_pat
             assert not (await session.execute(select(conversion.SingleUserConversionRun))).scalars().all()
 
 
-async def test_unknown_active_claim_authority_refuses(tmp_path):
+@pytest.mark.parametrize("owner_prefix", ["", "user:"])
+async def test_unknown_active_claim_authority_refuses(tmp_path, owner_prefix):
     async with database(tmp_path) as maker:
         async with maker() as session:
             artifact_id, _owner = await seed(session, tmp_path)
             claim = (await session.execute(select(TemporalArtifactUseClaim))).scalar_one()
-            claim.owner_principal = str(uuid4())
+            claim.owner_principal = f"{owner_prefix}{uuid4()}"
             await session.commit()
             result = await conversion.run_guarded_upgrade(session, operator_authorized=True)
             assert not result.published
@@ -394,12 +395,158 @@ async def test_live_machine_temporal_parent_is_preserved_by_conversion(tmp_path)
             assert retained.state == MoonMindWorkflowState.EXECUTING
 
 
+async def test_null_owner_projection_does_not_grant_linked_restricted_artifact_access(
+    tmp_path,
+    monkeypatch,
+):
+    from api_service.db.models import (
+        TemporalExecutionOwnerType,
+        TemporalExecutionRecord,
+        TemporalWorkflowType,
+    )
+    from moonmind.statuses.workflow import MoonMindWorkflowState
+
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
+    async with database(tmp_path) as maker:
+        async with maker() as session:
+            human_artifact_id, owner = await seed(session, tmp_path)
+            session.add(
+                TemporalExecutionRecord(
+                    workflow_id="retained-workflow",
+                    run_id="retained-run",
+                    namespace="default",
+                    entry="temporal",
+                    workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                    owner_id=None,
+                    owner_type=TemporalExecutionOwnerType.USER,
+                    state=MoonMindWorkflowState.EXECUTING,
+                )
+            )
+            artifacts = service(session, tmp_path)
+            machine_principal = "workflow:retained-workflow"
+            machine_artifact, _ = await artifacts.create(
+                principal=machine_principal,
+                content_type="application/octet-stream",
+                redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+                link={
+                    "namespace": "default",
+                    "workflow_id": "retained-workflow",
+                    "run_id": "retained-run",
+                    "link_type": "output",
+                },
+            )
+            await artifacts.write_complete(
+                artifact_id=machine_artifact.artifact_id,
+                principal=machine_principal,
+                payload=b"machine-only evidence",
+                content_type="application/octet-stream",
+            )
+            machine_artifact_id = machine_artifact.artifact_id
+            await session.commit()
+            for principal in (owner, "operator"):
+                assert not await artifacts._repository.principal_owns_linked_execution(
+                    artifact_id=machine_artifact_id,
+                    principal=principal,
+                )
+                with pytest.raises(TemporalArtifactAuthorizationError):
+                    await artifacts.read(
+                        artifact_id=machine_artifact_id, principal=principal
+                    )
+
+            converted = await conversion.run_guarded_upgrade(
+                session, operator_authorized=True
+            )
+            assert converted.published, converted.to_sanitized_dict()
+            assert (
+                await session.get(TemporalArtifact, human_artifact_id)
+            ).operator_recovery_granted
+
+        async with maker() as restarted:
+            assert (
+                await conversion.run_guarded_upgrade(
+                    restarted,
+                    operator_authorized=True,
+                )
+            ).published
+            projection = await restarted.get(
+                TemporalExecutionRecord, "retained-workflow"
+            )
+            assert projection.owner_id is None
+            assert projection.owner_type == TemporalExecutionOwnerType.USER
+            machine_artifact = await restarted.get(
+                TemporalArtifact, machine_artifact_id
+            )
+            assert machine_artifact.created_by_principal == machine_principal
+            assert machine_artifact.operator_recovery_granted is False
+            artifacts = service(restarted, tmp_path)
+            assert (
+                await artifacts.read(
+                    artifact_id=human_artifact_id,
+                    principal="operator",
+                )
+            )[1] == b"retained bytes"
+            for principal in (owner, "operator"):
+                assert not await artifacts._repository.principal_owns_linked_execution(
+                    artifact_id=machine_artifact_id,
+                    principal=principal,
+                )
+                with pytest.raises(TemporalArtifactAuthorizationError):
+                    await artifacts.read(
+                        artifact_id=machine_artifact_id, principal=principal
+                    )
+
+
+@pytest.mark.parametrize("projection_owner", ["unknown", "another_user"])
+async def test_populated_projection_owner_still_requires_single_person_attribution(
+    tmp_path,
+    projection_owner,
+):
+    from api_service.db.models import (
+        TemporalExecutionOwnerType,
+        TemporalExecutionRecord,
+        TemporalWorkflowType,
+    )
+
+    async with database(tmp_path) as maker, maker() as session:
+        artifact_id, _owner = await seed(session, tmp_path)
+        other_id = uuid4()
+        if projection_owner == "another_user":
+            await add_source_user(session, User(id=other_id, email="other@example.invalid"))
+        session.add(
+            TemporalExecutionRecord(
+                workflow_id="retained-workflow",
+                run_id="retained-run",
+                namespace="default",
+                entry="temporal",
+                workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                owner_id=str(other_id),
+                owner_type=TemporalExecutionOwnerType.USER,
+            )
+        )
+        await session.commit()
+        refused = await conversion.run_guarded_upgrade(
+            session, operator_authorized=True
+        )
+        assert refused.published is False
+        assert refused.decision.reason_code == (
+            "unknown_principal" if projection_owner == "unknown" else "multi_person"
+        )
+        assert (
+            await session.get(TemporalArtifact, artifact_id)
+        ).operator_recovery_granted is False
+        projection = await session.get(TemporalExecutionRecord, "retained-workflow")
+        assert projection.owner_id == str(other_id)
+
+
 async def test_recovery_schema_downgrade_preserves_published_grants(tmp_path):
     import importlib
     from alembic.migration import MigrationContext
     from alembic.operations import Operations
     from api_service.services.single_user_conversion import completed_guarded_upgrade
-    migration = importlib.import_module("api_service.migrations.versions.396_artifact_operator_recovery")
+
+    migration = importlib.import_module(
+        "api_service.migrations.versions.396_artifact_operator_recovery"
+    )
 
     def migrate(connection, operation):
         with Operations.context(MigrationContext.configure(connection)):

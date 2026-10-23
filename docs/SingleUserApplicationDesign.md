@@ -334,6 +334,13 @@ An arbitrary UUID list, caller boolean, matching email/display name, admin flag,
 or one remaining active account cannot manufacture that authority. Genuinely
 unresolved human data remains protected. Multiple provider accounts are not
 multiple people, and historical provenance is not automatically a live owner.
+Artifact attribution recognizes bare UUID creators and container-job
+`user:<UUID>` creators as the same retained person, subject to the same identity
+evidence. Conversion preserves their stored creator, quota, and claim scopes;
+malformed or unknown human principals still block conversion.
+Execution projections are already instance resources: a missing historical owner
+does not block unrelated conversion, and the projection remains unchanged.
+Missing ownership never supplies authority to read a linked restricted artifact.
 
 The authoritative eligibility read and conversion share the existing migration
 serialization and appropriate transaction/locks or bounded writer quiescence.
