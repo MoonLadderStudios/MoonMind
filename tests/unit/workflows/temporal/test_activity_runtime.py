@@ -2713,14 +2713,23 @@ async def test_tool_activity_heartbeats_during_pending_handler(method) -> None:
     assert result.status == "COMPLETED"
 
 
-async def test_mm_tool_execute_preserves_tool_failure_envelope() -> None:
+async def test_mm_tool_execute_preserves_tool_failure_envelope(monkeypatch) -> None:
     dispatcher = SkillActivityDispatcher()
+    leaked_token = "ghp_toolfailuretoken1234567890abcd"
+    # Deployment secrets can coincide with ordinary service-name words.
+    # This wire-envelope test owns the secret used by its real redactor.
+    monkeypatch.setattr(
+        activity_runtime_module.SecretRedactor,
+        "from_environ",
+        lambda **kwargs: activity_runtime_module.SecretRedactor(
+            secrets=[leaked_token], placeholder=kwargs.get("placeholder", "***")
+        ),
+    )
 
     def _failing_handler(
         _inputs: dict[str, object],
         _context: dict[str, object] | None,
     ) -> SkillResult:
-        leaked_token = "ghp_toolfailuretoken1234567890abcd"
         raise ToolFailure(
             error_code="DEPLOYMENT_RUNNER_UNSAFE",
             message=(
