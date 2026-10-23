@@ -221,7 +221,11 @@ async def test_normal_api_manifest_is_readable_at_the_first_temporal_consumer(
             )
         return SimpleNamespace(run_id="actual-api-run")
 
-    adapter = SimpleNamespace(start_workflow=AsyncMock(side_effect=start_workflow))
+    adapter = SimpleNamespace(
+        start_workflow=AsyncMock(side_effect=start_workflow),
+        describe_workflow=AsyncMock(return_value=SimpleNamespace(run_id="actual-api-run")),
+        namespace_retention_seconds=AsyncMock(return_value=86400),
+    )
     roots = {}
     if include_roots:
         for key, body in (
