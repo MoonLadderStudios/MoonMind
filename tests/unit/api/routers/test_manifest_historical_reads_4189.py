@@ -30,6 +30,7 @@ from api_service.db.models import (
     TemporalExecutionOwnerType,
     TemporalWorkflowType,
 )
+from moonmind.security.operator_admission import OperatorAdmission
 
 # Adapter calls a read may make while Temporal no longer knows the run.
 _READ_ADAPTER_CALLS = {"describe_workflow"}
@@ -102,7 +103,7 @@ async def _historical_app(tmp_path: Path, *, owner_id: str | None, **record_fiel
             app = FastAPI()
             app.include_router(router)
             app.include_router(temporal_artifacts.router)
-            principal = {"user": None}
+            admission = OperatorAdmission(via="loopback")
             app.dependency_overrides[_get_service] = lambda: service
             app.dependency_overrides[
                 temporal_artifacts._get_temporal_artifact_service
@@ -112,23 +113,8 @@ async def _historical_app(tmp_path: Path, *, owner_id: str | None, **record_fiel
             # Routes that reach Temporal directly (reschedule) or through the
             # adapter dependency (retry-publication) share the recorded adapter.
             app.dependency_overrides[get_temporal_client_adapter] = lambda: adapter
-            app.dependency_overrides[get_instance_access] = lambda: principal["user"]
-            app.dependency_overrides[get_instance_access_optional] = (
-                lambda: principal["user"]
-            )
-            app.dependency_overrides[get_instance_access] = lambda: principal["user"]
-            app.dependency_overrides[get_instance_access_optional] = (
-                lambda: principal["user"]
-            )
-
-            def act_as(user_id: str, *, is_superuser: bool = False) -> None:
-                principal["user"] = SimpleNamespace(
-                    id=user_id,
-                    email="operator@example.com",
-                    is_active=True,
-                    is_superuser=is_superuser,
-                    roles=[],
-                )
+            app.dependency_overrides[get_instance_access] = lambda: admission
+            app.dependency_overrides[get_instance_access_optional] = lambda: admission
 
             transport = ASGITransport(app=app)
             with patch.object(
@@ -143,7 +129,6 @@ async def _historical_app(tmp_path: Path, *, owner_id: str | None, **record_fiel
                         adapter=adapter,
                         artifacts=artifacts,
                         session=session,
-                        act_as=act_as,
                     )
     finally:
         await engine.dispose()
@@ -166,12 +151,11 @@ class _RetiredTemporalClient:
 
 
 @pytest.mark.asyncio
-async def test_owner_reads_historical_manifest_run_through_generic_list_and_detail(
+async def test_operator_reads_historical_manifest_run_through_generic_list_and_detail(
     tmp_path: Path,
 ) -> None:
     owner = str(uuid4())
     async with _historical_app(tmp_path, owner_id=owner) as ctx:
-        ctx.act_as(owner)
         record = ctx.record
 
         listed = await ctx.client.get("/api/executions", params={"entry": "manifest"})
@@ -221,7 +205,6 @@ async def test_degraded_historical_row_does_not_acquire_system_ownership(
         state=MoonMindWorkflowState.FAILED,
         plan_ref=None,
     ) as ctx:
-        ctx.act_as(str(uuid4()), is_superuser=True)
 
         detail = await ctx.client.get(f"/api/executions/{ctx.record.workflow_id}")
         assert detail.status_code == 200, detail.text
@@ -243,7 +226,6 @@ async def test_historical_compile_input_is_read_from_stored_evidence(
     # ``manifest_ref`` was the compile/summary input of the parent run. It is
     # read back verbatim from the stored row, without the deleted compiler.
     async with _historical_app(tmp_path, owner_id=str(uuid4())) as ctx:
-        ctx.act_as(str(uuid4()), is_superuser=True)
 
         detail = await ctx.client.get(f"/api/executions/{ctx.record.workflow_id}")
 
@@ -280,7 +262,6 @@ async def test_historical_node_execution_lineage_stays_on_the_child_run(
         input_ref="art_manifest_nodes_1",
         parameters=lineage,
     ) as ctx:
-        ctx.act_as(owner)
 
         detail = await ctx.client.get(f"/api/executions/{ctx.record.workflow_id}")
 
@@ -302,7 +283,6 @@ async def test_historical_manifest_run_artifacts_stay_readable(
 
     owner = str(uuid4())
     async with _historical_app(tmp_path, owner_id=owner) as ctx:
-        ctx.act_as(owner)
         record = ctx.record
         artifact, _upload = await ctx.artifacts.create(
             principal=owner,
@@ -334,6 +314,8 @@ async def test_historical_manifest_run_artifacts_stay_readable(
         )
         assert downloaded.status_code == 200, downloaded.text
         assert downloaded.content == b'{"phase": "completed"}'
+        await ctx.session.refresh(artifact)
+        assert artifact.created_by_principal == owner
         assert _mutating_adapter_calls(ctx.adapter) == []
 
 
@@ -417,7 +399,6 @@ async def test_historical_manifest_run_rejects_every_mutation(
         close_status=TemporalExecutionCloseStatus.FAILED if terminal else None,
         closed_at=datetime(2026, 9, 1, 12, 30, tzinfo=UTC) if terminal else None,
     ) as ctx:
-        ctx.act_as(owner)
         record = ctx.record
         # A read materializes the projection row; count only mutation effects.
         read = await ctx.client.get(f"/api/executions/{record.workflow_id}")
@@ -472,7 +453,6 @@ async def test_reschedule_reaches_temporal_only_for_ordinary_runs(
         close_status=None,
         closed_at=None,
     ) as ctx:
-        ctx.act_as(owner)
         ctx.adapter.send_reschedule_signal = AsyncMock(return_value=None)
 
         response = await ctx.client.post(
@@ -495,7 +475,6 @@ async def test_historical_manifest_run_subresource_reads_are_not_denied(
 ) -> None:
     owner = str(uuid4())
     async with _historical_app(tmp_path, owner_id=owner) as ctx:
-        ctx.act_as(owner)
 
         response = await ctx.client.get(
             f"/api/executions/{ctx.record.workflow_id}/{subpath}"
@@ -522,7 +501,6 @@ async def test_open_historical_manifest_run_offers_no_actions(
     async with _historical_app(
         tmp_path, owner_id=owner, state=state, close_status=None, closed_at=None
     ) as ctx:
-        ctx.act_as(owner)
 
         detail = await ctx.client.get(f"/api/executions/{ctx.record.workflow_id}")
 
