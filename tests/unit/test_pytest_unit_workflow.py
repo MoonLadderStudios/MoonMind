@@ -335,8 +335,11 @@ def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
     ("suite", "execution_minutes"),
     [("fresh-journey", 20), ("upgrade-journey", 25), ("controller-journey", 20)],
 )
+@pytest.mark.parametrize(
+    "candidate_image", ["", "ghcr.io/example/app@sha256:" + "a" * 64]
+)
 def test_journey_job_reserves_setup_execution_and_reporting(
-    suite: str, execution_minutes: int
+    suite: str, execution_minutes: int, candidate_image: str
 ) -> None:
     job = _load_workflow()["jobs"]["integration-ci"]
     steps = job["steps"]
@@ -349,6 +352,12 @@ def test_journey_job_reserves_setup_execution_and_reporting(
         step
         for step in steps[:first_journey]
         if step.get("if") != "matrix.suite == 'hermetic'"
+        and not (
+            candidate_image and "inputs.candidate_image == ''" in step.get("if", "")
+        )
+        and not (
+            not candidate_image and "inputs.candidate_image != ''" in step.get("if", "")
+        )
     ]
     setup_minutes = sum(
         _integration_row_timeout_minutes(step["timeout-minutes"], suite)
@@ -390,7 +399,7 @@ def test_journey_job_reserves_setup_execution_and_reporting(
     reporting_minutes = sum(int(step["timeout-minutes"]) for step in reporting)
     assert reporting_minutes == 6
     # Bound every phase, including failure diagnostics; reserve runner/post-action overhead.
-    assert setup_minutes == 50
+    assert 0 < setup_minutes <= 50
     assert setup_minutes + execution_minutes + reporting_minutes + 4 <= (
         _integration_row_timeout_minutes(job["timeout-minutes"], suite)
     )
@@ -634,7 +643,9 @@ def test_image_building_jobs_share_a_layer_cache() -> None:
     assert build["with"]["cache-from"].startswith("type=gha,")
     assert build["with"]["cache-to"].startswith("type=gha,")
     run_step = next(
-        step for step in integration_steps if step.get("name") == "Run hermetic integration CI suite"
+        step
+        for step in integration_steps
+        if step.get("name") == "Run hermetic integration CI suite"
     )
     assert run_step["env"]["MOONMIND_PYTHON_TEST_IMAGE"] == build["with"]["tags"]
 
@@ -651,7 +662,9 @@ def test_image_building_jobs_share_a_layer_cache() -> None:
     # gate writes. The gate stays the only writer: the parallel journey rows
     # export nothing.
     candidate = next(step for step in builds if "target" not in step["with"])
-    assert candidate["if"] == "matrix.suite != 'hermetic'"
+    assert candidate["if"] == (
+        "matrix.suite != 'hermetic' && inputs.candidate_image == ''"
+    )
     assert candidate["with"]["file"] == exact_build["with"]["file"]
     assert candidate["with"]["build-args"] == exact_build["with"]["build-args"]
     assert candidate["with"]["cache-from"] == exact_build["with"]["cache-from"]
