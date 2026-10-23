@@ -188,7 +188,6 @@ print("router-without-embedded-modules: OK")
 
 
 def test_router_imports_and_proxy_composes_with_launch_modules_unavailable() -> None:
-    pytest.importorskip("fastapi_users")
     pytest.importorskip("aiohttp")
     completed = subprocess.run(
         [sys.executable, "-c", _ISOLATION_PROBE],

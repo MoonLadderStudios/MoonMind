@@ -12,7 +12,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from api_service.api.routers.workflow_console import _resolve_user_dependency_overrides
+from tests.helpers.route_dependencies import _resolve_user_dependency_overrides
 from api_service.db.base import get_async_session
 from api_service.main import app
 

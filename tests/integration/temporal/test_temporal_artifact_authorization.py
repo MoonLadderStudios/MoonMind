@@ -21,7 +21,6 @@ from api_service.db.models import (
     TemporalExecutionOwnerType,
     TemporalWorkflowType,
 )
-from moonmind.config.settings import settings
 from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
     LocalTemporalArtifactStore,
@@ -53,7 +52,7 @@ class TestArtifactAuthorizationBoundaries:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """When OIDC is enabled, a non-owner principal must be denied read access."""
-        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+        monkeypatch.setenv("AUTH_PROVIDER", "oidc")
         async with _db(tmp_path) as maker:
             async with maker() as session:
                 service = TemporalArtifactService(
@@ -96,7 +95,7 @@ class TestArtifactAuthorizationBoundaries:
         A bare ``service:`` principal without an admitted scope is denied
         even for reads; carrying the owner's admitted scope succeeds.
         """
-        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+        monkeypatch.setenv("AUTH_PROVIDER", "oidc")
         async with _db(tmp_path) as maker:
             async with maker() as session:
                 service = TemporalArtifactService(
@@ -135,7 +134,7 @@ class TestArtifactAuthorizationBoundaries:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """When OIDC is enabled, a non-owner principal must be denied mutation access."""
-        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+        monkeypatch.setenv("AUTH_PROVIDER", "oidc")
         async with _db(tmp_path) as maker:
             async with maker() as session:
                 service = TemporalArtifactService(
@@ -177,7 +176,7 @@ class TestArtifactAuthorizationBoundaries:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """When AUTH_PROVIDER=disabled, any principal can read/mutate."""
-        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled")
+        monkeypatch.setenv("AUTH_PROVIDER", "disabled")
         async with _db(tmp_path) as maker:
             async with maker() as session:
                 service = TemporalArtifactService(
@@ -228,7 +227,7 @@ class TestArtifactAuthorizationBoundaries:
     ) -> None:
         """MM-628: linked input attachment reads are authorized by execution owner."""
 
-        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+        monkeypatch.setenv("AUTH_PROVIDER", "oidc")
         async with _db(tmp_path) as maker:
             async with maker() as session:
                 service = TemporalArtifactService(

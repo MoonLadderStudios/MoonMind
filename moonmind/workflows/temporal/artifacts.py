@@ -17,8 +17,8 @@ from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Iterable, Mapping
-from uuid import uuid4
 from urllib.parse import urlsplit, urlunsplit
+from uuid import uuid4
 
 if TYPE_CHECKING:
     from moonmind.schemas.temporal_activity_models import (
@@ -34,12 +34,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, AsyncSessionTransaction
 
 from api_service.db import models as db_models
 from moonmind.config.settings import settings
-from moonmind.security.auth_modes_4120 import is_disabled_local_mode
 from moonmind.core.artifacts import assert_model_agnostic_metadata
+from moonmind.schemas import saved_work_retention as _saved_work_retention
 from moonmind.schemas.saved_work_models import (
     assert_complete_payload_matches as _assert_saved_work_complete_matches,
 )
-from moonmind.schemas import saved_work_retention as _saved_work_retention
 
 logger = logging.getLogger(__name__)
 
@@ -2165,8 +2164,6 @@ class TemporalArtifactService:
         principal: str,
         admitted_principal: str | None = None,
     ) -> None:
-        if is_disabled_local_mode():
-            return
         owner = self._owner_principal(artifact)
         if not owner:
             return
@@ -2246,8 +2243,6 @@ class TemporalArtifactService:
         *,
         principal: str,
     ) -> None:
-        if is_disabled_local_mode():
-            return
         # Single-user (#4351): the admitted operator controls instance
         # artifacts; machine (workflow:/service:) mutation stays owner-bound.
         if self._is_instance_operator_principal(principal):
@@ -2406,8 +2401,6 @@ class TemporalArtifactService:
         readers remain execution-bound below; raw restricted bytes,
         quarantine, and redaction checks keep their owning gates.
         """
-        if is_disabled_local_mode():
-            return
         if self._reads_all_instance_artifacts(principal, admitted_principal):
             return
         owner = self._owner_principal(artifact)
@@ -3932,7 +3925,7 @@ class TemporalArtifactService:
         link_type: str | None = None,
         latest_only: bool = False,
     ) -> list[db_models.TemporalArtifact]:
-        if not is_disabled_local_mode() and not principal:
+        if not principal:
             raise TemporalArtifactAuthorizationError("principal required")
         if latest_only and link_type:
             latest = await self._repository.latest_for_execution_link(
@@ -3949,9 +3942,6 @@ class TemporalArtifactService:
                 run_id=run_id,
                 link_type=link_type,
             )
-
-        if is_disabled_local_mode():
-            return artifacts
 
         visible: list[db_models.TemporalArtifact] = []
         for artifact in artifacts:
@@ -6048,12 +6038,12 @@ class TemporalArtifactActivities:
         """
         from sqlalchemy import select
 
+        from api_service.db.base import get_async_session_context
         from api_service.db.models import (
             ManagedAgentProviderProfile,
             ProviderCapacityScope,
             ProviderProfileSlotLease,
         )
-        from api_service.db.base import get_async_session_context
         from api_service.services.provider_profile_readiness import (
             provider_profile_launch_ready,
         )
@@ -6227,10 +6217,12 @@ class TemporalArtifactActivities:
         """
         from temporalio.exceptions import WorkflowAlreadyStartedError
 
-        from moonmind.workflows.temporal.client import TemporalClientAdapter
         from moonmind.workflows.temporal.activity_catalog import get_workflow_task_queue
+        from moonmind.workflows.temporal.client import TemporalClientAdapter
         from moonmind.workflows.temporal.workflows.provider_profile_manager import (
             WORKFLOW_NAME as PROVIDER_PROFILE_MANAGER_WF,
+        )
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
             workflow_id_for_runtime,
         )
 
@@ -6268,12 +6260,13 @@ class TemporalArtifactActivities:
     ) -> dict[str, Any]:
         """Acquire an acknowledged maintenance lease for a workflow owner."""
 
+        from temporalio import activity
+
         from moonmind.provider_profiles.lease_client import (
             CredentialLeasePurpose,
             ProviderProfileLeaseClient,
         )
         from moonmind.workflows.temporal.client import TemporalClientAdapter
-        from temporalio import activity
 
         lease_task = asyncio.create_task(
             ProviderProfileLeaseClient(
@@ -6825,8 +6818,8 @@ class TemporalArtifactActivities:
         """
         from sqlalchemy import select
 
-        from api_service.db.models import TemporalExecutionRecord
         from api_service.db.base import get_async_session_context
+        from api_service.db.models import TemporalExecutionRecord
 
         unique_ids = list(
             dict.fromkeys(
@@ -6907,8 +6900,8 @@ class TemporalArtifactActivities:
 
         from sqlalchemy import delete, select
 
-        from api_service.db.models import ProviderProfileSlotLease
         from api_service.db.base import get_async_session_context
+        from api_service.db.models import ProviderProfileSlotLease
         from moonmind.provider_profiles.lease_client import (
             ACTIVE_DURABLE_LEASE_STATES,
             KNOWN_DURABLE_LEASE_STATES,

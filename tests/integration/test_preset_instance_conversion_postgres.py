@@ -8,7 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.db.models import Base
+from tests.helpers.account_source import create_source_schema
 from tests.integration import (
     test_single_user_conversion_postgres_4346 as postgres_fixtures,
 )
@@ -31,7 +31,7 @@ async def preset_sessions(conversion_postgres_url):
         connect_args={"server_settings": {"search_path": schema}},
     )
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     try:
         yield maker

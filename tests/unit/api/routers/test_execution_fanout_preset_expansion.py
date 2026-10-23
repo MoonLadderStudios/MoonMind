@@ -90,9 +90,8 @@ async def test_system_owned_fanout_expands_existing_pr_preset(
     _override_temporal_client(app)
     # Exercise the real machine-first boundary, not an auth=None override.
     # This populated catalog has no account or completed account conversion.
-    from moonmind.security import auth_modes_4120
 
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
+    monkeypatch.setenv("AUTH_PROVIDER", "disabled")
 
     async def session_dependency():
         async with sessions() as session:

@@ -10,7 +10,6 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 import sqlalchemy_utils
-import fastapi_users_db_sqlalchemy
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
@@ -317,7 +316,7 @@ def upgrade() -> None:
     sa.Column('hashed_password', sa.Text(), nullable=True),
     sa.Column('oidc_provider', sa.String(length=32), nullable=True),
     sa.Column('oidc_subject', sa.String(length=255), nullable=True),
-    sa.Column('id', fastapi_users_db_sqlalchemy.generics.GUID(), nullable=False),
+    sa.Column('id', sa.Uuid(), nullable=False),
     sa.Column('email', sa.String(length=320), nullable=False),
     sa.Column('is_active', sa.Boolean(), nullable=False),
     sa.Column('is_superuser', sa.Boolean(), nullable=False),

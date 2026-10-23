@@ -12,7 +12,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.db.models import Base, ManagedSecret, User, UserProfile
+from api_service.db.models import ManagedSecret
+from tests.helpers.account_source import (
+    User,
+    UserProfile,
+    create_source_schema,
+)
 
 
 def _factory(tmp_path, name="mig4349.db"):
@@ -24,13 +29,13 @@ def _factory(tmp_path, name="mig4349.db"):
 @pytest.mark.asyncio
 async def test_migration_preserves_distinct_secrets_and_ids(tmp_path):
     from api_service.services.profile_secret_migration import (
-        migrate_legacy_profile_secrets,
         legacy_secret_slug,
+        migrate_legacy_profile_secrets,
     )
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         # One operator holding the same value in two distinct credentials:
         # slugs derive from existing IDs + field (never value hashes), so
@@ -72,7 +77,7 @@ async def test_migration_blocks_multi_operator_by_default(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         u1 = User(id=uuid.uuid4(), email="a@example.com")
         u2 = User(id=uuid.uuid4(), email="b@example.com")
@@ -96,7 +101,7 @@ async def test_migration_bypass_flag_is_owning_caller_only(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         u1 = User(id=uuid.uuid4(), email="a@example.com")
         u2 = User(id=uuid.uuid4(), email="b@example.com")
@@ -122,7 +127,7 @@ async def test_migration_rerun_and_interruption_safe(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         u1 = User(id=uuid.uuid4(), email="a@example.com")
         session.add(u1)

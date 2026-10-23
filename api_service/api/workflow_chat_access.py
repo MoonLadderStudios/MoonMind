@@ -7,9 +7,8 @@ from fastapi import Depends, HTTPException, Request, WebSocketException
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import HTTPConnection
 
-from api_service.auth_providers import get_instance_operator_access
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
-from api_service.db.models import User
 from api_service.operator_admission import require_operator
 from moonmind.security.operator_admission import (
     STREAM_REVALIDATION_SECONDS,
@@ -28,12 +27,10 @@ def _admission_request(connection: HTTPConnection) -> Request:
 async def get_workflow_chat_access(
     connection: HTTPConnection,
     session: Annotated[AsyncSession, Depends(get_async_session)],
-) -> User | OperatorAdmission:
-    """Use published conversion admission, retaining unconverted account access."""
+) -> OperatorAdmission:
+    """Use published conversion admission for the existing chat facade."""
     try:
-        caller = await get_instance_operator_access(
-            _admission_request(connection), session
-        )
+        caller = await get_instance_access(_admission_request(connection), session)
         if isinstance(caller, OperatorAdmission):
             connection.state.workflow_chat_admitted_at = monotonic()
         return caller
@@ -49,7 +46,7 @@ async def get_workflow_chat_access(
 
 def workflow_chat_stream_timeout(
     connection: HTTPConnection,
-    caller: User | OperatorAdmission,
+    caller: OperatorAdmission,
     maximum_wait: float,
 ) -> float:
     """Bound cached transport authority without renewing its ingress assertion."""
@@ -68,7 +65,7 @@ def workflow_chat_stream_timeout(
 
 async def revalidate_workflow_chat_access(
     connection: HTTPConnection,
-    caller: User | OperatorAdmission,
+    caller: OperatorAdmission,
 ) -> None:
     """Recheck live ingress authority without canceling independently admitted work."""
     if isinstance(caller, OperatorAdmission):
@@ -78,6 +75,6 @@ async def revalidate_workflow_chat_access(
         await require_operator(_admission_request(connection))
 
 
-def workflow_chat_actor(caller: User | OperatorAdmission) -> str:
+def workflow_chat_actor(caller: OperatorAdmission) -> str:
     """Audit provenance is not a synthetic person or a machine credential."""
-    return "operator" if isinstance(caller, OperatorAdmission) else str(caller.id)
+    return "operator"

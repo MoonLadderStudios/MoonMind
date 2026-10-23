@@ -1,5 +1,7 @@
 """Mounted artifact recovery preserves admission and retained accounting."""
 
+from api_service.migrations.account_source import source_user_ids
+
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
@@ -10,26 +12,23 @@ import pytest
 from fastapi import FastAPI
 from sqlalchemy import select
 
-from api_service.api.routers import temporal_artifacts
-from api_service.api.routers import agent_runs, sessions
-from api_service.auth_providers import (
-    get_current_user_optional,
-    get_instance_access,
-    get_instance_access_optional,
-)
+from api_service.api.routers import agent_runs, sessions, temporal_artifacts
+from api_service.auth_providers import get_instance_access, get_instance_access_optional
 from api_service.db.base import get_async_session
 from api_service.db.models import (
-    TemporalArtifact, TemporalArtifactRedactionLevel, TemporalArtifactUseClaim,
-    User, WorkflowRun,
+    TemporalArtifact,
+    TemporalArtifactRedactionLevel,
+    TemporalArtifactUseClaim,
+    WorkflowRun,
 )
 from api_service.services import single_user_conversion as conversion
 from moonmind.config.settings import settings
-from moonmind.security import auth_modes_4120
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
-from moonmind.workflows.temporal.runtime.managed_session_store import ManagedSessionStore
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore, TemporalArtifactRepository, TemporalArtifactService, TemporalArtifactValidationError,
 )
+from moonmind.workflows.temporal.runtime.managed_session_store import ManagedSessionStore
+from tests.helpers.account_source import User
 from tests.unit.services.test_artifact_conversion import database, seed, service
 
 pytestmark = pytest.mark.asyncio
@@ -52,10 +51,13 @@ def mounted_app(session, tmp_path):
 @pytest.mark.parametrize("creator", ["historical", "operator"])
 @pytest.mark.parametrize("streamed", [False, True])
 async def test_session_and_direct_recovery_share_trusted_operator_scope(
-    tmp_path, monkeypatch, creator, streamed,
+    tmp_path,
+    monkeypatch,
+    creator,
+    streamed,
 ):
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
-    monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", DEFAULT_OPERATOR)
+    monkeypatch.setenv("AUTH_PROVIDER", "disabled")
+    monkeypatch.setenv("DEFAULT_USER_ID", str(DEFAULT_OPERATOR or ""))
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path / "runtime"))
     monkeypatch.setattr(settings.feature_flags, "session_api_compat_enabled", True)
     metadata_principals = set()
@@ -162,30 +164,35 @@ async def test_session_and_direct_recovery_share_trusted_operator_scope(
             assert await TemporalArtifactRepository(session).quota_usage_for_scope(owner) == quota
             assert (await session.get(TemporalArtifact, rows["main"])).created_by_principal == owner
             assert (await session.get(TemporalArtifact, rows["main"])).operator_recovery_granted is (creator == "historical")
-            assert await session.get(User, UUID(DEFAULT_OPERATOR)) is None
+            assert UUID(DEFAULT_OPERATOR) not in await source_user_ids(session)
             # UUID identity and caller headers alone do not mint the private
             # request admission proof, for either literal or historical owners.
             untrusted = mounted_app(session, tmp_path)
             local_identity = User(id=UUID(DEFAULT_OPERATOR), email="operator@example.invalid")
             untrusted.dependency_overrides[get_instance_access] = lambda: local_identity
-            untrusted.dependency_overrides[get_current_user_optional()] = lambda: local_identity
+            untrusted.dependency_overrides[get_instance_access_optional] = lambda: local_identity
             untrusted.dependency_overrides[get_instance_access_optional] = lambda: local_identity
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=untrusted),
                                         base_url="http://localhost") as client:
                 for path in [f"/api/artifacts/{rows['main']}/download",
                              f"/api/sessions/{record.session_id}/resources/{rows['main']}/content"]:
                     response = await client.get(path, headers={"X-MoonMind-Admitted-Principal": "operator"})
-                    assert response.status_code == 403, response.text
+                    assert response.status_code == 401, response.text
 
 
 @pytest.mark.parametrize("create_default_artifact", [False, True])
 async def test_oidc_artifacts_created_after_conversion_recover_at_account_free_startup(
-    tmp_path, monkeypatch, create_default_artifact,
+    tmp_path,
+    monkeypatch,
+    create_default_artifact,
 ):
     from api_service import main
 
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "oidc")
-    monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", DEFAULT_OPERATOR if create_default_artifact else None)
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv(
+        "DEFAULT_USER_ID",
+        str(DEFAULT_OPERATOR if create_default_artifact else None or ""),
+    )
     async with database(tmp_path) as maker:
         @asynccontextmanager
         async def startup_session():
@@ -200,7 +207,7 @@ async def test_oidc_artifacts_created_after_conversion_recover_at_account_free_s
 
         # A real account-free phase records reserved-scope consumers without
         # a User row. These must survive a later OIDC -> disabled transition.
-        monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
+        monkeypatch.setenv("AUTH_PROVIDER", "disabled")
         async with maker() as local:
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=mounted_app(local, tmp_path)),
@@ -217,7 +224,7 @@ async def test_oidc_artifacts_created_after_conversion_recover_at_account_free_s
                         content=b"account-free saved bytes",
                         headers={"Content-Type": "application/octet-stream"})
                     assert response.status_code == 200, response.text
-            assert await local.get(User, UUID(DEFAULT_OPERATOR)) is None
+            assert UUID(DEFAULT_OPERATOR) not in await source_user_ids(local)
             claims_before = (await local.execute(select(TemporalArtifactUseClaim.__table__).where(
                 TemporalArtifactUseClaim.owner_principal == DEFAULT_OPERATOR))).all()
             assert claims_before
@@ -226,7 +233,7 @@ async def test_oidc_artifacts_created_after_conversion_recover_at_account_free_s
             assert len(default_rows_before) == (2 if create_default_artifact else 0)
             quota_before = await TemporalArtifactRepository(local).quota_usage_for_scope(DEFAULT_OPERATOR)
 
-        monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "oidc")
+        monkeypatch.setenv("AUTH_PROVIDER", "oidc")
         # Normal OIDC writes continue after the prerequisite first starts.
         # The old completion alone must not authorize these new resources.
         later = {}
@@ -250,14 +257,14 @@ async def test_oidc_artifacts_created_after_conversion_recover_at_account_free_s
                 assert row.operator_recovery_granted is False
                 later[label] = row.artifact_id
 
-        monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
+        monkeypatch.setenv("AUTH_PROVIDER", "disabled")
         async with maker() as before:
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=mounted_app(before, tmp_path)),
                 base_url="http://localhost",
             ) as client:
                 response = await client.get(f"/api/artifacts/{later['human']}/download")
-                assert response.status_code == 403, response.text
+                assert response.status_code == 503, response.text
 
         collect = AsyncMock(wraps=conversion.collect_inventory)
         monkeypatch.setattr(conversion, "collect_inventory", collect)
@@ -270,7 +277,7 @@ async def test_oidc_artifacts_created_after_conversion_recover_at_account_free_s
             assert (await restarted.execute(select(TemporalArtifact.__table__).where(
                 TemporalArtifact.created_by_principal == DEFAULT_OPERATOR))).all() == default_rows_before
             assert await TemporalArtifactRepository(restarted).quota_usage_for_scope(DEFAULT_OPERATOR) == quota_before
-            assert await restarted.get(User, UUID(DEFAULT_OPERATOR)) is None
+            assert UUID(DEFAULT_OPERATOR) not in await source_user_ids(restarted)
             if create_default_artifact:
                 default = await restarted.get(TemporalArtifact, default_id)
                 assert default.operator_recovery_granted is False
@@ -316,10 +323,11 @@ async def test_oidc_artifacts_created_after_conversion_recover_at_account_free_s
 
 
 async def test_mounted_converted_historical_owner_recovers_without_changing_claim_scope(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
-    monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", DEFAULT_OPERATOR)
+    monkeypatch.setenv("AUTH_PROVIDER", "disabled")
+    monkeypatch.setenv("DEFAULT_USER_ID", str(DEFAULT_OPERATOR or ""))
     async with database(tmp_path) as maker:
         async with maker() as session:
             artifact_id, owner = await seed(session, tmp_path)
@@ -379,7 +387,7 @@ async def test_mounted_converted_historical_owner_recovers_without_changing_clai
             assert {c.owner_principal for c in claims if c.request_id == "ongoing-recovery"} == {owner}
             assert {c.owner_principal for c in claims if c.operation_kind == "download"} == {DEFAULT_OPERATOR}
             assert (await session.get(TemporalArtifact, artifact_id)).created_by_principal == owner
-            assert await session.get(User, UUID(DEFAULT_OPERATOR)) is None
+            assert UUID(DEFAULT_OPERATOR) not in await source_user_ids(session)
             row = await session.get(TemporalArtifact, artifact_id)
             row.metadata_json = {**row.metadata_json, "quarantine": True}
             await session.commit()
@@ -395,56 +403,58 @@ async def test_mounted_converted_historical_owner_recovers_without_changing_clai
                 assert response.json()["download_url"] is None
 
 
-async def test_old_admission_survives_unsupported_mixed_history_without_raw_grant(
-    tmp_path, monkeypatch,
+async def test_old_completion_cannot_expose_unresolved_history(
+    tmp_path,
+    monkeypatch,
 ):
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
-    monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", DEFAULT_OPERATOR)
+    monkeypatch.setenv("AUTH_PROVIDER", "disabled")
+    monkeypatch.setenv("DEFAULT_USER_ID", str(DEFAULT_OPERATOR or ""))
     async with database(tmp_path) as maker:
         async with maker() as session:
             artifact_id, owner = await seed(session, tmp_path)
-            session.add(WorkflowRun(feature_key="retained", requested_by_user_id=UUID(owner)))
+            session.add(WorkflowRun(feature_key="retained", requested_by_user_id=UUID(int=999)))
             session.add(conversion.SingleUserConversionRun(preflight_digest="previously-published",
                 status="complete", result_json={"published": True,
                     "decision": {"disposition": "eligible_conversion"}}))
             await session.commit()
             result = await conversion.run_guarded_upgrade(session, operator_authorized=True)
             assert not result.published
-            assert result.decision.reason_code == "missing_transform_coverage"
+            assert result.decision.reason_code == "unknown_principal"
             assert not (await session.get(TemporalArtifact, artifact_id)).operator_recovery_granted
             app = mounted_app(session, tmp_path)
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
                                         base_url="http://localhost") as client:
                 response = await client.get("/api/artifacts/collection")
-                assert response.status_code == 200, response.text
+                assert response.status_code == 503, response.text
                 response = await client.get(f"/api/artifacts/{artifact_id}")
-                assert response.status_code == 200, response.text
-                assert response.json()["raw_access_allowed"] is False
+                assert response.status_code == 503, response.text
+                assert response.json()["detail"] == "conversion_required"
                 response = await client.get(f"/api/artifacts/{artifact_id}/download",
                     headers={"X-MoonMind-Admitted-Principal": "operator"})
-                assert response.status_code == 403, response.text
+                assert response.status_code == 503, response.text
 
 
 async def test_default_uuid_without_server_admission_cannot_use_conversion_grant(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     async with database(tmp_path) as maker:
         async with maker() as session:
             artifact_id, _owner = await seed(session, tmp_path)
-            assert (await conversion.run_guarded_upgrade(
-                session, operator_authorized=True)).published
+            assert (await conversion.run_guarded_upgrade(session, operator_authorized=True)).published
             app = mounted_app(session, tmp_path)
             # This simulates an authenticated UUID, not disabled-mode admission.
             # The actual artifact principal and recovery dependencies stay intact.
             authenticated = User(
                 id=UUID(DEFAULT_OPERATOR), email="other@example.invalid", is_active=True)
-            app.dependency_overrides[get_current_user_optional()] = lambda: authenticated
+            app.dependency_overrides[get_instance_access_optional] = lambda: authenticated
             app.dependency_overrides[get_instance_access_optional] = lambda: authenticated
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
                                         base_url="http://localhost") as client:
                 response = await client.get(f"/api/artifacts/{artifact_id}/download",
                     headers={"X-MoonMind-Admitted-Principal": "operator"})
-                assert response.status_code == 403, response.text
+                assert response.status_code == 401, response.text
                 response = await client.get(f"/api/artifacts/{artifact_id}")
-                assert response.json()["raw_access_allowed"] is False
+                assert response.status_code == 401
+                assert response.json()["detail"]["code"] == "auth_required"

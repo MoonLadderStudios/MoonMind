@@ -40,7 +40,7 @@ from api_service.api.routers.omnigent_bridge import (
     _require_bridge_enabled,
     router,
 )
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_instance_access
 from tools.omnigent_faultlab.scenario import (
     EmittedEvent,
     FaultScenario,
@@ -183,7 +183,7 @@ def _build_client(rows: list[SimpleNamespace]) -> TestClient:
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
     store = _FaultlabBridgeStore(rows)
-    app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[get_instance_access] = _mock_user
     app.dependency_overrides[_get_execution_service] = lambda: _FaultlabService(_USER_ID)
     app.dependency_overrides[_get_bridge_store] = lambda: store
     app.dependency_overrides[_require_bridge_enabled] = lambda: SimpleNamespace(

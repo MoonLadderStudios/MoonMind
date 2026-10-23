@@ -18,13 +18,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from api_service.db.models import (
     Base,
     ManagedAgentProviderProfile,
+    OmnigentAgentProfile,
+    OmnigentAgentProfileUsage,
+    OmnigentAgentProfileVersion,
+    OmnigentUpstreamAgentProjection,
     ProviderCredentialSource,
     ProviderProfileAuthState,
     RuntimeMaterializationMode,
-    OmnigentAgentProfile,
-    OmnigentAgentProfileVersion,
-    OmnigentAgentProfileUsage,
-    OmnigentUpstreamAgentProjection,
     TemporalArtifactRedactionLevel,
     TemporalExecutionCanonicalRecord,
     TemporalWorkflowType,
@@ -62,7 +62,7 @@ class SourceVerified(Exception):
 async def test_retained_schedule_bundle_keeps_disabled_legacy_source_read(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled")
+    monkeypatch.setenv("AUTH_PROVIDER", "disabled")
     monkeypatch.setenv("AUTH_PROVIDER", "disabled")
     monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
     monkeypatch.setattr(
@@ -226,8 +226,8 @@ async def test_retained_schedule_bundle_keeps_disabled_legacy_source_read(
             )
             await session.flush()
             from api_service.services.omnigent_agent_profile_selection import (
-                resolve_agent_profile_snapshot,
                 compile_agent_profile_snapshot_parameters,
+                resolve_agent_profile_snapshot,
             )
 
             snapshot = await resolve_agent_profile_snapshot(

@@ -13,24 +13,29 @@ from fastapi import FastAPI
 from api_service.api.routers import omnigent_agent_profiles as profiles
 from api_service.db.base import get_async_session
 from api_service.db.models import (
-    OmnigentAgentProfile, OmnigentAgentProfileVersion, TemporalArtifact,
-    TemporalArtifactRedactionLevel, User,
+    OmnigentAgentProfile,
+    OmnigentAgentProfileVersion,
+    TemporalArtifact,
+    TemporalArtifactRedactionLevel,
 )
 from api_service.services import single_user_conversion as conversion
-from moonmind.config.settings import settings
-from moonmind.security import auth_modes_4120
+from tests.helpers.account_source import User
 from tests.unit.api.routers.test_omnigent_agent_profiles import document
 from tests.unit.services.test_artifact_conversion import database, seed, service
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("creator", ["historical", "operator", "service:bundle-builder"])
+@pytest.mark.parametrize(
+    "creator", ["historical", "operator", "service:bundle-builder"]
+)
 async def test_profile_validation_reads_only_admitted_recoverable_bundles(
-    tmp_path, monkeypatch, creator,
+    tmp_path,
+    monkeypatch,
+    creator,
 ):
     zero = conversion.DEPLOYMENT_SUBJECT_ID
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
-    monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", zero)
+    monkeypatch.setenv("AUTH_PROVIDER", "disabled")
+    monkeypatch.setenv("DEFAULT_USER_ID", str(zero or ""))
     stream = io.BytesIO()
     with ZipFile(stream, "w") as archive:
         archive.writestr("manifest.json", json.dumps({

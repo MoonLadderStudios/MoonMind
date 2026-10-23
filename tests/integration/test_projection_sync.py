@@ -93,7 +93,7 @@ async def test_sync_execution_projection_upsert_no_duplicates(db_session: AsyncS
 async def test_list_executions_router_sync_behavior(db_session, monkeypatch):
     """MoonLadderStudios/MoonMind#3927: HTTP reads repair persisted drift."""
     from api_service.api.routers import executions
-    from api_service.auth_providers import get_current_user
+    from api_service.auth_providers import get_instance_access
     from api_service.db.base import get_async_session
     from moonmind.config.settings import settings
 
@@ -134,7 +134,7 @@ async def test_list_executions_router_sync_behavior(db_session, monkeypatch):
     app.dependency_overrides[get_async_session] = session_dependency
     app.dependency_overrides[executions._get_service] = lambda: service
     app.dependency_overrides[executions.get_temporal_client] = lambda: temporal
-    app.dependency_overrides[get_current_user()] = lambda: user
+    app.dependency_overrides[get_instance_access] = lambda: user
     # FastAPI may retain auth closures on nested router wrappers.
     routes = list(app.routes)
     while routes:
@@ -165,18 +165,21 @@ async def test_list_executions_router_sync_behavior(db_session, monkeypatch):
     assert record.projection_version == 2
 
 
-async def test_product_list_repairs_included_rows_and_excludes_persisted_internal_type(db_session, monkeypatch):
+async def test_product_list_repairs_included_rows_and_excludes_persisted_internal_type(
+    db_session, monkeypatch
+):
     """The real HTTP/service/DB path applies registry policy to legacy rows."""
     from uuid import uuid4
     from temporalio import workflow
     from api_service.api.routers import executions
-    from api_service.auth_providers import get_current_user
+    from api_service.auth_providers import get_instance_access
     from api_service.db.base import get_async_session
     from api_service.db.models import TemporalExecutionCanonicalRecord, TemporalWorkflowType
     from moonmind.config.settings import settings
     from moonmind.workflows.temporal.service import TemporalExecutionService
     from moonmind.workflows.temporal.workflow_registry import (
-        USER_WORKFLOW_REGISTRATION, STATIC_WORKFLOW_REGISTRATIONS,
+        STATIC_WORKFLOW_REGISTRATIONS,
+        USER_WORKFLOW_REGISTRATION,
         WorkflowProjectionExcluded,
     )
 
@@ -208,7 +211,7 @@ async def test_product_list_repairs_included_rows_and_excludes_persisted_interna
     # Projection-mode list does not access Temporal; accidental access must fail.
     app.dependency_overrides[executions.get_temporal_client] = lambda: None
     user = SimpleNamespace(id=owner, is_superuser=False)
-    app.dependency_overrides[get_current_user()] = lambda: user
+    app.dependency_overrides[get_instance_access] = lambda: user
     routes = list(app.routes)
     while routes:
         route = routes.pop()

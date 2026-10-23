@@ -12,17 +12,17 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.api.routers import container_jobs
 from api_service.auth_providers import instance_operator_principal
-from api_service.db.models import Base, ContainerJobRecord, User
+from api_service.db.models import Base, ContainerJobRecord
 from api_service.services.container_jobs import ContainerJobService
 from api_service.services.single_user_conversion import SingleUserConversionRun
 from moonmind.schemas.container_job_models import (
     ContainerJobSubmitRequest,
     OwnerIdentity,
 )
-from moonmind.security import auth_modes_4120
 from moonmind.security.container_job_capabilities import (
     mint_container_job_session_capability,
 )
+from tests.helpers.account_source import User
 from tests.unit.api.test_container_jobs_transport import _submit_arguments
 
 pytestmark = pytest.mark.asyncio
@@ -35,18 +35,11 @@ async def admitted_jobs(tmp_path, monkeypatch):
         await connection.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
-        session.add(
-            SingleUserConversionRun(
-                preflight_digest="fresh",
-                status="complete",
-                result_json={
-                    "published": True,
-                    "decision": {"disposition": "fresh_init"},
-                },
-            )
-        )
-        await session.commit()
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
+        from api_service.services.single_user_conversion import run_guarded_upgrade
+
+        result = await run_guarded_upgrade(session, operator_authorized=True)
+        assert result.published
+
     monkeypatch.setattr(
         container_jobs.settings.feature_flags, "container_jobs_enabled", True
     )
@@ -108,7 +101,7 @@ async def call(client, operation, job_id=None):
 async def test_account_free_job_lifecycle_and_owner_isolation(admitted_jobs, retained):
     ctx = admitted_jobs
     async with ctx.factory() as session:
-        assert (await session.execute(select(User))).scalars().all() == []
+        assert "user" not in Base.metadata.tables
         repository = ContainerJobService(session).repository
         foreign, _ = await repository.create_or_replay(
             owner=OwnerIdentity(
@@ -154,7 +147,7 @@ async def test_account_free_job_lifecycle_and_owner_isolation(admitted_jobs, ret
             denied = await call(client, operation, foreign_id)
             assert denied.status_code == 404, denied.text
     async with ctx.factory() as session:
-        assert (await session.execute(select(User))).scalars().all() == []
+        assert "user" not in Base.metadata.tables
         own = await session.get(ContainerJobRecord, job_id)
         assert own.owner_id == instance_operator_principal()
         foreign = await session.get(ContainerJobRecord, foreign_id)

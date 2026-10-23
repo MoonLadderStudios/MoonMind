@@ -27,7 +27,6 @@ from api_service.services.container_jobs import (
     ContainerJobService,
     owner_artifact_principal,
 )
-from moonmind.config.settings import settings
 from moonmind.schemas.container_job_models import (
     ContainerJobActivityRequest,
     OwnerIdentity,
@@ -66,7 +65,7 @@ async def test_long_owner_publishes_and_reads_job_evidence(
     principal = owner_artifact_principal(request.owner)
     assert len(request.owner.principal_id) == 255
     assert len(principal) > 255
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "pytest-unit.xml").write_text('<testsuite tests="1" failures="0"/>')

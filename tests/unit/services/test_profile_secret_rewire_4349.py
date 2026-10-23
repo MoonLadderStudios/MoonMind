@@ -19,12 +19,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import (
-    Base,
     ManagedAgentProviderProfile,
     ManagedSecret,
     SecretStatus,
+)
+from tests.helpers.account_source import (
     User,
     UserProfile,
+    create_source_schema,
 )
 
 
@@ -65,7 +67,7 @@ async def test_eligibility_empty_and_single_operator(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         result = await check_single_operator_eligibility(session)
         assert result["eligible"] is True
@@ -88,7 +90,7 @@ async def test_eligibility_blocks_multi_operator_without_mutation(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         u1 = User(id=uuid.uuid4(), email="a@example.com")
         u2 = User(id=uuid.uuid4(), email="b@example.com")
@@ -115,7 +117,7 @@ async def test_rewire_publishes_refs_and_bumps_generation(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         session.add(
             ManagedSecret(
@@ -151,7 +153,7 @@ async def test_rewire_is_idempotent_and_retry_safe(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         session.add(
             ManagedSecret(
@@ -179,7 +181,7 @@ async def test_rewire_blocks_missing_secret_and_unknown_profile(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         session.add(
             ManagedSecret(
@@ -226,7 +228,7 @@ async def test_rewire_keeps_same_value_distinct_credentials_distinct(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         u1 = User(id=uuid.uuid4(), email="a@example.com")
         session.add(u1)
@@ -273,7 +275,7 @@ async def test_orchestrator_converts_and_rewires_single_operator(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         u1 = User(id=uuid.uuid4(), email="solo@example.com")
         session.add(u1)
@@ -314,7 +316,7 @@ async def test_orchestrator_blocks_multi_operator_without_mutation(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         u1 = User(id=uuid.uuid4(), email="a@example.com")
         u2 = User(id=uuid.uuid4(), email="b@example.com")

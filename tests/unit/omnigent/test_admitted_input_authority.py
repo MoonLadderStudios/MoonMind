@@ -69,7 +69,7 @@ def auth_mode():
 
 @pytest_asyncio.fixture
 async def artifacts(tmp_path, monkeypatch, auth_mode):
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", auth_mode)
+    monkeypatch.setenv("AUTH_PROVIDER", str(auth_mode or ""))
     monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
     monkeypatch.setattr(
         settings.workflow, "temporal_artifact_root", str(tmp_path / "blobs")

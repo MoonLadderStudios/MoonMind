@@ -1,9 +1,8 @@
 """Issue #4349 boundaries: seeding removal, visibility, manager, OAuth, sweep.
 
 Verifies:
-- R1: ``UserManager`` register/login hooks never create a legacy
-  ``UserProfile`` row, and ``load_execution_configurations`` no longer
-  filters private execution configurations by human owner.
+- R1: ``load_execution_configurations`` does not filter private execution
+  configurations by human owner.
 - R3: ``AuthProviderManager`` bound to an explicit profile fails closed
   (no ambient env fallback); unbound legacy callers keep prior default.
 - R4: two synthetic credentials stay isolated across separate sessions
@@ -21,23 +20,19 @@ import logging
 import os
 import uuid
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import (
-    Base,
     ManagedAgentProviderProfile,
     ManagedSecret,
     OmnigentAgentProfile,
     OmnigentAgentProfileVersion,
     SecretStatus,
-    User,
-    UserProfile,
 )
+from tests.helpers.account_source import User, UserProfile, create_source_schema
 
 
 def _factory(tmp_path, name="bound4349.db"):
@@ -61,25 +56,6 @@ def _provider_profile_row(profile_id, secret_refs, generation=1):
 
 
 @pytest.mark.asyncio
-async def test_register_login_hooks_never_create_user_profile(tmp_path):
-    from api_service.auth import UserManager
-
-    engine, factory = _factory(tmp_path)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    async with factory() as session:
-        user = User(id=uuid.uuid4(), email="op@example.com")
-        session.add(user)
-        await session.commit()
-        manager = UserManager(MagicMock())
-        assert await manager._ensure_profile(user) is None
-        assert await manager.on_after_register(user) is None
-        assert await manager.on_after_login(user) is None
-        rows = (await session.execute(select(UserProfile))).scalars().all()
-        assert rows == []
-
-
-@pytest.mark.asyncio
 async def test_execution_configurations_ignore_human_owner(tmp_path):
     from api_service.services.profile_execution_selection import (
         load_execution_configurations,
@@ -87,7 +63,7 @@ async def test_execution_configurations_ignore_human_owner(tmp_path):
 
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     owner = uuid.uuid4()
     stranger = SimpleNamespace(id=uuid.uuid4())
     async with factory() as session:
@@ -123,7 +99,7 @@ async def test_manager_suppresses_env_fallback_for_bound_profile(tmp_path, monke
     monkeypatch.setenv("SYNTHETIC_4349_FALLBACK_KEY", "ambient-value")
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         session.add(
             ManagedSecret(
@@ -168,7 +144,7 @@ async def test_two_credentials_isolated_across_concurrent_sessions(tmp_path):
 
     engine, factory = _factory(tmp_path, "iso4349.db")
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         session.add(
             ManagedSecret(slug="k1", ciphertext="synthetic-1", status=SecretStatus.ACTIVE)
@@ -205,7 +181,7 @@ async def test_oauth_legacy_owner_mount_transitions_to_profile_mount(tmp_path):
 
     engine, factory = _factory(tmp_path, "oauth4349.db")
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     owner = uuid.uuid4()
     async with factory() as session:
         session.add(
@@ -297,7 +273,7 @@ async def test_secret_non_exposure_sweep(tmp_path, caplog):
     plaintext_b = "sweep-synthetic-B"
     engine, factory = _factory(tmp_path, "sweep4349.db")
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(create_source_schema)
     async with factory() as session:
         user = User(id=uuid.uuid4(), email="sweep@example.com")
         session.add(user)
@@ -319,9 +295,6 @@ async def test_secret_non_exposure_sweep(tmp_path, caplog):
             )
             assert secret == plaintext_b
             logging.getLogger("sweep-test").info("resolved sweep-prof actief")
-            sanitized = await __import__(
-                "api_service.services.profile_service", fromlist=["ProfileService"]
-            ).ProfileService().get_sanitized_profile_by_user_id(session, user.id)
             from api_service.api.routers.provider_profiles import (
                 _secret_ref_results_for_rows,
             )
@@ -336,7 +309,6 @@ async def test_secret_non_exposure_sweep(tmp_path, caplog):
 
         surfaces = {
             "migration_summary": str(migration),
-            "sanitized_settings": str(sanitized),
             "api_payload": str(payload),
             "logs": caplog.text,
             "argv": f"run --profile sweep-prof --ref {payload['secret_refs']}",

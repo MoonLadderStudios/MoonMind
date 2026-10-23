@@ -14,7 +14,7 @@ from api_service.api.execution_fanout import resolve_execution_request_authority
 from api_service.api.routers.executions import (
     _expand_goal_preset_for_workflow_submission,
 )
-from api_service.db.models import Base, Preset, PresetRecent, User
+from api_service.db.models import Base, Preset, PresetRecent
 from api_service.services.presets.catalog import PresetCatalogService
 from moonmind.config.settings import settings
 from moonmind.security.execution_fanout_capabilities import (
@@ -25,6 +25,7 @@ from moonmind.workflows.executions.runtime_inheritance import (
     SCOPE_CREATE_CHILD,
     SCOPE_INHERIT_RUNTIME,
 )
+from tests.helpers.account_source import User
 
 
 @pytest.mark.asyncio

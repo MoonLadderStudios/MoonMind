@@ -21,7 +21,6 @@ from api_service.services.deployment_operations import (
     RollbackEligibilityDecision,
     RollbackImageTarget,
 )
-from moonmind.config.settings import settings
 from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
     DEPLOYMENT_UPDATE_TOOL_VERSION,
@@ -182,7 +181,7 @@ def test_update_without_a_controller_returns_the_repair_route_and_no_workflow(
 def test_non_admin_cannot_submit_deployment_update(
     user_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "accounts")
+    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
     response = user_client.post(
         "/api/v1/operations/deployment/update",
         json=_valid_update_payload(),
@@ -197,7 +196,7 @@ def test_disabled_mode_still_enforces_admin_after_identity_resolution(
     user_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """#4125: disabled mode grants no bypass; a non-admin is denied like any mode."""
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled")
+    monkeypatch.setenv("AUTH_PROVIDER", "disabled")
 
     response = user_client.post(
         "/api/v1/operations/deployment/update",

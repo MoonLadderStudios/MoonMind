@@ -13,12 +13,8 @@ profiles and managed-secret references, never from a MoonMind ``User`` or
 * caches by ``(profile_id, key)`` with ``credential_generation`` /
   secret-revision invalidation instead of a user-keyed cache.
 
-A deprecated ``user=`` keyword remains accepted for backward compatibility
-with existing callers but is ignored for resolution: legacy ``UserProfile``
-columns are migrated into managed secrets by
-``api_service.services.profile_secret_migration`` and are no longer consulted
-here. Passing only ``user`` without ``profile_id`` resolves to ``None``
-instead of provisioning a profile.
+Legacy profile columns are read only by the guarded conversion. Credential
+resolution accepts provider-profile identity and revision constraints only.
 """
 
 from __future__ import annotations
@@ -51,10 +47,8 @@ def _secret_refs_lookup(secret_refs: Any, key: str) -> str | None:
 
 
 class ProfileAuthProvider(AuthProvider):
-    def __init__(self, db: AsyncSession, profile_svc: Any | None = None) -> None:
+    def __init__(self, db: AsyncSession) -> None:
         self.db = db
-        # Retained for constructor compatibility; no longer consulted.
-        self.profile_svc = profile_svc
         # (profile_id, key) -> {"value": str, "generation": int,
         #   "credential_revision": int|None, "policy_revision": int|None,
         #   "slug": str}
@@ -77,16 +71,11 @@ class ProfileAuthProvider(AuthProvider):
         self,
         *,
         key: str,
-        user: Any | None = None,
         profile_id: str | None = None,
         expected_credential_revision: int | None = None,
         expected_policy_revision: int | None = None,
-        **kwargs: Any,
     ) -> str | None:
-        # ``user`` is intentionally ignored: credential identity is the
-        # profile + managed-secret reference, not application-user identity.
-        # ``profile_id`` may also arrive via kwargs from older manager calls.
-        resolved_profile_id = profile_id or kwargs.get("profile_id")
+        resolved_profile_id = profile_id
         if isinstance(resolved_profile_id, str):
             resolved_profile_id = resolved_profile_id.strip() or None
         if not resolved_profile_id:

@@ -19,7 +19,6 @@ from api_service.db.models import (
     ManagedSecret,
     SecretStatus,
 )
-from api_service.services.profile_service import ProfileService
 from moonmind.auth.profile_provider import ProfileAuthProvider
 
 
@@ -56,7 +55,7 @@ async def test_profile_secret_resolves_without_user(tmp_path):
         session.add(ManagedSecret(slug="prof-a-key", ciphertext="synthetic-A", status=SecretStatus.ACTIVE))
         session.add(_profile_row("prof-a", {"OPENAI_API_KEY": "db://prof-a-key"}))
         await session.commit()
-        provider = ProfileAuthProvider(session, ProfileService())
+        provider = ProfileAuthProvider(session)
         secret = await provider.get_secret(key="OPENAI_API_KEY", profile_id="prof-a")
         assert secret == "synthetic-A"
         assert "synthetic-A" not in repr(secret)
@@ -73,7 +72,7 @@ async def test_missing_revoked_wrong_profile_block_only_affected(tmp_path):
         session.add(_profile_row("prof-b", {"OPENAI_API_KEY": "db://revoked-key"}))
         session.add(_profile_row("prof-c", {"OTHER_KEY": "db://prof-a-key"}))
         await session.commit()
-        provider = ProfileAuthProvider(session, ProfileService())
+        provider = ProfileAuthProvider(session)
         # revoked blocks affected operation
         assert await provider.get_secret(key="OPENAI_API_KEY", profile_id="prof-b") is None
         # wrong-profile key does not fall back to another profile's credential
@@ -94,7 +93,7 @@ async def test_two_credentials_isolated_through_cache_refresh_rotation(tmp_path)
         session.add(_profile_row("p1", {"OPENAI_API_KEY": "db://k1"}))
         session.add(_profile_row("p2", {"OPENAI_API_KEY": "db://k2"}))
         await session.commit()
-        provider = ProfileAuthProvider(session, ProfileService())
+        provider = ProfileAuthProvider(session)
         assert await provider.get_secret(key="OPENAI_API_KEY", profile_id="p1") == "synthetic-1"
         assert await provider.get_secret(key="OPENAI_API_KEY", profile_id="p2") == "synthetic-2"
         # cache hits stay isolated
@@ -120,13 +119,10 @@ async def test_no_user_no_implicit_profile_creation(tmp_path):
         session.add(ManagedSecret(slug="k1", ciphertext="synthetic-1", status=SecretStatus.ACTIVE))
         session.add(_profile_row("p1", {"OPENAI_API_KEY": "db://k1"}))
         await session.commit()
-        provider = ProfileAuthProvider(session, ProfileService())
+        provider = ProfileAuthProvider(session)
         # legacy user-less call without profile must not create anything or resolve
         assert await provider.get_secret(key="OPENAI_API_KEY") is None
-        from sqlalchemy import select
-        from api_service.db.models import UserProfile
-
-        assert (await session.execute(select(UserProfile))).scalars().all() == []
+        assert "user_profile" not in Base.metadata.tables
 
 
 @pytest.mark.asyncio
@@ -142,10 +138,17 @@ async def test_concurrent_profile_resolution_isolated(tmp_path):
         session.add(_profile_row("p2", {"OPENAI_API_KEY": "db://k2"}))
         await session.commit()
     async with factory() as session:
-        provider = ProfileAuthProvider(session, ProfileService())
+        provider = ProfileAuthProvider(session)
         r1, r2 = await asyncio.gather(
             provider.get_secret(key="OPENAI_API_KEY", profile_id="p1"),
             provider.get_secret(key="OPENAI_API_KEY", profile_id="p2"),
         )
         assert r1 == "synthetic-1"
         assert r2 == "synthetic-2"
+
+
+@pytest.mark.asyncio
+async def test_provider_no_longer_accepts_a_person_argument():
+    provider = ProfileAuthProvider(None)
+    with pytest.raises(TypeError):
+        await provider.get_secret(key="OPENAI_API_KEY", user=object())

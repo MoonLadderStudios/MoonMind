@@ -25,8 +25,7 @@ from api_service.api.routers.executions import (
     _validate_branch_source,
     router,
 )
-from moonmind.schemas.temporal_models import StepLedgerSnapshotModel
-from api_service.auth_providers import get_current_user, get_current_user_optional
+from api_service.auth_providers import get_instance_access, get_instance_access_optional
 from api_service.db.base import get_async_session
 from api_service.db.models import (
     Base,
@@ -48,6 +47,7 @@ from api_service.services.checkpoint_branch_turn_execution import (
     CheckpointBranchTurnExecutionOwner,
     build_branch_turn_execution_identity,
 )
+from moonmind.schemas.temporal_models import StepLedgerSnapshotModel
 
 
 def _empty_dependency() -> SimpleNamespace:
@@ -377,7 +377,7 @@ def _override_user_dependencies(app: FastAPI, user: SimpleNamespace) -> None:
         }
     }
     if not user_dependencies:
-        user_dependencies = {get_current_user(), get_current_user_optional()}
+        user_dependencies = {get_instance_access, get_instance_access_optional}
 
     def _current_user() -> SimpleNamespace:
         return user

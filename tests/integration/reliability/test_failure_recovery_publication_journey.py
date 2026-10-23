@@ -104,7 +104,7 @@ async def test_failed_middle_step_retains_bytes_and_resumes_only_unfinished_phas
     )
     # The supported credential-free local mode exercises input projection;
     # destination publication below uses the authenticated operator contract.
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled")
+    monkeypatch.setenv("AUTH_PROVIDER", "disabled")
     monkeypatch.setattr(settings.security, "high_security_mode", False)
     now = datetime.now(UTC)
     monkeypatch.setattr(run_module.workflow, "now", lambda: now)
@@ -809,7 +809,7 @@ async def test_failed_middle_step_retains_bytes_and_resumes_only_unfinished_phas
         destination_files={"README.md": "destination\n"},
         saved_work_factory=compute_and_save,
     ) as state:
-        monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+        monkeypatch.setenv("AUTH_PROVIDER", "oidc")
         before = state.saved_bytes()
         retained_claims = {
             (claim.artifact_id, claim.operation_kind, claim.owner_principal)

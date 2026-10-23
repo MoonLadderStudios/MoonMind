@@ -24,78 +24,88 @@ from sqlalchemy.orm import sessionmaker
 from temporalio.api.enums.v1 import IndexedValueType
 from temporalio.service import RPCError, RPCStatusCode
 
+from api_service.api.routers import executions as executions_module
 from api_service.api.routers.executions import (
-    _get_service,
-    get_temporal_client_adapter,
+    _OPTIONAL_TEMPORAL_SEARCH_ATTRIBUTES_CACHE_TTL_SECONDS,
     _artifact_id_from_ref,
     _build_original_workflow_input_snapshot_payload,
     _build_recurring_target,
+    _derive_task_title,
+    _detect_optional_temporal_search_attributes,
     _execution_recurrence_provenance,
     _expand_goal_preset_for_workflow_submission,
     _extract_cost_estimate_usd,
+    _get_service,
     _hydrate_related_run_metadata,
-    merge_workflow_input,
-    _reuse_original_task_input_snapshot_from_source,
-    _workflow_input_snapshot_descriptor_from_record,
     _normalize_task_steps,
     _normalize_task_tool,
+    _optional_temporal_search_attributes_cache,
     _resolve_recurring_runtime_metadata,
     _resolve_step_runtime_selections,
-    _step_execution_detail_payload,
-    _detect_optional_temporal_search_attributes,
-    _derive_task_title,
-    _OPTIONAL_TEMPORAL_SEARCH_ATTRIBUTES_CACHE_TTL_SECONDS,
-    _optional_temporal_search_attributes_cache,
-    get_temporal_client,
+    _reuse_original_task_input_snapshot_from_source,
     _serialize_execution,
     _serialize_execution_list_item,
+    _step_execution_detail_payload,
     _verified_output_branch,
+    _workflow_input_snapshot_descriptor_from_record,
+    get_temporal_client,
+    get_temporal_client_adapter,
+    merge_workflow_input,
     router,
+)
+from api_service.api.routers.executions import (
     update_execution as update_execution_route,
 )
-from api_service.api.routers import executions as executions_module
 from api_service.api.schemas import CreateJobRequest
-from api_service.auth_providers import get_current_user, get_current_user_optional
+from api_service.auth_providers import get_instance_access, get_instance_access_optional
 from api_service.db.base import get_async_session
-from moonmind.omnigent.bridge_store import (
-    BridgeChatBindingAmbiguousError,
-    ChatBindingResolution,
-)
 from api_service.db.models import (
     Base,
     ManagedAgentProviderProfile,
     MoonMindWorkflowState,
     ProviderProfileAuthState,
     ProviderProfileSlotLease,
-    TemporalExecutionCloseStatus,
     TemporalArtifact,
     TemporalArtifactEncryption,
-    TemporalArtifactRedactionLevel,
     TemporalArtifactLink,
+    TemporalArtifactRedactionLevel,
     TemporalArtifactRetentionClass,
-    TemporalArtifactStorageBackend,
     TemporalArtifactStatus,
+    TemporalArtifactStorageBackend,
     TemporalArtifactUploadMode,
     TemporalExecutionCanonicalRecord,
+    TemporalExecutionCloseStatus,
     TemporalExecutionRecord,
     TemporalWorkflowType,
 )
-from api_service.services.settings_catalog import WorkflowCreationDefaults
 from api_service.services.recurring_workflows_service import RecurringWorkflowValidationError
+from api_service.services.settings_catalog import WorkflowCreationDefaults
 from moonmind.config.settings import (
     FeatureFlagsSettings,
     TemporalDashboardSettings,
     settings,
 )
+from moonmind.omnigent.bridge_store import (
+    BridgeChatBindingAmbiguousError,
+    ChatBindingResolution,
+)
+from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
+from moonmind.schemas.temporal_models import (
+    ExecutionMergeAutomationResolverChildModel,
+    ExecutionProgressModel,
+    StepExecutionManifestModel,
+    StepLedgerSnapshotModel,
+    UpdateExecutionRequest,
+)
 from moonmind.security.execution_fanout_capabilities import (
     mint_execution_fanout_capability,
 )
-from moonmind.workflows.temporal.publication_recovery import (
-    publication_operation_key,
-    publication_recovery_workflow_id,
+from moonmind.services.control_stop_continuation import (
+    ControlStopContinuationReservation,
 )
-from moonmind.workflows.temporal.client import WorkflowStartResult
-from moonmind.workflows.temporal.service import ExecutionDependencySummary
+from moonmind.workflows.executions.control_stop_continuation import (
+    ContinuationBudgetGrant,
+)
 from moonmind.workflows.temporal import (
     TemporalExecutionCancelUndeliverableError,
     TemporalExecutionNotFoundError,
@@ -107,24 +117,16 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
     TemporalArtifactStateError,
 )
-from moonmind.schemas.temporal_models import (
-    ExecutionMergeAutomationResolverChildModel,
-    ExecutionProgressModel,
-    StepExecutionManifestModel,
-    StepLedgerSnapshotModel,
-    UpdateExecutionRequest,
+from moonmind.workflows.temporal.client import WorkflowStartResult
+from moonmind.workflows.temporal.publication_recovery import (
+    publication_operation_key,
+    publication_recovery_workflow_id,
 )
-from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 from moonmind.workflows.temporal.service import (
+    ExecutionDependencySummary,
     TemporalExecutionRerunPlanError,
     TemporalExecutionRerunSkillSnapshotError,
     TemporalExecutionService,
-)
-from moonmind.services.control_stop_continuation import (
-    ControlStopContinuationReservation,
-)
-from moonmind.workflows.executions.control_stop_continuation import (
-    ContinuationBudgetGrant,
 )
 
 _TARGET_SEARCH_ATTRIBUTE_TYPE = int(IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST)
@@ -1547,12 +1549,12 @@ def _override_user_dependencies(
             "_strict_current_user",
             "_optional_current_user",
             "get_instance_access",
-            "get_instance_operator_access",
+            "get_instance_access",
             "get_instance_access_optional",
         }
     }
     if not user_dependencies:
-        user_dependencies = {get_current_user(), get_current_user_optional()}
+        user_dependencies = {get_instance_access, get_instance_access_optional}
 
     def _current_user() -> SimpleNamespace:
         return mock_user
@@ -2270,7 +2272,9 @@ async def test_get_owned_execution_hides_projection_type_from_non_admin() -> Non
     assert exc_info.value.detail["code"] == "execution_not_found"
     assert "ProviderProfileManager" not in str(exc_info.value.detail)
 
-    admin_user = SimpleNamespace(id="admin-1", is_superuser=True)
+    from moonmind.security.operator_admission import OperatorAdmission
+
+    admin_user = OperatorAdmission(via="loopback")
     with pytest.raises(_HTTPException) as admin_exc_info:
         await executions_module._get_owned_execution(
             service=service, workflow_id="mm:operator-1", user=admin_user
@@ -11736,7 +11740,7 @@ def test_create_task_shaped_execution_rejects_other_users_completed_input_attach
     """MM-628: another user's completed artifact cannot be attached to a new execution."""
 
     test_client, service, user = client
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
     service.create_execution.return_value = _build_execution_record()
     artifact_id = "art_01MM628WRONGOWNER0000000"
@@ -11783,7 +11787,7 @@ def test_create_task_shaped_execution_rejects_service_owned_attachment_for_user(
     """MM-628: service ownership does not make an artifact attachable by any user."""
 
     test_client, service, _user = client
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
     artifact_id = "art_01MM628SERVICEOWNER0000"
     test_client.app.dependency_overrides[get_async_session] = lambda: _artifact_session(

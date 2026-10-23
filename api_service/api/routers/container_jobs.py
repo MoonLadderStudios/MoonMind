@@ -17,12 +17,8 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.auth_providers import (
-    get_instance_operator_access,
-    instance_operator_principal,
-)
+from api_service.auth_providers import get_instance_access, instance_operator_principal
 from api_service.db.base import get_async_session
-from api_service.db.models import User
 from api_service.services.container_jobs import ContainerJobService
 from moonmind.config.settings import settings
 from moonmind.mcp.container_job_tool_registry import (
@@ -110,19 +106,13 @@ def _require_ready() -> None:
         )
 
 
-def container_job_owner(access: User | OperatorAdmission) -> OwnerIdentity:
-    """Keep durable owner/idempotency namespaces, not person-based permission.
-
-    Converted local installations retain the instance's historical owner key.
-    Admission, not that key, grants access; no User is synthesized or resolved.
-    Retained deployments continue using their authenticated account's own key.
-    """
-    principal = (
-        instance_operator_principal()
-        if isinstance(access, OperatorAdmission)
-        else str(access.id)
+def container_job_owner(access: OperatorAdmission) -> OwnerIdentity:
+    """Preserve durable job ownership/idempotency without resolving a person."""
+    if not isinstance(access, OperatorAdmission):
+        raise HTTPException(status_code=401, detail={"code": "auth_required"})
+    return OwnerIdentity(
+        principalId=instance_operator_principal(), principalType="user"
     )
-    return OwnerIdentity(principalId=principal, principalType="user")
 
 
 def _build_service(session: AsyncSession) -> ContainerJobService:
@@ -140,13 +130,13 @@ def _raise_from(exc: Exception) -> HTTPException:
 
 
 def _audit(
-    request: Request, user: User | OperatorAdmission, action: str, job_id: str | None
+    request: Request, user: OperatorAdmission, action: str, job_id: str | None
 ) -> None:
     logger.info(
         "container_job_http action=%s transport=http actor=%s owner=user:%s "
         "request_id=%s job_id=%s",
         action,
-        "operator" if isinstance(user, OperatorAdmission) else f"user:{user.id}",
+        "operator",
         container_job_owner(user).principal_id,
         request.headers.get("x-request-id"),
         job_id,
@@ -157,7 +147,7 @@ def _audit(
 async def submit_container_job(
     payload: ContainerJobSubmitRequest,
     request: Request,
-    user: User | OperatorAdmission = Depends(get_instance_operator_access),
+    user: OperatorAdmission = Depends(get_instance_access),
     session: AsyncSession = Depends(get_async_session),
 ) -> ContainerJobAccepted:
     """Create-or-replay a durable container job and start its Temporal workflow."""
@@ -178,7 +168,7 @@ async def submit_container_job(
 async def get_container_job_status(
     job_id: str,
     request: Request,
-    user: User | OperatorAdmission = Depends(get_instance_operator_access),
+    user: OperatorAdmission = Depends(get_instance_access),
     session: AsyncSession = Depends(get_async_session),
 ) -> ContainerJobStatus:
     _require_ready()
@@ -199,7 +189,7 @@ async def get_container_job_logs(
     request: Request,
     cursor: str | None = Query(None, max_length=512),
     limit: int = Query(100, ge=1, le=MAX_LOG_PAGE_ENTRIES),
-    user: User | OperatorAdmission = Depends(get_instance_operator_access),
+    user: OperatorAdmission = Depends(get_instance_access),
     session: AsyncSession = Depends(get_async_session),
 ) -> ContainerJobLogPage:
     _require_ready()
@@ -226,7 +216,7 @@ async def get_container_job_artifacts(
     request: Request,
     cursor: str | None = Query(None, max_length=512),
     limit: int = Query(MAX_ARTIFACT_PAGE_ENTRIES, ge=1, le=MAX_ARTIFACT_PAGE_ENTRIES),
-    user: User | OperatorAdmission = Depends(get_instance_operator_access),
+    user: OperatorAdmission = Depends(get_instance_access),
     session: AsyncSession = Depends(get_async_session),
 ) -> ContainerJobArtifactPage:
     _require_ready()
@@ -250,7 +240,7 @@ async def cancel_container_job(
     job_id: str,
     payload: ContainerJobCancelRequest,
     request: Request,
-    user: User | OperatorAdmission = Depends(get_instance_operator_access),
+    user: OperatorAdmission = Depends(get_instance_access),
     session: AsyncSession = Depends(get_async_session),
 ) -> ContainerJobCancelResult:
     _require_ready()

@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Iterator
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
-from uuid import UUID
 
 import pytest
 from fastapi import FastAPI
@@ -13,10 +12,8 @@ from fastapi.testclient import TestClient
 
 from api_service.api.routers import executions, temporal_artifacts
 from api_service.db.base import get_async_session
-from api_service.db.models import User
-from api_service.services.single_user_conversion import SCHEMA_REVISION
+from api_service.db.models import TemporalExecutionCanonicalRecord, TemporalExecutionRecord
 from moonmind.config.settings import settings
-from moonmind.security import auth_modes_4120
 from moonmind.security.execution_fanout_capabilities import (
     mint_execution_fanout_capability,
 )
@@ -65,15 +62,18 @@ def _child_request() -> dict:
 
 @pytest.fixture
 def fanout_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace]:
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
     monkeypatch.setattr(settings.workflow, "default_runtime", "codex_cli")
     monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
     monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", False)
 
+    from api_service.services import single_user_conversion
+
+    completion = AsyncMock(return_value=object())
+    monkeypatch.setattr(single_user_conversion, "completed_guarded_upgrade", completion)
+
     async def get_record(model, _key):
-        if model is User:
-            raise AssertionError("Machine capabilities must not fetch a User")
+        assert model in {TemporalExecutionCanonicalRecord, TemporalExecutionRecord}
 
     session = SimpleNamespace(
         get=AsyncMock(side_effect=get_record),
@@ -133,11 +133,13 @@ def fanout_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace]:
             service=service,
             artifact_service=artifact_service,
             child=child,
+            completion=completion,
         )
 
 
 def _assert_no_user_lookup(session: SimpleNamespace) -> None:
-    assert all(call.args[0] is not User for call in session.get.await_args_list)
+    assert all(call.args[0] in {TemporalExecutionCanonicalRecord, TemporalExecutionRecord}
+               for call in session.get.await_args_list)
 
 
 def _assert_no_writes(context: SimpleNamespace) -> None:
@@ -148,7 +150,7 @@ def _assert_no_writes(context: SimpleNamespace) -> None:
     context.session.commit.assert_not_awaited()
 
 
-def test_disabled_mode_fanout_creates_child_without_account_lookup(fanout_client):
+def test_scoped_fanout_creates_child_without_account_lookup(fanout_client):
     response = fanout_client.client.post(
         "/api/executions", headers=_capability_headers(), json=_child_request()
     )
@@ -164,7 +166,7 @@ def test_disabled_mode_fanout_creates_child_without_account_lookup(fanout_client
 
 
 @pytest.mark.parametrize("operation", ["describe", "cancel"])
-def test_disabled_mode_fanout_controls_own_child_without_account_lookup(
+def test_scoped_fanout_controls_own_child_without_account_lookup(
     fanout_client, operation
 ):
     if operation == "describe":
@@ -274,72 +276,41 @@ def test_fanout_marker_cannot_admit_an_artifact_operator(
     _assert_no_user_lookup(fanout_client.session)
 
 
-def test_unmarked_disabled_operator_still_uses_local_admission(fanout_client):
-    operator = User(
-        id=UUID("00000000-0000-0000-0000-000000000000"),
-        email="operator@example.com",
-        is_active=True,
-        is_superuser=False,
-    )
-    fanout_client.session.get.side_effect = None
-    fanout_client.session.get.return_value = operator
-
+def test_unconverted_local_operator_cannot_read_artifacts(fanout_client):
+    fanout_client.completion.return_value = None
     response = fanout_client.client.get("/api/artifacts/collection")
 
-    assert response.status_code == 200, response.text
-    assert response.json()["items"] == []
-    fanout_client.session.get.assert_awaited_once()
-    assert fanout_client.session.get.await_args.args[0] is User
-    assert operator.is_superuser is True
-    assert (
-        fanout_client.artifact_service.list_authorized_collection.await_args.kwargs[
-            "principal"
-        ]
-        == str(operator.id)
-    )
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"] == "conversion_required"
+    fanout_client.artifact_service.list_authorized_collection.assert_not_awaited()
+    fanout_client.completion.assert_awaited_once()
+    _assert_no_user_lookup(fanout_client.session)
+    _assert_no_writes(fanout_client)
 
 
-def test_unmarked_disabled_request_still_fails_on_identity_store_outage(fanout_client):
+def test_unmarked_request_fails_on_completion_store_outage(fanout_client):
+    fanout_client.completion.side_effect = ConnectionError("completion store down")
     response = fanout_client.client.get(f"/api/executions/{_CHILD_ID}")
 
     assert response.status_code == 503, response.text
     assert response.json()["detail"] == "unavailable"
-    fanout_client.session.get.assert_awaited_once()
-    assert fanout_client.session.get.await_args.args[0] is User
+    fanout_client.completion.assert_awaited_once()
+    _assert_no_user_lookup(fanout_client.session)
     fanout_client.service.describe_execution.assert_not_awaited()
     _assert_no_writes(fanout_client)
 
 
-def test_completed_conversion_admits_account_free_artifact_operator(
-    fanout_client, monkeypatch
-):
-    operator_id = "00000000-0000-0000-0000-000000000000"
-    monkeypatch.setattr(settings.oidc, "DEFAULT_USER_ID", operator_id)
-    fanout_client.session.get.side_effect = None
-    fanout_client.session.get.return_value = None
-    fanout_client.session.execute.return_value = _ExecuteResult(
-        [
-            SimpleNamespace(
-                status="complete",
-                result_json={
-                    "schema_revision": SCHEMA_REVISION,
-                    "published": True,
-                    "decision": {"disposition": "fresh_init"},
-                },
-            )
-        ]
-    )
-
+def test_completed_conversion_admits_account_free_artifact_operator(fanout_client):
     response = fanout_client.client.get("/api/artifacts/collection")
 
     assert response.status_code == 200, response.text
     assert response.json()["items"] == []
-    fanout_client.session.get.assert_not_awaited()
-    fanout_client.session.execute.assert_awaited_once()
+    _assert_no_user_lookup(fanout_client.session)
+    fanout_client.completion.assert_awaited_once()
     assert (
         fanout_client.artifact_service.list_authorized_collection.await_args.kwargs[
             "principal"
         ]
-        == operator_id
+        == "00000000-0000-0000-0000-000000000000"
     )
     _assert_no_writes(fanout_client)

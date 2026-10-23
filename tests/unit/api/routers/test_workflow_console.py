@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.route_dependencies import _resolve_user_dependency_overrides
+
 import json
 import os
 import tempfile
@@ -26,7 +28,6 @@ from api_service.api.routers.workflow_console import (
     DASHBOARD_DESTINATIONS,
     _get_temporal_service,
     _is_allowed_path,
-    _resolve_user_dependency_overrides,
     router,
 )
 

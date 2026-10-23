@@ -15,13 +15,13 @@ from api_service.api.routers.executions import (
 from api_service.db.base import get_async_session
 from api_service.db.models import SettingsOverride, TemporalArtifactStatus
 from moonmind.config.settings import settings
+from tests.helpers.step_type_payloads import preset_step, skill_step, tool_step
 from tests.unit.api.routers.test_executions import (
-    _ExecuteResult,
     _artifact_session,
     _build_execution_record,
+    _ExecuteResult,
     _override_user_dependencies,
 )
-from tests.helpers.step_type_payloads import preset_step, skill_step, tool_step
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -659,7 +659,7 @@ def test_task_shaped_submission_boundary_rejects_wrong_owner_binary_ref(
 ) -> None:
     """MM-628: unauthorized binary refs fail before execution creation."""
 
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
     test_client, service = _client()
     artifact_id = "art_01MM628INTWRONGOWNER0000"

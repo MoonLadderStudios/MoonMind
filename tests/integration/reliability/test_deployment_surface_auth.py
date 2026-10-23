@@ -1,31 +1,24 @@
-"""Release probes authenticate through the deployed dashboard's real session gate."""
+"""Release probes authenticate through the deployed dashboard's real operator admission gate."""
 
 from __future__ import annotations
 
 import asyncio
 import json
-import secrets
 import socket
-from uuid import uuid4
 
 import pytest
 import uvicorn
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from api_service.auth_providers import build_moonmind_control_plane_config
 from api_service.db import base as db_base
-from api_service.db.models import MoonmindSession, MoonmindUserSessionGeneration, User
-from api_service.services.session_store import (
-    DbAccountStore,
-    DbRevocationStore,
-    mint_and_record_session,
-)
-from moonmind.config.settings import settings
-from moonmind.security import auth_modes_4120 as auth_modes
-from moonmind.security.omnigent_auth_qualification import ValidatedIdentity
+from api_service.db.models import Base
+from api_service.services.single_user_conversion import run_guarded_upgrade
 from moonmind.workflows.skills.deployment_surface import verify_surface
 from tests.support.isolated_postgres import isolated_postgres
+from tests.integration import test_single_user_conversion_postgres_4346 as source_pg
+
+conversion_postgres_url = source_pg.conversion_postgres_url
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -34,26 +27,21 @@ pytestmark = [
 ]
 
 
-@pytest.mark.parametrize("secure_cookie", [False, True])
 @pytest.mark.parametrize(
-    "auth_selector", [None, "", "accounts"], ids=["omitted", "empty", "explicit"]
+    "auth_selector", [None, "", "accounts"], ids=["omitted", "empty", "retired"]
 )
-async def test_accounts_session_qualifies_protected_operator_surface(
-    tmp_path, monkeypatch, secure_cookie, auth_selector
+async def test_ingress_qualifies_protected_operator_surface(
+    tmp_path, monkeypatch, auth_selector, conversion_postgres_url
 ):
-    # Supply deployment configuration and a disposable DB through the normal
-    # substrate. No principal dependency or session validator is overridden.
-    monkeypatch.setattr(auth_modes, "_ACTIVE_PRODUCTION_MODE", "accounts")
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", auth_selector or "")
+    monkeypatch.setenv("MOONMIND_TEST_POSTGRES_URL", conversion_postgres_url)
     if auth_selector is None:
         monkeypatch.delenv("AUTH_PROVIDER", raising=False)
     else:
         monkeypatch.setenv("AUTH_PROVIDER", auth_selector)
-    monkeypatch.setenv("MOONMIND_SESSION_SECRET", secrets.token_hex(32))
-    if secure_cookie:
-        monkeypatch.delenv("MOONMIND_REQUIRE_SECURE_COOKIES", raising=False)
-    else:
-        monkeypatch.setenv("MOONMIND_REQUIRE_SECURE_COOKIES", "0")
+    monkeypatch.setenv("MOONMIND_PUBLIC_BASE_URL", "https://operator.example")
+    monkeypatch.setenv("MOONMIND_API_PUBLISH_HOST", "127.0.0.1")
+    monkeypatch.setenv("MOONMIND_TRUSTED_INGRESS", "1")
+    monkeypatch.setenv("MOONMIND_TRUSTED_PROXIES", "127.0.0.1")
     monkeypatch.delenv("MOONMIND_UI_DEV_SERVER_URL", raising=False)
     dist = tmp_path / "dist"
     (dist / ".vite").mkdir(parents=True)
@@ -80,6 +68,19 @@ async def test_accounts_session_qualifies_protected_operator_surface(
     observations = []
 
     @app.middleware("http")
+    async def trusted_ingress(request, call_next):
+        # External ingress authentication is a fixture. The backend still uses
+        # its real transport, Host, conversion and operator admission boundary.
+        admitted = request.cookies.get("ingress_test_session") == "admitted"
+        headers = [(key, value) for key, value in request.scope["headers"]
+                   if key.lower() not in {b"host", b"x-moonmind-user"}]
+        headers.append((b"host", b"operator.example"))
+        if admitted:
+            headers.append((b"x-moonmind-user", b"ingress-operator"))
+        request.scope["headers"] = headers
+        return await call_next(request)
+
+    @app.middleware("http")
     async def observe(request, call_next):
         response = await call_next(request)
         observations.append((request.url.path, response.status_code))
@@ -89,37 +90,13 @@ async def test_accounts_session_qualifies_protected_operator_surface(
     async def healthz():
         return {"status": "ok"}
 
-    tables = [
-        User.__table__,
-        MoonmindUserSessionGeneration.__table__,
-        MoonmindSession.__table__,
-    ]
-    async with isolated_postgres(tables) as sessions:
+    async with isolated_postgres(list(Base.metadata.sorted_tables)) as sessions:
         monkeypatch.setattr(db_base, "async_session_maker", sessions)
-        config = build_moonmind_control_plane_config()
-        assert config.mode == "accounts"
         async with sessions() as session:
-            user = User(
-                id=uuid4(),
-                email="release-operator@example.invalid",
-                hashed_password=None,
-                is_active=True,
-                is_superuser=False,
-                is_verified=True,
-            )
-            session.add(user)
-            await session.commit()
-            session_token, _ = await mint_and_record_session(
-                ValidatedIdentity(issuer="moonmind-accounts", subject=user.email),
-                DbAccountStore(session),
-                DbRevocationStore(session),
-                config,
-                session,
-            )
-        authorized_headers = [
-            {"Cookie": f"{config.cookie_name}={session_token}"},
-            {"Authorization": f"Bearer {session_token}"},
-        ]
+            assert (
+                await run_guarded_upgrade(session, operator_authorized=True)
+            ).published
+        authorized_headers = [{"Cookie": "ingress_test_session=admitted"}]
         listener = socket.socket()
         listener.bind(("127.0.0.1", 0))
         listener.listen()
@@ -132,8 +109,10 @@ async def test_accounts_session_qualifies_protected_operator_surface(
                 while not server.started:
                     await asyncio.sleep(0.01)
             for denied in (
-                None,
-                {"Cookie": f"{config.cookie_name}=invalid-session"},
+                {},
+                {
+                    "Cookie": "mm_session_dev=retired-session",
+                },
                 {"Authorization": "Bearer invalid-session"},
             ):
                 observations.clear()
@@ -156,13 +135,9 @@ async def test_accounts_session_qualifies_protected_operator_surface(
                 )
                 assert "Cookie" not in json.dumps(receipt)
                 assert "Authorization" not in json.dumps(receipt)
-                assert session_token not in json.dumps(receipt)
 
-            # Revocation remains authoritative even for a previously qualified
-            # origin and a cryptographically valid cookie.
-            async with sessions() as session:
-                await DbRevocationStore(session).revoke_all_for_user(user.id)
-                await session.commit()
+            # A fresh request rechecks the installed ingress allowlist.
+            monkeypatch.setenv("MOONMIND_TRUSTED_PROXIES", "192.0.2.10")
             for headers in authorized_headers:
                 with pytest.raises(RuntimeError, match="HTTP 401"):
                     await asyncio.to_thread(verify_surface, base_url, headers=headers)

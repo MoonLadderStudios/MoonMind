@@ -174,9 +174,7 @@ TEMPORAL_BOUNDARY_GLOBS = (
 INTEGRATION_CI_EXACT = {
     "api_service/core/sync.py",
     "docker-compose.test.yaml",
-    # MoonLadderStudios/MoonMind#4128: deployment topology is an auth
-    # qualification boundary (AUTH_PROVIDER selector gating,
-    # startup/readiness; post-#4129 there is no Keycloak profile).
+    # Deployment topology determines operator access and startup readiness.
     # A Compose change must run the integration foundation, not only the
     # exact-artifact gate.
     "docker-compose.yaml",
@@ -185,16 +183,13 @@ INTEGRATION_CI_EXACT = {
     "tools/test_integration.sh",
     "pyproject.toml",
     "uv.lock",
-    # MoonLadderStudios/MoonMind#4128: production auth, session issuance,
-    # worker authority, route mounting, and configuration are integration
+    # Operator admission, worker authority, route mounting, and configuration
+    # are integration
     # qualification boundaries. A change to any of these files must run the
     # hermetic integration_ci suite so a touched boundary cannot silently
     # skip its required tests.
-    "api_service/auth.py",
     "api_service/auth_providers.py",
     "api_service/main.py",
-    "api_service/api/routers/advanced_auth_4124.py",
-    "moonmind/security/advanced_identity_4124.py",
     "moonmind/config/settings.py",
     # MoonLadderStudios/MoonMind#4128 (rw-8): frontend transport is part of
     # the same qualification boundary. The generated OpenAPI client and the

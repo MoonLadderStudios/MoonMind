@@ -26,7 +26,6 @@ from api_service.api.routers.temporal_artifacts import (
     router,
 )
 from api_service.db import models as db_models
-from moonmind.config.settings import settings
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
@@ -202,7 +201,7 @@ async def _all_pages(client, statements, *, category, limit, query=None):
 async def test_operator_collection_pages_cost_bounded_queries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     # More rows than one internal candidate batch of the previous scan.
     rows = _mixed_rows(260)
     async with _collection_client(tmp_path, rows, "operator") as (client, statements):
@@ -276,7 +275,7 @@ def _machine_rows() -> list[_Row]:
 async def test_machine_principal_collection_keeps_execution_boundary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
     rows = _machine_rows()
     async with _collection_client(tmp_path, rows, "workflow:wf-mine") as (
         client,

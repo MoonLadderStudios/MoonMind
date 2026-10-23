@@ -1,14 +1,15 @@
-import pytest
-import pytest_asyncio
-from httpx import AsyncClient, ASGITransport
-from typing import AsyncGenerator
 import uuid
 from datetime import datetime, timezone
-from unittest.mock import patch, MagicMock, AsyncMock
+from typing import AsyncGenerator
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from api_service.main import app
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+
+from api_service.api.routers.executions import _get_service, get_instance_access
 from api_service.db.base import get_async_session
-from api_service.api.routers.executions import _get_service, get_current_user
+from api_service.main import app
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -65,8 +66,10 @@ async def test_intervention_signal_without_logs(
     mock_record.parameters = {}
     mock_record.artifact_refs = []
     mock_execution_service.signal_execution.return_value = mock_record
-    app.dependency_overrides[get_current_user()] = lambda: MagicMock(id=1, email="test@test.com")
-    
+    app.dependency_overrides[get_instance_access] = lambda: MagicMock(
+        id=1, email="test@test.com"
+    )
+
     # _get_owned_execution is called directly, not as a dependency
     with patch("api_service.api.routers.executions._get_owned_execution", new_callable=AsyncMock) as mock_get_owned:
         mock_get_owned.return_value = mock_record

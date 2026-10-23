@@ -1,4 +1,4 @@
-"""MCP browser boundary with the production disabled-mode auth dependency."""
+"""MCP browser boundary with production operator transport admission."""
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -10,16 +10,17 @@ from httpx import ASGITransport, AsyncClient
 
 import api_service.operator_admission as operator_admission
 from api_service.api.routers import mcp_tools
-from moonmind.security import auth_modes_4120
 
 pytestmark = pytest.mark.asyncio
 
 
 @pytest.fixture
-def browser_app(monkeypatch, disabled_env_keys):
-    # Keep production caller resolution: only the backing DB is represented by
-    # a retained local operator, not an override of the MCP caller.
-    monkeypatch.setattr(auth_modes_4120, "_ACTIVE_PRODUCTION_MODE", "disabled")
+def browser_app(monkeypatch, provider_env_keys):
+    # Keep transport admission real; isolate the already-certified storage edge.
+    from api_service.services import single_user_conversion
+
+    monkeypatch.setattr(single_user_conversion, "completed_guarded_upgrade",
+                        AsyncMock(return_value=object()))
     for key in (
         "MOONMIND_PUBLIC_BASE_URL",
         "MOONMIND_TRUSTED_INGRESS",
@@ -28,8 +29,7 @@ def browser_app(monkeypatch, disabled_env_keys):
         "MOONMIND_API_HOST",
     ):
         monkeypatch.delenv(key, raising=False)
-    user = SimpleNamespace(id="operator", is_active=True, is_superuser=True)
-    session = SimpleNamespace(get=AsyncMock(return_value=user))
+    session = SimpleNamespace(get=AsyncMock(side_effect=AssertionError("no person lookup")))
     app = FastAPI()
     app.include_router(mcp_tools.router, prefix="/api")
     app.add_middleware(CORSMiddleware, allow_origins=[], allow_credentials=True)
