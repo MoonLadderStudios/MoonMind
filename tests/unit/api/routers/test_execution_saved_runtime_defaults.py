@@ -88,10 +88,8 @@ async def saved_runtime_submission(tmp_path, monkeypatch):
                 )
             )
         await session.commit()
-        saved = await SettingsCatalogService(
-            session=session, user_id=user.id
-        ).apply_overrides(
-            scope="workspace", changes={"workflow.default_runtime": "claude_code"}
+        saved = await SettingsCatalogService(session=session).apply_overrides(
+            changes={"workflow.default_runtime": "claude_code"},
         )
         effective = saved.values["workflow.default_runtime"]
         assert effective.value == "claude_code"
@@ -166,10 +164,7 @@ async def test_saved_runtime_matches_explicit_default(
     if selector:
         runtime["profileSelector"] = selector
         async with context.sessions() as session:
-            await SettingsCatalogService(
-                session=session, user_id=context.user.id
-            ).apply_overrides(
-                scope="workspace",
+            await SettingsCatalogService(session=session).apply_overrides(
                 changes={"workflow.default_provider_profile_ref": "pool-codex_cli"},
             )
     context.settings_reads.clear()
@@ -210,10 +205,7 @@ async def test_saved_runtime_is_only_a_fallback(
         runtime["providerProfileRef"] = "pool-codex_cli"
     elif intent == "saved-profile":
         async with context.sessions() as session:
-            await SettingsCatalogService(
-                session=session, user_id=context.user.id
-            ).apply_overrides(
-                scope="workspace",
+            await SettingsCatalogService(session=session).apply_overrides(
                 changes={"workflow.default_provider_profile_ref": "pool-codex_cli"},
             )
     body = _request(entrypoint, runtime)
@@ -246,7 +238,6 @@ async def test_saved_runtime_snapshot_survives_preset_expansion(
         async def expand_template(self, **kwargs):
             captured.update(kwargs)
             await SettingsCatalogService(session=self.session).apply_overrides(
-                scope="workspace",
                 changes={
                     "workflow.default_runtime": "codex_cli",
                     "workflow.default_provider_profile_ref": "pool-codex_cli",
@@ -302,7 +293,7 @@ async def test_saved_runtime_cannot_bypass_retired_default_admission(
     context = saved_runtime_submission
     async with context.sessions() as session:
         await SettingsCatalogService(session=session).apply_overrides(
-            scope="workspace", changes={"workflow.default_runtime": "codex_cli"}
+            changes={"workflow.default_runtime": "codex_cli"},
         )
     monkeypatch.setattr(settings.workflow, "default_runtime", "claude_code")
     monkeypatch.setenv("MOONMIND_CODEX_DIRECT_RETIRED_AT", "2020-01-01T00:00:00Z")
@@ -345,7 +336,6 @@ async def test_raw_runtime_preview_uses_effective_selection_through_dispatch(
         "alternative-claude_code" if selection == "selected-profile" else None
     )
     await context.catalog.apply_overrides(
-        scope="workspace",
         changes={
             "workflow.default_runtime": (
                 "claude_code" if selection == "saved-runtime" else "codex_cli"
@@ -483,7 +473,6 @@ async def test_raw_preview_retry_keeps_admitted_runtime_and_profile(
 ):
     context = saved_profile_submission
     await context.catalog.apply_overrides(
-        scope="workspace",
         changes={"workflow.default_provider_profile_ref": "saved-claude_code"},
     )
     body = {
@@ -500,7 +489,7 @@ async def test_raw_preview_retry_keeps_admitted_runtime_and_profile(
     original = await stored_parameters(context, first)
     assert original["targetRuntime"] == "claude_code"
     await context.catalog.apply_overrides(
-        scope="workspace", changes={"workflow.default_runtime": "omnigent"}
+        changes={"workflow.default_runtime": "omnigent"},
     )
     saved = await context.session.get(ManagedAgentProviderProfile, "saved-claude_code")
     await context.session.delete(saved)
@@ -524,7 +513,6 @@ async def test_raw_preview_cannot_bypass_effective_omnigent_boundary(
 ):
     context = saved_profile_submission
     await context.catalog.apply_overrides(
-        scope="workspace",
         changes={
             "workflow.default_runtime": (
                 "omnigent" if selection == "saved-runtime" else "codex_cli"

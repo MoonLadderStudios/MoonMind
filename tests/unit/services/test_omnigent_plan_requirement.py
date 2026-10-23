@@ -164,7 +164,6 @@ async def test_admitted_raw_omnigent_tool_retry_keeps_recorded_identity(
     await context.session.commit()
     monkeypatch.setattr(settings.workflow, "default_runtime", "claude_code")
     await context.catalog.apply_overrides(
-        scope="workspace",
         changes={
             "workflow.default_provider_profile_ref": "alternative-claude_code",
             "workflow.default_runtime": "claude_code",

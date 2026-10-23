@@ -118,7 +118,12 @@ async def test_postgres_new_readiness_never_grants_legacy_authority(preset_sessi
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "schema_revision", ["396_artifact_operator_recovery", "397_instance_preset_catalog"]
+    "schema_revision",
+    [
+        "396_artifact_operator_recovery",
+        "397_instance_preset_catalog",
+        "398_instance_settings",
+    ],
 )
 @pytest.mark.parametrize(
     "scenario",

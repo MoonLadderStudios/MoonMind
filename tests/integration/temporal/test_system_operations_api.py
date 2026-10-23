@@ -145,7 +145,7 @@ def test_settings_catalog_contract_exposes_apply_semantics(tmp_path) -> None:
         with TestClient(app) as client:
             response = client.get(
                 "/api/v1/settings/catalog",
-                params={"section": "user-workspace", "scope": "workspace"},
+                params={"section": "user-workspace"},
             )
     finally:
         app.dependency_overrides.clear()

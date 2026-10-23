@@ -22,6 +22,7 @@ from api_service.db.models import (
     SettingsOverride,
 )
 from api_service.main import app
+from moonmind.security.operator_admission import OperatorAdmission
 from api_service.services.settings_catalog import (
     _CATALOG_MIGRATION_RULES,
     SettingMigrationRule,
@@ -61,12 +62,11 @@ def _assert_settings_error_envelope(
     *,
     error: str,
     key: str | None = None,
-    scope: str | None = None,
 ) -> None:
     assert body["error"] == error
     assert "message" in body and body["message"]
     assert body["key"] == key
-    assert body["scope"] == scope
+    assert "scope" not in body
     assert isinstance(body["details"], dict)
 
 
@@ -92,13 +92,12 @@ def settings_api_db(tmp_path):
 
 @pytest.fixture
 def settings_user_override():
-    def _apply(*, permissions=(), is_superuser=False, user_id=None, workspace_id=None):
+    def _apply(*, permissions=(), is_superuser=False):
         user = SimpleNamespace(
-            id=user_id,
+            id=uuid4(),
             email="settings-user@example.com",
             is_superuser=is_superuser,
             settings_permissions=set(permissions),
-            workspace_id=workspace_id,
         )
         app.dependency_overrides[SETTINGS_USER_DEP] = lambda: user
         return user
@@ -111,21 +110,12 @@ def settings_user_override():
 
 @pytest.fixture(autouse=True)
 def _default_settings_test_principal():
-    """Explicit test principal for the shared auth boundary (#4125).
+    """Route-logic tests run as admitted operator without a person.
 
-    Production no longer mints environment-driven test identities, so
-    route-logic tests run under this explicit superuser double. Tests
-    that need a different identity keep working: their own
-    ``settings_user_override(...)`` call runs after this fixture and wins.
+    Retained account sessions keep their permission checks: tests that need
+    such an identity call ``settings_user_override(...)``, which wins.
     """
-    user = SimpleNamespace(
-        id=uuid4(),
-        email="settings-tests@example.com",
-        is_active=True,
-        is_superuser=True,
-        settings_permissions=set(),
-        workspace_id=None,
-    )
+    user = OperatorAdmission(via="loopback")
     missing = object()
     previous = app.dependency_overrides.get(SETTINGS_USER_DEP, missing)
     app.dependency_overrides[SETTINGS_USER_DEP] = lambda: user
@@ -145,13 +135,12 @@ async def test_settings_catalog_endpoint_returns_grouped_descriptors():
     ) as client:
         response = await client.get(
             "/api/v1/settings/catalog",
-            params={"section": "user-workspace", "scope": "workspace"},
+            params={"section": "user-workspace"},
         )
 
     assert response.status_code == 200
     body = response.json()
     assert body["section"] == "user-workspace"
-    assert body["scope"] == "workspace"
     descriptor = next(
         item
         for item in body["categories"]["Workflow"]
@@ -180,14 +169,14 @@ async def test_settings_catalog_endpoint_reports_persisted_override_versions(set
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"workflow.default_publish_mode": "branch"},
                 "expected_versions": {"workflow.default_publish_mode": 1},
             },
         )
         await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"workflow.default_publish_mode": "none"},
                 "expected_versions": {"workflow.default_publish_mode": 1},
@@ -195,7 +184,7 @@ async def test_settings_catalog_endpoint_reports_persisted_override_versions(set
         )
         response = await client.get(
             "/api/v1/settings/catalog",
-            params={"section": "user-workspace", "scope": "workspace"},
+            params={"section": "user-workspace"},
         )
 
     assert response.status_code == 200
@@ -205,7 +194,7 @@ async def test_settings_catalog_endpoint_reports_persisted_override_versions(set
         if item["key"] == "workflow.default_publish_mode"
     )
     assert descriptor["effective_value"] == "none"
-    assert descriptor["source"] == "workspace_override"
+    assert descriptor["source"] == "instance_override"
     assert descriptor["value_version"] == 2
 
 
@@ -216,7 +205,6 @@ async def test_effective_setting_endpoint_returns_structured_unknown_key_error()
     ) as client:
         response = await client.get(
             "/api/v1/settings/effective/workflow.github_token",
-            params={"scope": "workspace"},
         )
 
     assert response.status_code == 404
@@ -224,7 +212,6 @@ async def test_effective_setting_endpoint_returns_structured_unknown_key_error()
         "error": "unknown_setting",
         "message": "Unknown setting: workflow.github_token.",
         "key": "workflow.github_token",
-        "scope": "workspace",
         "details": {},
     }
 
@@ -235,7 +222,7 @@ async def test_settings_write_to_unexposed_key_returns_setting_not_exposed():
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         response = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"workflow.github_token": "raw-token"},
                 "expected_versions": {},
@@ -247,7 +234,6 @@ async def test_settings_write_to_unexposed_key_returns_setting_not_exposed():
     body = response.json()
     assert body["error"] == "setting_not_exposed"
     assert body["key"] == "workflow.github_token"
-    assert body["scope"] == "workspace"
     assert "raw-token" not in response.text
 
 
@@ -271,7 +257,7 @@ async def test_patch_deprecated_setting_key_is_rejected_without_echoing_value(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         response = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"test.removed_token": "ghp_should_never_echo"},
                 "expected_versions": {"test.removed_token": 1},
@@ -303,7 +289,6 @@ async def test_effective_setting_endpoint_resolves_renamed_override(
     async with settings_api_db() as session:
         session.add(
             SettingsOverride(
-                scope="workspace",
                 key="workflow.legacy_publish_mode",
                 value_json="branch",
                 value_version=5,
@@ -316,13 +301,12 @@ async def test_effective_setting_endpoint_resolves_renamed_override(
     ) as client:
         response = await client.get(
             "/api/v1/settings/effective/workflow.default_publish_mode",
-            params={"scope": "workspace"},
         )
 
     assert response.status_code == 200
     body = response.json()
     assert body["value"] == "branch"
-    assert body["source"] == "workspace_override"
+    assert body["source"] == "instance_override"
     assert body["value_version"] == 5
     assert body["diagnostics"][0]["code"] == "setting_renamed_override"
 
@@ -345,7 +329,6 @@ async def test_settings_diagnostics_include_deprecated_override_without_plaintex
     async with settings_api_db() as session:
         session.add(
             SettingsOverride(
-                scope="workspace",
                 key="workflow.removed_secret",
                 value_json="ghp_removed_plaintext",
                 value_version=7,
@@ -358,7 +341,6 @@ async def test_settings_diagnostics_include_deprecated_override_without_plaintex
     ) as client:
         response = await client.get(
             "/api/v1/settings/diagnostics",
-            params={"scope": "workspace"},
         )
 
     assert response.status_code == 200
@@ -370,22 +352,20 @@ async def test_settings_diagnostics_include_deprecated_override_without_plaintex
 
 
 @pytest.mark.asyncio
-async def test_effective_settings_endpoint_filters_by_scope():
+async def test_effective_settings_endpoint_returns_one_instance_configuration():
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
-        response = await client.get(
-            "/api/v1/settings/effective",
-            params={"scope": "user"},
-        )
+        response = await client.get("/api/v1/settings/effective")
 
     assert response.status_code == 200
     body = response.json()
-    assert body["scope"] == "user"
-    assert list(body["values"]) == [
+    assert "scope" not in body
+    assert {
         "integrations.github.token_ref",
         "workflow.default_provider_profile_ref",
-    ]
+        "workflow.default_runtime",
+    } <= set(body["values"])
 
 
 @pytest.mark.asyncio
@@ -402,7 +382,6 @@ async def test_effective_settings_endpoint_surfaces_db_read_failure(monkeypatch)
     ) as client:
         response = await client.get(
             "/api/v1/settings/effective",
-            params={"scope": "workspace"},
         )
 
     assert response.status_code == 500
@@ -410,47 +389,24 @@ async def test_effective_settings_endpoint_surfaces_db_read_failure(monkeypatch)
         "error": "settings_db_unavailable",
         "message": "Settings persistence is unavailable.",
         "key": None,
-        "scope": "workspace",
         "details": {},
     }
 
 
 @pytest.mark.asyncio
-async def test_effective_settings_endpoint_returns_structured_scope_not_allowed_error():
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://testserver"
-    ) as client:
-        response = await client.get(
-            "/api/v1/settings/effective",
-            params={"scope": "organization"},
-        )
-
-    assert response.status_code == 400
-    body = response.json()
-    assert body["error"] == "scope_not_allowed"
-    assert body["scope"] == "organization"
-    assert body["details"]["allowed_scopes"] == [
-        "operator",
-        "system",
-        "user",
-        "workspace",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_patch_settings_scope_not_allowed_uses_settings_error_contract():
+async def test_retired_scope_write_path_persists_nothing(settings_api_db):
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         response = await client.patch(
-            "/api/v1/settings/organization",
+            "/api/v1/settings/workspace",
             json={"changes": {"workflow.default_publish_mode": "branch"}},
         )
+    async with settings_api_db() as session:
+        rows = (await session.execute(select(SettingsOverride))).scalars().all()
 
-    assert response.status_code == 400
-    body = response.json()
-    assert body["error"] == "scope_not_allowed"
-    assert body["scope"] == "organization"
+    assert response.status_code == 405
+    assert rows == []
 
 
 @pytest.mark.asyncio
@@ -459,7 +415,7 @@ async def test_patch_workspace_setting_persists_override(settings_api_db):
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         response = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"workflow.default_publish_mode": "branch"},
                 "expected_versions": {"workflow.default_publish_mode": 1},
@@ -468,50 +424,67 @@ async def test_patch_workspace_setting_persists_override(settings_api_db):
         )
         effective = await client.get(
             "/api/v1/settings/effective/workflow.default_publish_mode",
-            params={"scope": "workspace"},
         )
 
     assert response.status_code == 200
     body = response.json()
     value = body["values"]["workflow.default_publish_mode"]
     assert value["value"] == "branch"
-    assert value["source"] == "workspace_override"
+    assert value["source"] == "instance_override"
     assert value["value_version"] == 1
-    assert effective.json()["source"] == "workspace_override"
+    assert effective.json()["source"] == "instance_override"
 
 
 @pytest.mark.asyncio
-async def test_patch_user_setting_wins_over_workspace_inheritance(settings_api_db):
+async def test_clients_share_committed_configuration_and_conflict_on_stale_version(
+    settings_api_db,
+):
+    transport = ASGITransport(app=app)
     async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://testserver"
-    ) as client:
-        await client.patch(
-            "/api/v1/settings/workspace",
+        transport=transport, base_url="http://testserver"
+    ) as first, AsyncClient(transport=transport, base_url="http://testserver") as second:
+        stale = (
+            await second.get("/api/v1/settings/effective/integrations.github.token_ref")
+        ).json()
+        written = await first.patch(
+            "/api/v1/settings",
             json={
-                "changes": {"integrations.github.token_ref": "env://WORKSPACE_TOKEN"},
+                "changes": {"integrations.github.token_ref": "env://INSTANCE_TOKEN"},
                 "expected_versions": {"integrations.github.token_ref": 1},
             },
         )
-        inherited = await client.get(
-            "/api/v1/settings/effective/integrations.github.token_ref",
-            params={"scope": "user"},
+        seen = await second.get(
+            "/api/v1/settings/effective/integrations.github.token_ref"
         )
-        await client.patch(
-            "/api/v1/settings/user",
+        updated = await first.patch(
+            "/api/v1/settings",
             json={
-                "changes": {"integrations.github.token_ref": "env://USER_TOKEN"},
+                "changes": {"integrations.github.token_ref": "env://NEWER_TOKEN"},
                 "expected_versions": {"integrations.github.token_ref": 1},
             },
         )
-        user_value = await client.get(
-            "/api/v1/settings/effective/integrations.github.token_ref",
-            params={"scope": "user"},
+        conflict = await second.patch(
+            "/api/v1/settings",
+            json={
+                "changes": {"integrations.github.token_ref": "env://STALE_TOKEN"},
+                "expected_versions": {
+                    "integrations.github.token_ref": seen.json()["value_version"]
+                },
+            },
+        )
+        final = await second.get(
+            "/api/v1/settings/effective/integrations.github.token_ref"
         )
 
-    assert inherited.json()["source"] == "workspace_override"
-    assert inherited.json()["value"] == "env://WORKSPACE_TOKEN"
-    assert user_value.json()["source"] == "user_override"
-    assert user_value.json()["value"] == "env://USER_TOKEN"
+    assert stale["source"] != "instance_override"
+    assert written.status_code == 200
+    assert seen.json()["source"] == "instance_override"
+    assert seen.json()["value"] == "env://INSTANCE_TOKEN"
+    assert updated.status_code == 200
+    assert conflict.status_code == 409
+    assert conflict.json()["error"] == "version_conflict"
+    assert final.json()["value"] == "env://NEWER_TOKEN"
+    assert final.json()["value_version"] == 2
 
 
 @pytest.mark.asyncio
@@ -530,14 +503,14 @@ async def test_delete_reset_preserves_secret_and_audit(settings_api_db):
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"workflow.default_publish_mode": "branch"},
                 "expected_versions": {"workflow.default_publish_mode": 1},
             },
         )
         response = await client.delete(
-            "/api/v1/settings/workspace/workflow.default_publish_mode"
+            "/api/v1/settings/workflow.default_publish_mode"
         )
 
     assert response.status_code == 200
@@ -553,7 +526,7 @@ async def test_version_conflict_returns_error_and_does_not_partially_persist(set
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {
                     "workflow.default_publish_mode": "branch",
@@ -566,7 +539,7 @@ async def test_version_conflict_returns_error_and_does_not_partially_persist(set
             },
         )
         conflict = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {
                     "workflow.default_publish_mode": "none",
@@ -580,11 +553,9 @@ async def test_version_conflict_returns_error_and_does_not_partially_persist(set
         )
         publish_mode = await client.get(
             "/api/v1/settings/effective/workflow.default_publish_mode",
-            params={"scope": "workspace"},
         )
         canary = await client.get(
             "/api/v1/settings/effective/skills.canary_percent",
-            params={"scope": "workspace"},
         )
 
     assert conflict.status_code == 409
@@ -599,14 +570,14 @@ async def test_secret_ref_reference_allowed_but_raw_secret_rejected(settings_api
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         allowed = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"integrations.github.token_ref": "env://GITHUB_TOKEN"},
                 "expected_versions": {"integrations.github.token_ref": 1},
             },
         )
         rejected = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"integrations.github.token_ref": "ghp_raw_plaintext"},
                 "expected_versions": {"integrations.github.token_ref": 1},
@@ -629,14 +600,14 @@ async def test_mm656_patch_settings_returns_structured_validation_error_and_no_m
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         accepted = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"workflow.default_publish_mode": "branch"},
                 "expected_versions": {"workflow.default_publish_mode": 1},
             },
         )
         rejected = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {
                     "workflow.default_publish_mode": "not-supported",
@@ -652,11 +623,9 @@ async def test_mm656_patch_settings_returns_structured_validation_error_and_no_m
         )
         publish_mode = await client.get(
             "/api/v1/settings/effective/workflow.default_publish_mode",
-            params={"scope": "workspace"},
         )
         token_ref = await client.get(
             "/api/v1/settings/effective/integrations.github.token_ref",
-            params={"scope": "workspace"},
         )
 
     body = rejected.json()
@@ -664,7 +633,6 @@ async def test_mm656_patch_settings_returns_structured_validation_error_and_no_m
     assert rejected.status_code == 400
     assert body["error"] == "invalid_setting_value"
     assert body["key"] == "workflow.default_publish_mode"
-    assert body["scope"] == "workspace"
     assert body["details"]["code"] == "enum_value_invalid"
     assert body["details"]["boundary"] == "write_request"
     assert "persistence" in body["details"]["blocks"]
@@ -681,7 +649,7 @@ async def test_mm656_patch_settings_rejects_missing_secret_ref_with_sanitized_de
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         rejected = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"integrations.github.token_ref": "db://missing-token"},
                 "expected_versions": {"integrations.github.token_ref": 1},
@@ -711,7 +679,7 @@ async def test_oversized_override_payload_rejected_and_effective_value_unchanged
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         rejected = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"workflow.default_provider_profile_ref": "x" * 20000},
                 "expected_versions": {"workflow.default_provider_profile_ref": 1},
@@ -719,7 +687,6 @@ async def test_oversized_override_payload_rejected_and_effective_value_unchanged
         )
         effective = await client.get(
             "/api/v1/settings/effective/workflow.default_provider_profile_ref",
-            params={"scope": "workspace"},
         )
 
     assert rejected.status_code == 400
@@ -750,7 +717,7 @@ async def test_unsafe_override_payload_classes_are_rejected_and_redacted(
     ) as client:
         for unsafe_value in unsafe_values:
             rejected = await client.patch(
-                "/api/v1/settings/workspace",
+                "/api/v1/settings",
                 json={
                     "changes": {"workflow.default_provider_profile_ref": unsafe_value},
                     "expected_versions": {"workflow.default_provider_profile_ref": 1},
@@ -783,7 +750,7 @@ async def test_provider_profile_ref_allows_literal_profile_ids_with_sensitive_wo
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         accepted = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {
                     "workflow.default_provider_profile_ref": "oauth_session-prod"
@@ -813,17 +780,17 @@ async def test_settings_catalog_requires_catalog_read_permission(settings_user_o
 
 
 @pytest.mark.asyncio
-async def test_settings_patch_requires_matching_scope_write_permission(
+async def test_settings_patch_requires_write_permission_for_retained_account(
     settings_api_db,
     settings_user_override,
 ):
-    settings_user_override(permissions={"settings.user.write"})
+    settings_user_override(permissions={"settings.catalog.read"})
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         denied = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"workflow.default_publish_mode": "branch"},
                 "expected_versions": {"workflow.default_publish_mode": 1},
@@ -846,7 +813,6 @@ async def test_mm657_validate_accepts_changes_without_override_or_audit_mutation
         response = await client.post(
             "/api/v1/settings/validate",
             json={
-                "scope": "workspace",
                 "changes": {"workflow.default_publish_mode": "branch"},
                 "expected_versions": {"workflow.default_publish_mode": 1},
             },
@@ -854,7 +820,6 @@ async def test_mm657_validate_accepts_changes_without_override_or_audit_mutation
 
     assert response.status_code == 200
     body = response.json()
-    assert body["scope"] == "workspace"
     assert body["accepted"] is True
     assert body["issues"] == []
     assert body["issues_by_key"] == {}
@@ -863,11 +828,11 @@ async def test_mm657_validate_accepts_changes_without_override_or_audit_mutation
 
 
 @pytest.mark.asyncio
-async def test_mm657_validate_requires_matching_scope_write_permission(
+async def test_mm657_validate_requires_write_permission_for_retained_account(
     settings_api_db,
     settings_user_override,
 ):
-    settings_user_override(permissions={"settings.user.write"})
+    settings_user_override(permissions={"settings.catalog.read"})
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
@@ -875,7 +840,6 @@ async def test_mm657_validate_requires_matching_scope_write_permission(
         denied = await client.post(
             "/api/v1/settings/validate",
             json={
-                "scope": "workspace",
                 "changes": {"workflow.default_publish_mode": "branch"},
                 "expected_versions": {"workflow.default_publish_mode": 1},
             },
@@ -885,7 +849,6 @@ async def test_mm657_validate_requires_matching_scope_write_permission(
     _assert_settings_error_envelope(
         denied.json(),
         error="permission_denied",
-        scope=None,
     )
     assert denied.json()["details"]["required_permission"] == "settings.workspace.write"
 
@@ -902,7 +865,6 @@ async def test_mm657_validate_returns_structured_issues_without_echoing_secret(
         response = await client.post(
             "/api/v1/settings/validate",
             json={
-                "scope": "workspace",
                 "changes": {
                     "workflow.default_publish_mode": "not-supported",
                     "integrations.github.token_ref": raw_secret_value,
@@ -938,19 +900,16 @@ async def test_mm657_preview_returns_diff_warnings_reload_and_no_commit(
         response = await client.post(
             "/api/v1/settings/preview",
             json={
-                "scope": "workspace",
                 "changes": {"skills.policy_mode": "allowlist"},
                 "expected_versions": {"skills.policy_mode": 1},
             },
         )
         effective = await client.get(
             "/api/v1/settings/effective/skills.policy_mode",
-            params={"scope": "workspace"},
         )
 
     assert response.status_code == 200
     body = response.json()
-    assert body["scope"] == "workspace"
     assert body["accepted"] is True
     diff = body["diffs"][0]
     assert diff["key"] == "skills.policy_mode"
@@ -975,7 +934,6 @@ async def test_mm657_preview_reports_missing_references_without_secret_material(
         response = await client.post(
             "/api/v1/settings/preview",
             json={
-                "scope": "workspace",
                 "changes": {"integrations.github.token_ref": "db://missing-token"},
                 "expected_versions": {"integrations.github.token_ref": 1},
             },
@@ -1006,7 +964,6 @@ async def test_mm657_documented_error_code_envelope_matrix(
         section="user-workspace",
         value_type="string",
         ui="input",
-        scopes=("workspace",),
         default_value="built-in",
         operator_locked_value="operator-value",
         operator_lock_reason="Controlled by operator policy.",
@@ -1024,35 +981,19 @@ async def test_mm657_documented_error_code_envelope_matrix(
         unknown = await client.post(
             "/api/v1/settings/validate",
             json={
-                "scope": "workspace",
                 "changes": {"workflow.github_token": "env://TOKEN"},
                 "expected_versions": {"workflow.github_token": 1},
             },
         )
-        bad_scope = await client.post(
-            "/api/v1/settings/preview",
-            json={
-                "scope": "organization",
-                "changes": {"workflow.default_publish_mode": "branch"},
-            },
-        )
-        scope_not_allowed = await client.post(
-            "/api/v1/settings/validate",
-            json={
-                "scope": "user",
-                "changes": {"workflow.default_publish_mode": "branch"},
-                "expected_versions": {"workflow.default_publish_mode": 1},
-            },
-        )
         secret_ref = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"integrations.github.token_ref": "db://missing-token"},
                 "expected_versions": {"integrations.github.token_ref": 1},
             },
         )
         provider_profile = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"workflow.default_provider_profile_ref": "missing-profile"},
                 "expected_versions": {"workflow.default_provider_profile_ref": 1},
@@ -1061,13 +1002,12 @@ async def test_mm657_documented_error_code_envelope_matrix(
         version_conflict = await client.post(
             "/api/v1/settings/validate",
             json={
-                "scope": "workspace",
                 "changes": {"workflow.default_runtime": "codex"},
                 "expected_versions": {"workflow.default_runtime": 99},
             },
         )
         requires_confirmation = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"workflow.operation_mode": "maintenance"},
                 "expected_versions": {"workflow.operation_mode": 1},
@@ -1079,7 +1019,7 @@ async def test_mm657_documented_error_code_envelope_matrix(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         operator_locked = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"test.locked": "client-value"},
                 "expected_versions": {"test.locked": 1},
@@ -1091,27 +1031,12 @@ async def test_mm657_documented_error_code_envelope_matrix(
         unknown.json(),
         error="setting_not_exposed",
         key="workflow.github_token",
-        scope="workspace",
-    )
-    assert bad_scope.status_code == 400
-    _assert_settings_error_envelope(
-        bad_scope.json(),
-        error="scope_not_allowed",
-        scope="organization",
-    )
-    assert scope_not_allowed.status_code == 400
-    _assert_settings_error_envelope(
-        scope_not_allowed.json(),
-        error="scope_not_allowed",
-        key="workflow.default_publish_mode",
-        scope="user",
     )
     assert secret_ref.status_code == 400
     _assert_settings_error_envelope(
         secret_ref.json(),
         error="secret_ref_not_resolvable",
         key="integrations.github.token_ref",
-        scope="workspace",
     )
     assert "missing-token" not in secret_ref.text
     assert provider_profile.status_code == 400
@@ -1119,28 +1044,24 @@ async def test_mm657_documented_error_code_envelope_matrix(
         provider_profile.json(),
         error="provider_profile_not_found",
         key="workflow.default_provider_profile_ref",
-        scope="workspace",
     )
     assert version_conflict.status_code == 409
     _assert_settings_error_envelope(
         version_conflict.json(),
         error="version_conflict",
         key="workflow.default_runtime",
-        scope="workspace",
     )
     assert requires_confirmation.status_code == 428
     _assert_settings_error_envelope(
         requires_confirmation.json(),
         error="requires_confirmation",
         key="workflow.operation_mode",
-        scope="workspace",
     )
     assert operator_locked.status_code == 423
     _assert_settings_error_envelope(
         operator_locked.json(),
         error="operator_locked",
         key="test.locked",
-        scope="workspace",
     )
 
 
@@ -1157,7 +1078,7 @@ async def test_settings_audit_endpoint_redacts_without_secret_metadata_permissio
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"integrations.github.token_ref": "env://GITHUB_TOKEN"},
                 "expected_versions": {"integrations.github.token_ref": 1},
@@ -1194,7 +1115,7 @@ async def test_failed_settings_write_creates_redacted_audit_event_with_request_i
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         rejected = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             headers={"x-request-id": request_id},
             json={
                 "changes": {"integrations.github.token_ref": raw_secret_value},
@@ -1216,7 +1137,6 @@ async def test_failed_settings_write_creates_redacted_audit_event_with_request_i
     item = audit.json()["items"][0]
     assert item["event_type"] == "settings.override.rejected"
     assert item["key"] == "integrations.github.token_ref"
-    assert item["scope"] == "workspace"
     assert item["validation_outcome"] == "rejected"
     assert item["request_id"] == request_id[:255]
     assert item["reason"] == "wire github token"
@@ -1231,12 +1151,9 @@ async def test_failed_settings_write_creates_redacted_audit_event_with_request_i
 @pytest.mark.asyncio
 async def test_rejected_write_audit_failure_is_logged(
     settings_api_db,
-    settings_user_override,
     monkeypatch,
     caplog,
 ):
-    user = settings_user_override(permissions={"settings.workspace.write"})
-
     class FailingAuditService(SettingsCatalogService):
         async def record_rejected_write_audit(self, **kwargs):
             raise RuntimeError("audit unavailable")
@@ -1245,9 +1162,7 @@ async def test_rejected_write_audit_failure_is_logged(
 
     with caplog.at_level(logging.ERROR, logger=settings_router.__name__):
         await settings_router._record_rejected_write_audit(
-            scope="workspace",
             changes={"integrations.github.token_ref": "db://github-token"},
-            user=user,
             reason="test audit visibility",
             request_id="req-1",
         )
@@ -1273,7 +1188,7 @@ async def test_settings_audit_endpoint_exposes_secret_ref_with_metadata_permissi
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"integrations.github.token_ref": "env://GITHUB_TOKEN"},
                 "expected_versions": {"integrations.github.token_ref": 1},
@@ -1289,7 +1204,7 @@ async def test_settings_audit_endpoint_exposes_secret_ref_with_metadata_permissi
 
 
 @pytest.mark.asyncio
-async def test_settings_audit_endpoint_scopes_rows_to_current_workspace_and_user(
+async def test_settings_audit_endpoint_lists_one_instance_history(
     settings_api_db,
     settings_user_override,
 ):
@@ -1318,87 +1233,50 @@ async def test_settings_audit_endpoint_scopes_rows_to_current_workspace_and_user
         )
         await session.commit()
 
-    workspace_id = uuid4()
-    user_id = uuid4()
-    settings_user_override(
-        permissions={
-            "settings.user.write",
-            "settings.workspace.write",
-            "settings.audit.read",
-        },
-        user_id=user_id,
-        workspace_id=workspace_id,
-    )
+        session.add(
+            SettingsAuditEvent(
+                event_type="settings.override.updated",
+                key="workflow.default_provider_profile_ref",
+                scope="user",
+                workspace_id=uuid4(),
+                user_id=uuid4(),
+                new_value_json="other-profile",
+                redacted=False,
+            )
+        )
+        await session.commit()
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"workflow.default_publish_mode": "branch"},
                 "expected_versions": {"workflow.default_publish_mode": 1},
             },
         )
+
+    settings_user_override(
+        permissions={"settings.workspace.write", "settings.audit.read"},
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
         await client.patch(
-            "/api/v1/settings/user",
+            "/api/v1/settings",
             json={
                 "changes": {"workflow.default_provider_profile_ref": "codex-default"},
                 "expected_versions": {"workflow.default_provider_profile_ref": 1},
             },
         )
-
-    other_workspace = uuid4()
-    other_user = uuid4()
-    settings_user_override(
-        permissions={
-            "settings.user.write",
-            "settings.workspace.write",
-            "settings.audit.read",
-        },
-        user_id=other_user,
-        workspace_id=other_workspace,
-    )
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://testserver"
-    ) as client:
-        await client.patch(
-            "/api/v1/settings/workspace",
-            json={
-                "changes": {"workflow.default_publish_mode": "none"},
-                "expected_versions": {"workflow.default_publish_mode": 1},
-            },
-        )
-        await client.patch(
-            "/api/v1/settings/user",
-            json={
-                "changes": {"workflow.default_provider_profile_ref": "other-profile"},
-                "expected_versions": {"workflow.default_provider_profile_ref": 1},
-            },
-        )
-
-    settings_user_override(
-        permissions={"settings.audit.read"},
-        user_id=user_id,
-        workspace_id=workspace_id,
-    )
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://testserver"
-    ) as client:
         audit = await client.get("/api/v1/settings/audit")
-        user_audit = await client.get(
-            "/api/v1/settings/audit",
-            params={"scope": "user"},
-        )
 
     assert audit.status_code == 200
-    values = {item["new_value"] for item in audit.json()["items"]}
-    assert values == {"branch", "codex-default"}
-    assert user_audit.status_code == 200
-    user_items = user_audit.json()["items"]
-    assert len(user_items) == 1
-    assert user_items[0]["new_value"] == "codex-default"
-    assert user_items[0]["actor_user_id"] == str(user_id)
+    items = audit.json()["items"]
+    assert {item["new_value"] for item in items} == {"branch", "codex-default"}
+    assert all(item["actor_user_id"] is None for item in items)
+    assert all("scope" not in item for item in items)
 
 
 @pytest.mark.asyncio
@@ -1414,7 +1292,7 @@ async def test_settings_diagnostics_endpoint_returns_actionable_sanitized_output
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         rejected = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"integrations.github.token_ref": "db://missing-token"},
                 "expected_versions": {"integrations.github.token_ref": 1},
@@ -1423,7 +1301,7 @@ async def test_settings_diagnostics_endpoint_returns_actionable_sanitized_output
         )
         response = await client.get(
             "/api/v1/settings/diagnostics",
-            params={"scope": "workspace", "key": "integrations.github.token_ref"},
+            params={"key": "integrations.github.token_ref"},
         )
 
     assert rejected.status_code == 400
@@ -1457,7 +1335,7 @@ async def test_settings_diagnostics_endpoint_falls_back_without_db(monkeypatch):
     ) as client:
         response = await client.get(
             "/api/v1/settings/diagnostics",
-            params={"scope": "workspace", "key": "workflow.default_publish_mode"},
+            params={"key": "workflow.default_publish_mode"},
         )
 
     assert response.status_code == 200
@@ -1493,7 +1371,7 @@ async def test_db_secret_ref_catalog_diagnostics_report_missing_and_inactive(set
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         active = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {
                     "integrations.github.token_ref": "db://active-github-token"
@@ -1502,7 +1380,7 @@ async def test_db_secret_ref_catalog_diagnostics_report_missing_and_inactive(set
             },
         )
         disabled = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {
                     "integrations.github.token_ref": "db://disabled-github-token"
@@ -1511,7 +1389,7 @@ async def test_db_secret_ref_catalog_diagnostics_report_missing_and_inactive(set
             },
         )
         missing = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {
                     "integrations.github.token_ref": "db://missing-github-token"
@@ -1552,7 +1430,6 @@ async def test_mm655_effective_setting_endpoint_exposes_complete_contract(monkey
         section="user-workspace",
         value_type="string",
         ui="input",
-        scopes=("workspace",),
         default_value="built-in",
         settings_path=("settings", "configured"),
         apply_mode="worker_reload",
@@ -1576,7 +1453,6 @@ async def test_mm655_effective_setting_endpoint_exposes_complete_contract(monkey
     ) as client:
         response = await client.get(
             "/api/v1/settings/effective/test.configured",
-            params={"scope": "workspace"},
         )
 
     assert response.status_code == 200
@@ -1599,7 +1475,6 @@ async def test_mm655_operator_lock_endpoint_returns_read_only_reason(monkeypatch
         section="user-workspace",
         value_type="string",
         ui="input",
-        scopes=("workspace",),
         default_value="built-in",
         operator_locked_value="operator-value",
         operator_lock_reason="Controlled by operator policy.",
@@ -1618,7 +1493,6 @@ async def test_mm655_operator_lock_endpoint_returns_read_only_reason(monkeypatch
     ) as client:
         response = await client.get(
             "/api/v1/settings/effective/test.locked",
-            params={"scope": "workspace"},
         )
 
     assert response.status_code == 200
@@ -1639,7 +1513,6 @@ async def test_mm655_diagnostics_endpoint_reports_distinct_states(monkeypatch):
         section="user-workspace",
         value_type="string",
         ui="input",
-        scopes=("workspace",),
         default_value="blocked",
         policy_blocked_reason="Workspace policy blocks this value.",
         order=1,
@@ -1657,7 +1530,7 @@ async def test_mm655_diagnostics_endpoint_reports_distinct_states(monkeypatch):
     ) as client:
         response = await client.get(
             "/api/v1/settings/diagnostics",
-            params={"scope": "workspace", "key": "test.policy_blocked"},
+            params={"key": "test.policy_blocked"},
         )
 
     assert response.status_code == 200

@@ -25,7 +25,6 @@ from api_service.db.models import (
 )
 from moonmind.config.settings import AppSettings, settings as app_settings
 
-SettingScope = Literal["user", "workspace", "system", "operator"]
 SettingSection = Literal["providers-secrets", "user-workspace", "operations"]
 SettingApplyMode = Literal[
     "immediate",
@@ -44,8 +43,6 @@ SettingActivationState = Literal[
     "pending_manual_operation",
 ]
 SettingMigrationState = Literal["renamed", "deprecated", "removed", "type_changed"]
-_DEFAULT_SUBJECT_ID = UUID("00000000-0000-0000-0000-000000000000")
-_PERSISTED_SCOPES: set[SettingScope] = {"user", "workspace"}
 _MAX_OVERRIDE_VALUE_BYTES = 16 * 1024
 _SECRET_PREFIXES = ("ghp_", "github_pat_", "AIza", "AKIA")
 _UNSAFE_FIELD_TOKENS = (
@@ -88,7 +85,6 @@ SETTINGS_PERMISSION_NAMES: frozenset[str] = frozenset(
     {
         "settings.catalog.read",
         "settings.effective.read",
-        "settings.user.write",
         "settings.workspace.write",
         "settings.system.read",
         "settings.system.write",
@@ -164,7 +160,6 @@ _VALIDATION_BLOCKS_BY_BOUNDARY: dict[SettingValidationBoundary, list[str]] = {
 
 class SettingValidationIssue(BaseModel):
     key: str
-    scope: SettingScope
     code: str
     message: str
     boundary: SettingValidationBoundary
@@ -193,7 +188,6 @@ class SettingsValidationError(ValueError):
             "provider_profile_not_found": "provider_profile_not_found",
             "requires_confirmation": "requires_confirmation",
             "secret_ref_unresolved": "secret_ref_not_resolvable",
-            "unsupported_scope": "scope_not_allowed",
         }
         error_code = error_code_by_issue_code.get(
             issue.code,
@@ -201,7 +195,6 @@ class SettingsValidationError(ValueError):
         )
         details = issue.model_dump(mode="json")
         details.pop("key", None)
-        details.pop("scope", None)
         details.pop("message", None)
         if len(self.issues) > 1:
             details["issues"] = [
@@ -211,7 +204,6 @@ class SettingsValidationError(ValueError):
             error_code,
             issue.message,
             key=issue.key,
-            scope=issue.scope,
             details=details,
         )
 
@@ -271,7 +263,6 @@ class SettingDescriptor(BaseModel):
     section: SettingSection
     type: str
     ui: str
-    scopes: list[SettingScope]
     default_value: Any = None
     effective_value: Any = None
     override_value: Any = None
@@ -302,13 +293,11 @@ class SettingDescriptor(BaseModel):
 
 class SettingsCatalogResponse(BaseModel):
     section: SettingSection | None = None
-    scope: SettingScope | None = None
     categories: dict[str, list[SettingDescriptor]]
 
 
 class EffectiveSettingValue(BaseModel):
     key: str
-    scope: SettingScope
     value: Any = None
     default_value: Any = None
     source: str
@@ -331,13 +320,11 @@ class EffectiveSettingValue(BaseModel):
 
 
 class EffectiveSettingsResponse(BaseModel):
-    scope: SettingScope
     values: dict[str, EffectiveSettingValue]
     change_events: list["SettingsChangeEvent"] = Field(default_factory=list)
 
 
 class SettingsValidationResponse(BaseModel):
-    scope: SettingScope
     accepted: bool
     issues: list[SettingValidationIssue] = Field(default_factory=list)
     issues_by_key: dict[str, list[SettingValidationIssue]] = Field(default_factory=dict)
@@ -352,7 +339,6 @@ class SettingsPreviewValue(BaseModel):
 
 class SettingsPreviewDiff(BaseModel):
     key: str
-    scope: SettingScope
     before: SettingsPreviewValue
     after: SettingsPreviewValue
     redacted: bool = False
@@ -385,7 +371,6 @@ class SettingsError(BaseModel):
     error: str
     message: str
     key: str | None = None
-    scope: str | None = None
     details: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -393,7 +378,6 @@ class SettingsAuditRead(BaseModel):
     id: UUID
     event_type: str
     key: str
-    scope: str
     source: str | None = None
     actor_user_id: UUID | None = None
     old_value: Any = None
@@ -415,10 +399,8 @@ class SettingsAuditResponse(BaseModel):
 class SettingsChangeEvent(BaseModel):
     event_type: Literal["setting_changed"] = "setting_changed"
     key: str
-    scope: SettingScope
     source: str
     apply_mode: SettingApplyMode
-    actor_user_id: UUID | None = None
     changed_at: datetime
     affected_systems: list[str] = Field(default_factory=list)
     refresh_targets: list[str] = Field(default_factory=list)
@@ -433,7 +415,6 @@ class SettingsRecentChange(BaseModel):
 
 class SettingsDiagnosticRead(BaseModel):
     key: str
-    scope: SettingScope
     value: Any = None
     default_value: Any = None
     source: str
@@ -457,27 +438,14 @@ class SettingsDiagnosticRead(BaseModel):
 
 
 class SettingsDiagnosticsResponse(BaseModel):
-    scope: SettingScope
     values: dict[str, SettingsDiagnosticRead]
-
-
-def coerce_settings_subject_id(value: Any) -> UUID | None:
-    """Normalize persisted settings subjects; machine identities have no user scope."""
-    if isinstance(value, UUID):
-        return value
-    if value is None:
-        return None
-    try:
-        return UUID(str(value))
-    except (TypeError, ValueError):
-        return None
 
 
 def settings_permissions_for_user(user: Any) -> set[str]:
     from moonmind.security.operator_admission import OperatorAdmission
 
     if isinstance(user, OperatorAdmission):
-        return set(SETTINGS_PERMISSION_NAMES) - {"settings.user.write"}
+        return set(SETTINGS_PERMISSION_NAMES)
     if bool(getattr(user, "is_superuser", False)):
         return set(SETTINGS_PERMISSION_NAMES)
     raw_permissions = getattr(user, "settings_permissions", set()) or set()
@@ -518,7 +486,6 @@ class SettingRegistryEntry:
     section: SettingSection
     value_type: str
     ui: str
-    scopes: tuple[SettingScope, ...]
     order: int
     default_value: Any = None
     description: str | None = None
@@ -551,7 +518,6 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         section="user-workspace",
         value_type="enum",
         ui="select",
-        scopes=("workspace",),
         default_value="codex",
         settings_path=("workflow", "default_runtime"),
         env_aliases=("WORKFLOW_DEFAULT_RUNTIME", "MOONMIND_DEFAULT_RUNTIME"),
@@ -573,7 +539,6 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         section="user-workspace",
         value_type="enum",
         ui="select",
-        scopes=("workspace",),
         default_value="pr",
         settings_path=("workflow", "default_publish_mode"),
         env_aliases=("WORKFLOW_DEFAULT_PUBLISH_MODE", "MOONMIND_DEFAULT_PUBLISH_MODE"),
@@ -590,7 +555,6 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         section="user-workspace",
         value_type="enum",
         ui="select",
-        scopes=("workspace",),
         default_value="permissive",
         settings_path=("workflow", "skill_policy_mode"),
         env_aliases=(
@@ -612,7 +576,6 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         section="user-workspace",
         value_type="integer",
         ui="number",
-        scopes=("workspace",),
         default_value=100,
         settings_path=("workflow", "skills_canary_percent"),
         env_aliases=("WORKFLOW_SKILLS_CANARY_PERCENT",),
@@ -629,7 +592,6 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         section="providers-secrets",
         value_type="secret_ref",
         ui="secret_ref_picker",
-        scopes=("user", "workspace"),
         default_value=None,
         env_aliases=("MOONMIND_GITHUB_TOKEN_REF",),
         apply_mode="next_launch",
@@ -654,7 +616,6 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         section="user-workspace",
         value_type="string",
         ui="provider_profile_picker",
-        scopes=("user", "workspace"),
         default_value=None,
         env_aliases=("MOONMIND_DEFAULT_PROVIDER_PROFILE_REF",),
         apply_mode="next_launch",
@@ -669,7 +630,6 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         section="operations",
         value_type="enum",
         ui="select",
-        scopes=("workspace",),
         default_value="normal",
         env_aliases=("MOONMIND_OPERATION_MODE",),
         apply_mode="manual_operation",
@@ -783,7 +743,6 @@ class SettingsRegistry:
                 continue
             section: SettingSection = mm.get("section", "user-workspace")
             category: str = mm.get("category", "General")
-            scopes: tuple[SettingScope, ...] = tuple(mm.get("scopes", ["workspace"]))
             ui: str = mm.get("ui", "input")
             requires_reload: bool = bool(mm.get("requires_reload", False))
             apply_mode: SettingApplyMode = (
@@ -809,7 +768,6 @@ class SettingsRegistry:
                     section=section,
                     value_type=mm.get("type", "string"),
                     ui=ui,
-                    scopes=scopes,
                     default_value=default_any,
                     apply_mode=apply_mode,
                     requires_reload=requires_reload,
@@ -834,21 +792,18 @@ class SettingsCatalogBuilder:
     def build(
         self,
         section: SettingSection | None = None,
-        scope: SettingScope | None = None,
         descriptor_fn: Callable[[SettingRegistryEntry], SettingDescriptor] | None = None,
     ) -> SettingsCatalogResponse:
-        """Build a catalog response, filtered by section and/or scope."""
+        """Build a catalog response, optionally filtered by section."""
         if descriptor_fn is None:
             raise ValueError("descriptor_fn is required to build catalog descriptors")
         categories: dict[str, list[SettingDescriptor]] = {}
         for entry in self._registry.entries:
             if section is not None and entry.section != section:
                 continue
-            if scope is not None and scope not in entry.scopes:
-                continue
             descriptor = descriptor_fn(entry)
             categories.setdefault(entry.category, []).append(descriptor)
-        return SettingsCatalogResponse(section=section, scope=scope, categories=categories)
+        return SettingsCatalogResponse(section=section, categories=categories)
 
 
 class SettingsCatalogService:
@@ -862,8 +817,6 @@ class SettingsCatalogService:
         registry: tuple[SettingRegistryEntry, ...] = _REGISTRY,
         migration_rules: tuple[SettingMigrationRule, ...] | None = None,
         session: AsyncSession | None = None,
-        workspace_id: UUID | None = None,
-        user_id: UUID | None = None,
         workspace_policy: SettingsWorkspacePolicy | dict[str, Any] | None = None,
         change_publisher: "SettingsChangePublisher | None" = None,
     ) -> None:
@@ -896,8 +849,6 @@ class SettingsCatalogService:
         self._migration_diagnostics_by_key: dict[str, SettingDiagnostic] = {}
         self._redacted_invalid_secret_refs: set[str] = set()
         self._session = session
-        self._workspace_id = workspace_id or _DEFAULT_SUBJECT_ID
-        self._user_id = user_id or _DEFAULT_SUBJECT_ID
         self._managed_secret_status_by_slug: dict[str, str | None] = {}
         self._provider_profile_enabled_by_id: dict[str, bool | None] = {}
         self._provider_profile_readiness_by_id: dict[str, SettingDiagnostic | None] = {}
@@ -912,94 +863,69 @@ class SettingsCatalogService:
         self,
         *,
         section: SettingSection | None = None,
-        scope: SettingScope | None = None,
     ) -> SettingsCatalogResponse:
         self._validate_apply_modes()
         return self._catalog_builder.build(
             section,
-            scope,
             descriptor_fn=self._descriptor,
         )
-
-    def _entries_for_scope(self, scope: SettingScope) -> list[SettingRegistryEntry]:
-        return [
-            entry
-            for entry in self._registry
-            if scope in entry.scopes
-        ]
 
     async def catalog_async(
         self,
         *,
         section: SettingSection | None = None,
-        scope: SettingScope | None = None,
     ) -> SettingsCatalogResponse:
         self._validate_apply_modes()
         entries = [
             entry
             for entry in self._registry
-            if (section is None or entry.section == section)
-            and (scope is None or scope in entry.scopes)
+            if section is None or entry.section == section
         ]
         overrides = await self._get_effective_overrides(
-            scope=scope,
             keys=[entry.key for entry in entries],
         )
         await self._prime_managed_secret_statuses(
             self._resolve_value_from_overrides(
                 entry,
-                scope=scope,
                 overrides=overrides,
             )[0]
             for entry in entries
-            if scope is not None
         )
         await self._prime_provider_profile_statuses(
             self._resolve_value_from_overrides(
                 entry,
-                scope=scope,
                 overrides=overrides,
             )[0]
             for entry in entries
-            if scope is not None
-            and entry.key == "workflow.default_provider_profile_ref"
+            if entry.key == "workflow.default_provider_profile_ref"
         )
         return self._catalog_builder.build(
             section,
-            scope,
             descriptor_fn=lambda entry: self._descriptor(
                 entry,
-                scope=scope,
                 overrides=overrides,
             ),
         )
 
-    def effective_values(self, *, scope: SettingScope) -> EffectiveSettingsResponse:
+    def effective_values(self) -> EffectiveSettingsResponse:
         values = {
-            entry.key: self.effective_value(entry.key, scope=scope)
-            for entry in self._registry
-            if scope in entry.scopes
+            entry.key: self.effective_value(entry.key) for entry in self._registry
         }
-        return EffectiveSettingsResponse(scope=scope, values=values)
+        return EffectiveSettingsResponse(values=values)
 
     def effective_value(
         self,
         key: str,
-        *,
-        scope: SettingScope,
     ) -> EffectiveSettingValue:
         entry = self._entries_by_key.get(key)
         if entry is None:
             raise KeyError(key)
-        if scope not in entry.scopes:
-            raise ValueError(scope)
         value, source = self._resolve_value(entry)
-        proposed_values = self._current_effective_values(scope=scope)
+        proposed_values = self._current_effective_values()
         self._prime_referenced_resources_sync(proposed_values)
         validation_by_key: dict[str, list[SettingValidationIssue]] = {}
         for issue in self._validate_values(
             proposed_values,
-            scope=scope,
             boundary="effective_preview",
         ):
             validation_by_key.setdefault(issue.key, []).append(issue)
@@ -1007,7 +933,6 @@ class SettingsCatalogService:
             entry,
             value,
             False,
-            scope=scope,
             boundary="effective_preview",
         )
         existing_codes = {diagnostic.code for diagnostic in diagnostics}
@@ -1019,14 +944,13 @@ class SettingsCatalogService:
         activation = self._activation_metadata(entry, value)
         return EffectiveSettingValue(
             key=entry.key,
-            scope=scope,
             value=value,
             **self._effective_metadata(entry, value, source, False, diagnostics),
             **activation,
             diagnostics=diagnostics,
         )
 
-    def ensure_write_allowed(self, key: str, *, scope: SettingScope) -> None:
+    def ensure_write_allowed(self, key: str) -> None:
         migration_rule = self._rules_by_old_key.get(key)
         if migration_rule is not None and migration_rule.state in {
             "renamed",
@@ -1037,8 +961,6 @@ class SettingsCatalogService:
         entry = self._entries_by_key.get(key)
         if entry is None:
             raise KeyError(key)
-        if scope not in entry.scopes:
-            raise ValueError(scope)
         if self._read_only(entry):
             raise PermissionError(self._read_only_reason(entry) or "Setting is read-only.")
 
@@ -1052,13 +974,11 @@ class SettingsCatalogService:
         self,
         entry: SettingRegistryEntry,
         *,
-        scope: SettingScope | None = None,
-        overrides: dict[tuple[SettingScope, str], SettingsOverride] | None = None,
+        overrides: dict[str, SettingsOverride] | None = None,
     ) -> SettingDescriptor:
-        if scope is not None and overrides is not None:
+        if overrides is not None:
             value, source, version, override_present = self._resolve_value_from_overrides(
                 entry,
-                scope=scope,
                 overrides=overrides,
             )
         else:
@@ -1069,7 +989,6 @@ class SettingsCatalogService:
             entry,
             value,
             override_present,
-            scope=scope or "workspace",
             boundary="descriptor_generation",
         )
         metadata = self._effective_metadata(
@@ -1087,7 +1006,6 @@ class SettingsCatalogService:
             section=entry.section,
             type=entry.value_type,
             ui=entry.ui,
-            scopes=list(entry.scopes),
             default_value=entry.default_value,
             effective_value=value,
             override_value=None,
@@ -1122,23 +1040,17 @@ class SettingsCatalogService:
     async def effective_value_async(
         self,
         key: str,
-        *,
-        scope: SettingScope,
     ) -> EffectiveSettingValue:
         entry = self._entries_by_key.get(key)
         if entry is None:
             raise KeyError(key)
-        if scope not in entry.scopes:
-            raise ValueError(scope)
-        entries = self._entries_for_scope(scope)
+        entries = list(self._registry)
         overrides = await self._get_effective_overrides(
-            scope=scope,
             keys=[item.key for item in entries],
         )
         resolved_values = {
             item.key: self._resolve_value_from_overrides(
                 item,
-                scope=scope,
                 overrides=overrides,
             )
             for item in entries
@@ -1151,7 +1063,6 @@ class SettingsCatalogService:
         validation_by_key: dict[str, list[SettingValidationIssue]] = {}
         for issue in self._validate_values(
             proposed_values,
-            scope=scope,
             boundary="effective_preview",
         ):
             validation_by_key.setdefault(issue.key, []).append(issue)
@@ -1159,7 +1070,6 @@ class SettingsCatalogService:
             entry,
             value,
             override_present,
-            scope=scope,
             boundary="effective_preview",
         )
         existing_codes = {diagnostic.code for diagnostic in diagnostics}
@@ -1170,7 +1080,6 @@ class SettingsCatalogService:
         )
         return EffectiveSettingValue(
             key=entry.key,
-            scope=scope,
             value=value,
             **self._effective_metadata(entry, value, source, override_present, diagnostics),
             **self._activation_metadata(
@@ -1182,25 +1091,19 @@ class SettingsCatalogService:
             diagnostics=diagnostics,
         )
 
-    async def workflow_creation_defaults(
-        self, *, scope: Literal["user", "workspace"]
-    ) -> WorkflowCreationDefaults:
+    async def workflow_creation_defaults(self) -> WorkflowCreationDefaults:
         """Read runtime and account defaults from the same settings snapshot.
 
         Missing, disabled, and unready accounts must reach admission validation;
         treating them as an omission could silently authorize another account.
-        The runtime setting is workspace-only; account intent may be user-scoped.
         """
-        scopes: dict[str, SettingScope] = {
-            "workflow.default_runtime": "workspace",
-            "workflow.default_provider_profile_ref": scope,
-        }
-        overrides = await self._get_effective_overrides(scope=scope, keys=list(scopes))
+        keys = ("workflow.default_runtime", "workflow.default_provider_profile_ref")
+        overrides = await self._get_effective_overrides(keys=list(keys))
         values = {
             key: self._resolve_value_from_overrides(
-                self._entries_by_key[key], scope=value_scope, overrides=overrides
+                self._entries_by_key[key], overrides=overrides
             )[0]
-            for key, value_scope in scopes.items()
+            for key in keys
         }
         runtime = values["workflow.default_runtime"]
         profile = values["workflow.default_provider_profile_ref"]
@@ -1213,12 +1116,9 @@ class SettingsCatalogService:
 
     async def effective_values_async(
         self,
-        *,
-        scope: SettingScope,
     ) -> EffectiveSettingsResponse:
-        entries = [entry for entry in self._registry if scope in entry.scopes]
+        entries = list(self._registry)
         overrides = await self._get_effective_overrides(
-            scope=scope,
             keys=[entry.key for entry in entries],
         )
         resolved = {
@@ -1226,7 +1126,6 @@ class SettingsCatalogService:
                 entry,
                 self._resolve_value_from_overrides(
                     entry,
-                    scope=scope,
                     overrides=overrides,
                 ),
             )
@@ -1244,7 +1143,6 @@ class SettingsCatalogService:
         validation_by_key: dict[str, list[SettingValidationIssue]] = {}
         for issue in self._validate_values(
             proposed_values,
-            scope=scope,
             boundary="effective_preview",
         ):
             validation_by_key.setdefault(issue.key, []).append(issue)
@@ -1254,7 +1152,6 @@ class SettingsCatalogService:
                 entry,
                 data[0],
                 data[3],
-                scope=scope,
                 boundary="effective_preview",
             )
             existing_codes = {diagnostic.code for diagnostic in diagnostics}
@@ -1265,7 +1162,6 @@ class SettingsCatalogService:
             )
             values[key] = EffectiveSettingValue(
                 key=entry.key,
-                scope=scope,
                 value=data[0],
                 **self._effective_metadata(entry, data[0], data[1], data[3], diagnostics),
                 **self._activation_metadata(
@@ -1276,34 +1172,30 @@ class SettingsCatalogService:
                 value_version=data[2],
                 diagnostics=diagnostics,
             )
-        return EffectiveSettingsResponse(scope=scope, values=values)
+        return EffectiveSettingsResponse(values=values)
 
     async def validate_changes(
         self,
         *,
-        scope: SettingScope,
         changes: dict[str, Any],
         expected_versions: dict[str, int] | None = None,
         confirmation: str | None = None,
     ) -> SettingsValidationResponse:
         context = await self._validate_preview_context(
-            scope=scope,
             changes=changes,
             expected_versions=expected_versions,
             confirmation=confirmation,
         )
-        return self._validation_response(scope=scope, issues=context["issues"])
+        return self._validation_response(issues=context["issues"])
 
     async def preview_changes(
         self,
         *,
-        scope: SettingScope,
         changes: dict[str, Any],
         expected_versions: dict[str, int] | None = None,
         confirmation: str | None = None,
     ) -> SettingsPreviewResponse:
         context = await self._validate_preview_context(
-            scope=scope,
             changes=changes,
             expected_versions=expected_versions,
             confirmation=confirmation,
@@ -1337,7 +1229,6 @@ class SettingsCatalogService:
             diffs.append(
                 SettingsPreviewDiff(
                     key=key,
-                    scope=scope,
                     before=SettingsPreviewValue(
                         value=None if redacted else before_value,
                         source=before_source,
@@ -1346,7 +1237,7 @@ class SettingsCatalogService:
                     ),
                     after=SettingsPreviewValue(
                         value=None if redacted else after_value,
-                        source=f"{scope}_preview",
+                        source="instance_preview",
                         value_version=before_version,
                         activation_state=after_activation["activation_state"],
                     ),
@@ -1381,9 +1272,8 @@ class SettingsCatalogService:
             for issue in issues
             if issue.code == "dependency_not_satisfied"
         ]
-        validation = self._validation_response(scope=scope, issues=issues)
+        validation = self._validation_response(issues=issues)
         return SettingsPreviewResponse(
-            scope=scope,
             accepted=validation.accepted,
             issues=validation.issues,
             issues_by_key=validation.issues_by_key,
@@ -1395,7 +1285,6 @@ class SettingsCatalogService:
     async def _validate_preview_context(
         self,
         *,
-        scope: SettingScope,
         changes: dict[str, Any],
         expected_versions: dict[str, int] | None,
         confirmation: str | None,
@@ -1403,24 +1292,6 @@ class SettingsCatalogService:
         expected_versions = expected_versions or {}
         entries: dict[str, SettingRegistryEntry] = {}
         validation_issues: list[SettingValidationIssue] = []
-
-        if scope not in _PERSISTED_SCOPES:
-            validation_issues.append(
-                self._validation_issue_for_key(
-                    next(iter(changes), "*"),
-                    scope,
-                    code="unsupported_scope",
-                    message=f"Setting writes are not available at scope {scope}.",
-                    boundary="write_request",
-                    rule="scope",
-                )
-            )
-            return {
-                "entries": entries,
-                "current_resolved": {},
-                "proposed_values": {},
-                "issues": validation_issues,
-            }
 
         for key, value in changes.items():
             migration_rule = self._rules_by_old_key.get(key)
@@ -1432,7 +1303,6 @@ class SettingsCatalogService:
                 validation_issues.append(
                     self._validation_issue_for_key(
                         key,
-                        scope,
                         code="setting_not_exposed",
                         message=migration_rule.message,
                         boundary="write_request",
@@ -1445,23 +1315,10 @@ class SettingsCatalogService:
                 validation_issues.append(
                     self._validation_issue_for_key(
                         key,
-                        scope,
                         code="setting_not_exposed",
                         message=f"Setting {key} is not exposed through the Settings API.",
                         boundary="write_request",
                         rule="exposed_setting",
-                    )
-                )
-                continue
-            if scope not in entry.scopes:
-                validation_issues.append(
-                    self._validation_issue(
-                        entry,
-                        scope,
-                        code="unsupported_scope",
-                        message=f"Setting {key} is not available at scope {scope}.",
-                        boundary="write_request",
-                        rule="scope",
                     )
                 )
                 continue
@@ -1474,7 +1331,6 @@ class SettingsCatalogService:
                 validation_issues.append(
                     self._validation_issue(
                         entry,
-                        scope,
                         code=code,
                         message=self._read_only_reason(entry) or "Setting is read-only.",
                         boundary="write_request",
@@ -1484,29 +1340,26 @@ class SettingsCatalogService:
                 continue
             entries[key] = entry
 
-        effective_entries = self._entries_for_scope(scope)
+        effective_entries = list(self._registry)
         overrides = await self._get_effective_overrides(
-            scope=scope,
             keys=[entry.key for entry in effective_entries],
         )
         current_resolved = {
             entry.key: self._resolve_value_from_overrides(
                 entry,
-                scope=scope,
                 overrides=overrides,
             )
             for entry in effective_entries
         }
 
         for key in entries:
-            row = overrides.get((scope, key))
+            row = overrides.get(key)
             current_version = row.value_version if row is not None else 1
             expected = expected_versions.get(key)
             if expected is not None and expected != current_version:
                 validation_issues.append(
                     self._validation_issue(
                         entries[key],
-                        scope,
                         code="version_conflict",
                         message="Expected setting version does not match current version.",
                         boundary="write_request",
@@ -1526,7 +1379,6 @@ class SettingsCatalogService:
         validation_issues.extend(
             self._validate_values(
                 proposed_values,
-                scope=scope,
                 boundary="write_request",
             )
         )
@@ -1534,7 +1386,6 @@ class SettingsCatalogService:
             self._confirmation_issues_for_changes(
                 entries,
                 changes,
-                scope=scope,
                 confirmation=confirmation,
             )
         )
@@ -1548,14 +1399,12 @@ class SettingsCatalogService:
     def _validation_response(
         self,
         *,
-        scope: SettingScope,
         issues: list[SettingValidationIssue],
     ) -> SettingsValidationResponse:
         issues_by_key: dict[str, list[SettingValidationIssue]] = {}
         for issue in issues:
             issues_by_key.setdefault(issue.key, []).append(issue)
         return SettingsValidationResponse(
-            scope=scope,
             accepted=not issues,
             issues=issues,
             issues_by_key=issues_by_key,
@@ -1575,7 +1424,6 @@ class SettingsCatalogService:
     async def apply_overrides(
         self,
         *,
-        scope: SettingScope,
         changes: dict[str, Any],
         expected_versions: dict[str, int] | None = None,
         reason: str | None = None,
@@ -1584,19 +1432,6 @@ class SettingsCatalogService:
     ) -> EffectiveSettingsResponse:
         if self._session is None:
             raise RuntimeError("settings override persistence requires a DB session")
-        if scope not in _PERSISTED_SCOPES:
-            raise SettingsValidationError(
-                [
-                    self._validation_issue_for_key(
-                        next(iter(changes), "*"),
-                        scope if scope in {"user", "workspace"} else "workspace",
-                        code="unsupported_scope",
-                        message=f"Setting writes are not available at scope {scope}.",
-                        boundary="write_request",
-                        rule="scope",
-                    )
-                ]
-            )
         expected_versions = expected_versions or {}
         entries: dict[str, SettingRegistryEntry] = {}
         validated: dict[str, Any] = {}
@@ -1612,7 +1447,6 @@ class SettingsCatalogService:
                 validation_issues.append(
                     self._validation_issue_for_key(
                         key,
-                        scope,
                         code="setting_not_exposed",
                         message=migration_rule.message,
                         boundary="write_request",
@@ -1625,23 +1459,10 @@ class SettingsCatalogService:
                 validation_issues.append(
                     self._validation_issue_for_key(
                         key,
-                        scope,
                         code="setting_not_exposed",
                         message=f"Setting {key} is not exposed through the Settings API.",
                         boundary="write_request",
                         rule="exposed_setting",
-                    )
-                )
-                continue
-            if scope not in entry.scopes:
-                validation_issues.append(
-                    self._validation_issue(
-                        entry,
-                        scope,
-                        code="unsupported_scope",
-                        message=f"Setting {key} is not available at scope {scope}.",
-                        boundary="write_request",
-                        rule="scope",
                     )
                 )
                 continue
@@ -1654,7 +1475,6 @@ class SettingsCatalogService:
                 validation_issues.append(
                     self._validation_issue(
                         entry,
-                        scope,
                         code=code,
                         message=self._read_only_reason(entry) or "Setting is read-only.",
                         boundary="write_request",
@@ -1668,26 +1488,23 @@ class SettingsCatalogService:
             raise SettingsValidationError(validation_issues)
 
         current_rows = await self._get_overrides(
-            scope=scope,
             keys=validated.keys(),
             for_update=True,
         )
         for key in validated:
-            row = current_rows.get((scope, key))
+            row = current_rows.get(key)
             current_version = row.value_version if row is not None else 1
             expected = expected_versions.get(key)
             if expected is not None and expected != current_version:
                 raise ValueError("version_conflict")
 
         proposed_values = await self._proposed_effective_values(
-            scope=scope,
             changes=validated,
         )
         await self._prime_referenced_resources(proposed_values)
         validation_issues.extend(
             self._validate_values(
                 proposed_values,
-                scope=scope,
                 boundary="write_request",
             )
         )
@@ -1695,7 +1512,6 @@ class SettingsCatalogService:
             self._confirmation_issues_for_changes(
                 entries,
                 changes,
-                scope=scope,
                 confirmation=confirmation,
             )
         )
@@ -1704,7 +1520,6 @@ class SettingsCatalogService:
 
         pre_persistence_issues = self._validate_values(
             proposed_values,
-            scope=scope,
             boundary="pre_persistence",
         )
         if pre_persistence_issues:
@@ -1714,20 +1529,12 @@ class SettingsCatalogService:
         change_events: list[SettingsChangeEvent] = []
         for key, value in validated.items():
             entry = entries[key]
-            row = current_rows.get((scope, key))
+            row = current_rows.get(key)
             old_value = row.value_json if row is not None else None
-            source = f"{scope}_override"
             if row is None:
-                row = SettingsOverride(
-                    scope=scope,
-                    workspace_id=self._workspace_id,
-                    user_id=self._user_id if scope == "user" else _DEFAULT_SUBJECT_ID,
-                    key=key,
-                    value_json=value,
-                    value_version=1,
-                )
+                row = SettingsOverride(key=key, value_json=value, value_version=1)
                 self._session.add(row)
-                current_rows[(scope, key)] = row
+                current_rows[key] = row
             else:
                 row.value_json = value
                 row.value_version += 1
@@ -1735,7 +1542,6 @@ class SettingsCatalogService:
                 self._audit_event(
                     entry,
                     event_type="settings.override.updated",
-                    scope=scope,
                     old_value=old_value,
                     new_value=value,
                     reason=reason,
@@ -1745,12 +1551,8 @@ class SettingsCatalogService:
             change_events.append(
                 SettingsChangeEvent(
                     key=entry.key,
-                    scope=scope,
-                    source=source,
+                    source="instance_override",
                     apply_mode=entry.apply_mode,
-                    actor_user_id=(
-                        self._user_id if self._user_id != _DEFAULT_SUBJECT_ID else None
-                    ),
                     changed_at=changed_at,
                     affected_systems=list(entry.applies_to),
                     refresh_targets=self._refresh_targets_for_entry(entry),
@@ -1764,14 +1566,13 @@ class SettingsCatalogService:
             raise ValueError("version_conflict") from exc
         await self._dispatch_change_events(change_events)
         changed_overrides = {
-            (row_scope, changed_key): row
-            for (row_scope, changed_key), row in current_rows.items()
-            if row_scope == scope and changed_key in changes
+            changed_key: row
+            for changed_key, row in current_rows.items()
+            if changed_key in changes
         }
         resolved = {
             key: self._resolve_value_from_overrides(
                 entries[key],
-                scope=scope,
                 overrides=changed_overrides,
             )
             for key in changes
@@ -1789,12 +1590,10 @@ class SettingsCatalogService:
                 entry,
                 data[0],
                 data[3],
-                scope=scope,
                 boundary="effective_preview",
             )
             values[key] = EffectiveSettingValue(
                 key=entry.key,
-                scope=scope,
                 value=data[0],
                 **self._effective_metadata(entry, data[0], data[1], data[3], diagnostics),
                 **self._activation_metadata(
@@ -1806,7 +1605,6 @@ class SettingsCatalogService:
                 diagnostics=diagnostics,
             )
         return EffectiveSettingsResponse(
-            scope=scope,
             values=values,
             change_events=change_events,
         )
@@ -1815,19 +1613,14 @@ class SettingsCatalogService:
         self,
         key: str,
         *,
-        scope: SettingScope,
         reason: str | None = None,
     ) -> EffectiveSettingValue:
         if self._session is None:
             raise RuntimeError("settings override persistence requires a DB session")
-        if scope not in _PERSISTED_SCOPES:
-            raise ValueError("invalid_scope")
         entry = self._entries_by_key.get(key)
         if entry is None:
             raise KeyError(key)
-        if scope not in entry.scopes:
-            raise ValueError("invalid_scope")
-        row = await self._get_override(scope=scope, key=key)
+        row = await self._get_override(key=key)
         if row is not None:
             old_value = row.value_json
             await self._session.delete(row)
@@ -1835,7 +1628,6 @@ class SettingsCatalogService:
                 self._audit_event(
                     entry,
                     event_type="settings.override.reset",
-                    scope=scope,
                     old_value=old_value,
                     new_value=None,
                     reason=reason,
@@ -1843,7 +1635,7 @@ class SettingsCatalogService:
                 )
             )
         await self._session.commit()
-        return await self.effective_value_async(key, scope=scope)
+        return await self.effective_value_async(key)
 
     async def audit_event_count(self) -> int:
         if self._session is None:
@@ -1856,7 +1648,6 @@ class SettingsCatalogService:
         *,
         permissions: set[str],
         key: str | None = None,
-        scope: SettingScope | None = None,
         limit: int = 50,
     ) -> list[SettingsAuditRead]:
         if self._session is None:
@@ -1865,19 +1656,14 @@ class SettingsCatalogService:
         statement = select(SettingsAuditEvent).order_by(
             desc(SettingsAuditEvent.created_at)
         ).limit(bounded_limit)
-        statement = statement.where(SettingsAuditEvent.workspace_id == self._workspace_id)
+        # Retained personal events stay out of instance history until their
+        # guarded conversion; the conversion records its own instance event.
+        statement = statement.where(
+            SettingsAuditEvent.user_id.is_(None),
+            SettingsAuditEvent.workspace_id.is_(None),
+        )
         if key:
             statement = statement.where(SettingsAuditEvent.key == key)
-        if scope:
-            statement = statement.where(SettingsAuditEvent.scope == scope)
-            subject_id = self._user_id if scope == "user" else _DEFAULT_SUBJECT_ID
-            statement = statement.where(SettingsAuditEvent.user_id == subject_id)
-        else:
-            statement = statement.where(
-                SettingsAuditEvent.user_id.in_(
-                    {_DEFAULT_SUBJECT_ID, self._user_id}
-                )
-            )
         result = await self._session.execute(statement)
         return [
             self._audit_read_model(row, permissions=permissions)
@@ -1887,7 +1673,6 @@ class SettingsCatalogService:
     async def record_rejected_write_audit(
         self,
         *,
-        scope: SettingScope,
         changes: dict[str, Any],
         reason: str | None = None,
         request_id: str | None = None,
@@ -1900,7 +1685,6 @@ class SettingsCatalogService:
                 self._rejected_audit_event(
                     entry,
                     key=key,
-                    scope=scope,
                     new_value=value,
                     reason=reason,
                     request_id=request_id,
@@ -1911,20 +1695,15 @@ class SettingsCatalogService:
     async def diagnostics(
         self,
         *,
-        scope: SettingScope,
         key: str | None = None,
     ) -> SettingsDiagnosticsResponse:
-        entries = self._entries_for_scope(scope)
+        entries = list(self._registry)
         if key is not None:
             if key not in self._entries_by_key:
                 raise KeyError(key)
-            entry = self._entries_by_key[key]
-            if scope not in entry.scopes:
-                raise ValueError("invalid_scope")
-            entries = [entry]
+            entries = [self._entries_by_key[key]]
 
         overrides = await self._get_effective_overrides(
-            scope=scope,
             keys=[entry.key for entry in entries],
         )
         resolved = {
@@ -1932,7 +1711,6 @@ class SettingsCatalogService:
                 entry,
                 self._resolve_value_from_overrides(
                     entry,
-                    scope=scope,
                     overrides=overrides,
                 ),
             )
@@ -1948,7 +1726,6 @@ class SettingsCatalogService:
         validation_by_key: dict[str, list[SettingValidationIssue]] = {}
         for issue in self._validate_values(
             proposed_values,
-            scope=scope,
             boundary="readiness_diagnostics",
         ):
             validation_by_key.setdefault(issue.key, []).append(issue)
@@ -1960,7 +1737,6 @@ class SettingsCatalogService:
                     entry,
                     data[0],
                     data[3],
-                    scope=scope,
                     boundary="readiness_diagnostics",
                 )
             )
@@ -1997,7 +1773,6 @@ class SettingsCatalogService:
                 )
             values[entry.key] = SettingsDiagnosticRead(
                 key=entry.key,
-                scope=scope,
                 value=None if entry.audit.redact else data[0],
                 default_value=entry.default_value,
                 source=metadata["source"],
@@ -2015,8 +1790,8 @@ class SettingsCatalogService:
                 recent_change=recent_changes.get(entry.key),
             )
         if key is None:
-            values.update(await self._deprecated_override_diagnostics(scope=scope))
-        return SettingsDiagnosticsResponse(scope=scope, values=values)
+            values.update(await self._deprecated_override_diagnostics())
+        return SettingsDiagnosticsResponse(values=values)
 
     def _validate_apply_modes(self) -> None:
         self._validate_migration_rules()
@@ -2127,7 +1902,7 @@ class SettingsCatalogService:
             entry.key == "workflow.default_provider_profile_ref"
             and isinstance(value, str)
             and value.strip()
-            and source not in {"workspace_override", "user_override"}
+            and source != "instance_override"
         ):
             return "provider_profile"
         return source
@@ -2231,82 +2006,12 @@ class SettingsCatalogService:
             return None, "no_default"
         return entry.default_value, "default"
 
-    async def _resolve_value_async(
-        self,
-        entry: SettingRegistryEntry,
-        *,
-        scope: SettingScope,
-    ) -> tuple[Any, str, int, bool]:
-        if self._session is not None:
-            if scope == "user":
-                user_override = await self._get_override(scope="user", key=entry.key)
-                if user_override is not None:
-                    return (
-                        user_override.value_json,
-                        "user_override",
-                        user_override.value_version,
-                        True,
-                    )
-                workspace_override = await self._get_override(
-                    scope="workspace", key=entry.key
-                )
-                if workspace_override is not None:
-                    return (
-                        workspace_override.value_json,
-                        "workspace_override",
-                        workspace_override.value_version,
-                        True,
-                    )
-            elif scope == "workspace":
-                workspace_override = await self._get_override(
-                    scope="workspace", key=entry.key
-                )
-                if workspace_override is not None:
-                    return (
-                        workspace_override.value_json,
-                        "workspace_override",
-                        workspace_override.value_version,
-                        True,
-                    )
-        value, source = self._resolve_value(entry)
-        return value, source, 1, False
-
-    def _effective_value_from_overrides(
-        self,
-        entry: SettingRegistryEntry,
-        *,
-        scope: SettingScope,
-        overrides: dict[tuple[SettingScope, str], SettingsOverride],
-    ) -> EffectiveSettingValue:
-        value, source, version, override_present = self._resolve_value_from_overrides(
-            entry,
-            scope=scope,
-            overrides=overrides,
-        )
-        diagnostics = self._diagnostics_for_override(
-            entry,
-            value,
-            override_present,
-            scope=scope,
-            boundary="effective_preview",
-        )
-        return EffectiveSettingValue(
-            key=entry.key,
-            scope=scope,
-            value=value,
-            **self._effective_metadata(entry, value, source, override_present, diagnostics),
-            **self._activation_metadata(entry, value),
-            value_version=version,
-            diagnostics=diagnostics,
-        )
-
     def _diagnostics_for_override(
         self,
         entry: SettingRegistryEntry,
         value: Any,
         override_present: bool,
         *,
-        scope: SettingScope = "workspace",
         boundary: SettingValidationBoundary = "effective_preview",
     ) -> list[SettingDiagnostic]:
         migration_diagnostic = self._migration_diagnostics_by_key.get(entry.key)
@@ -2334,13 +2039,11 @@ class SettingsCatalogService:
         validation_issues = self._validation_issues_for_value(
             entry,
             value,
-            scope=scope,
             boundary=boundary,
         )
         validation_issues.extend(
             self._policy_issues_for_changes(
                 {entry.key: value},
-                scope=scope,
                 boundary=boundary,
             )
         )
@@ -2356,7 +2059,6 @@ class SettingsCatalogService:
     ) -> SettingDiagnostic:
         details = issue.model_dump(mode="json")
         details.pop("key", None)
-        details.pop("scope", None)
         details.pop("code", None)
         details.pop("message", None)
         return SettingDiagnostic(
@@ -2379,8 +2081,6 @@ class SettingsCatalogService:
 
     async def _deprecated_override_diagnostics(
         self,
-        *,
-        scope: SettingScope,
     ) -> dict[str, SettingsDiagnosticRead]:
         deprecated_rules = [
             rule
@@ -2390,18 +2090,14 @@ class SettingsCatalogService:
         if self._session is None or not deprecated_rules:
             return {}
         overrides = await self._get_effective_overrides(
-            scope=scope,
             keys=[rule.old_key for rule in deprecated_rules],
         )
         values: dict[str, SettingsDiagnosticRead] = {}
         for rule in deprecated_rules:
-            for row_scope in (("user", "workspace") if scope == "user" else ("workspace",)):
-                row = overrides.get((row_scope, rule.old_key))
-                if row is None:
-                    continue
+            row = overrides.get(rule.old_key)
+            if row is not None:
                 values[rule.old_key] = SettingsDiagnosticRead(
                     key=rule.old_key,
-                    scope=scope,
                     source="deprecated_override",
                     source_explanation=rule.message,
                     apply_mode="immediate",
@@ -2422,7 +2118,6 @@ class SettingsCatalogService:
                     ],
                     recent_change=None,
                 )
-                break
         return values
 
     async def _prime_managed_secret_statuses(self, values: Iterable[Any]) -> None:
@@ -2505,73 +2200,26 @@ class SettingsCatalogService:
         self,
         entry: SettingRegistryEntry,
         *,
-        scope: SettingScope,
-        overrides: dict[tuple[SettingScope, str], SettingsOverride],
+        overrides: dict[str, SettingsOverride],
     ) -> tuple[Any, str, int, bool]:
         self._migration_diagnostics_by_key.pop(entry.key, None)
         if self._is_operator_locked(entry):
             return entry.operator_locked_value, "operator_lock", 1, False
-        if scope == "user":
-            user_override = overrides.get(("user", entry.key))
-            if user_override is not None:
-                type_migration = self._type_migration_diagnostic(entry, user_override)
-                if type_migration is not None:
-                    self._migration_diagnostics_by_key[entry.key] = type_migration
-                    return (
-                        None,
-                        "user_override",
-                        user_override.value_version,
-                        True,
-                    )
-                return (
-                    user_override.value_json,
-                    "user_override",
-                    user_override.value_version,
-                    True,
-                )
-            workspace_override = overrides.get(("workspace", entry.key))
-            if workspace_override is not None:
-                type_migration = self._type_migration_diagnostic(
-                    entry, workspace_override
-                )
-                if type_migration is not None:
-                    self._migration_diagnostics_by_key[entry.key] = type_migration
-                    return (
-                        None,
-                        "workspace_override",
-                        workspace_override.value_version,
-                        True,
-                    )
-                return (
-                    workspace_override.value_json,
-                    "workspace_override",
-                    workspace_override.value_version,
-                    True,
-                )
-        elif scope == "workspace":
-            workspace_override = overrides.get(("workspace", entry.key))
-            if workspace_override is not None:
-                type_migration = self._type_migration_diagnostic(
-                    entry, workspace_override
-                )
-                if type_migration is not None:
-                    self._migration_diagnostics_by_key[entry.key] = type_migration
-                    return (
-                        None,
-                        "workspace_override",
-                        workspace_override.value_version,
-                        True,
-                    )
-                return (
-                    workspace_override.value_json,
-                    "workspace_override",
-                    workspace_override.value_version,
-                    True,
-                )
-        migrated = self._resolve_migrated_override(entry, scope=scope, overrides=overrides)
+        override = overrides.get(entry.key)
+        if override is not None:
+            type_migration = self._type_migration_diagnostic(entry, override)
+            if type_migration is not None:
+                self._migration_diagnostics_by_key[entry.key] = type_migration
+                return None, "instance_override", override.value_version, True
+            return (
+                override.value_json,
+                "instance_override",
+                override.value_version,
+                True,
+            )
+        migrated = self._resolve_migrated_override(entry, overrides=overrides)
         if migrated is not None:
-            row_scope, row, rule = migrated
-            source = "user_override" if row_scope == "user" else "workspace_override"
+            row, rule = migrated
             self._migration_diagnostics_by_key[entry.key] = SettingDiagnostic(
                 code="setting_renamed_override",
                 message=rule.message,
@@ -2582,7 +2230,7 @@ class SettingsCatalogService:
                     "state": rule.state,
                 },
             )
-            return row.value_json, source, row.value_version, True
+            return row.value_json, "instance_override", row.value_version, True
         value, source = self._resolve_value(entry)
         return value, source, 1, False
 
@@ -2610,39 +2258,20 @@ class SettingsCatalogService:
         self,
         entry: SettingRegistryEntry,
         *,
-        scope: SettingScope,
-        overrides: dict[tuple[SettingScope, str], SettingsOverride],
-    ) -> tuple[SettingScope, SettingsOverride, SettingMigrationRule] | None:
+        overrides: dict[str, SettingsOverride],
+    ) -> tuple[SettingsOverride, SettingMigrationRule] | None:
         rule = self._rename_rules_by_new_key.get(entry.key)
         if rule is None:
             return None
-        if scope == "user":
-            user_override = overrides.get(("user", rule.old_key))
-            if user_override is not None:
-                return "user", user_override, rule
-            workspace_override = overrides.get(("workspace", rule.old_key))
-            if workspace_override is not None:
-                return "workspace", workspace_override, rule
-        elif scope == "workspace":
-            workspace_override = overrides.get(("workspace", rule.old_key))
-            if workspace_override is not None:
-                return "workspace", workspace_override, rule
-        return None
+        row = overrides.get(rule.old_key)
+        return (row, rule) if row is not None else None
 
     async def _get_effective_overrides(
         self,
         *,
-        scope: SettingScope | None,
         keys: list[str],
-    ) -> dict[tuple[SettingScope, str], SettingsOverride]:
+    ) -> dict[str, SettingsOverride]:
         if self._session is None or not keys:
-            return {}
-        scopes: tuple[SettingScope, ...]
-        if scope == "user":
-            scopes = ("user", "workspace")
-        elif scope == "workspace":
-            scopes = ("workspace",)
-        else:
             return {}
         expanded_keys = set(keys)
         for key in keys:
@@ -2652,60 +2281,35 @@ class SettingsCatalogService:
         for rule in self._migration_rules:
             if rule.state in {"deprecated", "removed"} and rule.old_key in keys:
                 expanded_keys.add(rule.old_key)
-        return await self._get_overrides(scopes=scopes, keys=expanded_keys)
+        return await self._get_overrides(keys=expanded_keys)
 
     async def _get_overrides(
         self,
         *,
         keys: Iterable[str],
-        scope: SettingScope | None = None,
-        scopes: tuple[SettingScope, ...] | None = None,
         for_update: bool = False,
-    ) -> dict[tuple[SettingScope, str], SettingsOverride]:
+    ) -> dict[str, SettingsOverride]:
         if self._session is None:
             return {}
         key_list = list(keys)
         if not key_list:
             return {}
-        resolved_scopes = scopes or ((scope,) if scope is not None else ())
-        if not resolved_scopes:
-            return {}
         statement = select(SettingsOverride).where(
-            SettingsOverride.scope.in_(resolved_scopes),
-            SettingsOverride.workspace_id == self._workspace_id,
+            SettingsOverride.scope.is_(None),
             SettingsOverride.key.in_(key_list),
         )
-        if "user" in resolved_scopes:
-            statement = statement.where(
-                (
-                    (SettingsOverride.scope == "user")
-                    & (SettingsOverride.user_id == self._user_id)
-                )
-                | (
-                    (SettingsOverride.scope != "user")
-                    & (SettingsOverride.user_id == _DEFAULT_SUBJECT_ID)
-                )
-            )
-        else:
-            statement = statement.where(
-                SettingsOverride.user_id == _DEFAULT_SUBJECT_ID
-            )
         if for_update:
             statement = statement.with_for_update()
         result = await self._session.execute(statement)
-        return {(row.scope, row.key): row for row in result.scalars().all()}
+        return {row.key: row for row in result.scalars().all()}
 
     async def _get_override(
         self,
         *,
-        scope: SettingScope,
         key: str,
     ) -> SettingsOverride | None:
-        rows = await self._get_overrides(
-            scope=scope,
-            keys=[key],
-        )
-        return rows.get((scope, key))
+        rows = await self._get_overrides(keys=[key])
+        return rows.get(key)
 
     def _parse_env_value(self, entry: SettingRegistryEntry, raw_value: str) -> Any:
         if entry.value_type == "integer":
@@ -2739,10 +2343,8 @@ class SettingsCatalogService:
             return "No configured value or catalog default could be resolved."
         if source == "no_default":
             return "No configured value or catalog default could be resolved."
-        if source == "workspace_override":
-            return "Resolved from a workspace override."
-        if source == "user_override":
-            return "Resolved from a user override."
+        if source == "instance_override":
+            return "Resolved from an instance override."
         if source == "operator_lock":
             return entry.operator_lock_reason or "Resolved from an operator lock."
         if source == "secret_ref":
@@ -2765,7 +2367,6 @@ class SettingsCatalogService:
             "list",
             "object",
         }
-        supported_scopes = {"user", "workspace", "system", "operator"}
         supported_apply_modes = {
             "immediate",
             "next_request",
@@ -2780,7 +2381,6 @@ class SettingsCatalogService:
                 issues.append(
                     self._validation_issue(
                         entry,
-                        None,
                         code="descriptor_constraint_invalid",
                         message=f"{entry.key} has an invalid setting key format.",
                         boundary="descriptor_generation",
@@ -2791,7 +2391,6 @@ class SettingsCatalogService:
                 issues.append(
                     self._validation_issue(
                         entry,
-                        None,
                         code="descriptor_constraint_invalid",
                         message=f"{entry.key} uses unsupported setting type.",
                         boundary="descriptor_generation",
@@ -2799,22 +2398,10 @@ class SettingsCatalogService:
                         details={"value_type": entry.value_type},
                     )
                 )
-            if not entry.scopes or any(scope not in supported_scopes for scope in entry.scopes):
-                issues.append(
-                    self._validation_issue(
-                        entry,
-                        None,
-                        code="descriptor_constraint_invalid",
-                        message=f"{entry.key} declares invalid scopes.",
-                        boundary="descriptor_generation",
-                        rule="scopes",
-                    )
-                )
             if entry.value_type == "enum" and not entry.options:
                 issues.append(
                     self._validation_issue(
                         entry,
-                        None,
                         code="descriptor_constraint_invalid",
                         message=f"{entry.key} enum descriptor requires options.",
                         boundary="descriptor_generation",
@@ -2827,7 +2414,6 @@ class SettingsCatalogService:
                     issues.append(
                         self._validation_issue(
                             entry,
-                            None,
                             code="descriptor_constraint_invalid",
                             message=f"{entry.key} enum descriptor has duplicate options.",
                             boundary="descriptor_generation",
@@ -2844,7 +2430,6 @@ class SettingsCatalogService:
                     issues.append(
                         self._validation_issue(
                             entry,
-                            None,
                             code="descriptor_constraint_invalid",
                             message=f"{entry.key} numeric constraints are incoherent.",
                             boundary="descriptor_generation",
@@ -2859,7 +2444,6 @@ class SettingsCatalogService:
                     issues.append(
                         self._validation_issue(
                             entry,
-                            None,
                             code="descriptor_constraint_invalid",
                             message=f"{entry.key} string constraints are incoherent.",
                             boundary="descriptor_generation",
@@ -2874,7 +2458,6 @@ class SettingsCatalogService:
                     issues.append(
                         self._validation_issue(
                             entry,
-                            None,
                             code="descriptor_constraint_invalid",
                             message=f"{entry.key} list constraints are incoherent.",
                             boundary="descriptor_generation",
@@ -2889,7 +2472,6 @@ class SettingsCatalogService:
                         issues.append(
                             self._validation_issue(
                                 entry,
-                                None,
                                 code="descriptor_constraint_invalid",
                                 message=(
                                     f"{entry.key} requires fields not in allowed keys."
@@ -2902,7 +2484,6 @@ class SettingsCatalogService:
                 issues.append(
                     self._validation_issue(
                         entry,
-                        None,
                         code="descriptor_constraint_invalid",
                         message=f"{entry.key} has an invalid apply mode.",
                         boundary="descriptor_generation",
@@ -2913,7 +2494,6 @@ class SettingsCatalogService:
                 issues.append(
                     self._validation_issue(
                         entry,
-                        None,
                         code="descriptor_constraint_invalid",
                         message=f"{entry.key} non-immediate apply mode requires affected systems.",
                         boundary="descriptor_generation",
@@ -2925,7 +2505,6 @@ class SettingsCatalogService:
                     issues.append(
                         self._validation_issue(
                             entry,
-                            None,
                             code="descriptor_constraint_invalid",
                             message=f"{entry.key} depends on an unknown setting.",
                             boundary="descriptor_generation",
@@ -2939,51 +2518,39 @@ class SettingsCatalogService:
         self,
         key: str,
         value: Any,
-        *,
-        scope: SettingScope,
     ) -> list[SettingValidationIssue]:
-        proposed_values = self._current_effective_values(scope=scope)
+        proposed_values = self._current_effective_values()
         proposed_values[key] = value
         self._prime_referenced_resources_sync(proposed_values)
         return self._validate_values(
             proposed_values,
-            scope=scope,
             boundary="effective_preview",
         )
 
     def validate_launch_execution(
         self,
         values: dict[str, Any],
-        *,
-        scope: SettingScope,
     ) -> list[SettingValidationIssue]:
         return self._validate_runtime_values(
             values,
-            scope=scope,
             boundary="launch_execution",
         )
 
     def validate_operation_execution(
         self,
         values: dict[str, Any],
-        *,
-        scope: SettingScope,
     ) -> list[SettingValidationIssue]:
         return self._validate_runtime_values(
             values,
-            scope=scope,
             boundary="operation_execution",
         )
 
     def readiness_diagnostics(
         self,
         values: dict[str, Any],
-        *,
-        scope: SettingScope,
     ) -> dict[str, list[SettingValidationIssue]]:
         issues = self._validate_runtime_values(
             values,
-            scope=scope,
             boundary="readiness_diagnostics",
         )
         by_key: dict[str, list[SettingValidationIssue]] = {}
@@ -2995,15 +2562,13 @@ class SettingsCatalogService:
         self,
         values: dict[str, Any],
         *,
-        scope: SettingScope,
         boundary: SettingValidationBoundary,
     ) -> list[SettingValidationIssue]:
-        proposed_values = self._current_effective_values(scope=scope)
+        proposed_values = self._current_effective_values()
         proposed_values.update(values)
         self._prime_referenced_resources_sync(proposed_values)
         return self._validate_values(
             proposed_values,
-            scope=scope,
             boundary=boundary,
         )
 
@@ -3011,13 +2576,10 @@ class SettingsCatalogService:
         self,
         entry: SettingRegistryEntry,
         value: Any,
-        *,
-        scope: SettingScope,
     ) -> None:
         issues = self._validation_issues_for_value(
             entry,
             value,
-            scope=scope,
             boundary="write_request",
         )
         if issues:
@@ -3026,18 +2588,15 @@ class SettingsCatalogService:
     async def _proposed_effective_values(
         self,
         *,
-        scope: SettingScope,
         changes: dict[str, Any],
     ) -> dict[str, Any]:
-        entries = self._entries_for_scope(scope)
+        entries = list(self._registry)
         overrides = await self._get_effective_overrides(
-            scope=scope,
             keys=[entry.key for entry in entries],
         )
         proposed_values = {
             entry.key: self._resolve_value_from_overrides(
                 entry,
-                scope=scope,
                 overrides=overrides,
             )[0]
             for entry in entries
@@ -3045,11 +2604,8 @@ class SettingsCatalogService:
         proposed_values.update(changes)
         return proposed_values
 
-    def _current_effective_values(self, *, scope: SettingScope) -> dict[str, Any]:
-        return {
-            entry.key: self._resolve_value(entry)[0]
-            for entry in self._entries_for_scope(scope)
-        }
+    def _current_effective_values(self) -> dict[str, Any]:
+        return {entry.key: self._resolve_value(entry)[0] for entry in self._registry}
 
     async def _prime_referenced_resources(self, values: dict[str, Any]) -> None:
         await self._prime_managed_secret_statuses(values.values())
@@ -3081,7 +2637,6 @@ class SettingsCatalogService:
         self,
         values: dict[str, Any],
         *,
-        scope: SettingScope,
         boundary: SettingValidationBoundary,
     ) -> list[SettingValidationIssue]:
         issues: list[SettingValidationIssue] = []
@@ -3091,7 +2646,6 @@ class SettingsCatalogService:
                 issues.append(
                     self._validation_issue_for_key(
                         key,
-                        scope,
                         code="setting_not_exposed",
                         message=f"Setting {key} is not exposed through the Settings API.",
                         boundary=boundary,
@@ -3099,23 +2653,10 @@ class SettingsCatalogService:
                     )
                 )
                 continue
-            if scope not in entry.scopes:
-                issues.append(
-                    self._validation_issue(
-                        entry,
-                        scope,
-                        code="unsupported_scope",
-                        message=f"Setting {key} is not available at scope {scope}.",
-                        boundary=boundary,
-                        rule="scope",
-                    )
-                )
-                continue
             issues.extend(
                 self._validation_issues_for_value(
                     entry,
                     value,
-                    scope=scope,
                     boundary=boundary,
                 )
             )
@@ -3123,7 +2664,6 @@ class SettingsCatalogService:
                 self._dependency_issues_for_values(
                     entry,
                     values,
-                    scope=scope,
                     boundary=boundary,
                 )
             )
@@ -3131,12 +2671,11 @@ class SettingsCatalogService:
                 self._reference_validation_issues(
                     entry,
                     value,
-                    scope=scope,
                     boundary=boundary,
                 )
             )
         issues.extend(
-            self._policy_issues_for_changes(values, scope=scope, boundary=boundary)
+            self._policy_issues_for_changes(values, boundary=boundary)
         )
         return issues
 
@@ -3145,7 +2684,6 @@ class SettingsCatalogService:
         entries: dict[str, SettingRegistryEntry],
         changes: dict[str, Any],
         *,
-        scope: SettingScope,
         confirmation: str | None,
     ) -> list[SettingValidationIssue]:
         if confirmation is not None and confirmation.strip():
@@ -3158,7 +2696,6 @@ class SettingsCatalogService:
             issues.append(
                 self._validation_issue(
                     entry,
-                    scope,
                     code="requires_confirmation",
                     message=f"{key} requires confirmation before it can be changed.",
                     boundary="write_request",
@@ -3174,7 +2711,6 @@ class SettingsCatalogService:
     def _validation_issue(
         self,
         entry: SettingRegistryEntry,
-        scope: SettingScope | None,
         *,
         code: str,
         message: str,
@@ -3184,7 +2720,6 @@ class SettingsCatalogService:
     ) -> SettingValidationIssue:
         return SettingValidationIssue(
             key=entry.key,
-            scope=scope or "workspace",
             code=code,
             message=message,
             boundary=boundary,
@@ -3196,7 +2731,6 @@ class SettingsCatalogService:
     def _validation_issue_for_key(
         self,
         key: str,
-        scope: SettingScope,
         *,
         code: str,
         message: str,
@@ -3206,7 +2740,6 @@ class SettingsCatalogService:
     ) -> SettingValidationIssue:
         return SettingValidationIssue(
             key=key,
-            scope=scope,
             code=code,
             message=message,
             boundary=boundary,
@@ -3251,7 +2784,6 @@ class SettingsCatalogService:
         entry: SettingRegistryEntry,
         value: Any,
         *,
-        scope: SettingScope,
         boundary: SettingValidationBoundary,
     ) -> list[SettingValidationIssue]:
         issues: list[SettingValidationIssue] = []
@@ -3259,7 +2791,6 @@ class SettingsCatalogService:
             return [
                 self._validation_issue(
                     entry,
-                    scope,
                     code="value_size_limit_exceeded",
                     message=f"{entry.key} exceeds the maximum settings value size.",
                     boundary=boundary,
@@ -3274,7 +2805,6 @@ class SettingsCatalogService:
             return [
                 self._validation_issue(
                     entry,
-                    scope,
                     code="unsafe_setting_payload",
                     message=f"{entry.key} contains unsafe setting payload content.",
                     boundary=boundary,
@@ -3289,7 +2819,6 @@ class SettingsCatalogService:
                 issues.append(
                     self._validation_issue(
                         entry,
-                        scope,
                         code="enum_value_invalid",
                         message=f"{entry.key} must be one of the allowed values.",
                         boundary=boundary,
@@ -3300,24 +2829,23 @@ class SettingsCatalogService:
         elif entry.value_type == "integer":
             if not isinstance(value, int) or isinstance(value, bool):
                 issues.append(
-                    self._type_mismatch_issue(entry, scope, boundary, "integer")
+                    self._type_mismatch_issue(entry, boundary, "integer")
                 )
             else:
-                issues.extend(self._numeric_constraint_issues(entry, value, scope, boundary))
+                issues.extend(self._numeric_constraint_issues(entry, value, boundary))
         elif entry.value_type == "number":
             if not isinstance(value, (int, float)) or isinstance(value, bool):
-                issues.append(self._type_mismatch_issue(entry, scope, boundary, "number"))
+                issues.append(self._type_mismatch_issue(entry, boundary, "number"))
             else:
-                issues.extend(self._numeric_constraint_issues(entry, value, scope, boundary))
+                issues.extend(self._numeric_constraint_issues(entry, value, boundary))
         elif entry.value_type == "boolean":
             if not isinstance(value, bool):
-                issues.append(self._type_mismatch_issue(entry, scope, boundary, "boolean"))
+                issues.append(self._type_mismatch_issue(entry, boundary, "boolean"))
         elif entry.value_type == "secret_ref":
             if not isinstance(value, str) or "://" not in value:
                 issues.append(
                     self._validation_issue(
                         entry,
-                        scope,
                         code="invalid_secret_ref",
                         message=f"{entry.key} must be a SecretRef.",
                         boundary=boundary,
@@ -3328,7 +2856,6 @@ class SettingsCatalogService:
                 issues.append(
                     self._validation_issue(
                         entry,
-                        scope,
                         code="unsafe_setting_payload",
                         message=f"{entry.key} contains unsafe setting payload content.",
                         boundary=boundary,
@@ -3337,24 +2864,23 @@ class SettingsCatalogService:
                 )
         elif entry.value_type == "string":
             if not isinstance(value, str):
-                issues.append(self._type_mismatch_issue(entry, scope, boundary, "string"))
+                issues.append(self._type_mismatch_issue(entry, boundary, "string"))
             else:
-                issues.extend(self._string_constraint_issues(entry, value, scope, boundary))
+                issues.extend(self._string_constraint_issues(entry, value, boundary))
         elif entry.value_type == "list":
             if not isinstance(value, list):
-                issues.append(self._type_mismatch_issue(entry, scope, boundary, "list"))
+                issues.append(self._type_mismatch_issue(entry, boundary, "list"))
             else:
-                issues.extend(self._list_constraint_issues(entry, value, scope, boundary))
+                issues.extend(self._list_constraint_issues(entry, value, boundary))
         elif entry.value_type == "object":
             if not isinstance(value, dict):
-                issues.append(self._type_mismatch_issue(entry, scope, boundary, "object"))
+                issues.append(self._type_mismatch_issue(entry, boundary, "object"))
             else:
-                issues.extend(self._object_constraint_issues(entry, value, scope, boundary))
+                issues.extend(self._object_constraint_issues(entry, value, boundary))
         else:
             issues.append(
                 self._validation_issue(
                     entry,
-                    scope,
                     code="unsupported_setting_type",
                     message=f"{entry.key} uses unsupported setting type {entry.value_type}.",
                     boundary=boundary,
@@ -3367,13 +2893,11 @@ class SettingsCatalogService:
     def _type_mismatch_issue(
         self,
         entry: SettingRegistryEntry,
-        scope: SettingScope,
         boundary: SettingValidationBoundary,
         expected_type: str,
     ) -> SettingValidationIssue:
         return self._validation_issue(
             entry,
-            scope,
             code="type_mismatch",
             message=f"{entry.key} must be a {expected_type} value.",
             boundary=boundary,
@@ -3385,7 +2909,6 @@ class SettingsCatalogService:
         self,
         entry: SettingRegistryEntry,
         value: int | float,
-        scope: SettingScope,
         boundary: SettingValidationBoundary,
     ) -> list[SettingValidationIssue]:
         constraints = entry.constraints
@@ -3395,7 +2918,6 @@ class SettingsCatalogService:
             return [
                 self._validation_issue(
                     entry,
-                    scope,
                     code="numeric_constraint_failed",
                     message=f"{entry.key} is below the allowed minimum.",
                     boundary=boundary,
@@ -3407,7 +2929,6 @@ class SettingsCatalogService:
             return [
                 self._validation_issue(
                     entry,
-                    scope,
                     code="numeric_constraint_failed",
                     message=f"{entry.key} is above the allowed maximum.",
                     boundary=boundary,
@@ -3421,7 +2942,6 @@ class SettingsCatalogService:
         self,
         entry: SettingRegistryEntry,
         value: str,
-        scope: SettingScope,
         boundary: SettingValidationBoundary,
     ) -> list[SettingValidationIssue]:
         constraints = entry.constraints
@@ -3431,7 +2951,6 @@ class SettingsCatalogService:
             return [
                 self._validation_issue(
                     entry,
-                    scope,
                     code="string_constraint_failed",
                     message=f"{entry.key} is shorter than the allowed minimum.",
                     boundary=boundary,
@@ -3443,7 +2962,6 @@ class SettingsCatalogService:
             return [
                 self._validation_issue(
                     entry,
-                    scope,
                     code="string_constraint_failed",
                     message=f"{entry.key} is longer than the allowed maximum.",
                     boundary=boundary,
@@ -3455,7 +2973,6 @@ class SettingsCatalogService:
             return [
                 self._validation_issue(
                     entry,
-                    scope,
                     code="string_constraint_failed",
                     message=f"{entry.key} does not match the required pattern.",
                     boundary=boundary,
@@ -3468,7 +2985,6 @@ class SettingsCatalogService:
         self,
         entry: SettingRegistryEntry,
         value: list[Any],
-        scope: SettingScope,
         boundary: SettingValidationBoundary,
     ) -> list[SettingValidationIssue]:
         constraints = entry.constraints
@@ -3478,7 +2994,6 @@ class SettingsCatalogService:
             return [
                 self._validation_issue(
                     entry,
-                    scope,
                     code="list_constraint_failed",
                     message=f"{entry.key} has fewer items than allowed.",
                     boundary=boundary,
@@ -3490,7 +3005,6 @@ class SettingsCatalogService:
             return [
                 self._validation_issue(
                     entry,
-                    scope,
                     code="list_constraint_failed",
                     message=f"{entry.key} has more items than allowed.",
                     boundary=boundary,
@@ -3504,7 +3018,6 @@ class SettingsCatalogService:
         self,
         entry: SettingRegistryEntry,
         value: dict[str, Any],
-        scope: SettingScope,
         boundary: SettingValidationBoundary,
     ) -> list[SettingValidationIssue]:
         constraints = entry.constraints
@@ -3517,7 +3030,6 @@ class SettingsCatalogService:
             return [
                 self._validation_issue(
                     entry,
-                    scope,
                     code="object_constraint_failed",
                     message=f"{entry.key} is missing required fields.",
                     boundary=boundary,
@@ -3531,7 +3043,6 @@ class SettingsCatalogService:
                 return [
                     self._validation_issue(
                         entry,
-                        scope,
                         code="object_constraint_failed",
                         message=f"{entry.key} contains unsupported fields.",
                         boundary=boundary,
@@ -3544,7 +3055,6 @@ class SettingsCatalogService:
             return [
                 self._validation_issue(
                     entry,
-                    scope,
                     code="object_constraint_failed",
                     message=f"{entry.key} contains unsafe object fields.",
                     boundary=boundary,
@@ -3589,7 +3099,6 @@ class SettingsCatalogService:
         entry: SettingRegistryEntry,
         values: dict[str, Any],
         *,
-        scope: SettingScope,
         boundary: SettingValidationBoundary,
     ) -> list[SettingValidationIssue]:
         issues: list[SettingValidationIssue] = []
@@ -3599,7 +3108,6 @@ class SettingsCatalogService:
                 issues.append(
                     self._validation_issue(
                         entry,
-                        scope,
                         code="dependency_not_satisfied",
                         message=f"{entry.key} depends on an unavailable setting.",
                         boundary=boundary,
@@ -3607,8 +3115,6 @@ class SettingsCatalogService:
                         details={"dependency_key": dependency.key},
                     )
                 )
-                continue
-            if scope not in dependency_entry.scopes:
                 continue
             actual = values.get(dependency.key)
             required = dependency.required_value
@@ -3622,7 +3128,6 @@ class SettingsCatalogService:
                 issues.append(
                     self._validation_issue(
                         entry,
-                        scope,
                         code="dependency_not_satisfied",
                         message=f"{entry.key} dependency is not satisfied.",
                         boundary=boundary,
@@ -3636,7 +3141,6 @@ class SettingsCatalogService:
         self,
         changes: dict[str, Any],
         *,
-        scope: SettingScope,
         boundary: SettingValidationBoundary,
     ) -> list[SettingValidationIssue]:
         issues: list[SettingValidationIssue] = []
@@ -3650,7 +3154,6 @@ class SettingsCatalogService:
             issues.append(
                 self._validation_issue(
                     self._entries_by_key["workflow.default_runtime"],
-                    scope,
                     code="runtime_policy_denied",
                     message="workflow.default_runtime is not allowed by workspace policy.",
                     boundary=boundary,
@@ -3667,7 +3170,6 @@ class SettingsCatalogService:
             issues.append(
                 self._validation_issue(
                     self._entries_by_key["workflow.default_publish_mode"],
-                    scope,
                     code="publication_mode_policy_denied",
                     message="workflow.default_publish_mode is not allowed by workspace policy.",
                     boundary=boundary,
@@ -3681,7 +3183,6 @@ class SettingsCatalogService:
                 issues.append(
                     self._validation_issue(
                         self._entries_by_key["skills.canary_percent"],
-                        scope,
                         code="feature_disabled_canary_percent",
                         message="skills.canary_percent must be zero while skills canary is disabled.",
                         boundary=boundary,
@@ -3692,7 +3193,6 @@ class SettingsCatalogService:
                 issues.append(
                     self._validation_issue(
                         self._entries_by_key["skills.canary_percent"],
-                        scope,
                         code="max_canary_percent_exceeded",
                         message=(
                             "skills.canary_percent exceeds the workspace policy "
@@ -3718,7 +3218,6 @@ class SettingsCatalogService:
             issues.append(
                 self._validation_issue(
                     entry,
-                    scope,
                     code="secret_ref_backend_policy_denied",
                     message=f"{key} uses a SecretRef backend denied by workspace policy.",
                     boundary=boundary,
@@ -3736,7 +3235,6 @@ class SettingsCatalogService:
             issues.append(
                 self._validation_issue(
                     self._entries_by_key["workflow.default_provider_profile_ref"],
-                    scope,
                     code="provider_policy_denied",
                     message="workflow.default_provider_profile_ref is not allowed by workspace policy.",
                     boundary=boundary,
@@ -3752,7 +3250,6 @@ class SettingsCatalogService:
             issues.append(
                 self._validation_issue(
                     self._entries_by_key["workflow.operation_mode"],
-                    scope,
                     code="maintenance_mode_conflict",
                     message="workflow.operation_mode is not allowed during maintenance mode.",
                     boundary=boundary,
@@ -3766,7 +3263,6 @@ class SettingsCatalogService:
         entry: SettingRegistryEntry,
         value: Any,
         *,
-        scope: SettingScope,
         boundary: SettingValidationBoundary,
     ) -> list[SettingValidationIssue]:
         if value is None:
@@ -3796,7 +3292,6 @@ class SettingsCatalogService:
             return [
                 self._validation_issue(
                     entry,
-                    scope,
                     code=(
                         "secret_ref_unresolved"
                         if diagnostic.code == "unresolved_secret_ref"
@@ -3827,7 +3322,6 @@ class SettingsCatalogService:
             return [
                 self._validation_issue(
                     entry,
-                    scope,
                     code=diagnostic.code,
                     message=diagnostic.message,
                     boundary=boundary,
@@ -3879,7 +3373,6 @@ class SettingsCatalogService:
         entry: SettingRegistryEntry,
         *,
         event_type: str,
-        scope: SettingScope,
         old_value: Any,
         new_value: Any,
         reason: str | None,
@@ -3889,12 +3382,6 @@ class SettingsCatalogService:
         return SettingsAuditEvent(
             event_type=event_type,
             key=entry.key,
-            scope=scope,
-            workspace_id=self._workspace_id,
-            user_id=self._user_id if scope == "user" else _DEFAULT_SUBJECT_ID,
-            actor_user_id=(
-                self._user_id if self._user_id != _DEFAULT_SUBJECT_ID else None
-            ),
             old_value_json=(
                 None
                 if (redacted and entry.value_type != "secret_ref")
@@ -3917,7 +3404,6 @@ class SettingsCatalogService:
         entry: SettingRegistryEntry | None,
         *,
         key: str,
-        scope: SettingScope,
         new_value: Any,
         reason: str | None,
         request_id: str | None,
@@ -3938,12 +3424,6 @@ class SettingsCatalogService:
         return SettingsAuditEvent(
             event_type="settings.override.rejected",
             key=key,
-            scope=scope,
-            workspace_id=self._workspace_id,
-            user_id=self._user_id if scope == "user" else _DEFAULT_SUBJECT_ID,
-            actor_user_id=(
-                self._user_id if self._user_id != _DEFAULT_SUBJECT_ID else None
-            ),
             old_value_json=None,
             new_value_json=(
                 new_value
@@ -4245,12 +3725,10 @@ class SettingsCatalogService:
         result = await self._session.execute(
             select(SettingsAuditEvent)
             .where(
-                SettingsAuditEvent.workspace_id == self._workspace_id,
+                SettingsAuditEvent.user_id.is_(None),
+                SettingsAuditEvent.workspace_id.is_(None),
                 SettingsAuditEvent.key.in_(keys),
                 SettingsAuditEvent.event_type != "settings.override.rejected",
-                SettingsAuditEvent.user_id.in_(
-                    {_DEFAULT_SUBJECT_ID, self._user_id}
-                ),
             )
             .order_by(desc(SettingsAuditEvent.created_at))
         )
@@ -4293,9 +3771,8 @@ class SettingsCatalogService:
             id=row.id,
             event_type=row.event_type,
             key=row.key,
-            scope=row.scope,
             source=(
-                f"{row.scope}_override"
+                "instance_override"
                 if row.event_type != "settings.override.reset"
                 else "inherited"
             ),
@@ -4367,13 +3844,11 @@ def settings_error(
     message: str,
     *,
     key: str | None = None,
-    scope: str | None = None,
     details: dict[str, Any] | None = None,
 ) -> SettingsError:
     return SettingsError(
         error=error,
         message=message,
         key=key,
-        scope=scope,
         details=details or {},
     )

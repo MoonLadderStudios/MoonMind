@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
-from uuid import UUID
 
 import pytest
 
@@ -1454,10 +1452,9 @@ def test_build_runtime_config_omits_provider_profile_ref_when_blank() -> None:
 def _effective(value: Any, *, diagnostics: list[SettingDiagnostic] | None = None) -> EffectiveSettingValue:
     return EffectiveSettingValue(
         key="workflow.default_provider_profile_ref",
-        scope="user",
         value=value,
-        source="user_override",
-        source_explanation="user override",
+        source="instance_override",
+        source_explanation="instance override",
         apply_mode="next_launch",
         activation_state="pending_next_boundary",
         active=False,
@@ -1468,10 +1465,9 @@ def _effective(value: Any, *, diagnostics: list[SettingDiagnostic] | None = None
 def _runtime_effective(value: Any) -> EffectiveSettingValue:
     return EffectiveSettingValue(
         key="workflow.default_runtime",
-        scope="workspace",
         value=value,
-        source="workspace_override",
-        source_explanation="workspace override",
+        source="instance_override",
+        source_explanation="instance override",
         apply_mode="next_workflow",
         activation_state="pending_next_boundary",
         active=False,
@@ -1482,13 +1478,9 @@ def _runtime_effective(value: Any) -> EffectiveSettingValue:
 async def test_resolve_dashboard_runtime_config_propagates_overrides() -> None:
     """Effective settings flow into build_runtime_config for the route layer."""
 
-    user = SimpleNamespace(
-        id=UUID("11111111-1111-1111-1111-111111111111"),
-        workspace_id=UUID("22222222-2222-2222-2222-222222222222"),
-    )
     fake_session = object()
 
-    async def fake_effective_value_async(self, key, *, scope):
+    async def fake_effective_value_async(self, key):
         if key == "workflow.default_runtime":
             return _runtime_effective("claude_code")
         if key == "workflow.default_provider_profile_ref":
@@ -1500,7 +1492,7 @@ async def test_resolve_dashboard_runtime_config_propagates_overrides() -> None:
         new=fake_effective_value_async,
     ):
         config = await dashboard_view_model.resolve_dashboard_runtime_config(
-            "/workflows/new", session=fake_session, user=user
+            "/workflows/new", session=fake_session
         )
 
     assert config["system"]["defaultRuntime"] == "claude_code"
@@ -1518,10 +1510,9 @@ async def test_resolve_dashboard_runtime_config_drops_invalid_profile_ref(
 ) -> None:
     """Provider profile diagnostics flag missing/disabled refs; we omit them."""
 
-    user = SimpleNamespace(id=None, workspace_id=None)
     fake_session = object()
 
-    async def fake_effective_value_async(self, key, *, scope):
+    async def fake_effective_value_async(self, key):
         if key == "workflow.default_runtime":
             return _runtime_effective(None)
         if key == "workflow.default_provider_profile_ref":
@@ -1542,7 +1533,7 @@ async def test_resolve_dashboard_runtime_config_drops_invalid_profile_ref(
         new=fake_effective_value_async,
     ):
         config = await dashboard_view_model.resolve_dashboard_runtime_config(
-            "/workflows/new", session=fake_session, user=user
+            "/workflows/new", session=fake_session
         )
 
     assert "defaultProfileRef" not in config["system"]["providerProfiles"]

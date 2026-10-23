@@ -1900,11 +1900,13 @@ class SecretInvalidationOutbox(Base):
     )
 
 
-_DEFAULT_SETTINGS_SUBJECT_ID = "00000000-0000-0000-0000-000000000000"
-
-
 class SettingsOverride(Base):
-    """Sparse persisted user/workspace override for one settings key."""
+    """Sparse persisted instance override for one settings key.
+
+    Null ``scope``/``workspace_id``/``user_id`` is the instance configuration.
+    Non-null values identify retained predecessor rows that only the guarded
+    single-user conversion may reconcile; instance reads never consult them.
+    """
 
     __tablename__ = "settings_overrides"
     __table_args__ = (
@@ -1919,22 +1921,19 @@ class SettingsOverride(Base):
             "scope in ('user', 'workspace')",
             name="ck_settings_overrides_scope",
         ),
+        Index(
+            "uq_settings_overrides_instance_key",
+            "key",
+            unique=True,
+            postgresql_where=text("scope IS NULL"),
+            sqlite_where=text("scope IS NULL"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    scope: Mapped[str] = mapped_column(String(32), nullable=False)
-    workspace_id: Mapped[UUID] = mapped_column(
-        Uuid,
-        nullable=False,
-        default=lambda: UUID(_DEFAULT_SETTINGS_SUBJECT_ID),
-        server_default=text(f"'{_DEFAULT_SETTINGS_SUBJECT_ID}'"),
-    )
-    user_id: Mapped[UUID] = mapped_column(
-        Uuid,
-        nullable=False,
-        default=lambda: UUID(_DEFAULT_SETTINGS_SUBJECT_ID),
-        server_default=text(f"'{_DEFAULT_SETTINGS_SUBJECT_ID}'"),
-    )
+    scope: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    workspace_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    user_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
     key: Mapped[str] = mapped_column(String(255), nullable=False)
     value_json: Mapped[Any | None] = mapped_column(_json_variant(), nullable=True)
     schema_version: Mapped[int] = mapped_column(
@@ -1957,7 +1956,11 @@ class SettingsOverride(Base):
 
 
 class SettingsAuditEvent(Base):
-    """Durable non-secret settings change audit event."""
+    """Durable non-secret settings change audit event.
+
+    New events describe the instance configuration and carry no subject.
+    Retained predecessor subject columns remain historical provenance.
+    """
 
     __tablename__ = "settings_audit_events"
     __table_args__ = (Index("ix_settings_audit_events_key_scope", "key", "scope"),)
@@ -1965,19 +1968,9 @@ class SettingsAuditEvent(Base):
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
     key: Mapped[str] = mapped_column(String(255), nullable=False)
-    scope: Mapped[str] = mapped_column(String(32), nullable=False)
-    workspace_id: Mapped[UUID] = mapped_column(
-        Uuid,
-        nullable=False,
-        default=lambda: UUID(_DEFAULT_SETTINGS_SUBJECT_ID),
-        server_default=text(f"'{_DEFAULT_SETTINGS_SUBJECT_ID}'"),
-    )
-    user_id: Mapped[UUID] = mapped_column(
-        Uuid,
-        nullable=False,
-        default=lambda: UUID(_DEFAULT_SETTINGS_SUBJECT_ID),
-        server_default=text(f"'{_DEFAULT_SETTINGS_SUBJECT_ID}'"),
-    )
+    scope: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    workspace_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
+    user_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
     actor_user_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
     old_value_json: Mapped[Any | None] = mapped_column(_json_variant(), nullable=True)
     new_value_json: Mapped[Any | None] = mapped_column(_json_variant(), nullable=True)

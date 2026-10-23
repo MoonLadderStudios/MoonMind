@@ -1634,7 +1634,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/settings/{scope}": {
+    "/api/v1/settings": {
         parameters: {
             query?: never;
             header?: never;
@@ -1648,10 +1648,10 @@ export interface paths {
         options?: never;
         head?: never;
         /** Patch Settings */
-        patch: operations["patch_settings_api_v1_settings__scope__patch"];
+        patch: operations["patch_settings_api_v1_settings_patch"];
         trace?: never;
     };
-    "/api/v1/settings/{scope}/{key}": {
+    "/api/v1/settings/{key}": {
         parameters: {
             query?: never;
             header?: never;
@@ -1662,7 +1662,7 @@ export interface paths {
         put?: never;
         post?: never;
         /** Reset Setting */
-        delete: operations["reset_setting_api_v1_settings__scope___key__delete"];
+        delete: operations["reset_setting_api_v1_settings__key__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -13343,11 +13343,6 @@ export interface components {
         };
         /** SettingsProposalRequest */
         SettingsProposalRequest: {
-            /**
-             * Scope
-             * @default workspace
-             */
-            scope: string;
             /** Changes */
             changes?: {
                 [key: string]: unknown;
@@ -17254,7 +17249,6 @@ export interface operations {
         parameters: {
             query?: {
                 section?: string | null;
-                scope?: string | null;
             };
             header?: never;
             path?: never;
@@ -17284,9 +17278,7 @@ export interface operations {
     };
     get_effective_settings_api_v1_settings_effective_get: {
         parameters: {
-            query?: {
-                scope?: string;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -17302,22 +17294,11 @@ export interface operations {
                     "application/json": unknown;
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     get_effective_setting_api_v1_settings_effective__key__get: {
         parameters: {
-            query?: {
-                scope?: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 key: string;
@@ -17349,7 +17330,6 @@ export interface operations {
     get_settings_diagnostics_api_v1_settings_diagnostics_get: {
         parameters: {
             query?: {
-                scope?: string;
                 key?: string | null;
             };
             header?: never;
@@ -17481,7 +17461,6 @@ export interface operations {
         parameters: {
             query?: {
                 key?: string | null;
-                scope?: string | null;
                 limit?: number;
             };
             header?: never;
@@ -17510,13 +17489,11 @@ export interface operations {
             };
         };
     };
-    patch_settings_api_v1_settings__scope__patch: {
+    patch_settings_api_v1_settings_patch: {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                scope: string;
-            };
+            path?: never;
             cookie?: never;
         };
         requestBody: {
@@ -17545,12 +17522,11 @@ export interface operations {
             };
         };
     };
-    reset_setting_api_v1_settings__scope___key__delete: {
+    reset_setting_api_v1_settings__key__delete: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                scope: string;
                 key: string;
             };
             cookie?: never;

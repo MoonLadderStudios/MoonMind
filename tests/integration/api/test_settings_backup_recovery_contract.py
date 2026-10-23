@@ -18,7 +18,6 @@ end-to-end coverage:
 
 from __future__ import annotations
 
-from uuid import UUID
 
 import pytest
 import pytest_asyncio
@@ -56,7 +55,6 @@ pytestmark = [
 ]
 
 
-_DEFAULT_SUBJECT_ID = UUID("00000000-0000-0000-0000-000000000000")
 
 
 @pytest_asyncio.fixture
@@ -77,16 +75,10 @@ def _seed_override(
     *,
     key: str,
     value: object,
-    scope: str = "workspace",
-    user_id: UUID = _DEFAULT_SUBJECT_ID,
-    workspace_id: UUID = _DEFAULT_SUBJECT_ID,
     schema_version: int = 1,
     value_version: int = 1,
 ) -> SettingsOverride:
     row = SettingsOverride(
-        scope=scope,
-        workspace_id=workspace_id,
-        user_id=user_id,
         key=key,
         value_json=value,
         schema_version=schema_version,
@@ -154,7 +146,6 @@ async def test_rename_cutover_preserves_effective_value_through_real_registry(
             section="user-workspace",
             value_type="string",
             ui="text",
-            scopes=("workspace",),
             default_value=None,
             order=1,
         ),
@@ -165,7 +156,6 @@ async def test_rename_cutover_preserves_effective_value_through_real_registry(
             section="user-workspace",
             value_type="string",
             ui="text",
-            scopes=("workspace",),
             default_value=None,
             order=2,
             audit=SettingAuditPolicy(
@@ -196,7 +186,7 @@ async def test_rename_cutover_preserves_effective_value_through_real_registry(
         session=settings_backup_session,
     )
     before = await catalog_before.effective_value_async(
-        "contract.default_runtime", scope="workspace"
+        "contract.default_runtime"
     )
     assert before.value == "codex_cli"
     assert any(
@@ -220,7 +210,7 @@ async def test_rename_cutover_preserves_effective_value_through_real_registry(
         session=settings_backup_session,
     )
     after = await catalog_after.effective_value_async(
-        "contract.default_runtime", scope="workspace"
+        "contract.default_runtime"
     )
     assert after.value == "codex_cli"
     assert all(
@@ -266,9 +256,6 @@ async def test_backup_export_against_real_registry_redacts_audit_payloads(
         SettingsAuditEvent(
             event_type="settings.override.updated",
             key="integrations.github.token_ref",
-            scope="workspace",
-            workspace_id=_DEFAULT_SUBJECT_ID,
-            user_id=_DEFAULT_SUBJECT_ID,
             redacted=True,
             old_value_json=None,
             new_value_json=None,
@@ -278,9 +265,6 @@ async def test_backup_export_against_real_registry_redacts_audit_payloads(
         SettingsAuditEvent(
             event_type="settings.migration.renamed",
             key="workflow.legacy_default_runtime",
-            scope="workspace",
-            workspace_id=_DEFAULT_SUBJECT_ID,
-            user_id=_DEFAULT_SUBJECT_ID,
             redacted=False,
             old_value_json="codex",
             new_value_json="codex",
@@ -414,7 +398,6 @@ async def test_type_change_cutover_records_audit_and_survives_backup(
             section="user-workspace",
             value_type="integer",
             ui="number",
-            scopes=("workspace",),
             default_value=0,
             order=1,
             audit=SettingAuditPolicy(

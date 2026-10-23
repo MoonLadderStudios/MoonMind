@@ -6,7 +6,6 @@ import logging
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from typing import Any
-from uuid import uuid4
 
 import pytest
 
@@ -22,7 +21,6 @@ from api_service.services.settings_change_publisher import (
 def _make_event(
     *,
     key: str = "workflow.default_runtime",
-    scope: str = "workspace",
     source: str | None = None,
     apply_mode: str = "next_workflow",
     affected_systems: Iterable[str] = ("workflow_creation", "workflow_runtime"),
@@ -33,10 +31,8 @@ def _make_event(
 ) -> SettingsChangeEvent:
     return SettingsChangeEvent(
         key=key,
-        scope=scope,
-        source=source or f"{scope}_override",
+        source=source or "instance_override",
         apply_mode=apply_mode,
-        actor_user_id=uuid4(),
         changed_at=datetime.now(timezone.utc),
         affected_systems=list(affected_systems),
         refresh_targets=list(refresh_targets),
@@ -224,7 +220,7 @@ async def test_publish_isolates_subscriber_failures(caplog: pytest.LogCaptureFix
     assert payload.get("subscriber_name") == "failing"
     assert payload.get("exception_class") == "RuntimeError"
     assert payload.get("key") == event.key
-    assert payload.get("scope") == event.scope
+    assert "scope" not in payload
     assert payload.get("apply_mode") == event.apply_mode
 
 
@@ -258,7 +254,6 @@ async def test_secret_ref_event_carries_only_documented_fields():
 
     event = _make_event(
         key="integrations.github.token_ref",
-        scope="user",
         apply_mode="next_launch",
         affected_systems=("github", "integrations"),
         refresh_targets=("settings_catalog",),
@@ -269,10 +264,8 @@ async def test_secret_ref_event_carries_only_documented_fields():
     assert set(dumped.keys()) == {
         "event_type",
         "key",
-        "scope",
         "source",
         "apply_mode",
-        "actor_user_id",
         "changed_at",
         "affected_systems",
         "refresh_targets",

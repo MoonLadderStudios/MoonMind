@@ -1800,8 +1800,8 @@ def settings_overrides(monkeypatch):
 
     overrides = {}
 
-    async def get_overrides(_service, *, scopes, **_kwargs):
-        return {key: row for key, row in overrides.items() if key[0] in scopes}
+    async def get_overrides(_service, *, keys, **_kwargs):
+        return {key: row for key, row in overrides.items() if key in set(keys)}
 
     monkeypatch.setattr(SettingsCatalogService, "_get_overrides", get_overrides)
     return overrides
@@ -20405,9 +20405,8 @@ def test_mm3833_cli_profile_pin_selects_the_create_route(monkeypatch) -> None:
 
 
 @pytest.mark.parametrize("entrypoint", ["api", "cli", "recurring"])
-@pytest.mark.parametrize("setting_scope", ["workspace", "user"])
 def test_saved_profile_default_selects_create_route_and_model(
-    monkeypatch, settings_overrides, entrypoint, setting_scope
+    monkeypatch, settings_overrides, entrypoint
 ) -> None:
     from api_service.db.models import SettingsOverride
     from moonmind.workflow_cli import build_execution_payload
@@ -20427,13 +20426,12 @@ def test_saved_profile_default_selects_create_route_and_model(
         cooldown_after_429_seconds=0,
     )
     saved_default = SettingsOverride(
-        scope=setting_scope,
         key="workflow.default_provider_profile_ref",
         value_json=profile.profile_id,
         value_version=1,
     )
 
-    settings_overrides[(setting_scope, saved_default.key)] = saved_default
+    settings_overrides[saved_default.key] = saved_default
 
     async def execute(statement):
         entity = statement.column_descriptions[0].get("entity")
@@ -21470,10 +21468,8 @@ def test_saved_omnigent_runtime_reaches_the_plan_owner(
     from api_service.db.models import SettingsOverride
     from moonmind.workflow_cli import build_execution_payload
 
-    saved = SettingsOverride(
-        scope="workspace", key="workflow.default_runtime", value_json="omnigent"
-    )
-    settings_overrides[("workspace", saved.key)] = saved
+    saved = SettingsOverride(key="workflow.default_runtime", value_json="omnigent")
+    settings_overrides[saved.key] = saved
     body = (
         build_execution_payload(instructions="Use the saved Omnigent backend.")
         if entrypoint == "cli"

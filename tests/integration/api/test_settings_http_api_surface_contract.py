@@ -19,6 +19,7 @@ from api_service.db.models import (
     SettingsOverride,
 )
 from api_service.main import app
+from moonmind.security.operator_admission import OperatorAdmission
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -33,20 +34,10 @@ async def settings_http_api_db(tmp_path):
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
     original = db_base.async_session_maker
     db_base.async_session_maker = session_maker
-    user = SimpleNamespace(
-        id=uuid4(),
-        email="settings-http-api@example.com",
-        is_superuser=True,
-        settings_permissions={
-            "settings.catalog.read",
-            "settings.effective.read",
-            "settings.user.write",
-            "settings.workspace.write",
-            "settings.audit.read",
-        },
-        workspace_id=uuid4(),
+    # Admitted operator: no person, account row or synthetic subject.
+    app.dependency_overrides[SETTINGS_USER_DEP] = lambda: OperatorAdmission(
+        via="loopback"
     )
-    app.dependency_overrides[SETTINGS_USER_DEP] = lambda: user
     try:
         yield session_maker
     finally:
@@ -70,15 +61,15 @@ async def test_mm657_catalog_contract_exposes_all_documented_sections(
     ) as client:
         provider = await client.get(
             "/api/v1/settings/catalog",
-            params={"section": "providers-secrets", "scope": "user"},
+            params={"section": "providers-secrets"},
         )
         user_workspace = await client.get(
             "/api/v1/settings/catalog",
-            params={"section": "user-workspace", "scope": "workspace"},
+            params={"section": "user-workspace"},
         )
         operations = await client.get(
             "/api/v1/settings/catalog",
-            params={"section": "operations", "scope": "workspace"},
+            params={"section": "operations"},
         )
 
     assert provider.status_code == 200
@@ -101,7 +92,6 @@ async def test_mm657_validate_and_preview_do_not_commit_or_audit(
         validate = await client.post(
             "/api/v1/settings/validate",
             json={
-                "scope": "workspace",
                 "changes": {"workflow.default_publish_mode": "branch"},
                 "expected_versions": {"workflow.default_publish_mode": 1},
             },
@@ -109,18 +99,15 @@ async def test_mm657_validate_and_preview_do_not_commit_or_audit(
         preview = await client.post(
             "/api/v1/settings/preview",
             json={
-                "scope": "workspace",
                 "changes": {"skills.policy_mode": "allowlist"},
                 "expected_versions": {"skills.policy_mode": 1},
             },
         )
         publish_mode = await client.get(
             "/api/v1/settings/effective/workflow.default_publish_mode",
-            params={"scope": "workspace"},
         )
         skill_policy = await client.get(
             "/api/v1/settings/effective/skills.policy_mode",
-            params={"scope": "workspace"},
         )
 
     assert validate.status_code == 200
@@ -146,7 +133,6 @@ async def test_mm657_all_api_families_are_contract_covered(settings_http_api_db)
         validate = await client.post(
             "/api/v1/settings/validate",
             json={
-                "scope": "workspace",
                 "changes": {"workflow.default_publish_mode": "branch"},
                 "expected_versions": {"workflow.default_publish_mode": 1},
             },
@@ -154,20 +140,19 @@ async def test_mm657_all_api_families_are_contract_covered(settings_http_api_db)
         preview = await client.post(
             "/api/v1/settings/preview",
             json={
-                "scope": "workspace",
                 "changes": {"workflow.default_publish_mode": "branch"},
                 "expected_versions": {"workflow.default_publish_mode": 1},
             },
         )
         update = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"workflow.default_publish_mode": "branch"},
                 "expected_versions": {"workflow.default_publish_mode": 1},
             },
         )
         reset = await client.delete(
-            "/api/v1/settings/workspace/workflow.default_publish_mode"
+            "/api/v1/settings/workflow.default_publish_mode"
         )
         audit = await client.get("/api/v1/settings/audit")
 
@@ -189,7 +174,7 @@ async def test_mm659_failed_write_produces_redacted_audit_event(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         rejected = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             headers={"x-request-id": "mm659-failed-write"},
             json={
                 "changes": {"integrations.github.token_ref": "ghp_raw_plaintext"},
@@ -221,8 +206,7 @@ async def test_mm657_validate_preview_structured_errors_and_redaction(
         id=uuid4(),
         email="limited-settings-http-api@example.com",
         is_superuser=False,
-        settings_permissions={"settings.user.write"},
-        workspace_id=uuid4(),
+        settings_permissions={"settings.catalog.read"},
     )
     app.dependency_overrides[SETTINGS_USER_DEP] = lambda: limited_user
 
@@ -232,7 +216,6 @@ async def test_mm657_validate_preview_structured_errors_and_redaction(
         denied = await client.post(
             "/api/v1/settings/preview",
             json={
-                "scope": "workspace",
                 "changes": {"workflow.default_publish_mode": "branch"},
             },
         )
@@ -242,7 +225,6 @@ async def test_mm657_validate_preview_structured_errors_and_redaction(
         email="privileged-settings-http-api@example.com",
         is_superuser=True,
         settings_permissions={"settings.workspace.write"},
-        workspace_id=uuid4(),
     )
     app.dependency_overrides[SETTINGS_USER_DEP] = lambda: privileged_user
 
@@ -252,7 +234,6 @@ async def test_mm657_validate_preview_structured_errors_and_redaction(
         missing_ref = await client.post(
             "/api/v1/settings/preview",
             json={
-                "scope": "workspace",
                 "changes": {"integrations.github.token_ref": "db://missing-token"},
                 "expected_versions": {"integrations.github.token_ref": 1},
             },
@@ -260,43 +241,26 @@ async def test_mm657_validate_preview_structured_errors_and_redaction(
         invalid_key = await client.post(
             "/api/v1/settings/validate",
             json={
-                "scope": "workspace",
                 "changes": {"workflow.github_token": "env://TOKEN"},
                 "expected_versions": {"workflow.github_token": 1},
             },
         )
         secret_ref = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"integrations.github.token_ref": "db://missing-token"},
                 "expected_versions": {"integrations.github.token_ref": 1},
             },
         )
         provider_profile = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"workflow.default_provider_profile_ref": "missing-profile"},
                 "expected_versions": {"workflow.default_provider_profile_ref": 1},
             },
         )
-        scope_not_allowed = await client.post(
-            "/api/v1/settings/validate",
-            json={
-                "scope": "user",
-                "changes": {"workflow.default_publish_mode": "branch"},
-                "expected_versions": {"workflow.default_publish_mode": 1},
-            },
-        )
-        unsupported_system_scope = await client.post(
-            "/api/v1/settings/validate",
-            json={
-                "scope": "system",
-                "changes": {"workflow.default_publish_mode": "branch"},
-                "expected_versions": {"workflow.default_publish_mode": 1},
-            },
-        )
         requires_confirmation = await client.patch(
-            "/api/v1/settings/workspace",
+            "/api/v1/settings",
             json={
                 "changes": {"workflow.operation_mode": "maintenance"},
                 "expected_versions": {"workflow.operation_mode": 1},
@@ -319,11 +283,6 @@ async def test_mm657_validate_preview_structured_errors_and_redaction(
     assert "missing-token" not in secret_ref.text
     assert provider_profile.status_code == 400
     assert provider_profile.json()["error"] == "provider_profile_not_found"
-    assert scope_not_allowed.status_code == 400
-    assert scope_not_allowed.json()["error"] == "scope_not_allowed"
-    assert unsupported_system_scope.status_code == 400
-    assert unsupported_system_scope.json()["error"] == "scope_not_allowed"
-    assert unsupported_system_scope.json()["scope"] == "system"
     assert requires_confirmation.status_code == 428
     assert requires_confirmation.json()["error"] == "requires_confirmation"
 
@@ -331,33 +290,15 @@ async def test_mm657_validate_preview_structured_errors_and_redaction(
 async def test_mm664_restored_reference_diagnostics_surface_broken_resources(
     settings_http_api_db,
 ):
-    workspace_id = uuid4()
-    restored_user = SimpleNamespace(
-        id=uuid4(),
-        email="restored-settings-http-api@example.com",
-        is_superuser=True,
-        settings_permissions={
-            "settings.effective.read",
-            "settings.workspace.write",
-            "settings.audit.read",
-        },
-        workspace_id=workspace_id,
-    )
-    app.dependency_overrides[SETTINGS_USER_DEP] = lambda: restored_user
-
     async with settings_http_api_db() as session:
         session.add_all(
             [
                 SettingsOverride(
-                    scope="workspace",
-                    workspace_id=workspace_id,
                     key="integrations.github.token_ref",
                     value_json="db://restored-missing-secret",
                     value_version=7,
                 ),
                 SettingsOverride(
-                    scope="workspace",
-                    workspace_id=workspace_id,
                     key="workflow.default_provider_profile_ref",
                     value_json="restored-missing-profile",
                     value_version=3,
@@ -371,7 +312,6 @@ async def test_mm664_restored_reference_diagnostics_surface_broken_resources(
     ) as client:
         missing_refs = await client.get(
             "/api/v1/settings/diagnostics",
-            params={"scope": "workspace"},
         )
 
     assert missing_refs.status_code == 200
@@ -391,7 +331,7 @@ async def test_mm664_restored_reference_diagnostics_surface_broken_resources(
         override = (
             await session.execute(
                 select(SettingsOverride).where(
-                    SettingsOverride.workspace_id == workspace_id,
+                    SettingsOverride.scope.is_(None),
                     SettingsOverride.key == "workflow.default_provider_profile_ref",
                 )
             )
@@ -415,7 +355,6 @@ async def test_mm664_restored_reference_diagnostics_surface_broken_resources(
         oauth_gap = await client.get(
             "/api/v1/settings/diagnostics",
             params={
-                "scope": "workspace",
                 "key": "workflow.default_provider_profile_ref",
             },
         )

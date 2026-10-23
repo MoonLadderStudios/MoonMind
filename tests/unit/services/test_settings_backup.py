@@ -42,7 +42,6 @@ from api_service.services.settings_catalog import (
 )
 
 
-_DEFAULT_SUBJECT_ID = UUID("00000000-0000-0000-0000-000000000000")
 
 
 @pytest.fixture
@@ -68,7 +67,6 @@ def _backup_registry() -> SettingsRegistry:
             section="user-workspace",
             value_type="enum",
             ui="select",
-            scopes=("workspace",),
             default_value="codex",
             order=1,
         ),
@@ -79,7 +77,6 @@ def _backup_registry() -> SettingsRegistry:
             section="user-workspace",
             value_type="string",
             ui="select",
-            scopes=("workspace",),
             default_value=None,
             order=2,
         ),
@@ -90,7 +87,6 @@ def _backup_registry() -> SettingsRegistry:
             section="providers-secrets",
             value_type="secret_ref",
             ui="secret_ref",
-            scopes=("workspace",),
             default_value=None,
             sensitive=True,
             order=3,
@@ -105,7 +101,6 @@ def _backup_registry() -> SettingsRegistry:
             section="providers-secrets",
             value_type="string",
             ui="text",
-            scopes=("workspace",),
             default_value=None,
             sensitive=True,
             order=4,
@@ -122,9 +117,9 @@ def _seed_override(
     *,
     key: str,
     value: object,
-    scope: str = "workspace",
-    user_id: UUID = _DEFAULT_SUBJECT_ID,
-    workspace_id: UUID = _DEFAULT_SUBJECT_ID,
+    scope: str | None = None,
+    user_id: UUID | None = None,
+    workspace_id: UUID | None = None,
     schema_version: int = 1,
     value_version: int = 1,
 ) -> SettingsOverride:
@@ -149,14 +144,10 @@ def _seed_audit(
     redacted: bool = False,
     old_value=None,
     new_value=None,
-    scope: str = "workspace",
 ) -> SettingsAuditEvent:
     event = SettingsAuditEvent(
         event_type=event_type,
         key=key,
-        scope=scope,
-        workspace_id=_DEFAULT_SUBJECT_ID,
-        user_id=_DEFAULT_SUBJECT_ID,
         actor_user_id=None,
         old_value_json=old_value,
         new_value_json=new_value,
@@ -225,8 +216,39 @@ async def test_export_includes_nonsensitive_overrides_with_metadata(
     assert record.value_json == "codex_cli"
     assert record.schema_version == 2
     assert record.value_version == 4
-    assert record.scope == "workspace"
+    assert (record.scope, record.workspace_id, record.user_id) == (None, None, None)
     assert bundle.excluded_keys == []
+
+
+@pytest.mark.asyncio
+async def test_export_keeps_retained_personal_rows_with_their_subject(
+    settings_session_maker,
+):
+    registry = _backup_registry()
+    retained_user = uuid4()
+
+    async with settings_session_maker() as session:
+        _seed_override(
+            session,
+            key="integrations.github.token_ref",
+            value="env://PERSONAL_TOKEN",
+            scope="user",
+            user_id=retained_user,
+            workspace_id=uuid4(),
+        )
+        await session.commit()
+
+        bundle = await export_settings_backup(session=session, registry=registry)
+        broken = await scan_broken_references(
+            session=session, registry=registry, env={}
+        )
+
+    # Data awaiting guarded conversion survives a backup unchanged, but it is
+    # not part of the effective instance configuration the scan reports on.
+    assert [(r.scope, r.user_id, r.value_json) for r in bundle.overrides] == [
+        ("user", retained_user, "env://PERSONAL_TOKEN")
+    ]
+    assert broken == []
 
 
 @pytest.mark.asyncio
@@ -527,6 +549,7 @@ async def test_scan_returns_broken_references_as_pydantic_models(
 
     assert all(isinstance(item, SettingsBrokenReference) for item in broken)
     dump = broken[0].model_dump()
-    # Stable shape for operator dashboards: must include the scope so the
-    # diagnostic identifies the affected override row uniquely.
-    assert set(dump) >= {"key", "scope", "code", "severity", "details", "message"}
+    # Stable shape for operator dashboards: the key identifies the one
+    # affected instance override.
+    assert set(dump) >= {"key", "code", "severity", "details", "message"}
+    assert "scope" not in dump

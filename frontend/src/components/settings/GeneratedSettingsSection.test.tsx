@@ -1,23 +1,14 @@
-import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '../../utils/test-utils';
 import { renderWithClient } from '../../utils/test-utils';
 import { GeneratedSettingsSection } from './GeneratedSettingsSection';
 
 function ControlledGeneratedSettingsSection({ canReadAudit = false }: { canReadAudit?: boolean }) {
-  const [scope, setScope] = useState<'workspace' | 'user'>('workspace');
-  return (
-    <GeneratedSettingsSection
-      scope={scope}
-      onScopeChange={setScope}
-      canReadAudit={canReadAudit}
-    />
-  );
+  return <GeneratedSettingsSection canReadAudit={canReadAudit} />;
 }
 
 const workspaceCatalog = {
   section: 'user-workspace',
-  scope: 'workspace',
   categories: {
     Workflow: [
       {
@@ -28,7 +19,6 @@ const workspaceCatalog = {
         section: 'user-workspace',
         type: 'enum',
         ui: 'select',
-        scopes: ['workspace'],
         default_value: 'pr',
         effective_value: 'pr',
         override_value: null,
@@ -68,12 +58,11 @@ const workspaceCatalog = {
         section: 'user-workspace',
         type: 'integer',
         ui: 'number',
-        scopes: ['workspace'],
         default_value: 100,
         effective_value: 25,
         override_value: null,
-        source: 'workspace_override',
-        source_explanation: 'Resolved from a workspace override.',
+        source: 'instance_override',
+        source_explanation: 'Resolved from an instance override.',
         apply_mode: 'next_task',
         activation_state: 'pending_next_boundary',
         active: false,
@@ -106,7 +95,6 @@ const workspaceCatalog = {
         section: 'user-workspace',
         type: 'secret_ref',
         ui: 'secret_ref_picker',
-        scopes: ['user', 'workspace'],
         default_value: null,
         effective_value: 'env://GITHUB_TOKEN',
         override_value: null,
@@ -150,7 +138,6 @@ const workspaceCatalog = {
         section: 'user-workspace',
         type: 'string',
         ui: 'text',
-        scopes: ['workspace'],
         default_value: 'comfortable',
         effective_value: 'comfortable',
         override_value: null,
@@ -186,7 +173,6 @@ const workspaceCatalog = {
         section: 'user-workspace',
         type: 'list',
         ui: 'tag_editor',
-        scopes: ['workspace'],
         default_value: [],
         effective_value: ['email'],
         override_value: null,
@@ -222,7 +208,6 @@ const workspaceCatalog = {
         section: 'user-workspace',
         type: 'object',
         ui: 'key_value',
-        scopes: ['workspace'],
         default_value: {},
         effective_value: { name: 'MoonMind' },
         override_value: null,
@@ -258,7 +243,6 @@ const workspaceCatalog = {
         section: 'user-workspace',
         type: 'string',
         ui: 'readonly',
-        scopes: ['workspace'],
         default_value: 'normal',
         effective_value: 'normal',
         override_value: null,
@@ -295,12 +279,11 @@ const workspaceCatalog = {
         section: 'user-workspace',
         type: 'string',
         ui: 'readonly',
-        scopes: ['workspace'],
         default_value: null,
         effective_value: null,
         override_value: null,
-        source: 'workspace_override',
-        source_explanation: 'Resolved from a workspace override.',
+        source: 'instance_override',
+        source_explanation: 'Resolved from an instance override.',
         apply_mode: 'process_restart',
         activation_state: 'pending_restart',
         active: false,
@@ -322,22 +305,6 @@ const workspaceCatalog = {
         audit: { store_old_value: true, store_new_value: true, redact: false },
         value_version: 2,
         diagnostics: [],
-      },
-    ],
-  },
-};
-
-const userCatalog = {
-  section: 'user-workspace',
-  scope: 'user',
-  categories: {
-    Integrations: [
-      {
-        ...workspaceCatalog.categories.Integrations[0],
-        source: 'workspace_override',
-        source_explanation: 'Resolved from a workspace override.',
-        effective_value: 'env://WORKSPACE_TOKEN',
-        scopes: ['user', 'workspace'],
       },
     ],
   },
@@ -369,7 +336,6 @@ describe('GeneratedSettingsSection', () => {
               id: 'audit-1',
               event_type: 'settings.override.updated',
               key: 'integrations.github.token_ref',
-              scope: 'user',
               actor_user_id: 'user-1',
               old_value: null,
               new_value: null,
@@ -382,14 +348,11 @@ describe('GeneratedSettingsSection', () => {
           ],
         }));
       }
-      if (url.includes('scope=user')) {
-        return Promise.resolve(jsonResponse(userCatalog));
-      }
       if (url.includes('/api/v1/settings/catalog')) {
         return Promise.resolve(jsonResponse(workspaceCatalog));
       }
-      if (url === '/api/v1/settings/workspace') {
-        return Promise.resolve(jsonResponse({ scope: 'workspace', values: {} }));
+      if (url === '/api/v1/settings') {
+        return Promise.resolve(jsonResponse({ values: {} }));
       }
       return Promise.resolve(jsonResponse({ error: 'not_found', message: 'not found' }, false, 404));
     });
@@ -410,13 +373,15 @@ describe('GeneratedSettingsSection', () => {
     expect(details?.open).toBe(false);
 
     const visible = within(row!);
-    // Pending activation and the active workspace override stay in the default view.
+    // Pending activation and the active instance override stay in the default view.
     expect(details?.contains(visible.getByText('Pending next boundary'))).toBe(false);
-    expect(details?.contains(visible.getByText('Workspace override'))).toBe(false);
+    expect(
+      visible.getAllByText('Instance override').some((badge) => !details?.contains(badge)),
+    ).toBe(true);
     expect(details?.contains(visible.getByText('Affects skills'))).toBe(false);
     // Source explanation, key and Applies-to targets are one disclosure away,
     // and the affected targets are no longer repeated as both text and chips.
-    expect(details?.contains(visible.getByText('Resolved from a workspace override.'))).toBe(true);
+    expect(details?.contains(visible.getByText('Resolved from an instance override.'))).toBe(true);
     expect(details?.contains(visible.getByText('skills.canary_percent'))).toBe(true);
     for (const target of visible.queryAllByText('skills')) {
       expect(details?.contains(target)).toBe(true);
@@ -427,7 +392,7 @@ describe('GeneratedSettingsSection', () => {
     renderWithClient(<ControlledGeneratedSettingsSection />);
 
     expect(await screen.findByText('Default Publish Mode')).toBeTruthy();
-    expect(screen.getByText('Config · Workspace')).toBeTruthy();
+    expect(screen.getAllByText('Config')).not.toHaveLength(0);
     expect(screen.getAllByText('Applies on next task')).not.toHaveLength(0);
     expect(screen.getAllByText('Pending next boundary')).not.toHaveLength(0);
     expect(screen.getAllByText('New tasks will use this value when they are created.')).not.toHaveLength(0);
@@ -451,25 +416,31 @@ describe('GeneratedSettingsSection', () => {
     expect(screen.getByText('GitHub Token Reference')).toBeTruthy();
   });
 
-  it('switches scope and fetches scoped descriptors', async () => {
+  it('reads one instance catalog without scope inputs', async () => {
     renderWithClient(<ControlledGeneratedSettingsSection />);
 
     await screen.findByText('Default Publish Mode');
-    fireEvent.click(screen.getByRole('button', { name: 'User' }));
-
-    await screen.findByDisplayValue('env://WORKSPACE_TOKEN');
-    expect(requests.some((request) => request.url.includes('scope=user'))).toBe(true);
-    expect(screen.queryByText('Default Publish Mode')).toBeNull();
+    expect(screen.queryByLabelText('Settings scope')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'User' })).toBeNull();
+    const catalogRequests = requests.filter((request) => request.url.startsWith('/api/v1/settings/catalog'));
+    expect(catalogRequests.map((request) => request.url)).toEqual([
+      '/api/v1/settings/catalog?section=user-workspace',
+    ]);
   });
 
-  it('does not offer reset for inherited workspace overrides in user scope', async () => {
+  it('offers reset only for instance overrides and resets by key', async () => {
     renderWithClient(<ControlledGeneratedSettingsSection />);
 
-    await screen.findByText('Default Publish Mode');
-    fireEvent.click(screen.getByRole('button', { name: 'User' }));
+    await screen.findByText('Skills Canary Percent');
+    expect(screen.queryByRole('button', { name: 'Reset Default Publish Mode' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Reset Skills Canary Percent' }));
 
-    await screen.findByDisplayValue('env://WORKSPACE_TOKEN');
-    expect(screen.queryByRole('button', { name: 'Reset GitHub Token Reference' })).toBeNull();
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/settings/skills.canary_percent',
+        expect.objectContaining({ method: 'DELETE' }),
+      );
+    });
   });
 
   it('edits generated controls and previews only changed keys', async () => {
@@ -504,7 +475,7 @@ describe('GeneratedSettingsSection', () => {
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
-        '/api/v1/settings/workspace',
+        '/api/v1/settings',
         expect.objectContaining({
           method: 'PATCH',
           body: JSON.stringify({
@@ -549,21 +520,19 @@ describe('GeneratedSettingsSection', () => {
     expect(screen.queryByLabelText('Pending settings preview')).toBeNull();
   });
 
-  it('loads row audit on demand with the active scope and setting key when authorized', async () => {
+  it('loads row audit on demand with the setting key when authorized', async () => {
     renderWithClient(<ControlledGeneratedSettingsSection canReadAudit />);
 
     await screen.findByText('Default Publish Mode');
     expect(requests.some((request) => request.url.startsWith('/api/v1/settings/audit'))).toBe(false);
 
-    fireEvent.click(screen.getByRole('button', { name: 'User' }));
-    await screen.findByDisplayValue('env://WORKSPACE_TOKEN');
     fireEvent.click(screen.getByRole('button', { name: 'View audit for GitHub Token Reference' }));
 
     await waitFor(() => {
       const auditRequest = requests.find((request) => request.url.startsWith('/api/v1/settings/audit'));
       expect(auditRequest).toBeTruthy();
       const query = new URL(auditRequest?.url ?? '', window.location.origin).searchParams;
-      expect(query.get('scope')).toBe('user');
+      expect(query.has('scope')).toBe(false);
       expect(query.get('key')).toBe('integrations.github.token_ref');
     });
     expect(await screen.findByRole('region', { name: 'Audit history for GitHub Token Reference' })).toBeTruthy();
@@ -634,7 +603,6 @@ describe('GeneratedSettingsSection', () => {
         if (url.includes('/api/v1/settings/catalog')) {
           return Promise.resolve(jsonResponse({
             section: 'user-workspace',
-            scope: 'workspace',
             categories: { Workflow: [profileDescriptor, timeoutDescriptor] },
           }));
         }
@@ -644,8 +612,8 @@ describe('GeneratedSettingsSection', () => {
             { profile_id: 'claude-team', runtime_id: 'claude_code', provider_id: 'anthropic', provider_label: 'Anthropic' },
           ]));
         }
-        if (url === '/api/v1/settings/workspace') {
-          return Promise.resolve(jsonResponse({ scope: 'workspace', values: {} }));
+        if (url === '/api/v1/settings') {
+          return Promise.resolve(jsonResponse({ values: {} }));
         }
         return Promise.resolve(jsonResponse({ error: 'not_found' }, false, 404));
       });
@@ -678,7 +646,6 @@ describe('GeneratedSettingsSection', () => {
         if (url.includes('/api/v1/settings/catalog')) {
           return Promise.resolve(jsonResponse({
             section: 'user-workspace',
-            scope: 'workspace',
             categories: { Workflow: [{ ...profileDescriptor, effective_value: 'retired-profile' }] },
           }));
         }

@@ -13,7 +13,6 @@ const generatedDescriptor = {
   section: 'user-workspace',
   type: 'enum',
   ui: 'select',
-  scopes: ['workspace'],
   default_value: 'pr',
   effective_value: 'pr',
   override_value: null,
@@ -102,7 +101,6 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
       if (url.startsWith('/api/v1/settings/catalog')) {
         return Promise.resolve(ok({
           section: 'user-workspace',
-          scope: 'workspace',
           categories: { Workflow: [generatedDescriptor] },
         }));
       }

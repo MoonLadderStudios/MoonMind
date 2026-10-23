@@ -43,7 +43,10 @@ def test_migration_chains_off_current_head() -> None:
     config = Config("api_service/migrations/alembic.ini")
     config.set_main_option("script_location", "api_service/migrations")
     script = ScriptDirectory.from_config(config)
-    assert tuple(script.get_heads()) == ("397_instance_preset_catalog",)
+    assert tuple(script.get_heads()) == ("398_instance_settings",)
+    assert script.get_revision("398_instance_settings").down_revision == (
+        "397_instance_preset_catalog"
+    )
     assert script.get_revision("397_instance_preset_catalog").down_revision == (
         "396_artifact_operator_recovery"
     )

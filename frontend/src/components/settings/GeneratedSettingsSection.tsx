@@ -1,16 +1,11 @@
 import { Button } from '../Button';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { responseError } from '../../lib/api/client';
 import { formatHarnessLabel } from '../../runtime/runtimeTargets';
 import { fetchProviderProfiles, PROVIDER_PROFILE_QUERY_KEY } from './ProviderProfilesManager';
-import {
-  useSettingsDraftGuard,
-  useSettingsDraftRegistration,
-} from './SettingsDraftGuard';
-
-export type SettingScope = 'workspace' | 'user';
+import { useSettingsDraftRegistration } from './SettingsDraftGuard';
 
 interface SettingOption {
   value: string;
@@ -45,7 +40,6 @@ interface SettingDescriptor {
   section: string;
   type: string;
   ui: string;
-  scopes: SettingScope[];
   default_value?: unknown;
   effective_value: unknown;
   override_value?: unknown;
@@ -75,7 +69,6 @@ interface SettingDescriptor {
 
 interface SettingsCatalogResponse {
   section: string;
-  scope: SettingScope;
   categories: Record<string, SettingDescriptor[]>;
 }
 
@@ -90,7 +83,6 @@ interface SettingsAuditEvent {
   id: string;
   event_type: string;
   key: string;
-  scope: string;
   actor_user_id?: string | null;
   old_value?: unknown;
   new_value?: unknown;
@@ -105,17 +97,11 @@ interface SettingsAuditResponse {
   items: SettingsAuditEvent[];
 }
 
-const SCOPE_LABELS: Record<SettingScope, string> = {
-  workspace: 'Workspace',
-  user: 'User',
-};
-
 const SOURCE_LABELS: Record<string, string> = {
   config_or_default: 'Config',
   default: 'Default',
   environment: 'Environment',
-  workspace_override: 'Workspace override',
-  user_override: 'User override',
+  instance_override: 'Instance override',
   operator_locked: 'Operator locked',
   provider_profile: 'Provider profile',
   secret_reference: 'Secret reference',
@@ -165,8 +151,7 @@ function settingFieldClassName(...classNames: string[]): string {
 // Sources that mean an explicit value is in force rather than the default.
 const OVERRIDE_SOURCES = new Set([
   'environment',
-  'workspace_override',
-  'user_override',
+  'instance_override',
   'operator_locked',
   'provider_profile',
   'secret_reference',
@@ -363,15 +348,12 @@ function hasBrokenSecretRef(descriptor: SettingDescriptor): boolean {
   );
 }
 
-function canReset(descriptor: SettingDescriptor, scope: SettingScope): boolean {
-  return (
-    (scope === 'workspace' && descriptor.source === 'workspace_override') ||
-    (scope === 'user' && descriptor.source === 'user_override')
-  );
+function canReset(descriptor: SettingDescriptor): boolean {
+  return descriptor.source === 'instance_override';
 }
 
-async function fetchCatalog(scope: SettingScope): Promise<SettingsCatalogResponse> {
-  const response = await fetch(`/api/v1/settings/catalog?section=user-workspace&scope=${scope}`, {
+async function fetchCatalog(): Promise<SettingsCatalogResponse> {
+  const response = await fetch('/api/v1/settings/catalog?section=user-workspace', {
     headers: { Accept: 'application/json' },
   });
   if (!response.ok) {
@@ -380,8 +362,8 @@ async function fetchCatalog(scope: SettingScope): Promise<SettingsCatalogRespons
   return response.json();
 }
 
-async function fetchSettingAudit(scope: SettingScope, key: string): Promise<SettingsAuditResponse> {
-  const query = new URLSearchParams({ scope, key });
+async function fetchSettingAudit(key: string): Promise<SettingsAuditResponse> {
+  const query = new URLSearchParams({ key });
   const response = await fetch(`/api/v1/settings/audit?${query.toString()}`, {
     headers: { Accept: 'application/json' },
   });
@@ -429,17 +411,8 @@ function displayAuditValue(
   return displayValue(value);
 }
 
-export function GeneratedSettingsSection({
-  scope,
-  onScopeChange,
-  canReadAudit,
-}: {
-  scope: SettingScope;
-  onScopeChange?: ((scope: SettingScope) => void) | undefined;
-  canReadAudit: boolean;
-}) {
+export function GeneratedSettingsSection({ canReadAudit }: { canReadAudit: boolean }) {
   const queryClient = useQueryClient();
-  const { requestDeparture } = useSettingsDraftGuard();
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('all');
   const [modifiedOnly, setModifiedOnly] = useState(false);
@@ -449,8 +422,8 @@ export function GeneratedSettingsSection({
   const [selectedAuditKey, setSelectedAuditKey] = useState<string | null>(null);
 
   const catalogQuery = useQuery({
-    queryKey: ['settings-catalog', scope],
-    queryFn: () => fetchCatalog(scope),
+    queryKey: ['settings-catalog'],
+    queryFn: fetchCatalog,
   });
 
   const descriptors = useMemo(() => flattenedDescriptors(catalogQuery.data), [catalogQuery.data]);
@@ -458,8 +431,8 @@ export function GeneratedSettingsSection({
     (descriptor) => descriptor.key === selectedAuditKey,
   );
   const auditQuery = useQuery({
-    queryKey: ['settings-audit', scope, selectedAuditKey],
-    queryFn: () => fetchSettingAudit(scope, selectedAuditKey ?? ''),
+    queryKey: ['settings-audit', selectedAuditKey],
+    queryFn: () => fetchSettingAudit(selectedAuditKey ?? ''),
     enabled: canReadAudit && selectedAuditKey !== null,
   });
   const categories = useMemo(
@@ -511,32 +484,7 @@ export function GeneratedSettingsSection({
     setPending({});
   }, []);
 
-  useSettingsDraftRegistration(
-    `generated-settings:${scope}`,
-    pendingChanges.length > 0,
-    discardPending,
-  );
-
-  useEffect(() => {
-    setPending({});
-    setNotice(null);
-    setCategory('all');
-    setSearch('');
-    setModifiedOnly(false);
-    setReadOnlyOnly(false);
-    setSelectedAuditKey(null);
-  }, [scope]);
-
-  const requestScopeChange = (nextScope: SettingScope) => {
-    if (nextScope === scope || !onScopeChange) {
-      return;
-    }
-    const changeScope = onScopeChange;
-    requestDeparture(
-      () => changeScope(nextScope),
-      `Change to ${SCOPE_LABELS[nextScope]} scope? Your unsaved settings draft will be discarded.`,
-    );
-  };
+  useSettingsDraftRegistration('generated-settings', pendingChanges.length > 0, discardPending);
 
   const saveChanges = async () => {
     if (!pendingChanges.length || hasInvalidChange) {
@@ -547,7 +495,7 @@ export function GeneratedSettingsSection({
       pendingChanges.map((change) => [change.descriptor.key, change.descriptor.value_version]),
     );
     try {
-      const response = await fetch(`/api/v1/settings/${scope}`, {
+      const response = await fetch('/api/v1/settings', {
         method: 'PATCH',
         headers: {
           Accept: 'application/json',
@@ -564,7 +512,7 @@ export function GeneratedSettingsSection({
       }
       setPending({});
       setNotice('Settings saved.');
-      await queryClient.invalidateQueries({ queryKey: ['settings-catalog', scope] });
+      await queryClient.invalidateQueries({ queryKey: ['settings-catalog'] });
     } catch (error) {
       setNotice(sanitizeError(error));
     }
@@ -572,7 +520,7 @@ export function GeneratedSettingsSection({
 
   const resetOverride = async (descriptor: SettingDescriptor) => {
     try {
-      const response = await fetch(`/api/v1/settings/${scope}/${encodeURIComponent(descriptor.key)}`, {
+      const response = await fetch(`/api/v1/settings/${encodeURIComponent(descriptor.key)}`, {
         method: 'DELETE',
         headers: { Accept: 'application/json' },
       });
@@ -585,7 +533,7 @@ export function GeneratedSettingsSection({
         return updated;
       });
       setNotice(`${descriptor.title} reset.`);
-      await queryClient.invalidateQueries({ queryKey: ['settings-catalog', scope] });
+      await queryClient.invalidateQueries({ queryKey: ['settings-catalog'] });
     } catch (error) {
       setNotice(sanitizeError(error));
     }
@@ -617,24 +565,6 @@ export function GeneratedSettingsSection({
               Configure eligible settings from backend-owned descriptors. Validation, sensitivity, and authorization remain server-side.
             </p>
           </div>
-          {onScopeChange ? (
-          <div className="flex rounded-full border border-slate-300 p-1 dark:border-slate-700" aria-label="Settings scope">
-            {(['workspace', 'user'] as SettingScope[]).map((candidate) => (
-              <button
-                key={candidate}
-                type="button"
-                className={`rounded-full px-4 py-2 text-sm font-medium ${
-                  scope === candidate
-                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
-                    : 'bg-transparent text-slate-600 hover:text-slate-950 dark:text-slate-400 dark:hover:text-white'
-                }`}
-                onClick={() => requestScopeChange(candidate)}
-              >
-                {SCOPE_LABELS[candidate]}
-              </button>
-            ))}
-          </div>
-          ) : null}
         </div>
       </div>
 
@@ -656,7 +586,7 @@ export function GeneratedSettingsSection({
                 Audit history: {selectedAuditDescriptor.title}
               </h4>
               <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                Recent recorded changes for {SCOPE_LABELS[scope].toLowerCase()} scope.
+                Recent recorded changes to this instance setting.
               </p>
               {selectedAuditDescriptor.audit.redact ? (
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-500">
@@ -720,7 +650,7 @@ export function GeneratedSettingsSection({
             </ol>
           ) : (
             <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
-              No audit events were found for this setting and scope.
+              No audit events were found for this setting.
             </p>
           )}
         </section>
@@ -894,7 +824,7 @@ export function GeneratedSettingsSection({
                       <dl className="mt-2 grid gap-1">
                         <div>
                           <dt className="inline font-medium">Source: </dt>
-                          <dd className="inline">{sourceLabel(descriptor.source)} · {SCOPE_LABELS[scope]}</dd>
+                          <dd className="inline">{sourceLabel(descriptor.source)}</dd>
                         </div>
                         <p>{descriptor.source_explanation}</p>
                         <div>
@@ -930,7 +860,7 @@ export function GeneratedSettingsSection({
                             View audit
                           </Button>
                         ) : null}
-                        {canReset(descriptor, scope) ? (
+                        {canReset(descriptor) ? (
                           <Button variant="ghost"
                             type="button"
                             className="text-sm"
