@@ -503,6 +503,68 @@ async def test_generic_dispatch_projects_typed_turn_not_started_code() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_binding", [False, True])
+async def test_generic_auth_failure_stops_step_retries_and_names_reauthentication(
+    explicit_binding: bool,
+) -> None:
+    from moonmind.omnigent.harness_platform.failures import (
+        HarnessPlatformError,
+        HarnessPlatformFailure,
+    )
+    from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+    from tests.unit.omnigent.test_generic_platform_production_services import _plan
+
+    plan = _plan("gpt-6.1-sol")
+    failure = HarnessPlatformError(
+        "The ChatGPT login stored for Provider Profile codex_openai_oauth has ended.",
+        code=HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NEEDS_AUTH,
+    )
+    execute = AsyncMock(side_effect=failure)
+    result = await _try_generic_realizer_dispatch(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="workflow-ended-login",
+            idempotencyKey="step-ended-login",
+            resolvedSkillsetRef="artifact:skills",
+            parameters={"executionPlanRef": plan.planRef},
+            omnigentExecutionPlan=(
+                OmnigentExecutionPlanBinding(
+                    planRef=plan.planRef,
+                    planDigest="sha256:" + plan.planRef.rsplit(":", 1)[-1],
+                    planArtifactRef="artifact:plan",
+                    taskInputSnapshotRef="artifact:input",
+                    taskInputSnapshotDigest="sha256:" + "a" * 64,
+                )
+                if explicit_binding
+                else None
+            ),
+        ),
+        plan_store=SimpleNamespace(load=AsyncMock(return_value=plan)),
+        realizer_registry=SimpleNamespace(
+            require=lambda _ref: SimpleNamespace(execute=execute)
+        ),
+    )
+
+    assert result is not None
+    assert result.provider_error_code == "OMNIGENT_HOST_HARNESS_NEEDS_AUTH"
+    assert result.retry_recommendation == "reauthenticate"
+    parent = MoonMindRunWorkflow()
+    parent_result = {"status": "FAILED", "outputs": result.model_dump(by_alias=True)}
+    assert (
+        parent._activity_result_retryable(
+            parent_result, failure_message="execution_error", tool_type="agent_runtime"
+        )
+        is False
+    )
+    assert (
+        "Provider authentication failed"
+        in parent._activity_result_provider_failure_summary(parent_result)
+    )
+    execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_generic_dispatch_recommends_step_retry_for_unavailable_external_service() -> (
     None
 ):
