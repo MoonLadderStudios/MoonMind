@@ -10,7 +10,6 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from api_service.api.routers import mcp_tools as mcp_tools_router
-from api_service.auth_providers import get_current_user
 from moonmind.integrations.jira.errors import JiraToolError
 from moonmind.mcp.executable_tool_registry import ExecutableToolDiscoveryRegistry
 from moonmind.mcp.jira_tool_registry import JiraToolRegistry
@@ -22,8 +21,6 @@ from moonmind.security.container_job_capabilities import (
 )
 
 pytestmark = [pytest.mark.asyncio]
-
-CURRENT_USER_DEP = get_current_user()
 
 
 def _empty_async_session() -> SimpleNamespace:
@@ -47,7 +44,7 @@ def router_app(
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(mcp_tools_router.router, prefix="/api")
-    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(id=None)
+    app.dependency_overrides[mcp_tools_router.get_mcp_caller] = lambda: SimpleNamespace(id=None)
     monkeypatch.setattr(
         mcp_tools_router,
         "_execution_tool_registry",

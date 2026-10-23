@@ -103,8 +103,12 @@ def test_jira_helper_dispatches_trusted_tool_payload(
         "MOONMIND_AUTH_TOKEN",
         "MOONMIND_BEARER_TOKEN",
         "MOONMIND_API_KEY",
+        "MOONMIND_MCP_TOOLS_BEARER_TOKEN",
     ):
         monkeypatch.delenv(var, raising=False)
+    token_file = tmp_path / "mcp-tools"
+    token_file.write_text("scoped-jira-token\n", encoding="utf-8")
+    monkeypatch.setenv("MOONMIND_MCP_TOOLS_BEARER_TOKEN_FILE", str(token_file))
     monkeypatch.setattr(
         sys,
         "argv",
@@ -130,6 +134,7 @@ def test_jira_helper_dispatches_trusted_tool_payload(
 
     def _fake_urlopen(request, timeout=60):
         captured["url"] = request.full_url
+        captured["headers"] = dict(request.header_items())
         captured["payload"] = json.loads(request.data.decode("utf-8"))
         return _FakeResponse()
 
@@ -138,6 +143,9 @@ def test_jira_helper_dispatches_trusted_tool_payload(
     with redirect_stdout(out):
         assert jira_helper.main() == 0
     assert captured["url"] == "https://moonmind.test/mcp/tools/call"
+    assert captured["headers"]["X-moonmind-mcp-tools"] == "v1"
+    assert captured["headers"]["Authorization"] == "Bearer scoped-jira-token"
+    assert "scoped-jira-token" not in out.getvalue()
     assert captured["payload"]["tool"] == "jira.add_comment"
     assert captured["payload"]["arguments"]["issueKey"] == "ENG-123"
     assert captured["payload"]["arguments"]["body"] == "Verification PASS for ENG-123."

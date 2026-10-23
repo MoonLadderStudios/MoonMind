@@ -17,7 +17,7 @@ from httpx import ASGITransport, AsyncClient
 
 from api_service.api.routers import container_jobs as http_router
 from api_service.api.routers import mcp_tools as mcp_tools_router
-from api_service.auth_providers import get_current_user, get_instance_operator_access
+from api_service.auth_providers import get_instance_operator_access
 from api_service.services.container_jobs import (
     ContainerJobAuthorizationError,
     ContainerJobIdempotencyConflictError,
@@ -36,7 +36,6 @@ from moonmind.schemas.container_job_models import (
 
 pytestmark = [pytest.mark.asyncio]
 
-CURRENT_USER_DEP = get_current_user()
 _OWNER_ID = "11111111-1111-1111-1111-111111111111"
 _JOB_ID = "container-job:" + "0" * 32
 
@@ -123,7 +122,9 @@ def _empty_namespace() -> SimpleNamespace:
 def mcp_app(monkeypatch) -> FastAPI:
     app = FastAPI()
     app.include_router(mcp_tools_router.router, prefix="/api")
-    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(id=_OWNER_ID)
+    app.dependency_overrides[mcp_tools_router.get_mcp_caller] = lambda: (
+        SimpleNamespace(id=_OWNER_ID)
+    )
     monkeypatch.setattr(mcp_tools_router, "_jira_registry", None)
     app.dependency_overrides[mcp_tools_router.get_async_session] = _empty_namespace
     return app
