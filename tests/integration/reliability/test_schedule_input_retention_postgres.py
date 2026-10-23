@@ -53,6 +53,7 @@ async def context(tmp_path):
             models.TemporalExecutionRemediationLink,
             models.RecurringWorkflowDefinition,
             models.RecurringWorkflowRun,
+            models.AgentSkillDefinition,
         )
     }
     while True:

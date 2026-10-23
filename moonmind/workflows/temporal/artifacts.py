@@ -1179,7 +1179,7 @@ class TemporalArtifactRepository:
                 db_models.TemporalArtifact.storage_key == storage_key,
                 or_(
                     db_models.TemporalArtifact.hard_deleted_at.is_(None),
-                    self._schedule_reference_exists(
+                    self._saved_definition_reference_exists(
                         db_models.TemporalArtifact.artifact_id
                     ),
                 ),
@@ -1515,8 +1515,8 @@ class TemporalArtifactRepository:
             ),
         )
 
-    def _schedule_reference_exists(self, artifact_id: Any) -> Any:
-        """Saved definition fields retain bytes; arbitrary text does not."""
+    def _saved_definition_reference_exists(self, artifact_id: Any) -> Any:
+        """Exact saved schedule and Skill fields retain their current bytes."""
         schedule = db_models.RecurringWorkflowDefinition
 
         def matches(value):
@@ -1543,7 +1543,7 @@ class TemporalArtifactRepository:
         array_ref = exists(
             select(1).select_from(values).where(matches(values.c.value))
         ).correlate(schedule, db_models.TemporalArtifact)
-        return (
+        schedule_ref = (
             exists()
             .where(
                 or_(
@@ -1556,11 +1556,17 @@ class TemporalArtifactRepository:
             )
             .correlate(db_models.TemporalArtifact)
         )
+        skill_ref = (
+            exists()
+            .where(matches(db_models.AgentSkillDefinition.artifact_ref))
+            .correlate(db_models.TemporalArtifact)
+        )
+        return or_(schedule_ref, skill_ref)
 
-    async def has_schedule_reference(self, artifact_id: str) -> bool:
+    async def has_saved_definition_reference(self, artifact_id: str) -> bool:
         return bool(
             await self._session.scalar(
-                select(self._schedule_reference_exists(artifact_id))
+                select(self._saved_definition_reference_exists(artifact_id))
             )
         )
 
@@ -1612,7 +1618,7 @@ class TemporalArtifactRepository:
                 ~self._active_journal_reference_exists(
                     db_models.TemporalArtifact.artifact_id
                 ).correlate(db_models.TemporalArtifact),
-                ~self._schedule_reference_exists(
+                ~self._saved_definition_reference_exists(
                     db_models.TemporalArtifact.artifact_id
                 ),
             )
@@ -1642,7 +1648,9 @@ class TemporalArtifactRepository:
                 ~self._active_journal_reference_exists(
                     db_models.TemporalArtifact.artifact_id
                 ).correlate(db_models.TemporalArtifact),
-                ~self._schedule_reference_exists(db_models.TemporalArtifact.artifact_id),
+                ~self._saved_definition_reference_exists(
+                    db_models.TemporalArtifact.artifact_id
+                ),
             )
             .order_by(db_models.TemporalArtifact.deleted_at.asc())
             .limit(max(1, int(limit)))
@@ -1684,7 +1692,7 @@ class TemporalArtifactRepository:
             # NULL); keep the tombstone as that run's diagnostic context.
             referenced(db_models.TemporalExecutionRemediationLink.context_artifact_ref),
             self._active_journal_reference_exists(artifact_id).correlate(artifact),
-            self._schedule_reference_exists(artifact_id),
+            self._saved_definition_reference_exists(artifact_id),
         ]
 
     def _purge_eligibility(
@@ -1795,7 +1803,9 @@ class TemporalArtifactRepository:
                 db_models.TemporalArtifact.storage_key.in_(storage_keys),
                 or_(
                     db_models.TemporalArtifact.hard_deleted_at.is_(None),
-                    self._schedule_reference_exists(db_models.TemporalArtifact.artifact_id),
+                    self._saved_definition_reference_exists(
+                        db_models.TemporalArtifact.artifact_id
+                    ),
                 ),
             )
             .distinct()
@@ -2771,8 +2781,9 @@ class TemporalArtifactService:
         )
         reference_now = datetime.now(UTC)
         availability = self.saved_work_availability_of(artifact, now=reference_now)
-        if availability == "expired" and await self._repository.has_schedule_reference(
-            artifact_id
+        if (
+            availability == "expired"
+            and await self._repository.has_saved_definition_reference(artifact_id)
         ):
             availability = "available"
         if availability == "expired" and any(
@@ -4138,9 +4149,9 @@ class TemporalArtifactService:
         # explicit administrator deletion with a stated reason.
         artifact = await self._repository.get_artifact_for_update(artifact_id)
         self._assert_mutation_access(artifact, principal=principal)
-        if await self._repository.has_schedule_reference(artifact_id):
+        if await self._repository.has_saved_definition_reference(artifact_id):
             raise TemporalArtifactStateError(
-                f"SAVED_WORK_DELETE_BLOCKED: artifact {artifact_id} is retained by a saved schedule"
+                f"SAVED_WORK_DELETE_BLOCKED: artifact {artifact_id} is retained by a saved schedule or Skill definition"
             )
         if artifact.status is db_models.TemporalArtifactStatus.DELETED:
             return artifact
@@ -4329,9 +4340,9 @@ class TemporalArtifactService:
         )
         artifact = await self._repository.get_artifact_for_update(artifact_id)
         self._assert_mutation_access(artifact, principal=principal)
-        if await self._repository.has_schedule_reference(artifact_id):
+        if await self._repository.has_saved_definition_reference(artifact_id):
             raise TemporalArtifactStateError(
-                f"SAVED_WORK_DELETE_BLOCKED: artifact {artifact_id} is retained by a saved schedule"
+                f"SAVED_WORK_DELETE_BLOCKED: artifact {artifact_id} is retained by a saved schedule or Skill definition"
             )
         if artifact.hard_deleted_at is not None:
             return artifact
@@ -4512,7 +4523,9 @@ class TemporalArtifactService:
                 or await self._repository.has_active_journal_reference(
                     artifact.artifact_id
                 )
-                or await self._repository.has_schedule_reference(artifact.artifact_id)
+                or await self._repository.has_saved_definition_reference(
+                    artifact.artifact_id
+                )
             ):
                 skipped_in_use += 1
                 artifact.last_lifecycle_run_id = lifecycle_run_id
@@ -4550,7 +4563,9 @@ class TemporalArtifactService:
                 or await self._repository.has_active_journal_reference(
                     artifact.artifact_id
                 )
-                or await self._repository.has_schedule_reference(artifact.artifact_id)
+                or await self._repository.has_saved_definition_reference(
+                    artifact.artifact_id
+                )
             ):
                 skipped_in_use += 1
                 artifact.last_lifecycle_run_id = lifecycle_run_id

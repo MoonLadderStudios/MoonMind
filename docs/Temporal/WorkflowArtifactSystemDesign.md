@@ -788,11 +788,12 @@ evidence does not keep its longer expiry. As with linking, the new expiry
 counts from the latest such link, never earlier than creation. Such migrations
 only change expiry; the sweep still enforces every protection before deleting.
 
-Saved schedules retain exact input, plan, manifest, and recorded authority
-references, including paused or disabled definitions. Unreferenced inputs return
-to ordinary retention. Admission and deletion share artifact row locks, so cleanup
-cannot invalidate a newly committed schedule. Shared storage aliases lock in
-artifact-ID order. This protection adds neither read access nor operator pins.
+Saved schedules, including disabled definitions, retain admitted inputs and old
+frozen Skill content after edits. Bootstrap repairs incomplete lists from the
+original digest-verified manifest before launch refresh. Current Skill definitions
+retain content; unreferenced revisions resume ordinary expiry. Admission and deletion
+share artifact locks in ID order, including storage aliases. Retention adds no
+read access or pins.
 
 Current raw and normalized journals referenced by non-terminal Omnigent bridge
 sessions remain recovery data. Their ordinary retention resumes when the
