@@ -1086,9 +1086,6 @@ async def _classify_ended_codex_login(result: AgentRunResult) -> AgentRunResult:
     )
     if verdict != "ended":
         return result
-    from moonmind.omnigent.codex_login import record_ended_codex_login
-
-    await record_ended_codex_login(profile_id, capture["credentialGeneration"])
     metadata["codexLoginSession"] = {
         "verdict": "ended",
         "harnessStartFailureCode": result.provider_error_code,
