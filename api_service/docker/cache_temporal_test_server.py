@@ -22,9 +22,13 @@ async def _cache_test_server() -> None:
                 environment = await start_environment()
                 break
             except RuntimeError as exc:
+                # The SDK removes partial downloads before reporting archive
+                # I/O failures, so retrying never accepts an incomplete binary.
                 if retry_delay is None or not re.search(
                     r"failed to download ephemeral server executable: .*"
-                    r"HTTP status (?:client|server) error \((?:429|5\d\d)\b",
+                    r"HTTP status (?:client|server) error \((?:429|5\d\d)\b"
+                    r"|invalid ephemeral server download: could not (?:read|extract) "
+                    r"(?:tar|ZIP) archive\b",
                     str(exc),
                 ):
                     raise
