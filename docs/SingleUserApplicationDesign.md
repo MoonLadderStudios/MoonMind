@@ -182,6 +182,8 @@ same frozen inputs under its new identity.
 Child result publication links its generated summary and result envelopes to the
 parent verified against Temporal's recorded ancestry. Provider metadata or a
 returned artifact reference alone cannot grant another execution access.
+An unreadable optional Story file is skipped with diagnostics while generated
+summary and result publication continues.
 
 Existing signing, revocation, and credential-materialization mechanisms remain
 where they serve these machine contracts. Removing application login is not a

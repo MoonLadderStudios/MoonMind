@@ -8817,13 +8817,20 @@ class TemporalAgentRuntimeActivities:
 
         def _prepare_story_breakdown_file(workspace: Path, raw_path: str) -> bytes | None:
             if raw_path not in prepared_story_payloads:
-                path = _workspace_story_path(workspace, raw_path)
-                prepared_story_payloads[raw_path] = (
-                    read_regular_file(
-                        path, limit=settings.workflow.agent_job_artifact_max_bytes
+                payload = None
+                try:
+                    path = _workspace_story_path(workspace, raw_path)
+                    if path is not None:
+                        payload = read_regular_file(
+                            path, limit=settings.workflow.agent_job_artifact_max_bytes
+                        )
+                except OSError:
+                    logger.warning(
+                        "Skipping unreadable story breakdown handoff file: %s",
+                        raw_path,
+                        exc_info=True,
                     )
-                    if path is not None else None
-                )
+                prepared_story_payloads[raw_path] = payload
             return prepared_story_payloads[raw_path]
 
         async def _publish_story_breakdown_file(
