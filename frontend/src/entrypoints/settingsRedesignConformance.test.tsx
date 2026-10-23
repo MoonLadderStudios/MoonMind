@@ -81,17 +81,6 @@ const CANONICAL_SETTINGS_ROUTES = [
   },
 ] as const;
 
-const ALL_SETTINGS_PERMISSIONS = [
-  'provider_profiles.read',
-  'provider_profiles.write',
-  'secrets.metadata.read',
-  'settings.effective.read',
-  'settings.catalog.read',
-  'settings.workspace.write',
-  'settings.user.write',
-  'operations.read',
-  'operations.invoke',
-];
 
 const userWorkspaceDescriptor = {
   key: 'workflow.default_publish_mode',
@@ -158,7 +147,7 @@ function uiInfo(overrides: Record<string, unknown> = {}) {
     limits: {},
     endpoints: { workflows: '/api/executions' },
     dashboardConfig: { initialPath: '/workflows', pollIntervalsMs: { list: 60_000, detail: 60_000, events: 60_000 } },
-    settingsPermissions: ALL_SETTINGS_PERMISSIONS,
+
     workerPause: {
       get: '/api/system/worker-pause',
       post: '/api/system/worker-pause',
@@ -348,7 +337,6 @@ describe('MoonLadderStudios/MoonMind#3822 Settings redesign conformance', () => 
               page: 'settings-instance',
               apiBase: '/api',
               initialData: {
-                settingsPermissions: ['settings.catalog.read', 'settings.workspace.write'],
               },
             } as BootPayload}
           />
@@ -447,7 +435,7 @@ describe('MoonLadderStudios/MoonMind#3822 Settings redesign conformance', () => 
                 page,
                 apiBase: '/api',
                 initialData: {
-                  settingsPermissions: ALL_SETTINGS_PERMISSIONS,
+
                   workerPause: {
                     get: '/api/system/worker-pause',
                     post: '/api/system/worker-pause',

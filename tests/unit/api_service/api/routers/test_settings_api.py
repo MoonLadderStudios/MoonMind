@@ -90,31 +90,9 @@ def settings_api_db(tmp_path):
         asyncio_run(engine.dispose())
 
 
-@pytest.fixture
-def settings_user_override():
-    def _apply(*, permissions=(), is_superuser=False):
-        user = SimpleNamespace(
-            id=uuid4(),
-            email="settings-user@example.com",
-            is_superuser=is_superuser,
-            settings_permissions=set(permissions),
-        )
-        app.dependency_overrides[SETTINGS_USER_DEP] = lambda: user
-        return user
-
-    try:
-        yield _apply
-    finally:
-        app.dependency_overrides.pop(SETTINGS_USER_DEP, None)
-
-
 @pytest.fixture(autouse=True)
 def _default_settings_test_principal():
-    """Route-logic tests run as admitted operator without a person.
-
-    Retained account sessions keep their permission checks: tests that need
-    such an identity call ``settings_user_override(...)``, which wins.
-    """
+    """Route-logic tests run as admitted operator without a person."""
     user = OperatorAdmission(via="loopback")
     missing = object()
     previous = app.dependency_overrides.get(SETTINGS_USER_DEP, missing)
@@ -766,44 +744,6 @@ async def test_provider_profile_ref_allows_literal_profile_ids_with_sensitive_wo
 
 
 @pytest.mark.asyncio
-async def test_settings_catalog_requires_catalog_read_permission(settings_user_override):
-    settings_user_override(permissions={"settings.effective.read"})
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://testserver"
-    ) as client:
-        denied = await client.get("/api/v1/settings/catalog")
-
-    assert denied.status_code == 403
-    assert denied.json()["error"] == "permission_denied"
-    assert denied.json()["details"]["required_permission"] == "settings.catalog.read"
-
-
-@pytest.mark.asyncio
-async def test_settings_patch_requires_write_permission_for_retained_account(
-    settings_api_db,
-    settings_user_override,
-):
-    settings_user_override(permissions={"settings.catalog.read"})
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://testserver"
-    ) as client:
-        denied = await client.patch(
-            "/api/v1/settings",
-            json={
-                "changes": {"workflow.default_publish_mode": "branch"},
-                "expected_versions": {"workflow.default_publish_mode": 1},
-                "descriptor": {"audit": {"redact": False}},
-                "permissions": ["settings.workspace.write"],
-            },
-        )
-
-    assert denied.status_code == 403
-    assert denied.json()["details"]["required_permission"] == "settings.workspace.write"
-
-
-@pytest.mark.asyncio
 async def test_mm657_validate_accepts_changes_without_override_or_audit_mutation(
     settings_api_db,
 ):
@@ -825,32 +765,6 @@ async def test_mm657_validate_accepts_changes_without_override_or_audit_mutation
     assert body["issues_by_key"] == {}
     assert await _settings_override_count(settings_api_db) == 0
     assert await _settings_audit_count(settings_api_db) == 0
-
-
-@pytest.mark.asyncio
-async def test_mm657_validate_requires_write_permission_for_retained_account(
-    settings_api_db,
-    settings_user_override,
-):
-    settings_user_override(permissions={"settings.catalog.read"})
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://testserver"
-    ) as client:
-        denied = await client.post(
-            "/api/v1/settings/validate",
-            json={
-                "changes": {"workflow.default_publish_mode": "branch"},
-                "expected_versions": {"workflow.default_publish_mode": 1},
-            },
-        )
-
-    assert denied.status_code == 403
-    _assert_settings_error_envelope(
-        denied.json(),
-        error="permission_denied",
-    )
-    assert denied.json()["details"]["required_permission"] == "settings.workspace.write"
 
 
 @pytest.mark.asyncio
@@ -1066,48 +980,9 @@ async def test_mm657_documented_error_code_envelope_matrix(
 
 
 @pytest.mark.asyncio
-async def test_settings_audit_endpoint_redacts_without_secret_metadata_permission(
-    settings_api_db,
-    settings_user_override,
-):
-    settings_user_override(
-        permissions={"settings.workspace.write", "settings.audit.read"}
-    )
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://testserver"
-    ) as client:
-        await client.patch(
-            "/api/v1/settings",
-            json={
-                "changes": {"integrations.github.token_ref": "env://GITHUB_TOKEN"},
-                "expected_versions": {"integrations.github.token_ref": 1},
-                "reason": "configure token ref",
-            },
-        )
-        audit = await client.get(
-            "/api/v1/settings/audit",
-            params={"key": "integrations.github.token_ref"},
-        )
-
-    assert audit.status_code == 200
-    item = audit.json()["items"][0]
-    assert item["key"] == "integrations.github.token_ref"
-    assert item["apply_mode"] == "next_launch"
-    assert item["affected_systems"] == ["github", "integrations"]
-    assert item["new_value"] is None
-    assert item["redacted"] is True
-    assert "env://GITHUB_TOKEN" not in audit.text
-
-
-@pytest.mark.asyncio
 async def test_failed_settings_write_creates_redacted_audit_event_with_request_id(
     settings_api_db,
-    settings_user_override,
 ):
-    settings_user_override(
-        permissions={"settings.workspace.write", "settings.audit.read"}
-    )
     raw_secret_value = "gh" + "p_raw_plaintext"
     request_id = "settings-write-req-1" * 20
 
@@ -1172,17 +1047,9 @@ async def test_rejected_write_audit_failure_is_logged(
 
 
 @pytest.mark.asyncio
-async def test_settings_audit_endpoint_exposes_secret_ref_with_metadata_permission(
+async def test_settings_audit_endpoint_exposes_safe_secret_ref_metadata(
     settings_api_db,
-    settings_user_override,
 ):
-    settings_user_override(
-        permissions={
-            "settings.workspace.write",
-            "settings.audit.read",
-            "secrets.metadata.read",
-        }
-    )
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
@@ -1206,7 +1073,6 @@ async def test_settings_audit_endpoint_exposes_secret_ref_with_metadata_permissi
 @pytest.mark.asyncio
 async def test_settings_audit_endpoint_lists_one_instance_history(
     settings_api_db,
-    settings_user_override,
 ):
     async with settings_api_db() as session:
         session.add_all(
@@ -1257,9 +1123,6 @@ async def test_settings_audit_endpoint_lists_one_instance_history(
             },
         )
 
-    settings_user_override(
-        permissions={"settings.workspace.write", "settings.audit.read"},
-    )
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
@@ -1282,11 +1145,7 @@ async def test_settings_audit_endpoint_lists_one_instance_history(
 @pytest.mark.asyncio
 async def test_settings_diagnostics_endpoint_returns_actionable_sanitized_output(
     settings_api_db,
-    settings_user_override,
 ):
-    settings_user_override(
-        permissions={"settings.workspace.write", "settings.effective.read"}
-    )
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"

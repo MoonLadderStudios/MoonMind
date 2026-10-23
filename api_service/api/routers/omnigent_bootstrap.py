@@ -41,21 +41,11 @@ class BootstrapOpencodeResponse(BaseModel):
     model_config = {"populate_by_name": True}
 
 
-def _require_bootstrap_permission(user: Any) -> None:
-    # Reuse provider_profiles.write or settings
-    from api_service.api.routers.provider_profiles import (
-        _require_provider_profile_permission,
-    )
-
-    _require_provider_profile_permission(user, "provider_profiles.write")
-
-
 @router.get("/opencode", response_model=BootstrapOpencodeResponse)
 async def get_bootstrap_state(
     session: AsyncSession = Depends(get_async_session),
     current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
-    _require_bootstrap_permission(current_user)
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.bootstrap.controller import BootstrapController
 
@@ -78,7 +68,6 @@ async def bootstrap_opencode(
     session: AsyncSession = Depends(get_async_session),
     current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
-    _require_bootstrap_permission(current_user)
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.bootstrap.controller import BootstrapController
 
@@ -124,7 +113,6 @@ async def retry_bootstrap(
     policy. The Provider Profile already owns the credential, which is checked
     for launch readiness and revalidated against the pinned runtime.
     """
-    _require_bootstrap_permission(current_user)
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.bootstrap.controller import BootstrapController
     from moonmind.omnigent.bootstrap.store import load_bootstrap_record

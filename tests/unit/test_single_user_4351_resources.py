@@ -561,7 +561,6 @@ def test_r1_instance_operator_manages_resources_without_legacy_roles():
 
     from api_service.api.routers import provider_profiles as provider_router
     from api_service.api.routers import omnigent_agent_profiles as agent_router
-    from api_service.services import settings_catalog
     from moonmind.security.operator_admission import OperatorAdmission
 
     operator = OperatorAdmission(via="loopback")
@@ -572,17 +571,6 @@ def test_r1_instance_operator_manages_resources_without_legacy_roles():
             )
         assert denied.value.status_code == 403
     provider_router._require_privileged_credential_volume_import(operator)
-
-    # Admission grants instance settings access; legacy permission payloads
-    # remain bounded to their explicit grants.
-    all_permissions = settings_catalog.settings_permissions_for_user(
-        operator
-    )
-    assert set(settings_catalog.SETTINGS_PERMISSION_NAMES) <= set(all_permissions)
-    limited = settings_catalog.settings_permissions_for_user(
-        SimpleNamespace(is_superuser=False, settings_permissions={"settings.catalog.read"})
-    )
-    assert limited == {"settings.catalog.read"}
 
     # Retained private profiles belong to the instance operator; a caller
     # without admission or matching provenance still cannot manage them.

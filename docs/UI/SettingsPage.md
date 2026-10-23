@@ -85,9 +85,7 @@ All three use the dashboard's utility-page classification. They may share one bu
 
 ### 5.2 Default entry point
 
-`/settings` is an entry point, not a destination. It resolves, with replacement history so it is not a back-button trap, to the first destination the backend authorizes in Configuration order: Providers & Secrets, then Instance, then Operations. It does not assume Providers & Secrets is available.
-
-When no destination is accessible, `/settings` renders the Configuration unavailable state (section 10) instead of redirecting to a forbidden page. This fallback applies only to `/settings`; a direct request for a specific unauthorized destination shows that destination's own unavailable or forbidden state and is never rerouted to a sibling.
+`/settings` resolves to Providers & Secrets with replacement history, keeping approved page-local filters. Protected operator admission is shared by all three Configuration pages; no account permission list selects a destination.
 
 ### 5.3 `section` query parameter
 
@@ -106,7 +104,7 @@ Standalone paths users may have bookmarked redirect with replacement history:
 | `/settings/user-workspace` | `/settings/instance` |
 | an unknown older Settings alias | the default entry point |
 
-Redirects keep page-relevant query parameters, drop ones that no longer mean anything on the target, and never land on a destination the user cannot see; an unavailable mapped target falls back to the default entry point.
+Redirects keep page-relevant query parameters and drop ones that no longer mean anything on the target. A backend failure stays on its destination with readable errors.
 
 ### 5.5 Page-local URL state
 
@@ -277,19 +275,17 @@ Saves submit `expected_versions` with the changed keys, so `PATCH` rejects the w
 
 ---
 
-## 10. Permissions and failure states
+## 10. Admission, availability and failure states
 
-The backend controls authorization; the UI reflects it without treating client checks as a security boundary.
-
-Each destination has an independent state: `shown` for accessible content, `unavailable` when a visible explanation is wanted, or `hidden` when it should not be advertised. The Configuration label appears when at least one child is shown or intentionally unavailable. A direct unauthorized route shows an unavailable or forbidden state rather than silently redirecting.
+Shared server-side operator admission protects Configuration pages and APIs. The dashboard carries no human roles or settings permission list. Destination metadata controls navigation visibility, while each page fetches its instance resources and reports denied access or backend failure in place. Navigation visibility is not authorization.
 
 | Backend state | UI behavior |
 |---|---|
-| catalog readable, setting not writable | Read-only row with reason |
-| secret metadata not readable | Redacted or hidden reference metadata |
-| audit not readable | No audit link |
-| operation not invokable | Current state visible, action disabled with reason |
-| permission error during mutation | Structured error, no automatic destructive retry |
+| deployment-locked or read-only setting | Read-only row with reason |
+| sensitive audit value | Redacted value; safe SecretRef metadata remains readable |
+| operation unavailable | Current state visible, action disabled with reason |
+| denied request | Structured error, no automatic destructive retry |
+| backend unavailable or missing configuration | Region-specific error; unrelated content remains usable |
 
 Loading placeholders do not imply values are default, unset, permitted, or healthy. Empty states explain the next authorized action. Failures identify the affected page or region and keep unrelated content.
 

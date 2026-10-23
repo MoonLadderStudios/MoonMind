@@ -22,6 +22,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api_service.api.routers import workflow_console as workflow_console_router
+from moonmind.security.operator_admission import OperatorAdmission
 from api_service.db.base import get_async_session
 from api_service.main import app as main_app
 from api_service.api.routers.workflow_console import (
@@ -97,16 +98,11 @@ def _write_dashboard_test_manifest(root: Path) -> Path:
 @contextmanager
 def _client_with_mock_service(
     monkeypatch: pytest.MonkeyPatch | None = None,
-    user_settings_permissions: set[str] | None = None,
 ) -> Iterator[tuple[TestClient, AsyncMock]]:
     app = FastAPI()
     app.include_router(router)
 
-    mock_user = SimpleNamespace(
-        id=uuid4(),
-        email="dashboard@example.com",
-        settings_permissions=user_settings_permissions or set(),
-    )
+    mock_user = OperatorAdmission(via="loopback")
     mock_service = AsyncMock()
     mock_service.list_jobs_page.return_value = SimpleNamespace(
         items=tuple(),
@@ -336,18 +332,17 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
     payload = response.json()
     assert payload["app"] == "moonmind"
     assert payload["apiBase"] == "/api"
+    assert "settingsPermissions" not in payload
     assert payload["features"]["workflowLiveUpdates"] is True
     assert payload["features"]["remediationCollection"] is True
     assert isinstance(payload["features"]["omnigentAgents"], bool)
-    assert payload["features"]["omnigentPolicies"] is (
-        "settings.catalog.read" in payload["settingsPermissions"]
-    )
+    assert payload["features"]["omnigentPolicies"] is True
     assert "manifests" not in payload["features"]
     assert {
         "settingsProvidersSecrets",
         "settingsInstance",
         "settingsOperations",
-    }.isdisjoint(payload["features"])
+    } <= {key for key, available in payload["features"].items() if available}
     assert payload["destinations"] == [
         destination.to_ui_info() for destination in DASHBOARD_DESTINATIONS
     ]
@@ -388,7 +383,6 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
         "post": "/api/system/worker-pause",
         "shardHealth": "/api/v1/operations/codex/shards",
     }
-    assert isinstance(payload["settingsPermissions"], list)
     assert "initialPath" not in payload["dashboardConfig"]
 
     for path in (
@@ -438,36 +432,6 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
         assert 'id="dashboard-alerts-root"' not in response.text
         assert "marked.min.js" not in response.text
         assert "__moonmind_customElementsDefineGuard" not in response.text
-
-
-def test_dashboard_ui_info_scopes_configuration_destinations_to_permissions() -> None:
-    with _client_with_mock_service(
-        user_settings_permissions={"settings.catalog.read", "operations.read"}
-    ) as (client, _mock_service):
-        response = client.get("/api/ui/info")
-
-    assert response.status_code == 200
-    features = response.json()["features"]
-    assert "settingsProvidersSecrets" not in features
-    assert features["settingsInstance"] is True
-    assert features["settingsOperations"] is True
-
-
-def test_dashboard_ui_info_marks_mutation_only_configuration_destinations_unavailable() -> None:
-    with _client_with_mock_service(
-        user_settings_permissions={
-            "provider_profiles.write",
-            "settings.workspace.write",
-            "operations.invoke",
-        }
-    ) as (client, _mock_service):
-        response = client.get("/api/ui/info")
-
-    assert response.status_code == 200
-    features = response.json()["features"]
-    assert features["settingsProvidersSecrets"] is False
-    assert features["settingsInstance"] is False
-    assert features["settingsOperations"] is False
 
 
 def test_retired_index_health_route_is_gone(client: TestClient) -> None:
@@ -704,9 +668,7 @@ def test_retired_follow_up_routes_are_not_dashboard_surfaces(client: TestClient)
 
 def test_legacy_settings_subroutes_redirect_to_canonical_routes(
 ) -> None:
-    with _client_with_mock_service(
-        user_settings_permissions={"provider_profiles.read", "operations.read"}
-    ) as (client, _mock_service):
+    with _client_with_mock_service() as (client, _mock_service):
         workers = client.get("/workers", follow_redirects=False)
         secrets = client.get("/secrets", follow_redirects=False)
 
@@ -714,30 +676,6 @@ def test_legacy_settings_subroutes_redirect_to_canonical_routes(
     assert workers.headers["location"] == "/settings/operations"
     assert secrets.status_code == 307
     assert secrets.headers["location"] == "/settings/providers-secrets"
-
-
-def test_legacy_settings_subroutes_fall_back_to_first_authorized_destination() -> None:
-    with _client_with_mock_service(
-        user_settings_permissions={"settings.catalog.read"}
-    ) as (client, _mock_service):
-        workers = client.get("/workers", follow_redirects=False)
-        secrets = client.get("/secrets", follow_redirects=False)
-
-    assert workers.status_code == 307
-    assert workers.headers["location"] == "/settings/instance"
-    assert secrets.status_code == 307
-    assert secrets.headers["location"] == "/settings/instance"
-
-
-def test_legacy_settings_subroutes_fall_back_to_bare_entry_without_permissions() -> None:
-    with _client_with_mock_service() as (client, _mock_service):
-        workers = client.get("/workers", follow_redirects=False)
-        secrets = client.get("/secrets", follow_redirects=False)
-
-    assert workers.status_code == 307
-    assert workers.headers["location"] == "/settings"
-    assert secrets.status_code == 307
-    assert secrets.headers["location"] == "/settings"
 
 
 def test_canonical_settings_routes_tolerate_a_trailing_slash(
@@ -767,9 +705,7 @@ def test_canonical_settings_routes_tolerate_a_trailing_slash(
 def test_retired_user_workspace_route_redirects_to_instance() -> None:
     """MoonMind#4353: the retired `/settings/user-workspace` bookmark redirects
     to the `/settings/instance` replacement with stale scope params dropped."""
-    with _client_with_mock_service(
-        user_settings_permissions={"settings.catalog.read"}
-    ) as (client, _mock_service):
+    with _client_with_mock_service() as (client, _mock_service):
         response = client.get("/settings/user-workspace", follow_redirects=False)
         assert response.status_code == 307
         assert response.headers["location"] == "/settings/instance"
@@ -799,13 +735,7 @@ def test_legacy_settings_redirects_drop_section_without_mapping_it() -> None:
     """MoonLadderStudios/MoonMind#3816 + SettingsPage.md 5.3: `section` is retired
     page identity. It is stripped from redirect targets and never selects a
     sibling Configuration page; approved page-local filters still survive."""
-    with _client_with_mock_service(
-        user_settings_permissions={
-            "provider_profiles.read",
-            "settings.catalog.read",
-            "operations.read",
-        }
-    ) as (client, _mock_service):
+    with _client_with_mock_service() as (client, _mock_service):
         for section in ("providers-secrets", "user-workspace", "operations", "legacy"):
             secrets = client.get(
                 f"/secrets?section={section}&runtime=codex", follow_redirects=False
@@ -824,9 +754,7 @@ def test_legacy_settings_redirects_drop_section_without_mapping_it() -> None:
 
 
 def test_legacy_settings_redirects_drop_filters_the_target_page_does_not_own() -> None:
-    with _client_with_mock_service(
-        user_settings_permissions={"provider_profiles.read", "operations.read"}
-    ) as (client, _mock_service):
+    with _client_with_mock_service() as (client, _mock_service):
         secrets = client.get(
             "/secrets?status=paused&scope=user&section=operations",
             follow_redirects=False,
