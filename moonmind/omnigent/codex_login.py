@@ -1,6 +1,5 @@
 """Observe stored Codex logins and record proven expiry in profile readiness."""
 
-import hashlib
 import logging
 from datetime import UTC, datetime
 
@@ -87,12 +86,11 @@ async def record_ended_codex_login(profile_id: str, credential_generation: int) 
             )
     except Exception as exc:
         # Database/provider errors can contain credentials or SQL parameters.
-        # Hash credential-derived identifiers; retain only correlation,
-        # generation and exception type, never raw values or exception text.
+        # Retain only generation and exception type, never credential-derived
+        # identifiers or exception text.
         logger.warning(
-            "Could not record ended Codex login: profile_id_sha256=%s "
+            "Could not record ended Codex login: "
             "credential_generation=%s error_type=%s",
-            hashlib.sha256(profile_id.encode("utf-8", "replace")).hexdigest()[:12],
             credential_generation,
             type(exc).__name__,
         )

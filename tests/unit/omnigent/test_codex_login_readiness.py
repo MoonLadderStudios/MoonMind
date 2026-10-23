@@ -160,6 +160,9 @@ async def test_state_write_failure_is_observable_without_secret_text(
     assert "RuntimeError" in caplog.text
     assert "private-profile-sentinel" not in caplog.text
     assert "private credential sentinel" not in caplog.text
+    first_diagnostic = caplog.records[-1].getMessage()
+    await codex_login.record_ended_codex_login("another-private-profile", 4)
+    assert caplog.records[-1].getMessage() == first_diagnostic
 
 
 @pytest.mark.asyncio
