@@ -18,7 +18,6 @@ on:
     paths:
       - "api_service/Dockerfile"
       - "api_service/docker/**"
-      - "api_service/config.template.toml"
       - "moonmind/workflows/adapters/codex_session_adapter.py"
       - "moonmind/workflows/temporal/runtime/codex_session_runtime.py"
       - "moonmind/workflows/temporal/runtime/managed_session_controller.py"

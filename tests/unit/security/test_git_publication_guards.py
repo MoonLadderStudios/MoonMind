@@ -1,13 +1,10 @@
 """Real regressions for narrowly scoped Git publication guards."""
 
-import asyncio
 import os
 import subprocess
-from types import SimpleNamespace
 
 import pytest
 
-from moonmind.agents.codex_worker.worker import CodexWorker
 from moonmind.config.settings import settings
 from moonmind.publish.service import PublishService
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
@@ -42,10 +39,6 @@ async def scan(owner, repo, base):
         return await PublishService()._scan_git_push_before_publish(
             repo_dir=repo, branch_name="main", base_ref=base, env=dict(os.environ)
         )
-    if owner == "legacy":
-        return await CodexWorker.__new__(CodexWorker)._scan_publish_git_push(
-            repo_dir=repo, branch_name="main", base_ref=base, env=dict(os.environ)
-        )
     result = await TemporalAgentRuntimeActivities()._scan_workspace_push_range(
         workspace=str(repo),
         run_id="test",
@@ -60,7 +53,7 @@ async def scan(owner, repo, base):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("owner", ["publisher", "legacy", "managed"])
+@pytest.mark.parametrize("owner", ["publisher", "managed"])
 async def test_publication_scan_cannot_hide_content_with_textconv(
     repository, tmp_path, monkeypatch, owner
 ):
@@ -76,7 +69,7 @@ async def test_publication_scan_cannot_hide_content_with_textconv(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("owner", ["publisher", "legacy", "managed"])
+@pytest.mark.parametrize("owner", ["publisher", "managed"])
 async def test_publication_fetch_treats_option_like_ref_as_data(
     repository, tmp_path, monkeypatch, owner
 ):
@@ -137,40 +130,6 @@ def test_workspace_auth_does_not_write_or_execute_workload_support(
     assert env["PATH"] == "/usr/bin"
     assert env["GIT_CONFIG_KEY_1"] == "credential.https://github.com.helper"
     assert env["GITHUB_TOKEN"] == "fixture-token"
-
-
-@pytest.mark.asyncio
-async def test_default_verification_does_not_receive_publish_credentials(
-    tmp_path, monkeypatch
-):
-    worker = CodexWorker.__new__(CodexWorker)
-    monkeypatch.setattr(worker, "_collect_verification_evidence", lambda **kw: ((), ()))
-    monkeypatch.setattr(worker, "_append_stage_log", lambda *args: None)
-    repo = tmp_path / "repo"
-    (repo / "tools").mkdir(parents=True)
-    script = repo / "tools/test_unit.sh"
-    script.write_text(
-        '#!/bin/sh\n[ -z "${GITHUB_TOKEN}${GH_TOKEN}${PRIVATE_WORKER_SECRET}" ]\n'
-    )
-    script.chmod(0o755)
-    monkeypatch.setenv("GITHUB_TOKEN", "ambient-fixture-token")
-    monkeypatch.setenv("PRIVATE_WORKER_SECRET", "fixture-secret")
-
-    async def run(command, **kwargs):
-        await asyncio.to_thread(
-            subprocess.run, command, cwd=kwargs["cwd"], env=kwargs["env"], check=True
-        )
-
-    monkeypatch.setattr(worker, "_run_stage_command", run)
-    prepared = SimpleNamespace(
-        repo_dir=repo,
-        publish_log_path=tmp_path / "log",
-        repo_command_env={**os.environ, "GH_TOKEN": "repo-fixture-token"},
-        publish_command_env={**os.environ, "GITHUB_TOKEN": "publish-fixture-token"},
-    )
-    await worker._run_default_publish_verification_if_needed(
-        prepared=prepared, publish={}, status_output=" M file.py\n"
-    )
 
 
 def test_in_memory_auth_preserves_github_host_scope(tmp_path):

@@ -202,12 +202,11 @@ dockerBackendService:
       dockerfile: api_service/Dockerfile
       target: test-runtime
       buildArgs:
-        INSTALL_CODEX_CLI: "false"
         INSTALL_TEST_DEPS: "true"
       fingerprint:
         mode: declared-effective-inputs
         inputs: [.dockerignore, api_service/Dockerfile, api_service/docker/**/*,
-                 api_service/config.template.toml, pyproject.toml, poetry.lock,
+                 pyproject.toml, poetry.lock,
                  README.md, LICENSE, NOTICE]
       freshness:
         maxAge: deployment-configured

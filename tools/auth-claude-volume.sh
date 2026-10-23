@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Populate the claude_auth_volume Docker volume with Claude Code OAuth
-# credentials so the MoonMind sandbox worker inherits the host user's
+# credentials so the Omnigent host inherits the host user's
 # account tier.
 #
 # Usage:
@@ -72,8 +72,7 @@ cmd_sync() {
     "
 
   echo ""
-  echo "Done. Restart the sandbox worker to pick up the new credentials:"
-  echo "  docker compose restart temporal-worker-sandbox"
+  echo "Done. Credentials are available to Omnigent hosts using this volume."
 }
 
 # ---------------------------------------------------------------------------
@@ -82,8 +81,8 @@ cmd_sync() {
 cmd_login() {
   _require_docker
 
-  local AUTH_SERVICE="${CLAUDE_AUTH_SERVICE:-temporal-worker-sandbox}"
-  local AUTH_PROFILE="${CLAUDE_AUTH_PROFILE:-}"
+  local AUTH_SERVICE="${CLAUDE_AUTH_SERVICE:-omnigent-host-claude}"
+  local AUTH_PROFILE="${CLAUDE_AUTH_PROFILE:-omnigent-host-claude}"
   local CLAUDE_TERM="${TERM:-xterm-256color}"
 
   if ! [ -t 0 ] || ! [ -t 1 ]; then
@@ -96,8 +95,8 @@ cmd_login() {
     COMPOSE_PROFILE_ARGS+=(--profile "$AUTH_PROFILE")
   fi
 
-  docker compose run --rm -it \
-    ${COMPOSE_PROFILE_ARGS[@]+"${COMPOSE_PROFILE_ARGS[@]}"} \
+  docker compose ${COMPOSE_PROFILE_ARGS[@]+"${COMPOSE_PROFILE_ARGS[@]}"} run --rm -it \
+    --user 1000:1000 \
     --entrypoint /bin/bash \
     -e MOONMIND_CLAUDE_CLI_AUTH_MODE=oauth \
     -e ANTHROPIC_API_KEY= \

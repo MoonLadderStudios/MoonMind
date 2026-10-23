@@ -6,7 +6,6 @@ This module validates prerequisites before starting a workflow run.
 from __future__ import annotations
 
 import logging
-import os
 import re
 from dataclasses import dataclass
 from typing import Optional
@@ -70,10 +69,11 @@ def _run_codex_preflight_check(
             volume=volume,
         )
 
-    image = (
-        settings.workflow.codex_login_check_image
-        or settings.workflow.job_image
+    from moonmind.omnigent.harness_platform.static_hosts import (
+        resolve_static_host_image_ref,
     )
+
+    image = settings.workflow.codex_login_check_image or resolve_static_host_image_ref()
     stdout = ""
     stderr = ""
     exit_code: Optional[int] = None
