@@ -97,6 +97,7 @@ cmd_login() {
 
   docker compose ${COMPOSE_PROFILE_ARGS[@]+"${COMPOSE_PROFILE_ARGS[@]}"} run --rm -it \
     --user 1000:1000 \
+    -v "${VOLUME_NAME}:${CLAUDE_HOME}" \
     --entrypoint /bin/bash \
     -e MOONMIND_CLAUDE_CLI_AUTH_MODE=oauth \
     -e ANTHROPIC_API_KEY= \

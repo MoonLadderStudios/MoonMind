@@ -1,12 +1,15 @@
 # Docker Image Notes
 
-`api_service/Dockerfile` builds the shared API and Temporal worker image. Agent
-CLIs and provider SDKs are owned by Omnigent and its host image at
-`services/omnigent/moonmind-host/Dockerfile`; the application image does not
-install Codex, Claude Code, OpenCode, Gemini, or Node/npm.
+`api_service/Dockerfile` builds the shared API and Temporal worker image.
+Omnigent owns new agent execution through its host image at
+`services/omnigent/moonmind-host/Dockerfile`. The application image still carries
+Codex, Claude Code, and their Node runtime for retained Temporal managed-launch
+activities, including queued launches and recovery retries. Remove that tooling
+after these consumers migrate to Omnigent and their existing work has drained.
+Provider SDKs, OpenCode, Gemini, and npm are absent from the application image.
 
-The frontend builder uses Node to compile Vite assets. Production receives only
-the compiled assets. The `test-runtime` target includes Node/npm separately so
+The frontend builder uses Node to compile Vite assets. Production receives the
+compiled assets. The `test-runtime` target includes Node/npm separately so
 `tools/test_unit.sh` can run both Python and frontend tests. Its Python test
 extras include the TOML parser used by dependency checks.
 

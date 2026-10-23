@@ -277,8 +277,9 @@ auth volume, and finalization endpoint rather than on the tmate URL itself.
 
 The auth runner uses the installed shared Omnigent host image, which contains
 the provider CLIs. `MOONMIND_OAUTH_RUNNER_IMAGE` selects an explicit custom image.
-The API/worker image contains no agent CLI. The shell login helpers use the
-corresponding `omnigent-host-codex` or `omnigent-host-claude` Compose service.
+The shell login helpers use the corresponding `omnigent-host-codex` or
+`omnigent-host-claude` Compose service and mount the selected credential volume
+at the configured `CODEX_VOLUME_PATH` or `CLAUDE_VOLUME_PATH`.
 
 ### 5.4 Provider terminal finalization workflow
 

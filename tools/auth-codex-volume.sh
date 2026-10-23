@@ -85,9 +85,12 @@ _run_auth_command() {
 
   docker compose ${COMPOSE_PROFILE_ARGS[@]+"${COMPOSE_PROFILE_ARGS[@]}"} run --rm -it \
     --user 1000:1000 \
+    -v "${VOLUME_NAME}:${CODEX_HOME}" \
     --entrypoint /bin/bash \
     -e TERM="${CODEX_TERM}" \
     -e CODEX_HOME="${CODEX_HOME}" \
+    -e CODEX_CONFIG_HOME="${CODEX_HOME}" \
+    -e CODEX_CONFIG_PATH="${CODEX_HOME}/config.toml" \
     "$AUTH_SERVICE" \
     -lc 'stty sane 2>/dev/null || true; exec "$@"' -- \
     "${command_parts[@]}"

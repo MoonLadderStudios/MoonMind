@@ -5,6 +5,19 @@
 # ---------------------------------------------------------------------------
 FROM node:26-bookworm AS node-runtime
 
+# Retained Temporal managed launches and their retries still execute these
+# CLIs in the shared API/worker image. Remove this stage only after those
+# consumers migrate to Omnigent and their existing work has drained.
+FROM node-runtime AS managed-tooling
+ARG CODEX_CLI_VERSION=latest
+ARG CLAUDE_CLI_VERSION=2.1.281
+RUN --mount=type=cache,target=/root/.npm \
+    npm install --global --prefix /opt/moonmind-managed-cli --include=optional --no-audit --no-fund \
+        "@openai/codex@${CODEX_CLI_VERSION}" \
+        "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}" \
+    && /opt/moonmind-managed-cli/bin/codex --version \
+    && /opt/moonmind-managed-cli/bin/claude --version
+
 FROM node-runtime AS frontend-builder
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 WORKDIR /build
@@ -61,8 +74,8 @@ SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 
 WORKDIR /app
 
-# API and Temporal workers coordinate execution; agent runtimes live in the
-# Omnigent host image. Keep only control-plane and container-job tooling here.
+# Keep the shared Python/test layer free of agent tooling. The production
+# layer retains the CLIs required by pre-Omnigent Temporal launch consumers.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
@@ -150,10 +163,18 @@ RUN if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
 
 FROM runtime-dependencies AS runtime-base
 
-# Install the egress proxy before source copies so source edits retain this layer.
+# Install the egress proxy and the retained CLIs' Node runtime before source
+# copies so source edits retain this layer. npm stays in the build/test images.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends squid
+    apt-get update && apt-get install -y --no-install-recommends squid libatomic1
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=managed-tooling /opt/moonmind-managed-cli /opt/moonmind-managed-cli
+RUN ln -s /opt/moonmind-managed-cli/bin/codex /usr/local/bin/codex \
+    && ln -s /opt/moonmind-managed-cli/bin/claude /usr/local/bin/claude \
+    && runuser -u app -- env HOME=/home/app \
+        PATH="/usr/local/bin:/usr/local/sbin:/usr/bin:/bin" \
+        sh -c 'codex --version && claude --version'
 
 # Copy source code AFTER installing locked dependencies so code changes only
 # invalidate the lightweight project install.
