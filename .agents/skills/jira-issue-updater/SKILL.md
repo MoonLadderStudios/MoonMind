@@ -132,8 +132,12 @@ Example tool payload:
 When no native Jira tool is exposed but an authenticated MoonMind API endpoint is available, call:
 
 ```bash
+token="$(cat "${MOONMIND_MCP_TOOLS_BEARER_TOKEN_FILE:-/dev/null}" 2>/dev/null || true)"
+token="${token:-${MOONMIND_MCP_TOOLS_BEARER_TOKEN:-}}"
 curl -sS -X POST "$MOONMIND_URL/mcp/tools/call" \
   -H "Content-Type: application/json" \
+  -H "X-MoonMind-Mcp-Tools: v1" \
+  -H "Authorization: Bearer $token" \
   -d '{
     "tool": "jira.get_transitions",
     "arguments": {
@@ -143,7 +147,7 @@ curl -sS -X POST "$MOONMIND_URL/mcp/tools/call" \
   }'
 ```
 
-Use the authentication mechanism already provided by the runtime or user. Do not ask the user to paste raw Atlassian credentials into the shell, task prompt, artifacts, or logs.
+Use the authentication mechanism already provided by the runtime or user. Inside a MoonMind managed step that is the step's scoped Jira tool capability: send `X-MoonMind-Mcp-Tools: v1` and `Authorization: Bearer` with the token from `MOONMIND_MCP_TOOLS_BEARER_TOKEN_FILE` (or `MOONMIND_MCP_TOOLS_BEARER_TOKEN`). Do not ask the user to paste raw Atlassian credentials into the shell, task prompt, artifacts, or logs.
 
 ## Failure Modes
 

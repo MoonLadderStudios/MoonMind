@@ -16,23 +16,19 @@ Implementation: [`api_service/api/routers/mcp_tools.py`](../../api_service/api/r
 
 ## Authentication
 
-Protected MCP discovery/invocation routes use the same `get_current_user()`
-dependency as the rest of the API
-(`api_service/api/routers/mcp_tools.py`). The one MoonMind selector `AUTH_PROVIDER`
-(`accounts` | `oidc` | `header` | explicitly restricted local `disabled`) decides
-how that dependency validates the caller. Retired selectors (`keycloak`, `default`,
-`google`, `local`) fail at startup with migration guidance; they are never silently
-translated. The Streamable HTTP `GET /mcp` probe (`handle_streamable_http_get`)
-is intentionally unauthenticated: it carries no `Depends(get_current_user())`
-and answers `406` (missing `text/event-stream` accept header) or `405`, so it
-must not be read as an authenticated route. See [AuthenticationContracts.md](../Security/AuthenticationContracts.md)
-for the authoritative mode, identity, session, and error contracts.
+Every MCP route except the `GET /mcp` probe resolves its caller through
+`get_mcp_caller` (`api_service/api/routers/mcp_tools.py`). A caller is either
+the admitted operator or a managed runtime presenting its own scoped
+capability; neither path resolves or synthesizes a person. The `GET /mcp`
+probe carries no authentication and only answers `406` or `405`. See
+[AuthenticationContracts.md](../Security/AuthenticationContracts.md) for the
+mode, session, and error contracts behind `AUTH_PROVIDER`.
 
 | Caller | Credential at the MCP boundary | Scope |
 | --- | --- | --- |
-| Browser / API user (`accounts`, `oidc`, `header`) | Bearer credential validated by `get_current_user()` on every protected route today; the MoonMind session cookie for the resolved `User.id` UUID is not implemented (no cookie issuance routes exist — bearer only where the route explicitly accepts it) | Only its authorized routes and resources; conflicting cookie/bearer identities are rejected (`401 auth_conflict`) |
-| Local single-user (`disabled`) | Stable persisted user behind loopback-only bind or documented trusted ingress (`MOONMIND_TRUSTED_INGRESS=1`) | Same execution-linked authorization; never an error fallback |
-| Machine (worker / container-job) | Container-job bearer (`MOONMIND_CONTAINER_JOBS_BEARER_TOKEN` family) or other scoped service credential on its authorized routes | Succeeds only on authorized routes and resources; runtime, session, and worker tokens never become unrestricted browser credentials. The removed legacy worker-token path is rejected (`410 worker_token_deprecated`). |
+| Operator | `get_instance_operator_access`: loopback/approved-ingress admission in local `disabled` mode, or a MoonMind session in `accounts`, `oidc`, `header` | All MCP tools. A presented machine credential or marker fails closed (`401`) rather than becoming operator access. |
+| Managed runtime (Jira Skills) | `X-MoonMind-Mcp-Tools: v1` plus `Authorization: Bearer` with the step's `MOONMIND_MCP_TOOLS_BEARER_TOKEN` (delivered as `..._FILE` on Omnigent hosts), minted at launch for steps whose Skill requires `jira` | Only `jira.*` tools, while the bound workflow is active and before expiry. Wrong purpose is `403 mcp_tool_capability_scope_mismatch`; invalid, expired, or foreign-audience tokens are `401 invalid_mcp_tool_capability`; a finished or unknown workflow is `401 stale_mcp_tool_capability`. No fallback to operator admission. |
+| Container jobs | Container-job session capability on `POST /mcp/container/tools/call` only | `container.*` tools within the signed session, workspace, and owner scope. |
 
 Missing credentials at strict boundaries are `401 auth_required`; invalid, expired,
 wrong-key/issuer/purpose, or reserved-identity credentials are `401 auth_invalid`,
@@ -59,7 +55,9 @@ deployment (no public base URL or approved trusted ingress), an origin-bearing
 browser request must also use a loopback Host. Matching attacker-controlled Host
 and Origin values cannot authorize a DNS-rebound browser request. Configured
 public URLs and the documented audited-ingress path retain their existing
-contracts; origin-less Compose clients can still address `http://api:8000`.
+contracts; origin-less Compose clients can still address `http://api:8000`
+but need their scoped capability, because reaching the API is not operator
+admission.
 CORS alone is not a mutation authorization boundary.
 
 MoonMind supports protocol versions `2025-03-26` and `2025-06-18` for its implemented lifecycle and tool methods:
@@ -98,6 +96,6 @@ The `result` shape is tool-specific. Errors use HTTP status codes with a structu
 
 ## Client configuration
 
-Point clients at the MoonMind API base URL, for example `http://localhost:7000` from the host or `http://api:8000` from another Compose service. Configure authentication headers to match `AUTH_PROVIDER`.
+Point clients at the MoonMind API base URL, for example `http://localhost:7000` from the host or `http://api:8000` from another Compose service. Operator clients use the admitted operator path for the deployment's `AUTH_PROVIDER`; managed runtimes send their scoped capability headers.
 
 The API container advertises the MCP endpoint using `MODEL_CONTEXT_PROTOCOL_ENABLED`, `MODEL_CONTEXT_PROTOCOL_PORT`, and `MODEL_CONTEXT_PROTOCOL_HOST` in the canonical Compose file.

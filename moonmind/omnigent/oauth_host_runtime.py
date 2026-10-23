@@ -99,6 +99,11 @@ from moonmind.security.execution_fanout_capabilities import (
     mint_execution_fanout_capability,
     require_execution_fanout_authorization,
 )
+from moonmind.security.mcp_tool_capabilities import (
+    JIRA_TOOLS_PURPOSE,
+    mint_mcp_tool_capability,
+    requires_jira_tools,
+)
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from moonmind.workflows.skills.run_projection import (
     load_resolved_skillset,
@@ -227,11 +232,13 @@ _RUNTIME_EXECUTION_PROFILE_ENV_NAMES = (
     "MOONMIND_CONTAINER_JOBS_WORKSPACE_RELATIVE_PATH",
     "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE",
     "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE",
+    "MOONMIND_MCP_TOOLS_BEARER_TOKEN_FILE",
 )
 _SECRET_RUNTIME_ENV_NAMES = frozenset(
     {
         "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN",
         "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN",
+        "MOONMIND_MCP_TOOLS_BEARER_TOKEN",
     }
 )
 _RUNTIME_CAPABILITY_FILE_ENV = {
@@ -242,6 +249,10 @@ _RUNTIME_CAPABILITY_FILE_ENV = {
     "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": (
         "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE",
         "execution-fanout",
+    ),
+    "MOONMIND_MCP_TOOLS_BEARER_TOKEN": (
+        "MOONMIND_MCP_TOOLS_BEARER_TOKEN_FILE",
+        "mcp-tools",
     ),
 }
 _RUNTIME_CAPABILITY_MOUNT_ROOT = "/opt/moonmind/capabilities"
@@ -3937,6 +3948,18 @@ class OmnigentOAuthHostRuntime:
                     source_kind="omnigent",
                     lifetime_seconds=timeout_seconds,
                 )
+            )
+        if requires_jira_tools(normalized_capabilities):
+            environment["MOONMIND_MCP_TOOLS_BEARER_TOKEN"] = mint_mcp_tool_capability(
+                secret=str(settings.security.JWT_SECRET_KEY or ""),
+                purpose=JIRA_TOOLS_PURPOSE,
+                workflow_id=current_workflow_id,
+                agent_run_id=agent_run_id,
+                step_id=current_step_execution_id,
+                session_id=session_scope,
+                runtime_id=runtime_id,
+                source_kind="omnigent",
+                lifetime_seconds=timeout_seconds,
             )
         return environment
 

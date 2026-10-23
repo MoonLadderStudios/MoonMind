@@ -33,18 +33,19 @@ If trusted Jira content is not available, attempt a bounded MoonMind MCP fetch:
 
 ```bash
 test -n "$MOONMIND_URL"
-curl -fsS -H "$MOONMIND_AUTH_HEADER" "$MOONMIND_URL/mcp/tools"
-curl -fsS -X POST "$MOONMIND_URL/mcp/tools/call" \
+token="$(cat "${MOONMIND_MCP_TOOLS_BEARER_TOKEN_FILE:-/dev/null}" 2>/dev/null || true)"
+token="${token:-${MOONMIND_MCP_TOOLS_BEARER_TOKEN:-}}"
+set -- -H 'X-MoonMind-Mcp-Tools: v1' -H "Authorization: Bearer $token"
+curl -fsS "$@" "$MOONMIND_URL/mcp/tools"
+curl -fsS -X POST "$MOONMIND_URL/mcp/tools/call" "$@" \
   -H 'content-type: application/json' \
-  -H "$MOONMIND_AUTH_HEADER" \
   --data '{"tool":"jira.verify_connection","arguments":{}}'
-curl -fsS -X POST "$MOONMIND_URL/mcp/tools/call" \
+curl -fsS -X POST "$MOONMIND_URL/mcp/tools/call" "$@" \
   -H 'content-type: application/json' \
-  -H "$MOONMIND_AUTH_HEADER" \
   --data '{"tool":"jira.get_issue","arguments":{"issueKey":"ENG-123"}}'
 ```
 
-When the MoonMind API requires auth, use an existing runtime token through `MOONMIND_AUTH_HEADER`, `MOONMIND_API_TOKEN`, `MOONMIND_AUTH_TOKEN`, `MOONMIND_BEARER_TOKEN`, or `MOONMIND_API_KEY`; do not print those values.
+Inside a MoonMind managed step, the Jira tool route authenticates with the step's scoped Jira tool capability (`MOONMIND_MCP_TOOLS_BEARER_TOKEN_FILE`, or `MOONMIND_MCP_TOOLS_BEARER_TOKEN`); it works only for `jira.*` tools while the workflow is active. Outside a managed step, an operator client on the admitted operator path needs no token. Do not print token values.
 
 Never scrape private Atlassian browser pages, ask for `ATLASSIAN_API_KEY`, call Jira directly with raw credentials, or run `printenv`, `env`, `set`, or equivalent commands that can dump secrets into logs.
 

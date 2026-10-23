@@ -418,7 +418,9 @@ under `/opt/moonmind/capabilities`. The login-shell profile exports only
 value. The portable queue helper reads that file and fails closed when the
 selector exists but the file is missing or empty. This preserves unchanged
 upstream host images and avoids a token broker, sidecar, broad API token, or
-operator-managed permission switch.
+operator-managed permission switch. A `jira` requirement uses the same delivery
+for a workflow-bound bearer that the general MCP route accepts only for
+`jira.*` tools, exposed as `MOONMIND_MCP_TOOLS_BEARER_TOKEN_FILE`.
 
 The container-job bearer uses the same lease-owned file pattern. Both the
 projected dependency-free `moonmind` CLI and the shared Python CLI prefer

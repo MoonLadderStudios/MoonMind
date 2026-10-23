@@ -29,6 +29,11 @@ from moonmind.security.execution_fanout_capabilities import (
     mint_execution_fanout_capability,
     require_execution_fanout_authorization,
 )
+from moonmind.security.mcp_tool_capabilities import (
+    JIRA_TOOLS_PURPOSE,
+    mint_mcp_tool_capability,
+    requires_jira_tools,
+)
 
 
 class OmnigentRuntimeEnvironmentService:
@@ -87,7 +92,8 @@ class OmnigentRuntimeEnvironmentService:
         required_capabilities = authored_required_capabilities(request)
         needs_fanout = EXECUTION_FANOUT_REQUIRED_CAPABILITY in required_capabilities
         needs_containers = "docker" in required_capabilities
-        if not needs_fanout and not needs_containers:
+        needs_jira_tools = requires_jira_tools(required_capabilities)
+        if not needs_fanout and not needs_containers and not needs_jira_tools:
             return {}
         try:
             require_execution_fanout_authorization(
@@ -184,6 +190,18 @@ class OmnigentRuntimeEnvironmentService:
                     source_kind="omnigent",
                     lifetime_seconds=capability_lifetime_seconds,
                 )
+            )
+        if needs_jira_tools:
+            environment["MOONMIND_MCP_TOOLS_BEARER_TOKEN"] = mint_mcp_tool_capability(
+                secret=self._signing_secret,
+                purpose=JIRA_TOOLS_PURPOSE,
+                workflow_id=workflow_id,
+                agent_run_id=step_execution_id,
+                step_id=step_execution_id,
+                session_id=host_lease_ref,
+                runtime_id=runtime_id,
+                source_kind="omnigent",
+                lifetime_seconds=capability_lifetime_seconds,
             )
         repository_connection_ref = authored_connection_ref(request)
         if repository_connection_ref:

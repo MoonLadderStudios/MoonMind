@@ -381,6 +381,7 @@ async def get_instance_operator_access(
         name in request.headers
         for name in (
             "x-moonmind-execution-fanout",
+            "x-moonmind-mcp-tools",
             "x-moonmind-worker-token",
             "x-moonmind-integration-token",
         )
