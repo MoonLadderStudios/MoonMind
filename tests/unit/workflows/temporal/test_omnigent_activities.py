@@ -1042,9 +1042,7 @@ async def _execute_with_login_session_verdict(
     binding = SimpleNamespace(
         binding_ref=binding_ref,
         credential_mount_ref=SimpleNamespace(
-            auth_volume_ref=SimpleNamespace(
-                credential_generation=credential_generation
-            )
+            auth_volume_ref=SimpleNamespace(credential_generation=credential_generation)
         ),
         effective_launch_snapshot={"snapshotRef": "launch-1"},
     )
@@ -1054,6 +1052,12 @@ async def _execute_with_login_session_verdict(
         lookups.append(profile_id)
         return binding
 
+    from moonmind.omnigent import codex_login
+
+    record_ended_login = AsyncMock()
+    monkeypatch.setattr(
+        codex_login, "record_ended_codex_login", record_ended_login, raising=False
+    )
     probe = AsyncMock(return_value=verdict)
     monkeypatch.setattr(
         OmnigentOAuthHostRepository, "get_binding_for_profile", get_binding_for_profile
@@ -1069,7 +1073,7 @@ async def _execute_with_login_session_verdict(
             idempotencyKey="step-ended-login",
         ),
     )
-    return result, lookups, probe, binding
+    return result, lookups, probe, binding, record_ended_login
 
 
 @pytest.mark.asyncio
@@ -1081,11 +1085,12 @@ async def test_never_started_codex_turn_on_ended_login_requires_reauthentication
     mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane, code: str
 ):
     """An ended ChatGPT login cannot be fixed by retrying on a fresh host."""
-    result, lookups, probe, binding = await _execute_with_login_session_verdict(
+    result, lookups, probe, binding, record = await _execute_with_login_session_verdict(
         monkeypatch, mock_run, code=code, verdict="ended"
     )
 
     assert lookups == ["codex_openai_oauth"]
+    record.assert_awaited_once_with("codex_openai_oauth", 3)
     probe.assert_awaited_once_with(
         binding=binding, effective_launch={"snapshotRef": "launch-1"}
     )
@@ -1110,11 +1115,14 @@ async def test_never_started_codex_turn_on_ended_login_requires_reauthentication
 async def test_never_started_codex_turn_keeps_retry_without_ended_login_proof(
     mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane, verdict: str
 ):
-    result, _lookups, probe, _binding = await _execute_with_login_session_verdict(
-        monkeypatch, mock_run, code="agent_startup_pending", verdict=verdict
+    result, _lookups, probe, _binding, record = (
+        await _execute_with_login_session_verdict(
+            monkeypatch, mock_run, code="agent_startup_pending", verdict=verdict
+        )
     )
 
     probe.assert_awaited_once()
+    record.assert_not_awaited()
     assert result == _never_started_codex_result("agent_startup_pending")
 
 
@@ -1131,11 +1139,18 @@ async def test_login_session_probe_is_fenced_to_the_attempted_credential(
     mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane, moved_on
 ):
     """A reconnected profile's new credential cannot classify the old attempt."""
-    result, _lookups, probe, _binding = await _execute_with_login_session_verdict(
-        monkeypatch, mock_run, code="agent_startup_pending", verdict="ended", **moved_on
+    result, _lookups, probe, _binding, record = (
+        await _execute_with_login_session_verdict(
+            monkeypatch,
+            mock_run,
+            code="agent_startup_pending",
+            verdict="ended",
+            **moved_on,
+        )
     )
 
     probe.assert_not_awaited()
+    record.assert_not_awaited()
     assert result == _never_started_codex_result("agent_startup_pending")
 
 
@@ -1144,11 +1159,14 @@ async def test_login_session_probe_is_fenced_to_the_attempted_credential(
 async def test_started_turn_failure_does_not_probe_credentials(
     mock_run, monkeypatch: pytest.MonkeyPatch, isolated_control_plane
 ):
-    result, lookups, probe, _binding = await _execute_with_login_session_verdict(
-        monkeypatch, mock_run, code="codex_turn_error", verdict="ended"
+    result, lookups, probe, _binding, record = (
+        await _execute_with_login_session_verdict(
+            monkeypatch, mock_run, code="codex_turn_error", verdict="ended"
+        )
     )
 
     assert lookups == []
+    record.assert_not_awaited()
     probe.assert_not_awaited()
     assert result == _never_started_codex_result("codex_turn_error")
 
