@@ -25,6 +25,7 @@ TOKEN = "integrations.github.token_ref"
 PROFILE = "workflow.default_provider_profile_ref"
 PUBLISH = "workflow.default_publish_mode"
 CANARY = "skills.canary_percent"
+POLICY = "skills.policy_mode"
 
 pytestmark = pytest.mark.asyncio
 
@@ -264,3 +265,75 @@ async def test_multi_person_settings_stay_protected(factory):
             env={}, session=session
         ).effective_value_async(TOKEN)
         assert effective.source != "instance_override"
+
+
+async def test_instance_edit_during_refused_conversion_is_not_replaced(factory):
+    async with factory() as session:
+        operator = await _user(session)
+        session.add_all(
+            [
+                _personal(operator, TOKEN, "env://STALE_PERSONAL"),
+                _personal(operator, PUBLISH, "branch"),
+                _personal(operator, POLICY, "allowlist"),
+                # An unrelated collision keeps the conversion refused.
+                _workspace(CANARY, 25),
+                _workspace(CANARY, 40),
+            ]
+        )
+        await session.commit()
+        refused = await suc.run_guarded_upgrade(session, operator_authorized=True)
+        assert refused.published is False
+        assert refused.decision.reason_code == "settings_collision"
+
+        # While refused, the operator changes the instance configuration.
+        service = SettingsCatalogService(env={}, session=session)
+        await service.apply_overrides(
+            changes={TOKEN: "env://OPERATOR_NEW", PUBLISH: "branch"}
+        )
+        await service.apply_overrides(changes={POLICY: "permissive"})
+        await service.reset_override(POLICY)
+
+        # Resolving only the unrelated key must not publish the stale personal
+        # value over the operator's confirmed writes.
+        still_refused = await suc.run_guarded_upgrade(
+            session, operator_authorized=True, collision_resolutions={CANARY: 40}
+        )
+        assert still_refused.published is False
+        assert still_refused.decision.reason_code == "settings_collision"
+        assert TOKEN in still_refused.decision.detail
+        assert POLICY in still_refused.decision.detail
+        # An equal instance write agrees with the personal choice.
+        assert PUBLISH not in still_refused.decision.detail
+        assert "env://" not in str(still_refused.to_sanitized_dict())
+        effective = await service.effective_value_async(TOKEN)
+        assert (effective.value, effective.source) == (
+            "env://OPERATOR_NEW",
+            "instance_override",
+        )
+
+        # The disposition may keep the operator's instance write; a reset
+        # cannot be named, so the operator confirms the retained value.
+        resolved = await suc.run_guarded_upgrade(
+            session,
+            operator_authorized=True,
+            collision_resolutions={
+                CANARY: 40,
+                TOKEN: "env://OPERATOR_NEW",
+                POLICY: "allowlist",
+            },
+        )
+        assert resolved.published is True
+        rows = {row.key: row for row in await _rows(session)}
+        assert {key: (row.scope, row.value_json) for key, row in rows.items()} == {
+            TOKEN: (None, "env://OPERATOR_NEW"),
+            PUBLISH: (None, "branch"),
+            POLICY: (None, "allowlist"),
+            CANARY: (None, 40),
+        }
+        converted = {
+            event.key: event
+            for event in (await session.execute(select(SettingsAuditEvent))).scalars()
+            if event.event_type == "settings.override.converted"
+        }
+        assert converted[TOKEN].old_value_json == ["env://STALE_PERSONAL"]
+        assert converted[TOKEN].new_value_json == "env://OPERATOR_NEW"

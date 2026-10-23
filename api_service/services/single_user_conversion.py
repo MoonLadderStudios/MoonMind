@@ -861,9 +861,10 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
                         )
                     )
                 )
+        instance_edited = await _instance_edited_settings_keys(session)
         inv.settings_collisions = sorted(
             key
-            for key, choices in _legacy_settings_choices(rows).items()
+            for key, choices in _legacy_settings_choices(rows, instance_edited).items()
             if len(choices) > 1
         )
         # Retained predecessor rows need the settings transform whatever
@@ -2150,23 +2151,74 @@ async def _has_pending_instance_conversion(session: AsyncSession) -> bool:
     ) or await _has_pending_settings_conversion(session)
 
 
-def _legacy_settings_choices(rows) -> dict[str, dict[str, Any]]:
+#: Choice key for an instance reset made after revision 398. It is never a
+#: canonical JSON value, so a disposition cannot name it.
+_INSTANCE_RESET_CHOICE = "<instance reset>"
+
+
+async def _instance_edited_settings_keys(session: AsyncSession) -> set[str]:
+    """Keys the operator wrote or reset as instance configuration after 398.
+
+    Revision 398 kept the scope label on deployment-subject history, so only
+    instance writes made since then record override events with null scope.
+    """
+    from api_service.db.models import SettingsAuditEvent
+
+    try:
+        async with session.begin_nested():
+            return set(
+                (
+                    await session.execute(
+                        select(SettingsAuditEvent.key)
+                        .where(
+                            SettingsAuditEvent.scope.is_(None),
+                            SettingsAuditEvent.event_type.in_(
+                                ("settings.override.updated", "settings.override.reset")
+                            ),
+                        )
+                        .distinct()
+                    )
+                ).scalars()
+            )
+    except SQLAlchemyError as exc:
+        if _is_absent_table_error(exc):
+            return set()
+        raise
+
+
+def _legacy_settings_choices(
+    rows, instance_edited: set[str] = frozenset()
+) -> dict[str, dict[str, Any]]:
     """The operator's previously effective choices for keys with retained rows.
 
     A personal row overrode its workspace in that person's sessions, so once
     one operator is proven it is that operator's effective choice. Shared
     (instance or workspace) rows decide only keys without a personal row.
-    Equal choices agree however many rows hold them; distinct choices within
-    the deciding tier conflict, whichever row is newer.
+    An instance write or reset made after revision 398 is a later explicit
+    choice for that key, so it joins the deciding tier rather than losing to
+    a retained row. Equal choices agree however many rows hold them; distinct
+    choices within the deciding tier conflict, whichever row is newer.
     """
     pending = {row.key for row in rows if row.scope is not None}
     personal: dict[str, dict[str, Any]] = {}
     shared: dict[str, dict[str, Any]] = {}
+    instance: dict[str, Any] = {}
     for row in rows:
         if row.key in pending:
             tier = personal if row.scope == "user" else shared
             tier.setdefault(row.key, {})[_canonical(row.value_json)] = row
-    return {key: personal.get(key) or shared[key] for key in pending}
+            if row.scope is None:
+                instance[row.key] = row
+    choices: dict[str, dict[str, Any]] = {}
+    for key in pending:
+        choices[key] = dict(personal.get(key) or shared[key])
+        if key in instance_edited:
+            row = instance.get(key)
+            if row is None:
+                choices[key][_INSTANCE_RESET_CHOICE] = None
+            else:
+                choices[key].setdefault(_canonical(row.value_json), row)
+    return choices
 
 
 async def settings_transform(
@@ -2205,7 +2257,8 @@ async def settings_transform(
     resolutions = collision_resolutions or {}
     catalog = SettingsCatalogService()
     converted = merged = resolved = 0
-    for key, choices in sorted(_legacy_settings_choices(rows).items()):
+    instance_edited = await _instance_edited_settings_keys(session)
+    for key, choices in sorted(_legacy_settings_choices(rows, instance_edited).items()):
         if len(choices) > 1:
             chosen = _canonical(resolutions.get(key)) if key in resolutions else None
             if chosen not in choices:
