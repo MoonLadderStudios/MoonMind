@@ -38,7 +38,11 @@ def test_migration_chains_to_current_head() -> None:
     config = Config("api_service/migrations/alembic.ini")
     config.set_main_option("script_location", "api_service/migrations")
     script = ScriptDirectory.from_config(config)
-    assert tuple(script.get_heads()) == ("398_instance_settings",)
+    heads = script.get_heads()
+    assert len(heads) == 1
+    assert migration.revision in {
+        revision.revision for revision in script.walk_revisions(head=heads[0])
+    }
     assert script.get_revision("398_instance_settings").down_revision == (
         "397_instance_preset_catalog"
     )
