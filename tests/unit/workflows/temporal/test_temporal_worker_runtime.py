@@ -29,7 +29,6 @@ from moonmind.workflows.temporal.worker_runtime import (
     _OPENTELEMETRY_LOG_FORMAT,
     _build_agent_runtime_deps,
     _build_deployment_update_executor,
-    _enforce_codex_config_for_managed_fleet,
     _expand_preset_for_child_run,
     _publish_mode_agent_instructions,
     _persist_child_run_task_input_snapshot,
@@ -4303,18 +4302,6 @@ def test_runtime_planner_publish_pr_falls_back_to_top_level_commit_message():
 
     assert plan["nodes"][-1]["inputs"]["commitMessage"] == "Top-level commit text"
 
-def test_enforce_codex_config_skips_non_managed_fleet() -> None:
-    with patch("api_service.scripts.ensure_codex_config.ensure_codex_config") as mock_ensure:
-        _enforce_codex_config_for_managed_fleet(WORKFLOW_FLEET)
-    mock_ensure.assert_not_called()
-
-@pytest.mark.parametrize("fleet", [SANDBOX_FLEET, AGENT_RUNTIME_FLEET])
-def test_enforce_codex_config_runs_for_managed_fleets(fleet: str) -> None:
-    with patch("api_service.scripts.ensure_codex_config.ensure_codex_config") as mock_ensure:
-        mock_ensure.return_value = SimpleNamespace(path="/tmp/codex-config.toml")
-        _enforce_codex_config_for_managed_fleet(fleet)
-    mock_ensure.assert_called_once_with()
-
 @pytest.mark.asyncio
 @patch("moonmind.workflows.temporal.worker_runtime.start_healthcheck_server")
 @patch("moonmind.workflows.temporal.worker_runtime.describe_configured_worker")
@@ -4542,7 +4529,9 @@ async def test_main_async_lane_failure_stops_every_lane_and_never_reports_ready(
     assert sorted(shutdowns) == ["merge", "replay", "user.v2"]
     mock_healthcheck_server.close.assert_called_once()
 
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fleet", ["artifacts", SANDBOX_FLEET, AGENT_RUNTIME_FLEET])
 @patch("moonmind.workflows.temporal.worker_runtime.start_healthcheck_server")
 @patch("moonmind.workflows.temporal.worker_runtime._build_runtime_activities")
 @patch("moonmind.workflows.temporal.worker_runtime.describe_configured_worker")
@@ -4555,6 +4544,7 @@ async def test_main_async_activity_fleet(
     mock_runtime_activities,
     mock_healthcheck,
     monkeypatch,
+    fleet,
 ):
     # An installed immutable release used to enable Worker Versioning and
     # startup routing bootstrap. Installed workers now poll ordinary queues.
@@ -4567,8 +4557,8 @@ async def test_main_async_activity_fleet(
     mock_healthcheck_server.wait_closed = AsyncMock()
     mock_healthcheck.return_value = mock_healthcheck_server
     mock_topology = MagicMock()
-    mock_topology.fleet = "artifacts"
-    mock_topology.task_queues = ["mm.activity.artifacts"]
+    mock_topology.fleet = fleet
+    mock_topology.task_queues = [f"mm.activity.{fleet}"]
     mock_topology.concurrency_limit = 3
     mock_topology.queue_concurrency_limits = {}
     mock_describe.return_value = mock_topology
@@ -4594,7 +4584,7 @@ async def test_main_async_activity_fleet(
     # Verify Worker creation uses activities
     mock_worker_cls.assert_called_once()
     kwargs = mock_worker_cls.call_args.kwargs
-    assert kwargs["task_queue"] == "mm.activity.artifacts"
+    assert kwargs["task_queue"] == f"mm.activity.{fleet}"
     assert kwargs["workflows"] == ()
     assert kwargs["activities"] == (test_handler,)
     assert "deployment_config" not in kwargs
@@ -4614,6 +4604,7 @@ async def test_main_async_activity_fleet(
     assert "releaseRouting" not in health_state.readiness_metadata
     assert "workerVersioningEnabled" not in health_state.readiness_metadata
     assert not mock_client.workflow_service.mock_calls
+
 
 @pytest.mark.asyncio
 @patch("moonmind.workflows.temporal.worker_runtime._build_agent_runtime_deps")

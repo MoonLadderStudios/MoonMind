@@ -275,6 +275,11 @@ the OAuth session row through `terminal_session_id` and `terminal_bridge_id`.
 Provider profile and workflow semantics still depend on the OAuth session row,
 auth volume, and finalization endpoint rather than on the tmate URL itself.
 
+The auth runner uses the installed shared Omnigent host image, which contains
+the provider CLIs. `MOONMIND_OAUTH_RUNNER_IMAGE` selects an explicit custom image.
+The API/worker image contains no agent CLI. The shell login helpers use the
+corresponding `omnigent-host-codex` or `omnigent-host-claude` Compose service.
+
 ### 5.4 Provider terminal finalization workflow
 
 The launched provider terminal page should let the operator finish provider

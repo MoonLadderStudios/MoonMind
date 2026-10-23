@@ -1,35 +1,26 @@
 # Docker Image Notes
 
-## Multi-stage Tooling Builder
+`api_service/Dockerfile` builds the shared API and Temporal worker image. Agent
+CLIs and provider SDKs are owned by Omnigent and its host image at
+`services/omnigent/moonmind-host/Dockerfile`; the application image does not
+install Codex, Claude Code, OpenCode, Gemini, or Node/npm.
 
-The `api_service/Dockerfile` uses a dedicated Node.js builder stage named `tooling-builder` to install the packaged CLIs used by the shared runtime image.
+The frontend builder uses Node to compile Vite assets. Production receives only
+the compiled assets. The `test-runtime` target includes Node/npm separately so
+`tools/test_unit.sh` can run both Python and frontend tests. Its Python test
+extras include the TOML parser used by dependency checks.
 
-Relevant build args include:
+The production Python graph is exported from `poetry.lock` with `--only main`.
+Keep HTTP/WebSocket support, PostgreSQL drivers, artifact storage, Docker access,
+and telemetry declared for their application consumers. OAuth enrollment runs
+provider CLIs in the installed Omnigent host image; an explicit
+`MOONMIND_OAUTH_RUNNER_IMAGE` overrides that selection. API and worker startup do
+not read or rewrite local agent configuration or credential homes.
 
-- `CODEX_CLI_VERSION`
-- `CLAUDE_CLI_VERSION`
+The historical Codex login-check operation also selects the shared Omnigent
+host image, with `CODEX_LOGIN_CHECK_IMAGE` retained as its explicit override.
 
-During the build the stage:
-
-1. Installs minimal Debian packages required for global npm installs.
-2. Disables npm analytics prompts for deterministic builds.
-3. Runs `npm install -g` for the requested CLI packages.
-4. Replaces the npm-created `codex` launcher symlink with a stable wrapper script so multi-stage `COPY` keeps that CLI anchored in the copied `node_modules` tree.
-5. Cleans the npm cache before handing control back to the Python runtime stage.
-
-The final runtime image copies the produced launchers, the Node runtime, supporting `node_modules`, and license files from the builder. It intentionally relies on the platform-specific optional dependency already installed under `@openai/codex` rather than copying an extra Codex vendor tree into the image.
-
-The runtime stage also includes additional shell tooling required by bootstrap and diagnostics workflows, including `rg` (`ripgrep`) so Codex preflight and maintenance shells can perform reliable search checks without ad-hoc runtime installs.
-
-### Updating Versions
-
-Override the defaults when building an image:
-
-```bash
-docker build \
-  --build-arg CODEX_CLI_VERSION=0.104.0 \
-  --build-arg CLAUDE_CLI_VERSION=latest \
-  -f api_service/Dockerfile .
-```
-
-Publishing a new image should always document the CLI versions in release notes so downstream operators can audit automation changes.
+The application image retains Git, GitHub CLI, Docker CLI/Buildx/Compose,
+ripgrep, curl, SSH, and process tools for workspace publication, managed
+container jobs, deployment coordination, and diagnostics. The standalone
+queue-worker entrypoint has been removed; durable execution belongs to Temporal.

@@ -781,11 +781,8 @@ def test_poetry_lock_has_no_qdrant_distribution_transitive() -> None:
 
 
 def test_surviving_dependency_libraries_remain_supported() -> None:
-    """Ordinary provider/HTTP/YAML/source-control libraries stay declared.
+    """Retained HTTP, artifact, workflow, and database libraries stay declared.
 
-    MoonLadderStudios/MoonMind#4111: vector removal must not take ordinary
-    libraries with it. ``pyproject.toml`` must still explicitly declare the
-    provider, HTTP, YAML, artifact, source-control, and workspace libraries.
     Real importability in the built image is proven by
     ``tests/integration/test_installed_graph_vector_free_4111.py``; this
     hermetic pin keeps declaration support explicit without an install.
@@ -801,14 +798,11 @@ def test_surviving_dependency_libraries_remain_supported() -> None:
         name.lower() for name in pyproject["tool"]["poetry"]["dependencies"]
     }
     for library in (
-        "openai",
-        "anthropic",
         "httpx",
         "requests",
         "aiohttp",
         "boto3",
         "PyYAML",
-        "gitpython",
         "SQLAlchemy",
         "temporalio",
         "typer",
