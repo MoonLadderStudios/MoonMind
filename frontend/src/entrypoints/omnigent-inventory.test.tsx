@@ -364,7 +364,7 @@ describe('OmnigentInventoryPage', () => {
       if (url === '/api/ui/info') {
         return json({
           app: 'moonmind', apiBase: '/api', features: { omnigentAgents: true },
-          endpoints: { omnigentAgents: '/api/omnigent/api/agents' }, settingsPermissions: [],
+          endpoints: { omnigentAgents: '/api/omnigent/api/agents' },
         });
       }
       if (url.startsWith('/api/v1/provider-profiles')) return json([]);

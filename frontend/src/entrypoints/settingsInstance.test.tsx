@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
@@ -13,9 +13,7 @@ describe('Instance settings page (account-free)', () => {
   const mockPayload: BootPayload = {
     page: 'settings-instance',
     apiBase: '/api',
-    initialData: {
-      settingsPermissions: ['settings.catalog.read', 'settings.audit.read'],
-    },
+    initialData: {},
   };
 
   let fetchSpy: MockInstance;
@@ -59,6 +57,9 @@ describe('Instance settings page (account-free)', () => {
     );
 
     await screen.findByRole('heading', { name: 'Instance' });
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([url]) =>
+      String(url).startsWith('/api/v1/settings/catalog'),
+    )).toBe(true));
     const urls = fetchSpy.mock.calls.map(([url]) => String(url));
     expect(urls.some((url) => url === '/me' || url.includes('/api/me/profile'))).toBe(false);
     expect(urls.some((url) => /[?&]scope=(personal|user|global)\b/.test(url))).toBe(false);

@@ -283,7 +283,8 @@ _PRINCIPAL_SURFACES: tuple[tuple[str, str, str], ...] = (
     ("preset_recents", "user_id", "uuid_fk"),
     ("settings_overrides", "user_id", "uuid_fk"),
     ("settings_audit_events", "user_id", "uuid_fk"),
-    ("settings_audit_events", "actor_user_id", "uuid_fk"),
+    # Audit actors record who attempted a change (including rejected writes),
+    # not ownership of retained settings. Preserve them without attribution.
     ("temporal_executions", "owner_id", "user_temporal"),
     ("temporal_execution_sources", "owner_id", "user_temporal"),
     ("workflow_execution_source_mappings", "owner_id", "user_temporal"),
@@ -432,7 +433,7 @@ def _artifact_human_principal(raw: Any) -> str | None:
     return _looks_like_uuid(value[5:] if value.startswith("user:") else value)
 
 
-def _uses_reserved_disabled_artifact_scope() -> bool:
+def _uses_reserved_disabled_scope() -> bool:
     """Recognize predecessor local scope during conversion, never as admission."""
     return (
         os.environ.get("AUTH_PROVIDER", "disabled").strip().lower() == "disabled"
@@ -465,7 +466,7 @@ async def _has_pending_artifact_recovery(session: AsyncSession) -> bool:
             stripped(func.substr(normalized, len(prefix) + 1)) != "",
         ) for prefix in _ARTIFACT_MACHINE_PREFIXES),
     )
-    if _uses_reserved_disabled_artifact_scope():
+    if _uses_reserved_disabled_scope():
         default_owner = DEPLOYMENT_SUBJECT_ID
         if default_owner is not None:
             # The unchanged raw-owner equality already admits this exact
@@ -569,8 +570,8 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
     users = await source_user_ids(session)
     inv.user_ids = sorted(str(u) for u in users)
     user_set = set(inv.user_ids)
-    preserve_deployment_artifacts = (
-        _uses_reserved_disabled_artifact_scope()
+    preserve_deployment_scope = (
+        _uses_reserved_disabled_scope()
         and DEPLOYMENT_SUBJECT_ID not in user_set
     )
 
@@ -615,8 +616,14 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
                 else None
             )
             if (
-                preserve_deployment_artifacts
-                and kind in {"artifact_principal", "active_artifact_claim", "user_job"}
+                preserve_deployment_scope
+                and kind
+                in {
+                    "artifact_principal",
+                    "active_artifact_claim",
+                    "user_job",
+                    "user_temporal",
+                }
                 and (
                     raw == DEPLOYMENT_SUBJECT_ID
                     or (kind != "user_job" and raw == f"user:{DEPLOYMENT_SUBJECT_ID}")
@@ -1874,7 +1881,7 @@ async def artifacts_transform(
             return {"recovery_grants": 0, "preserved": 0}
         raise
     preserve_deployment_scope = False
-    if _uses_reserved_disabled_artifact_scope() and any(
+    if _uses_reserved_disabled_scope() and any(
         row.created_by_principal
         in {DEPLOYMENT_SUBJECT_ID, f"user:{DEPLOYMENT_SUBJECT_ID}"}
         for row in rows

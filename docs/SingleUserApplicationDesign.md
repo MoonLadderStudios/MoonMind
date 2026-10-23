@@ -349,6 +349,10 @@ evidence. Conversion preserves their stored creator, quota, and claim scopes;
 malformed or unknown human principals still block conversion.
 Execution projections are already instance resources: a missing historical owner
 does not block unrelated conversion, and the projection remains unchanged.
+The reserved zero owner on an account-free local deployment is deployment scope,
+unless a retained account has that ID; other human owners still require attribution.
+Settings audit actors record attempted changes, including rejected requests, not
+resource ownership. Preserve their provenance without using it as attribution.
 Missing ownership never supplies authority to read a linked restricted artifact.
 
 The authoritative eligibility read and conversion share the existing migration
