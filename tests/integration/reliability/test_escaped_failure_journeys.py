@@ -26,6 +26,10 @@ import yaml
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from temporalio import activity
+from temporalio.api.workflowservice.v1 import (
+    DescribeNamespaceResponse,
+    DescribeWorkflowExecutionResponse,
+)
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
@@ -7227,7 +7231,43 @@ async def test_remediation_does_not_declare_initial_assessment_output(
                     workflow_run_id=agent_run_info.run_id,
                 ),
             )
+            monkeypatch.setattr(
+                activity,
+                "client",
+                lambda: SimpleNamespace(
+                    namespace="default",
+                    workflow_service=SimpleNamespace(
+                        describe_workflow_execution=AsyncMock(
+                            return_value=DescribeWorkflowExecutionResponse(
+                                workflow_execution_info={
+                                    "execution": {
+                                        "workflow_id": agent_run_info.workflow_id,
+                                        "run_id": agent_run_info.run_id,
+                                    },
+                                    "parent_execution": {
+                                        "workflow_id": workflow_info.workflow_id,
+                                        "run_id": workflow_info.run_id,
+                                    },
+                                    "parent_namespace_id": "incident-namespace",
+                                }
+                            )
+                        ),
+                        describe_namespace=AsyncMock(
+                            return_value=DescribeNamespaceResponse(
+                                namespace_info={"id": "incident-namespace"}
+                            )
+                        ),
+                    ),
+                ),
+            )
             published = await activities.agent_runtime_publish_artifacts(enriched)
+            _, result_bytes = await artifact_service.read(
+                artifact_id=published.diagnostics_ref,
+                principal=f"workflow:{workflow_info.workflow_id}",
+            )
+            assert AgentRunResult.model_validate_json(result_bytes).summary == (
+                "Remediation completed."
+            )
     finally:
         await engine.dispose()
 
