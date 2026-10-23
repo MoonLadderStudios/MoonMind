@@ -7,7 +7,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Iterable, Literal
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -24,6 +24,9 @@ from api_service.db.models import (
     SettingsOverride,
 )
 from moonmind.config.settings import AppSettings, settings as app_settings
+
+if TYPE_CHECKING:
+    from api_service.services.settings_change_publisher import SettingsChangePublisher
 
 SettingSection = Literal["providers-secrets", "user-workspace", "operations"]
 SettingApplyMode = Literal[
@@ -79,26 +82,6 @@ _UNSAFE_PROFILE_REF_ASSIGNMENT_RE = re.compile(
     r"(secret|token|password|api_key|apikey|credential|private_key|refresh|oauth|"
     r"workflow_payload|artifact|command_history|operational_history|decrypted|"
     r"generated_config|large_artifact)\w*\s*[:=]"
-)
-
-SETTINGS_PERMISSION_NAMES: frozenset[str] = frozenset(
-    {
-        "settings.catalog.read",
-        "settings.effective.read",
-        "settings.workspace.write",
-        "settings.system.read",
-        "settings.system.write",
-        "secrets.metadata.read",
-        "secrets.value.write",
-        "secrets.rotate",
-        "secrets.disable",
-        "secrets.delete",
-        "provider_profiles.read",
-        "provider_profiles.write",
-        "operations.read",
-        "operations.invoke",
-        "settings.audit.read",
-    }
 )
 
 _SECRET_LIKE_SUBSTRINGS = (
@@ -439,25 +422,6 @@ class SettingsDiagnosticRead(BaseModel):
 
 class SettingsDiagnosticsResponse(BaseModel):
     values: dict[str, SettingsDiagnosticRead]
-
-
-def settings_permissions_for_user(user: Any) -> set[str]:
-    from moonmind.security.operator_admission import OperatorAdmission
-
-    if isinstance(user, OperatorAdmission):
-        return set(SETTINGS_PERMISSION_NAMES)
-    if bool(getattr(user, "is_superuser", False)):
-        return set(SETTINGS_PERMISSION_NAMES)
-    raw_permissions = getattr(user, "settings_permissions", set()) or set()
-    return {
-        str(permission)
-        for permission in raw_permissions
-        if str(permission) in SETTINGS_PERMISSION_NAMES
-    }
-
-
-def has_settings_permission(user: Any, permission: str) -> bool:
-    return permission in settings_permissions_for_user(user)
 
 
 _SETTING_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$")
@@ -1646,7 +1610,6 @@ class SettingsCatalogService:
     async def list_audit_events(
         self,
         *,
-        permissions: set[str],
         key: str | None = None,
         limit: int = 50,
     ) -> list[SettingsAuditRead]:
@@ -1666,7 +1629,7 @@ class SettingsCatalogService:
             statement = statement.where(SettingsAuditEvent.key == key)
         result = await self._session.execute(statement)
         return [
-            self._audit_read_model(row, permissions=permissions)
+            self._audit_read_model(row)
             for row in result.scalars().all()
         ]
 
@@ -3747,8 +3710,6 @@ class SettingsCatalogService:
     def _audit_read_model(
         self,
         row: SettingsAuditEvent,
-        *,
-        permissions: set[str],
     ) -> SettingsAuditRead:
         entry = self._entries_by_key.get(row.key)
         affected_systems = list(entry.applies_to) if entry is not None else []
@@ -3757,13 +3718,11 @@ class SettingsCatalogService:
             entry=entry,
             row_redacted=row.redacted
             and (row.old_value_json is not None or row.new_value_json is None),
-            permissions=permissions,
         )
         new_value, new_reasons = self._visible_audit_value(
             row.new_value_json,
             entry=entry,
             row_redacted=row.redacted,
-            permissions=permissions,
         )
         reasons = sorted(set(old_reasons + new_reasons))
         redacted = bool(reasons)
@@ -3799,7 +3758,6 @@ class SettingsCatalogService:
         *,
         entry: SettingRegistryEntry | None,
         row_redacted: bool,
-        permissions: set[str],
     ) -> tuple[Any, list[str]]:
         reasons: list[str] = []
         if value is None:
@@ -3809,7 +3767,6 @@ class SettingsCatalogService:
         if entry is not None and entry.audit.redact:
             if (
                 entry.value_type == "secret_ref"
-                and "secrets.metadata.read" in permissions
                 and isinstance(value, str)
             ):
                 return value, reasons

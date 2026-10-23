@@ -75,11 +75,6 @@ const providersSecretsPayload = {
   page: 'settings-providers-secrets',
   apiBase: '/api',
   initialData: {
-    settingsPermissions: [
-      'provider_profiles.read',
-      'provider_profiles.write',
-      'secrets.metadata.read',
-    ],
     runtimeConfig: { system: { supportedRuntimes: ['codex_cli', 'claude_code'] } },
   },
 } as BootPayload;
@@ -124,7 +119,6 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
             page: 'settings-instance',
             apiBase: '/api',
             initialData: {
-              settingsPermissions: ['settings.catalog.read', 'settings.workspace.write'],
             },
           } as BootPayload}
         />
@@ -158,10 +152,6 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
             page: 'settings-instance',
             apiBase: '/api',
             initialData: {
-              settingsPermissions: [
-                'settings.catalog.read',
-                'settings.workspace.write',
-              ],
             },
           } as BootPayload}
         />
@@ -184,11 +174,6 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
             page: 'settings-providers-secrets',
             apiBase: '/api',
             initialData: {
-              settingsPermissions: [
-                'provider_profiles.read',
-                'provider_profiles.write',
-                'secrets.metadata.read',
-              ],
               runtimeConfig: { system: { supportedRuntimes: ['codex_cli', 'claude_code'] } },
             },
           } as BootPayload}
@@ -221,7 +206,6 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
             page: 'settings-providers-secrets',
             apiBase: '/api',
             initialData: {
-              settingsPermissions: ['provider_profiles.read', 'secrets.metadata.read'],
             },
           } as BootPayload}
         />
@@ -253,7 +237,6 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
             page: 'settings-instance',
             apiBase: '/api',
             initialData: {
-              settingsPermissions: ['settings.catalog.read', 'settings.workspace.write'],
             },
           } as BootPayload}
         />
@@ -291,7 +274,7 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
           payload={{
             page: 'settings-instance',
             apiBase: '/api',
-            initialData: { settingsPermissions: ['settings.catalog.read'] },
+            initialData: { },
           } as BootPayload}
         />
       </BrowserRouter>,
@@ -317,7 +300,6 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
             page: 'settings-instance',
             apiBase: '/api',
             initialData: {
-              settingsPermissions: ['settings.catalog.read', 'settings.workspace.write'],
             },
           } as BootPayload}
         />
@@ -352,7 +334,6 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
             page: 'settings-providers-secrets',
             apiBase: '/api',
             initialData: {
-              settingsPermissions: ['provider_profiles.read', 'secrets.metadata.read'],
               runtimeConfig: { system: { supportedRuntimes: ['codex_cli', 'claude_code'] } },
             },
           } as BootPayload}
