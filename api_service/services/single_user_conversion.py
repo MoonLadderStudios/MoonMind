@@ -301,9 +301,11 @@ _PRINCIPAL_SURFACES: tuple[tuple[str, str, str], ...] = (
 # column whose null (on a non-empty table) refuses conversion.
 _UNOWNED_TRACKED: tuple[tuple[str, str], ...] = (
     ("presets", "created_by"),
-    ("temporal_executions", "owner_id"),
     ("temporal_artifacts", "created_by_principal"),
 )
+# Execution projections are already instance-visible and remain unchanged.
+# Their populated human owners still participate in principal attribution above;
+# a missing historical owner cannot authorize linked artifact recovery.
 
 # Multi-column attribution: a row here is unattributed only when *every*
 # listed user column is null. A workflow run with either owner set is
@@ -713,58 +715,38 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
         col = table.c[column_name]
         probe = await session.begin_nested()
         try:
-            if table_name == "temporal_executions":
-                owner_type_col = table.c.get("owner_type")
-                if owner_type_col is not None:
-                    # ``owner_type`` is a native PostgreSQL enum, which
-                    # ``lower()`` does not accept: cast to text first so
-                    # the user-qualification works on every backend.
-                    nulls = (
-                        await session.execute(
-                            select(func.count())
-                            .select_from(table)
-                            .where(
-                                col.is_(None),
-                                func.lower(cast(owner_type_col, String)) == "user",
-                            )
-                        )
-                    ).scalar() or 0
-                else:
-                    nulls = (
-                        await session.execute(
-                            select(func.count())
-                            .select_from(table)
-                            .where(col.is_(None))
-                        )
-                    ).scalar() or 0
-            else:
-                if table_name == "presets" and "seed_source" in table.c:
-                    predicates = [
-                        col.is_(None), table.c.seed_source.is_(None),
-                        table.c.scope_type.is_not(None),
-                        or_(cast(table.c.scope_type, String) != "personal",
-                            table.c.scope_ref.is_(None)),
-                    ]
-                    if instance_admitted:
-                        # The predecessor OperatorAdmission has no User.id and
-                        # saved custom presets as global with no scope_ref or
-                        # seed_source. Only that exact shape inherits certified
-                        # instance provenance; missing personal scopes do not.
-                        predicates.append(or_(
+            if table_name == "presets" and "seed_source" in table.c:
+                predicates = [
+                    col.is_(None),
+                    table.c.seed_source.is_(None),
+                    table.c.scope_type.is_not(None),
+                    or_(
+                        cast(table.c.scope_type, String) != "personal",
+                        table.c.scope_ref.is_(None),
+                    ),
+                ]
+                if instance_admitted:
+                    # The predecessor OperatorAdmission has no User.id and
+                    # saved custom presets as global with no scope_ref or
+                    # seed_source. Only that exact shape inherits certified
+                    # instance provenance; missing personal scopes do not.
+                    predicates.append(
+                        or_(
                             cast(table.c.scope_type, String) != "global",
                             table.c.scope_ref.is_not(None),
-                        ))
-                    nulls = (
-                        await session.execute(
-                            select(func.count()).select_from(table).where(*predicates)
                         )
-                    ).scalar() or 0
-                else:
-                    nulls = (
-                        await session.execute(
-                            select(func.count()).select_from(table).where(col.is_(None))
-                        )
-                    ).scalar() or 0
+                    )
+                nulls = (
+                    await session.execute(
+                        select(func.count()).select_from(table).where(*predicates)
+                    )
+                ).scalar() or 0
+            else:
+                nulls = (
+                    await session.execute(
+                        select(func.count()).select_from(table).where(col.is_(None))
+                    )
+                ).scalar() or 0
             # Only ambiguous when the table is non-empty.
             total = (
                 await session.execute(select(func.count()).select_from(table))
