@@ -160,6 +160,10 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
     image_ref = "example/host@sha256:" + "1" * 64
     build_digest = "sha256:" + "2" * 64
     selected_model = manifest["selectedModel"]
+    record_ended_login = AsyncMock()
+    monkeypatch.setattr(
+        attestation, "record_ended_codex_login", record_ended_login, raising=False
+    )
     credential_handles = []
     credential_home = tmp_path / "codex-home"
 
@@ -477,6 +481,7 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
         assert "codex_openai_oauth" in str(exc.value)
         assert "ended" in str(exc.value)
         assert "private-token-material" not in str(exc.value)
+        record_ended_login.assert_awaited_once_with("codex_openai_oauth", 4)
         assert attempts == ([] if fault == "oauth_ended" else ["replay-host"])
         assert events.count("launch") == 1
         assert events.count("login_status") == 1
@@ -543,6 +548,7 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
         if fault.startswith("oauth_"):
             assert events.index("login_session") < events.index("catalog")
             assert events.count("login_session") == len(attempts) + 1
+    record_ended_login.assert_not_awaited()
     assert events.count("launch") == 1
     assert set(attempts) == {"replay-host"}
     assert candidate.read_text() == "preserved edits"
