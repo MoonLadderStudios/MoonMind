@@ -475,6 +475,9 @@ AGENT_RUN_MANAGED_NO_PROGRESS_RECONCILIATION_PATCH_ID = (
 AGENT_RUN_MANAGED_NO_PROGRESS_CANCEL_FETCH_PATCH_ID = (
     "agent-run-managed-no-progress-cancel-fetch-v1"
 )
+AGENT_RUN_MANAGED_NO_PROGRESS_EXPIRY_RECOVERY_PATCH_ID = (
+    "agent-run-managed-no-progress-expiry-recovery-v1"
+)
 # Publishes the workflow's effective execution budget into the launch request's
 # ``timeoutPolicy`` so the managed process supervisor enforces the same deadline
 # (MoonLadderStudios/MoonMind#3685 review). In-flight runs started before this
@@ -4371,11 +4374,40 @@ class MoonMindAgentRun:
                 )
 
             remaining_grace = (deadline - workflow.now()).total_seconds()
-            remaining_overall = timeout_seconds - (
-                workflow.now() - overall_start
-            ).total_seconds()
+            remaining_overall = (
+                timeout_seconds - (workflow.now() - overall_start).total_seconds()
+            )
             remaining = min(remaining_grace, remaining_overall)
             if remaining <= 0:
+                if (
+                    use_managed_status_activity
+                    and not uses_codex_session_adapter
+                    and workflow.patched(
+                        AGENT_RUN_MANAGED_NO_PROGRESS_EXPIRY_RECOVERY_PATCH_ID
+                    )
+                ):
+                    if remaining_overall <= 0:
+                        return None
+                    # A terminal provider effect may have arrived during the last
+                    # wait. Reconcile it before requesting cancellation.
+                    status_obj = await self._poll_managed_status(
+                        request=request,
+                        adapter=adapter,
+                        uses_codex_session_adapter=uses_codex_session_adapter,
+                        use_managed_status_activity=use_managed_status_activity,
+                        remaining_budget_seconds=remaining_overall,
+                    )
+                    if status_obj.status in _TERMINAL_RUN_STATUSES:
+                        return await self._fetch_managed_result(
+                            request=request,
+                            adapter=adapter,
+                            uses_codex_session_adapter=uses_codex_session_adapter,
+                            use_managed_status_activity=use_managed_status_activity,
+                        )
+                    remaining_overall = (
+                        timeout_seconds
+                        - (workflow.now() - overall_start).total_seconds()
+                    )
                 if workflow.patched(
                     AGENT_RUN_MANAGED_NO_PROGRESS_CANCEL_FETCH_PATCH_ID
                 ):
@@ -4411,6 +4443,10 @@ class MoonMindAgentRun:
                 and workflow.patched(MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID)
                 and remaining_status_budget <= 0
             ):
+                if workflow.patched(
+                    AGENT_RUN_MANAGED_NO_PROGRESS_EXPIRY_RECOVERY_PATCH_ID
+                ):
+                    continue
                 return None
             status_obj = await self._poll_managed_status(
                 request=request,
@@ -4442,6 +4478,30 @@ class MoonMindAgentRun:
         if not self.run_id or remaining_overall <= 0:
             return None
 
+        recovery_deadline = workflow.now() + timedelta(seconds=remaining_overall)
+        bounded_expiry_recovery = (
+            use_managed_status_activity
+            and not uses_codex_session_adapter
+            and workflow.patched(AGENT_RUN_MANAGED_NO_PROGRESS_EXPIRY_RECOVERY_PATCH_ID)
+        )
+        cancel_budget = {}
+        if bounded_expiry_recovery:
+            route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("agent_runtime.cancel")
+            cancel_budget = {
+                "start_to_close_timeout": timedelta(
+                    seconds=min(
+                        route.timeouts.start_to_close_seconds,
+                        remaining_overall,
+                    )
+                ),
+                "schedule_to_close_timeout": timedelta(
+                    seconds=min(
+                        route.timeouts.schedule_to_close_seconds,
+                        remaining_overall,
+                    )
+                ),
+            }
+
         try:
             await self._execute_routed_activity(
                 "agent_runtime.cancel",
@@ -4450,6 +4510,7 @@ class MoonMindAgentRun:
                     runId=str(self.run_id or ""),
                 ),
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                **cancel_budget,
             )
         except Exception:
             self._get_logger().warning(
@@ -4458,6 +4519,10 @@ class MoonMindAgentRun:
             )
             return None
 
+        if bounded_expiry_recovery:
+            remaining_overall = (recovery_deadline - workflow.now()).total_seconds()
+            if remaining_overall <= 0:
+                return None
         reconcile_seconds = min(
             max(float(poll_interval) * 2.0, 10.0),
             max(1.0, float(remaining_overall)),
@@ -4483,6 +4548,8 @@ class MoonMindAgentRun:
             if completed or self.completion_event.is_set():
                 if self._result_requires_provider_cooldown(self.final_result):
                     return self.final_result
+                if bounded_expiry_recovery:
+                    return self.final_result
                 return None
 
             remaining_status_budget = (deadline - workflow.now()).total_seconds()
@@ -4492,7 +4559,13 @@ class MoonMindAgentRun:
                 and workflow.patched(MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID)
                 and remaining_status_budget <= 0
             ):
-                return None
+                if not bounded_expiry_recovery:
+                    return None
+                remaining_status_budget = (
+                    recovery_deadline - workflow.now()
+                ).total_seconds()
+                if remaining_status_budget <= 0:
+                    return None
             status_obj = await self._poll_managed_status(
                 request=request,
                 adapter=adapter,
@@ -4509,6 +4582,8 @@ class MoonMindAgentRun:
                     use_managed_status_activity=use_managed_status_activity,
                 )
                 if self._result_requires_provider_cooldown(result):
+                    return result
+                if bounded_expiry_recovery and status_obj.status == RunStatus.completed:
                     return result
                 if status_obj.status != RunStatus.cancelled:
                     return None
