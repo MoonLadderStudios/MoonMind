@@ -384,7 +384,7 @@ def test_latest_is_not_moved_by_stale_or_non_main_builds(
 
 
 def test_latest_publication_is_serialized() -> None:
-    merge_job = _load_workflow()["jobs"]["merge"]
-    concurrency = merge_job.get("concurrency") or {}
+    publish_job = _load_workflow()["jobs"]["publish-latest"]
+    concurrency = publish_job.get("concurrency") or {}
     assert concurrency.get("cancel-in-progress") is False
     assert concurrency.get("group")
