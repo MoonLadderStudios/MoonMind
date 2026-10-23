@@ -496,7 +496,9 @@ recognizes only narrow public probes: `/healthz`, `/health`, `/ready`,
 - Absent/invalid presented credentials return 401
   (`auth_required`/`auth_invalid`); a remote URL without a configured
   trusted ingress returns 503 `unavailable` with the missing inputs
-  named. No path mints a synthetic administrator, falls back to an
+  named. Admission outages carry `detail.code` and `detail.message` so
+  clients can distinguish pre-handler rejection from an uncertain outcome.
+  No path mints a synthetic administrator, falls back to an
   account, or weakens access.
 
 ### 13.3 Stream policy and limitations

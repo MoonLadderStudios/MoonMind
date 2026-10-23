@@ -405,6 +405,38 @@ def test_no_user_table_imports_in_boundary():
     assert "usermanager" not in lowered
 
 
+@pytest.mark.parametrize("code", ["unavailable", "misconfigured"])
+def test_http_admission_outage_preserves_code_and_message_before_handler(
+    monkeypatch, code
+):
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+
+    from api_service import operator_admission as adapter
+    from moonmind.security.operator_admission import OperatorAdmissionError
+
+    message = "Operator ingress needs repair."
+
+    def reject_admission(**_inputs):
+        raise OperatorAdmissionError(code, message)
+
+    monkeypatch.setattr(adapter, "resolve_operator_admission", reject_admission)
+    app = FastAPI()
+    admitted = []
+
+    @app.post("/api/executions")
+    def create_execution(_admission=Depends(adapter.require_operator)):
+        admitted.append(True)
+        return {"workflowId": "must-not-be-created"}
+
+    with TestClient(app) as client:
+        response = client.post("/api/executions", json={})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": {"code": code, "message": message}}
+    assert admitted == []
+
+
 def test_stream_revalidation_bound_reuses_existing_bound():
     from moonmind.security import operator_admission as oa
     from moonmind.security import session_authority_4121 as s
