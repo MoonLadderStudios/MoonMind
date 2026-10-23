@@ -172,6 +172,13 @@ authorized for its execution. It does not inherit access to every instance
 resource because the person who launched it owns the instance. A runtime bridge
 remains bound to the intended runtime session, not an arbitrary upstream proxy.
 
+Scheduled occurrences receive execution links to their frozen input and plan
+artifacts before planning. The verified execution plan and original task-input
+snapshot identify those inputs; current parameters cannot substitute another
+artifact. Activity identity supplies the workflow and run receiving access.
+Retries reuse the links, while an authorized recovery execution can retain the
+same frozen inputs under its new identity.
+
 Existing signing, revocation, and credential-materialization mechanisms remain
 where they serve these machine contracts. Removing application login is not a
 blanket deletion of `auth` modules, JWT libraries, signing keys, OAuth workflows,
