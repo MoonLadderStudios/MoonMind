@@ -8,6 +8,7 @@ import logging
 from typing import Any
 
 from moonmind.omnigent.bridge_artifacts import OmnigentArtifactGateway
+from moonmind.omnigent.codex_login import CODEX_LOGIN_SESSION_PROBE
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
@@ -1256,18 +1257,46 @@ class DockerOmnigentHostAttestor:
                         "generation": generation,
                     }
                 )
-        # Execute the declared OAuth login-status preflight inside the exact
-        # runner environment before advancing host authority. Volume presence
-        # and generation only prove enrollment; an expired or revoked token
-        # since validation would otherwise surface only on the first provider
-        # call. Vendor CLI output may carry credential context, so failures
-        # carry only the typed error, never raw output.
-        has_writable_oauth_mount = any(
-            _declared_access_is_writable(attachment.get("accessMode"))
+        # Volume presence and login status prove enrollment, not a usable
+        # session: Codex still reports "logged in" for an ended ChatGPT login
+        # and can answer model/list with its bundled catalog after a 401.
+        # Observe the exact mounted home before trusting that model list.
+        # Ordinary token expiry remains refreshable; only a proven ended
+        # session requires a new sign-in. Never retain vendor login output.
+        oauth_mounts = [
+            (handle, attachment)
             for handle in credential_handles
             for attachment in handle.get("attachments", [])
-        )
-        if has_writable_oauth_mount:
+            if _declared_access_is_writable(attachment.get("accessMode"))
+        ]
+
+        async def verify_codex_login_session() -> None:
+            if not oauth_mounts or plan.payload.harnessId != "codex-native":
+                return
+            for handle, attachment in oauth_mounts:
+                code, verdict, _err = await self._backend.run(
+                    [
+                        "docker",
+                        "exec",
+                        launch_result["containerName"],
+                        "/opt/venv/bin/python",
+                        "-c",
+                        CODEX_LOGIN_SESSION_PROBE,
+                        str(attachment["targetPath"]),
+                    ],
+                    timeout_seconds=10.0,
+                    check=False,
+                )
+                if code == 0 and verdict.strip() == "ended":
+                    profile_id = str(handle.get("providerProfileRef") or "")
+                    raise HarnessPlatformError(
+                        f"The ChatGPT login stored for Provider Profile {profile_id} "
+                        "has ended and cannot be refreshed. Reconnect OAuth in "
+                        "Settings, then retry the failed step.",
+                        code=HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NEEDS_AUTH,
+                    )
+
+        if oauth_mounts:
             harness_id = ""
             try:
                 harness_id = str(plan.payload.harnessId or "")
@@ -1294,6 +1323,7 @@ class DockerOmnigentHostAttestor:
                         "OAuth credential login status failed on the exact host",
                         code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
                     )
+        await verify_codex_login_session()
         host_id = registration["omnigentHostId"]
         try:
 
@@ -1376,6 +1406,9 @@ class DockerOmnigentHostAttestor:
                 # Do not retain raw provider CLI diagnostics in evidence.
                 observation["errorCode"] = exc.code
             model_evidence["attempts"].append(observation)
+            # Refresh can first prove the session ended during this read,
+            # even when a bundled fallback includes the selected model.
+            await verify_codex_login_session()
             if observation["selectedModelPresent"]:
                 break
             if attempt < _MODEL_ATTESTATION_MAX_ATTEMPTS:

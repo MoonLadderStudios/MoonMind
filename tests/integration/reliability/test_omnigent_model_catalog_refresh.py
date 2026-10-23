@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import base64
 import json
 import sys
+import time
 from itertools import product
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,7 +16,10 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+from moonmind.omnigent.harness_platform.failures import (
+    HarnessPlatformError,
+    remediation_for,
+)
 from moonmind.omnigent.host_runtime import (
     GenericOmnigentHostRuntime,
     PreparedHostInputs,
@@ -128,6 +133,18 @@ def _install_catalog_cli(root: Path, *, fault: str) -> None:
             "model_mismatch_probe_error",
             "model_corrected",
         )
+    ]
+    + [
+        (fault, "codex-native")
+        for fault in (
+            "oauth_ended",
+            "oauth_ended_during_refresh",
+            "oauth_ended_bundled_match",
+            "oauth_ended_probe_error",
+            "oauth_aged",
+            "oauth_aged_transient",
+            "oauth_reconnected",
+        )
     ],
 )
 async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
@@ -143,6 +160,46 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
     image_ref = "example/host@sha256:" + "1" * 64
     build_digest = "sha256:" + "2" * 64
     selected_model = manifest["selectedModel"]
+    credential_handles = []
+    credential_home = tmp_path / "codex-home"
+
+    def write_login(*, issued_at: int, expires_at: int) -> None:
+        claims = (
+            base64.urlsafe_b64encode(
+                json.dumps({"iat": issued_at, "exp": expires_at}).encode()
+            )
+            .decode()
+            .rstrip("=")
+        )
+        (credential_home / "auth.json").write_text(
+            json.dumps(
+                {"tokens": {"access_token": f"header.{claims}.private-token-material"}}
+            )
+        )
+
+    if fault.startswith("oauth_"):
+        selected_model = "gpt-6.1-sol"
+        credential_home.mkdir()
+        now = int(time.time())
+        issued_at = now if fault == "oauth_reconnected" else now - 86400
+        expires_at = issued_at if fault == "oauth_ended" else issued_at + 3600
+        write_login(issued_at=issued_at, expires_at=expires_at)
+        credential_handles = [
+            {
+                "credentialRuntimeRef": "credential-runtime:original",
+                "credentialGeneration": 4,
+                "providerProfileRef": "codex_openai_oauth",
+                "materializerRef": "codex-oauth-home@1",
+                "attachments": [
+                    {
+                        "kind": "volume",
+                        "sourceRef": "codex-auth",
+                        "targetPath": "/home/app/.codex",
+                        "accessMode": "read-write",
+                    }
+                ],
+            }
+        ]
     if fault.startswith("model_"):
         selected_model = "opencode-go/gemini-4-argon"
         if fault == "model_corrected":
@@ -168,6 +225,8 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
             }
 
         async def run(self, argv, **kwargs):
+            if argv[:3] == ["docker", "container", "inspect"]:
+                return 0, "rw", ""
             if argv[:3] == ["docker", "image", "inspect"]:
                 return (
                     0,
@@ -191,8 +250,18 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
             if argv[3:] == ["/opt/venv/bin/omnigent", "--version"]:
                 return 0, "omnigent 0.13.0", ""
             if argv[3] == "/bin/sh":
+                if argv[-1] == "/home/app/.codex":
+                    return 0, "4", ""
                 return 0, "", ""
+            if argv[3:] == ["codex", "login", "status"]:
+                events.append("login_status")
+                return 0, "Logged in using ChatGPT", ""
             assert argv[3:5] == ["/opt/venv/bin/python", "-c"]
+            if argv[-1] == "/home/app/.codex":
+                events.append("login_session")
+                return await super().run(
+                    [sys.executable, *argv[4:-1], str(credential_home)], **kwargs
+                )
             attempts.append(argv[2])
             events.append("catalog")
             if fault == "cancelled":
@@ -210,6 +279,12 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
         )
         attempts.append("replay-host")
         events.append("catalog")
+        if fault.startswith("oauth_ended_"):
+            # A refresh request can be the first proof that the session ended.
+            now = int(time.time())
+            write_login(issued_at=now, expires_at=now)
+            if fault == "oauth_ended_probe_error":
+                return httpx.Response(503, text="private provider diagnostic")
         if fault == "cancelled":
             raise asyncio.CancelledError()
         if fault == "build_mismatch":
@@ -232,9 +307,12 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
                 return httpx.Response(
                     transient_status, text="private provider diagnostic"
                 )
-        available = fault not in {"exhausted", "artifact_error"} and (
-            fault != "transient" or len(attempts) > 1
-        )
+        available = fault not in {
+            "exhausted",
+            "artifact_error",
+            "oauth_ended",
+            "oauth_ended_during_refresh",
+        } and (fault not in {"transient", "oauth_aged_transient"} or len(attempts) > 1)
         return httpx.Response(
             200,
             json={
@@ -373,7 +451,7 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
             "attestationRef": "artifact:egress",
         },
     )
-    operation = runtime.realize(
+    realize_inputs = dict(
         request=AgentExecutionRequest(
             agentKind="external",
             agentId="omnigent",
@@ -387,8 +465,30 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
         host_class=host_class,
         launch_policy=SimpleNamespace(ref="policy@1", limits={}),
         prepared=prepared,
-        credential_handles=[],
+        credential_handles=credential_handles,
     )
+    if fault.startswith("oauth_ended"):
+        # The stored login passes `codex login status`, but cannot refresh.
+        # Its bundled catalog must never become a false model-unavailable error.
+        with pytest.raises(HarnessPlatformError) as exc:
+            await runtime.realize(**realize_inputs)
+        assert exc.value.code == "OMNIGENT_HOST_HARNESS_NEEDS_AUTH"
+        assert remediation_for(exc.value.code) == "reauthenticate"
+        assert "codex_openai_oauth" in str(exc.value)
+        assert "ended" in str(exc.value)
+        assert "private-token-material" not in str(exc.value)
+        assert attempts == ([] if fault == "oauth_ended" else ["replay-host"])
+        assert events.count("launch") == 1
+        assert events.count("login_status") == 1
+        assert events.count("login_session") == (1 if fault == "oauth_ended" else 2)
+        if fault != "oauth_ended":
+            assert events.index("login_session") < events.index("catalog")
+            assert events[-2] == "login_session"
+        assert events.count("cleanup") == 1
+        assert events[-1] == "cleanup"
+        assert candidate.read_text() == "preserved edits"
+        assert plan.payload.modelConfig.qualifiedId == selected_model
+        return
     catalog_exhausted = fault in {
         "exhausted",
         "artifact_error",
@@ -410,7 +510,7 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
             )
         )
         with pytest.raises(error) as exc:
-            await operation
+            await runtime.realize(**realize_inputs)
         assert events[-1] == "cleanup"
         if terminal_http_error:
             assert exc.value.status_code == int(fault.removeprefix("http_"))
@@ -429,13 +529,20 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
             assert "Select an exact model ID" in str(exc.value)
             assert "private provider diagnostic" not in str(exc.value)
     else:
-        result = await operation
+        result = await runtime.realize(**realize_inputs)
         assert (
             result["modelOptionAttestationRef"]
             == "artifact:generic-host-model-options.json"
         )
         assert "cleanup" not in events
-        assert len(attempts) == (1 if fault in {"none", "model_corrected"} else 2)
+        assert len(attempts) == (
+            1
+            if fault in {"none", "model_corrected", "oauth_aged", "oauth_reconnected"}
+            else 2
+        )
+        if fault.startswith("oauth_"):
+            assert events.index("login_session") < events.index("catalog")
+            assert events.count("login_session") == len(attempts) + 1
     assert events.count("launch") == 1
     assert set(attempts) == {"replay-host"}
     assert candidate.read_text() == "preserved edits"

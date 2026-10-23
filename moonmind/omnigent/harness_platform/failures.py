@@ -118,7 +118,7 @@ _FAILURE_REMEDIATION: dict[str, str] = {
     HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED: "repair_host_launcher",
     HarnessPlatformFailure.OMNIGENT_HOST_REGISTRATION_TIMEOUT: "repair_host_registration",
     HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NOT_READY: "provision_host_harness",
-    HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NEEDS_AUTH: "reauthenticate_provider_profile",
+    HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NEEDS_AUTH: "reauthenticate",
     HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE: "select_available_model",
     HarnessPlatformFailure.OMNIGENT_MODEL_CONFIG_UNSUPPORTED: "normalize_model_config",
     HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE: "select_compatible_policy",
