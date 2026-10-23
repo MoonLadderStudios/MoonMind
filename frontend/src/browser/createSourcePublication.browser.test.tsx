@@ -156,8 +156,9 @@ afterEach(async () => {
 });
 
 async function replaceWithKeyboard(input: HTMLInputElement, text: string) {
-  // Keep focus, selection and native typing in the same browser-provider action.
-  await userEvent.type(input, `{selectall}{Backspace}${text}`);
+  // Activate the field with a native click before sending keyboard events.
+  await userEvent.click(input);
+  await userEvent.keyboard(`{selectall}{Backspace}${text}`);
   await waitFor(() => {
     const active = document.activeElement;
     const state = JSON.stringify({
