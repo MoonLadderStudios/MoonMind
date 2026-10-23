@@ -19,7 +19,6 @@ from api_service.db.models import (
     TemporalArtifactRedactionLevel,
 )
 from api_service.services import single_user_conversion as conversion
-from tests.helpers.account_source import User
 from tests.unit.api.routers.test_omnigent_agent_profiles import document
 from tests.unit.services.test_artifact_conversion import database, seed, service
 
@@ -53,10 +52,6 @@ async def test_profile_validation_reads_only_admitted_recoverable_bundles(
                 principal=owner, payload=stream.getvalue(), content_type="application/zip")
             artifact_id, digest = artifact.artifact_id, artifact.sha256
             assert (await conversion.run_guarded_upgrade(session, operator_authorized=True)).published
-            # This consumer still records a User FK in its audit. Keep that
-            # separate prerequisite real rather than claiming a completed account-free profile-mutation migration.
-            session.add(User(id=UUID(zero), email="local-operator@example.invalid"))
-            await session.commit()
             profile = OmnigentAgentProfile(profile_id="retained-bundle", display_name="Retained",
                 owner_id=UUID(historical_owner), visibility="private")
             version = OmnigentAgentProfileVersion(profile_id=profile.profile_id, version=1,
