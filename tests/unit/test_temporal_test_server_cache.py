@@ -1,4 +1,4 @@
-"""Image preparation recovers transient downloads without hiding startup errors."""
+"""Test-server preparation recovers downloads without hiding startup errors."""
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, call
@@ -30,12 +30,30 @@ def download_error(status):
     )
 
 
+def invalid_archive_error(message="could not extract tar archive entry"):
+    return RuntimeError(
+        f"Failed starting Temporal dev server: invalid ephemeral server download: {message}"
+    )
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", [429, 503])
+@pytest.mark.parametrize(
+    "error",
+    [download_error(429), download_error(503)]
+    + [
+        invalid_archive_error(message)
+        for message in (
+            "could not read tar archive",
+            "could not read tar archive entry",
+            "could not extract tar archive entry",
+            "could not read ZIP archive",
+            "could not extract ZIP archive entry",
+        )
+    ],
+)
 async def test_transient_download_retries_only_the_unfinished_server(
-    servers, capsys, status
+    servers, capsys, error
 ):
-    error = download_error(status)
     servers.starts.start_local.side_effect = [error, servers.local]
 
     await cache._cache_test_server()
@@ -49,8 +67,8 @@ async def test_transient_download_retries_only_the_unfinished_server(
 
 
 @pytest.mark.asyncio
-async def test_persistent_download_failure_stops_after_bounded_retries(servers):
-    error = download_error(429)
+@pytest.mark.parametrize("error", [download_error(429), invalid_archive_error()])
+async def test_persistent_download_failure_stops_after_bounded_retries(servers, error):
     servers.starts.start_time_skipping.side_effect = error
 
     with pytest.raises(RuntimeError) as raised:
@@ -65,7 +83,14 @@ async def test_persistent_download_failure_stops_after_bounded_retries(servers):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "error", [download_error(404), RuntimeError("server exited 1")]
+    "error",
+    [
+        download_error(404),
+        RuntimeError("server exited 1"),
+        invalid_archive_error("unsupported architecture: example"),
+        invalid_archive_error("archive URL has unsupported format: example"),
+        invalid_archive_error("requested executable was not found in tar archive"),
+    ],
 )
 async def test_permanent_startup_errors_are_not_retried(servers, error):
     servers.starts.start_time_skipping.side_effect = error
