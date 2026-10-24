@@ -123,9 +123,10 @@ generated table keeps distinct; they are not a second inventory.
   implies a safe paused state (§6.2). Do not infer a universal control
   contract from handler or type names.
 - **Retired types stay out of the catalog.** `MoonMind.ManifestIngest` has
-  no workflow module, registration, Activities, or lifecycle section. Old
-  histories may retain the historical type string as replay evidence; the
-  current release never registers, starts, or updates it.
+  no current workflow module, registration, or Activities. Old histories may
+  retain the type string; the current release never registers, starts, or
+  updates it. [Section 11.2](#112-moonmindmanifestingest-lifecycle-retired)
+  preserves old-release retirement and upgrade guidance.
 - **Current routing is not historical routing.** The workflow-queue lane in
   the generated reference separates the current handler lane from
   historical-only handlers retained for pre-cutover histories; module
