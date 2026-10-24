@@ -1546,6 +1546,7 @@ async def test_schedule_refresh_retains_original_repository_principal(
         ManagedAgentProviderProfile,
         RecurringWorkflowDefinition,
         TemporalArtifact,
+        TemporalArtifactStatus,
     )
     from api_service.services.recurring_workflows_service import (
         RecurringWorkflowsService,
@@ -1603,6 +1604,7 @@ async def test_schedule_refresh_retains_original_repository_principal(
         session.add(
             TemporalArtifact(
                 artifact_id="art_request_1",
+                status=TemporalArtifactStatus.COMPLETE,
                 created_by_principal="user-1",
                 sha256="1" * 64,
                 storage_key="original-schedule-input",
@@ -1628,15 +1630,18 @@ async def test_schedule_refresh_retains_original_repository_principal(
         else repository
     )
     try:
-        compiled = await _compile_opencode_plan(
-            monkeypatch,
-            artifacts=artifacts,
-            launch_policy_ref="opencode-on-demand@1",
-            plan_store=DbExecutionPlanStore(sessions),
-            session_factory=sessions,
-            workflow_id=f"mm-schedule:{definition_id}",
-            extra_parameters={"repository": target_repository},
-        )
+        async with sessions() as artifact_session:
+            artifacts._db_session = artifact_session
+            compiled = await _compile_opencode_plan(
+                monkeypatch,
+                artifacts=artifacts,
+                launch_policy_ref="opencode-on-demand@1",
+                plan_store=DbExecutionPlanStore(sessions),
+                session_factory=sessions,
+                workflow_id=f"mm-schedule:{definition_id}",
+                extra_parameters={"repository": target_repository},
+            )
+            await artifact_session.commit()
         snapshot = _snapshot(
             harness="opencode-native",
             policy="opencode-on-demand@1",
@@ -1660,6 +1665,7 @@ async def test_schedule_refresh_retains_original_repository_principal(
             "initialParameters": initial_parameters,
         }
         async with sessions() as session:
+            artifacts._db_session = session
             definition = RecurringWorkflowDefinition(
                 id=definition_id,
                 name="Frozen repository principal",
