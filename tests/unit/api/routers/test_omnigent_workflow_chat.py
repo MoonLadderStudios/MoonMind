@@ -1818,7 +1818,7 @@ def test_identity_guard_allows_bound_session_echo() -> None:
     )
 
 
-# --- Capability policy intersection (interventionCapabilities) ---------------
+# --- Capability policy intersection ------------------------------------------
 
 
 def test_recompute_capabilities_intersects_binding_policy() -> None:
@@ -1837,15 +1837,15 @@ def test_recompute_capabilities_intersects_binding_policy() -> None:
 
 
 def test_message_denied_when_policy_disables_send() -> None:
-    store = _FakeStore(
-        row=_row(
-            metadata_={
-                **_row().metadata_,
-                "interventionCapabilities": {"sendMessage": False},
-            }
-        )
-    )
-    client, proxy, _store = _build(store=store)
+    row = _row()
+    authority = row.metadata_["capabilityAuthority"]
+    authority["launchPolicy"] = {**authority["launchPolicy"], "sendMessage": False}
+    client, proxy, _store = _build(store=_FakeStore(row=row))
+
+    snapshot = client.get(_path("health"))
+    assert snapshot.status_code == 200
+    assert snapshot.json()["capabilities"][CAP_SEND_MESSAGE] is False
+    assert snapshot.json()["disabledReasons"][CAP_SEND_MESSAGE] == "launch_policy_denied"
 
     response = client.post(
         _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
@@ -2176,15 +2176,20 @@ async def test_canonical_admission_rejection_is_a_session_not_ready_conflict() -
 
 
 def test_resolve_elicitation_denied_when_policy_disables_approval() -> None:
-    store = _FakeStore(
-        row=_row(
-            metadata_={
-                **_row().metadata_,
-                "interventionCapabilities": {"resolveElicitation": False},
-            }
-        )
+    row = _row()
+    authority = row.metadata_["capabilityAuthority"]
+    authority["launchPolicy"] = {
+        **authority["launchPolicy"],
+        "resolveElicitation": False,
+    }
+    client, proxy, _store = _build(store=_FakeStore(row=row))
+
+    snapshot = client.get(_path("health"))
+    assert snapshot.status_code == 200
+    assert snapshot.json()["capabilities"]["resolveElicitation"] is False
+    assert (
+        snapshot.json()["disabledReasons"]["resolveElicitation"] == "launch_policy_denied"
     )
-    client, proxy, _store = _build(store=store)
 
     response = client.post(
         _path(f"v1/sessions/{_CHAT_BINDING_ID}/elicitations/el-9/resolve"),
