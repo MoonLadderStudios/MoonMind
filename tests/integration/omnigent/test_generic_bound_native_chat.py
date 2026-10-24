@@ -741,6 +741,7 @@ async def test_generic_native_stream_rechecks_runtime_cleanup(
                 chat_binding_id=row.chat_binding_id,
                 bridge_session_id=row.bridge_session_id,
                 provider_session_id=row.omnigent_session_id,
+                response_provider_session_id=bridge._durable_provider_session_id(row),
                 initial_cursor=0,
                 user=user,
                 service=None,
