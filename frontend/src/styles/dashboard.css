@@ -6645,6 +6645,7 @@ textarea {
   gap: 0.4rem;
   justify-content: stretch;
   isolation: isolate;
+  overflow: hidden;
 }
 
 .queue-floating-bar::before {
@@ -6676,23 +6677,9 @@ textarea {
   z-index: 1;
 }
 
-.queue-floating-bar--liquid-glass[data-liquid-gl-initialized="true"] {
-  border-color: rgb(255 255 255 / 0.22);
-}
-
-.queue-floating-bar--liquid-glass {
-  position: fixed;
-  isolation: isolate;
-  overflow: hidden;
-}
-
-.queue-floating-bar--liquid-glass > * {
+.queue-floating-bar > * {
   position: relative;
   z-index: 2;
-}
-
-.queue-floating-bar--liquid-glass[data-liquid-gl-initialized="true"] > * {
-  pointer-events: auto;
 }
 
 .queue-floating-bar-row {
@@ -7787,7 +7774,7 @@ textarea {
   }
 
   .surface--liquidgl-hero,
-.queue-floating-bar--liquid-glass {
+.queue-floating-bar {
     transition-duration: 0s !important;
     animation-duration: 0s !important;
   }
