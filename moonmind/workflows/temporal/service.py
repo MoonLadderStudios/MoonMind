@@ -2638,13 +2638,16 @@ class TemporalExecutionService:
                 # canonical transaction commits the record and entire closure
                 # together, or rolls both back on any admission failure.
                 try:
-                    await link_verified_execution_plan_inputs(
+                    admitted_refs = await link_verified_execution_plan_inputs(
                         session_factory=admission_sessions,
                         plan=_admitted_execution_plan.envelope,
                         binding=_admitted_execution_plan.binding,
                         workflow_id=workflow_id,
                         run_id=run_id,
                         namespace=self._namespace,
+                    )
+                    record.artifact_refs = list(
+                        dict.fromkeys([*record.artifact_refs, *admitted_refs])
                     )
                 except (OmnigentArtifactError, TemporalArtifactError) as exc:
                     raise TemporalExecutionValidationError(str(exc)) from exc
