@@ -3192,30 +3192,45 @@ def _probe_client(responses):
         "feature?query=changed#fragment",
         "../issues",
         "https://attacker.invalid/x",
+        "//attacker.invalid/x",
+        "\\\\attacker.invalid\\x",
+        "feature%2Fhidden",
+        "feature/雪",
     ],
 )
-async def test_probe_encodes_branch_as_one_url_segment(monkeypatch, branch):
+@pytest.mark.parametrize("from_remote_default", [False, True])
+async def test_probe_encodes_branch_as_one_url_segment(
+    monkeypatch, branch, from_remote_default
+):
     from urllib.parse import quote
 
     monkeypatch.setenv("GITHUB_TOKEN", "synthetic-test-token")
-    mock_client = _probe_client(
-        [
-            _mock_get_response(200, {"default_branch": branch}),
-            *[_mock_get_response(200, {}) for _ in range(5)],
-        ]
-    )
+    requests = []
+    real_client = httpx.AsyncClient
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(200, json={"default_branch": branch})
+
+    transport = httpx.MockTransport(handle)
     with patch(
         "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
-        return_value=mock_client,
+        side_effect=lambda **kwargs: real_client(transport=transport, **kwargs),
     ):
         result = await GitHubService().probe_token(
-            repo="owner/repo", mode="full_pr_automation", base_branch=branch
+            repo="owner/repo",
+            mode="full_pr_automation",
+            base_branch=None if from_remote_default else branch,
         )
-    urls = [call.args[0] for call in mock_client.get.call_args_list]
-    assert (
-        f"https://api.github.com/repos/owner/repo/branches/{quote(branch, safe='')}"
-        in urls
-    )
+    assert len(requests) == 6
+    assert all(request.url.scheme == "https" for request in requests)
+    assert all(request.url.host == "api.github.com" for request in requests)
+    branch_request = requests[1]
+    assert branch_request.url.raw_path == (
+        "/repos/owner/repo/branches/" + quote(branch, safe="")
+    ).encode("ascii")
+    assert not branch_request.url.query
+    assert not branch_request.url.fragment
     assert result["testedBranch"] == branch
 
 
