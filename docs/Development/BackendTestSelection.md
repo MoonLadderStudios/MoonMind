@@ -102,7 +102,7 @@ bound sized from observed setup, testing, and bounded diagnostics/cleanup:
 | --- | --- | --- | --- |
 | Unit-fast | 60s (`--timeout 60`) | 15-minute native test step | 21-minute job |
 | API/component | 120s (`--timeout 120`) | 12-minute native test step | 18-minute job |
-| Temporal boundary | 120s (`--timeout 120`) | 7-minute native test step | 15-minute job |
+| Temporal boundary | 120s (`--timeout 120`) | 12-minute native test step | 20-minute job |
 | Ordinary reliability shard | 150s | 600-second shell deadline inside a 12-minute Actions step | 20-minute job |
 | Scheduled reliability shard | 300s | 660-second shell deadline inside a 12-minute Actions step | 20-minute job |
 
@@ -127,7 +127,9 @@ Unit-fast and API/component keep six minutes outside their 15/12-minute test
 steps for setup and reporting. The full unit corpus can exceed twelve
 minutes while making progress; API/component can exceed seven without failures.
 The normal summary and upload steps each have a 2-minute cap. Temporal keeps
-a 15-minute job and 7-minute test step. Reliability 20-minute jobs also cover Compose
+eight minutes for setup and reporting around its 12-minute test step: the full
+corpus can exceed seven minutes while passing on slower runners.
+Reliability 20-minute jobs also cover Compose
 pull/up (~1-2 minutes), their 12-minute test step, and bounded diagnostics/
 cleanup. Job deadlines remain hard ceilings: slow setup or multiple exhausted
 failure-diagnostic caps can prevent final uploads. The reliability bound
