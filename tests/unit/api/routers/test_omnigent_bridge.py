@@ -1,8 +1,8 @@
 """Router tests for the Omnigent Bridge Session API Facade.
 
 MM-1155 (source: MM-1140): the public session routes are exposed at the
-configured mount path, POST /v1/sessions validates the MoonMind principal +
-workflow ownership, and bridge failure classes map onto HTTP status codes.
+configured mount path, POST /v1/sessions validates operator admission and the
+referenced workflow, and bridge failure classes map onto HTTP status codes.
 """
 
 from __future__ import annotations
@@ -258,7 +258,7 @@ def _fake_store_dependency() -> "_FakeStore":
 
 
 def _mock_user():
-    return SimpleNamespace(id=_USER_ID, email="bridge@example.com", is_superuser=False)
+    return OperatorAdmission(via="loopback")
 
 
 class _FakeService:
@@ -563,7 +563,7 @@ class _FakeStore:
                 },
             },
             metadata_={
-                "callerAuthorities": {str(_USER_ID): capabilities},
+                "callerAuthorities": {"operator": capabilities},
                 "capabilityAuthority": {
                     "fresh": True,
                     "providerProfileGeneration": 4,
@@ -647,6 +647,7 @@ class _FakeEmbeddedFacade(_FakeProxy):
 def _build(
     *,
     owner_id: Any = _USER_ID,
+    caller: Any | None = None,
     proxy: _FakeProxy | None = None,
     store: _FakeStore | None = None,
     config: Any | None = None,
@@ -656,7 +657,9 @@ def _build(
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
     proxy = proxy or _FakeProxy()
     store = store or _FakeStore()
-    app.dependency_overrides[get_instance_access] = _mock_user
+    app.dependency_overrides[get_instance_access] = (
+        _mock_user if caller is None else lambda: caller
+    )
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(owner_id)
     app.dependency_overrides[_get_bridge_proxy] = lambda: proxy
     app.dependency_overrides[_get_bridge_store] = lambda: store
@@ -761,8 +764,8 @@ def test_create_session_requires_workflow_label() -> None:
     assert resp.status_code == 400
 
 
-def test_create_session_denies_non_owner() -> None:
-    client, proxy, _ = _build(owner_id=uuid4())  # different owner
+def test_create_session_denies_unadmitted_caller() -> None:
+    client, proxy, _ = _build(caller=SimpleNamespace(id=_USER_ID, is_superuser=False))
     resp = client.post(_CREATE_PATH, json=_create_body())
     assert resp.status_code == 403
     assert resp.json()["detail"]["code"] == "workflow_ownership_denied"
@@ -788,8 +791,8 @@ def test_create_session_maps_integration_error_to_502() -> None:
     assert resp.status_code == 502
 
 
-def test_get_session_returns_snapshot_for_owner() -> None:
-    client, _, _ = _build()  # user owns mm:w1 (the session owner)
+def test_get_session_returns_snapshot_for_operator() -> None:
+    client, _, _ = _build()
     resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77")
     assert resp.status_code == 200
     assert resp.json() == {"id": "sess-77", "status": "completed"}
@@ -804,9 +807,9 @@ def test_get_session_unknown_session_is_not_found() -> None:
     assert resp.json()["detail"]["code"] == "omnigent_bridge_session_unknown"
 
 
-def test_get_session_denies_non_owner() -> None:
-    # The session is owned by mm:w1, but the caller does not own that workflow.
-    client, _, _ = _build(owner_id=uuid4())
+def test_get_session_denies_unadmitted_caller() -> None:
+    # Retained person ownership does not admit a caller to the operator surface.
+    client, _, _ = _build(caller=SimpleNamespace(id=_USER_ID, is_superuser=False))
     resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77")
     assert resp.status_code == 403
     assert resp.json()["detail"]["code"] == "workflow_ownership_denied"
@@ -1572,15 +1575,15 @@ def test_event_page_is_bounded_and_cursor_based() -> None:
     assert body["latestSequence"] == 4
 
 
-def test_list_bridge_session_events_denies_non_owner() -> None:
-    client, _, _ = _build(owner_id=uuid4())
+def test_list_bridge_session_events_denies_unadmitted_caller() -> None:
+    client, _, _ = _build(caller=SimpleNamespace(id=_USER_ID, is_superuser=False))
     resp = client.get(f"{OMNIGENT_BRIDGE_MOUNT_PATH}/bridge-sessions/brs-1/events")
     assert resp.status_code == 404
     assert resp.json()["detail"] == {"code": "omnigent_bridge_session_unknown"}
 
 
-def test_unknown_and_foreign_sessions_have_identical_projection_failure() -> None:
-    foreign, _, _ = _build(owner_id=uuid4())
+def test_unknown_and_unadmitted_sessions_have_identical_projection_failure() -> None:
+    foreign, _, _ = _build(caller=SimpleNamespace(id=_USER_ID, is_superuser=False))
     unknown, _, _ = _build(store=_FakeStore(owner=None))
     for suffix in ("events", "stream"):
         foreign_response = foreign.get(
@@ -1739,7 +1742,7 @@ def test_routes_registered_under_configured_mount_path() -> None:
     assert OMNIGENT_BRIDGE_MOUNT_PATH == "/api/omnigent"
 
 
-def test_superuser_owns_any_workflow() -> None:
+def test_legacy_administrator_does_not_grant_operator_admission() -> None:
     def _superuser():
         return SimpleNamespace(id=uuid4(), email="admin@example.com", is_superuser=True)
 
@@ -1747,7 +1750,7 @@ def test_superuser_owns_any_workflow() -> None:
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
     proxy = _FakeProxy()
     app.dependency_overrides[get_instance_access] = _superuser
-    # Service returns a foreign owner, but superuser bypasses ownership.
+    # A historical administrator flag never establishes operator admission.
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(uuid4())
     app.dependency_overrides[_get_bridge_proxy] = lambda: proxy
     app.dependency_overrides[_get_bridge_store] = _fake_store_dependency
@@ -1755,8 +1758,9 @@ def test_superuser_owns_any_workflow() -> None:
     client = TestClient(app)
 
     resp = client.post(_CREATE_PATH, json=_create_body())
-    assert resp.status_code == 200
-    assert len(proxy.created) == 1
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "workflow_ownership_denied"
+    assert not proxy.created
 
 
 def test_create_session_rejected_in_retired_embedded_mode() -> None:
@@ -2046,7 +2050,7 @@ def test_proxy_stream_passes_through_untyped_upstream_frames() -> None:
     assert "event: error" not in response.text
 
 
-def test_proxy_and_embedded_share_unknown_and_non_owner_error_contracts() -> None:
+def test_proxy_and_embedded_share_unknown_and_unadmitted_error_contracts() -> None:
     embedded_config = parse_bridge_config(
         {
             "enabled": False,
@@ -2066,8 +2070,8 @@ def test_proxy_and_embedded_share_unknown_and_non_owner_error_contracts() -> Non
         facade._session_owner = owner
         app = FastAPI()
         app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
-        app.dependency_overrides[get_instance_access] = _mock_user
-        app.dependency_overrides[_get_execution_service] = lambda: _FakeService(caller)
+        app.dependency_overrides[get_instance_access] = lambda: caller
+        app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
         if embedded:
             app.dependency_overrides[_require_bridge_enabled] = lambda: embedded_config
             app.dependency_overrides[_get_bridge_proxy] = lambda: None
@@ -2077,7 +2081,10 @@ def test_proxy_and_embedded_share_unknown_and_non_owner_error_contracts() -> Non
         return TestClient(app)
 
     owner = SimpleNamespace(workflow_id="mm:w1", agent_run_id="ar-1")
-    cases = ((None, _USER_ID, 404), (owner, uuid4(), 403))
+    cases = (
+        (None, OperatorAdmission(via="loopback"), 404),
+        (owner, SimpleNamespace(id=_USER_ID, is_superuser=False), 403),
+    )
     for binding, caller, expected_status in cases:
         proxy_client = mode_client(embedded=False, owner=binding, caller=caller)
         embedded_client = mode_client(embedded=True, owner=binding, caller=caller)
