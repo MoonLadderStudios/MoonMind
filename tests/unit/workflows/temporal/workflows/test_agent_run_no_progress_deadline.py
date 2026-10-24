@@ -215,6 +215,51 @@ async def test_recorded_cancel_fetch_keeps_original_activity_timeouts(
     assert "schedule_to_close_timeout" not in kwargs
 
 
+@pytest.mark.parametrize("status_elapsed,remaining", [(4, 1), (5, 0)])
+@pytest.mark.parametrize("fetch_budget_enabled", [False, True])
+async def test_terminal_status_inside_grace_uses_remaining_fetch_budget(
+    monkeypatch, status_elapsed, remaining, fetch_budget_enabled
+):
+    now = _clock(monkeypatch, fetch_budget_enabled=fetch_budget_enabled)
+    overall_start = now[0] - timedelta(seconds=45)
+    run = agent_run.MoonMindAgentRun()
+    run.run_id = "run"
+
+    async def status(**kwargs):
+        # The normal grace poll starts with five seconds left. Completion fits
+        # that Activity window; consuming its result must not start a new one.
+        assert kwargs["remaining_budget_seconds"] == 5
+        now[0] += timedelta(seconds=status_elapsed)
+        return _status("completed")
+
+    run._poll_managed_status = AsyncMock(side_effect=status)
+    run._execute_routed_activity = AsyncMock(return_value={"summary": "retained"})
+    actual = await run._reconcile_managed_no_progress(
+        request=_request(),
+        adapter=object(),
+        uses_codex_session_adapter=False,
+        use_managed_status_activity=True,
+        resiliency_policy={"noProgressGraceSeconds": 30},
+        poll_interval=10,
+        initial_status=_status("running"),
+        overall_start=overall_start,
+        timeout_seconds=60,
+    )
+
+    if fetch_budget_enabled and not remaining:
+        assert actual is None
+        run._execute_routed_activity.assert_not_awaited()
+    else:
+        assert actual.summary == "retained"
+        kwargs = run._execute_routed_activity.await_args.kwargs
+        if fetch_budget_enabled:
+            assert kwargs["start_to_close_timeout"].total_seconds() == remaining
+            assert kwargs["schedule_to_close_timeout"].total_seconds() == remaining
+        else:
+            assert "start_to_close_timeout" not in kwargs
+            assert "schedule_to_close_timeout" not in kwargs
+
+
 @pytest.mark.parametrize("enabled,budget", [(False, 60), (True, 5)])
 async def test_retained_path_and_exhausted_budget_emit_no_new_effects(
     monkeypatch, enabled, budget

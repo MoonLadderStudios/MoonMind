@@ -4390,11 +4390,27 @@ class MoonMindAgentRun:
         while True:
             self.run_status = status_obj.status
             if status_obj.status in _TERMINAL_RUN_STATUSES:
+                fetch_budget = {}
+                if (
+                    use_managed_status_activity
+                    and not uses_codex_session_adapter
+                    and workflow.patched(
+                        AGENT_RUN_MANAGED_RESULT_FETCH_BUDGET_PATCH_ID
+                    )
+                ):
+                    remaining_fetch_budget = (
+                        timeout_seconds
+                        - (workflow.now() - overall_start).total_seconds()
+                    )
+                    if remaining_fetch_budget <= 0:
+                        return None
+                    fetch_budget["remaining_budget_seconds"] = remaining_fetch_budget
                 return await self._fetch_managed_result(
                     request=request,
                     adapter=adapter,
                     uses_codex_session_adapter=uses_codex_session_adapter,
                     use_managed_status_activity=use_managed_status_activity,
+                    **fetch_budget,
                 )
 
             remaining_grace = (deadline - workflow.now()).total_seconds()
