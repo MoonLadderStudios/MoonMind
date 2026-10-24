@@ -177,9 +177,17 @@ Temporal starts; scheduled occurrences receive them in admission before planning
 The canonical create transaction commits the execution and grants together, so a
 duplicate request cannot contribute different inputs to the winning execution.
 The compiler result and original task-input snapshot identify the inputs; current
-parameters cannot substitute another artifact. The original principal must retain
+parameters cannot substitute another artifact. Activity identity supplies the
+workflow and run receiving scheduled access. The original principal must retain
 read authority for frozen planning pointers. Retries reuse the links, and an
 authorized recovery execution can retain frozen inputs under its new identity.
+
+Child result publication links its generated summary and result envelopes to the
+parent verified against Temporal's recorded ancestry. Provider metadata or a
+returned artifact reference alone cannot grant another execution access.
+An unreadable optional Story file is skipped with diagnostics while generated
+summary and result publication continues.
+
 
 Existing signing, revocation, and credential-materialization mechanisms remain
 where they serve these machine contracts. Removing application login is not a

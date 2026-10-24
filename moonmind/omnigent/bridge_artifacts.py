@@ -279,6 +279,7 @@ async def _frozen_planning_input_refs(
         if not scheduled:
             raise OmnigentArtifactError("scheduled planning lacks a schedule snapshot")
         definition_id = str(source["definitionId"]).strip()
+
         system = planning_parameters.get("system")
         recurrence = system.get("recurrence") if isinstance(system, Mapping) else None
         if (

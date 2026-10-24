@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import stat
-import subprocess
 import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -31,10 +29,6 @@ from moonmind.schemas.agent_runtime_models import (
     ManagedRunRecord,
 )
 from moonmind.schemas.managed_session_models import CodexManagedSessionLocator
-from moonmind.schemas.workload_models import (
-    ValidatedWorkloadRequest,
-    WorkloadResult,
-)
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
 from moonmind.workflows.skills.skill_plan_contracts import SkillResult
@@ -764,24 +758,6 @@ async def test_prepare_managed_codex_turn_appends_vocab_when_path_already_presen
     assert '"advance"' in prepared
     assert "workflow-specific destination" in prepared
     assert "Follow the resolved Skill's evidence policy" in prepared
-
-
-async def test_codex_skill_payload_rejects_auto_publish_mode() -> None:
-    from moonmind.agents.codex_worker.handlers import (
-        CodexSkillPayload,
-        CodexWorkerHandlerError,
-    )
-
-    with pytest.raises(CodexWorkerHandlerError, match="codex_skill publishMode"):
-        CodexSkillPayload.from_payload(
-            {
-                "skillId": "fix-ci",
-                "inputs": {
-                    "repo": "MoonLadderStudios/MoonMind",
-                    "publishMode": "auto",
-                },
-            }
-        )
 
 
 async def test_checkpoint_activity_runtime_bindings_are_registered() -> None:
@@ -4146,6 +4122,32 @@ async def test_agent_runtime_publish_artifacts_publishes_assessment_verdict_json
                     workflow_id="parent-wf:agent:assess",
                     workflow_run_id="child-run-assess",
                 ),
+            )
+            from temporalio.api.workflowservice.v1 import (
+                DescribeWorkflowExecutionResponse,
+            )
+            from tests.unit.workflows.temporal.test_source_brief_artifact_authority import (
+                _recorded_server,
+            )
+
+            server, _calls = _recorded_server(
+                DescribeWorkflowExecutionResponse(
+                    workflow_execution_info={
+                        "execution": {
+                            "workflow_id": "parent-wf:agent:assess",
+                            "run_id": "child-run-assess",
+                        },
+                        "parent_execution": {
+                            "workflow_id": "parent-wf", "run_id": "parent-run",
+                        },
+                        "parent_namespace_id": "namespace-default",
+                    },
+                )
+            )
+            monkeypatch.setattr(
+                temporal_activity,
+                "client",
+                lambda: SimpleNamespace(namespace="default", workflow_service=server),
             )
 
             result = await activities.agent_runtime_publish_artifacts(

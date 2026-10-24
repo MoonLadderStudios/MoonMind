@@ -1,71 +1,24 @@
 # syntax=docker/dockerfile:1.4
-ARG CODEX_CLI_VERSION=latest
-# Pin the Claude CLI instead of tracking the mutable ``latest`` tag. Upstream
-# publishes the launcher wrapper and its platform-native packages separately, so
-# ``latest`` can point at a wrapper whose matching native package is not
-# published yet (2.1.237 required @anthropic-ai/claude-code-linux-x64@2.1.237,
-# which does not exist). npm then omits the unresolvable optional dependency and
-# the launcher aborts with "claude native binary not installed", breaking every
-# image build until upstream catches up. Bump this deliberately.
-ARG CLAUDE_CLI_VERSION=2.1.281
-# Build the shared runtime image with Codex/Claude CLIs by default so the API
-# and Temporal workers can run from the same image tag. Disable selectively in
-# test-only or constrained builds.
-ARG INSTALL_CODEX_CLI=true
-ARG INSTALL_CLAUDE_CLI=true
-
-FROM node:26-bookworm AS tooling-builder
-
-# Ensure all RUN commands in this stage use bash with pipefail and fail fast on
-# unset variables, so we don't hit dash incompatibilities or silently continue
-# when build args are missing. Keep the strict flags explicit on the SHELL
-# instruction so future RUN steps automatically inherit them.
-SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
-
-ARG CODEX_CLI_VERSION
-ARG INSTALL_CODEX_CLI=true
-ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
-ARG CLAUDE_CLI_VERSION
-ARG INSTALL_CLAUDE_CLI
-# Install build prerequisites required for global npm CLI installs so future
-# stages can compile any optional native extensions.
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    rm -f /etc/apt/apt.conf.d/docker-clean && \
-    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
-        python3 \
-        build-essential
-
-# Keep npm non-interactive inside Docker builds to avoid analytics prompts.
-RUN npm config set fund false \
-    && npm config set update-notifier false
-
-ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
-ARG CLAUDE_CLI_VERSION
-ARG INSTALL_CLAUDE_CLI
-ARG CLEAN_NPM_CACHE=false
-ARG GITHUB_TOKEN
-ARG NPM_TOKEN
-
-# Install Codex and Claude CLIs globally so binaries can be copied to the
-# runtime image without shipping npm tooling alongside the Python stack. Keep the
-# installer in a normal script file instead of a Dockerfile heredoc so legacy
-# Docker builders without buildx execute it consistently.
-COPY api_service/docker/install_cli_tooling.sh /tmp/install_cli_tooling.sh
-RUN --mount=type=cache,target=/root/.npm \
-    /bin/bash /tmp/install_cli_tooling.sh && rm -f /tmp/install_cli_tooling.sh
-
-# Fail the build early if the bundled CLIs are missing or broken.
-RUN codex --version \
-    && claude --version
-
 # ---------------------------------------------------------------------------
 # Frontend builder – compiles Tailwind CSS and Vite assets in a Node environment
 # so the slim Python runtime image does not need npm.
 # ---------------------------------------------------------------------------
-FROM node:26-bookworm AS frontend-builder
+FROM node:26-bookworm AS node-runtime
+
+# Retained Temporal managed launches and their retries still execute these
+# CLIs in the shared API/worker image. Remove this stage only after those
+# consumers migrate to Omnigent and their existing work has drained.
+FROM node-runtime AS managed-tooling
+ARG CODEX_CLI_VERSION=latest
+ARG CLAUDE_CLI_VERSION=2.1.281
+RUN --mount=type=cache,target=/root/.npm \
+    npm install --global --prefix /opt/moonmind-managed-cli --include=optional --no-audit --no-fund \
+        "@openai/codex@${CODEX_CLI_VERSION}" \
+        "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}" \
+    && /opt/moonmind-managed-cli/bin/codex --version \
+    && /opt/moonmind-managed-cli/bin/claude --version
+
+FROM node-runtime AS frontend-builder
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 WORKDIR /build
 
@@ -113,71 +66,34 @@ RUN poetry export --only main --format requirements.txt --without-hashes --outpu
 # ---------------------------------------------------------------------------
 FROM python:3.15-slim-bookworm AS runtime-dependencies
 
-ARG CODEX_CLI_VERSION
 # Use bash with pipefail and strict mode in the runtime image as well so
 # future RUN commands that rely on bash-specific behavior do not regress to
 # /bin/sh defaults or ignore unset variables. Keep the options explicit for
 # readability.
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 
-ENV CODEX_CLI_VERSION=${CODEX_CLI_VERSION} \
-    PATH="/usr/local/bin:${PATH}"
-
 WORKDIR /app
 
-# Copy Codex and Claude artifacts from the tooling builder so the runtime image
-# retains only the compiled CLIs and minimal Node runtime needed to execute them.
-COPY --from=tooling-builder /usr/local/bin/node /usr/local/bin/node
-COPY --from=tooling-builder /usr/local/bin/codex /usr/local/bin/codex
-COPY --from=tooling-builder /usr/local/bin/claude /usr/local/bin/claude
-COPY --from=tooling-builder /usr/local/lib/node_modules /usr/local/lib/node_modules
-
-# Docker COPY dereferences the npm/npx symlinks from the Node image. Install
-# stable wrappers that keep npm's relative module resolution anchored in the
-# copied /usr/local/lib/node_modules tree.
-RUN printf '%s\n' \
-    '#!/bin/sh' \
-    'exec /usr/local/bin/node /usr/local/lib/node_modules/npm/bin/npm-cli.js "$@"' \
-    >/usr/local/bin/npm
-RUN printf '%s\n' \
-    '#!/bin/sh' \
-    'exec /usr/local/bin/node /usr/local/lib/node_modules/npm/bin/npx-cli.js "$@"' \
-    >/usr/local/bin/npx
-RUN chmod 0755 /usr/local/bin/npm /usr/local/bin/npx
-
-RUN mkdir -p /usr/share/licenses/codex-cli /usr/share/licenses/claude-cli
-
-COPY --from=tooling-builder /usr/local/lib/node_modules/@openai/codex/LICENSE /usr/share/licenses/codex-cli/LICENSE
-COPY --from=tooling-builder /usr/local/lib/node_modules/@anthropic-ai/claude-code/LICENSE /usr/share/licenses/claude-cli/LICENSE
-
-# Install system packages required by the Python service along with the
-# Node.js runtime libraries that the bundled CLIs rely on.
-# libatomic1 provides libatomic.so.1 required by the Node 26 runtime copied
-# from the tooling-builder stage onto this Python slim base.
+# Keep the shared Python/test layer free of agent tooling. The production
+# layer retains the CLIs required by pre-Omnigent Temporal launch consumers.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
     echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
-        bubblewrap \
-        libatomic1 \
-        libffi-dev \
         ripgrep \
-        tesseract-ocr \
-        tesseract-ocr-eng \
         git \
         gh \
         curl \
         ca-certificates \
         openssh-client \
-        procps \
-        gnupg && \
+        procps && \
     install -m 0755 -d /etc/apt/keyrings && \
-    curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg && \
-    chmod a+r /etc/apt/keyrings/docker.gpg && \
+    curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc && \
+    chmod a+r /etc/apt/keyrings/docker.asc && \
     echo \
-      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian \
       $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
       tee /etc/apt/sources.list.d/docker.list > /dev/null && \
     apt-get update && \
@@ -191,27 +107,14 @@ RUN install -d -m 0755 /usr/libexec/moonmind && \
 COPY api_service/docker/moonmind-docker-wrapper.sh /usr/bin/docker
 RUN chmod 0755 /usr/bin/docker /usr/libexec/moonmind/docker-real
 
-# Ensure the non-root ``app`` user exists for Temporal workers and the bundled
-# CLIs remain executable from its PATH.
-# Pre-create ~/.npm as a managed cache so repeated managed-agent runs do not
-# pay the full install cost every time.
-RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
-    chmod 0755 /usr/local/bin/codex /usr/local/bin/claude /usr/local/bin/npm /usr/local/bin/npx && \
-    mkdir -p /home/app/.npm && chown app:app /home/app/.npm
+# Temporal workers and managed container jobs use this non-root identity.
+RUN useradd --create-home --home-dir /home/app --shell /bin/bash app
 
-# Verify the non-root ``app`` user can resolve and execute the bundled CLIs and
-# repository search tooling expected by Codex runtime defaults.
-RUN runuser -u app -- env -u NODE_OPTIONS -u npm_config_node_options \
+# Verify the worker's diagnostic and container-job tools remain executable.
+RUN runuser -u app -- env \
     HOME=/home/app \
     PATH="/usr/local/bin:/usr/local/sbin:/usr/bin:/bin" \
-    sh -c 'codex --version && claude --version && npm --version && rg --version && docker buildx version && docker compose version'
-
-# Provide a managed Codex configuration template that enforces non-interactive
-# approvals and managed sandbox defaults. The template is merged into the
-# worker's home directory at runtime.
-RUN install -d -o root -g app -m 0750 /etc/codex
-COPY api_service/config.template.toml /etc/codex/config.toml
-RUN chown root:app /etc/codex/config.toml && chmod 0640 /etc/codex/config.toml
+    sh -c 'rg --version && docker buildx version && docker compose version'
 
 COPY --from=python-requirements /deps/requirements-main.txt /tmp/requirements-main.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
@@ -231,6 +134,10 @@ COPY NOTICE /app/NOTICE
 # must not inherit production-only source COPY steps such as Omnigent.
 FROM runtime-dependencies AS test-runtime
 ARG INSTALL_TEST_DEPS=true
+# The local test wrapper supports frontend tests. Node/npm belong only in this
+# target; production receives the compiled frontend assets instead.
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 COPY --from=python-requirements /deps/requirements-tests.txt /tmp/requirements-tests.txt
 COPY --chown=app:app api_service/docker/cache_temporal_test_server.py /tmp/cache_temporal_test_server.py
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -238,7 +145,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
     echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
     apt-get update && \
-    apt-get install -y --no-install-recommends postgresql
+    apt-get install -y --no-install-recommends postgresql libatomic1 && \
+    ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
+    ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx && \
+    runuser -u app -- node --version && runuser -u app -- npm --version
 RUN --mount=type=cache,target=/root/.cache/pip \
     if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
         pip install --disable-pip-version-check -r /tmp/requirements-tests.txt; \
@@ -253,10 +163,18 @@ RUN if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
 
 FROM runtime-dependencies AS runtime-base
 
-# Install the egress proxy before source copies so source edits retain this layer.
+# Install the egress proxy and the retained CLIs' Node runtime before source
+# copies so source edits retain this layer. npm stays in the build/test images.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends squid
+    apt-get update && apt-get install -y --no-install-recommends squid libatomic1
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=managed-tooling /opt/moonmind-managed-cli /opt/moonmind-managed-cli
+RUN ln -s /opt/moonmind-managed-cli/bin/codex /usr/local/bin/codex \
+    && ln -s /opt/moonmind-managed-cli/bin/claude /usr/local/bin/claude \
+    && runuser -u app -- env HOME=/home/app \
+        PATH="/usr/local/bin:/usr/local/sbin:/usr/bin:/bin" \
+        sh -c 'codex --version && claude --version'
 
 # Copy source code AFTER installing locked dependencies so code changes only
 # invalidate the lightweight project install.
