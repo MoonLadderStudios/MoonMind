@@ -14,7 +14,7 @@ from moonmind.omnigent.control_plane.turn_commands import (
 )
 from moonmind.omnigent.control_plane.turn_sources import TurnSource
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
 
 def apply(connection, operation):
