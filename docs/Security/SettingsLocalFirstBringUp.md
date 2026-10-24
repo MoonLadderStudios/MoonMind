@@ -28,11 +28,14 @@ In a local-first deployment the operator brings only:
 
 1. A Postgres database (or a SQLite tree for personal use).
 2. A running MoonMind API service and worker.
-3. A first-party login (the `is_superuser` bootstrap user).
+3. Access through the deployment's protected operator URL: loopback
+   transport locally or approved ingress remotely, with the guarded data
+   conversion complete. See [Operator and machine access](AuthenticationContracts.md).
 
 There is **no external secret manager**, **no OAuth IdP**, **no provider
-profile pre-seed**, and **no per-workspace policy administrator**. Every
-remaining configuration step happens through the Settings UI.
+profile pre-seed**, and **no application account to provision**. Every
+remaining configuration step happens through the Settings UI under shared
+instance admission.
 
 The Settings System's contract (§3, §4, §5, §10, §22, §29) holds even in
 this minimal environment: descriptors are catalog-driven, raw secrets are
@@ -50,6 +53,9 @@ operator can read the catalog without any prior writes:
 ```http
 GET /api/v1/settings/catalog?section=user-workspace
 ```
+
+`user-workspace` selects a catalog section; it does not select a person or
+workspace scope. Settings reads and writes use one instance configuration.
 
 Expectations:
 
@@ -113,8 +119,8 @@ Expectations:
 - A new instance row (no scope or subject) is written to `settings_overrides`.
 - A row is written to `settings_audit_events` with `redacted=True` (because
   the descriptor declares `audit.redact=True`). (§21.1, §21.2, §22.8)
-- The settings catalog now reports `source="instance_override"` and
-  `source_explanation` non-empty. (§29.8)
+- The settings catalog reports `source="secret_ref"` for the `db://`
+  binding and a non-empty `source_explanation`. (§29.8)
 
 The override row stores `db://github-pat-local` as a reference — never the
 plaintext that crossed the wire in §2.
@@ -153,7 +159,7 @@ Expectations:
 
 - The response carries `source` in `{"default", "config_file",
   "environment"}` again.
-- The `settings_overrides` row for the workspace scope is deleted.
+- The instance `settings_overrides` row for this key is deleted.
 - The descriptor's `default_value` is unchanged in the catalog. (§5.4)
 - A `settings.override.reset` audit event is written. (§21.1)
 
@@ -192,13 +198,12 @@ The local-first walkthrough deliberately stops at:
 
 - one managed secret,
 - one SecretRef-bound Settings override,
-- one workspace scope, and
+- one instance configuration, and
 - one reset.
 
 It does **not** cover:
 
 - OAuth volume bootstrap (see [`OAuthTerminal.md`](../ManagedAgents/OAuthTerminal.md))
-- Multi-workspace inheritance (`SettingsSystem.md` §16.4)
 - Operator locks (`SettingsSystem.md` §10.2)
 - Operational commands (`SettingsSystem.md` §17)
 
@@ -213,8 +218,10 @@ testable on a clean install.
 The smoke test
 [`tests/integration/api/test_settings_local_first_smoke.py`](../../tests/integration/api/test_settings_local_first_smoke.py)
 exercises steps 1–5 against a freshly created database and the real
-`api_service.main.app`. It runs under the required `integration_ci`
-suite (`./tools/test_integration.sh`).
+`api_service.main.app`. It supplies an admitted operator dependency to
+exercise Settings and Secrets behavior; it does not test transport or
+ingress admission. It runs under the required `integration_ci` suite
+(`./tools/test_integration.sh`).
 
 Each pytest assertion in the smoke test cites the section above with a
 short comment. If a future change breaks this contract, the smoke test
