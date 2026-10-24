@@ -143,48 +143,6 @@ def test_post_pause_and_resume_return_snapshots_and_call_subsystem(
     assert temporal.resume_calls == 1
 
 
-def test_missing_operations_invoke_is_rejected_without_subsystem_invocation(
-    system_operations_client: tuple[TestClient, FakeTemporalService],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    client, temporal = system_operations_client
-    _override_user(client.app, is_superuser=False)
-    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
-
-    response = client.post(
-        "/api/system/worker-pause",
-        json={
-            "action": "pause",
-            "mode": "quiesce",
-            "reason": "Maintenance",
-            "confirmation": "Pause workers confirmed",
-            "idempotencyKey": "router-denied",
-        },
-    )
-
-    assert response.status_code == 403
-    assert response.json()["detail"]["code"] == "worker_operation_forbidden"
-    assert temporal.pause_calls == 0
-
-
-def test_missing_operations_read_is_rejected(
-    system_operations_client: tuple[TestClient, FakeTemporalService],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    client, _temporal = system_operations_client
-    _override_user(
-        client.app,
-        is_superuser=False,
-        settings_permissions={"operations.invoke"},
-    )
-    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
-
-    response = client.get("/api/system/worker-pause")
-
-    assert response.status_code == 403
-    assert response.json()["detail"]["code"] == "worker_operation_forbidden"
-
-
 def test_non_superuser_with_operations_permissions_can_read_and_invoke(
     system_operations_client: tuple[TestClient, FakeTemporalService],
     monkeypatch: pytest.MonkeyPatch,

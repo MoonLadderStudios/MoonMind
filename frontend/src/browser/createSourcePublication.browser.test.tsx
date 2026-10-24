@@ -1,10 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { page, userEvent } from 'vitest/browser';
+import { commands, page, userEvent } from 'vitest/browser';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { DashboardApp } from '../entrypoints/dashboard-app';
 import { renderWithClient, screen, waitFor, within } from '../utils/test-utils';
 import '../styles/dashboard.css';
+
+declare module 'vitest/browser' {
+  interface BrowserCommands {
+    replaceInputByKeyboard: (label: string, text: string) => Promise<void>;
+  }
+}
 
 // Real-browser Create journey for workspace source and publication intent
 // (MoonLadderStudios/MoonMind#2619). It mounts the production dashboard router
@@ -44,7 +50,6 @@ const uiInfo = {
       temporalDashboard: { actionsEnabled: true, listEnabled: false, workspaceShellEnabled: false, temporalWorkflowEditing: true },
     },
   },
-  settingsPermissions: [],
 };
 
 const payload: BootPayload = { page: 'dashboard', apiBase: '/api' };
@@ -157,9 +162,21 @@ afterEach(async () => {
 });
 
 async function replaceWithKeyboard(input: HTMLInputElement, text: string) {
-  input.focus();
-  input.setSelectionRange(0, input.value.length);
-  await userEvent.keyboard(text ? `{Backspace}${text}` : '{Backspace}');
+  // Playwright owns the focused frame and sequential native key dispatch.
+  await commands.replaceInputByKeyboard(input.getAttribute('aria-label')!, text);
+  await waitFor(() => {
+    const active = document.activeElement;
+    const state = JSON.stringify({
+      field: input.getAttribute('aria-label'),
+      value: input.value,
+      connected: input.isConnected,
+      activeElement: active?.getAttribute('aria-label') || active?.tagName,
+      documentHasFocus: document.hasFocus(),
+      snapshotFrames: document.querySelectorAll('iframe.html2canvas-container').length,
+    });
+    expect(input.value, state).toBe(text);
+    expect(active, state).toBe(input);
+  });
 }
 
 function publicationOutcome(select: HTMLSelectElement): string {
@@ -224,6 +241,7 @@ describe('Create workspace source and publication intent', () => {
       // A source the backend can never admit is caught before submission and
       // focus moves to the field that needs the correction.
       await replaceWithKeyboard(repository, 'octo repo');
+      await waitFor(() => expect(start).not.toHaveAttribute('aria-busy', 'true'));
       await userEvent.click(start);
       expect(await screen.findByText(REPOSITORY_ERROR)).toBeTruthy();
       expect(document.activeElement).toBe(repository);

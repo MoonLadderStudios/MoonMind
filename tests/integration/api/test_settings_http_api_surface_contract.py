@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-from uuid import uuid4
 
 import pytest
 import pytest_asyncio
@@ -202,14 +200,6 @@ async def test_mm659_failed_write_produces_redacted_audit_event(
 async def test_mm657_validate_preview_structured_errors_and_redaction(
     settings_http_api_db,
 ):
-    limited_user = SimpleNamespace(
-        id=uuid4(),
-        email="limited-settings-http-api@example.com",
-        is_superuser=False,
-        settings_permissions={"settings.catalog.read"},
-    )
-    app.dependency_overrides[SETTINGS_USER_DEP] = lambda: limited_user
-
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
@@ -219,14 +209,6 @@ async def test_mm657_validate_preview_structured_errors_and_redaction(
                 "changes": {"workflow.default_publish_mode": "branch"},
             },
         )
-
-    privileged_user = SimpleNamespace(
-        id=uuid4(),
-        email="privileged-settings-http-api@example.com",
-        is_superuser=True,
-        settings_permissions={"settings.workspace.write"},
-    )
-    app.dependency_overrides[SETTINGS_USER_DEP] = lambda: privileged_user
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
@@ -267,8 +249,8 @@ async def test_mm657_validate_preview_structured_errors_and_redaction(
             },
         )
 
-    assert denied.status_code == 403
-    assert denied.json()["error"] == "permission_denied"
+    assert denied.status_code == 200
+    assert denied.json()["accepted"] is True
     assert missing_ref.status_code == 200
     assert missing_ref.json()["accepted"] is False
     assert missing_ref.json()["issues_by_key"]["integrations.github.token_ref"][0][

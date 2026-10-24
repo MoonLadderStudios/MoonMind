@@ -7423,8 +7423,6 @@ export interface components {
             dashboardConfig: {
                 [key: string]: unknown;
             };
-            /** Settingspermissions */
-            settingsPermissions?: string[];
             /** Workerpause */
             workerPause?: {
                 [key: string]: unknown;

@@ -172,6 +172,19 @@ authorized for its execution. It does not inherit access to every instance
 resource because the person who launched it owns the instance. A runtime bridge
 remains bound to the intended runtime session, not an arbitrary upstream proxy.
 
+Scheduled occurrences receive execution links to their frozen input and plan
+artifacts before planning. The verified execution plan and original task-input
+snapshot identify those inputs; current parameters cannot substitute another
+artifact. Activity identity supplies the workflow and run receiving access.
+Retries reuse the links, while an authorized recovery execution can retain the
+same frozen inputs under its new identity.
+
+Child result publication links its generated summary and result envelopes to the
+parent verified against Temporal's recorded ancestry. Provider metadata or a
+returned artifact reference alone cannot grant another execution access.
+An unreadable optional Story file is skipped with diagnostics while generated
+summary and result publication continues.
+
 Existing signing, revocation, and credential-materialization mechanisms remain
 where they serve these machine contracts. Removing application login is not a
 blanket deletion of `auth` modules, JWT libraries, signing keys, OAuth workflows,
@@ -340,6 +353,10 @@ evidence. Conversion preserves their stored creator, quota, and claim scopes;
 malformed or unknown human principals still block conversion.
 Execution projections are already instance resources: a missing historical owner
 does not block unrelated conversion, and the projection remains unchanged.
+The reserved zero owner on an account-free local deployment is deployment scope,
+unless a retained account has that ID; other human owners still require attribution.
+Settings audit actors record attempted changes, including rejected requests, not
+resource ownership. Preserve their provenance without using it as attribution.
 Missing ownership never supplies authority to read a linked restricted artifact.
 
 The authoritative eligibility read and conversion share the existing migration

@@ -367,7 +367,7 @@ async def test_loader_brief_read_uses_trusted_verifier_parent(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("output", ("missing", "unreadable", "malformed", "nonobject", "failed"))
-async def test_ineligible_source_verifier_does_not_lookup_ancestry(
+async def test_ineligible_source_verifier_handoff_does_not_read_source(
     artifacts, tmp_path, monkeypatch, output  # noqa: F811
 ):
     from moonmind.workflows.temporal import activity_runtime
@@ -399,7 +399,7 @@ async def test_ineligible_source_verifier_does_not_lookup_ancestry(
             workspacePath=str(workspace),
         )
     )
-    lookup = AsyncMock(side_effect=AssertionError("ineligible output must not lookup ancestry"))
+    lookup = AsyncMock(return_value="workflow:parent")
     monkeypatch.setattr(activity_runtime, "_verified_artifact_parent_scope", lookup)
     monkeypatch.setattr(
         activity,
@@ -409,8 +409,11 @@ async def test_ineligible_source_verifier_does_not_lookup_ancestry(
         ),
     )
     async with artifacts() as session:
+        service = TemporalArtifactService(TemporalArtifactRepository(session))
+        source_reads = AsyncMock(wraps=service.read)
+        monkeypatch.setattr(service, "read", source_reads)
         activities = TemporalAgentRuntimeActivities(
-            artifact_service=TemporalArtifactService(TemporalArtifactRepository(session)),
+            artifact_service=service,
             run_store=run_store,
         )
         monkeypatch.setattr(activities, "execution_notify_completion", AsyncMock())
@@ -427,8 +430,14 @@ async def test_ineligible_source_verifier_does_not_lookup_ancestry(
             },
         )
         published = await activities.agent_runtime_publish_artifacts(result)
-        lookup.assert_not_awaited()
+        lookup.assert_awaited_once()
+        source_reads.assert_not_awaited()
         assert "moonSpecVerify" not in published.metadata
+        assert (
+            await service.read(
+                artifact_id=published.diagnostics_ref, principal="workflow:parent"
+            )
+        )[1]
 
 
 @pytest.mark.asyncio

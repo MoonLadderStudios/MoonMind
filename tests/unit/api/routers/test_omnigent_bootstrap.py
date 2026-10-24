@@ -69,9 +69,6 @@ def client(monkeypatch):
     app.dependency_overrides[get_instance_access] = lambda: SimpleNamespace(
         id="user-1", is_superuser=True
     )
-    monkeypatch.setattr(
-        bootstrap_router, "_require_bootstrap_permission", lambda _user: None
-    )
     return TestClient(app)
 
 

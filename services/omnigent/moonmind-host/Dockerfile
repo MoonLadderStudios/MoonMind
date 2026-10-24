@@ -17,10 +17,8 @@
 # Vendor pins: each CLI is installed at build time only; the workflow launcher
 # must never install runtimes. The pinned versions below mirror the trusted
 # runtime-pack descriptors in
-# moonmind/omnigent/harness_platform/runtime_packs.py and the deployment CLI
-# pins (CLAUDE_CLI_VERSION in api_service/Dockerfile, the documented known-good
-# CODEX_CLI_VERSION in tools/update-moonmind.sh, OPENCODE_PINNED_VERSION in
-# host_classes.py). Update image pins and pack descriptors in the same change;
+# moonmind/omnigent/harness_platform/runtime_packs.py and the OpenCode pin in
+# host_classes.py. Update image pins and pack descriptors in the same change;
 # exact-host attestation rejects a drifted runtime.
 
 ARG OMNIGENT_HOST_BASE_IMAGE

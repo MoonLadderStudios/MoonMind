@@ -175,7 +175,7 @@ describe('SecretManager', () => {
           ]}
           onNotice={onNotice}
           queryClient={queryClient}
-          permissions={new Set(['secrets.disable'])}
+
         />
       </QueryClientProvider>,
     );
@@ -199,7 +199,7 @@ describe('SecretManager', () => {
     );
   });
 
-  it('hides the Re-enable action when the user lacks the required permission', () => {
+  it('offers Re-enable to the admitted instance operator', () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -218,12 +218,12 @@ describe('SecretManager', () => {
           ]}
           onNotice={vi.fn()}
           queryClient={queryClient}
-          permissions={new Set()}
+
         />
       </QueryClientProvider>,
     );
 
-    expect(screen.queryByRole('button', { name: /re-enable github-pat-main/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /re-enable github-pat-main/i })).toBeTruthy();
   });
 
   it('encodes slugs with reserved characters in every secret request', async () => {
@@ -251,7 +251,7 @@ describe('SecretManager', () => {
           ]}
           onNotice={vi.fn()}
           queryClient={queryClient}
-          permissions={new Set(['secrets.disable'])}
+
         />
       </QueryClientProvider>,
     );

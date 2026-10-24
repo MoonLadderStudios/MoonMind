@@ -917,7 +917,6 @@ jobs:
           file: api_service/Dockerfile
           target: test-runtime
           build-args: |
-            INSTALL_CODEX_CLI=false
             INSTALL_TEST_DEPS=true
           load: true
           tags: moonmind-python-tests:ci

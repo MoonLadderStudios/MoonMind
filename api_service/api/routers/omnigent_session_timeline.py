@@ -30,18 +30,8 @@ from api_service.services.omnigent_session_timeline_service import (
     OmnigentSessionProjectionNotFound,
     OmnigentSessionTimelineService,
 )
-from api_service.services.settings_catalog import has_settings_permission
 
 router = APIRouter(prefix="/api/omnigent/sessions", tags=["Omnigent Session Timeline"])
-
-_DIAGNOSTIC_PERMISSION = "operations.read"
-
-def _require_diagnostic_read(user: Any) -> None:
-    if not has_settings_permission(user, _DIAGNOSTIC_PERMISSION):
-        raise HTTPException(
-            403,
-            f"Missing required operator permission: {_DIAGNOSTIC_PERMISSION}.",
-        )
 
 
 @router.get("/{session_id}/timeline")
@@ -52,7 +42,6 @@ async def get_session_timeline(
 ) -> dict:
     """Return the machine-readable operator timeline for one canonical session."""
 
-    _require_diagnostic_read(user)
     try:
         return await OmnigentSessionTimelineService(db).timeline(session_id)
     except OmnigentSessionProjectionNotFound:
@@ -62,7 +51,6 @@ async def get_session_timeline(
 async def _diagnostic_redirect(
     *, session_id: str, kind: str, user: Any, db: AsyncSession
 ) -> RedirectResponse:
-    _require_diagnostic_read(user)
     try:
         target = await OmnigentSessionTimelineService(db).diagnostic_target(
             session_id, kind
@@ -110,7 +98,6 @@ async def get_session_stuck_state(
     executes the same pure response plan.
     """
 
-    _require_diagnostic_read(user)
     try:
         return await OmnigentSessionTimelineService(db).stuck_state(session_id)
     except OmnigentSessionProjectionNotFound:
