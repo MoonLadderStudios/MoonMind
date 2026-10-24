@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -39,7 +40,18 @@ async def test_changed_edited_full_retry_creates_fresh_execution_with_provenance
 ) -> None:
     async with _db(tmp_path) as maker:
         async with maker() as session:
-            service = TemporalExecutionService(session, client_adapter=AsyncMock(describe_workflow=AsyncMock(return_value=None)))
+            service = TemporalExecutionService(
+                session,
+                client_adapter=AsyncMock(
+                    start_workflow=AsyncMock(
+                        side_effect=lambda *_args, **_kwargs: SimpleNamespace(
+                            run_id=str(uuid4())
+                        )
+                    ),
+                    namespace_retention_seconds=AsyncMock(return_value=86400),
+                    describe_workflow=AsyncMock(return_value=None),
+                ),
+            )
             source = await service.create_execution(
                 workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),
@@ -108,7 +120,10 @@ async def test_changed_edited_full_retry_creates_fresh_execution_with_provenance
     assert edited_retry.workflow_id != refreshed_source.workflow_id
     assert refreshed_source.state is MoonMindWorkflowState.FAILED
     assert refreshed_source.close_status is TemporalExecutionCloseStatus.FAILED
-    assert refreshed_source.parameters["workflow"]["instructions"] == "Original instructions."
+    assert (
+        refreshed_source.parameters["workflow"]["instructions"]
+        == "Original instructions."
+    )
 
     assert edited_retry.input_ref == "artifact://input/edited"
     assert edited_retry.parameters["rerunSource"] == {

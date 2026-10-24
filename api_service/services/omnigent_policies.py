@@ -203,12 +203,12 @@ def validate_policy(
     payload = document.model_dump(by_alias=True, mode="json")
     try:
         require_explicit_policy_resources(document)
-    except ValueError as exc:
+    except ValueError:
         diagnostics.append(
             {
                 "code": "OMNIGENT_CPU_LIMIT_REQUIRED",
                 "path": "resources.cpuMillis",
-                "message": str(exc),
+                "message": "resources.cpuMillis must be a positive explicit limit",
             }
         )
     image_pattern = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")

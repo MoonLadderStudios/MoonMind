@@ -579,6 +579,7 @@ async def _run_wave(
 
 
 @pytest.mark.asyncio
+@pytest.mark.requires_credentials
 async def test_exact_images_run_the_required_concurrency_level(tmp_path) -> None:
     """Run the exact-image row at the level the qualification runner selected."""
 

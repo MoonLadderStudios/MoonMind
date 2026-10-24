@@ -164,7 +164,7 @@ Rate limiting uses endpoint, resource bucket, and the actual actor, installation
 
 ### CONTRACT-010 Repository consumers use bound access clients
 
-Transport and hosting-service adapters consume admitted access plus authenticated execution ownership; they do not accept an optional PAT and discover credentials when it is absent. An unavailable hosting capability yields an explicit capability error, not an irrelevant PAT prompt. The local managed broker and Omnigent lease-owned materializer share admission semantics with runtime-appropriate delivery.
+Transport and hosting adapters consume admitted access and authenticated execution ownership. Unavailable authority fails without discovering a PAT. The local managed broker and Omnigent lease-owned materializer share admission semantics. Standalone `gh --version` and `gh version` inspect the local binary without credentials or broker requests; repository commands still require selected authority.
 
 The Omnigent path verifies the stored execution plan before linking inputs to a Step Execution, and snapshot reads carry that execution's admitted scope, so a known artifact ref does not grant unrelated reads. Branch and PR publication acquire the selected `destination_write` binding before remote access and validate the workspace origin; missing or revoked authority fails before publication without falling back to ambient credentials. Plans without repository snapshots keep their existing credential path.
 

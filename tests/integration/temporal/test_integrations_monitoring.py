@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -20,6 +21,7 @@ from moonmind.workflows.temporal.service import (
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
+
 @asynccontextmanager
 async def _db(tmp_path: Path):
     url = f"sqlite+aiosqlite:///{tmp_path}/integrations_monitoring.db"
@@ -32,6 +34,7 @@ async def _db(tmp_path: Path):
     finally:
         await engine.dispose()
 
+
 async def test_callback_first_completion_uses_single_terminal_path(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -43,7 +46,15 @@ async def test_callback_first_completion_uses_single_terminal_path(
                 integration_poll_initial_seconds=5,
                 integration_poll_max_seconds=30,
                 integration_poll_jitter_ratio=0.0,
-                client_adapter=AsyncMock(describe_workflow=AsyncMock(return_value=None)),
+                client_adapter=AsyncMock(
+                    start_workflow=AsyncMock(
+                        side_effect=lambda *_args, **_kwargs: SimpleNamespace(
+                            run_id=str(uuid4())
+                        )
+                    ),
+                    namespace_retention_seconds=AsyncMock(return_value=86400),
+                    describe_workflow=AsyncMock(return_value=None),
+                ),
             )
             created = await service.create_execution(
                 workflow_type="MoonMind.UserWorkflow",
@@ -89,6 +100,7 @@ async def test_callback_first_completion_uses_single_terminal_path(
             assert completed.integration_state["normalized_status"] == "completed"
             assert "art_callback" in completed.artifact_refs
 
+
 async def test_polling_fallback_and_continue_as_new_preserve_monitoring_identity(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -101,7 +113,15 @@ async def test_polling_fallback_and_continue_as_new_preserve_monitoring_identity
                 integration_poll_max_seconds=20,
                 integration_poll_jitter_ratio=0.0,
                 run_continue_as_new_wait_cycle_threshold=2,
-                client_adapter=AsyncMock(describe_workflow=AsyncMock(return_value=None)),
+                client_adapter=AsyncMock(
+                    start_workflow=AsyncMock(
+                        side_effect=lambda *_args, **_kwargs: SimpleNamespace(
+                            run_id=str(uuid4())
+                        )
+                    ),
+                    namespace_retention_seconds=AsyncMock(return_value=86400),
+                    describe_workflow=AsyncMock(return_value=None),
+                ),
             )
             created = await service.create_execution(
                 workflow_type="MoonMind.UserWorkflow",
@@ -159,13 +179,25 @@ async def test_polling_fallback_and_continue_as_new_preserve_monitoring_identity
             assert finished.integration_state["normalized_status"] == "completed"
             assert "art_result" in finished.artifact_refs
 
+
 async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", False)
     async with _db(tmp_path) as maker:
         async with maker() as session:
-            service = TemporalExecutionService(session, client_adapter=AsyncMock(describe_workflow=AsyncMock(return_value=None)))
+            service = TemporalExecutionService(
+                session,
+                client_adapter=AsyncMock(
+                    start_workflow=AsyncMock(
+                        side_effect=lambda *_args, **_kwargs: SimpleNamespace(
+                            run_id=str(uuid4())
+                        )
+                    ),
+                    namespace_retention_seconds=AsyncMock(return_value=86400),
+                    describe_workflow=AsyncMock(return_value=None),
+                ),
+            )
             created = await service.create_execution(
                 workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),
@@ -251,13 +283,25 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
                     payload_artifact_ref=None,
                 )
 
+
 async def test_failure_and_cancel_paths_keep_integration_status_compact(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", False)
     async with _db(tmp_path) as maker:
         async with maker() as session:
-            service = TemporalExecutionService(session, client_adapter=AsyncMock(describe_workflow=AsyncMock(return_value=None)))
+            service = TemporalExecutionService(
+                session,
+                client_adapter=AsyncMock(
+                    start_workflow=AsyncMock(
+                        side_effect=lambda *_args, **_kwargs: SimpleNamespace(
+                            run_id=str(uuid4())
+                        )
+                    ),
+                    namespace_retention_seconds=AsyncMock(return_value=86400),
+                    describe_workflow=AsyncMock(return_value=None),
+                ),
+            )
             created = await service.create_execution(
                 workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),

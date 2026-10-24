@@ -22,7 +22,7 @@ Classification follows resources started by a test, not simply the module it imp
 | Hermetic integration CI | `integration` and `integration_ci` | Disposable Compose-backed local dependencies, without external credentials. |
 | Provider verification | `provider_verification` and provider markers | Live external-provider checks in explicitly credentialed environments, outside required credential-free PR CI. |
 
-`pyproject.toml` owns marker registration. `tests/conftest.py` owns classification for existing tests. Prefer an explicit resource marker for a clear boundary. Unit ownership precedence is `slow > temporal_boundary > component > unit_fast`. The ownership verifier checks that eligible provider-free tests have exactly one owner.
+`pyproject.toml` owns marker registration. `tests/conftest.py` owns classification for existing tests. Unit ownership precedence is `slow > temporal_boundary > component > unit_fast`. The ownership verifier checks every provider-free unit, API component and integration node, including integration tests with missing ownership markers. Live provider, GPU and operator-owned deployment fixtures declare their external resource requirements. Host-side controller and credential-free exact-artifact tests retain their existing executable runners outside the Compose pytest service.
 
 Reliability tests are excluded from the general Compose integration corpus so the same journeys are not executed twice under different names.
 
@@ -73,7 +73,7 @@ Workflow/runtime/worker code, Temporal-facing schemas, relevant tests, and chang
 
 ### Reliability Journey Selection
 
-Reliability coverage is selected for orchestration and runtime seams, checkpoints, skill contracts and their materialization, replay fixtures, and managed runtime packaging. Shared CI, dependency, selector, or global test-configuration changes take the full-backend path.
+Reliability coverage is selected for orchestration and runtime seams, checkpoints, skill materialization, replay fixtures, and managed runtime packaging. Saved-preset definitions, catalog/readiness code and conversion also select the journeys that consume them. Shared CI, dependency, selector, or global test-configuration changes take the full-backend path.
 
 These journeys test retained user outcomes through real production composition. Scripted external providers remove network/credential dependence, not the boundary under test.
 
@@ -100,9 +100,9 @@ bound sized from observed setup, testing, and bounded diagnostics/cleanup:
 
 | Lane | Per-test timeout | Test-step bound | Job bound |
 | --- | --- | --- | --- |
-| Unit-fast | 60s (`--timeout 60`) | 12-minute native test step | 18-minute job |
-| API/component | 120s (`--timeout 120`) | 7-minute native test step | 15-minute job |
-| Temporal boundary | 120s (`--timeout 120`) | 7-minute native test step | 15-minute job |
+| Unit-fast | 60s (`--timeout 60`) | 15-minute native test step | 21-minute job |
+| API/component | 120s (`--timeout 120`) | 12-minute native test step | 18-minute job |
+| Temporal boundary | 120s (`--timeout 120`) | 12-minute native test step | 20-minute job |
 | Ordinary reliability shard | 150s | 600-second shell deadline inside a 12-minute Actions step | 20-minute job |
 | Scheduled reliability shard | 300s | 660-second shell deadline inside a 12-minute Actions step | 20-minute job |
 
@@ -123,11 +123,13 @@ evidence summary reports the termination as a cooperative deadline stop
 (124), a hard kill (137), an ordinary pytest exit, or unavailable when the
 native step bound, cancellation or runner loss stopped the step first.
 
-Unit-fast keeps six minutes outside its 12-minute test step for setup and
-reporting. Its full suite can take about nine minutes before final process
-exit. Warm setup has taken about 35 seconds; the normal summary and upload
-steps each have a 2-minute cap. API/component and Temporal retain 15-minute
-jobs and 7-minute test steps. Reliability 20-minute jobs also cover Compose
+Unit-fast and API/component keep six minutes outside their 15/12-minute test
+steps for setup and reporting. The full unit corpus can exceed twelve
+minutes while making progress; API/component can exceed seven without failures.
+The normal summary and upload steps each have a 2-minute cap. Temporal keeps
+eight minutes for setup and reporting around its 12-minute test step: the full
+corpus can exceed seven minutes while passing on slower runners.
+Reliability 20-minute jobs also cover Compose
 pull/up (~1-2 minutes), their 12-minute test step, and bounded diagnostics/
 cleanup. Job deadlines remain hard ceilings: slow setup or multiple exhausted
 failure-diagnostic caps can prevent final uploads. The reliability bound

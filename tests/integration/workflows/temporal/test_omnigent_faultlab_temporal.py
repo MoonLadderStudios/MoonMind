@@ -24,10 +24,7 @@ retry, Continue-As-New, and replay machinery actually run:
   a monotonically preserved session epoch;
 * **deterministic replay** — the faulted history replays deterministically.
 
-Per ``AGENTS.md`` the Temporal time-skipping boundary tests are marked
-``integration`` + ``temporal_boundary`` and are **excluded** from required CI
-(``integration_ci``) because the test server consistently exceeds CI timeout
-thresholds. They remain valuable for local-dev verification.
+The hermetic integration lane owns these real Temporal boundary scenarios.
 """
 
 from __future__ import annotations
@@ -61,6 +58,7 @@ pytestmark = [
     pytest.mark.asyncio,
     pytest.mark.integration,
     pytest.mark.temporal_boundary,
+    pytest.mark.integration_ci,
 ]
 
 _ACTIVITY_QUEUE = settings.temporal.activity_agent_runtime_task_queue
@@ -451,18 +449,30 @@ async def test_temporal_worker_restart_and_continue_as_new_preserve_authority() 
                 # identity, so the workflow provably continues-as-new. Stop as soon
                 # as the first run records a Continue-As-New event.
                 continued_as_new = False
-                for _ in range(120):
+                deadline = asyncio.get_running_loop().time() + 10
+                while asyncio.get_running_loop().time() < deadline:
                     first_history = await env.client.get_workflow_handle(
                         handle.id, run_id=first_run_id
                     ).fetch_history()
                     if _history_continued_as_new_run_id(first_history) is not None:
                         continued_as_new = True
                         break
-                    await handle.signal(
-                        "attach_runtime_handles",
-                        {"containerId": "ctr-2", "threadId": "thread-2"},
-                    )
-                assert continued_as_new, "workflow never continued-as-new"
+                    # Once history crosses the threshold, stop producing events.
+                    # Signals racing Continue-As-New produce UNHANDLED_COMMAND
+                    # retries; a flood tests server starvation instead of recovery.
+                    if len(first_history.events) < 40:
+                        await handle.signal(
+                            "attach_runtime_handles",
+                            {"containerId": "ctr-2", "threadId": "thread-2"},
+                        )
+                    await asyncio.sleep(0.05)
+                assert continued_as_new, "workflow never continued-as-new: " + repr(
+                    [
+                        str(e.workflow_task_failed_event_attributes)
+                        for e in first_history.events
+                        if e.HasField("workflow_task_failed_event_attributes")
+                    ][-2:]
+                )
 
                 status = await handle.query("get_status")
                 # Monotonic authority: the session epoch never regressed across the

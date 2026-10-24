@@ -324,6 +324,7 @@ from moonmind.workflows.temporal import (
     TemporalExecutionService,
     TemporalExecutionTargetRunChangedError,
     TemporalExecutionValidationError,
+    TemporalExecutionStartUnconfirmedError,
 )
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
@@ -10296,6 +10297,10 @@ def _build_original_workflow_input_snapshot_payload(
     workspace_value = payload.get("workspace")
     if isinstance(workspace_value, Mapping):
         draft["workspace"] = copy.deepcopy(dict(workspace_value))
+    for key in ("inputArtifactRef", "planArtifactRef"):
+        ref = payload.get(key) or task_payload.get(key)
+        if ref:
+            draft[key] = ref
     return {
         "snapshotVersion": _WORKFLOW_INPUT_SNAPSHOT_VERSION,
         "source": {
@@ -10352,6 +10357,10 @@ def _snapshot_source_payload_from_parameters(
     workspace_value = parameters.get("workspaceSpec") or parameters.get("workspace")
     if isinstance(workspace_value, Mapping):
         payload["workspace"] = copy.deepcopy(dict(workspace_value))
+    for key in ("inputArtifactRef", "planArtifactRef"):
+        ref = parameters.get(key) or task.get(key)
+        if ref:
+            payload[key] = ref
     return payload, task
 
 
@@ -11543,6 +11552,7 @@ async def _create_execution_from_workflow_request(
             workflow_type="MoonMind.UserWorkflow",
         )
         if existing_execution is not None:
+            existing_execution = await service.ensure_create_started(existing_execution)
             return _serialize_execution(existing_execution, user=user)
     reserved_workflow_id = (
         f"mm:{uuid5(NAMESPACE_URL, f'{_execution_principal(user)}:user-workflow:{create_idempotency_key}')}"
@@ -11555,6 +11565,7 @@ async def _create_execution_from_workflow_request(
             reserved_workflow_id,
         )
         if existing_execution is not None:
+            existing_execution = await service.ensure_create_started(existing_execution)
             return _serialize_execution(existing_execution)
     try:
         inherited = await resolve_child_runtime_inheritance(
@@ -12386,6 +12397,12 @@ async def _create_execution_from_workflow_request(
         snapshot_source, snapshot_task = _snapshot_source_payload_from_parameters(
             initial_parameters
         )
+        for key, ref in (
+            ("inputArtifactRef", input_artifact_ref),
+            ("planArtifactRef", plan_artifact_ref),
+        ):
+            if ref:
+                snapshot_source[key] = ref
         if not snapshot_task:
             raise _invalid_workflow_request(
                 "Omnigent execution requires an immutable task input snapshot."
@@ -12491,6 +12508,7 @@ async def _create_execution_from_workflow_request(
             start_delay=start_delay,
             scheduled_for=scheduled_for_dt,
             _workflow_id=reserved_workflow_id,
+            _admitted_execution_plan=persisted_omnigent_plan,
         )
     except ProviderProfileRuntimeMismatchError as exc:
         # Provider Profiles are runtime-owned: the shared invariant is
@@ -12510,12 +12528,16 @@ async def _create_execution_from_workflow_request(
             },
         ) from exc
 
-    await _attach_input_attachment_artifacts_to_execution(
-        session=session,
-        record=record,
-        attachment_refs=attachment_index,
+    if persisted_omnigent_plan is None:
+        await _attach_input_attachment_artifacts_to_execution(
+            session=session,
+            record=record,
+            attachment_refs=attachment_index,
+        )
+    snapshot_ref = _workflow_input_snapshot_ref_from_memo(
+        dict(getattr(record, "memo", None) or {})
     )
-    if persisted_omnigent_plan is not None:
+    if persisted_omnigent_plan is not None and not snapshot_ref:
         snapshot_ref = prelaunch_task_input_snapshot_ref
         # Snapshot memo keys go through the snapshot owner and the plan
         # binding keys through the canonical owner (REQ-02); both route
@@ -12581,7 +12603,7 @@ async def _create_execution_from_workflow_request(
             # Detached double without attribute-write support; durable refs
             # were already reconciled through the shared mutator above.
             pass
-    else:
+    elif persisted_omnigent_plan is None:
         snapshot_ref = await _persist_original_workflow_input_snapshot_from_parameters(
             session=session,
             record=record,
@@ -15137,6 +15159,10 @@ async def create_execution(
             start_delay=route.start_delay,
             scheduled_for=route.scheduled_for,
         )
+    except TemporalExecutionStartUnconfirmedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=exc.detail
+        ) from exc
     except ValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,

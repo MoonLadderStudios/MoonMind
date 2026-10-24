@@ -5,11 +5,13 @@ import subprocess
 import pytest
 
 from tools.verify_test_shard_ownership import (
+    CONTROLLER_JOURNEY_PATHS,
     RELIABILITY_MATRIX_OWNER,
     RELIABILITY_SHARD_NAMES,
     CollectedNode,
     PluginUnavailable,
     collect_group_node_ids,
+    controller_journey_paths,
     owners,
     verify,
     verify_physical_partitions,
@@ -85,6 +87,84 @@ def test_verifier_reports_missing_duplicate_and_marker_conflicts() -> None:
     assert any("unit_fast conflicts" in error for error in errors)
     assert any("multiple CI owners" in error for error in errors)
     assert any("integration_ci conflicts" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    "markers", [(), ("integration",), ("integration", "temporal_boundary")]
+)
+def test_integration_test_without_execution_owner_is_reported(markers) -> None:
+    node = _node("tests/integration/test_recovery.py", *markers)
+
+    assert verify([node]) == [f"{node.nodeid}: no CI owner"]
+
+
+@pytest.mark.parametrize(
+    "provider_marker",
+    [
+        "provider_verification",
+        "requires_credentials",
+        "requires_gpu",
+        "requires_deployment",
+    ],
+)
+def test_credentialed_integration_is_outside_provider_free_ownership(
+    provider_marker,
+) -> None:
+    assert verify([_node("tests/integration/test_live.py", provider_marker)]) == []
+
+
+def test_host_owned_integration_nodes_have_their_actual_runner_owner() -> None:
+    nodes = [_node(path, "integration") for path in CONTROLLER_JOURNEY_PATHS]
+    assert nodes, "controller runner must actually select its integration tests"
+    assert all(owners(node) == {"integration-controller-journey"} for node in nodes)
+    exact = CollectedNode(
+        nodeid=(
+            "tests/integration/omnigent/test_exact_docker_n_way_concurrency.py::"
+            "test_exact_host_replacement_resumes_same_session_without_provider_input"
+        ),
+        path="tests/integration/omnigent/test_exact_docker_n_way_concurrency.py",
+        markers=frozenset({"integration"}),
+    )
+    assert owners(exact) == {"omnigent-exact-artifact"}
+    assert verify([*nodes, exact]) == []
+    assert verify([_node("tests/integration/host_update/test_new.py", "integration")])
+
+
+def test_controller_selection_follows_the_executable_workflow_command(tmp_path) -> None:
+    workflow = tmp_path / "workflow.yml"
+    workflow.write_text("""jobs:
+  integration-ci:
+    steps:
+      - if: matrix.suite == 'controller-journey'
+        run: |
+          # The controller's helper uses an unrelated heredoc.
+          python - <<'PY'
+          print("an unrelated string with an apostrophe's context")
+          PY
+          "$journal_test_env/bin/python" -m pytest --confcutdir=tests/integration/host_update \\
+            tests/integration/host_update/test_changed.py -q # controller's fixtures
+      - run: |
+          # unrelated runner's unmatched quote: '
+          python - <<'PY'
+          print("this isn't a pytest command")
+          PY
+""")
+
+    assert controller_journey_paths(workflow) == {
+        "tests/integration/host_update/test_changed.py"
+    }
+
+
+def test_malformed_controller_pytest_command_fails_usefully(tmp_path) -> None:
+    workflow = tmp_path / "workflow.yml"
+    workflow.write_text("""jobs:
+  integration-ci:
+    steps:
+      - if: matrix.suite == 'controller-journey'
+        run: python -m pytest 'unterminated
+""")
+    with pytest.raises(ValueError, match="Malformed controller pytest command"):
+        controller_journey_paths(workflow)
 
 
 def _reliability_nodes() -> list[CollectedNode]:

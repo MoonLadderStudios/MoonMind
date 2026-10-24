@@ -34,7 +34,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactService,
 )
 
-pytestmark = [pytest.mark.asyncio]
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration_ci]
 
 # ---------------------------------------------------------------------------
 # DB fixture
@@ -63,9 +63,38 @@ async def _patched_session_context(session_factory):
     async with session_factory() as session:
         yield session
 
+
+def _composite_profile_contract() -> dict[str, Any]:
+    return {
+        "clear_env_keys": ["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENROUTER_API_KEY"],
+        "env_template": {"OPENROUTER_API_KEY": {"from_secret_ref": "provider_api_key"}},
+        "file_templates": [
+            {
+                "path": "{{runtime_support_dir}}/codex-home/config.toml",
+                "format": "toml",
+                "merge_strategy": "replace",
+                "content_template": {"model_provider": "openrouter"},
+            }
+        ],
+        "home_path_overrides": {"CODEX_HOME": "{{runtime_support_dir}}/codex-home"},
+        "command_behavior": {"suppress_default_model_flag": True},
+    }
+
+
 def _fake_profiles(profiles: list[dict[str, Any]]):
     async def _fetcher(*, runtime_id: str):
-        return {"profiles": profiles}
+        return {
+            "profiles": [
+                {
+                    **_composite_profile_contract(),
+                    "runtime_id": runtime_id,
+                    "secret_refs": {"provider_api_key": "env://OPENROUTER_API_KEY"},
+                    "auth_state": "connected",
+                    **profile,
+                }
+                for profile in profiles
+            ]
+        }
     return _fetcher
 
 async def _async_noop(**_kwargs):
@@ -84,6 +113,7 @@ async def test_two_openrouter_profiles_independently_resolvable(tmp_path: Path) 
             session.add(
                 ManagedAgentProviderProfile(
                     profile_id="codex_openrouter_qwen36_plus",
+                    **_composite_profile_contract(),
                     runtime_id="codex_cli",
                     provider_id="openrouter",
                     provider_label="OpenRouter",
@@ -102,6 +132,7 @@ async def test_two_openrouter_profiles_independently_resolvable(tmp_path: Path) 
             session.add(
                 ManagedAgentProviderProfile(
                     profile_id="codex_openrouter_claude_sonnet",
+                    **_composite_profile_contract(),
                     runtime_id="codex_cli",
                     provider_id="openrouter",
                     provider_label="OpenRouter",
@@ -275,20 +306,20 @@ async def test_profile_roundtrip_via_provider_profile_list(tmp_path: Path) -> No
                     default_model="qwen/qwen3.6-plus",
                     secret_refs={"provider_api_key": "env://OPENROUTER_API_KEY"},
                     auth_state=ProviderProfileAuthState.CONNECTED,
-                    clear_env_keys=["OPENAI_API_KEY", "OPENROUTER_API_KEY"],
+                    clear_env_keys=[
+                        "OPENAI_API_KEY",
+                        "OPENAI_BASE_URL",
+                        "OPENROUTER_API_KEY",
+                    ],
                     env_template={
-                        "OPENROUTER_API_KEY": {
-                            "from_secret_ref": "provider_api_key"
-                        }
+                        "OPENROUTER_API_KEY": {"from_secret_ref": "provider_api_key"}
                     },
                     file_templates=[
                         {
                             "path": "{{runtime_support_dir}}/codex-home/config.toml",
                             "format": "toml",
                             "merge_strategy": "replace",
-                            "content_template": {
-                                "model_provider": "openrouter"
-                            },
+                            "content_template": {"model_provider": "openrouter"},
                         }
                     ],
                     home_path_overrides={
@@ -333,7 +364,11 @@ async def test_profile_roundtrip_via_provider_profile_list(tmp_path: Path) -> No
             assert p["runtime_materialization_mode"] == "composite"
             assert p["default_model"] == "qwen/qwen3.6-plus"
             assert p["secret_refs"] == {"provider_api_key": "env://OPENROUTER_API_KEY"}
-            assert p["clear_env_keys"] == ["OPENAI_API_KEY", "OPENROUTER_API_KEY"]
+            assert p["clear_env_keys"] == [
+                "OPENAI_API_KEY",
+                "OPENAI_BASE_URL",
+                "OPENROUTER_API_KEY",
+            ]
             assert p["env_template"] == {
                 "OPENROUTER_API_KEY": {"from_secret_ref": "provider_api_key"}
             }

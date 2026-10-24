@@ -221,6 +221,10 @@ def main(argv=None):
     )
     requested_args = list(sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(requested_args)
+    controller_url_explicit = bool(os.environ.get("MOONMIND_CONTROLLER_URL")) or any(
+        arg == "--controller-url" or arg.startswith("--controller-url=")
+        for arg in requested_args
+    )
     if args.resume and args.operator_url:
         raise ValueError(
             "Resume preserves the original operator URLs; omit --operator-url"
@@ -295,7 +299,16 @@ def main(argv=None):
         rendered = json.loads(
             run(["docker", "compose", "config", "--format", "json"], cwd=repo)
         )
-        project = args.compose_project or rendered["name"]
+        if not (
+            args.compose_project
+            or args.controller_secret_file
+            or os.environ.get("MOONMIND_CONTROLLER_SECRET_FILE")
+            or controller_url_explicit
+        ):
+            _recover_controller_identity(
+                {"project": rendered["name"], "image": digests[0]}, repo
+            )
+        project = _compose_project(repo, args.compose_project, rendered["name"])
         submission_id = str(uuid.uuid4())
         operator_urls = list(args.operator_url)
         inputs = {
@@ -335,13 +348,7 @@ def main(argv=None):
         repo,
         controller_url=args.controller_url,
         secret_file=args.controller_secret_file,
-        controller_url_explicit=(
-            bool(os.environ.get("MOONMIND_CONTROLLER_URL"))
-            or any(
-                arg == "--controller-url" or arg.startswith("--controller-url=")
-                for arg in requested_args
-            )
-        ),
+        controller_url_explicit=controller_url_explicit,
     )
 
 
@@ -474,6 +481,53 @@ def _controller_identity(repo):
     except (OSError, ValueError):
         return {}
     return identity if isinstance(identity, dict) else {}
+
+
+def _compose_project(repo, explicit, rendered):
+    """Keep default updates on the installed deployment's recorded target."""
+    if explicit:
+        return explicit
+    identity = _controller_identity(repo)
+    if identity is None:
+        return rendered
+    if not identity:
+        raise RuntimeError("The installed controller identity is unreadable or malformed.")
+    # Older installs recorded an endpoint before the target/API link existed.
+    if "targetProject" not in identity:
+        return rendered
+    target = identity["targetProject"]
+    recorded_repo = identity.get("repo")
+    if not isinstance(target, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", target):
+        raise RuntimeError("The installed controller identity has an invalid target project.")
+    if not isinstance(recorded_repo, str) or not recorded_repo:
+        raise RuntimeError("The installed controller identity has no deployment repository.")
+    candidates = [Path(recorded_repo)]
+    # A host can alternate between native Windows, WSL and Docker Desktop
+    # spellings. Accept an alias only when it names this actual filesystem object.
+    drive_path = re.fullmatch(
+        r"(?:([A-Za-z]):/|/(?:mnt|run/desktop/mnt/host)/([A-Za-z])(?:/|$))(.*)",
+        recorded_repo.replace("\\", "/"),
+    )
+    if drive_path:
+        drive = (drive_path[1] or drive_path[2]).lower()
+        tail = drive_path[3] or ""
+        candidates.extend(
+            Path(value)
+            for value in (
+                f"{drive}:/{tail}",
+                f"/mnt/{drive}/{tail}",
+                f"/run/desktop/mnt/host/{drive}/{tail}",
+            )
+        )
+    elif not Path(recorded_repo).is_absolute():
+        raise RuntimeError("The installed controller identity has no absolute repository.")
+    for candidate in candidates:
+        try:
+            if candidate.samefile(repo):
+                return target
+        except (OSError, ValueError):
+            continue
+    raise RuntimeError("The installed controller identity cannot be verified for this deployment repository.")
 
 
 def _controller_never_started(repo):
@@ -1420,7 +1474,7 @@ def _local_build_update(args, repo):
     rendered = json.loads(
         run(["docker", "compose", "config", "--format", "json"], cwd=repo)
     )
-    project = args.compose_project or rendered["name"]
+    project = _compose_project(repo, args.compose_project, rendered["name"])
     before = _compose_ps_state(repo=repo, project=project)
     if not before:
         raise RuntimeError(
