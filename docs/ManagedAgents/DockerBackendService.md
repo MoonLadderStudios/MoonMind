@@ -765,17 +765,15 @@ advertises no container tools, and `kubernetes-job` fails before launch unless a
 Kubernetes backend is configured. Workflow text and runtime environment
 overrides cannot elevate that decision.
 
-The `tactics-unreal` source selects the deployment-approved Unreal image; its
-default `pullPolicy=if-missing` lets the first admitted job provision a cold
-cache through the coalesced acquisition path, and an operator may set `never`
-when prewarming is required. The `unreal-ccache` and `unreal-ubt` cache refs
-resolve to deployment-owned targets and owner-scoped volumes derived from the
-configured base names, so jobs from the same principal reuse a cache while
-another identity gets a different writable volume. The `tactics-test` Skill
-routes its `run_dood_unreal_tactics.sh` entrypoint through
-`moonmind container run` inside a managed session and keeps direct-Docker
-behavior outside MoonMind, so the portable capability needs no MoonMind-only
-fork.
+The `tactics-unreal` source selects the deployment-approved Unreal image.
+`pullPolicy=if-missing` provisions a cold image through coalesced acquisition;
+`never` requires prewarming. Compose declares `unreal-ccache`, `unreal-ubt`,
+and writable `unreal-ddc` at `/home/ue4/.cache/UnrealEngine/Common/DerivedDataCache`.
+Their volumes use configured base names plus the admitted owner's identity,
+preserving caches across that owner's jobs without sharing writable state
+with another principal. An explicit cache declaration replaces these defaults.
+The portable `tactics-test` Skill uses `moonmind container run` in managed
+sessions and direct Docker outside MoonMind.
 
 ---
 
