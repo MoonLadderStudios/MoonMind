@@ -21,6 +21,7 @@ interface NativeChatFrameProps {
   /** Time to wait for authorized conversation rendering. */
   loadTimeoutMs?: number;
   onSignal?: (signal: NativeChatFrameSignal) => void;
+  onFailure?: (reason: string) => void;
 }
 
 export function NativeChatFrame({
@@ -30,6 +31,7 @@ export function NativeChatFrame({
   readOnly = false,
   loadTimeoutMs = NATIVE_CHAT_READY_TIMEOUT_MS,
   onSignal,
+  onFailure,
 }: NativeChatFrameProps) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const loadedRef = useRef(false);
@@ -45,11 +47,12 @@ export function NativeChatFrame({
       if (loadedRef.current) {
         return;
       }
+      onFailure?.('readiness_timeout');
       onSignal?.('incompatible');
     }, loadTimeoutMs);
     return () => window.clearTimeout(timer);
     // Reset whenever the mounted session changes.
-  }, [src, chatBindingId, loadTimeoutMs, onSignal]);
+  }, [src, chatBindingId, loadTimeoutMs, onSignal, onFailure]);
 
   // Liveness and compatibility signals from the same-origin native application.
   useEffect(() => {
@@ -65,13 +68,17 @@ export function NativeChatFrame({
         loadedRef.current = true;
         setLoaded(true);
         onSignal?.('ready');
-      } else if (nativeChatFatalReason(event.data, chatBindingId) !== null) {
-        onSignal?.('incompatible');
+      } else {
+        const reason = nativeChatFatalReason(event.data, chatBindingId);
+        if (reason !== null) {
+          onFailure?.(reason);
+          onSignal?.('incompatible');
+        }
       }
     }
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [chatBindingId, src, onSignal]);
+  }, [chatBindingId, src, onSignal, onFailure]);
 
   return (
     <div className="wf-native-chat__frame" data-loaded={loaded ? 'true' : 'false'}>

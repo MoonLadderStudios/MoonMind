@@ -376,12 +376,12 @@ def test_render_document_injects_bootstrap_and_base() -> None:
     # root-relative transport through the binding-scoped facade.
     assert document.index("window.fetch =") < document.index("index-abc.js")
     assert '"/c/" + bindingId' in document
-    assert "apiBase + url.pathname" in document
+    assert "window.__OMNIGENT_BASE_PATH__ = uiBase" in document
     assert "sameSocketHost" in document
     assert "window.EventSource =" in document
     assert "window.WebSocket =" in document
     assert "MutationObserver" in document
-    assert "restoreScopedDocumentUrl" in document
+    assert "restoreScopedDocumentUrl" not in document
     assert "beforeunload" not in document
     # Assets are scoped in the rendered document too.
     assert f'src="{base}/assets/index-abc.js"' in document
@@ -407,7 +407,7 @@ def test_render_document_escapes_closing_script_tag() -> None:
     assert "&lt;/script&gt;" in document
 
 
-def test_render_document_keeps_untrusted_bootstrap_out_of_script_source():
+def test_render_document_keeps_untrusted_bootstrap_out_of_script_source(tmp_path):
     class Document(HTMLParser):
         scripts = []
         bootstrap = None
@@ -435,16 +435,18 @@ def test_render_document_keeps_untrusted_bootstrap_out_of_script_source():
     assert len(parsed.scripts) == 2  # Host adapter and the original module.
     assert '<script>alert("x")</script>' not in rendered
     initialization = rendered.split("<script>", 1)[1].split("\n", 1)[0]
+    initialization_path = tmp_path / "bootstrap.cjs"
+    initialization_path.write_text(initialization, encoding="utf-8")
     result = subprocess.run(
         [
             "node",
             "-e",
             (
                 "global.window={};global.document={getElementById:()=>({getAttribute:()=>process.argv[1]})};"
-                + "eval(process.argv[2]);process.stdout.write(JSON.stringify(window.__MOONMIND_OMNIGENT_CHAT__));"
+                + "require(process.argv[2]);process.stdout.write(JSON.stringify(window.__MOONMIND_OMNIGENT_CHAT__));"
             ),
             parsed.bootstrap,
-            initialization,
+            str(initialization_path),
         ],
         check=True,
         capture_output=True,
@@ -477,7 +479,7 @@ _ADAPTER_SCRIPT_RE = re.compile(
 
 # Node harness executing the ACTUAL injected adapter (extracted from the
 # rendered document, not a handwritten copy). It installs recording native
-# transports (no network), evals the adapter, then asserts:
+# transports (no network), loads the adapter as a module, then asserts:
 # * WebSocket CONNECTING/OPEN/CLOSING/CLOSED statics survive the shim;
 # * EventSource CONNECTING/OPEN/CLOSED statics survive the shim;
 # * the pinned upstream sendWatch guard (`ws?.readyState === WebSocket.OPEN`)
@@ -563,7 +565,8 @@ globalThis.MutationObserver = class {
   disconnect() {}
 };
 
-eval(adapterSrc);
+// Load the exact rendered file in its own module scope, not the harness scope.
+require(process.argv[2]);
 
 const HostedWebSocket = globalThis.WebSocket;
 const HostedEventSource = globalThis.EventSource;
@@ -785,7 +788,7 @@ def test_injected_adapter_preserves_transport_statics_and_sendwatch(
     adapter_src = match.group(1)
     assert "window.WebSocket =" in adapter_src
 
-    adapter_path = tmp_path / "adapter.js"
+    adapter_path = tmp_path / "adapter.cjs"
     harness_path = tmp_path / "harness.js"
     adapter_path.write_text(adapter_src, encoding="utf-8")
     harness_path.write_text(_NODE_ADAPTER_HARNESS, encoding="utf-8")
@@ -846,7 +849,7 @@ def test_mutated_adapter_without_static_preservation_fails_transport_regression(
     )
     assert mutated != adapter_src
 
-    adapter_path = tmp_path / "adapter-mutated.js"
+    adapter_path = tmp_path / "adapter-mutated.cjs"
     harness_path = tmp_path / "harness.js"
     adapter_path.write_text(mutated, encoding="utf-8")
     harness_path.write_text(_NODE_ADAPTER_HARNESS, encoding="utf-8")
@@ -891,13 +894,17 @@ def test_injected_adapter_waits_for_authorized_render_and_reports_handled_failur
     )
     match = _ADAPTER_SCRIPT_RE.search(document)
     assert match is not None
-    adapter_path = tmp_path / "adapter.js"
+    adapter_path = tmp_path / "adapter.cjs"
     adapter_path.write_text(match.group(1), encoding="utf-8")
-    harness = Path(__file__).parents[2] / "fixtures/omnigent/native_ui_readiness.cjs"
-    completed = subprocess.run(
-        [node, str(harness), str(adapter_path)], capture_output=True, text=True, timeout=15
-    )
-    assert completed.returncode == 0, completed.stdout + completed.stderr
+    for name in ("native_ui_readiness.cjs", "native_ui_submissions.cjs"):
+        harness = Path(__file__).parents[2] / "fixtures/omnigent" / name
+        completed = subprocess.run(
+            [node, str(harness), str(adapter_path)],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
 def test_is_valid_chat_binding_id_accepts_both_server_shapes() -> None:

@@ -71,7 +71,6 @@ _ADAPTER_SCRIPT_RE = re.compile(
 _NODE_RENDERED_APP_HARNESS = r"""
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const adapterSrc = fs.readFileSync(process.argv[2], 'utf8');
 const bindingId = process.argv[3];
 
 class RecordingNativeWebSocket {
@@ -124,7 +123,8 @@ globalThis.MutationObserver = class {
   disconnect() {}
 };
 
-eval(adapterSrc);
+// Load the exact rendered file in its own module scope, not the harness scope.
+require(process.argv[2]);
 
 // The exact pinned upstream sendWatch guard (issue brief §"Confirmed code
 // defect"): with the adapter's restored constants this no longer crashes on
@@ -292,7 +292,7 @@ def test_served_adapter_and_consumer_render_without_sendwatch_crash(tmp_path) ->
         document, bootstrap = _render(mode)  # type: ignore[arg-type]
         match = _ADAPTER_SCRIPT_RE.search(document)
         assert match is not None, f"injected adapter missing ({mode})"
-        adapter_path = tmp_path / f"adapter_{mode}.js"
+        adapter_path = tmp_path / f"adapter_{mode}.cjs"
         bootstrap_path = tmp_path / f"bootstrap_{mode}.json"
         adapter_path.write_text(match.group(1), encoding="utf-8")
         bootstrap_path.write_text(

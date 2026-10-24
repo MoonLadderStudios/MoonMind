@@ -481,11 +481,70 @@ def render_native_ui_document(
   const apiBase = String(binding.apiBase).replace(/\/+$/, "");
   const bindingId = encodeURIComponent(String(binding.chatBindingId));
   const scopedDocumentUrl = window.location.href;
+  const uiBase = String(binding.uiBase || new URL(scopedDocumentUrl).pathname).replace(/\/+$/, "");
+  // Use the native application's supported basename. Keep the address valid
+  // throughout boot, suspense, reload and retry instead of racing its router
+  // with a temporary origin-root URL and a first-paint restoration timer.
+  window.__OMNIGENT_BASE_PATH__ = uiBase;
+  window.history.replaceState(window.history.state, "",
+    uiBase + "/c/" + bindingId + window.location.search + window.location.hash);
   const sameOriginApiPath = /^\/(?:v1|api|health)(?:\/|$)/;
   let sessionValidated = false;
   let transcriptValidated = false;
   let fatalAnnounced = false;
   let readinessObserver = null;
+  let lastReadFailure = "readiness_timeout";
+  const pendingSubmissions = new Map();
+  const submissionStorage = "moonmind.chat.pending.v1:" + bindingId;
+  function submissionDigest(text) {
+    // WebCrypto is unavailable on ordinary HTTP LAN origins. SHA-256 here
+    // identifies retry bytes without persisting their plaintext on those URLs.
+    const bytes = new TextEncoder().encode(text);
+    const padded = new Uint8Array(Math.ceil((bytes.length + 9) / 64) * 64);
+    padded.set(bytes); padded[bytes.length] = 128;
+    const data = new DataView(padded.buffer);
+    data.setUint32(padded.length - 8, Math.floor(bytes.length / 536870912));
+    data.setUint32(padded.length - 4, bytes.length * 8);
+    const h = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+    const k = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+      0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+      0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+      0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+      0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+      0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+      0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+      0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+    const rotate = (x, n) => (x >>> n) | (x << (32 - n));
+    const w = new Uint32Array(64);
+    for (let offset = 0; offset < padded.length; offset += 64) {
+      for (let i = 0; i < 16; i++) w[i] = data.getUint32(offset + i * 4);
+      for (let i = 16; i < 64; i++) {
+        const x = w[i - 15], y = w[i - 2];
+        w[i] = w[i - 16] + (rotate(x,7)^rotate(x,18)^(x>>>3)) + w[i - 7] + (rotate(y,17)^rotate(y,19)^(y>>>10));
+      }
+      let [a,b,c,d,e,f,g,j] = h;
+      for (let i = 0; i < 64; i++) {
+        const t = (j + (rotate(e,6)^rotate(e,11)^rotate(e,25)) + ((e&f)^(~e&g)) + k[i] + w[i]) >>> 0;
+        const u = ((rotate(a,2)^rotate(a,13)^rotate(a,22)) + ((a&b)^(a&c)^(b&c))) >>> 0;
+        j=g; g=f; f=e; e=(d+t)>>>0; d=c; c=b; b=a; a=(t+u)>>>0;
+      }
+      [a,b,c,d,e,f,g,j].forEach((value, i) => { h[i] = (h[i] + value) >>> 0; });
+    }
+    return h.map(value => value.toString(16).padStart(8, "0")).join("");
+  }
+  // Only digests and opaque retry identities are persisted, never message text.
+  try {
+    const saved = JSON.parse(window.sessionStorage.getItem(submissionStorage) || "[]");
+    if (Array.isArray(saved)) for (const entry of saved.slice(0, 32)) {
+      if (Array.isArray(entry) && /^[a-f0-9]{64}$/.test(entry[0]) && /^mm-[a-f0-9-]{32,36}$/.test(entry[1]))
+        pendingSubmissions.set(entry[0], entry[1]);
+    }
+  } catch (error) {}
+  function saveSubmissions() {
+    try { window.sessionStorage.setItem(submissionStorage,
+      JSON.stringify(Array.from(pendingSubmissions).filter(([digest]) => /^[a-f0-9]{64}$/.test(digest)))); }
+    catch (error) {}
+  }
 
   function checkConversationRendered() {
     // The pinned ChatPage renders Conversation (role=log) only beyond its
@@ -507,15 +566,17 @@ def render_native_ui_document(
     const sameSocketHost =
       (url.protocol === "ws:" || url.protocol === "wss:") &&
       url.host === window.location.host;
+    const path = url.pathname.startsWith(uiBase + "/")
+      ? url.pathname.slice(uiBase.length) : url.pathname;
     if (
       (!sameHttpOrigin && !sameSocketHost) ||
       url.pathname === apiBase ||
       url.pathname.startsWith(apiBase + "/") ||
-      !sameOriginApiPath.test(url.pathname)
+      !sameOriginApiPath.test(path)
     ) {
       return null;
     }
-    url.pathname = apiBase + url.pathname;
+    url.pathname = apiBase + path;
     return url;
   }
 
@@ -526,19 +587,82 @@ def render_native_ui_document(
     const url = scoped || new URL(String(source), window.location.origin);
     const sessionPath = apiBase + "/v1/sessions/" + bindingId;
     const method = String(init?.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
+    // The hosted surface cannot browse other conversations. Do not mount a
+    // second server-side catalog query for the native global sidebar. Bound
+    // metadata and transcript reads still cross the authorized facade.
+    if (method === "GET" && url.origin === window.location.origin &&
+        url.pathname === apiBase + "/v1/sessions") {
+      return new Response(JSON.stringify({ object: "list", data: [], has_more: false }),
+        { headers: { "Content-Type": "application/json" } });
+    }
     const essential = method === "GET" && url.origin === window.location.origin &&
       (url.pathname === sessionPath ||
        (url.pathname === sessionPath + "/items" && !url.searchParams.has("after")));
+    let submission = null;
+    let newSubmission = false;
+    if (method === "POST" && url.pathname === sessionPath + "/events") {
+      const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
+      if (!headers.has("Idempotency-Key")) {
+        const body = init?.body ?? (input instanceof Request ? await input.clone().text() : null);
+        if (typeof body === "string") {
+          // An unacknowledged, byte-identical send is a retry. Once its receipt
+          // is confirmed, the same text is a new submission with a fresh key.
+          let digest;
+          if (window.crypto?.subtle) {
+            const bytes = await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(body));
+            digest = Array.from(new Uint8Array(bytes), value => value.toString(16).padStart(2, "0")).join("");
+          } else digest = submissionDigest(body);
+          let key = pendingSubmissions.get(digest);
+          if (!key) {
+            newSubmission = true;
+            if (pendingSubmissions.size >= 32) throw new Error("Too many unconfirmed chat submissions. Retry an earlier send.");
+            const nonce = window.crypto.randomUUID?.() || Array.from(
+              window.crypto.getRandomValues(new Uint8Array(16)),
+              value => value.toString(16).padStart(2, "0")
+            ).join("");
+            key = "mm-" + nonce;
+            pendingSubmissions.set(digest, key);
+            saveSubmissions();
+          }
+          headers.set("Idempotency-Key", key);
+          init = { ...init, headers };
+          submission = digest;
+        }
+      }
+    }
     const request = scoped
       ? (input instanceof Request ? new Request(scoped.href, input) : scoped.href)
       : input;
     try {
-      const response = await nativeFetch(request, init);
+      let response;
+      const signal = init?.signal || (input instanceof Request ? input.signal : null);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try { response = await nativeFetch(request, init); }
+        catch (error) {
+          if (!essential || signal?.aborted || attempt === 2) throw error;
+        }
+        const transient = !response || [408, 429].includes(response.status) || response.status >= 500;
+        if (!essential || !transient || attempt === 2) break;
+        if (response?.body) await response.body.cancel();
+        await new Promise(function (resolve, reject) {
+          if (signal?.aborted) { reject(new DOMException("Read aborted", "AbortError")); return; }
+          function abort() { window.clearTimeout(timer); reject(new DOMException("Read aborted", "AbortError")); }
+          const timer = window.setTimeout(function () {
+            signal?.removeEventListener("abort", abort); resolve();
+          }, 500 * (attempt + 1));
+          signal?.addEventListener("abort", abort, { once: true });
+        });
+        response = null;
+      }
       if (essential) {
         if (!response.ok) {
-          announceFatal("essential_read_failed");
+          lastReadFailure = "essential_read_failed";
+          announceFatal([401, 403].includes(response.status)
+            ? "transcript_access_denied" : "essential_read_failed");
         } else {
-          const body = await response.clone().json();
+          let body;
+          try { body = await response.clone().json(); }
+          catch (error) { announceFatal("essential_read_invalid"); return response; }
           if (url.pathname === sessionPath) {
             sessionValidated = body?.id === binding.chatBindingId;
             if (!sessionValidated) announceFatal("essential_read_invalid");
@@ -549,9 +673,24 @@ def render_native_ui_document(
           checkConversationRendered();
         }
       }
+      if (submission !== null && (response.ok ||
+          (newSubmission && [400, 401, 403, 404, 413, 415, 422].includes(response.status)))) {
+        try {
+          // Headers alone are not an acknowledgement: a dropped response body
+          // must retain the identity across explicit retry or frame reload.
+          // A definitive first-attempt rejection also settles that request;
+          // a rejection after uncertain delivery cannot settle the earlier send.
+          await response.clone().json();
+          pendingSubmissions.delete(submission);
+          saveSubmissions();
+        } catch (error) {}
+      }
       return response;
     } catch (error) {
-      if (essential) announceFatal("essential_read_failed");
+      if (essential && !(init?.signal || (input instanceof Request ? input.signal : null))?.aborted) {
+        lastReadFailure = "essential_read_failed";
+        announceFatal(lastReadFailure);
+      }
       throw error;
     }
   };
@@ -594,39 +733,9 @@ def render_native_ui_document(
     Object.setPrototypeOf(window.WebSocket, NativeWebSocket);
   }
 
-  // BrowserRouter must see the stock chat route at first render. The provider
-  // id remains virtualized: the only client-visible id is chatBindingId.
-  window.history.replaceState(
-    window.history.state,
-    "",
-    "/c/" + bindingId + window.location.search + window.location.hash
-  );
-  // Once BrowserRouter has captured the stock route, restore the authorized
-  // scoped URL without emitting a navigation event. The mounted router keeps
-  // its virtual location while reloads, bookmarks, and crash recovery continue
-  // to target a server route MoonMind actually serves.
-  function restoreScopedDocumentUrl() {
-    window.history.replaceState(window.history.state, "", scopedDocumentUrl);
-  }
-  function restoreAfterFirstRender() {
+  function observeConversation() {
     const root = document.getElementById("root");
     if (!root) return;
-    if (root.hasChildNodes()) {
-      restoreScopedDocumentUrl();
-    } else {
-      const observer = new MutationObserver(function () {
-        if (!root.hasChildNodes()) return;
-        observer.disconnect();
-        restoreScopedDocumentUrl();
-      });
-      observer.observe(root, { childList: true });
-      window.setTimeout(function () {
-        observer.disconnect();
-        restoreScopedDocumentUrl();
-      }, 5000);
-    }
-    // URL restoration has a short fallback timer; readiness must keep
-    // observing throughout slow hydration and until the frame is disposed.
     readinessObserver = new MutationObserver(checkConversationRendered);
     readinessObserver.observe(root, { childList: true, subtree: true });
     checkConversationRendered();
@@ -702,8 +811,8 @@ def render_native_ui_document(
   }
   if (fullPage) {
     window.setTimeout(function () {
-      if (!readyAnnounced && !fatalAnnounced) announceFatal("readiness_timeout");
-    }, 15000);
+      if (!readyAnnounced && !fatalAnnounced) announceFatal(lastReadFailure);
+    }, 60000);
   }
   window.addEventListener("error", function () {
     announceFatal("native_crash");
@@ -712,9 +821,9 @@ def render_native_ui_document(
     announceFatal("unhandled_rejection");
   });
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", restoreAfterFirstRender, { once: true });
+    document.addEventListener("DOMContentLoaded", observeConversation, { once: true });
   } else {
-    restoreAfterFirstRender();
+    observeConversation();
   }
 })();
 """.strip()
