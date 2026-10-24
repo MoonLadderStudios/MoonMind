@@ -37,10 +37,9 @@ export default defineConfig({
         replaceInputByKeyboard: async ({ iframe }, label: string, text: string) => {
           const input = iframe.getByLabel(label, { exact: true });
           await input.click();
-          // These are single-line fields. Select their line without relying
-          // on the engine's platform-specific select-all shortcut.
-          await input.press('Home');
-          await input.press('Shift+End');
+          // Use the platform's native select-all shortcut; WebKit can treat
+          // Home/End as viewport navigation instead of input caret movement.
+          await input.press('ControlOrMeta+A');
           await input.press('Backspace');
           await input.pressSequentially(text);
         },
