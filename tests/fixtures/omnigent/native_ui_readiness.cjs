@@ -9,6 +9,7 @@ async function journey({ items = [], readOnly = false, failure = null, delayedRo
   const timers = [];
   const observers = [];
   const listeners = {};
+  const navigations = [];
   let rendered = false;
   let mounted = false;
   const root = {
@@ -27,7 +28,7 @@ async function journey({ items = [], readOnly = false, failure = null, delayedRo
       href: 'https://moonmind.test/omnigent-ui/workflow-chat/cb-1?embedded=1',
       origin: 'https://moonmind.test', protocol: 'https:', host: 'moonmind.test', search: '', hash: '',
     },
-    history: { state: null, replaceState() {} },
+    history: { state: null, replaceState(_state, _title, url) { navigations.push(url); } },
     document: { readyState: 'complete', getElementById: () => root },
     parent: { postMessage: (message, origin) => {
       assert.equal(origin, 'https://moonmind.test');
@@ -41,6 +42,7 @@ async function journey({ items = [], readOnly = false, failure = null, delayedRo
         (failure === 'metadata' && path.endsWith('/cb-1'));
       return {
         ok: !failed,
+        status: failed ? 403 : 200,
         clone: () => ({ json: async () => {
           if (failure === 'json' && path.endsWith('/items')) throw new Error('private invalid body');
           if (path.endsWith('/items')) return failure === 'schema' ? {} : { data: items, has_more: false };
@@ -54,11 +56,13 @@ async function journey({ items = [], readOnly = false, failure = null, delayedRo
       observe() { this.active = true; }
       disconnect() { this.active = false; }
     },
-    setTimeout: (callback, ms) => { timers.push({ callback, ms }); },
+    setTimeout: (callback, ms) => { timers.push({ callback, ms }); if (ms < 2000) queueMicrotask(callback); },
     addEventListener: (name, callback) => { listeners[name] = callback; },
   };
   context.window = context;
   vm.runInNewContext(adapter, context);
+  assert.equal(context.__OMNIGENT_BASE_PATH__, '/omnigent-ui/workflow-chat/cb-1');
+  assert.deepEqual(navigations, ['/omnigent-ui/workflow-chat/cb-1/c/cb-1']);
   const mutate = () => observers.filter((observer) => observer.active).forEach((observer) => observer.callback());
   const ready = () => messages.filter((message) => message.type.endsWith('.ready'));
   const fatal = () => messages.filter((message) => message.type.endsWith('.fatal'));
@@ -72,6 +76,7 @@ async function journey({ items = [], readOnly = false, failure = null, delayedRo
   timers.filter((timer) => timer.ms <= 8000).forEach((timer) => timer.callback());
   mounted = true;
   mutate();
+  assert.equal(navigations.length, 1, 'loading or delayed render cannot restore an unmatched URL');
   await context.fetch('/v1/sessions/cb-1?include_items=false');
   await context.fetch('/v1/sessions/other/items').catch(() => {});
   await context.fetch('/v1/sessions/cb-1/items?after=old-cursor').catch(() => {});
@@ -80,6 +85,7 @@ async function journey({ items = [], readOnly = false, failure = null, delayedRo
   await context.fetch('/v1/sessions/cb-1/items?order=desc&limit=100').catch(() => {});
   assert.equal(ready().length, 0, 'successful read is not a rendered conversation');
   if (failure) {
+    if (failure === 'network') timers.filter((timer) => timer.ms === 60000).forEach((timer) => timer.callback());
     assert.ok(fatal().length > 0, 'handled essential failure must reach the embedding route');
     // A later unrelated rerender must not replace authoritative failure.
     rendered = true;
@@ -125,6 +131,7 @@ async function fullPageJourney({ failure = null } = {}) {
     postMessage: () => {},
     fetch: async (url) => ({
       ok: !(failure === '403' && new URL(url).pathname.endsWith('/items')),
+      status: failure === '403' && new URL(url).pathname.endsWith('/items') ? 403 : 200,
       clone: () => ({ json: async () => (new URL(url).pathname.endsWith('/items')
         ? { data: [], has_more: false } : { id: 'cb-1' }) }),
     }),
@@ -139,10 +146,10 @@ async function fullPageJourney({ failure = null } = {}) {
   const surface = () => JSON.stringify(body.children);
   if (failure) {
     await context.fetch('/v1/sessions/cb-1/items').catch(() => {});
-    assert.ok(surface().includes('essential_read_failed'), 'full-page failure must be visible');
+    assert.ok(surface().includes('transcript_access_denied'), 'full-page denial must be visible');
   } else {
     assert.equal(body.children.length, 0, 'loading page is left to the native app');
-    const deadline = timers.find((timer) => timer.ms === 15000);
+    const deadline = timers.find((timer) => timer.ms === 60000);
     assert.ok(deadline, 'full-page startup needs a finite readiness deadline');
     deadline.callback();
     assert.ok(surface().includes('readiness_timeout'), 'never-ready page must become unavailable');

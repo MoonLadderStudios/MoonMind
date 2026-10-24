@@ -73,9 +73,11 @@ export function WorkflowNativeChatRoute({
   // Client-detected native-application failures (compatibility / disconnect)
   // override an otherwise-mountable server status so the fallback is explicit.
   const [frameSignal, setFrameSignal] = useState<NativeChatFrameSignal | null>(null);
+  const [frameFailure, setFrameFailure] = useState<string | null>(null);
   const chatUrl = binding?.chatUrl ?? null;
   useEffect(() => {
     setFrameSignal(null);
+    setFrameFailure(null);
   }, [chatUrl]);
 
   const status = useMemo(() => {
@@ -127,6 +129,9 @@ export function WorkflowNativeChatRoute({
         <WorkflowTerminalChatActions apiBase={apiBase} workflowId={workflowId} />
       ) : null}
       <div className="wf-native-chat__surface">
+        {mountFrame && errorStatus != null ? (
+          <p className="small" role="status">Unable to refresh chat status. Reconnecting…</p>
+        ) : null}
         {mountFrame && iframeSrc ? (
           <NativeChatFrame
             key={`${binding?.chatBindingId}:${iframeSrc}`}
@@ -135,14 +140,16 @@ export function WorkflowNativeChatRoute({
             title={`${workflowTitle} — Omnigent chat`}
             readOnly={readOnly}
             onSignal={setFrameSignal}
+            onFailure={setFrameFailure}
           />
         ) : (
           <NativeChatUnavailableState
             status={status}
-            unavailableReason={binding?.unavailableReason ?? null}
+            unavailableReason={frameFailure ?? binding?.unavailableReason ?? null}
             errorStatus={errorStatus}
             onRetry={() => {
               setFrameSignal(null);
+              setFrameFailure(null);
               void query.refetch();
             }}
             fullPageHref={fullHref}

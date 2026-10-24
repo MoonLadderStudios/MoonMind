@@ -22,17 +22,21 @@ OPERATOR = "00000000-0000-0000-0000-000000000000"
 
 
 @pytest.mark.parametrize("action", ["download", "continue"])
+@pytest.mark.parametrize("ref_form", ["bare", "durable"])
 @pytest.mark.parametrize(
     "retained_owner,quarantine", [(False, False), (True, False), (True, True)]
 )
 async def test_converted_artifact_attached_to_new_workflow(
-    tmp_path, monkeypatch, action, retained_owner, quarantine
+    tmp_path, monkeypatch, action, ref_form, retained_owner, quarantine
 ):
     monkeypatch.setenv("AUTH_PROVIDER", "disabled")
     monkeypatch.setenv("DEFAULT_USER_ID", str(OPERATOR or ""))
     async with database(tmp_path) as maker:
         async with maker() as session:
             artifact_id, owner = await seed(session, tmp_path, quarantine=quarantine)
+            artifact_ref = (
+                f"artifact:{artifact_id}" if ref_form == "durable" else artifact_id
+            )
             assert (await conversion.run_guarded_upgrade(session, operator_authorized=True)).published
             # This workflow is created after conversion. Its captured evidence
             # may legitimately refer to retained bytes from the prior account.
@@ -50,11 +54,18 @@ async def test_converted_artifact_attached_to_new_workflow(
             artifacts = service(session, tmp_path)
             retained_quota = await TemporalArtifactRepository(session).quota_usage_for_scope(owner)
             monkeypatch.setattr(ex, "get_temporal_artifact_service", lambda _: artifacts)
-            evidence = ex._SourceCapturedEvidence(available=True,
-                named_refs={"finalSnapshotRef": artifact_id}, additional_refs=[],
-                finish_summary_ref=None, final_snapshot_ref=artifact_id,
-                capture_manifest_ref=None, summary=None, logical_step_id=None,
-                step_execution_id=None, incomplete_reason=None)
+            evidence = ex._SourceCapturedEvidence(
+                available=True,
+                named_refs={"finalSnapshotRef": artifact_ref},
+                additional_refs=[],
+                finish_summary_ref=None,
+                final_snapshot_ref=artifact_ref,
+                capture_manifest_ref=None,
+                summary=None,
+                logical_step_id=None,
+                step_execution_id=None,
+                incomplete_reason=None,
+            )
             monkeypatch.setattr(ex, "_resolve_source_captured_evidence", AsyncMock(return_value=evidence))
 
             class WorkflowService:
@@ -88,11 +99,18 @@ async def test_converted_artifact_attached_to_new_workflow(
                                         base_url="http://localhost") as client:
                 if quarantine:
                     if action == "download":
-                        response = await client.get("/api/executions/new-workflow/captured-evidence/download",
-                                                    params={"ref": artifact_id})
+                        response = await client.get(
+                            "/api/executions/new-workflow/captured-evidence/download",
+                            params={"ref": artifact_ref},
+                        )
                     else:
-                        response = await client.post("/api/executions/new-workflow/continue", json={
-                            "idempotencyKey": "quarantined", "selectedSourceArtifactRefs": [artifact_id]})
+                        response = await client.post(
+                            "/api/executions/new-workflow/continue",
+                            json={
+                                "idempotencyKey": "quarantined",
+                                "selectedSourceArtifactRefs": [artifact_ref],
+                            },
+                        )
                     # Existing read() state-error mapping returns a generic 500;
                     # recovery must not bypass quarantine or return its bytes.
                     assert response.status_code == 500
@@ -100,16 +118,23 @@ async def test_converted_artifact_attached_to_new_workflow(
                     assert await TemporalArtifactRepository(session).quota_usage_for_scope(owner) == retained_quota
                     return
                 if action == "download":
-                    response = await client.get("/api/executions/new-workflow/captured-evidence/download",
-                                                params={"ref": artifact_id})
+                    response = await client.get(
+                        "/api/executions/new-workflow/captured-evidence/download",
+                        params={"ref": artifact_ref},
+                    )
                     assert response.status_code == 200, response.text
                     assert response.content == b"retained bytes"
                     denied = await client.get("/api/executions/new-workflow/captured-evidence/download",
                                               params={"ref": "art_not_selected"})
                     assert denied.status_code == 404
                 else:
-                    response = await client.post("/api/executions/new-workflow/continue", json={
-                        "idempotencyKey": "recovery", "selectedSourceArtifactRefs": [artifact_id]})
+                    response = await client.post(
+                        "/api/executions/new-workflow/continue",
+                        json={
+                            "idempotencyKey": "recovery",
+                            "selectedSourceArtifactRefs": [artifact_ref],
+                        },
+                    )
                     assert response.status_code == 201, response.text
                     destination = await session.get(TemporalExecutionCanonicalRecord,
                                                     response.json()["destinationWorkflowId"])
@@ -129,8 +154,11 @@ async def test_converted_artifact_attached_to_new_workflow(
                     {"X-MoonMind-Execution-Fanout": "v1"},
                     {"X-MoonMind-Execution-Fanout": "v1", "X-MoonMind-Admitted-Principal": "operator"},
                 ]:
-                    denied = await client.get("/api/executions/new-workflow/captured-evidence/download",
-                                              params={"ref": artifact_id}, headers=headers)
+                    denied = await client.get(
+                        "/api/executions/new-workflow/captured-evidence/download",
+                        params={"ref": artifact_ref},
+                        headers=headers,
+                    )
                     assert denied.status_code == 401
                     denied = await client.post("/api/executions/new-workflow/continue", headers=headers, json={
                         "idempotencyKey": "marker-denied", "selectedSourceArtifactRefs": [artifact_id]})
