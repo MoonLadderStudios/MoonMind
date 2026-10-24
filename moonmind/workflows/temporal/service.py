@@ -23,7 +23,7 @@ from sqlalchemy import Select, and_, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
-from temporalio.client import WorkflowExecutionStatus
+from temporalio.client import WorkflowExecutionStatus, WorkflowHistory
 from temporalio.common import WorkflowIDReusePolicy
 from temporalio.service import RPCError, RPCStatusCode
 
@@ -126,6 +126,11 @@ from moonmind.workflows.executions.preset_expansion import (
     expand_preset_for_child_run,
     has_unexpanded_task_template,
 )
+from moonmind.workflows.executions.provider_profile_projection import (
+    PROVIDER_PROFILE_MEMO_KEY,
+    PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
+    build_provider_profile_projection,
+)
 from moonmind.workflows.executions.title_derivation import (
     TITLE_PROVENANCE_GENERATED,
     TITLE_PROVENANCE_USER_EXPLICIT,
@@ -144,11 +149,6 @@ from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
 )
 from moonmind.workflows.temporal.title_search import tokenize_title
-from moonmind.workflows.executions.provider_profile_projection import (
-    PROVIDER_PROFILE_MEMO_KEY,
-    PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
-    build_provider_profile_projection,
-)
 
 if TYPE_CHECKING:
     from api_service.services.omnigent_execution_plan_service import (
@@ -3892,6 +3892,11 @@ class TemporalExecutionService:
         async with self._issue_claim_for_step_retry(
             record, source_run_id=source_run_id
         ):
+            await self._restore_step_retry_input_access(
+                history,
+                workflow_id=record.workflow_id,
+                run_id=source_run_id,
+            )
             new_run_id = await self._client_adapter.reset_workflow_execution(
                 record.workflow_id,
                 run_id=source_run_id,
@@ -3907,6 +3912,79 @@ class TemporalExecutionService:
             step_id=plan.logical_step_id,
             title=plan.title,
         )
+
+    async def _restore_step_retry_input_access(
+        self, history: WorkflowHistory, *, workflow_id: str, run_id: str
+    ) -> None:
+        """Restore the recorded plan's input grants before a reset can read.
+
+        Retained runs can predate input delegation at API admission. Their
+        exact Temporal start input supplies authority; current projection
+        parameters and artifact refs cannot add or replace admitted inputs.
+        """
+        if not history.events or not history.events[0].HasField(
+            "workflow_execution_started_event_attributes"
+        ):
+            return
+        from moonmind.omnigent.bridge_artifacts import (
+            OmnigentArtifactError,
+            link_verified_execution_plan_inputs,
+        )
+        from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+        from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
+        from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
+
+        try:
+            started = history.events[0].workflow_execution_started_event_attributes
+            values = MOONMIND_TEMPORAL_DATA_CONVERTER.payload_converter.from_payloads(
+                started.input.payloads
+            )
+            if len(values) != 1 or not isinstance(values[0], Mapping):
+                return
+            parameters = values[0].get("initial_parameters")
+            if not isinstance(parameters, Mapping):
+                return
+            raw_binding = parameters.get("omnigentExecutionPlan")
+            if raw_binding is None:
+                return
+            binding = OmnigentExecutionPlanBinding.model_validate(raw_binding)
+            plan = await SessionExecutionPlanStore(self._session).load(binding.plan_ref)
+            if plan is None:
+                raise OmnigentArtifactError(
+                    "The recorded execution plan is unavailable"
+                )
+            # Artifact services commit their own read accounting and links.
+            # Keep those commits inside savepoints until the entire verified
+            # closure succeeds, including on databases with deferred BEGIN.
+            async with self._session.begin_nested():
+                admission_sessions = async_sessionmaker(
+                    bind=await self._session.connection(),
+                    expire_on_commit=False,
+                    join_transaction_mode="create_savepoint",
+                )
+                await link_verified_execution_plan_inputs(
+                    session_factory=admission_sessions,
+                    plan=plan,
+                    binding=binding,
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    namespace=self._namespace,
+                )
+            # Temporal may resume immediately after reset. Grants must already
+            # be visible to its independent Activity database sessions.
+            await self._session.commit()
+        except (
+            OmnigentArtifactError,
+            HarnessPlatformError,
+            TemporalArtifactError,
+            ValueError,
+            TypeError,
+        ) as exc:
+            await self._session.rollback()
+            raise TemporalExecutionRetryUnavailableError(
+                "input_artifacts_unavailable",
+                f"The run's recorded inputs cannot be restored for step retry: {exc}",
+            ) from exc
 
     async def _save_retry_response(
         self,
