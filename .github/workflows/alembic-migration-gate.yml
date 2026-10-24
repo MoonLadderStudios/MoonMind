@@ -9,12 +9,13 @@ name: CI / Alembic Migration Gate
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: alembic-migration-gate-${{ github.event.pull_request.number || github.ref }}
+  group: alembic-migration-gate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
