@@ -775,14 +775,11 @@ durable metadata. A lifecycle failure marks that maintenance run
 degraded and is retried by the next schedule rather than overwriting successful
 workspace cleanup evidence.
 
-Each sweep processes bounded pages of expired and soft-deleted artifacts,
-pending deletion intents and purgeable tombstones, and keeps paging for up to 40 minutes while pages
-still make progress. The Activity heartbeats while database or object-store
-operations are pending, before each candidate and after each page. A page that makes no progress ends the pass instead of
-repeating protected or stalled candidates. A short deletion-intent page still
-reports a backlog if any intent remains unresolved after reconciliation. The
-result reports whether a backlog remains; the next hourly pass resumes it, so
-removal keeps pace with creation rather than one page per hour.
+Each sweep pages through expiry, deletion intents, and tombstones for up to
+40 minutes while progress continues. Soft and hard deletions commit per candidate
+to release locks; metadata purge commits bounded pages. Heartbeats continue
+during pending operations and between candidates. A stalled page ends the pass;
+unresolved intents report a backlog for the next hourly pass.
 
 Retention class is assigned when an artifact is created or linked. When the
 mapping shortens a link type's class, a migration applies the new class to
@@ -791,10 +788,16 @@ evidence does not keep its longer expiry. As with linking, the new expiry
 counts from the latest such link, never earlier than creation. Such migrations
 only change expiry; the sweep still enforces every protection before deleting.
 
-The current raw and normalized journals referenced by a non-terminal Omnigent
-bridge session remain recovery data and are excluded from expiry and destructive
-deletion. Once that session is terminal, ordinary retention applies. Pins and
-live use claims continue to protect all artifact classes.
+Saved schedules, including disabled definitions, retain admitted inputs and old
+frozen Skill content after edits. Bootstrap repairs incomplete lists from the
+original digest-verified manifest before launch refresh. Current Skill definitions
+retain content; unreferenced revisions resume ordinary expiry. Admission and deletion
+share artifact locks in ID order, including storage aliases. Retention adds no
+read access or pins.
+
+Current raw and normalized journals referenced by non-terminal Omnigent bridge
+sessions remain recovery data. Their ordinary retention resumes when the
+session ends. Pins and live use claims protect all artifact classes.
 
 Read-use observations isolate optional claim writes in savepoints. A recoverable
 database write failure preserves the caller's work and artifact data; failed

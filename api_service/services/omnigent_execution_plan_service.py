@@ -542,6 +542,7 @@ async def _resolve_and_persist_skills(
                 raise ValueError(
                     f"selected Skill '{skill.skill_name}' lacks content digest evidence"
                 )
+            content_refs.append(skill.content_ref)
             persisted_entries.append(skill)
             continue
         source_path = str(skill.provenance.source_path or "").strip()
