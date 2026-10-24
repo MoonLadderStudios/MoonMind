@@ -37,12 +37,12 @@ async def test_concurrent_rotation_has_one_generation_winner_on_postgres(
 
     store = host_auth_store
     await store.put(HostAuthCredentialProfile("managed", "env://HOST_ONE", 1))
-    start = asyncio.Event()
+    ready_to_rotate = asyncio.Barrier(2)
 
     async def writer(secret_ref: str):
         current = await store.get_active()
         assert current is not None and current.current_generation == 1
-        await start.wait()
+        await ready_to_rotate.wait()
         candidate = rotate_host_auth_profile(
             current,
             new_secret_ref=secret_ref,
@@ -53,13 +53,10 @@ async def test_concurrent_rotation_has_one_generation_winner_on_postgres(
         except RuntimeError as exc:
             return exc
 
-    pending = [
-        asyncio.create_task(writer("env://HOST_TWO_A")),
-        asyncio.create_task(writer("env://HOST_TWO_B")),
-    ]
-    await asyncio.sleep(0)
-    start.set()
-    results = await asyncio.gather(*pending)
+    results = await asyncio.gather(
+        writer("env://HOST_TWO_A"),
+        writer("env://HOST_TWO_B"),
+    )
 
     winners = [item for item in results if isinstance(item, HostAuthCredentialProfile)]
     losers = [item for item in results if isinstance(item, RuntimeError)]
