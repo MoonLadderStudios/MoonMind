@@ -3,9 +3,10 @@
 Task-spawning callers identify themselves with trusted transport headers
 (``X-MoonMind-Task-Workflow-Id`` / ``X-MoonMind-Agent-Run-Id`` /
 ``X-MoonMind-Agent-Run-Identifier``).  We refuse to honour those headers
-unless the caller is an admitted instance operator or the executions service
-can confirm the machine principal owns the referenced workflow. When that
-check passes the principal is granted the
+unless the caller is an admitted instance operator and the executions service
+can load the referenced workflow. Machines use the separately verified fan-out
+capability principal; task identity headers never grant machine authority.
+When the operator's check passes the principal is granted the
 ``executions:create-child`` and ``executions:inherit-runtime`` scopes that
 the runtime inheritance contract requires.
 """
@@ -38,43 +39,27 @@ def _coerce_str(value: Any) -> Optional[str]:
     return text or None
 
 
-def _is_superuser(user: Any) -> bool:
-    return bool(getattr(user, "is_superuser", False))
-
-
-def _owner_id(user: Any) -> Optional[str]:
-    raw = getattr(user, "id", None)
-    return _coerce_str(raw)
-
-
-async def _verify_task_workflow_ownership(
+async def _verify_operator_workflow(
     *,
     service: Any,
     workflow_id: str,
     user: Any,
 ) -> bool:
-    """Return True when ``user`` is allowed to act as the workflow principal."""
+    """Verify operator admission and existence before trusting task headers."""
 
-    if _is_superuser(user):
-        return True
+    if not is_instance_operator(user):
+        return False
     try:
-        record = await service.describe_execution(workflow_id)
+        await service.describe_execution(workflow_id)
     except Exception:
         logger.debug(
-            "Failed to verify task workflow ownership for %s",
+            "Failed to verify operator task workflow %s",
             workflow_id,
             exc_info=True,
         )
         return False
 
-    if is_instance_operator(user):
-        return True
-
-    record_owner_id = _coerce_str(getattr(record, "owner_id", None))
-    user_id = _owner_id(user)
-    if not record_owner_id or not user_id:
-        return False
-    return record_owner_id == user_id
+    return True
 
 
 async def resolve_execution_principal(
@@ -112,20 +97,19 @@ async def resolve_execution_principal(
     verified_agent_run_id: Optional[str] = None
 
     if workflow_id:
-        ownership_ok = await _verify_task_workflow_ownership(
+        workflow_verified = await _verify_operator_workflow(
             service=service,
             workflow_id=workflow_id,
             user=user,
         )
-        if ownership_ok:
+        if workflow_verified:
             verified_workflow_id = workflow_id
             verified_run_id = run_id
             verified_agent_run_id = agent_run_id
             scopes.update({SCOPE_CREATE_CHILD, SCOPE_INHERIT_RUNTIME})
 
     return ExecutionPrincipal(
-        user_id=_owner_id(user),
-        is_superuser=_is_superuser(user),
+        is_instance_operator=is_instance_operator(user),
         workflow_id=verified_workflow_id,
         run_id=verified_run_id,
         agent_run_id=verified_agent_run_id,

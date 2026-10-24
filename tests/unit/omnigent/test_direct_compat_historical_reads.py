@@ -39,6 +39,7 @@ from api_service.db.models import Base
 from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.security.operator_admission import OperatorAdmission
 
 COMPAT_PROFILE = "moonmind.codex_direct_compat.v1"
 
@@ -225,7 +226,7 @@ async def test_direct_compat_reads_through_workflow_detail_http_routes(store) ->
     This boundary test drives the *production* read path an operator hits after
     the direct worker is retired: it resolves the retained session by its
     MoonMind workflow/run identity through ``GET /bridge-sessions/resolve``
-    (ownership authorization included), then fetches events through
+    (operator admission included), then fetches events through
     ``GET /bridge-sessions/{id}/events`` and consumes the real
     ``BridgeEventPageResponse`` HTTP shape — response-model serialization and
     client JSON parsing — rather than calling the serializer helpers itself.
@@ -284,12 +285,12 @@ async def test_direct_compat_reads_through_workflow_detail_http_routes(store) ->
 
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
-    # Only substrate concerns are overridden: authenticated MoonMind principal,
-    # workflow-ownership service, bridge-enabled gate, and the durable store the
+    # Only substrate concerns are overridden: operator admission,
+    # execution service, bridge-enabled gate, and the durable store the
     # events were persisted into. Resolution, authorization, and serialization
     # all run through the real router code under test.
-    app.dependency_overrides[get_instance_access] = lambda: SimpleNamespace(
-        id=user_id, email="operator@example.com", is_superuser=False
+    app.dependency_overrides[get_instance_access] = lambda: OperatorAdmission(
+        via="loopback"
     )
     app.dependency_overrides[_get_execution_service] = lambda: SimpleNamespace(
         describe_execution=_describe_execution_for(user_id)
