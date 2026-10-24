@@ -15,6 +15,12 @@ certified completion of the guarded data conversion. An incomplete conversion
 returns `503 conversion_required`, and an unreadable completion returns
 `503 unavailable`. Neither falls back to an account or a synthetic administrator.
 
+Each admission checks current pending recovery work through an indexed owner
+classification, rather than scanning retained artifact history or caching a
+successful readiness result. Restored human/ambiguous owners and revoked grants
+are visible immediately. The reserved disabled-mode scope is a separate index
+class, so changing that deployment configuration does not require a data rewrite.
+
 | Deployment | Admission |
 | --- | --- |
 | Local, with no public URL or an explicit loopback URL | Connecting loopback peer and loopback Host. Compose also recognizes its single kernel default gateway as the host publication peer when configured to publish loopback. Other bridge peers and forwarding claims confer no authority. |
