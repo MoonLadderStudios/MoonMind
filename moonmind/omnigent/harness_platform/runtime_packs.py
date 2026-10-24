@@ -322,10 +322,8 @@ register_runtime_pack(
         forbidden=_OPENCODE_FORBIDDEN + _SHARED_OAUTH_FORBIDDEN,
     )
 )
-# Vendor pins mirror the deployment's CLI tooling pins
-# (``api_service/Dockerfile`` CLAUDE_CLI_VERSION, the documented known-good
-# CODEX_CLI_VERSION in ``tools/update-moonmind.sh``, and the OpenCode pin in
-# ``host_classes.OPENCODE_PINNED_VERSION``). Updating a pin is a deployment
+# Vendor pins mirror ``services/omnigent/moonmind-host/Dockerfile`` and
+# ``host_classes.OPENCODE_PINNED_VERSION``. Updating a pin is a deployment
 # change that must land in the shared image build args and these descriptors
 # in the same change; exact-host attestation rejects a drifted runtime.
 register_runtime_pack(

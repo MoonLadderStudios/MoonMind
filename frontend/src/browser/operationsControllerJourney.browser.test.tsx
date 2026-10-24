@@ -149,7 +149,7 @@ function renderOperations() {
   const page = document.createElement('section');
   root.appendChild(page);
   return renderWithClient(
-    <OperationsSettingsSection canInvokeOperations workerPauseConfig={null} />,
+    <OperationsSettingsSection workerPauseConfig={null} />,
     { container: page },
   );
 }

@@ -3,8 +3,8 @@ import { fireEvent, screen, waitFor, within } from '../../utils/test-utils';
 import { renderWithClient } from '../../utils/test-utils';
 import { GeneratedSettingsSection } from './GeneratedSettingsSection';
 
-function ControlledGeneratedSettingsSection({ canReadAudit = false }: { canReadAudit?: boolean }) {
-  return <GeneratedSettingsSection canReadAudit={canReadAudit} />;
+function ControlledGeneratedSettingsSection() {
+  return <GeneratedSettingsSection />;
 }
 
 const workspaceCatalog = {
@@ -520,8 +520,8 @@ describe('GeneratedSettingsSection', () => {
     expect(screen.queryByLabelText('Pending settings preview')).toBeNull();
   });
 
-  it('loads row audit on demand with the setting key when authorized', async () => {
-    renderWithClient(<ControlledGeneratedSettingsSection canReadAudit />);
+  it('loads row audit on demand with the setting key for the admitted operator', async () => {
+    renderWithClient(<ControlledGeneratedSettingsSection />);
 
     await screen.findByText('Default Publish Mode');
     expect(requests.some((request) => request.url.startsWith('/api/v1/settings/audit'))).toBe(false);
@@ -539,16 +539,8 @@ describe('GeneratedSettingsSection', () => {
     expect(await screen.findByText(/Prefer branch publication/)).toBeTruthy();
   });
 
-  it('hides audit affordances without settings.audit.read permission', async () => {
-    renderWithClient(<ControlledGeneratedSettingsSection />);
-
-    await screen.findByText('Default Publish Mode');
-    expect(screen.queryByRole('button', { name: /View audit for/ })).toBeNull();
-    expect(requests.some((request) => request.url.startsWith('/api/v1/settings/audit'))).toBe(false);
-  });
-
   it('keeps long setting keys wrapped inside row Details, out of the action row', async () => {
-    renderWithClient(<ControlledGeneratedSettingsSection canReadAudit />);
+    renderWithClient(<ControlledGeneratedSettingsSection />);
 
     await screen.findByText('Default Publish Mode');
     const keyLabel = screen.getByText('workflow.default_publish_mode');
@@ -688,7 +680,7 @@ describe('GeneratedSettingsSection', () => {
       }
       return Promise.resolve(jsonResponse({ error: 'not_found' }, false, 404));
     });
-    renderWithClient(<ControlledGeneratedSettingsSection canReadAudit />);
+    renderWithClient(<ControlledGeneratedSettingsSection />);
 
     await screen.findByText('Default Publish Mode');
     fireEvent.click(screen.getByRole('button', { name: 'View audit for Default Publish Mode' }));

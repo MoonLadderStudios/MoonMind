@@ -775,13 +775,13 @@ outcomes are reported distinctly, because the operator responses differ (raise
 the ceiling versus investigate a wedged runtime), and the result records the
 budget and the condition that ended it.
 
-Intervals are measured with a monotonic clock so a host clock step cannot kill a
-healthy run or extend a wedged one; wall-clock timestamps remain the persisted
-evidence that lines up with file mtimes and operator timelines. Before ending a
-run for lack of progress, each boundary reconciles once against fresh evidence
-(the supervisor samples CPU and workspace activity; the workflow performs one
-final bounded status poll), because a heartbeat-cached observation can be a
-whole interval stale. The hard ceiling is enforced without reconciliation.
+Monotonic intervals resist host clock changes; persisted wall-clock timestamps
+correlate runtime evidence. Before ending for lack of progress, the supervisor
+samples CPU/workspace activity and the workflow checks fresh canonical status.
+Managed grace expiry preserves confirmed completion; a still-silent run receives
+bounded cancellation and result reconciliation so provider quota can enter
+cooldown recovery. Cancellation and status polling consume the original
+remaining execution budget. The hard ceiling ends execution without further reconciliation.
 
 ### Progress evidence
 

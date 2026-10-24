@@ -46,7 +46,6 @@ from api_service.auth_providers import get_instance_access
 from api_service.dashboard_static import DASHBOARD_HTML_CACHE_CONTROL
 from api_service.db.base import get_async_session
 from api_service.db.models import AgentSkillDefinition, TemporalArtifact
-from api_service.services.settings_catalog import settings_permissions_for_user
 from api_service.ui_assets import DashboardUIAssetsError, ui_assets
 from api_service.ui_boot import generate_boot_payload
 from moonmind.capabilities.input_contracts import (
@@ -492,10 +491,6 @@ class DashboardUiInfoResponse(BaseModel):
     endpoints: dict[str, str] = Field(default_factory=dict)
     destinations: list[dict[str, object]] = Field(default_factory=list)
     dashboard_config: dict = Field(..., alias="dashboardConfig")
-    settings_permissions: list[str] = Field(
-        default_factory=list,
-        alias="settingsPermissions",
-    )
     worker_pause: dict = Field(default_factory=dict, alias="workerPause")
 
 
@@ -631,79 +626,6 @@ def _dashboard_destination_info() -> list[dict[str, object]]:
     return [destination.to_ui_info() for destination in DASHBOARD_DESTINATIONS]
 
 
-_SETTINGS_DESTINATION_PERMISSIONS: dict[
-    str, tuple[str, frozenset[str], frozenset[str]]
-] = {
-    "settings-providers-secrets": (
-        "settingsProvidersSecrets",
-        frozenset(
-            {
-                "provider_profiles.read",
-                "secrets.metadata.read",
-                "settings.effective.read",
-            }
-        ),
-        frozenset(
-            {
-                "provider_profiles.write",
-                "secrets.value.write",
-                "secrets.rotate",
-                "secrets.disable",
-                "secrets.delete",
-            }
-        ),
-    ),
-    "settings-instance": (
-        "settingsInstance",
-        frozenset({"settings.catalog.read"}),
-        frozenset(
-            {
-                "settings.workspace.write",
-                "settings.system.write",
-            }
-        ),
-    ),
-    "settings-operations": (
-        "settingsOperations",
-        frozenset({"operations.read"}),
-        frozenset({"operations.invoke"}),
-    ),
-}
-
-
-def _settings_destination_features(permissions: set[str]) -> dict[str, bool]:
-    features: dict[str, bool] = {}
-    for (
-        capability_key,
-        read_permissions,
-        mutation_permissions,
-    ) in _SETTINGS_DESTINATION_PERMISSIONS.values():
-        if permissions & read_permissions:
-            features[capability_key] = True
-        elif permissions & mutation_permissions:
-            features[capability_key] = False
-    return features
-
-
-def _settings_redirect_path(
-    user: OperatorAdmission, preferred_destination_key: str
-) -> str:
-    permissions = settings_permissions_for_user(user)
-    ordered_destination_keys = (
-        preferred_destination_key,
-        *(
-            key
-            for key in _SETTINGS_DESTINATION_PERMISSIONS
-            if key != preferred_destination_key
-        ),
-    )
-    for destination_key in ordered_destination_keys:
-        _, read_permissions, _ = _SETTINGS_DESTINATION_PERMISSIONS[destination_key]
-        if permissions & read_permissions:
-            return _dashboard_destination(destination_key).canonical_path
-    return "/settings"
-
-
 def _settings_redirect_url(
     request: Request, user: OperatorAdmission, preferred_destination_key: str
 ) -> str:
@@ -712,9 +634,9 @@ def _settings_redirect_url(
     Per SettingsPage.md 5.4, redirects use replacement history, preserve approved
     page-relevant query parameters, and drop parameters that no longer have meaning
     on the target page. At minimum, drop retired `section` page identity.
-    Unknown legacy aliases fall back to the first authorized destination.
+    Legacy aliases retain their canonical instance destination.
     """
-    canonical = _settings_redirect_path(user, preferred_destination_key)
+    canonical = _dashboard_destination(preferred_destination_key).canonical_path
     # Preserve safe filters (runtime, status, etc.) but drop `section`
     # which is retired as page identity (SettingsPage.md 5.3).
     if not request.query_params:
@@ -1705,7 +1627,6 @@ async def get_dashboard_ui_info(
         and bridge_config.host_protocol_mode == HOST_PROTOCOL_MODE_PROXY
         and build_omnigent_gate().enabled
     )
-    settings_permissions = settings_permissions_for_user(_user)
     return DashboardUiInfoResponse(
         buildId=system_config.get("buildId"),
         features={
@@ -1716,11 +1637,13 @@ async def get_dashboard_ui_info(
             "artifacts": True,
             "schedules": True,
             "skills": True,
-            **_settings_destination_features(settings_permissions),
+            "settingsProvidersSecrets": True,
+            "settingsInstance": True,
+            "settingsOperations": True,
             "oauthTerminal": True,
             "remediationCollection": True,
             "omnigentAgents": omnigent_agents_available,
-            "omnigentPolicies": "settings.catalog.read" in settings_permissions,
+            "omnigentPolicies": True,
         },
         limits={
             "workflowListDefaultPageSize": 50,
@@ -1747,7 +1670,6 @@ async def get_dashboard_ui_info(
         },
         destinations=_dashboard_destination_info(),
         dashboardConfig=dashboard_config,
-        settingsPermissions=sorted(settings_permissions),
         workerPause=_worker_pause_sources(),
     )
 

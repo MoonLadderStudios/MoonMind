@@ -7144,6 +7144,13 @@ async def test_remediation_does_not_declare_initial_assessment_output(
 ) -> None:
     """Replay mm:14460d13 through request construction and publication."""
 
+    from temporalio.api.workflowservice.v1 import DescribeWorkflowExecutionResponse
+    from temporalio.workflow import ParentInfo
+
+    from tests.unit.workflows.temporal.test_source_brief_artifact_authority import (
+        _recorded_server,
+    )
+
     replay_id = "remediation-assessment-output-contract"
     manifest = load_replay(replay_id, "manifest.json")
     expected = load_replay(replay_id, "expected-outcome.json")
@@ -7184,8 +7191,14 @@ async def test_remediation_does_not_declare_initial_assessment_output(
         tool_name=remediation["tool"]["name"],
     )
     agent_run_info = SimpleNamespace(
+        namespace=workflow_info.namespace,
         workflow_id=f"{manifest['incidentWorkflowId']}:agent:remediation-1",
         run_id="incident-agent-replay",
+        parent=ParentInfo(
+            namespace=workflow_info.namespace,
+            workflow_id=workflow_info.workflow_id,
+            run_id=workflow_info.run_id,
+        ),
     )
     monkeypatch.setattr(agent_run_module.workflow, "info", lambda: agent_run_info)
     enriched = MoonMindAgentRun()._enrich_result_metadata(
@@ -7227,7 +7240,53 @@ async def test_remediation_does_not_declare_initial_assessment_output(
                     workflow_run_id=agent_run_info.run_id,
                 ),
             )
+            recorded, ancestry_calls = _recorded_server(
+                DescribeWorkflowExecutionResponse(
+                    workflow_execution_info={
+                        "execution": {
+                            "workflow_id": agent_run_info.workflow_id,
+                            "run_id": agent_run_info.run_id,
+                        },
+                        "parent_execution": {
+                            "workflow_id": workflow_info.workflow_id,
+                            "run_id": workflow_info.run_id,
+                        },
+                        "parent_namespace_id": "namespace-default",
+                    }
+                )
+            )
+            monkeypatch.setattr(
+                activity,
+                "client",
+                lambda: SimpleNamespace(
+                    namespace=workflow_info.namespace,
+                    workflow_service=recorded,
+                ),
+            )
             published = await activities.agent_runtime_publish_artifacts(enriched)
+            assert isinstance(published, AgentRunResult)
+            assert published.diagnostics_ref is not None
+            _, result_bytes = await artifact_service.read(
+                artifact_id=published.diagnostics_ref,
+                principal=f"workflow:{workflow_info.workflow_id}",
+            )
+            assert AgentRunResult.model_validate_json(result_bytes).summary == (
+                "Remediation completed."
+            )
+            _, summary_bytes = await artifact_service.read(
+                artifact_id=published.metadata["outputSummaryRef"],
+                principal=f"workflow:{workflow_info.workflow_id}",
+            )
+            assert json.loads(summary_bytes)["summary"] == "Remediation completed."
+            describe_calls = [
+                call
+                for call in ancestry_calls.await_args_list
+                if call.kwargs["rpc"] == "describe_workflow_execution"
+            ]
+            assert len(describe_calls) == 1
+            described_execution = describe_calls[0].kwargs["req"].execution
+            assert described_execution.workflow_id == agent_run_info.workflow_id
+            assert described_execution.run_id == agent_run_info.run_id
     finally:
         await engine.dispose()
 

@@ -634,9 +634,8 @@ def test_dry_run_never_pulls_or_launches(tmp_path, monkeypatch, capsys):
     ],
 )
 def test_bare_invocation_never_invents_operator_urls(tmp_path, monkeypatch, rendered):
-    """A bare invocation records no operator URLs: wildcard bindings require
-    an explicit --operator-url (or MOONMIND_PUBLIC_BASE_URL) so release
-    probes validate the actual operator route instead of loopback."""
+    """The controller derives default origins from the effective deployment;
+    only explicit --operator-url declarations belong to the submission."""
     repo = tmp_path / "installed"
     repo.mkdir()
 

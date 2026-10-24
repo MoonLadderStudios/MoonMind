@@ -8,9 +8,6 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "docker-publish.yml"
 DOCKERFILE_PATH = REPO_ROOT / "api_service" / "Dockerfile"
-CLI_TOOLING_INSTALLER_PATH = (
-    REPO_ROOT / "api_service" / "docker" / "install_cli_tooling.sh"
-)
 
 
 def test_application_image_packages_an_independently_executable_controller(tmp_path):
@@ -214,10 +211,6 @@ def test_dockerfile_uses_buildkit_package_cache_mounts() -> None:
     assert "--mount=type=cache,target=/var/cache/apt,sharing=locked" in dockerfile
     assert "--mount=type=cache,target=/var/lib/apt/lists,sharing=locked" in dockerfile
     assert 'Binary::apt::APT::Keep-Downloaded-Packages "true";' in dockerfile
-    assert (
-        dockerfile.count('Binary::apt::APT::Keep-Downloaded-Packages "true";')
-        == 4
-    )
 
 
 def test_docker_publish_persists_buildkit_cache_mounts() -> None:
@@ -289,16 +282,6 @@ def test_runtime_project_install_precedes_non_package_asset_copies() -> None:
         "COPY .agents /app/.agents/",
     ):
         assert project_install_index < dockerfile.index(copied_path)
-
-
-def test_cli_tooling_installer_keeps_npm_cache_by_default() -> None:
-    installer = CLI_TOOLING_INSTALLER_PATH.read_text(encoding="utf-8")
-
-    assert "${CLEAN_NPM_CACHE:-false}" in installer
-    assert "npm cache clean --force || true" in installer
-    assert installer.index("${CLEAN_NPM_CACHE:-false}") < installer.index(
-        "npm cache clean --force || true"
-    )
 
 
 def _run_qualified_publication(tmp_path, *, ref: str, sha: str, main_head: str) -> str:

@@ -51,7 +51,6 @@ from api_service.services.provider_profile_creation_presets import (
     apply_provider_profile_creation_preset,
     get_provider_profile_creation_preset,
 )
-from api_service.services.settings_catalog import has_settings_permission
 from moonmind.auth.secret_refs import (
     ParsedSecretRef,
     SecretBackend,
@@ -167,7 +166,6 @@ async def _credential_maintenance_guard(
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     _require_profile_management(profile, current_user)
     operation_id = (
         request.headers.get("Idempotency-Key")
@@ -1158,7 +1156,6 @@ async def list_profiles(
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
     current_user: Any = Depends(get_instance_access),
 ) -> list[dict[str, Any]]:
-    _require_provider_profile_permission(current_user, "provider_profiles.read")
     stmt = select(ManagedAgentProviderProfile)
     if runtime_id:
         stmt = stmt.where(ManagedAgentProviderProfile.runtime_id == runtime_id)
@@ -1216,7 +1213,6 @@ async def get_creation_preset(
 ) -> dict[str, Any]:
     """Preview the versioned backend policy used by standard profile creation."""
 
-    _require_provider_profile_permission(current_user, "provider_profiles.read")
     return get_provider_profile_creation_preset(
         runtime_id=runtime_id,
         provider_id=provider_id,
@@ -1234,7 +1230,6 @@ async def get_tier_capabilities_for_draft(
     current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     """Tier editor capabilities for a not-yet-persisted profile — MoonLadderStudios/MoonMind#3815."""
-    _require_provider_profile_permission(current_user, "provider_profiles.read")
     from api_service.services.provider_profile_tier_capabilities import (
         tier_capabilities_for_draft,
     )
@@ -1251,7 +1246,6 @@ async def get_creation_capabilities(
     provider_id: str,
     current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
-    _require_provider_profile_permission(current_user, "provider_profiles.read")
     return provider_profile_creation_capabilities(
         runtime_id=runtime_id,
         provider_id=provider_id,
@@ -1267,7 +1261,6 @@ async def get_creation_choices(
 ) -> dict[str, Any]:
     """Supported Harness/Provider choices for the creation form (#4001)."""
 
-    _require_provider_profile_permission(current_user, "provider_profiles.read")
     return {
         **provider_profile_creation_choices(),
         "profile_id_max_length": PROFILE_ID_MAX_LENGTH,
@@ -1284,7 +1277,6 @@ async def get_tier_capabilities_for_profile(
     current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
     """Tier editor capabilities scoped to profile evidence — MoonLadderStudios/MoonMind#3815."""
-    _require_provider_profile_permission(current_user, "provider_profiles.read")
     from api_service.services.provider_profile_tier_capabilities import (
         tier_capabilities_for_profile,
     )
@@ -1308,7 +1300,6 @@ async def validate_imported_credential_volume(
     body: ProviderCredentialVolumeImportRequest,
     current_user: Any = Depends(get_instance_access),
 ) -> dict[str, str]:
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     _require_privileged_credential_volume_import(current_user)
     volume_ref, mount_path = await _validate_imported_credential_volume(
         runtime_id=body.runtime_id,
@@ -1329,7 +1320,6 @@ async def get_profile(
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
     current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
-    _require_provider_profile_permission(current_user, "provider_profiles.read")
     row = await session.get(ManagedAgentProviderProfile, profile_id)
     if not row:
         raise HTTPException(status_code=404, detail="Profile not found")
@@ -1423,7 +1413,6 @@ async def create_profile(
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
     current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     existing = await session.get(ManagedAgentProviderProfile, body.profile_id)
     if existing:
         raise HTTPException(
@@ -1653,7 +1642,6 @@ async def update_profile(
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     _require_profile_management(profile, current_user)
 
     update_data = body.model_dump(exclude_unset=True)
@@ -2319,7 +2307,6 @@ async def preview_model_tiers(
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
     current_user: Any = Depends(get_instance_access),
 ) -> dict[str, Any]:
-    _require_provider_profile_permission(current_user, "provider_profiles.read")
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
@@ -2389,7 +2376,6 @@ async def credential_maintenance_status(
     deterministic owner are never projected, and manager unavailability
     degrades to ``known: False`` instead of failing the poll.
     """
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
@@ -2427,7 +2413,6 @@ async def setup_provider_api_key(
     current_user: Any = Depends(get_instance_access),
     maintenance_guard: object = Depends(_credential_validation_guard),
 ) -> dict[str, Any]:
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
@@ -2601,7 +2586,6 @@ async def commit_claude_manual_auth(
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     _require_profile_management(profile, current_user)
     _require_claude_anthropic_profile(profile)
 
@@ -2729,7 +2713,6 @@ async def validate_claude_oauth_profile(
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     _require_profile_management(profile, current_user)
     mapping = _require_first_party_oauth_profile(profile)
     if not profile.volume_ref or not profile.volume_mount_path:
@@ -2846,7 +2829,6 @@ async def disconnect_claude_oauth_profile(
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     _require_profile_management(profile, current_user)
     mapping = _require_first_party_oauth_profile(profile)
 
@@ -2892,7 +2874,6 @@ async def delete_profile(
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     _require_profile_management(profile, current_user)
     runtime_id = profile.runtime_id
     await session.delete(profile)
@@ -2907,26 +2888,17 @@ async def delete_profile(
 # ---------------------------------------------------------------------------
 
 
-def _require_provider_profile_permission(user: Any, permission: str) -> None:
-    if has_settings_permission(user, permission):
-        return
-    raise HTTPException(
-        status_code=403,
-        detail=f"Missing required provider profile permission: {permission}.",
-    )
-
-
 def _can_view_profile(row: ManagedAgentProviderProfile, user: Any) -> bool:
     # Single-user (#4349): provider profiles are instance resources without
     # human-owner visibility. ``owner_user_id`` is legacy provenance, never
-    # an access predicate. All profiles are visible to the operator; settings
-    # permission gates (checked separately) remain the access boundary.
+    # an access predicate. All profiles are visible to the operator; shared
+    # operator admission remains the access boundary.
     return True
 
 
 def _require_profile_management(row: ManagedAgentProviderProfile, user: Any) -> None:
     # Single-user (#4349): no user-owned management gate. Instance-wide
-    # settings permission (checked by callers) is the boundary.
+    # operator admission (checked by callers) is the boundary.
     return None
 
 

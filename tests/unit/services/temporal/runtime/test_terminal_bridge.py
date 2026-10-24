@@ -187,6 +187,96 @@ class _FakeProcess:
     def kill(self) -> None:
         self.killed = True
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "runner", [start_terminal_bridge_container, start_tmate_auth_runner_container]
+)
+@pytest.mark.parametrize(
+    "runtime_id,executable", [("codex_cli", "codex"), ("claude_code", "claude")]
+)
+@pytest.mark.parametrize(
+    "environment,expected_image",
+    [
+        ({}, "ghcr.io/moonladderstudios/omnigent-host-moonmind:latest"),
+        (
+            {"MOONMIND_OAUTH_RUNNER_IMAGE": " "},
+            "ghcr.io/moonladderstudios/omnigent-host-moonmind:latest",
+        ),
+        (
+            {
+                "OMNIGENT_SHARED_HOST_IMAGE": "registry.invalid/host",
+                "OMNIGENT_SHARED_HOST_IMAGE_TAG": "chosen",
+            },
+            "registry.invalid/host:chosen",
+        ),
+        (
+            {
+                "OMNIGENT_SHARED_HOST_IMAGE_REF": "registry.invalid/host@sha256:"
+                + "a" * 64
+            },
+            "registry.invalid/host@sha256:" + "a" * 64,
+        ),
+        (
+            {"MOONMIND_OAUTH_RUNNER_IMAGE": "registry.invalid/oauth:custom"},
+            "registry.invalid/oauth:custom",
+        ),
+    ],
+)
+async def test_oauth_runners_use_the_omnigent_host_image(
+    monkeypatch, runner, runtime_id, executable, environment, expected_image
+):
+    calls = []
+
+    async def docker(*args):
+        calls.append(args)
+        return _FakeProcess(stdout=b"https://tmate.invalid/session\nssh session\n")
+
+    for key in (
+        "MOONMIND_OAUTH_RUNNER_IMAGE",
+        "MOONMIND_IMAGE",
+        "OMNIGENT_SHARED_HOST_IMAGE_REF",
+        "OMNIGENT_SHARED_HOST_IMAGE",
+        "OMNIGENT_SHARED_HOST_IMAGE_TAG",
+        "OMNIGENT_HOST_IMAGE_REF",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    # The application image must never become an OAuth runtime fallback.
+    monkeypatch.setenv("MOONMIND_IMAGE", "registry.invalid/api:agent-free")
+    for key, value in environment.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.store.load_resolved_state", lambda: None
+    )
+    monkeypatch.setattr(terminal_bridge, "_create_docker_subprocess", docker)
+    await runner(
+        session_id="oas_host_image",
+        runtime_id=runtime_id,
+        volume_ref="oauth_auth_volume",
+        volume_mount_path="/home/app/.auth",
+        session_ttl=60,
+        bootstrap_command=(executable, "login"),
+    )
+    assert calls[0][-4] == expected_image
+
+
+def test_oauth_runner_follows_installed_host_updates(monkeypatch):
+    from types import SimpleNamespace
+
+    current = "registry.invalid/host@sha256:" + "b" * 64
+    monkeypatch.delenv("MOONMIND_OAUTH_RUNNER_IMAGE", raising=False)
+    monkeypatch.setenv(
+        "OMNIGENT_SHARED_HOST_IMAGE_REF", "registry.invalid/host@sha256:" + "a" * 64
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.store.load_resolved_state",
+        lambda: SimpleNamespace(shared_host_image_ref=current),
+    )
+    assert terminal_bridge._oauth_runner_image() == current
+    monkeypatch.setenv("MOONMIND_OAUTH_RUNNER_IMAGE", "registry.invalid/oauth:explicit")
+    assert terminal_bridge._oauth_runner_image() == "registry.invalid/oauth:explicit"
+
+
 @pytest.mark.asyncio
 async def test_start_terminal_bridge_container_uses_provider_bootstrap_command(
     monkeypatch: pytest.MonkeyPatch,

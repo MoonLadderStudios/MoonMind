@@ -28,7 +28,6 @@ services:
       dockerfile: api_service/Dockerfile
       target: test-runtime
       args:
-        INSTALL_CODEX_CLI: "false"
         INSTALL_TEST_DEPS: "true"
     env_file:
       - .env
@@ -58,20 +57,6 @@ services:
     command: ["bash", "-lc", "/app/tools/test_unit.sh"]
     depends_on:
       - minio
-    networks:
-      - control-plane-network
-
-  cli-tooling-smoke:
-    build:
-      context: .
-      dockerfile: api_service/Dockerfile
-      args:
-        INSTALL_CODEX_CLI: "false"
-    env_file:
-      - .env
-    environment:
-      - PYTHONPATH=/app:/app/moonmind
-    command: ["bash", "-lc", "codex --version"]
     networks:
       - control-plane-network
 
