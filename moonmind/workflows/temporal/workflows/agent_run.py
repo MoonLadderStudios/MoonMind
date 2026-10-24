@@ -478,6 +478,9 @@ AGENT_RUN_MANAGED_NO_PROGRESS_CANCEL_FETCH_PATCH_ID = (
 AGENT_RUN_MANAGED_NO_PROGRESS_EXPIRY_RECOVERY_PATCH_ID = (
     "agent-run-managed-no-progress-expiry-recovery-v1"
 )
+AGENT_RUN_MANAGED_RESULT_FETCH_BUDGET_PATCH_ID = (
+    "agent-run-managed-result-fetch-budget-v1"
+)
 # Publishes the workflow's effective execution budget into the launch request's
 # ``timeoutPolicy`` so the managed process supervisor enforces the same deadline
 # (MoonLadderStudios/MoonMind#3685 review). In-flight runs started before this
@@ -3576,6 +3579,7 @@ class MoonMindAgentRun:
         adapter: AgentAdapter,
         uses_codex_session_adapter: bool,
         use_managed_status_activity: bool,
+        remaining_budget_seconds: float | None = None,
     ) -> AgentRunResult:
         def _pr_resolver_fetch_flags() -> tuple[bool, bool]:
             expected = (
@@ -3619,10 +3623,30 @@ class MoonMindAgentRun:
             )
 
         if use_managed_status_activity:
+            fetch_budget = {}
+            if remaining_budget_seconds is not None:
+                route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    "agent_runtime.fetch_result"
+                )
+                fetch_budget = {
+                    "start_to_close_timeout": timedelta(
+                        seconds=min(
+                            route.timeouts.start_to_close_seconds,
+                            remaining_budget_seconds,
+                        )
+                    ),
+                    "schedule_to_close_timeout": timedelta(
+                        seconds=min(
+                            route.timeouts.schedule_to_close_seconds,
+                            remaining_budget_seconds,
+                        )
+                    ),
+                }
             result_payload = await self._execute_routed_activity(
                 "agent_runtime.fetch_result",
                 self._build_managed_fetch_result_activity_input(request),
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                **fetch_budget,
             )
             return (
                 AgentRunResult(**result_payload)
@@ -4398,11 +4422,25 @@ class MoonMindAgentRun:
                         remaining_budget_seconds=remaining_overall,
                     )
                     if status_obj.status in _TERMINAL_RUN_STATUSES:
+                        fetch_budget = {}
+                        if workflow.patched(
+                            AGENT_RUN_MANAGED_RESULT_FETCH_BUDGET_PATCH_ID
+                        ):
+                            remaining_fetch_budget = (
+                                timeout_seconds
+                                - (workflow.now() - overall_start).total_seconds()
+                            )
+                            if remaining_fetch_budget <= 0:
+                                return None
+                            fetch_budget["remaining_budget_seconds"] = (
+                                remaining_fetch_budget
+                            )
                         return await self._fetch_managed_result(
                             request=request,
                             adapter=adapter,
                             uses_codex_session_adapter=uses_codex_session_adapter,
                             use_managed_status_activity=use_managed_status_activity,
+                            **fetch_budget,
                         )
                     remaining_overall = (
                         timeout_seconds
@@ -4575,11 +4613,22 @@ class MoonMindAgentRun:
             )
             self.run_status = status_obj.status
             if status_obj.status in _TERMINAL_RUN_STATUSES:
+                fetch_budget = {}
+                if bounded_expiry_recovery and workflow.patched(
+                    AGENT_RUN_MANAGED_RESULT_FETCH_BUDGET_PATCH_ID
+                ):
+                    remaining_fetch_budget = (
+                        recovery_deadline - workflow.now()
+                    ).total_seconds()
+                    if remaining_fetch_budget <= 0:
+                        return None
+                    fetch_budget["remaining_budget_seconds"] = remaining_fetch_budget
                 result = await self._fetch_managed_result(
                     request=request,
                     adapter=adapter,
                     uses_codex_session_adapter=uses_codex_session_adapter,
                     use_managed_status_activity=use_managed_status_activity,
+                    **fetch_budget,
                 )
                 if self._result_requires_provider_cooldown(result):
                     return result
@@ -4608,7 +4657,7 @@ class MoonMindAgentRun:
         When ``request_slot`` is false this only returns the external handle;
         pre-slot profile sync owns its own signal-with-start retry so an
         already-running singleton does not pay an unconditional activity hop.
-        
+
         Note: The Temporal Python SDK does not provide a `signal_with_start`
         method on `workflow.ExternalWorkflowHandle` objects for use inside a
         workflow. Therefore, we use this try/catch/activity/retry pattern to
