@@ -5455,6 +5455,7 @@ def test_api_idempotent_omnigent_retry_reuses_recorded_plan_before_resolution(
     )
     db_session = SimpleNamespace(get=AsyncMock(return_value=existing))
     test_client.app.dependency_overrides[get_async_session] = lambda: db_session
+    temporal_service.ensure_create_started.return_value = existing
     profile_resolver = AsyncMock()
 
     with patch(
@@ -5486,6 +5487,7 @@ def test_api_idempotent_omnigent_retry_reuses_recorded_plan_before_resolution(
     )
     profile_resolver.assert_not_awaited()
     temporal_service.create_execution.assert_not_awaited()
+    temporal_service.ensure_create_started.assert_awaited_once_with(existing)
 
 
 def test_admitted_omnigent_execution_rejects_in_place_input_reinterpretation(
@@ -21733,6 +21735,7 @@ def test_mm3935_cli_retry_reconciles_before_mutable_admission(
     test_client.app.dependency_overrides[get_async_session] = lambda: (
         SimpleNamespace(get=_get, commit=AsyncMock(), refresh=AsyncMock())
     )
+    service.ensure_create_started.return_value = admitted
 
     response = test_client.post(
         "/api/executions",
@@ -21752,6 +21755,7 @@ def test_mm3935_cli_retry_reconciles_before_mutable_admission(
         )
     ]
     service.create_execution.assert_not_awaited()
+    service.ensure_create_started.assert_awaited_once_with(admitted)
 
 
 @pytest.mark.parametrize("account_free", [False, True])
