@@ -78,6 +78,15 @@ export function deriveNativeChatStatus(input: {
 }): NativeChatStatus {
   const { isLoading, binding, errorStatus } = input;
   if (errorStatus != null) {
+    // A transport failure is not a revocation. Keep the last authorized
+    // conversation mounted while the resolver backs off; every scoped native
+    // request still independently enforces current authority.
+    if (
+      (errorStatus === 0 || errorStatus === 408 || errorStatus === 429 || errorStatus >= 500) &&
+      binding && (binding.state === 'available' || binding.state === 'ended')
+    ) {
+      return deriveNativeChatStatus({ isLoading: false, binding, errorStatus: null });
+    }
     if (errorStatus === 401 || errorStatus === 403) {
       return 'unauthorized';
     }
@@ -242,6 +251,12 @@ export function nativeChatStateCopy(
       return {
         title: 'Native chat could not load',
         description:
+          ({
+            readiness_timeout: 'The chat application did not finish loading. Retry or review captured evidence.',
+            transcript_access_denied: 'Access to the recorded conversation was denied. Review workflow diagnostics before retrying.',
+            essential_read_failed: 'The chat service could not read this conversation. Retry or review captured evidence.',
+            essential_read_invalid: 'The chat service returned an invalid conversation response. Review workflow diagnostics or captured evidence.',
+          } as Record<string, string>)[unavailableReason ?? ''] ??
           'The native chat application failed to load in this browser. Open it in a full page or review captured evidence instead.',
         role: 'alert',
         canRetry: true,

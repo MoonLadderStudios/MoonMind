@@ -276,6 +276,10 @@ def resolve_bridge_row_capabilities(
     launch = dict(getattr(row, "effective_launch_snapshot_json", None) or {})
     policy = dict(launch.get("policyAuthority") or {})
     state = dict(evidence.get("state") or {})
+    historical = (
+        _text(getattr(row, "status", None)).lower() in TERMINAL_STATUSES
+        and getattr(row, "_chat_historical_authority_fresh", False) is True
+    )
     authority = {
         "agentProfileRef": launch.get("executionProfileRef"),
         "agentProfileDigest": launch.get("executionProfileDigest"),
@@ -288,8 +292,12 @@ def resolve_bridge_row_capabilities(
         "sessionEpoch": state.get("sessionEpoch"),
         "authorityFresh": evidence.get("fresh") is True
         and (
-            (not metadata.get("executionPlanRef") and metadata.get("runtimeAuthority") is None)
+            (
+                not metadata.get("executionPlanRef")
+                and metadata.get("runtimeAuthority") is None
+            )
             or getattr(row, "_chat_runtime_authority_fresh", False) is True
+            or historical
         ),
         "expectedProviderProfileGeneration": evidence.get("providerProfileGeneration"),
         "expectedSessionEpoch": expected_session_epoch,
@@ -338,7 +346,16 @@ def resolve_bridge_row_capabilities(
         upstream_capabilities=dict(evidence.get("upstream") or {}),
         profile_capabilities=dict(evidence.get("agentProfile") or {}),
         launch_capabilities=dict(evidence.get("launchPolicy") or {}),
-        state_capabilities=dict(state.get("capabilities") or {}),
+        state_capabilities=(
+            {
+                "viewTranscript": (state.get("capabilities") or {}).get(
+                    "viewTranscript"
+                )
+                is True
+            }
+            if historical
+            else dict(state.get("capabilities") or {})
+        ),
         caller_capabilities=caller_capabilities,
         session_status=getattr(row, "status", None),
     )

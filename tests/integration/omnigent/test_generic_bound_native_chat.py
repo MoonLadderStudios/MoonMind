@@ -19,7 +19,7 @@ from uuid import uuid4
 import httpx
 import pytest
 from fastapi import FastAPI, Request
-from sqlalchemy import inspect, select
+from sqlalchemy import delete, inspect, select
 
 from api_service.api.routers import omnigent_bridge as bridge
 from api_service.api.routers import omnigent_native_ui as ui
@@ -34,6 +34,7 @@ from api_service.db.models import (
     OmnigentSession,
     OmnigentTurnAttempt,
     ProviderProfileSlotLease,
+    TemporalArtifactLink,
 )
 from api_service.services.single_user_conversion import run_guarded_upgrade
 from moonmind.omnigent.bridge_proxy import OmnigentBridgeSessionProxy
@@ -43,13 +44,11 @@ from moonmind.omnigent.runtime_bindings import RuntimeBindingState
 from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from tests.helpers.account_source import User
-from tests.support.native_ui import read_native_ui_bootstrap
 from tests.integration.omnigent.test_generic_native_durable_journey import (  # noqa: F401
     native_journey,
-)
-from tests.integration.omnigent.test_generic_native_durable_journey import (  # noqa: F401
     session_factory,
 )
+from tests.support.native_ui import read_native_ui_bootstrap
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -93,7 +92,7 @@ def _application(store, base_url, *, account_free=False, caller=None):
     app.dependency_overrides[bridge._get_create_embedded_facade] = lambda: None
     app.dependency_overrides[bridge.get_capability_registry] = lambda: None
     app.dependency_overrides[bridge._require_bridge_enabled] = lambda: SimpleNamespace(
-        enabled=True, host_protocol_mode="proxy"
+        enabled=True, host_protocol_mode=bridge.HOST_PROTOCOL_MODE_PROXY
     )
     app.dependency_overrides[ui.get_native_ui_upstream] = lambda: ui.NativeUiUpstream(
         base_url=base_url
@@ -281,6 +280,78 @@ async def _authority_records(store, row):
                 )
             )
     return result
+
+
+@pytest.mark.parametrize("native_journey", ["opencode-native"], indirect=True)
+async def test_cleaned_runtime_keeps_only_its_captured_transcript_readable(
+    native_journey, monkeypatch
+):
+    journey = native_journey
+    result = await journey.realizer.execute(journey.request, journey.plan)
+    assert result.failure_class is None, result
+    original_event_count = len(journey.server.events)
+    store = OmnigentBridgeSessionStore(journey.session_factory)
+    row = await store.resolve_projection_session(
+        idempotency_key=journey.request.idempotency_key
+    )
+    assert row.final_snapshot_ref.startswith("artifact:art_")
+    binding = await store.resolve_chat_binding(workflow_id=row.moonmind_workflow_id)
+    assert binding.state == "ended"
+    assert binding.capabilities == {"viewTranscript": True}
+    assert binding.read_only
+    monkeypatch.setattr(bridge, "async_session_maker", journey.session_factory)
+    path = f"/api/workflow-chat-bindings/{binding.chat_binding_id}/omnigent/v1/sessions/{binding.chat_binding_id}"
+    app = _application(store, os.environ["OMNIGENT_SERVER_URL"])
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://moonmind.test"
+    ) as client:
+        snapshot = await client.get(path)
+        assert snapshot.status_code == 200, snapshot.text
+        assert snapshot.json()["id"] == binding.chat_binding_id
+        assert snapshot.json()["readOnly"] is True
+        page = await client.get(path + "/items")
+        assert page.status_code == 200, page.text
+        assert page.json()["data"], "cleanup must not erase the recorded transcript"
+        assert row.omnigent_session_id not in snapshot.text + page.text
+        denied = await client.post(path + "/events", json=_message("must not execute"))
+        assert denied.status_code in {403, 409}
+        assert len(journey.server.events) == original_event_count
+        canonical_id = row.metadata_["runtimeAuthority"]["canonicalSessionId"]
+        async with journey.session_factory() as session:
+            canonical = await session.get(OmnigentSession, canonical_id)
+            canonical.historical_read_state = "quarantined"
+            await session.commit()
+        quarantined = await client.get(path + "/items")
+        assert quarantined.status_code == 403
+        async with journey.session_factory() as session:
+            canonical = await session.get(OmnigentSession, canonical_id)
+            canonical.historical_read_state = "live"
+            await session.commit()
+        artifact_id = row.final_snapshot_ref.removeprefix("artifact:")
+        async with journey.session_factory() as session:
+            await session.execute(
+                delete(TemporalArtifactLink).where(
+                    TemporalArtifactLink.artifact_id == artifact_id,
+                    TemporalArtifactLink.workflow_id == row.moonmind_workflow_id,
+                )
+            )
+            session.add(
+                TemporalArtifactLink(
+                    artifact_id=artifact_id,
+                    namespace="default",
+                    workflow_id="foreign-workflow",
+                    run_id="foreign-run",
+                    link_type="output",
+                )
+            )
+            await session.commit()
+        foreign = await client.get(path + "/items")
+        assert foreign.status_code == 503
+        assert (
+            foreign.json()["detail"]["code"]
+            == "omnigent_bridge_terminal_evidence_unavailable"
+        )
+        assert len(journey.server.events) == original_event_count
 
 
 async def _restore_authority(store, records):
@@ -670,6 +741,7 @@ async def test_generic_native_stream_rechecks_runtime_cleanup(
                 chat_binding_id=row.chat_binding_id,
                 bridge_session_id=row.bridge_session_id,
                 provider_session_id=row.omnigent_session_id,
+                response_provider_session_id=bridge._durable_provider_session_id(row),
                 initial_cursor=0,
                 user=user,
                 service=None,

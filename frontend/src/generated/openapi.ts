@@ -2201,18 +2201,13 @@ export interface paths {
         };
         /**
          * Download Workflow Captured Evidence
-         * @description Stream one authorized MoonMind captured-evidence artifact (§10, #3641).
+         * @description Stream one workflow-authorized captured-evidence artifact.
          *
-         *     Production Omnigent evidence refs are gateway refs
-         *     (``artifact://omnigent/<correlation>/<name>``) that the generic Temporal
-         *     artifact download route cannot serve — the nested path never routes and no
-         *     ``TemporalArtifact`` row exists — so a real captured-evidence link 404s. This
-         *     workflow-scoped route authorizes the caller against the Workflow, confirms
-         *     the requested ref is one of that Workflow's authorized evidence refs
-         *     (possession of a ref is never authorization), then reads it through the same
-         *     scheme-aware boundary the runtime uses: the Omnigent artifact gateway for
-         *     ``artifact://omnigent/`` refs, and the Temporal artifact service otherwise.
-         *     An unauthorized ref returns 404 without revealing whether it exists.
+         *     Confirm the ref belongs to the execution's selected evidence, then apply
+         *     the owning store's access policy: the local gateway for legacy
+         *     ``artifact://omnigent/`` refs and the Temporal service for durable artifact
+         *     refs. Possession of a ref is never authorization. An unauthorized ref
+         *     returns 404 without revealing whether it exists.
          */
         get: operations["download_workflow_captured_evidence_api_executions__workflow_id__captured_evidence_download_get"];
         put?: never;
