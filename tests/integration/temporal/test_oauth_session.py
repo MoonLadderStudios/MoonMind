@@ -20,8 +20,7 @@ from moonmind.workflows.temporal.workflows.oauth_session import (
     MoonMindOAuthSessionWorkflow,
 )
 
-# NOTE: Not marked integration_ci — Temporal workflow tests with time-skipping consistently exceed CI timeout thresholds. Kept for local dev verification.
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
 @activity.defn(name="oauth_session.ensure_volume")
 async def mock_ensure_volume(request: dict) -> dict:
@@ -454,7 +453,7 @@ async def test_failed_oauth_host_check_releases_lease_after_verified_cleanup(
         "purpose": "oauth_connect",
         "fencing_generation": 3,
     }
-            
+
 async def test_oauth_session_workflow_cancel() -> None:
     """Test OAuth session workflow cancellation."""
     async with await WorkflowEnvironment.start_time_skipping() as env:

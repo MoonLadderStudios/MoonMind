@@ -40,7 +40,7 @@ from tests.unit.workflows.temporal.workflows.test_run_integration import (
 )
 
 
-pytestmark = [pytest.mark.integration]
+pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
 
 @activity.defn(name="provider_profile.list")

@@ -40,7 +40,7 @@ from moonmind.workflows.temporal.worker_runtime import _build_runtime_planner
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from tests.unit.api.test_presets_service import template_db
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration_ci]
 
 
 def provider_profile():
