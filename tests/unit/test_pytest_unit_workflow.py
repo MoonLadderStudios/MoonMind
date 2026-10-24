@@ -1074,7 +1074,14 @@ def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> N
     )
     assert api_step["timeout-minutes"] + 6 <= rows["api-component"]["job_minutes"]
     assert "--timeout 120" in api_step["run"]
-    assert rows["temporal-boundary"]["job_minutes"] == 15
+    assert rows["temporal-boundary"]["job_minutes"] == 20
+    temporal_step = next(
+        step for step in job["steps"] if step["name"] == "Run Temporal boundary suite"
+    )
+    assert temporal_step["timeout-minutes"] == 12
+    assert temporal_step["timeout-minutes"] + 8 <= rows["temporal-boundary"]["job_minutes"]
+    assert "--timeout 120" in temporal_step["run"]
+    assert "-o faulthandler_timeout=90" in temporal_step["run"]
     for shard in (
         "reliability-shard-1",
         "reliability-shard-2",
@@ -1435,6 +1442,21 @@ def test_required_gate_accepts_only_intentional_skips(tmp_path):
         ).returncode
         != 0
     )
+
+
+@pytest.mark.parametrize("job_minutes, accepted", [(20, True), (15, False)])
+def test_required_gate_validates_temporal_completion_budget(tmp_path, job_minutes, accepted):
+    result = _run_required_gate(
+        tmp_path,
+        outputs={
+            "temporal_boundary": "true",
+            "backend_matrix": json.dumps(
+                {"include": [{"suite": "temporal-boundary", "job_minutes": job_minutes}]}
+            ),
+        },
+        results={"backend-matrix": "success"},
+    )
+    assert (result.returncode == 0) == accepted, result.stdout + result.stderr
 
 
 def test_backend_and_integration_matrices_consume_selected_rows():

@@ -298,8 +298,8 @@ jobs:
     # (always() compose down wrapped in timeout 100s).
     # The PR ceiling stays above the heaviest duration-balanced partition
     # load (~500s) plus collection/shutdown overhead.
-    # Unit-fast has a 15-minute test-step bound, API/component twelve and
-    # Temporal seven. Per-test timeouts stay 60s for unit-fast and 120s
+    # Unit-fast has a 15-minute test-step bound, API/component and Temporal
+    # twelve. Per-test timeouts stay 60s for unit-fast and 120s
     # for API/component and Temporal. Justified slow cases use the installed
     # pytest-timeout per-test marker. Each row writes a
     # uniquely named junit report and attempted cancellation diagnostics.
@@ -313,7 +313,7 @@ jobs:
     # Unit-fast and API/component get 21/18 minutes: their 15/12-minute steps
     # leave six for setup and reporting. Normal summary/upload steps each have a
     # 2-minute cap; extra failure diagnostics remain best-effort at the job
-    # deadline. Temporal retains a 15-minute job bound;
+    # deadline. Temporal retains a 20-minute job bound;
     # reliability retains 20 minutes for setup, its 12-minute test step,
     # and bounded diagnostics/cleanup.
     timeout-minutes: ${{ matrix.job_minutes }}
@@ -478,11 +478,10 @@ jobs:
       - name: Run Temporal boundary suite
         id: run-temporal
         if: matrix.suite == 'temporal-boundary' && needs.select-test-suites.outputs.temporal_boundary == 'true'
-        # Fast-lane hard bound (MoonLadderStudios/MoonMind#4369): 7-minute
-        # native test-step ceiling over the 120s per-test pytest timeout. The
-        # per-invocation faulthandler dump (90s) writes every thread's stack
-        # into the teed log before that terminating deadline.
-        timeout-minutes: 7
+        # The full Temporal corpus can exceed seven minutes while passing.
+        # Keep bounded runner-speed headroom without changing the 120s
+        # per-test timeout or the earlier 90s faulthandler stack dump.
+        timeout-minutes: 12
         env:
           PYTHONUNBUFFERED: "1"
         run: |
@@ -635,7 +634,7 @@ jobs:
               status_file="/tmp/backend-temporal-boundary-test-status.txt"
               effective_command="python -m pytest tests/unit/workflows/temporal -m temporal_boundary -v --tb=short -n auto --dist loadfile --durations=25 --timeout 120 -o faulthandler_timeout=90 --maxfail=1 (ordinary; omitted on schedule)"
               pytest_timeout="120s per-test"
-              step_budget="7-min test step within 15-min job" ;;
+              step_budget="12-min test step within 20-min job" ;;
             reliability-*)
               selected="${{ needs.select-test-suites.outputs.reliability_journey }}"
               outcome="${{ steps.run-reliability.outcome }}"
@@ -1613,7 +1612,7 @@ jobs:
                       raise ValueError(f"{flag} omits required selections")
               backend = [
                   {"suite": suite, "job_minutes": {
-                      "unit-fast": 21, "api-component": 18, "temporal-boundary": 15
+                      "unit-fast": 21, "api-component": 18, "temporal-boundary": 20
                   }[suite]}
                   for key, suite in (("unit_fast", "unit-fast"),
                                      ("api_component", "api-component"),
