@@ -277,8 +277,8 @@ def test_per_row_job_bounds_replace_blanket_thirty_minutes() -> None:
     assert job.get("timeout-minutes") != 30
     matrix = json.loads(select_suites([]).as_outputs()["backend_matrix"])["include"]
     by_suite = {row["suite"]: row for row in matrix}
-    assert by_suite["unit-fast"].get("job_minutes") == 18
-    assert by_suite["api-component"].get("job_minutes") == 15
+    assert by_suite["unit-fast"].get("job_minutes") == 21
+    assert by_suite["api-component"].get("job_minutes") == 18
     assert by_suite["temporal-boundary"].get("job_minutes") == 15
     for shard in (
         "reliability-shard-1",

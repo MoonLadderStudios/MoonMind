@@ -126,7 +126,11 @@ def test_docker_publish_passes_manifest_tag_into_image_build_metadata() -> None:
 
     build_steps = workflow["jobs"]["build"]["steps"]
     build_push_step = next(
-        (step for step in build_steps if step.get("name") == "Build and push by digest"),
+        (
+            step
+            for step in build_steps
+            if step.get("name") == "Build and push by digest"
+        ),
         None,
     )
     assert (
@@ -135,7 +139,7 @@ def test_docker_publish_passes_manifest_tag_into_image_build_metadata() -> None:
     build_args = build_push_step["with"].get("build-args", "")
     assert "MOONMIND_BUILD_ID=${{ needs.metadata.outputs.version_tag }}" in build_args
 
-    merge_job = workflow["jobs"]["merge"]
+    merge_job = workflow["jobs"]["assemble"]
     assert set(merge_job.get("needs", [])) == {"metadata", "build"}
 
     merge_run_steps = [step["run"] for step in merge_job["steps"] if "run" in step]
@@ -143,14 +147,16 @@ def test_docker_publish_passes_manifest_tag_into_image_build_metadata() -> None:
         "${IMAGE_NAME}:" in run and "${{ needs.metadata.outputs.version_tag }}" in run
         for run in merge_run_steps
     )
-    assert all("date +" not in run and "VERSION_TAG=" not in run for run in merge_run_steps)
+    assert all(
+        "date +" not in run and "VERSION_TAG=" not in run for run in merge_run_steps
+    )
 
 
 def test_docker_publish_writes_build_summary_for_promotion() -> None:
     # The summary lets an operator copy the version tag and digest straight into
     # the Release / Promote Stable workflow.
     workflow = _load_workflow()
-    merge_steps = workflow["jobs"]["merge"]["steps"]
+    merge_steps = workflow["jobs"]["assemble"]["steps"]
 
     summary_step = next(
         (
@@ -167,7 +173,7 @@ def test_docker_publish_writes_build_summary_for_promotion() -> None:
     assert "{{.Manifest.Digest}}" in run
     assert "${IMAGE_NAME}:${VERSION}@${DIGEST}" in run
     assert "Release / Promote Stable" in run
-    assert "VERSION=\"${{ needs.metadata.outputs.version_tag }}\"" in run
+    assert 'VERSION="${{ needs.metadata.outputs.version_tag }}"' in run
 
 
 
@@ -278,16 +284,23 @@ def test_runtime_project_install_precedes_non_package_asset_copies() -> None:
         assert project_install_index < dockerfile.index(copied_path)
 
 
-def _run_manifest_step(tmp_path, *, ref: str, sha: str, main_head: str) -> str:
-    """Execute the real manifest step with fake gh/docker; return docker args."""
+def _run_qualified_publication(tmp_path, *, ref: str, sha: str, main_head: str) -> str:
+    """Execute assembly and the qualified writer with fake gh/docker."""
     import os
     import shutil
     import subprocess
 
     workflow = _load_workflow()
-    merge_job = workflow["jobs"]["merge"]
+    merge_job = workflow["jobs"]["assemble"]
     step = next(
-        s for s in merge_job["steps"] if s.get("name") == "Create manifest list and push"
+        s
+        for s in merge_job["steps"]
+        if s.get("name") == "Create manifest list and push"
+    )
+    publish_step = next(
+        s
+        for s in workflow["jobs"]["publish-latest"]["steps"]
+        if s.get("name") == "Publish the qualified default channel"
     )
     bash = shutil.which("bash")
     assert bash is not None
@@ -296,6 +309,7 @@ def _run_manifest_step(tmp_path, *, ref: str, sha: str, main_head: str) -> str:
     (bin_dir / "gh").write_text(f"#!{bash}\nprintf '%s\\n' '{main_head}'\n")
     (bin_dir / "docker").write_text(
         f'#!{bash}\nprintf "%s\\n" "$*" >> "{tmp_path}/docker.log"\n'
+        + 'if [ "$3" = "inspect" ]; then printf "sha256:%064d\\n" 0; fi\n'
     )
     for tool in ("gh", "docker"):
         (bin_dir / tool).chmod(0o755)
@@ -313,9 +327,11 @@ def _run_manifest_step(tmp_path, *, ref: str, sha: str, main_head: str) -> str:
         "GITHUB_SHA": sha,
         "GITHUB_REPOSITORY": "example/moonmind",
         "GITHUB_OUTPUT": str(output),
+        "GITHUB_STEP_SUMMARY": str(tmp_path / "summary"),
+        "CANDIDATE_IMAGE": "ghcr.io/example/moonmind@sha256:" + "0" * 64,
     }
     subprocess.run(
-        [bash, "-e", "-o", "pipefail", "-c", step["run"]],
+        [bash, "-e", "-o", "pipefail", "-c", step["run"] + "\n" + publish_step["run"]],
         cwd=digests,
         env=env,
         check=True,
@@ -326,7 +342,7 @@ def _run_manifest_step(tmp_path, *, ref: str, sha: str, main_head: str) -> str:
 
 
 def test_latest_moves_only_for_the_current_main_tip(tmp_path) -> None:
-    args = _run_manifest_step(
+    args = _run_qualified_publication(
         tmp_path, ref="refs/heads/main", sha="b" * 40, main_head="b" * 40
     )
     assert "ghcr.io/example/moonmind:latest" in args
@@ -345,13 +361,13 @@ def test_latest_moves_only_for_the_current_main_tip(tmp_path) -> None:
 def test_latest_is_not_moved_by_stale_or_non_main_builds(
     tmp_path, ref, sha, main_head
 ) -> None:
-    args = _run_manifest_step(tmp_path, ref=ref, sha=sha, main_head=main_head)
+    args = _run_qualified_publication(tmp_path, ref=ref, sha=sha, main_head=main_head)
     assert ":latest" not in args
     assert "ghcr.io/example/moonmind:20261014.1" in args
 
 
 def test_latest_publication_is_serialized() -> None:
-    merge_job = _load_workflow()["jobs"]["merge"]
-    concurrency = merge_job.get("concurrency") or {}
+    publish_job = _load_workflow()["jobs"]["publish-latest"]
+    concurrency = publish_job.get("concurrency") or {}
     assert concurrency.get("cancel-in-progress") is False
     assert concurrency.get("group")
