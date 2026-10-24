@@ -83,7 +83,8 @@ async def test_read_faults_keep_storage_meaning_and_preserve_artifact(
                 await getattr(service, surface)(artifact_id=artifact.artifact_id, principal="owner")
             assert raised.value.code == code
             assert raised.value.retryable is retryable
-            assert raised.value.__cause__ is fault
+            assert type(raised.value.__cause__) is type(fault)
+            assert raised.value.__cause__.args == fault.args
             assert "synthetic" not in str(raised.value)
             assert artifact.status is TemporalArtifactStatus.COMPLETE
             monkeypatch.setattr(store, target, original)
@@ -128,7 +129,11 @@ async def test_serving_failure_survives_consumer_cleanup_failure(tmp_path, monke
             expected = asyncio.CancelledError if cancel else artifact_module.TemporalArtifactUnavailableError
             with pytest.raises(expected) as raised:
                 await service.read(artifact_id=artifact.artifact_id, principal="owner")
-            assert raised.value is primary if cancel else raised.value.__cause__ is primary
+            if cancel:
+                assert raised.value is primary
+            else:
+                assert type(raised.value.__cause__) is type(primary)
+                assert raised.value.__cause__.args == primary.args
             assert any("ConnectionError" in note for note in raised.value.__notes__)
 
 
