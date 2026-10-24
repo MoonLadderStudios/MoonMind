@@ -12,6 +12,7 @@ import json
 import re
 import shutil
 import subprocess
+from html.parser import HTMLParser
 
 from moonmind.omnigent.native_ui import (
     CODE_NATIVE_CHAT_UNAVAILABLE,
@@ -402,7 +403,59 @@ def test_render_document_escapes_closing_script_tag() -> None:
 
     # The injected bootstrap script is not prematurely terminated.
     assert "</script><script>alert(1)</script>" not in document
-    assert "<\\/script>" in document
+    assert "&lt;/script&gt;" in document
+
+
+def test_render_document_keeps_untrusted_bootstrap_out_of_script_source():
+    class Document(HTMLParser):
+        scripts = []
+        bootstrap = None
+
+        def handle_starttag(self, tag, attrs):
+            attributes = dict(attrs)
+            if tag == "script":
+                self.scripts.append(attributes)
+            if attributes.get("id") == "moonmind-omnigent-chat-bootstrap":
+                self.bootstrap = attributes["data-bootstrap"]
+
+    bootstrap = {
+        "chatBindingId": "chatb_test",
+        "labels": {"note": '</script><script>alert("x")</script> <!-- café & 😀'},
+    }
+    rendered = render_native_ui_document(
+        _INDEX_HTML, bootstrap=bootstrap, scoped_base=scoped_ui_base(_BINDING)
+    )
+    parsed = Document()
+    parsed.feed(rendered)
+    assert json.loads(parsed.bootstrap) == bootstrap
+    assert len(parsed.scripts) == 2  # Host adapter and the original module.
+    assert '<script>alert("x")</script>' not in rendered
+    initialization = rendered.split("<script>", 1)[1].split("\n", 1)[0]
+    result = subprocess.run(
+        [
+            "node",
+            "-e",
+            "global.window={};global.document={getElementById:()=>({getAttribute:()=>process.argv[1]})};"
+            "eval(process.argv[2]);process.stdout.write(JSON.stringify(window.__MOONMIND_OMNIGENT_CHAT__));",
+            parsed.bootstrap,
+            initialization,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert json.loads(result.stdout) == bootstrap
+
+
+def test_asset_rewrite_escapes_the_binding_scope_in_every_attribute():
+    scope = '/omnigent-ui/workflow-chat/chatb_x" onload="alert(1)'
+    rewritten = rewrite_asset_urls(
+        '<img src="/asset.png"><style>x {background:url(/bg.png)}</style>',
+        scoped_base=scope,
+    )
+    assert 'chatb_x" onload="' not in rewritten
+    assert "&quot; onload=&quot;" in rewritten
 
 
 def test_code_constant_is_stable() -> None:

@@ -10,6 +10,8 @@ leaking a provider session id, upstream URL, or credential to the browser.
 
 from __future__ import annotations
 
+import json
+from html.parser import HTMLParser
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
@@ -177,6 +179,24 @@ def _url(suffix: str = "", *, binding: str = _CHAT_BINDING_ID) -> str:
     return f"{base}/{suffix}" if suffix else base
 
 
+def _bootstrap(document: str) -> dict:
+    class BootstrapParser(HTMLParser):
+        payload = None
+
+        def handle_starttag(self, tag, attrs):
+            attributes = dict(attrs)
+            if (
+                tag == "meta"
+                and attributes.get("id") == "moonmind-omnigent-chat-bootstrap"
+            ):
+                self.payload = attributes["data-bootstrap"]
+
+    parser = BootstrapParser()
+    parser.feed(document)
+    assert parser.payload is not None
+    return json.loads(parser.payload)
+
+
 # --- Embedded document -------------------------------------------------------
 
 
@@ -192,11 +212,13 @@ def test_embedded_document_serves_native_app_with_bootstrap() -> None:
     assert 'id="root"' in body
     # Browser-safe bootstrap is injected and marks embedded mode.
     assert "window.__MOONMIND_OMNIGENT_CHAT__=" in body
-    assert '"mode":"embedded"' in body
-    assert '"embedded":true' in body
-    assert f'"chatBindingId":"{_CHAT_BINDING_ID}"' in body
+    bootstrap = _bootstrap(body)
+    assert bootstrap["mode"] == "embedded"
+    assert bootstrap["embedded"] is True
+    assert bootstrap["chatBindingId"] == _CHAT_BINDING_ID
     assert (
-        f'"apiBase":"/api/workflow-chat-bindings/{_CHAT_BINDING_ID}/omnigent"' in body
+        bootstrap["apiBase"]
+        == f"/api/workflow-chat-bindings/{_CHAT_BINDING_ID}/omnigent"
     )
     # Asset URLs are scoped back through the MoonMind route.
     scoped = f"{NATIVE_UI_MOUNT_PATH}/{_CHAT_BINDING_ID}"
@@ -237,7 +259,7 @@ def test_full_page_document_refuses_framing() -> None:
     response = client.get(_url())  # no embedded=1 -> full page
 
     assert response.status_code == 200
-    assert '"mode":"full_page"' in response.text
+    assert _bootstrap(response.text)["mode"] == "full_page"
     assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
     assert response.headers["x-frame-options"] == "DENY"
 
@@ -320,8 +342,11 @@ def test_rebuilt_server_image_serves_without_manual_repin(
     response = client.get(_url(), params={"embedded": "1"})
 
     assert response.status_code == 200
-    assert '"schemaVersion":"moonmind.omnigent_native_ui.bootstrap.v1"' in response.text
-    assert '"compatibilityVersion":"1"' in response.text
+    assert (
+        _bootstrap(response.text)["schemaVersion"]
+        == "moonmind.omnigent_native_ui.bootstrap.v1"
+    )
+    assert _bootstrap(response.text)["compatibilityVersion"] == "1"
     assert upstream.paths == ["/"]
 
 

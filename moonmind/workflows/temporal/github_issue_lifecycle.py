@@ -19,7 +19,6 @@ and never treated as available.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
@@ -79,8 +78,6 @@ OUTCOME_INCOMPLETE = "incomplete"
 OUTCOME_DENIED = "denied"
 OUTCOME_UNKNOWN = "outcome_unknown"
 
-_STATUS_PREFIX_RE = re.compile(r"^status(?:\s+|[:/_-]+)\s*(.*)$")
-
 
 def _normalize_label_name(value: Any) -> str:
     return str(value or "").strip().lower()
@@ -119,10 +116,18 @@ def is_workflow_status_like(name: Any) -> bool:
         return True
     if normalized.startswith("status:"):
         return True
-    match = _STATUS_PREFIX_RE.match(normalized)
-    if match and match.group(1):
-        return True
-    return False
+    if not normalized.startswith("status"):
+        return False
+    suffix = normalized[len("status") :]
+    if not suffix:
+        return False
+    if suffix[0].isspace():
+        remainder = suffix.lstrip()
+    elif suffix[0] in ":/_-":
+        remainder = suffix.lstrip(":/_-").lstrip()
+    else:
+        return False
+    return bool(remainder) and "\n" not in remainder
 
 
 def _label_names(labels: Any) -> list[str]:

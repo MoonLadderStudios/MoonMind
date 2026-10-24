@@ -408,6 +408,11 @@ async def _serve_native_ui(
         # so an upstream Location can never become an open redirect.
         if not _is_safe_scoped_redirect(rewritten, scoped_base=scoped_base):
             rewritten = scoped_base.rstrip("/") + "/"
+        target = urlsplit(rewritten)
+        if target.scheme or target.netloc or "\\" in rewritten:
+            return _native_chat_unavailable(
+                mode=mode, is_document=document, reason="native_ui_upstream_unavailable"
+            )
         return RedirectResponse(
             url=rewritten,
             status_code=response.status_code,
