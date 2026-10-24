@@ -1278,6 +1278,7 @@ async def _load_verified_execution_plan(
     *,
     workflow_id: str | None = None,
     run_id: str | None = None,
+    namespace: str = "default",
     step_execution_id: str | None = None,
     admitted_principal: str | None = None,
 ):
@@ -1345,6 +1346,7 @@ async def _load_verified_execution_plan(
                 binding=binding,
                 workflow_id=workflow_id,
                 run_id=execution_run_id,
+                namespace=namespace,
             )
             admitted_principal = f"workflow:{workflow_id}"
 

@@ -34,7 +34,7 @@ A resolver may repair and merge a newer head than the original candidate. On eit
 
 A separate top-level follow-up would create a second dependency target and make the original parent's success ambiguous. Folding everything into one UserWorkflow would mix implementation/publication, external waits, and repeated resolver attempts into one history and duplicate resolver logic. The child boundary keeps each durable and inspectable.
 
-The resolver is itself a child UserWorkflow so it gets ordinary workspace/runtime preparation, logging, artifacts, admission, and Skill snapshots. It materializes the exact `pr-resolver` bundle and runs it through AgentRun; the Skill and its helpers own snapshots, comment classification, remediation selection, retries, final merge checks, and terminal evidence. The `MoonMind.PRResolver` workflow type remains only for replaying recorded histories; new work does not select it or infer a native host from the Skill name or publication mode.
+The resolver is a child UserWorkflow with ordinary workspace preparation, logging, artifacts, and Skill snapshots. Temporal starts it directly, bypassing API admission. Preparing its plan creates immutable artifacts; `plan.validate` delegates their verified closure to the Activity's actual namespace/workflow/run before the workflow reads its Skill manifest. This applies to agent and native plans: successful compilation alone does not prove readable inputs. Retried validation reuses durable links without changing owners or bytes. The exact `pr-resolver` bundle then runs through AgentRun; the Skill owns diagnosis, remediation, merge checks, and terminal evidence. `MoonMind.PRResolver` remains only for replaying recorded histories.
 
 ```text
 UserWorkflow: one authored PR-and-merge intent
