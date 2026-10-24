@@ -8,13 +8,14 @@ referenced workflow, and bridge failure classes map onto HTTP status codes.
 from __future__ import annotations
 
 import importlib
+from time import monotonic
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from api_service.api.routers.omnigent_bridge import (
@@ -31,7 +32,6 @@ from api_service.api.routers.omnigent_bridge import (
     router,
 )
 from api_service.auth_providers import get_instance_access, instance_operator_principal
-from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
     HOST_PROTOCOL_MODE_PROXY,
@@ -45,6 +45,7 @@ from moonmind.omnigent.bridge_proxy import (
 from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
 from moonmind.omnigent.control_plane.turn_sources import TurnSource
 from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
+from moonmind.security.operator_admission import OperatorAdmission
 
 _USER_ID = uuid4()
 
@@ -257,7 +258,8 @@ def _fake_store_dependency() -> "_FakeStore":
     return _FakeStore()
 
 
-def _mock_user():
+def _mock_user(request: Request):
+    request.state.operator_admitted_at = monotonic()
     return OperatorAdmission(via="loopback")
 
 

@@ -24,7 +24,6 @@ from starlette.websockets import WebSocketDisconnect
 from api_service.api.routers.omnigent_bridge import (
     CODE_SESSION_NOT_READY,
     WORKFLOW_CHAT_BINDINGS_MOUNT_PATH,
-    WorkflowChatFacadeError,
     _get_bridge_proxy,
     _get_bridge_store,
     _get_create_embedded_facade,
@@ -110,16 +109,12 @@ def _mock_user():
 
 
 class _FakeService:
-    def __init__(self, owner_id: Any, *, deny_after: int | None = None) -> None:
+    def __init__(self, owner_id: Any) -> None:
         self._owner_id = owner_id
-        self._deny_after = deny_after
         self.calls = 0
 
     async def describe_execution(self, workflow_id: str):
         self.calls += 1
-        if self._deny_after is not None and self.calls > self._deny_after:
-            # Simulate the workflow authority being revoked mid-stream.
-            return SimpleNamespace(owner_id=uuid4())
         return SimpleNamespace(owner_id=self._owner_id)
 
 
@@ -1693,11 +1688,9 @@ def test_websocket_closes_when_authority_is_revoked_midstream(monkeypatch) -> No
         "api_service.api.routers.omnigent_bridge._FACADE_STREAM_REAUTH_EVERY_POLLS",
         1,
     )
-    service = _FakeService(_USER_ID, deny_after=1)
     metadata = {**_row().metadata_, "callerAuthorities": {}}
-    client, _proxy, _store = _build(
-        service=service, store=_FakeStore(row=_row(metadata_=metadata))
-    )
+    store = _FakeStore(rows_by_call=[_row(), _row(metadata_=metadata)])
+    client, _proxy, _store = _build(store=store)
 
     with client.websocket_connect(
         _path(f"v1/sessions/{_CHAT_BINDING_ID}/stream"),
@@ -1708,7 +1701,7 @@ def test_websocket_closes_when_authority_is_revoked_midstream(monkeypatch) -> No
 
     assert closed.value.code == 4403
     assert closed.value.reason == "omnigent_chat_binding_unknown"
-    assert service.calls == 2
+    assert store.event_query_keys == []
 
 
 def test_stream_replays_from_cursor_and_terminates() -> None:
@@ -1757,18 +1750,18 @@ def test_stream_stops_when_authority_revoked_midstream(monkeypatch) -> None:
     )
     metadata = {**_row().metadata_, "callerAuthorities": {}}
     store = _FakeStore(
-        row=_row(status="active", metadata_=metadata), events=[_event(1)]
+        rows_by_call=[_row(), _row(metadata_=metadata)], events=[_event(1)]
     )
-    # The binding is authorized when the stream opens, then denied on the next
-    # authorization pass (deny_after=1).
-    service = _FakeService(_USER_ID, deny_after=1)
-    client, _proxy, _store = _build(store=store, service=service)
+    # Revoke the durable sharing grant after the connection is admitted.
+    client, _proxy, _store = _build(store=store)
 
     response = client.get(_path(f"v1/sessions/{_CHAT_BINDING_ID}/stream"))
 
     assert response.status_code == 200
     assert "event: error" in response.text
     assert "omnigent_chat_binding_unknown" in response.text
+    assert "id: 1" not in response.text
+    assert store.event_query_keys == []
 
 
 # --- Primitive-level coverage ------------------------------------------------

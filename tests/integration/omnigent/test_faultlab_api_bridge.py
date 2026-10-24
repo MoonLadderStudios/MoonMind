@@ -25,12 +25,13 @@ Docker, or Temporal) and therefore safe for required CI.
 
 from __future__ import annotations
 
+from time import monotonic
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from api_service.api.routers.omnigent_bridge import (
@@ -42,11 +43,7 @@ from api_service.api.routers.omnigent_bridge import (
 )
 from api_service.auth_providers import get_instance_access
 from moonmind.security.operator_admission import OperatorAdmission
-from tools.omnigent_faultlab.scenario import (
-    EmittedEvent,
-    FaultScenario,
-    ScenarioStep,
-)
+from tools.omnigent_faultlab.scenario import EmittedEvent, FaultScenario, ScenarioStep
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -176,7 +173,8 @@ class _FaultlabService:
         return SimpleNamespace(owner_id=str(self._owner_id))
 
 
-def _operator_access():
+def _operator_access(request: Request):
+    request.state.operator_admitted_at = monotonic()
     return OperatorAdmission(via="loopback")
 
 

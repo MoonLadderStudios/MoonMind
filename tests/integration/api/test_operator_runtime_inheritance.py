@@ -15,6 +15,7 @@ from api_service.db.base import get_async_session
 from api_service.db.models import (
     Base,
     ManagedAgentProviderProfile,
+    ProviderProfileAuthState,
     TemporalExecutionCanonicalRecord,
 )
 from api_service.services.single_user_conversion import run_guarded_upgrade
@@ -70,6 +71,7 @@ async def test_operator_creates_child_from_parent_without_identity_headers(
                 runtime_id="codex_cli",
                 provider_id="openai",
                 enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
                 default_model="gpt-5.4",
                 default_effort="high",
             )
