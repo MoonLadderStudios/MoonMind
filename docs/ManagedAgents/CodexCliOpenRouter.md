@@ -67,7 +67,6 @@ This design does **not** attempt to:
 - require project-local `.codex/config.toml` checked into repos
 - solve every Codex configuration feature in one pass
 - add OpenRouter-specific traffic proxying in v1
-- unify or replace the standalone `codex_worker` package
 
 ---
 

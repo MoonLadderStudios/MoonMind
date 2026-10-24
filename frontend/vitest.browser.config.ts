@@ -34,6 +34,13 @@ export default defineConfig({
       headless: true,
       provider: playwright(),
       commands: {
+        replaceInputByKeyboard: async ({ iframe }, label: string, text: string) => {
+          const input = iframe.getByLabel(label, { exact: true });
+          await input.click();
+          await input.press('ControlOrMeta+A');
+          await input.press('Backspace');
+          await input.pressSequentially(text);
+        },
         pointerButton: async ({ page }, action: 'down' | 'up') => page.mouse[action](),
         touchTreatment: async ({ context, page }, markup: string, css: string) => {
           const touchContext = await context.browser()!.newContext({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
