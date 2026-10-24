@@ -72,7 +72,10 @@ from api_service.api.execution_principal import (
     resolve_execution_principal,
 )
 from api_service.api.instance_access import is_instance_operator
-from api_service.api.routers.temporal_artifacts import _resolve_recovery_principal
+from api_service.api.routers.temporal_artifacts import (
+    _raise_temporal_artifact_http,
+    _resolve_recovery_principal,
+)
 from api_service.api.schemas import CreateJobRequest
 from api_service.auth_providers import (
     get_instance_access,
@@ -330,6 +333,8 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
     TemporalArtifactNotFoundError,
     TemporalArtifactStateError,
+    TemporalArtifactStorageAccessError,
+    TemporalArtifactUnavailableError,
     build_artifact_ref,
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter, query_workflow
@@ -20479,6 +20484,9 @@ async def _admit_saved_work_publication(
         _artifact, manifest_bytes = await artifact_service.read(
             artifact_id=artifact_id, principal=principal
         )
+    except (TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError) as exc:
+        _raise_temporal_artifact_http(exc)
+        raise
     except SavedPublicationError as exc:
         raise _saved_work_publication_error(
             status.HTTP_422_UNPROCESSABLE_CONTENT, "saved_work_invalid", str(exc)

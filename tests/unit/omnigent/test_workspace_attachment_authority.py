@@ -20,7 +20,37 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
     TemporalArtifactRepository,
     TemporalArtifactService,
+    TemporalArtifactUnavailableError,
+    LocalTemporalArtifactStore,
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_gateway", [False, True])
+@pytest.mark.parametrize("boundary", ["metadata", "stream"])
+async def test_attachment_outage_keeps_failure_meaning_and_original_grant(artifacts, tmp_path, monkeypatch, use_gateway, boundary):
+    from sqlalchemy.exc import OperationalError
+    artifact_id, payload = await _publish(artifacts)
+    original = OperationalError("SELECT links", {}, RuntimeError("synthetic DB outage")) if boundary == "metadata" else TimeoutError("synthetic storage outage")
+    async with artifacts() as session:
+        service = TemporalArtifactService(TemporalArtifactRepository(session))
+        projector = WorkspaceArtifactProjector(TemporalOmnigentArtifactGateway(artifacts) if use_gateway else service)
+        with monkeypatch.context() as injected:
+            if boundary == "metadata":
+                async def unavailable(*args, **kwargs):
+                    raise original
+                injected.setattr(TemporalArtifactRepository, "list_links", unavailable)
+            else:
+                def unavailable(*args, **kwargs):
+                    raise original
+                    yield
+                injected.setattr(LocalTemporalArtifactStore, "read_chunks", unavailable)
+            with pytest.raises(TemporalArtifactUnavailableError) as raised:
+                await _project(projector, tmp_path / "fresh", artifact_id)
+            assert raised.value.__cause__ is original
+            assert raised.value.code == f"artifact_{'authority' if boundary == 'metadata' else 'storage'}_unavailable"
+        evidence = await _project(projector, tmp_path / "fresh", artifact_id)
+        assert (tmp_path / "fresh" / evidence[0]["path"]).read_bytes() == payload
 
 
 @pytest_asyncio.fixture

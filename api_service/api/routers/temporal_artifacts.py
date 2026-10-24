@@ -36,11 +36,14 @@ from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal.artifacts import (
     COLLECTION_CATEGORY_LINK_PREFIXES,
     TemporalArtifactAuthorizationError,
+    TemporalArtifactBytesMissingError,
     TemporalArtifactExpiredError,
     TemporalArtifactNotFoundError,
     TemporalArtifactRepository,
     TemporalArtifactService,
     TemporalArtifactStateError,
+    TemporalArtifactStorageAccessError,
+    TemporalArtifactUnavailableError,
     TemporalArtifactValidationError,
     build_artifact_ref,
 )
@@ -96,6 +99,22 @@ def _attachment_upload_diagnostics(
     return {"events": [diagnostic_event]}
 
 def _raise_temporal_artifact_http(error: Exception) -> None:
+    if isinstance(error, TemporalArtifactUnavailableError):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": error.code, "message": str(error)},
+            headers={"Retry-After": "5"},
+        ) from error
+    if isinstance(error, TemporalArtifactStorageAccessError):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"code": error.code, "message": str(error)},
+        ) from error
+    if isinstance(error, TemporalArtifactBytesMissingError):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": error.code, "message": str(error)},
+        ) from error
     if isinstance(error, TemporalArtifactExpiredError):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

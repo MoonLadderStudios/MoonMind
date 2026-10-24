@@ -18735,6 +18735,19 @@ _SAVED_WORK_BODY = {
 }
 
 
+@pytest.mark.parametrize("dependency", ["authority", "storage"])
+def test_saved_work_publication_outage_does_not_start_replacement(monkeypatch, dependency):
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactUnavailableError
+    artifacts = _SavedWorkArtifacts()
+    artifacts.read = AsyncMock(side_effect=TemporalArtifactUnavailableError("art_saved", dependency=dependency, operation="read"))
+    app, adapter, _record, _user = _saved_work_app(monkeypatch, artifacts)
+    with TestClient(app) as client:
+        response = client.post("/api/executions/mm:wf-1/retry-publication", json=_SAVED_WORK_BODY)
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == f"artifact_{dependency}_unavailable"
+    adapter.start_workflow.assert_not_awaited()
+
+
 def test_saved_work_publication_freezes_one_decision_without_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
