@@ -179,10 +179,6 @@ async function replaceWithKeyboard(input: HTMLInputElement, text: string) {
   });
 }
 
-function publicationOutcome(select: HTMLSelectElement): string {
-  return document.getElementById(select.getAttribute('aria-describedby') || '')?.textContent || '';
-}
-
 describe('Create workspace source and publication intent', () => {
   for (const viewport of [DESKTOP, MOBILE]) {
     it(`authors scratch and repository work by keyboard at ${viewport.width}px`, async () => {
@@ -219,9 +215,11 @@ describe('Create workspace source and publication intent', () => {
       // destination mode is offered as a selectable dead end.
       await replaceWithKeyboard(repository, '');
       await waitFor(() => expect(publish.value).toBe('none'));
-      expect(publicationOutcome(publish)).toBe(
+      await userEvent.hover(publish);
+      expect(publish.getAttribute('title')).toBe(
         'Saves results on this workflow; nothing is published.',
       );
+      expect(screen.queryByText('Saves results on this workflow; nothing is published.')).toBeNull();
       expect(within(publish).getByRole('option', { name: 'Branch' })).toBeDisabled();
       expect(within(publish).getByRole('option', { name: 'PR' })).toBeDisabled();
 
@@ -249,7 +247,9 @@ describe('Create workspace source and publication intent', () => {
 
       await replaceWithKeyboard(repository, 'octo/repo');
       await userEvent.selectOptions(publish, 'pr');
-      expect(publicationOutcome(publish)).toBe('Opens a pull request on octo/repo.');
+      await userEvent.hover(publish);
+      expect(publish.getAttribute('title')).toBe('Opens a pull request on octo/repo.');
+      expect(screen.queryByText('Opens a pull request on octo/repo.')).toBeNull();
       await userEvent.click(start);
       await waitFor(() => expect(createRequests).toHaveLength(2));
       const submitted = (createRequests[1]?.payload as Record<string, unknown>).repository;
