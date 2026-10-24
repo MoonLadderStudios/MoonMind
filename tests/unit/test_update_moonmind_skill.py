@@ -723,6 +723,41 @@ def test_local_build_dry_run_never_builds_or_launches(tmp_path, monkeypatch, cap
     assert "local_source_overlay_update" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("explicit_project", [None, "operator-selected"])
+def test_local_build_preserves_the_installed_target(tmp_path, monkeypatch, explicit_project):
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+    _init_repo(repo)
+    (repo / "docker-compose.development.yaml").write_text("services: {}\n")
+    state = repo / "deploy/state/controller"
+    state.mkdir(parents=True)
+    (state / "controller-identity.json").write_text(
+        json.dumps({"repo": str(repo), "targetProject": "installed-project"})
+    )
+    expected = explicit_project or "installed-project"
+    commands = []
+
+    def command(args, **kwargs):
+        commands.append(args)
+        if args[:3] == ["docker", "compose", "config"]:
+            output = json.dumps({"name": "different-rendered-project"})
+        elif args[:2] == ["docker", "compose"]:
+            assert args[args.index("--project-name") + 1] == expected
+            output = json.dumps([{"Name": "api", "Publishers": []}]) if "ps" in args else ""
+        else:
+            assert args[0] == "git"
+            output = "a" * 40 if args[1] == "rev-parse" else ""
+        return SimpleNamespace(returncode=0, stdout=output)
+
+    monkeypatch.setattr(update.subprocess, "run", command)
+    args = ["--repo", str(repo), "--local-build"]
+    if explicit_project:
+        args.extend(["--compose-project", explicit_project])
+    assert update.main(args) == 0
+    assert len([args for args in commands if "up" in args]) == 1
+    assert not (repo / "deploy/state/release-submissions").exists()
+
+
 @pytest.mark.parametrize(
     "extra",
     [
