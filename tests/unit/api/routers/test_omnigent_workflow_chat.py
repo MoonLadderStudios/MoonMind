@@ -1838,7 +1838,12 @@ def test_recompute_capabilities_intersects_binding_policy() -> None:
 
 def test_message_denied_when_policy_disables_send() -> None:
     store = _FakeStore(
-        row=_row(metadata_={"interventionCapabilities": {"sendMessage": False}})
+        row=_row(
+            metadata_={
+                **_row().metadata_,
+                "interventionCapabilities": {"sendMessage": False},
+            }
+        )
     )
     client, proxy, _store = _build(store=store)
 
@@ -2172,7 +2177,12 @@ async def test_canonical_admission_rejection_is_a_session_not_ready_conflict() -
 
 def test_resolve_elicitation_denied_when_policy_disables_approval() -> None:
     store = _FakeStore(
-        row=_row(metadata_={"interventionCapabilities": {"resolveElicitation": False}})
+        row=_row(
+            metadata_={
+                **_row().metadata_,
+                "interventionCapabilities": {"resolveElicitation": False},
+            }
+        )
     )
     client, proxy, _store = _build(store=store)
 

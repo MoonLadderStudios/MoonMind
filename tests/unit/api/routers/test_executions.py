@@ -9537,9 +9537,11 @@ def caller_runtime_profile_session() -> SimpleNamespace:
     return SimpleNamespace(get=AsyncMock(side_effect=get_row))
 
 
+@pytest.mark.parametrize("inheritance", ["caller", "parent"])
 def test_create_task_shaped_execution_inherits_caller_runtime(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
     caller_runtime_profile_session: SimpleNamespace,
+    inheritance: str,
 ) -> None:
     test_client, service, user = client
     service.create_execution.return_value = _build_execution_record()
@@ -9569,14 +9571,23 @@ def test_create_task_shaped_execution_inherits_caller_runtime(
 
     response = test_client.post(
         "/api/executions",
-        headers={
-            "X-MoonMind-Task-Workflow-Id": "mm:parent-task",
-            "X-MoonMind-Agent-Run-Identifier": "agent-run-1",
-        },
+        headers=(
+            {
+                "X-MoonMind-Task-Workflow-Id": "mm:parent-task",
+                "X-MoonMind-Agent-Run-Identifier": "agent-run-1",
+            }
+            if inheritance == "caller"
+            else {}
+        ),
         json={
             "type": "workflow",
             "payload": {
-                "runtimeInheritance": "caller",
+                "runtimeInheritance": inheritance,
+                **(
+                    {"parentWorkflowId": "mm:parent-task"}
+                    if inheritance == "parent"
+                    else {}
+                ),
                 "repository": "MoonLadderStudios/MoonMind",
                 "requiredCapabilities": ["gh"],
                 "workflow": {
@@ -9596,6 +9607,8 @@ def test_create_task_shaped_execution_inherits_caller_runtime(
         "initial_parameters"
     ]
     assert initial_parameters["parentWorkflowId"] == "mm:parent-task"
+    if inheritance == "parent":
+        assert "executionPrincipal" not in initial_parameters
     assert initial_parameters["targetRuntime"] == "codex_cli"
     assert initial_parameters["profileId"] == "codex_default"
     assert initial_parameters["requestedModel"] == "gpt-5.4"
