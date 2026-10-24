@@ -6,21 +6,36 @@ import asyncio
 from datetime import timedelta
 
 import pytest
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from api_service.db.base import async_session_maker
+from api_service.db.models import OmnigentHostAuthProfileRecord
 from moonmind.omnigent.host_auth_contracts import (
     HostAuthCredentialProfile,
     rotate_host_auth_profile,
 )
 from moonmind.omnigent.host_auth_store import HostAuthProfileStore
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
 
-async def test_concurrent_rotation_has_one_generation_winner_on_postgres() -> None:
+@pytest_asyncio.fixture
+async def host_auth_store(control_plane_postgres_url):
+    engine = create_async_engine(control_plane_postgres_url)
+    async with engine.begin() as conn:
+        await conn.run_sync(OmnigentHostAuthProfileRecord.__table__.create)
+    try:
+        yield HostAuthProfileStore(async_sessionmaker(engine, expire_on_commit=False))
+    finally:
+        await engine.dispose()
+
+
+async def test_concurrent_rotation_has_one_generation_winner_on_postgres(
+    host_auth_store,
+) -> None:
     """The compose PostgreSQL backend must serialize generation-checked writers."""
 
-    store = HostAuthProfileStore(async_session_maker)
+    store = host_auth_store
     await store.put(HostAuthCredentialProfile("managed", "env://HOST_ONE", 1))
     start = asyncio.Event()
 

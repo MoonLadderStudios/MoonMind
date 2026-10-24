@@ -22,7 +22,7 @@ Classification follows resources started by a test, not simply the module it imp
 | Hermetic integration CI | `integration` and `integration_ci` | Disposable Compose-backed local dependencies, without external credentials. |
 | Provider verification | `provider_verification` and provider markers | Live external-provider checks in explicitly credentialed environments, outside required credential-free PR CI. |
 
-`pyproject.toml` owns marker registration. `tests/conftest.py` owns classification for existing tests. Prefer an explicit resource marker for a clear boundary. Unit ownership precedence is `slow > temporal_boundary > component > unit_fast`. The ownership verifier checks that eligible provider-free tests have exactly one owner.
+`pyproject.toml` owns marker registration. `tests/conftest.py` owns classification for existing tests. Unit ownership precedence is `slow > temporal_boundary > component > unit_fast`. The ownership verifier checks every provider-free unit, API component and integration node, including integration tests with missing ownership markers. Live provider, GPU and operator-owned deployment fixtures declare their external resource requirements. Host-side controller and credential-free exact-artifact tests retain their existing executable runners outside the Compose pytest service.
 
 Reliability tests are excluded from the general Compose integration corpus so the same journeys are not executed twice under different names.
 
@@ -73,7 +73,7 @@ Workflow/runtime/worker code, Temporal-facing schemas, relevant tests, and chang
 
 ### Reliability Journey Selection
 
-Reliability coverage is selected for orchestration and runtime seams, checkpoints, skill contracts and their materialization, replay fixtures, and managed runtime packaging. Shared CI, dependency, selector, or global test-configuration changes take the full-backend path.
+Reliability coverage is selected for orchestration and runtime seams, checkpoints, skill materialization, replay fixtures, and managed runtime packaging. Saved-preset definitions, catalog/readiness code and conversion also select the journeys that consume them. Shared CI, dependency, selector, or global test-configuration changes take the full-backend path.
 
 These journeys test retained user outcomes through real production composition. Scripted external providers remove network/credential dependence, not the boundary under test.
 

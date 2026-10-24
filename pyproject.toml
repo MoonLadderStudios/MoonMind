@@ -96,6 +96,7 @@ markers = [
     "codex: marks tests specific to the Codex provider.",
     "requires_credentials: marks tests that require real provider credentials.",
     "requires_gpu: marks tests that require a deployment-owned NVIDIA GPU host.",
+    "requires_deployment: marks live tests that require operator-owned deployment and network fixtures.",
 ]
 
 [tool.pre-commit]
