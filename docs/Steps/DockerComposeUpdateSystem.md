@@ -192,7 +192,7 @@ The deployment-control worker is a submission/observation adapter where availabl
 
 ### 11.2 Standalone controller project
 
-The controller's restart policy, durable state directory, and direct Docker socket let an update replace its submitting worker and survive target-project shutdown. Ownership, target, progress, deadline, and attempt budget survive restarts; on restart the controller resumes unfinished work under the stack lock once its earlier one-offs have exited.
+The controller's restart policy, durable state directory, and direct Docker socket let an update replace its submitting worker and survive target-project shutdown. Ownership, target, progress, deadline, and attempt budget survive restarts; on restart the controller resumes unfinished work under the stack lock once its earlier one-offs have exited. Capability one-offs exit after awaited async cleanup and flushing receipts or original errors, so interpreter finalization cannot strand a completed helper.
 
 The host derives its endpoint and default project from the installed controller identity; a changed inferred Compose name cannot create another stack. A recorded target must belong to this deployment; `--compose-project` overrides it. Unrecorded targets use Compose's rendered name. Target-less controller submissions derive the project and files from bootstrap/`.env`, including overrides, and omit Docker transport services. `MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK` overrides the project-scoped private network.
 
