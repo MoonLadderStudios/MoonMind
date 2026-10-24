@@ -20,13 +20,20 @@ from moonmind.workflows.temporal.workflows import agent_run
 pytestmark = pytest.mark.asyncio
 
 PATCH = "agent-run-managed-no-progress-expiry-recovery-v1"
+FETCH_BUDGET_PATCH = "agent-run-managed-result-fetch-budget-v1"
 
 
-def _clock(monkeypatch, *, enabled=True):
+def _clock(monkeypatch, *, enabled=True, fetch_budget_enabled=True):
     now = [datetime(2026, 10, 23, tzinfo=UTC)]
     monkeypatch.setattr(agent_run.workflow, "now", lambda: now[0])
     monkeypatch.setattr(
-        agent_run.workflow, "patched", lambda name: enabled or name != PATCH
+        agent_run.workflow,
+        "patched",
+        lambda name: (
+            fetch_budget_enabled
+            if name == FETCH_BUDGET_PATCH
+            else enabled or name != PATCH
+        ),
     )
 
     async def wait(_predicate, *, timeout):
@@ -85,6 +92,127 @@ async def test_grace_expiry_checks_completion_before_quota_recovery(
     else:
         run._fetch_managed_result.assert_not_awaited()
         run._cancel_managed_no_progress_and_fetch_cooldown_result.assert_awaited_once()
+
+
+@pytest.mark.parametrize("status_elapsed,remaining", [(54, 1), (55, 0)])
+async def test_expiry_terminal_fetch_stays_within_original_budget(
+    monkeypatch, status_elapsed, remaining
+):
+    now = _clock(monkeypatch)
+    run = agent_run.MoonMindAgentRun()
+    run.run_id = "run"
+
+    async def status(**_kwargs):
+        now[0] += timedelta(seconds=status_elapsed)
+        return _status("completed")
+
+    run._poll_managed_status = AsyncMock(side_effect=status)
+    run._execute_routed_activity = AsyncMock(return_value={"summary": "retained"})
+    actual = await run._reconcile_managed_no_progress(
+        request=_request(),
+        adapter=object(),
+        uses_codex_session_adapter=False,
+        use_managed_status_activity=True,
+        resiliency_policy={"noProgressGraceSeconds": 5},
+        poll_interval=10,
+        initial_status=_status("running"),
+        overall_start=now[0],
+        timeout_seconds=60,
+    )
+    if remaining:
+        assert actual.summary == "retained"
+        kwargs = run._execute_routed_activity.await_args.kwargs
+        assert kwargs["start_to_close_timeout"].total_seconds() == remaining
+        assert kwargs["schedule_to_close_timeout"].total_seconds() == remaining
+    else:
+        assert actual is None
+        run._execute_routed_activity.assert_not_awaited()
+
+
+async def test_cancel_terminal_fetch_consumes_status_poll_elapsed_time(monkeypatch):
+    now = _clock(monkeypatch)
+    run = agent_run.MoonMindAgentRun()
+    run.run_id = "run"
+
+    async def status(**_kwargs):
+        now[0] += timedelta(seconds=49)
+        return _status("completed")
+
+    run._poll_managed_status = AsyncMock(side_effect=status)
+    run._execute_routed_activity = AsyncMock(return_value={"summary": "retained"})
+    actual = await run._cancel_managed_no_progress_and_fetch_cooldown_result(
+        request=_request(),
+        adapter=object(),
+        uses_codex_session_adapter=False,
+        use_managed_status_activity=True,
+        poll_interval=10,
+        remaining_overall=60,
+    )
+    assert actual.summary == "retained"
+    kwargs = run._execute_routed_activity.await_args_list[-1].kwargs
+    assert kwargs["start_to_close_timeout"].total_seconds() == 1
+    assert kwargs["schedule_to_close_timeout"].total_seconds() == 1
+
+
+@pytest.mark.parametrize("status_elapsed", [54, 55])
+async def test_recorded_expiry_fetch_keeps_original_activity_timeouts(
+    monkeypatch, status_elapsed
+):
+    now = _clock(monkeypatch, fetch_budget_enabled=False)
+    run = agent_run.MoonMindAgentRun()
+    run.run_id = "run"
+
+    async def status(**_kwargs):
+        now[0] += timedelta(seconds=status_elapsed)
+        return _status("completed")
+
+    run._poll_managed_status = AsyncMock(side_effect=status)
+    run._execute_routed_activity = AsyncMock(return_value={"summary": "retained"})
+    actual = await run._reconcile_managed_no_progress(
+        request=_request(),
+        adapter=object(),
+        uses_codex_session_adapter=False,
+        use_managed_status_activity=True,
+        resiliency_policy={"noProgressGraceSeconds": 5},
+        poll_interval=10,
+        initial_status=_status("running"),
+        overall_start=now[0],
+        timeout_seconds=60,
+    )
+
+    assert actual.summary == "retained"
+    kwargs = run._execute_routed_activity.await_args.kwargs
+    assert "start_to_close_timeout" not in kwargs
+    assert "schedule_to_close_timeout" not in kwargs
+
+
+@pytest.mark.parametrize("status_elapsed", [49, 50])
+async def test_recorded_cancel_fetch_keeps_original_activity_timeouts(
+    monkeypatch, status_elapsed
+):
+    now = _clock(monkeypatch, fetch_budget_enabled=False)
+    run = agent_run.MoonMindAgentRun()
+    run.run_id = "run"
+
+    async def status(**_kwargs):
+        now[0] += timedelta(seconds=status_elapsed)
+        return _status("completed")
+
+    run._poll_managed_status = AsyncMock(side_effect=status)
+    run._execute_routed_activity = AsyncMock(return_value={"summary": "retained"})
+    actual = await run._cancel_managed_no_progress_and_fetch_cooldown_result(
+        request=_request(),
+        adapter=object(),
+        uses_codex_session_adapter=False,
+        use_managed_status_activity=True,
+        poll_interval=10,
+        remaining_overall=60,
+    )
+
+    assert actual.summary == "retained"
+    kwargs = run._execute_routed_activity.await_args_list[-1].kwargs
+    assert "start_to_close_timeout" not in kwargs
+    assert "schedule_to_close_timeout" not in kwargs
 
 
 @pytest.mark.parametrize("enabled,budget", [(False, 60), (True, 5)])
@@ -200,16 +328,33 @@ async def test_cancellation_during_grace_starts_no_recovery(monkeypatch):
     run._cancel_managed_no_progress_and_fetch_cooldown_result.assert_not_awaited()
 
 
-async def test_recorded_pre_recovery_grace_history_replays(monkeypatch):
-    # Recorded before this fix at ee53a90, using the production AgentRun under
-    # real Temporal and the documented short policy below. Never regenerate from
-    # the candidate: its absence of the new patch is the compatibility evidence.
+@pytest.mark.parametrize(
+    "fixture_name,workflow_id",
+    [
+        (
+            "grace-expired-before-recovery.json.gz",
+            "test-parent-managed-no-progress-grace:child",
+        ),
+        (
+            "shipped-expiry-fetch-after-worker-outage.json.gz",
+            "test-parent-managed-result-fetch-shipped",
+        ),
+    ],
+)
+async def test_recorded_no_progress_histories_replay(
+    monkeypatch, fixture_name, workflow_id
+):
+    # Immutable real-Temporal captures: ee53a90 predates expiry recovery;
+    # 0995369 (the identical AgentRun blob at 4907a13) records that patch and
+    # fetch_result after a worker outage exhausts the original budget. Never
+    # regenerate from the candidate: the old commands are replay evidence.
     fixture = (
         Path(__file__).resolve().parents[4]
-        / "fixtures/temporal/managed_no_progress/grace-expired-before-recovery.json.gz"
+        / "fixtures/temporal/managed_no_progress"
+        / fixture_name
     )
     history = WorkflowHistory.from_json(
-        "test-parent-managed-no-progress-grace:child",
+        workflow_id,
         gzip.decompress(fixture.read_bytes()).decode(),
     )
 
