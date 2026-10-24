@@ -53,13 +53,18 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
+from api_service.db.artifact_recovery import (
+    DEPLOYMENT_SUBJECT_ID,
+    RECOVERY_REQUIRED,
+    RECOVERY_RESERVED_SCOPE,
+    artifact_recovery_owner_class,
+    is_artifact_machine_principal as _is_artifact_machine_principal,
+)
 from api_service.db.models import Base, Uuid, mutable_json_dict
 
 logger = logging.getLogger(__name__)
 
 SCHEMA_REVISION = "400_job_operator_access"
-
-DEPLOYMENT_SUBJECT_ID = "00000000-0000-0000-0000-000000000000"
 
 
 class ConversionAuthorizationError(PermissionError):
@@ -407,25 +412,6 @@ _ARTIFACT_EVIDENCE_TABLES = (
 )
 
 
-_ARTIFACT_MACHINE_PRINCIPALS = ("operator", "system", "agent_workflow", "agent_runtime")
-_ARTIFACT_MACHINE_PREFIXES = ("service:", "workflow:", "system:")
-# SQL's default space-only trim would mistake a whitespace-only suffix for a
-# machine identity. Match Python str.strip across SQLite and PostgreSQL.
-_PRINCIPAL_WHITESPACE = (
-    "\t\n\x0b\x0c\r\x1c\x1d\x1e\x1f \x85\xa0\u1680"
-    "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
-    "\u2028\u2029\u202f\u205f\u3000"
-)
-
-
-def _is_artifact_machine_principal(raw: Any) -> bool:
-    value = str(raw or "").strip()
-    return value in _ARTIFACT_MACHINE_PRINCIPALS or any(
-        value.startswith(prefix) and bool(value[len(prefix):].strip())
-        for prefix in _ARTIFACT_MACHINE_PREFIXES
-    )
-
-
 def _artifact_human_principal(raw: Any) -> str | None:
     # Job evidence uses the owner's serialized type prefix. Preserve that raw
     # namespace; only attribution inspection reads the UUID inside it.
@@ -443,38 +429,12 @@ def _uses_reserved_disabled_scope() -> bool:
 
 
 async def _has_pending_artifact_recovery(session: AsyncSession) -> bool:
-    """Probe for work without loading artifact rows or retained child content.
-
-    This only selects at most one ID; a no-match query can still scan the
-    table. Unknown, null and malformed owners require authoritative inspection.
-    The probe never supplies attribution or grants recovery.
-    """
+    """Probe the indexed owner class, including newly restored recovery work."""
     from api_service.db.models import TemporalArtifact
 
-    def stripped(value):
-        return func.ltrim(
-            func.rtrim(value, _PRINCIPAL_WHITESPACE), _PRINCIPAL_WHITESPACE,
-        )
-
-    creator = func.coalesce(TemporalArtifact.created_by_principal, "")
-    normalized = stripped(creator)
-    no_recovery_needed = or_(
-        normalized.in_(_ARTIFACT_MACHINE_PRINCIPALS),
-        *(and_(
-            # LIKE would treat uppercase prefixes as machines on SQLite.
-            func.substr(normalized, 1, len(prefix)) == prefix,
-            stripped(func.substr(normalized, len(prefix) + 1)) != "",
-        ) for prefix in _ARTIFACT_MACHINE_PREFIXES),
-    )
-    if _uses_reserved_disabled_scope():
-        default_owner = DEPLOYMENT_SUBJECT_ID
-        if default_owner is not None:
-            # The unchanged raw-owner equality already admits this exact
-            # disabled request creator, even without a retained User row.
-            no_recovery_needed = or_(
-                no_recovery_needed,
-                creator.in_((default_owner, f"user:{default_owner}")),
-            )
+    pending_classes = [RECOVERY_REQUIRED]
+    if not _uses_reserved_disabled_scope():
+        pending_classes.append(RECOVERY_RESERVED_SCOPE)
     try:
         async with session.begin_nested():
             pending = (
@@ -482,7 +442,9 @@ async def _has_pending_artifact_recovery(session: AsyncSession) -> bool:
                     select(TemporalArtifact.artifact_id)
                     .where(
                         TemporalArtifact.operator_recovery_granted.is_not(True),
-                        ~no_recovery_needed,
+                        artifact_recovery_owner_class(
+                            TemporalArtifact.created_by_principal
+                        ).in_(pending_classes),
                     )
                     .limit(1)
                 )
