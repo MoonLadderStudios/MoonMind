@@ -30,6 +30,7 @@ from moonmind.omnigent.native_ui import (
     scoped_ui_base,
     upstream_path_for,
 )
+from tests.support.native_ui import read_native_ui_bootstrap
 
 _BINDING = "chatb_opaque123"
 
@@ -420,7 +421,9 @@ def test_render_document_keeps_untrusted_bootstrap_out_of_script_source():
 
     bootstrap = {
         "chatBindingId": "chatb_test",
-        "labels": {"note": '</script><script>alert("x")</script> <!-- café & 😀'},
+        "labels": {
+            "note": '</script><script>alert("x")</script> <!-- café & 😀 &quot; &lt; &amp;'
+        },
     }
     rendered = render_native_ui_document(
         _INDEX_HTML, bootstrap=bootstrap, scoped_base=scoped_ui_base(_BINDING)
@@ -428,6 +431,7 @@ def test_render_document_keeps_untrusted_bootstrap_out_of_script_source():
     parsed = Document()
     parsed.feed(rendered)
     assert json.loads(parsed.bootstrap) == bootstrap
+    assert read_native_ui_bootstrap(rendered) == bootstrap
     assert len(parsed.scripts) == 2  # Host adapter and the original module.
     assert '<script>alert("x")</script>' not in rendered
     initialization = rendered.split("<script>", 1)[1].split("\n", 1)[0]
