@@ -780,8 +780,8 @@ correlate runtime evidence. Before ending for lack of progress, the supervisor
 samples CPU/workspace activity and the workflow checks fresh canonical status.
 Managed grace expiry preserves confirmed completion; a still-silent run receives
 bounded cancellation and result reconciliation so provider quota can enter
-cooldown recovery. At grace expiry, cancellation, status polling, and result
-fetching consume the original remaining execution budget. The hard ceiling ends
+cooldown recovery. During no-progress recovery, cancellation, status polling, and
+result fetching consume the original remaining execution budget. The hard ceiling ends
 execution without further reconciliation.
 
 ### Progress evidence
