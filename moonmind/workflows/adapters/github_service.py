@@ -1648,9 +1648,8 @@ class GitHubService:
         *,
         repo: str,
         mode: str,
-        api_base: str = "https://api.github.com",
     ) -> list[dict[str, str | None]]:
-        """Return read checks; ``{ref}`` marks the branch the caller fills in."""
+        """Return relative read paths; ``{ref}`` marks the selected branch."""
 
         profile = cls.github_permission_profiles().get(
             mode,
@@ -1661,7 +1660,7 @@ class GitHubService:
         checks: list[dict[str, str | None]] = [
             {
                 "field": "repositoryAccessible",
-                "url": f"{api_base}/repos/{repo}",
+                "path": f"/repos/{repo}",
                 "operation": "repository",
                 "permission": None,
             }
@@ -1670,7 +1669,7 @@ class GitHubService:
             checks.append(
                 {
                     "field": "defaultBranchAccessible",
-                    "url": f"{api_base}/repos/{repo}/branches/{ref}",
+                    "path": f"/repos/{repo}/branches/{ref}",
                     "operation": "branch",
                     "permission": "Contents",
                 }
@@ -1679,7 +1678,7 @@ class GitHubService:
             checks.append(
                 {
                     "field": "pullRequestAccessible",
-                    "url": f"{api_base}/repos/{repo}/pulls?per_page=1",
+                    "path": f"/repos/{repo}/pulls?per_page=1",
                     "operation": "pulls",
                     "permission": "Pull requests",
                 }
@@ -1688,7 +1687,7 @@ class GitHubService:
             checks.append(
                 {
                     "field": None,
-                    "url": f"{api_base}/repos/{repo}/commits/{ref}/status",
+                    "path": f"/repos/{repo}/commits/{ref}/status",
                     "operation": "commit_statuses",
                     "permission": "Commit statuses",
                 }
@@ -1697,7 +1696,7 @@ class GitHubService:
             checks.append(
                 {
                     "field": None,
-                    "url": f"{api_base}/repos/{repo}/commits/{ref}/check-runs",
+                    "path": f"/repos/{repo}/commits/{ref}/check-runs",
                     "operation": "checks",
                     "permission": "Checks",
                 }
@@ -1706,7 +1705,7 @@ class GitHubService:
             checks.append(
                 {
                     "field": None,
-                    "url": f"{api_base}/repos/{repo}/issues?per_page=1",
+                    "path": f"/repos/{repo}/issues?per_page=1",
                     "operation": "issues",
                     "permission": "Issues",
                 }
@@ -1864,9 +1863,7 @@ class GitHubService:
             return result
 
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            checks = self._probe_checks_for_mode(
-                repo=repo, mode=mode, api_base=api_base
-            )
+            checks = self._probe_checks_for_mode(repo=repo, mode=mode)
             if app_read_scope:
                 # This issuance carries contents/metadata only. A failure on
                 # another endpoint would describe our narrowed token, not the
@@ -1883,10 +1880,10 @@ class GitHubService:
             ref = (base_branch or "").strip()
             for check in checks:
                 field = check["field"]
-                url = str(check["url"])
+                path = str(check["path"])
                 operation = str(check["operation"])
                 permission = check["permission"]
-                if "{ref}" in url:
+                if "{ref}" in path:
                     if not ref:
                         # No branch was observed; do not guess one.
                         continue
@@ -1901,11 +1898,15 @@ class GitHubService:
                             }
                         )
                         return result
-                    url = url.replace("{ref}", quote(ref, safe=""))
+                    path = path.replace("{ref}", quote(ref, safe=""))
                     if operation == "branch":
                         result["testedBranch"] = ref
                 try:
-                    response = await client.get(url, headers=headers)
+                    # Only a relative API path contains request data. Attach it
+                    # to the trusted deployment endpoint after substituting refs.
+                    response = await client.get(
+                        api_base.rstrip("/") + path, headers=headers
+                    )
                     response.raise_for_status()
                     if field:
                         result[field] = True

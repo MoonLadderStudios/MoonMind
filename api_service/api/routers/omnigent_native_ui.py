@@ -414,7 +414,9 @@ async def _serve_native_ui(
                 mode=mode, is_document=document, reason="native_ui_upstream_unavailable"
             )
         return RedirectResponse(
-            url=rewritten,
+            # Construct a root-relative URL with exactly one leading slash.
+            # The checks above retain binding scope and reject backslashes.
+            url="/" + rewritten.lstrip("/"),
             status_code=response.status_code,
             headers=headers,
         )
