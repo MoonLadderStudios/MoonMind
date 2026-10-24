@@ -19,10 +19,15 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.db.models import Base, TemporalArtifactRedactionLevel
+from api_service.db.models import (
+    Base,
+    TemporalArtifactLink,
+    TemporalArtifactRedactionLevel,
+)
 from moonmind.config.settings import settings
 from moonmind.omnigent.bridge_artifacts import (
     OmnigentArtifactError,
@@ -170,25 +175,25 @@ async def _skill_set(sessions, *, tag: str, owner: str, workflow_id: str | None)
         link_type="input.skill_snapshot",
         content_type="application/json",
     )
-    return SimpleNamespace(manifest_id=manifest_id, body_id=body_id, body=body)
+    canonical = json.dumps(
+        json.loads(manifest), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode()
+    return SimpleNamespace(
+        manifest_id=manifest_id,
+        manifest_digest="sha256:" + hashlib.sha256(canonical).hexdigest(),
+        body_id=body_id,
+        body=body,
+    )
 
 
 async def _admitted_plan(sessions, skills, *, plan_owner: str = "operator"):
     """Compile, persist and publish a verified plan admitting ``skills``."""
 
     inputs = _codex_plan_inputs()
-    canonical = json.dumps(
-        json.loads(
-            (await _read_as_owner(sessions, skills.manifest_id)).decode("utf-8")
-        ),
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode()
     inputs["resolved_skills"] = ResolvedSkillSet.model_validate(
         {
             "resolvedSkillSetRef": f"artifact:{skills.manifest_id}",
-            "resolvedSkillSetDigest": "sha256:" + hashlib.sha256(canonical).hexdigest(),
+            "resolvedSkillSetDigest": skills.manifest_digest,
             "skillDeliveryRef": "skill-delivery:sha256:" + "b" * 64,
         }
     )
@@ -266,6 +271,61 @@ async def _admit(sessions, plan, binding, *, workflow_id: str) -> None:
         workflow_id=workflow_id,
         run_id=f"{workflow_id}-run",
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("corruption", [None, "changed-content", "stored-bytes"])
+async def test_legacy_manifest_canonical_digest_protects_the_admitted_closure(
+    artifacts, corruption
+):
+    skills = await _skill_set(
+        artifacts, tag="legacy-spaced", owner="operator", workflow_id=None
+    )
+    original = await _read_as_owner(artifacts, skills.manifest_id)
+    assert "sha256:" + hashlib.sha256(original).hexdigest() != skills.manifest_digest
+    if corruption == "changed-content":
+        manifest = json.loads(original)
+        manifest["snapshot_id"] = "substituted-snapshot"
+        skills.manifest_id = await _put(
+            artifacts,
+            json.dumps(manifest, sort_keys=True).encode(),
+            owner="operator",
+            workflow_id=None,
+            link_type="",
+            content_type="application/json",
+        )
+    plan, binding = await _admitted_plan(artifacts, skills)
+    if corruption == "stored-bytes":
+        async with artifacts() as session:
+            service = TemporalArtifactService(TemporalArtifactRepository(session))
+            artifact = await service._repository.get_artifact(skills.manifest_id)
+            # Valid JSON with unchanged meaning is still a corrupt stored blob
+            # when it differs from the bytes recorded by its actual producer.
+            service._store.read_path(artifact.storage_key).write_bytes(original + b"\n")
+    if corruption:
+        with pytest.raises(OmnigentArtifactError, match="manifest .*mismatch"):
+            await _admit(artifacts, plan, binding, workflow_id="run-wf")
+        async with artifacts() as session:
+            assert not (
+                await session.scalars(
+                    select(TemporalArtifactLink).where(
+                        TemporalArtifactLink.workflow_id == "run-wf"
+                    )
+                )
+            ).all()
+    else:
+        await _admit(artifacts, plan, binding, workflow_id="run-wf")
+        request = _request(plan, binding, workflow_id="run-wf", skills=skills)
+        assert (
+            await TemporalOmnigentArtifactGateway(artifacts).read_admitted_input(
+                skills.manifest_id, request=request
+            )
+        ) == original
+    async with artifacts() as session:
+        with pytest.raises(TemporalArtifactAuthorizationError):
+            await TemporalArtifactService(TemporalArtifactRepository(session)).read(
+                artifact_id=skills.manifest_id, principal="workflow:unrelated"
+            )
 
 
 # Producer shapes from the original report. ``workflow_id`` is the execution
