@@ -59,7 +59,6 @@ _ADAPTER_SCRIPT_RE = re.compile(
 _NODE_PINNED_SOCKET_HARNESS = r"""
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const adapterSrc = fs.readFileSync(process.argv[2], 'utf8');
 const tsSrc = fs.readFileSync(process.argv[3], 'utf8');
 const bindingId = process.argv[4];
 
@@ -104,7 +103,8 @@ globalThis.document = { readyState: 'complete', getElementById: () => null, addE
 globalThis.addEventListener = () => {};
 globalThis.MutationObserver = class { constructor() {} observe() {} disconnect() {} };
 
-eval(adapterSrc);
+// Load the exact rendered file in its own module scope, not the harness scope.
+require(process.argv[2]);
 
 // Identity of the exact guard quoted in the issue brief.
 assert.ok(tsSrc.includes('if (this.ws?.readyState === WebSocket.OPEN) {'),
@@ -157,13 +157,19 @@ for (const [a, b] of reps) classSrc = classSrc.split(a).join(b);
 const leftover = classSrc.match(/\bprivate\b|\breadonly\b|string\[\]|:\svoid|:\sboolean|:\sstring\b|ReturnType|FrameListener|SessionListWireItem|MessageEvent/);
 assert.ok(!leftover, `TS remnants left in extracted class: ${leftover && leftover[0]}`);
 
-function getOmnigentHostConfig() { return {}; }
-function modalHostId() { return null; }
-function resolveWebSocketUrl(path) { return String(path); }
-eval(classSrc + '\n;globalThis.PinnedSessionUpdatesSocket = SessionUpdatesSocket;');
+// Keep the pinned class bytes and explicit host seams in a separate module.
+// Its source cannot accidentally capture the harness's lexical variables.
+const consumerPath = process.argv[2] + '.consumer.cjs';
+fs.writeFileSync(consumerPath,
+  'module.exports = ({ getOmnigentHostConfig, modalHostId, resolveWebSocketUrl }) => {\n'
+  + classSrc + '\nreturn SessionUpdatesSocket;\n};\n');
+const Pinned = require(consumerPath)({
+  getOmnigentHostConfig: () => ({}),
+  modalHostId: () => null,
+  resolveWebSocketUrl: (path) => String(path),
+});
 
 (async () => {
-  const Pinned = globalThis.PinnedSessionUpdatesSocket;
   const sock = new Pinned();
 
   // #4013 crash path: never-connected setWatched is a silent no-op.
@@ -331,7 +337,7 @@ def test_pinned_socket_lifecycle_through_served_adapter(tmp_path) -> None:
         )
         match = _ADAPTER_SCRIPT_RE.search(document)
         assert match is not None, f"injected adapter missing ({mode})"
-        adapter_path = tmp_path / f"adapter_{mode}.js"
+        adapter_path = tmp_path / f"adapter_{mode}.cjs"
         bootstrap_path = tmp_path / f"bootstrap_{mode}.json"
         adapter_path.write_text(match.group(1), encoding="utf-8")
         bootstrap_path.write_text(

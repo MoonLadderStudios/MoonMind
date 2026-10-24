@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -249,7 +250,10 @@ def test_docker_publish_persists_buildkit_cache_mounts() -> None:
         None,
     )
     assert restore_step is not None, "BuildKit cache mount restore step not found"
-    assert restore_step["uses"] == "reproducible-containers/buildkit-cache-dance@v3"
+    assert re.fullmatch(
+        r"reproducible-containers/buildkit-cache-dance@[0-9a-f]{40}",
+        restore_step["uses"],
+    )
     restore_with = restore_step["with"]
     assert restore_with["builder"] == "${{ steps.setup-buildx.outputs.name }}"
     assert restore_with["cache-dir"] == "${{ runner.temp }}/buildkit-cache-mounts"
