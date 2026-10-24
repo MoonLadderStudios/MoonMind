@@ -611,7 +611,7 @@ class SuiteSelection:
             {
                 "suite": suite,
                 "job_minutes": {
-                    "unit-fast": 21, "api-component": 18, "temporal-boundary": 15
+                    "unit-fast": 21, "api-component": 18, "temporal-boundary": 20
                 }[suite],
             }
             for suite in ("unit-fast", "api-component", "temporal-boundary")
