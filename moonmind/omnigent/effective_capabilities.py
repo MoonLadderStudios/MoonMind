@@ -391,8 +391,6 @@ def caller_capabilities_for_bridge(
     explicit = authorities.get(principal) if isinstance(authorities, Mapping) else None
     if isinstance(explicit, Mapping):
         return {name: explicit.get(name) is True for name in CAPABILITY_NAMES}
-    if bool(getattr(caller, "is_superuser", False)):
-        return {name: True for name in CAPABILITY_NAMES}
 
     # Authenticated owners retain ordinary presentation controls, while
     # approval and post-terminal lifecycle authority remain explicit-only.

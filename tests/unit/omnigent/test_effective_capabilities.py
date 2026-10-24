@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from moonmind.omnigent.effective_capabilities import (
     CAPABILITY_NAMES,
     CAPABILITY_SCHEMA_VERSION,
@@ -202,10 +204,26 @@ def test_caller_authority_separates_owner_from_approver_and_viewer():
     assert viewer_grants["writeTerminal"] is False
 
     approver_grants = caller_capabilities_for_bridge(
-        SimpleNamespace(metadata_={}),
-        SimpleNamespace(id="admin", is_superuser=True),
+        SimpleNamespace(
+            metadata_={"callerAuthorities": {"approver": {"resolveElicitation": True}}}
+        ),
+        SimpleNamespace(id="approver"),
     )
     assert approver_grants["resolveElicitation"] is True
+    assert approver_grants["harvestEvidence"] is False
+    assert approver_grants["cleanupSession"] is False
+
+
+@pytest.mark.parametrize("is_superuser", [False, True])
+def test_retired_admin_flag_cannot_grant_approval_or_cleanup(is_superuser):
+    caller = SimpleNamespace(id="retained-caller", is_superuser=is_superuser)
+    grants = caller_capabilities_for_bridge(SimpleNamespace(metadata_={}), caller)
+
+    assert grants["viewTranscript"] is True
+    assert grants["sendMessage"] is True
+    assert grants["resolveElicitation"] is False
+    assert grants["harvestEvidence"] is False
+    assert grants["cleanupSession"] is False
 
 
 def test_provider_control_adapter_preserves_reads_and_distinct_cleanup_authority():

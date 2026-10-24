@@ -1,82 +1,64 @@
 # Local-first Settings Bring-Up
 
-**Related design documents:** [SettingsSystem.md](./SettingsSystem.md), [SecretsSystem.md](./SecretsSystem.md), [ProviderProfiles.md](./ProviderProfiles.md)
+Related designs: [Settings](SettingsSystem.md), [Secrets](SecretsSystem.md),
+[Provider Profiles](ProviderProfiles.md).
 
-Status: **Operator walkthrough — pre-release**
-Owners: MoonMind Engineering
-Last Updated: 2026-05-17
+A fresh MoonMind instance uses the existing dashboard editors for provider
+profiles, managed secrets and source-control connections. The Settings API
+example below separately demonstrates a SecretRef-backed instance override;
+it is not a dashboard-only walkthrough.
 
-This document explains how a fresh, single-operator MoonMind deployment can
-go from a clean database to a working Settings configuration **through
-the dashboard alone**, without any of the external infrastructure that a
-production deployment would normally provide (no SSO directory, no managed
-identity provider, no external secret manager, no GitHub App, no Slack
-integration). It satisfies the **local-first baseline** named in
-`docs/Security/SettingsSystem.md` §3 (goal 10) and §22, and is exercised by
-the integration_ci smoke test
-[`tests/integration/api/test_settings_local_first_smoke.py`](../../tests/integration/api/test_settings_local_first_smoke.py).
+Use the deployment's protected operator URL, with guarded conversion complete.
+Local access uses loopback transport; remote access uses approved ingress.
+No MoonMind application account or external identity provider is needed. See
+[Operator and machine access](AuthenticationContracts.md).
 
-The walkthrough is intentionally short, declarative, and end-to-end. Each
-step links to the design section it implements so reviewers can trace it
-back to the contract.
+## Dashboard setup
 
----
+Open **Settings → Providers & Secrets**:
 
-## 0. What "local-first" means here
+- Use **Provider Profiles** to select a Harness, Provider and authentication
+  method, create a profile, and configure its credentials in the existing
+  profile editor. These operations use `/api/v1/provider-profiles` and its
+  credential endpoints. Profile readiness and the Harness default are managed
+  there; see [Provider Profiles](ProviderProfiles.md) and
+  [OAuth Terminal](../ManagedAgents/OAuthTerminal.md).
+- For GitHub repository access, use **Source Control → Add token connection**.
+  Saving sends the token to `POST /api/v1/repository-connections/pat`, which
+  stores it as a managed secret and returns connection metadata. Assign an
+  `owner/repo` in the connection detail pane, choosing read-only or Publish
+  access. Assignments use `POST /api/v1/repository-connections/{id}/assignments`;
+  saving a token alone does not assign a repository.
+- Use **Managed Secrets** when another consumer needs a named SecretRef.
+  Create a secret, copy its `db://` reference, and use **View usage** to inspect
+  its consumers. This editor manages secrets; it does not create a Settings
+  binding merely by saving one.
 
-In a local-first deployment the operator brings only:
+**Settings → Instance** edits the `user-workspace` catalog section. That name
+selects a section, not a person or workspace scope: all settings use one
+instance configuration. The default page does not expose
+`integrations.github.token_ref`, whose descriptor belongs to
+`providers-secrets`. Use the Source Control editor for repository connections;
+the override example below is an API operation.
 
-1. A Postgres database (or a SQLite tree for personal use).
-2. A running MoonMind API service and worker.
-3. Access through the deployment's protected operator URL: loopback
-   transport locally or approved ingress remotely, with the guarded data
-   conversion complete. See [Operator and machine access](AuthenticationContracts.md).
-
-There is **no external secret manager**, **no OAuth IdP**, **no provider
-profile pre-seed**, and **no application account to provision**. Every
-remaining configuration step happens through the Settings UI under shared
-instance admission.
-
-The Settings System's contract (§3, §4, §5, §10, §22, §29) holds even in
-this minimal environment: descriptors are catalog-driven, raw secrets are
-never persisted into setting overrides, every effective value carries a
-source explanation, and a partial restore surfaces broken references
-instead of silently degrading.
-
----
-
-## 1. Empty-state catalog read (§5.1, §10, §29.8)
-
-Right after the database is created and the application starts, the
-operator can read the catalog without any prior writes:
+## 1. Read the empty-state catalog
 
 ```http
 GET /api/v1/settings/catalog?section=user-workspace
 ```
 
-`user-workspace` selects a catalog section; it does not select a person or
-workspace scope. Settings reads and writes use one instance configuration.
+On a fresh database, descriptors report an inherited source (`default`,
+`config_file` or `environment`), an effective value and a source explanation.
+The initial `value_version` is `1`. Catalog responses do not contain
+plaintext, ciphertext or resolved secret values.
 
-Expectations:
+For the API example's GitHub descriptor, read the `providers-secrets` section.
+Use its current `value_version` in subsequent writes instead of assuming the
+fresh-database version on an existing installation.
 
-- Every descriptor is returned with `source` in
-  `{"default", "config_file", "environment"}` because no override row
-  exists yet.
-- `effective_value` matches the descriptor's default or environment
-  fallback.
-- `value_version` is `1` (no override row, but the catalog never returns
-  version `0` — see §11.1).
-- No descriptor returns `plaintext`, `ciphertext`, or `resolved_value`
-  fields. (§22.2, §29.5).
+## 2. Create a managed secret
 
-The smoke test asserts these properties against a fresh sqlite database.
-
----
-
-## 2. Create a managed secret in the dashboard (§14.1, §27.2)
-
-The operator opens **Settings → Providers & Secrets → Managed Secrets** and
-creates a single managed secret. The browser sends:
+Managed Secrets uses the same endpoint as this request:
 
 ```http
 POST /api/v1/secrets
@@ -86,23 +68,14 @@ POST /api/v1/secrets
 }
 ```
 
-Expectations (and the test asserts them):
+The response returns metadata and `secretRef="db://github-pat-local"`, never
+the plaintext. The database stores the secret encrypted with status `ACTIVE`.
+Later Settings operations pass the reference rather than the token.
 
-- The response body never echoes the plaintext (`SecretMetadataResponse`
-  excludes `ciphertext`/`plaintext`/`value`). (§22.2)
-- The response body advertises a SecretRef value (`secretRef =
-  "db://github-pat-local"`). (§5.3, §7.9, §27.2)
-- A row in `managed_secrets` is created with status `ACTIVE`.
+## 3. Bind the reference through the Settings API
 
-This is the only step where plaintext crosses the wire. Future Settings
-operations only ever reference the SecretRef.
-
----
-
-## 3. Reference the SecretRef from a Settings override (§5.3, §10.4)
-
-The operator goes back to **Settings → Instance** and points
-`integrations.github.token_ref` at the SecretRef returned in §2:
+This example writes the GitHub descriptor directly; it is not an action on
+**Settings → Instance** and does not create a Source Control connection:
 
 ```http
 PATCH /api/v1/settings
@@ -112,127 +85,52 @@ PATCH /api/v1/settings
 }
 ```
 
-Expectations:
+The write creates an instance override without a subject or scope. Its
+`setting_changed` event reports `source="instance_override"` and
+`apply_mode="next_launch"`. The catalog reports `source="secret_ref"` for a
+resolvable `db://` binding, with a source explanation. The override stores
+only the reference; audit events are redacted according to the descriptor's
+policy and never contain the token.
 
-- The response contains a `setting_changed` change event with
-  `source="instance_override"` and `apply_mode="next_launch"`. (§19.2)
-- A new instance row (no scope or subject) is written to `settings_overrides`.
-- A row is written to `settings_audit_events` with `redacted=True` (because
-  the descriptor declares `audit.redact=True`). (§21.1, §21.2, §22.8)
-- The settings catalog reports `source="secret_ref"` for the `db://`
-  binding and a non-empty `source_explanation`. (§29.8)
+## 4. Inspect usage
 
-The override row stores `db://github-pat-local` as a reference — never the
-plaintext that crossed the wire in §2.
-
----
-
-## 4. Cross-check the SecretRef usage view (§14.4)
-
-The Settings UI offers a usage view that lists every consumer of the
-managed secret:
+In Managed Secrets, **View usage** requests:
 
 ```http
 GET /api/v1/secrets/github-pat-local/usage
 ```
 
-Expectations:
+After the API write, the response lists a `setting_override` consumer for
+`integrations.github.token_ref`, named `Instance setting
+integrations.github.token_ref`. It does not return the underlying plaintext.
 
-- The response lists a `setting_override` consumer pointing at
-  `integrations.github.token_ref` named `Instance setting …`. (§14.4)
-- The response never includes the underlying plaintext value.
-
-This step is the operator's confidence-check that the SecretRef they just
-saved is wired into the correct Settings binding.
-
----
-
-## 5. Reset returns to inheritance, not to a mutated default (§5.4, §29.9)
-
-The operator decides the GitHub binding was a test and resets it:
+## 5. Reset the API example
 
 ```http
 DELETE /api/v1/settings/integrations.github.token_ref
 ```
 
-Expectations:
+This removes the instance override and records a `settings.override.reset`
+audit event. The value inherits from the default, configuration file or
+environment again; the descriptor's default remains unchanged. The managed
+secret remains available to its other consumers.
 
-- The response carries `source` in `{"default", "config_file",
-  "environment"}` again.
-- The instance `settings_overrides` row for this key is deleted.
-- The descriptor's `default_value` is unchanged in the catalog. (§5.4)
-- A `settings.override.reset` audit event is written. (§21.1)
+## Recovery and verification
 
----
+Restoring `settings_overrides` without the referenced `managed_secrets` can
+leave a broken binding. `scan_broken_references(session)` from
+`api_service.services.settings_backup` reports missing or disabled references;
+the catalog remains readable and surfaces `secret_ref_unresolved` diagnostics.
+See the [backup/recovery contract tests](../../tests/integration/api/test_settings_backup_recovery_contract.py).
 
-## 6. Partial-restore integrity (§23.3, §23.4)
+The [local-first API smoke test](../../tests/integration/api/test_settings_local_first_smoke.py)
+exercises steps 1–5 against a fresh SQLite database and the real
+`api_service.main.app`. It checks the API responses, persisted secret,
+redacted audits and reset. It supplies an admitted operator dependency, so it
+does not establish transport/ingress admission, the dashboard editor journey,
+provider credential validation or model-backed workflow completion. It is part
+of the `integration_ci` suite (`./tools/test_integration.sh`).
 
-If a future operator restores **only** the `settings_overrides` table
-(without `managed_secrets`), the SecretRef saved in step 3 will resolve
-against a missing managed secret. The local-first walkthrough does **not**
-require this branch, but the operator can exercise it manually with:
-
-```python
-from api_service.services.settings_backup import scan_broken_references
-
-broken = await scan_broken_references(session)
-```
-
-Expectations (covered by
-`tests/integration/api/test_settings_backup_recovery_contract.py`):
-
-- Every SecretRef whose target is missing/disabled is surfaced as a
-  `SettingsBrokenReference`.
-- The catalog still loads — the broken reference is rendered as a
-  `secret_ref_unresolved` diagnostic on the descriptor, not a 500. (§23.3)
-
-The smoke test in this story does not run the broken-reference scan
-itself; it relies on the dedicated backup/recovery contract suite to keep
-that path covered.
-
----
-
-## 7. Where the walkthrough stops
-
-The local-first walkthrough deliberately stops at:
-
-- one managed secret,
-- one SecretRef-bound Settings override,
-- one instance configuration, and
-- one reset.
-
-It does **not** cover:
-
-- OAuth volume bootstrap (see [`OAuthTerminal.md`](../ManagedAgents/OAuthTerminal.md))
-- Operator locks (`SettingsSystem.md` §10.2)
-- Operational commands (`SettingsSystem.md` §17)
-
-Those flows have their own dedicated docs and tests. The intent of this
-document is to keep the **smallest** path through the Settings system
-testable on a clean install.
-
----
-
-## 8. Smoke test mapping
-
-The smoke test
-[`tests/integration/api/test_settings_local_first_smoke.py`](../../tests/integration/api/test_settings_local_first_smoke.py)
-exercises steps 1–5 against a freshly created database and the real
-`api_service.main.app`. It supplies an admitted operator dependency to
-exercise Settings and Secrets behavior; it does not test transport or
-ingress admission. It runs under the required `integration_ci` suite
-(`./tools/test_integration.sh`).
-
-Each pytest assertion in the smoke test cites the section above with a
-short comment. If a future change breaks this contract, the smoke test
-fails and points back here.
-
-## 9. Related guardrails
-
-- `tests/unit/services/test_settings_guardrails.py` — single named
-  unit-test suite mapping every §4 non-goal, §22 security requirement,
-  and §29 invariant to at least one assertion.
-- `tests/unit/services/test_settings_catalog_snapshot.py` — catalog
-  drift detection on the required CI suite.
-- `tests/integration/api/test_settings_backup_recovery_contract.py` —
-  backup/restore + broken-reference scans (§23).
+OAuth bootstrap, operator locks and operational commands have their own
+procedures in [OAuth Terminal](../ManagedAgents/OAuthTerminal.md) and the
+[Settings design](SettingsSystem.md).
