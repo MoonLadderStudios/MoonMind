@@ -1,5 +1,5 @@
 /** Bounded startup deadline for the native iframe to announce readiness. */
-export const NATIVE_CHAT_READY_TIMEOUT_MS = 15_000;
+export const NATIVE_CHAT_READY_TIMEOUT_MS = 60_000;
 
 export const NATIVE_CHAT_READY_TYPE = 'moonmind.omnigent.chat.ready';
 export const NATIVE_CHAT_FATAL_TYPE = 'moonmind.omnigent.chat.fatal';

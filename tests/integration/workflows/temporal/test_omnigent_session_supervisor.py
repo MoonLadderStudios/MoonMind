@@ -29,7 +29,7 @@ from temporalio.common import (
     TypedSearchAttributes,
 )
 from temporalio.exceptions import ApplicationError
-from temporalio.testing import WorkflowEnvironment
+from temporalio.testing import ActivityEnvironment, WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from api_service.api.routers.executions import _get_service, get_temporal_client, router
@@ -39,6 +39,7 @@ from api_service.db.models import (
     ProviderProfileSlotLease,
     SettingsOverride,
 )
+from api_service.services.omnigent_execution_plan_service import persist_json_artifact
 from moonmind.omnigent.harness_platform.execution_plan import (
     create_execution_plan_envelope,
 )
@@ -72,11 +73,15 @@ from moonmind.workflows.temporal.activity_catalog import (
     get_workflow_task_queue,
 )
 from moonmind.workflows.temporal.activity_runtime import (
-    TemporalActivityRuntimeError,
     TemporalPlanActivities,
     build_activity_bindings,
 )
-from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
+from moonmind.workflows.temporal.artifacts import (
+    LocalTemporalArtifactStore,
+    TemporalArtifactActivities,
+    TemporalArtifactRepository,
+    TemporalArtifactService,
+)
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows import omnigent_session as session_module
@@ -856,22 +861,27 @@ def _direct_session_activities() -> list[Any]:
 
 
 @pytest_asyncio.fixture
-async def product_plan_store(
+async def product_plan_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> AsyncIterator[DbExecutionPlanStore]:
+) -> AsyncIterator[SimpleNamespace]:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/product-plan.db")
     async with engine.begin() as connection:
-        await connection.run_sync(OmnigentExecutionPlanRecord.__table__.create)
+        await connection.run_sync(OmnigentExecutionPlanRecord.metadata.create_all)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     monkeypatch.setattr(db_base, "async_session_maker", sessions)
+    monkeypatch.setattr(
+        TemporalArtifactService,
+        "_build_store_from_settings",
+        staticmethod(lambda: LocalTemporalArtifactStore(tmp_path / "artifacts")),
+    )
     try:
-        yield DbExecutionPlanStore(sessions)
+        yield SimpleNamespace(plans=DbExecutionPlanStore(sessions), sessions=sessions)
     finally:
         await engine.dispose()
 
 
 async def test_product_compiled_agent_run_converges_after_lost_terminal_event(
-    product_plan_store: DbExecutionPlanStore,
+    product_plan_context: SimpleNamespace,
 ) -> None:
     """The #3706 product plan reaches admission and the session supervisor."""
 
@@ -918,13 +928,42 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event(
             "capture": {"stream": True},
             "workspace": {"mutation": "allowed"},
             "harness": "opencode-native",
+            "source": {
+                "kind": "upstream",
+                "upstreamId": "opencode-native-ui",
+                "upstreamVersion": "1",
+            },
         },
     }
+    async with product_plan_context.sessions() as session:
+        artifacts = TemporalArtifactService(TemporalArtifactRepository(session))
+
+        async def persist(artifact_class, payload):
+            return await persist_json_artifact(
+                artifact_service=artifacts,
+                principal="user-1",
+                artifact_class=artifact_class,
+                payload=payload,
+            )
+
+        profile_ref, _ = await persist(
+            "omnigent.agent_profile_snapshot", profile_snapshot
+        )
+        skills_ref, skills_digest = await persist(
+            "omnigent.resolved_skillset", {"skills": []}
+        )
+        input_ref, input_digest = await persist(
+            "omnigent.task_input_snapshot",
+            {"workflow": {"instructions": "Apply the requested repository change."}},
+        )
     # Keep compilation controlled, but persist its agent-only authority so the
     # real validator must load the envelope and verify the binding digest.
     plan_payload = _agent_plan_envelope().payload.model_dump(mode="json", by_alias=True)
-    plan_payload["agentProfileSnapshotRef"] = (
-        "omnigent-agent-profile:" + profile_snapshot["digest"]
+    plan_payload["agentProfileSnapshotRef"] = "artifact:" + profile_ref
+    plan_payload["agentSource"]["upstreamSnapshotDigest"] = profile_snapshot["digest"]
+    plan_payload["resolvedSkills"].update(
+        resolvedSkillSetRef="artifact:" + skills_ref,
+        resolvedSkillSetDigest=skills_digest,
     )
     plan_payload["credentialBindings"]["primary-model"]["providerProfileRef"] = (
         profile_snapshot["providerProfileRef"]
@@ -933,24 +972,33 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event(
     plan_payload["policySnapshotRef"] = profile_snapshot["policyRef"]
     plan_payload["workspaceMutation"] = "allowed"
     plan_payload["capturePolicy"] = {"stream": True}
-    envelope = await product_plan_store.persist(
+    envelope = await product_plan_context.plans.persist(
         create_execution_plan_envelope(plan_payload)
     )
+    async with product_plan_context.sessions() as session:
+        plan_artifact_ref, _ = await persist_json_artifact(
+            artifact_service=TemporalArtifactService(
+                TemporalArtifactRepository(session)
+            ),
+            principal="user-1",
+            artifact_class="omnigent.execution_plan",
+            payload=envelope.model_dump(mode="json", by_alias=True),
+        )
     plan_binding = OmnigentExecutionPlanBinding(
         planRef=envelope.planRef,
         planDigest="sha256:" + envelope.planRef.rsplit(":", 1)[-1],
-        planArtifactRef="art_opencode_plan_3706",
-        taskInputSnapshotRef="art_opencode_task_3706",
-        taskInputSnapshotDigest="sha256:" + "c" * 64,
+        planArtifactRef=plan_artifact_ref,
+        taskInputSnapshotRef=input_ref,
+        taskInputSnapshotDigest=input_digest,
     )
     compiled_plan = SimpleNamespace(
         binding=plan_binding,
         artifact_refs=(
-            "art_profile_3706",
-            "art_skills_3706",
-            "art_opencode_plan_3706",
+            profile_ref,
+            skills_ref,
+            plan_artifact_ref,
         ),
-        resolved_skillset_ref="art_skills_3706",
+        resolved_skillset_ref=skills_ref,
     )
     with (
         patch(
@@ -959,9 +1007,7 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event(
         ),
         patch(
             "api_service.services.omnigent_execution_plan_service.persist_json_artifact",
-            new=AsyncMock(
-                return_value=("art_opencode_task_3706", "sha256:" + "c" * 64)
-            ),
+            new=AsyncMock(return_value=(input_ref, input_digest)),
         ),
         patch(
             "api_service.services.omnigent_execution_plan_service.compile_and_persist_execution_plan",
@@ -1004,10 +1050,12 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event(
     )
 
     validation_activities = TemporalPlanActivities(artifact_service=None)
+    activity_environment = ActivityEnvironment()
     with pytest.raises(
-        TemporalActivityRuntimeError, match="bound execution plan is unavailable"
+        ValueError, match="^persisted Omnigent execution plan is unavailable$"
     ):
-        await validation_activities.plan_validate(
+        await activity_environment.run(
+            validation_activities.plan_validate,
             plan_ref="artifact://plan/omnigent-session-3705",
             principal="user-1",
             omnigent_execution_plan={
@@ -1017,7 +1065,8 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event(
             },
         )
     with pytest.raises(ValueError, match="planDigest must match planRef"):
-        await validation_activities.plan_validate(
+        await activity_environment.run(
+            validation_activities.plan_validate,
             plan_ref="artifact://plan/omnigent-session-3705",
             principal="user-1",
             omnigent_execution_plan={

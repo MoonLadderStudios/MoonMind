@@ -2898,20 +2898,19 @@ class OmnigentBridgeSessionStore:
             # starting; there is no durable binding to allocate yet.
             return self._starting_binding(active[0], workflow, run)
 
-        # Identify the *authoritative* latest terminal session before selecting a
-        # transcript. ``rows`` is ordered newest-first, and a cleaned-up session
-        # keeps its deleted marker even though the delete cleared its provider
-        # binding, so a terminal row that ever had a provider session is a
-        # candidate. Decide against that newest candidate: if its provider
-        # transcript was cleaned up, fail closed with ``session_cleaned_up``
-        # rather than silently replaying an older run's or step's stale transcript
-        # (MoonLadderStudios/MoonMind#3633).
+        # Select the authoritative newest terminal session, retaining captured
+        # history after provider cleanup. If it has no recoverable transcript,
+        # fail closed rather than replaying an older run or step.
         latest_terminal = next(
             (
                 row
                 for row in supported
                 if _is_terminal_bridge_status(row.status)
-                and (_is_provider_bound(row) or _is_provider_session_deleted(row))
+                and (
+                    _is_provider_bound(row)
+                    or _is_provider_session_deleted(row)
+                    or row.final_snapshot_ref
+                )
             ),
             None,
         )
@@ -2919,8 +2918,9 @@ class OmnigentBridgeSessionStore:
             # No terminal session ever bound a provider session, so there is no
             # native transcript to replay.
             return self._unavailable_binding(workflow, run, "session_cleaned_up")
-        if _is_provider_session_deleted(latest_terminal) or not _is_provider_bound(
-            latest_terminal
+        if not latest_terminal.final_snapshot_ref and (
+            _is_provider_session_deleted(latest_terminal)
+            or not _is_provider_bound(latest_terminal)
         ):
             return self._unavailable_binding(workflow, run, "session_cleaned_up")
         return await self._live_binding(latest_terminal, workflow, run, terminal=True)
@@ -3036,6 +3036,7 @@ class OmnigentBridgeSessionStore:
         cleanup, replacement and fencing must be observed on every lookup.
         """
         metadata = dict(row.metadata_ or {})
+        row._chat_historical_authority_fresh = False
         authority = metadata.get("runtimeAuthority")
         if not isinstance(authority, dict):
             row._chat_runtime_authority_fresh = False
@@ -3079,19 +3080,30 @@ class OmnigentBridgeSessionStore:
             )
             if binding_id != authority.get("bindingId"):
                 return
+            historical = bool(
+                _is_terminal_bridge_status(row.status) and row.final_snapshot_ref
+            )
+            provider_session_id = row.omnigent_session_id or (
+                (metadata.get("capabilityAuthority") or {}).get("providerSessionId")
+                if historical
+                else None
+            )
             binding = await DbRuntimeBindingStore(self._session_factory).get(binding_id)
             if (
                 binding is None
                 or not _serves_native_chat(row)
                 or row.omnigent_endpoint_ref != plan.payload.endpointRef
                 or binding.executionPlanRef != plan_ref
-                or binding.state is not RuntimeBindingState.session_active
+                or (
+                    not historical
+                    and binding.state is not RuntimeBindingState.session_active
+                )
                 or binding.fencingGeneration != authority.get("fencingGeneration")
                 or (
                     metadata.get("capabilityAuthority")
                     and (
                         metadata["capabilityAuthority"].get("providerSessionId")
-                        != row.omnigent_session_id
+                        != provider_session_id
                         or metadata["capabilityAuthority"]
                         .get("state", {})
                         .get("sessionEpoch")
@@ -3102,8 +3114,8 @@ class OmnigentBridgeSessionStore:
                 or binding.hostBindingRef != row.host_binding_ref
                 or binding.hostLeaseRef != row.host_lease_ref
                 or binding.omnigentHostId != row.omnigent_host_id
-                or not row.omnigent_session_id
-                or binding.omnigentSessionId != row.omnigent_session_id
+                or not provider_session_id
+                or binding.omnigentSessionId != provider_session_id
                 or _provider_leases_digest(binding.providerLeases)
                 != authority.get("providerLeasesDigest")
                 or launch.get("providerProfileId") != row.provider_profile_id
@@ -3126,7 +3138,7 @@ class OmnigentBridgeSessionStore:
                 return
             from moonmind.omnigent.provider_leases import validate_bound_provider_leases
 
-            if not await validate_bound_provider_leases(
+            if not historical and not await validate_bound_provider_leases(
                 session_factory=self._session_factory,
                 provider_leases=binding.providerLeases,
                 execution_plan_ref=plan_ref,
@@ -3139,9 +3151,10 @@ class OmnigentBridgeSessionStore:
                 cleanup = await repos.cleanup.get(authority.get("canonicalSessionId"))
             if (
                 canonical is None
+                or canonical.historical_read_state == "quarantined"
                 or canonical.execution_plan_ref != plan_ref
                 or canonical.runtime_binding_ref != binding_id
-                or canonical.provider_session_ref != row.omnigent_session_id
+                or canonical.provider_session_ref != provider_session_id
                 or canonical.moonmind_workflow_id != row.moonmind_workflow_id
                 or (
                     canonical.moonmind_run_id is not None
@@ -3150,11 +3163,23 @@ class OmnigentBridgeSessionStore:
                 or canonical.step_execution_id != row.step_execution_id
                 or canonical.fencing_generation
                 != authority.get("canonicalFencingGeneration")
-                or (cleanup is not None and cleanup.state != "unclaimed")
-                or canonical.terminal_state is not None
-                or canonical.cleanup_state != "pending"
-                or canonical.historical_read_state != "live"
+                or (
+                    not historical
+                    and (
+                        (cleanup is not None and cleanup.state != "unclaimed")
+                        or canonical.terminal_state is not None
+                        or canonical.cleanup_state != "pending"
+                        or canonical.historical_read_state != "live"
+                    )
+                )
             ):
+                return
+            if historical:
+                # Recorded execution identity and immutable policy still match.
+                # Reading its captured transcript needs neither a running host
+                # nor an acquired provider lease. This flag grants no live
+                # resources or mutations; the artifact reader checks ownership.
+                row._chat_historical_authority_fresh = True
                 return
             host = await DbOmnigentHostLeaseRepository(self._session_factory).get(
                 str(row.host_lease_ref or "")

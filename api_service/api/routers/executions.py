@@ -10368,7 +10368,7 @@ def _artifact_id_from_ref(value: Any) -> str | None:
     ref = _coerce_artifact_ref(value)
     if not ref:
         return None
-    ref = ref.removeprefix("artifact://")
+    ref = ref.removeprefix("artifact:").removeprefix("//")
     ref = ref.removeprefix("input/")
     return ref.strip() or None
 
@@ -18628,18 +18628,13 @@ async def download_workflow_captured_evidence(
         str | None, Depends(_resolve_recovery_principal)
     ] = None,
 ) -> Response:
-    """Stream one authorized MoonMind captured-evidence artifact (§10, #3641).
+    """Stream one workflow-authorized captured-evidence artifact.
 
-    Production Omnigent evidence refs are gateway refs
-    (``artifact://omnigent/<correlation>/<name>``) that the generic Temporal
-    artifact download route cannot serve — the nested path never routes and no
-    ``TemporalArtifact`` row exists — so a real captured-evidence link 404s. This
-    workflow-scoped route authorizes the caller against the Workflow, confirms
-    the requested ref is one of that Workflow's authorized evidence refs
-    (possession of a ref is never authorization), then reads it through the same
-    scheme-aware boundary the runtime uses: the Omnigent artifact gateway for
-    ``artifact://omnigent/`` refs, and the Temporal artifact service otherwise.
-    An unauthorized ref returns 404 without revealing whether it exists.
+    Confirm the ref belongs to the execution's selected evidence, then apply
+    the owning store's access policy: the local gateway for legacy
+    ``artifact://omnigent/`` refs and the Temporal service for durable artifact
+    refs. Possession of a ref is never authorization. An unauthorized ref
+    returns 404 without revealing whether it exists.
     """
 
     execution = await _get_owned_execution(
@@ -20818,4 +20813,3 @@ async def retry_execution_from_step(
             status_code=status.HTTP_409_CONFLICT, detail=exc.detail
         ) from exc
     return RetryFromStepResponse.model_validate(result)
-

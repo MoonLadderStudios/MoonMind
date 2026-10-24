@@ -220,7 +220,6 @@ async def test_unposted_retry_retires_runtime_authority_only_after_cleanup(
         assert reopened.metadata_["runtimeAuthority"] == {"bindingId": "old-binding"}
 
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("lease_released", [True, False])
 @pytest.mark.parametrize("cleanup_owner", ["coordinator", "janitor"])
@@ -2098,6 +2097,29 @@ async def test_resolve_chat_binding_cleaned_up_session(store):
     resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
     assert resolution.state == CHAT_BINDING_STATE_UNAVAILABLE
     assert resolution.unavailable_reason == "session_cleaned_up"
+
+
+@pytest.mark.asyncio
+async def test_resolve_cleaned_session_with_captured_transcript(store):
+    await _seed_chat_session(
+        store,
+        key="captured",
+        workflow_id="mm:wf-1",
+        agent_run_id="ar-1",
+        session_id="sess-captured",
+        capabilities={"viewTranscript": True},
+        terminal_status="completed",
+        delete_session=True,
+    )
+    row = await store.get_existing("captured")
+    async with store._session_factory() as session:
+        saved = await session.get(OmnigentBridgeSession, row.bridge_session_id)
+        saved.final_snapshot_ref = "artifact:art_captured"
+        await session.commit()
+    resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
+    assert resolution.state == CHAT_BINDING_STATE_ENDED
+    assert resolution.read_only
+    assert resolution.chat_binding_id == row.chat_binding_id
 
 
 @pytest.mark.asyncio
