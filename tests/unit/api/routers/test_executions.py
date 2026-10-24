@@ -16972,6 +16972,7 @@ def test_direct_rerun_commits_snapshot_lineage_before_serialization(
 def test_task_input_snapshot_artifact_id_strips_input_prefix_without_scheme() -> None:
     assert _artifact_id_from_ref("input/art-full-input") == "art-full-input"
     assert _artifact_id_from_ref("artifact://input/art-full-input") == "art-full-input"
+    assert _artifact_id_from_ref("artifact:art-full-input") == "art-full-input"
 
 
 def test_task_input_snapshot_merge_preserves_step_deletions() -> None:
