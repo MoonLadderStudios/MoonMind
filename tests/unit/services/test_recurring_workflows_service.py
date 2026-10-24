@@ -715,6 +715,25 @@ def _mm3935_plan_admission(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
             resolved_skillset_ref="art_skills",
         )
     )
+
+    async def compile_with_metadata(**kwargs):
+        # This shared compiler double promises durable refs to both service
+        # and router callers; materialize their metadata in the caller's unit
+        # of work instead of depending on a particular database fixture.
+        session = kwargs["db_session"]
+        for artifact_id in ("art_plan", "art_task", "art_profile", "art_skills"):
+            if await session.get(TemporalArtifact, artifact_id) is None:
+                session.add(
+                    TemporalArtifact(
+                        artifact_id=artifact_id,
+                        status=TemporalArtifactStatus.COMPLETE,
+                        storage_key=f"schedule-fixture/{artifact_id}",
+                        created_by_principal=kwargs["principal"],
+                    )
+                )
+        return compile_plan.return_value
+
+    compile_plan.side_effect = compile_with_metadata
     monkeypatch.setattr(
         "api_service.services.omnigent_execution_plan_service."
         "compile_and_persist_execution_plan",
@@ -722,8 +741,7 @@ def _mm3935_plan_admission(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     )
     persist_task_input = AsyncMock(return_value=("art_task", "sha256:" + "c" * 64))
     monkeypatch.setattr(
-        "api_service.services.omnigent_execution_plan_service."
-        "persist_json_artifact",
+        "api_service.services.omnigent_execution_plan_service." "persist_json_artifact",
         persist_task_input,
     )
     return SimpleNamespace(
