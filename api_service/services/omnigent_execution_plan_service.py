@@ -504,6 +504,7 @@ async def _resolve_and_persist_skills(
     workflow_id: str,
     task_input_snapshot_digest: str,
     initial_parameters: Mapping[str, Any],
+    db_session: Any | None = None,
 ) -> tuple[AgentResolvedSkillSet, str, str, tuple[str, ...]]:
     """Resolve once at admission and persist exact content plus its manifest."""
 
@@ -526,6 +527,7 @@ async def _resolve_and_persist_skills(
             async_session_maker=(
                 session_factory if callable(session_factory) else None
             ),
+            db_session=db_session,
         ),
     )
     from moonmind.workflows.agent_skills.agent_skills_activities import (
@@ -1696,6 +1698,7 @@ async def compile_and_persist_execution_plan(
         skill_content_refs,
     ) = await _resolve_and_persist_skills(
         session_factory=session_factory,
+        db_session=db_session,
         artifact_service=artifact_service,
         principal=principal,
         workflow_id=workflow_id,
