@@ -153,10 +153,11 @@ def render_gh_wrapper_script(*, socket_path: str, real_gh_path: str | None = Non
         "    return str(resolved)\n"
         "\n"
         "def main():\n"
-        "    token = request_token()\n"
         "    env = dict(os.environ)\n"
         "    env.pop('GH_TOKEN', None)\n"
-        "    env['GITHUB_TOKEN'] = token\n"
+        "    env.pop('GITHUB_TOKEN', None)\n"
+        "    if sys.argv[1:] not in (['--version'], ['version']):\n"
+        "        env['GITHUB_TOKEN'] = request_token()\n"
         "    real_gh = resolve_real_gh()\n"
         "    os.execvpe(real_gh, [real_gh, *sys.argv[1:]], env)\n"
         "\n"
@@ -498,12 +499,13 @@ def _resolve_real_gh_path() -> str:
     return resolved
 
 def run_gh_wrapper(*, socket_path: str, real_gh_path: str | None = None) -> int:
-    """Exec the real gh binary with a token fetched from the local broker."""
+    """Exec gh; only standalone version inspection needs no broker token."""
     resolved_gh_path = str(real_gh_path or _resolve_real_gh_path())
-    token = request_github_token(socket_path)
     env = dict(os.environ)
     env.pop("GH_TOKEN", None)
-    env["GITHUB_TOKEN"] = token
+    env.pop("GITHUB_TOKEN", None)
+    if sys.argv[1:] not in (["--version"], ["version"]):
+        env["GITHUB_TOKEN"] = request_github_token(socket_path)
     os.execvpe(resolved_gh_path, [resolved_gh_path, *sys.argv[1:]], env)
     return 0
 
