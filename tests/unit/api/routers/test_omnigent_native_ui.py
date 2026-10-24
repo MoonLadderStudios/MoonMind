@@ -10,8 +10,6 @@ leaking a provider session id, upstream URL, or credential to the browser.
 
 from __future__ import annotations
 
-import json
-from html.parser import HTMLParser
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
@@ -20,6 +18,8 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+from tests.support.native_ui import read_native_ui_bootstrap as _bootstrap
 
 from api_service.api.routers.omnigent_bridge import (
     _get_bridge_store,
@@ -177,24 +177,6 @@ def _build(
 def _url(suffix: str = "", *, binding: str = _CHAT_BINDING_ID) -> str:
     base = f"{NATIVE_UI_MOUNT_PATH}/{binding}"
     return f"{base}/{suffix}" if suffix else base
-
-
-def _bootstrap(document: str) -> dict:
-    class BootstrapParser(HTMLParser):
-        payload = None
-
-        def handle_starttag(self, tag, attrs):
-            attributes = dict(attrs)
-            if (
-                tag == "meta"
-                and attributes.get("id") == "moonmind-omnigent-chat-bootstrap"
-            ):
-                self.payload = attributes["data-bootstrap"]
-
-    parser = BootstrapParser()
-    parser.feed(document)
-    assert parser.payload is not None
-    return json.loads(parser.payload)
 
 
 # --- Embedded document -------------------------------------------------------
