@@ -1084,9 +1084,6 @@ async def test_agent_run_reports_managed_429_retry_summary_to_parent():
                 id="test-parent-managed-429",
                 task_queue="agent-run-task-queue",
             )
-            child_handle = env.client.get_workflow_handle(
-                "test-parent-managed-429:child"
-            )
             manager_handle = env.client.get_workflow_handle(manager_id)
 
             # NOTE: AgentRun no longer sends profile_assigned to its parent
