@@ -1061,7 +1061,13 @@ def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> N
             "include"
         ]
     }
-    assert rows["unit-fast"]["job_minutes"] == 18
+    assert rows["unit-fast"]["job_minutes"] == 21
+    unit_step = next(
+        step for step in job["steps"] if step["name"] == "Run selected unit suite"
+    )
+    assert unit_step["timeout-minutes"] == 15
+    assert unit_step["timeout-minutes"] + 6 <= rows["unit-fast"]["job_minutes"]
+    assert "--timeout 60" in unit_step["run"]
     assert rows["api-component"]["job_minutes"] == 18
     api_step = next(
         step for step in job["steps"] if step["name"] == "Run API/component suite"
@@ -1414,7 +1420,7 @@ def test_required_gate_rejects_missing_or_failed_selected_result(tmp_path, resul
         tmp_path,
         outputs={
             "unit_fast": "true",
-            "backend_matrix": '{"include":[{"suite":"unit-fast","job_minutes":18}]}',
+            "backend_matrix": '{"include":[{"suite":"unit-fast","job_minutes":21}]}',
         },
         results={"backend-matrix": result},
     )

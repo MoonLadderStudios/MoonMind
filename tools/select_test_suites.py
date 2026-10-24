@@ -603,7 +603,12 @@ class SuiteSelection:
             separators=(",", ":"),
         )
         rows = [
-            {"suite": suite, "job_minutes": 15 if suite == "temporal-boundary" else 18}
+            {
+                "suite": suite,
+                "job_minutes": {
+                    "unit-fast": 21, "api-component": 18, "temporal-boundary": 15
+                }[suite],
+            }
             for suite in ("unit-fast", "api-component", "temporal-boundary")
             if getattr(self, suite.replace("-", "_"))
         ]
