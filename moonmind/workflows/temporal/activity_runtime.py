@@ -265,7 +265,10 @@ from moonmind.workflows.temporal.artifacts import (
     ArtifactRef,
     ArtifactUploadDescriptor,
     ExecutionRef,
+    TemporalArtifactAuthorizationError,
     TemporalArtifactError,
+    TemporalArtifactStorageAccessError,
+    TemporalArtifactUnavailableError,
     TemporalArtifactService,
     TemporalArtifactValidationError,
     build_artifact_ref,
@@ -3178,7 +3181,7 @@ class TemporalSandboxActivities:
 
         try:
             checkpoint = await self._load_policy_checkpoint(model)
-        except TemporalArtifactValidationError:
+        except (TemporalArtifactValidationError, TemporalArtifactAuthorizationError):
             return await self._reject_workspace_policy(
                 model,
                 failure_code="artifact_unauthorized",
@@ -3186,6 +3189,8 @@ class TemporalSandboxActivities:
                 provider_refs=provider_refs,
                 diagnostic_refs=[],
             )
+        except (TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError):
+            raise
         except (ArtifactStoreError, TemporalArtifactError):
             return await self._reject_workspace_policy(
                 model,
@@ -16585,15 +16590,32 @@ def _build_activity_wrapper(
     )
 
     async def _wrapper(self, request=None):
-        if accepts_positional_request:
+        try:
+            if accepts_positional_request:
+                return await func(self, request)
+            if isinstance(request, Mapping):
+                return await func(self, **request)
+            if request is None:
+                return await func(self)
+            if accepts_request_keyword or accepts_var_kwargs:
+                return await func(self, request=request)
             return await func(self, request)
-        if isinstance(request, Mapping):
-            return await func(self, **request)
-        if request is None:
-            return await func(self)
-        if accepts_request_keyword or accepts_var_kwargs:
-            return await func(self, request=request)
-        return await func(self, request)
+        except TemporalArtifactError as exc:
+            # Existing Activity budgets/backoff own retry; never replay agent
+            # work or a confirmed publication to recover a failed byte read.
+            failure = temporal_exceptions.ApplicationError(
+                str(exc), type=getattr(exc, "code", type(exc).__name__),
+                non_retryable=not exc.retryable,
+            )
+            # Keep the original available in-process, without serializing a
+            # transport exception's signed URL/SQL parameters into history.
+            failure.original_error = exc
+            logger.warning(
+                "Artifact Activity failed type=%s artifact_id=%s operation=%s cause_type=%s",
+                failure.type, getattr(exc, "artifact_id", ""),
+                getattr(exc, "operation", ""), type(exc.__cause__).__name__,
+            )
+            raise failure from None
 
     if all(
         param.kind is not inspect.Parameter.KEYWORD_ONLY for param in non_self_params
@@ -16878,6 +16900,8 @@ class TemporalCheckpointActivities:
         try:
             external_bytes = await self._read_bytes(external_ref)
             external = json.loads(external_bytes.decode("utf-8"))
+        except (TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError):
+            raise
         except (ArtifactStoreError, TemporalArtifactError, json.JSONDecodeError, UnicodeDecodeError):
             return None
         if not isinstance(external, Mapping):
@@ -16906,6 +16930,8 @@ class TemporalCheckpointActivities:
         if capture_manifest_ref:
             try:
                 capture_manifest_bytes = await self._read_bytes(capture_manifest_ref)
+            except (TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError):
+                raise
             except (ArtifactStoreError, TemporalArtifactError):
                 return None
             capture_manifest_digest = "sha256:" + hashlib.sha256(
@@ -17037,7 +17063,7 @@ class TemporalCheckpointActivities:
             try:
                 raw_checkpoint = await self._read_bytes(model.checkpoint_ref)
                 checkpoint_payload = json.loads(raw_checkpoint.decode("utf-8"))
-            except TemporalArtifactValidationError:
+            except (TemporalArtifactValidationError, TemporalArtifactAuthorizationError):
                 result = StepCheckpointValidateResult(
                     valid=False,
                     failureCode="artifact_unauthorized",
@@ -17047,6 +17073,8 @@ class TemporalCheckpointActivities:
                     diagnosticRefs=[model.checkpoint_ref],
                 )
                 return result.model_dump(by_alias=True, mode="json")
+            except (TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError):
+                raise
             except (ArtifactStoreError, TemporalArtifactError):
                 result = StepCheckpointValidateResult(
                     valid=False,

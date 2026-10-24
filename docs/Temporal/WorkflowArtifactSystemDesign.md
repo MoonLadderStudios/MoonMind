@@ -16,29 +16,12 @@ Last updated: 2026-10-06
 
 ## 1. Context
 
-MoonMind is built around **Temporal** as the durable orchestration substrate.
-
-- **Workflow Executions** are the primary durable orchestration primitive.
-- **Activities** perform all side effects.
-- Temporal history and payloads must remain **small**, **bounded**, and **safe**.
-
-Some public MoonMind surfaces still carry legacy task-named fields (they rename in the hard switch). This document defines the artifact contract at the Temporal/runtime layer.
-
-Therefore, workflows and activities must pass **artifact references** rather than large payloads. This ensures large immutable inputs and outputs such as:
-
-- plans
-- manifests
-- diffs and patches
-- logs
-- resolved skill snapshots
-- prompt indexes
-- runtime materialization bundles
-- provider result snapshots
-- managed runtime diagnostics
-
-are safely stored outside workflow history.
-
-This document defines the artifact system: storage, identity, linkage, authorization, API posture, retention, and activity-boundary usage.
+Temporal owns durable orchestration; Activities perform side effects. Compact
+artifact references keep large immutable plans, manifests, patches, logs, Skill
+snapshots, prompts, runtime bundles, provider results and diagnostics outside
+workflow history. Legacy task-named public fields do not change this runtime
+contract, which covers storage, identity, linkage, authorization, APIs, retention
+and Activity boundaries.
 
 ---
 
@@ -798,14 +781,22 @@ Current raw and normalized journals referenced by non-terminal Omnigent bridge
 sessions remain recovery data. Their ordinary retention resumes when the
 session ends. Pins and live use claims protect all artifact classes.
 
-Read-use observations isolate optional claims in savepoints. In a caller-owned
-connection, a bounded byte read holds its observation until consumption ends,
-then rolls back only that savepoint, releasing foreign-key locks before later
-input grants. Independent reads commit observations; streaming and signed URLs
-retain TTL claims. Recoverable observation failures preserve caller work; failed durable
-release leaves TTL protection. Connection, outer-transaction and transaction-control
-failures propagate. Cleanup failure is logged and attached to an existing serving
-error or cancellation without replacing it.
+Read-use observations use savepoints; caller-owned reads release only their
+observation. Independent reads commit observations; streams and signed URLs retain
+TTL claims. Connection and transaction-control failures propagate. Cleanup faults
+attach a safe diagnostic to the serving error or cancellation, preserving its
+cause and TTL protection.
+
+Known database connection failures return `artifact_authority_unavailable`;
+storage timeouts return `artifact_storage_unavailable` (HTTP 503, `Retry-After: 5`).
+Storage credential rejection is `artifact_storage_forbidden` (502); confirmed
+object absence is `artifact_bytes_missing` (409). Reader denial, quarantine,
+expiry and integrity checks retain their own semantics. Failures never change
+artifact availability or grants. Activities retry unavailability within existing
+budgets; permanent artifact errors stop. Lazy downloads open before response
+headers; later transport failures terminate the stream and retain their cause.
+Unreadable publication decisions stop reconciliation rather than authorize
+replacement publication.
 
 Omnigent commits each complete replacement journal pair before reclaiming its
 superseded numbered prefixes. The replacement retains the accumulated events;
