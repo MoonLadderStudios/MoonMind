@@ -8,9 +8,7 @@ row without duplicating the execution, and a late same-run RUNNING snapshot
 can never reopen the closed run — the last valid state is retained with
 honest limited freshness instead of a restart.
 
-NOTE: marked ``integration`` only, not ``integration_ci`` — Temporal
-workflow tests with time-skipping consistently exceed CI timeout thresholds.
-Kept for local dev verification alongside the SQLite ordering unit coverage.
+The hermetic integration lane owns this real Temporal repair journey.
 """
 
 from __future__ import annotations
@@ -41,7 +39,7 @@ from api_service.db.models import (
 )
 from tests.helpers.temporal_visibility import register_deployment_search_attributes
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
 
 @workflow.defn(name="MoonMind.UserWorkflow")

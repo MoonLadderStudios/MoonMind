@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.integration_ci
+
 from datetime import UTC, datetime
 
 from moonmind.schemas.temporal_models import (

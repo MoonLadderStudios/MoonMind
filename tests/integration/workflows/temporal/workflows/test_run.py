@@ -1,524 +1,285 @@
+"""UserWorkflow journeys through real Temporal dispatch and terminal projection."""
+
+from __future__ import annotations
+
 import json
-import unittest
-from typing import Any, Dict
+from contextlib import AsyncExitStack, asynccontextmanager
+from typing import Any
 
 import pytest
-
-pytest.importorskip("temporalio")
-
-# NOTE: Not marked integration_ci — Temporal workflow tests with time-skipping
-# consistently exceed CI timeout thresholds. Kept for local dev verification.
-pytestmark = [pytest.mark.integration]
-
-from temporalio import activity, client, exceptions
-from temporalio.api.enums.v1 import IndexedValueType
-from temporalio.api.operatorservice.v1 import AddSearchAttributesRequest
+from temporalio import activity, client, exceptions, workflow
 from temporalio.common import (
     SearchAttributeKey,
     SearchAttributePair,
     TypedSearchAttributes,
 )
 from temporalio.testing import WorkflowEnvironment
-from temporalio.worker import UnsandboxedWorkflowRunner, Worker
+from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
+from moonmind.config.settings import settings
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.activity_catalog import (
+    AGENT_RUNTIME_TASK_QUEUE,
     ARTIFACTS_TASK_QUEUE,
     LLM_TASK_QUEUE,
-    SANDBOX_TASK_QUEUE,
 )
 from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
+from tests.integration.workflows.temporal.workflows.test_merge_automation_full_topology import (
+    _register_search_attributes,
+)
+from tests.unit.workflows.temporal.workflows.test_run_integration import (
+    _mock_resilience_policy_envelope,
+)
 
-PLAN_GENERATE_CALLS: list[Dict[str, Any]] = []
-ARTIFACT_READ_CALLS: list[Dict[str, Any]] = []
-SKILL_EXECUTE_CALLS: list[Dict[str, Any]] = []
-SANDBOX_COMMAND_CALLS: list[Dict[str, Any]] = []
+pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
-def _trusted_search_attributes() -> TypedSearchAttributes:
-    return TypedSearchAttributes(
-        [
-            SearchAttributePair(
-                SearchAttributeKey.for_keyword("mm_owner_id"),
-                "trusted-owner",
-            ),
-            SearchAttributePair(
-                SearchAttributeKey.for_keyword("mm_owner_type"),
-                "user",
-            ),
-        ]
-    )
 
-async def _register_test_search_attributes(
-    env: WorkflowEnvironment,
-) -> None:
-    await env.client.operator_service.add_search_attributes(
-        AddSearchAttributesRequest(
-            namespace=env.client.namespace,
-            search_attributes={
-                "mm_owner_id": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
-                "mm_owner_type": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
-                "mm_state": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
-                "mm_entry": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
-                "mm_updated_at": IndexedValueType.INDEXED_VALUE_TYPE_DATETIME,
-                "mm_repo": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
-                "mm_integration": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
-            },
-        )
-    )
+_CHILD_CASES: dict[str, tuple[dict[str, Any] | None, list[Any]]] = {}
 
-async def _wait_for_condition(
-    predicate,
-    *,
-    timeout_seconds: float = 5.0,
-    poll_interval_seconds: float = 0.05,
-) -> None:
-    import asyncio
 
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
-    while not predicate():
-        if asyncio.get_running_loop().time() >= deadline:
-            raise AssertionError("Timed out waiting for test condition")
-        await asyncio.sleep(poll_interval_seconds)
+@workflow.defn(name="MoonMind.AgentRun")
+class AgentChild:
+    @workflow.run
+    async def run(self, payload: AgentExecutionRequest) -> dict[str, Any]:
+        parent = workflow.info().parent
+        assert parent is not None
+        result, calls = _CHILD_CASES[parent.workflow_id]
+        calls.append(payload)
+        return result if result is not None else {"summary": "Tests passed."}
 
-@activity.defn(name="plan.generate")
-async def mock_plan_generate(args: Dict[str, Any]) -> Dict[str, Any]:
-    PLAN_GENERATE_CALLS.append(args)
-    # Phase 3: Verify idempotency key is present (or support legacy absence)
-    if "idempotency_key" in args:
-        workflow_id = args.get("execution_ref", {}).get("workflow_id")
-        if workflow_id:
-            assert args["idempotency_key"] == f"{workflow_id}_plan_generate"
-        else:
-            # Fallback for tests that may not provide full execution_ref
-            assert "_plan_generate" in args["idempotency_key"]
-    return {"plan_ref": "artifact://plan/123"}
 
-@activity.defn(name="artifact.read")
-async def mock_artifact_read(args: Dict[str, Any]) -> bytes:
-    ARTIFACT_READ_CALLS.append(args)
-    artifact_ref = args.get("artifact_ref")
-    if artifact_ref == "artifact://registry/123":
-        payload = {
-            "skills": [
-                {
-                    "name": "repo.run_tests",
-                    "version": "1.0.0",
-                    "description": "Run repository test suite",
-                    "inputs": {"schema": {"type": "object"}},
-                    "outputs": {"schema": {"type": "object"}},
-                    "executor": {
-                        "activity_type": "mm.skill.execute",
-                        "selector": {"mode": "by_capability"},
-                    },
-                    "requirements": {"capabilities": ["sandbox"]},
-                    "policies": {
-                        "timeouts": {
-                            "start_to_close_seconds": 1800,
-                            "schedule_to_close_seconds": 3600,
-                        },
-                        "retries": {"max_attempts": 3},
-                    },
-                }
-            ]
-        }
-        return json.dumps(payload).encode("utf-8")
-    payload = {
+def _plan(tool_type: str = "agent_runtime") -> dict[str, Any]:
+    return {
         "plan_version": "1.0",
         "metadata": {
             "title": "Test plan",
             "created_at": "2026-03-12T00:00:00Z",
             "registry_snapshot": {
-                "digest": "reg:sha256:" + ("a" * 64),
-                "artifact_ref": "artifact://registry/123",
-            }
+                "digest": "reg:sha256:" + "a" * 64,
+                "artifact_ref": "artifact://registry/legacy",
+            },
         },
         "policy": {"failure_mode": "FAIL_FAST"},
         "nodes": [
             {
                 "id": "step-1",
-                "skill": {"name": "repo.run_tests"},
-                "inputs": {"repo_ref": "git:moonmind"},
-                "options": {},
+                "tool": {"type": tool_type, "name": "claude_code"},
+                "inputs": {"instructions": "Run repository tests."},
             }
         ],
     }
-    return json.dumps(payload).encode("utf-8")
 
-@activity.defn(name="mm.skill.execute")
-async def mock_skill_execute(args: Dict[str, Any]) -> Dict[str, Any]:
-    SKILL_EXECUTE_CALLS.append(args)
-    if "idempotency_key" in args:
-        context = args.get("context", {})
-        workflow_id = context.get("workflow_id")
-        node_id = context.get("node_id")
-        if workflow_id and node_id:
-            assert args["idempotency_key"] == f"{workflow_id}_{node_id}_execute"
-        else:
-            # Fallback for tests that may not provide full context
-            assert "_execute" in args["idempotency_key"]
-    return {"status": "COMPLETED", "outputs": {}}
 
-@activity.defn(name="mm.skill.execute")
-async def mock_skill_execute_with_telemetry(args: Dict[str, Any]) -> Dict[str, Any]:
-    SKILL_EXECUTE_CALLS.append(args)
-    if "idempotency_key" in args:
-        context = args.get("context", {})
-        workflow_id = context.get("workflow_id")
-        node_id = context.get("node_id")
-        if workflow_id and node_id:
-            assert args["idempotency_key"] == f"{workflow_id}_{node_id}_execute"
-        else:
-            assert "_execute" in args["idempotency_key"]
-    return {
-        "status": "COMPLETED",
-        "outputs": {
-            "summary": "Retried a flaky test and wrote diagnostics for review.",
-            "diagnostics_ref": "artifact://diag-mm-794",
+@asynccontextmanager
+async def _running_user_workflow(
+    *,
+    plan=None,
+    child_result=None,
+    request=None,
+    workflow_id="test-user-workflow",
+    trusted_owner=True,
+    context=None,
+):
+    """Stub external effects, retaining the real registered parent and queues."""
+    calls: dict[str, list[Any]] = {
+        key: []
+        for key in ("plan", "reads", "children", "terminal", "summaries", "skills")
+    }
+    selected_plan = plan if plan is not None else _plan()
+    _CHILD_CASES[workflow_id] = (child_result, calls["children"])
+
+    @activity.defn(name="plan.generate")
+    async def generate(payload: dict[str, Any]) -> dict[str, str]:
+        calls["plan"].append(payload)
+        return {"plan_ref": "artifact://plan/test"}
+
+    @activity.defn(name="artifact.read")
+    async def read(payload: dict[str, Any]) -> bytes:
+        calls["reads"].append(payload)
+        # Unexpected registry reads must fail instead of returning a plan and
+        # passing an assertion before dispatch ever reaches its child.
+        assert payload["artifact_ref"] == "artifact://plan/test"
+        return json.dumps(selected_plan).encode()
+
+    @activity.defn(name="artifact.create")
+    async def create(_payload: Any) -> tuple[dict[str, str], dict[str, str]]:
+        return {"artifact_id": "art-test-summary"}, {"upload_url": "memory://test"}
+
+    @activity.defn(name="artifact.write_complete")
+    async def write(payload: dict[str, Any]) -> dict[str, str]:
+        calls["summaries"].append(payload)
+        return {"artifact_id": "art-test-summary"}
+
+    @activity.defn(name="resilience.compile_policy")
+    async def compile_policy(payload: Any) -> dict[str, Any]:
+        return _mock_resilience_policy_envelope(payload)
+
+    @activity.defn(name="execution.record_terminal_state")
+    async def terminal(payload: dict[str, Any]) -> dict[str, bool]:
+        calls["terminal"].append(payload)
+        return {"recorded": True}
+
+    @activity.defn(name="provider_profile.list")
+    async def profiles(_payload: Any) -> dict[str, Any]:
+        return {"profiles": []}
+
+    @activity.defn(name="agent_skill.resolve")
+    async def skills(*payload: Any) -> dict[str, Any]:
+        calls["skills"].append(payload)
+        return {"manifestRef": "artifact://resolved/test", "skills": []}
+
+    owner = TypedSearchAttributes(
+        [
+            SearchAttributePair(
+                SearchAttributeKey.for_keyword("mm_owner_id"), "trusted-owner"
+            ),
+            SearchAttributePair(
+                SearchAttributeKey.for_keyword("mm_owner_type"), "user"
+            ),
+        ]
+    )
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        await _register_search_attributes(env)
+        if context is not None:
+            context.update(environment=env, client=env.client)
+        async with AsyncExitStack() as stack:
+            routes = [
+                (LLM_TASK_QUEUE, [generate]),
+                (
+                    ARTIFACTS_TASK_QUEUE,
+                    [read, create, write, compile_policy, terminal, profiles],
+                ),
+                (AGENT_RUNTIME_TASK_QUEUE, [skills]),
+            ]
+            for queue, activities in routes:
+                await stack.enter_async_context(
+                    Worker(env.client, task_queue=queue, activities=activities)
+                )
+            parent_queue = "test-parent"
+            child_queue = settings.temporal.user_workflow_v2_task_queue
+            for queue in dict.fromkeys([parent_queue, child_queue]):
+                await stack.enter_async_context(
+                    Worker(
+                        env.client,
+                        task_queue=queue,
+                        workflows=[MoonMindUserWorkflow, AgentChild],
+                        workflow_runner=UnsandboxedWorkflowRunner(),
+                    )
+                )
+            handle = await env.client.start_workflow(
+                MoonMindUserWorkflow.run,
+                (
+                    request
+                    if request is not None
+                    else {"workflowType": "MoonMind.UserWorkflow"}
+                ),
+                id=workflow_id,
+                task_queue=parent_queue,
+                search_attributes=owner if trusted_owner else TypedSearchAttributes([]),
+            )
+            try:
+                yield handle, calls
+            finally:
+                _CHILD_CASES.pop(workflow_id, None)
+
+
+@pytest.mark.asyncio
+async def test_user_workflow_completes_and_projects_queryable_step_ledger() -> None:
+    async with _running_user_workflow() as (handle, calls):
+        assert (await handle.result())["status"] == "success"
+        progress = await handle.query("get_progress")
+        ledger = await handle.query("get_step_ledger")
+        assert progress["total"] == progress["completed"] == 1
+        assert ledger["workflowId"] == handle.id
+        assert ledger["runScope"] == "latest"
+        assert [(s["logicalStepId"], s["status"]) for s in ledger["steps"]] == [
+            ("step-1", "completed")
+        ]
+        assert len(calls["children"]) == 1
+        assert calls["terminal"][-1]["state"] == "completed"
+        assert calls["plan"][0]["principal"] == f"workflow:{handle.id}"
+        assert calls["reads"][0]["principal"] == f"workflow:{handle.id}"
+        await Replayer(
+            workflows=[MoonMindUserWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ).replay_workflow(await handle.fetch_history())
+
+
+@pytest.mark.asyncio
+async def test_user_workflow_ignores_untrusted_payload_owner() -> None:
+    async with _running_user_workflow(
+        request={
+            "workflowType": "MoonMind.UserWorkflow",
+            "ownerId": "malicious-owner",
+            "ownerType": "system",
+        }
+    ) as (handle, calls):
+        assert (await handle.result())["status"] == "success"
+        assert calls["plan"][0]["principal"] == f"workflow:{handle.id}"
+        assert calls["reads"][0]["principal"] == f"workflow:{handle.id}"
+        assert (await handle.describe()).search_attributes["mm_owner_id"] == [
+            "trusted-owner"
+        ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "admission,trusted_owner,message",
+    [
+        ({"title": "Missing type"}, True, "workflowType is required"),
+        (
+            {"workflowType": "MoonMind.UserWorkflow"},
+            False,
+            "Trusted owner metadata is required",
+        ),
+    ],
+)
+async def test_user_workflow_rejects_invalid_admission(
+    admission, trusted_owner, message
+) -> None:
+    async with _running_user_workflow(
+        request=admission, trusted_owner=trusted_owner
+    ) as (handle, calls):
+        with pytest.raises(client.WorkflowFailureError) as error:
+            await handle.result()
+        assert isinstance(error.value.cause, exceptions.ApplicationError)
+        assert message in error.value.cause.message
+        assert calls["children"] == []
+
+
+@pytest.mark.asyncio
+async def test_user_workflow_fail_fast_preserves_child_failure() -> None:
+    async with _running_user_workflow(
+        child_result={
+            "failureClass": "user_error",
+            "summary": "Forced agent failure",
+        }
+    ) as (handle, calls):
+        with pytest.raises(client.WorkflowFailureError) as error:
+            await handle.result()
+        assert "Forced agent failure" in error.value.cause.message
+        assert (await handle.describe()).search_attributes["mm_state"] == ["failed"]
+        assert calls["terminal"][-1]["state"] == "failed"
+        assert len(calls["children"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_pr_publication_without_changes_stays_failed() -> None:
+    async with _running_user_workflow(
+        request={
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {
+                "repo": "MoonLadderStudios/MoonMind",
+                "publishMode": "pr",
+            },
         },
-    }
-
-@activity.defn(name="mm.skill.execute")
-async def mock_skill_execute_failed(args: Dict[str, Any]) -> Dict[str, Any]:
-    SKILL_EXECUTE_CALLS.append(args)
-    return {
-        "status": "FAILED",
-        "outputs": {"error": "forced skill failure"},
-        "progress": {"details": "forced skill failure"},
-    }
-
-@activity.defn(name="mm.skill.execute")
-async def mock_skill_execute_no_commits(args: Dict[str, Any]) -> Dict[str, Any]:
-    SKILL_EXECUTE_CALLS.append(args)
-    return {
-        "status": "COMPLETED",
-        "outputs": {
-            "push_status": "no_commits",
-            "push_branch": "feature/no-op",
+        child_result={
+            "summary": "No changes",
+            "metadata": {"push_status": "no_commits", "push_branch": "feature/no-op"},
         },
-    }
-
-@activity.defn(name="sandbox.run_command")
-async def mock_sandbox_command(args: Dict[str, Any]) -> Dict[str, Any]:
-    SANDBOX_COMMAND_CALLS.append(args)
-    return {"exit_code": 0, "stdout": "executing", "stderr": ""}
-
-class TestMoonMindUserWorkflow(unittest.IsolatedAsyncioTestCase):
-    def setUp(self) -> None:
-        PLAN_GENERATE_CALLS.clear()
-        ARTIFACT_READ_CALLS.clear()
-        SKILL_EXECUTE_CALLS.clear()
-        SANDBOX_COMMAND_CALLS.clear()
-
-    async def test_moonmind_run_workflow(self) -> None:
-        async with await WorkflowEnvironment.start_time_skipping() as env:
-            await _register_test_search_attributes(env)
-            async with (
-                Worker(
-                    env.client,
-                    task_queue=LLM_TASK_QUEUE,
-                    activities=[
-                        mock_plan_generate,
-                    ],
-                ),
-                Worker(
-                    env.client,
-                    task_queue=ARTIFACTS_TASK_QUEUE,
-                    activities=[mock_artifact_read],
-                ),
-                Worker(
-                    env.client,
-                    task_queue=SANDBOX_TASK_QUEUE,
-                    activities=[mock_sandbox_command, mock_skill_execute],
-                ),
-                Worker(
-                    env.client,
-                    task_queue="test-task-queue",
-                    workflows=[MoonMindUserWorkflow],
-                    workflow_runner=UnsandboxedWorkflowRunner(),
-                ),
-            ):
-                request = {
-                    "workflowType": "MoonMind.UserWorkflow",
-                    "title": "Test Run",
-                    "initialParameters": {
-                        "repo": "moonladder/moonmind",
-                    },
-                }
-
-                # Start workflow
-                handle = await env.client.start_workflow(
-                    MoonMindUserWorkflow.run,
-                    request,
-                    id="test-workflow-id",
-                    task_queue="test-task-queue",
-                    memo={"title": "Trusted title"},
-                    search_attributes=_trusted_search_attributes(),
-                )
-
-                result = await handle.result()
-                self.assertEqual(result["status"], "success")
-                self.assertEqual(PLAN_GENERATE_CALLS[0]["principal"], "trusted-owner")
-                self.assertEqual(ARTIFACT_READ_CALLS[0]["principal"], "trusted-owner")
-                self.assertEqual(SKILL_EXECUTE_CALLS[0]["principal"], "trusted-owner")
-
-    async def test_moonmind_run_workflow_queries_step_ledger_after_completion(self) -> None:
-        async with await WorkflowEnvironment.start_time_skipping() as env:
-            await _register_test_search_attributes(env)
-            async with (
-                Worker(
-                    env.client,
-                    task_queue=LLM_TASK_QUEUE,
-                    activities=[
-                        mock_plan_generate,
-                    ],
-                ),
-                Worker(
-                    env.client,
-                    task_queue=ARTIFACTS_TASK_QUEUE,
-                    activities=[mock_artifact_read],
-                ),
-                Worker(
-                    env.client,
-                    task_queue=SANDBOX_TASK_QUEUE,
-                    activities=[mock_sandbox_command, mock_skill_execute],
-                ),
-                Worker(
-                    env.client,
-                    task_queue="test-task-queue",
-                    workflows=[MoonMindUserWorkflow],
-                    workflow_runner=UnsandboxedWorkflowRunner(),
-                ),
-            ):
-                handle = await env.client.start_workflow(
-                    MoonMindUserWorkflow.run,
-                    {
-                        "workflowType": "MoonMind.UserWorkflow",
-                        "title": "Queryable run",
-                    },
-                    id="test-workflow-ledger-query",
-                    task_queue="test-task-queue",
-                    search_attributes=_trusted_search_attributes(),
-                )
-
-                result = await handle.result()
-                progress = await handle.query("get_progress")
-                ledger = await handle.query("get_step_ledger")
-
-                self.assertEqual(result["status"], "success")
-                self.assertEqual(progress["total"], 1)
-                self.assertEqual(progress["succeeded"], 1)
-                self.assertEqual(ledger["workflowId"], "test-workflow-ledger-query")
-                self.assertEqual(ledger["runScope"], "latest")
-                self.assertEqual(len(ledger["steps"]), 1)
-                self.assertEqual(ledger["steps"][0]["logicalStepId"], "step-1")
-                self.assertEqual(ledger["steps"][0]["status"], "succeeded")
-
-    async def test_moonmind_run_workflow_ignores_untrusted_owner_payload(self) -> None:
-        async with await WorkflowEnvironment.start_time_skipping() as env:
-            await _register_test_search_attributes(env)
-            async with (
-                Worker(
-                    env.client,
-                    task_queue=LLM_TASK_QUEUE,
-                    activities=[
-                        mock_plan_generate,
-                    ],
-                ),
-                Worker(
-                    env.client,
-                    task_queue=ARTIFACTS_TASK_QUEUE,
-                    activities=[mock_artifact_read],
-                ),
-                Worker(
-                    env.client,
-                    task_queue=SANDBOX_TASK_QUEUE,
-                    activities=[mock_sandbox_command, mock_skill_execute],
-                ),
-                Worker(
-                    env.client,
-                    task_queue="test-task-queue",
-                    workflows=[MoonMindUserWorkflow],
-                    workflow_runner=UnsandboxedWorkflowRunner(),
-                ),
-            ):
-                result = await env.client.execute_workflow(
-                    MoonMindUserWorkflow.run,
-                    {
-                        "workflowType": "MoonMind.UserWorkflow",
-                        "ownerId": "malicious-owner",
-                        "ownerType": "system",
-                    },
-                    id="test-workflow-id-trusted-owner",
-                    task_queue="test-task-queue",
-                    search_attributes=_trusted_search_attributes(),
-                )
-
-        self.assertEqual(result["status"], "success")
-        self.assertEqual(PLAN_GENERATE_CALLS[0]["principal"], "trusted-owner")
-        self.assertEqual(ARTIFACT_READ_CALLS[0]["principal"], "trusted-owner")
-        self.assertEqual(SKILL_EXECUTE_CALLS[0]["principal"], "trusted-owner")
-
-    async def test_moonmind_run_workflow_validation_error(self) -> None:
-        async with await WorkflowEnvironment.start_time_skipping() as env:
-            async with Worker(
-                env.client,
-                task_queue="test-task-queue",
-                workflows=[MoonMindUserWorkflow],
-                workflow_runner=UnsandboxedWorkflowRunner(),
-            ):
-                request = {
-                    "title": "Test Run",
-                    # Missing workflowType
-                }
-
-                with self.assertRaises(client.WorkflowFailureError) as exc_info:
-                    await env.client.execute_workflow(
-                        MoonMindUserWorkflow.run,
-                        request,
-                        id="test-workflow-id-error",
-                        task_queue="test-task-queue",
-                    )
-                self.assertIsInstance(
-                    exc_info.exception.cause, exceptions.ApplicationError
-                )
-                self.assertEqual(
-                    "workflowType is required",
-                    exc_info.exception.cause.message,
-                )
-
-    async def test_moonmind_run_workflow_requires_trusted_owner_metadata(self) -> None:
-        async with await WorkflowEnvironment.start_time_skipping() as env:
-            async with Worker(
-                env.client,
-                task_queue="test-task-queue",
-                workflows=[MoonMindUserWorkflow],
-                workflow_runner=UnsandboxedWorkflowRunner(),
-            ):
-                with self.assertRaises(client.WorkflowFailureError) as exc_info:
-                    await env.client.execute_workflow(
-                        MoonMindUserWorkflow.run,
-                        {"workflowType": "MoonMind.UserWorkflow"},
-                        id="test-workflow-id-missing-owner",
-                        task_queue="test-task-queue",
-                    )
-                self.assertIsInstance(
-                    exc_info.exception.cause, exceptions.ApplicationError
-                )
-                self.assertEqual(
-                    "Trusted owner metadata is required in Temporal search attributes",
-                    exc_info.exception.cause.message,
-                )
-
-    async def test_moonmind_run_workflow_fail_fast_surfaces_failed_skill_status(
-        self,
-    ) -> None:
-        async with await WorkflowEnvironment.start_time_skipping() as env:
-            await _register_test_search_attributes(env)
-            async with (
-                Worker(
-                    env.client,
-                    task_queue=LLM_TASK_QUEUE,
-                    activities=[mock_plan_generate],
-                ),
-                Worker(
-                    env.client,
-                    task_queue=ARTIFACTS_TASK_QUEUE,
-                    activities=[mock_artifact_read],
-                ),
-                Worker(
-                    env.client,
-                    task_queue=SANDBOX_TASK_QUEUE,
-                    activities=[mock_sandbox_command, mock_skill_execute_failed],
-                ),
-                Worker(
-                    env.client,
-                    task_queue="test-task-queue",
-                    workflows=[MoonMindUserWorkflow],
-                    workflow_runner=UnsandboxedWorkflowRunner(),
-                ),
-            ):
-                with self.assertRaises(client.WorkflowFailureError) as exc_info:
-                    await env.client.execute_workflow(
-                        MoonMindUserWorkflow.run,
-                        {"workflowType": "MoonMind.UserWorkflow"},
-                        id="test-workflow-id-failed-skill-status",
-                        task_queue="test-task-queue",
-                        search_attributes=_trusted_search_attributes(),
-                    )
-                self.assertIsInstance(
-                    exc_info.exception.cause, exceptions.ApplicationError
-                )
-                failure_message = exc_info.exception.cause.message
-                self.assertIn(
-                    "Plan step 'step-1' (repo.run_tests) returned status FAILED",
-                    failure_message,
-                )
-                self.assertIn("forced skill failure", failure_message)
-                
-                handle = env.client.get_workflow_handle("test-workflow-id-failed-skill-status")
-                desc = await handle.describe()
-                self.assertEqual(
-                    desc.search_attributes.get("mm_state"),
-                    ["failed"]
-                )
-
-    async def test_moonmind_run_workflow_pr_publish_without_changes_fails(
-        self,
-    ) -> None:
-        async with await WorkflowEnvironment.start_time_skipping() as env:
-            await _register_test_search_attributes(env)
-            async with (
-                Worker(
-                    env.client,
-                    task_queue=LLM_TASK_QUEUE,
-                    activities=[mock_plan_generate],
-                ),
-                Worker(
-                    env.client,
-                    task_queue=ARTIFACTS_TASK_QUEUE,
-                    activities=[mock_artifact_read],
-                ),
-                Worker(
-                    env.client,
-                    task_queue=SANDBOX_TASK_QUEUE,
-                    activities=[mock_sandbox_command, mock_skill_execute_no_commits],
-                ),
-                Worker(
-                    env.client,
-                    task_queue="test-task-queue",
-                    workflows=[MoonMindUserWorkflow],
-                    workflow_runner=UnsandboxedWorkflowRunner(),
-                ),
-            ):
-                with self.assertRaises(client.WorkflowFailureError) as exc_info:
-                    await env.client.execute_workflow(
-                        MoonMindUserWorkflow.run,
-                        {
-                            "workflowType": "MoonMind.UserWorkflow",
-                            "initialParameters": {
-                                "repo": "moonladder/moonmind",
-                                "publishMode": "pr",
-                            },
-                        },
-                        id="test-workflow-pr-no-changes",
-                        task_queue="test-task-queue",
-                        search_attributes=_trusted_search_attributes(),
-                    )
-
-                self.assertIsInstance(
-                    exc_info.exception.cause, exceptions.ApplicationError
-                )
-                self.assertIn(
-                    "publishMode 'pr' requested, but no publishable diff was produced",
-                    exc_info.exception.cause.message,
-                )
-                self.assertIn(
-                    "feature/no-op",
-                    exc_info.exception.cause.message,
-                )
-
-                handle = env.client.get_workflow_handle("test-workflow-pr-no-changes")
-                desc = await handle.describe()
-                self.assertEqual(
-                    desc.search_attributes.get("mm_state"),
-                    ["failed"],
-                )
+    ) as (handle, calls):
+        with pytest.raises(client.WorkflowFailureError) as error:
+            await handle.result()
+        assert "no publishable diff" in error.value.cause.message
+        assert "feature/no-op" in error.value.cause.message
+        assert calls["terminal"][-1]["state"] == "failed"
