@@ -3220,6 +3220,38 @@ async def test_probe_encodes_branch_as_one_url_segment(monkeypatch, branch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("branch", [".", ".."])
+@pytest.mark.parametrize("from_remote_default", [False, True])
+async def test_probe_never_verifies_dot_refs_after_httpx_normalization(
+    monkeypatch, branch, from_remote_default
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "synthetic-test-token")
+    requests = []
+    real_client = httpx.AsyncClient
+
+    def handle(request):
+        requests.append(str(request.url))
+        return httpx.Response(200, json={"default_branch": branch})
+
+    transport = httpx.MockTransport(handle)
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        lambda **kwargs: real_client(transport=transport, **kwargs),
+    )
+    result = await GitHubService().probe_token(
+        repo="owner/repo",
+        mode="full_pr_automation",
+        base_branch=None if from_remote_default else branch,
+    )
+    assert result["defaultBranchAccessible"] is not True
+    assert result["observations"]["branch"] != "verified"
+    assert requests == ["https://api.github.com/repos/owner/repo"]
+    assert any(
+        d["operation"] == "branch" and not d["retryable"] for d in result["diagnostics"]
+    )
+
+
+@pytest.mark.asyncio
 async def test_probe_token_stops_after_throttle_and_reports_server_retry_signal(
     monkeypatch,
 ):

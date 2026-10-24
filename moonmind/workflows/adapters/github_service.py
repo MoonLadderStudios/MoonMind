@@ -1890,6 +1890,17 @@ class GitHubService:
                     if not ref:
                         # No branch was observed; do not guess one.
                         continue
+                    if ref in {".", ".."}:
+                        # URL encoders preserve dots; HTTP clients normalize
+                        # these invalid refs into a different API endpoint.
+                        result["diagnostics"].append(
+                            {
+                                "operation": "branch",
+                                "message": "A branch reference cannot be '.' or '..'.",
+                                "retryable": False,
+                            }
+                        )
+                        return result
                     url = url.replace("{ref}", quote(ref, safe=""))
                     if operation == "branch":
                         result["testedBranch"] = ref
