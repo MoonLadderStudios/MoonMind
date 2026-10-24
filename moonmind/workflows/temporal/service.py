@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any, NoReturn
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
@@ -23,7 +23,8 @@ from sqlalchemy import Select, and_, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
-from temporalio.client import WorkflowExecutionStatus
+from temporalio.client import WorkflowExecutionStatus, WorkflowHistory
+from temporalio.common import WorkflowIDReusePolicy
 from temporalio.service import RPCError, RPCStatusCode
 
 from api_service.db.models import (
@@ -80,6 +81,7 @@ from moonmind.workflows.executions.runtime_capabilities import (
 from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
     TemporalArtifactAuthorizationError,
+    TemporalArtifactError,
     TemporalArtifactNotFoundError,
     TemporalArtifactRepository,
     TemporalArtifactService,
@@ -124,6 +126,11 @@ from moonmind.workflows.executions.preset_expansion import (
     expand_preset_for_child_run,
     has_unexpanded_task_template,
 )
+from moonmind.workflows.executions.provider_profile_projection import (
+    PROVIDER_PROFILE_MEMO_KEY,
+    PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
+    build_provider_profile_projection,
+)
 from moonmind.workflows.executions.title_derivation import (
     TITLE_PROVENANCE_GENERATED,
     TITLE_PROVENANCE_USER_EXPLICIT,
@@ -142,16 +149,18 @@ from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
 )
 from moonmind.workflows.temporal.title_search import tokenize_title
-from moonmind.workflows.executions.provider_profile_projection import (
-    PROVIDER_PROFILE_MEMO_KEY,
-    PROVIDER_PROFILE_SEARCH_ATTRIBUTE,
-    build_provider_profile_projection,
-)
+
+if TYPE_CHECKING:
+    from api_service.services.omnigent_execution_plan_service import (
+        PersistedOmnigentExecutionPlan,
+    )
 
 TERMINAL_STATES: frozenset[MoonMindWorkflowState] = TERMINAL_WORKFLOW_STATES
 SEND_MESSAGE_SCAN_LOCATION = "execution.send_message.message"
 CREATE_IDEMPOTENCY_KEY_MAX_LENGTH = 128
 _BEST_EFFORT_SESSION_TERMINATION_TIMEOUT_SECONDS = 5.0
+_CREATE_START_RPC_TIMEOUT_SECONDS = 10.0
+_CREATE_START_MEMO_KEY = "temporalStart"
 
 
 # Edits apply a shallow parameters patch, where an omitted key keeps its stored
@@ -485,6 +494,19 @@ class TemporalExecutionError(RuntimeError):
     """Base class for temporal execution service errors."""
 
 
+class TemporalExecutionStartUnconfirmedError(TemporalExecutionError):
+    """Admission is saved, but Temporal has not confirmed its start."""
+
+    def __init__(self, workflow_id: str, reason: str):
+        self.detail = {
+            "code": "temporal_start_unconfirmed",
+            "workflowId": workflow_id,
+            "reason": reason,
+            "message": "Execution inputs are saved, but its Temporal start is unconfirmed. Retry the original idempotency key to reconcile this admission.",
+        }
+        super().__init__(self.detail["message"])
+
+
 class TemporalExecutionNotFoundError(TemporalExecutionError):
     """Raised when a workflow execution cannot be located."""
 
@@ -679,11 +701,14 @@ class TemporalExecutionService:
         )
         self._client_adapter = client_adapter or TemporalClientAdapter()
 
-    def _remediation_context_builder(self) -> RemediationContextBuilder:
+    def _remediation_context_builder(
+        self, *, session: AsyncSession | None = None
+    ) -> RemediationContextBuilder:
+        context_session = session if session is not None else self._session
         return RemediationContextBuilder(
-            session=self._session,
+            session=context_session,
             artifact_service=TemporalArtifactService(
-                TemporalArtifactRepository(self._session)
+                TemporalArtifactRepository(context_session)
             ),
             step_ledger_loader=self._query_step_ledger_rows,
         )
@@ -2182,6 +2207,7 @@ class TemporalExecutionService:
         _run_id: str | None = None,
         _recovery_artifact_source: TemporalExecutionCanonicalRecord | None = None,
         _publication_identity_source: TemporalExecutionCanonicalRecord | None = None,
+        _admitted_execution_plan: PersistedOmnigentExecutionPlan | None = None,
     ) -> TemporalExecutionRecord:
         # --- Worker Pause API Guard (DOC-REQ-001, DOC-REQ-005, FR-005) ---
         if not _skip_pause_guard and await self.check_system_paused():
@@ -2214,7 +2240,7 @@ class TemporalExecutionService:
                 workflow_type=workflow_type_enum,
             )
             if existing is not None:
-                return await self._sync_projection_best_effort(existing)
+                return await self.ensure_create_started(existing)
 
         self._validate_execution_targets(initial_parameters or {})
 
@@ -2486,6 +2512,18 @@ class TemporalExecutionService:
             memo[PROVIDER_PROFILE_MEMO_KEY] = profile_summary
             search_attributes[PROVIDER_PROFILE_SEARCH_ATTRIBUTE] = profile_search_value
 
+        admitted_scheduled_for = scheduled_for
+        if admitted_scheduled_for is None and start_delay is not None:
+            admitted_scheduled_for = now + start_delay
+        memo[_CREATE_START_MEMO_KEY] = {
+            "state": "pending",
+            "firstRequestedAt": None,
+            "scheduledFor": (
+                admitted_scheduled_for.isoformat() if admitted_scheduled_for else None
+            ),
+            "taskQueue": _workflow_start_task_queue(params),
+        }
+
         artifact_refs = [
             ref
             for ref in (input_artifact_ref, plan_artifact_ref, manifest_artifact_ref)
@@ -2526,6 +2564,56 @@ class TemporalExecutionService:
             updated_at=now,
             closed_at=None,
         )
+        if _admitted_execution_plan is not None:
+            from api_service.services.omnigent_execution_plan_service import (
+                PersistedOmnigentExecutionPlan,
+            )
+            from moonmind.omnigent.bridge_artifacts import (
+                OmnigentArtifactError,
+                link_verified_execution_plan_inputs,
+            )
+            from moonmind.schemas.agent_runtime_models import (
+                OmnigentExecutionPlanBinding,
+            )
+
+            # Only the trusted producer's compiler result supplies delegation;
+            # a plan ref in authored parameters is not permission to read it.
+            if (
+                workflow_type_enum is not TemporalWorkflowType.USER_WORKFLOW
+                or not isinstance(
+                    _admitted_execution_plan, PersistedOmnigentExecutionPlan
+                )
+                or OmnigentExecutionPlanBinding.model_validate(
+                    params.get("omnigentExecutionPlan")
+                )
+                != _admitted_execution_plan.binding
+            ):
+                raise TemporalExecutionValidationError(
+                    "Execution input delegation conflicts with admitted plan authority"
+                )
+            # Snapshot lineage is part of admission, before an uncertain Start
+            # RPC can return without the router's post-create bookkeeping.
+            # Only the validated compiler result supplies these saved inputs.
+            binding = _admitted_execution_plan.binding
+            record.memo = {
+                **record.memo,
+                "task_input_snapshot_ref": binding.task_input_snapshot_ref,
+                "task_input_snapshot_version": 1,
+                "task_input_snapshot_source_kind": "create",
+                "omnigent_execution_plan_ref": binding.plan_ref,
+                "omnigent_execution_plan_digest": binding.plan_digest,
+                "omnigent_execution_plan_artifact_ref": binding.plan_artifact_ref,
+            }
+            record.artifact_refs = list(
+                dict.fromkeys(
+                    [
+                        *record.artifact_refs,
+                        binding.task_input_snapshot_ref,
+                        *_admitted_execution_plan.artifact_refs,
+                    ]
+                )
+            )
+
         self._session.add(record)
         if normalized_depends_on:
             await self._write_dependency_edges(
@@ -2534,8 +2622,35 @@ class TemporalExecutionService:
             )
         if remediation_link is not None:
             self._session.add(remediation_link)
-        recovery_input_links: list[TemporalArtifactLink] = []
         try:
+            if _admitted_execution_plan is not None:
+                # The canonical unique create identity chooses the winner
+                # before it may delegate. Competing same-key API requests use
+                # the same workflow ID and must not contribute losing inputs.
+                await self._session.flush()
+                admission_sessions = async_sessionmaker(
+                    bind=await self._session.connection(),
+                    expire_on_commit=False,
+                    join_transaction_mode="create_savepoint",
+                )
+                # The artifact owner retains its validation, link and read-use
+                # accounting. Its commits release only nested savepoints; this
+                # canonical transaction commits the record and entire closure
+                # together, or rolls both back on any admission failure.
+                try:
+                    admitted_refs = await link_verified_execution_plan_inputs(
+                        session_factory=admission_sessions,
+                        plan=_admitted_execution_plan.envelope,
+                        binding=_admitted_execution_plan.binding,
+                        workflow_id=workflow_id,
+                        run_id=run_id,
+                        namespace=self._namespace,
+                    )
+                    record.artifact_refs = list(
+                        dict.fromkeys([*record.artifact_refs, *admitted_refs])
+                    )
+                except (OmnigentArtifactError, TemporalArtifactError) as exc:
+                    raise TemporalExecutionValidationError(str(exc)) from exc
             if _recovery_artifact_source is not None:
                 # Recovery inherits the admitted source inputs and retained step
                 # evidence, but has a new execution identity. Commit their links
@@ -2570,17 +2685,15 @@ class TemporalExecutionService:
                     if link.artifact_id in inherited:
                         continue
                     inherited.add(link.artifact_id)
-                    recovery_input_links.append(
-                        await artifact_repository.add_link(
-                            artifact_id=link.artifact_id,
-                            execution=ExecutionRef(
-                                namespace=self._namespace,
-                                workflow_id=workflow_id,
-                                run_id=run_id,
-                                link_type="input.recovery",
-                                created_by_activity_type="workflow.recovery.inherit",
-                            ),
-                        )
+                    await artifact_repository.add_link(
+                        artifact_id=link.artifact_id,
+                        execution=ExecutionRef(
+                            namespace=self._namespace,
+                            workflow_id=workflow_id,
+                            run_id=run_id,
+                            link_type="input.recovery",
+                            created_by_activity_type="workflow.recovery.inherit",
+                        ),
                     )
             await self._session.commit()
         except IntegrityError as exc:
@@ -2595,7 +2708,7 @@ class TemporalExecutionService:
             )
             if existing is None:
                 raise exc
-            return await self._sync_projection_best_effort(existing)
+            return await self.ensure_create_started(existing)
         except Exception:
             # Never leave an idempotency-visible destination without its input
             # grants if admission fails before the atomic commit.
@@ -2603,91 +2716,7 @@ class TemporalExecutionService:
             raise
         await self._session.refresh(record)
 
-        if remediation_link is not None:
-            try:
-                await self._remediation_context_builder().build_context(
-                    remediation_workflow_id=record.workflow_id
-                )
-                await self._session.refresh(record)
-            except Exception as exc:
-                raise TemporalExecutionValidationError(
-                    "Failed to create remediation context artifact."
-                ) from exc
-
-        try:
-            input_args: dict[str, Any] = {}
-            if workflow_type_enum is TemporalWorkflowType.USER_WORKFLOW:
-                input_args = {
-                    "workflow_type": user_workflow_start_contract.workflow_type,
-                    "title": resolved_title,
-                    "initial_parameters": params,
-                    "input_artifact_ref": input_artifact_ref,
-                    "plan_artifact_ref": plan_artifact_ref,
-                }
-                if scheduled_for is not None:
-                    input_args["scheduled_for"] = scheduled_for.isoformat()
-
-            start_result = await self._client_adapter.start_workflow(
-                workflow_type=(
-                    user_workflow_start_contract.workflow_type
-                    if user_workflow_start_contract is not None
-                    else workflow_type_enum.value
-                ),
-                workflow_id=record.workflow_id,
-                input_args=input_args,
-                memo=memo,
-                search_attributes=search_attributes,
-                task_queue=_workflow_start_task_queue(params),
-                start_delay=(
-                    start_delay
-                    if workflow_type_enum is not TemporalWorkflowType.USER_WORKFLOW
-                    else None
-                ),
-            )
-            start_run_id = getattr(start_result, "run_id", None)
-            if (
-                isinstance(start_run_id, str)
-                and start_run_id.strip()
-                and start_run_id != record.run_id
-            ):
-                # Canonical admission correction (REQ-02): the Temporal start
-                # call is authoritative for the run identity of this canonical
-                # source row. This edits the canonical source only; the
-                # projection is reconciled through the shared mutator below
-                # via _sync_projection_best_effort, so no projection lifecycle
-                # field is written outside mutate_execution_projection.
-                record.run_id = start_run_id
-                for input_link in recovery_input_links:
-                    input_link.run_id = start_run_id
-                if remediation_link is not None:
-                    remediation_link.remediation_run_id = start_run_id
-                    if remediation_link.context_artifact_ref:
-                        context_link = (
-                            await self._session.execute(
-                                select(TemporalArtifactLink).where(
-                                    TemporalArtifactLink.workflow_id
-                                    == record.workflow_id,
-                                    TemporalArtifactLink.artifact_id
-                                    == remediation_link.context_artifact_ref,
-                                    TemporalArtifactLink.link_type
-                                    == "remediation.context",
-                                )
-                            )
-                        ).scalar_one_or_none()
-                        if context_link is not None:
-                            context_link.run_id = start_run_id
-                await self._session.commit()
-                await self._session.refresh(record)
-        except Exception as exc:
-            if remediation_link is not None:
-                logger.exception(
-                    "Failed to start Temporal remediation workflow for execution %s",
-                    record.workflow_id,
-                )
-                raise
-            logger.exception(
-                "Failed to start Temporal workflow for execution %s", record.workflow_id
-            )
+        record = await self._ensure_create_start_confirmed(record)
 
         synced_record = await self._sync_projection_best_effort(record)
         if scheduled_for is not None and isinstance(
@@ -2727,6 +2756,325 @@ class TemporalExecutionService:
                     pass
                 synced_record = await self._sync_projection_best_effort(record)
         return synced_record
+
+    async def ensure_create_started(
+        self, record: TemporalExecutionCanonicalRecord
+    ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
+        """Resume only a durably admitted pending create, using its saved inputs."""
+        record = await self._ensure_create_start_confirmed(record)
+        return await self._sync_projection_best_effort(record)
+
+    async def _ensure_create_start_confirmed(
+        self, record: TemporalExecutionCanonicalRecord
+    ) -> TemporalExecutionCanonicalRecord:
+        workflow_id = record.workflow_id
+
+        async def locked_record() -> TemporalExecutionCanonicalRecord:
+            return (
+                await self._session.execute(
+                    select(TemporalExecutionCanonicalRecord)
+                    .where(TemporalExecutionCanonicalRecord.workflow_id == workflow_id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar_one()
+
+        record = await locked_record()
+        intent = dict((record.memo or {}).get(_CREATE_START_MEMO_KEY) or {})
+        if self._create_start_stopped(record, intent):
+            return record
+
+        if _workflow_payload(record.parameters).get("remediation"):
+            remediation_link = await self._session.get(
+                TemporalExecutionRemediationLink, workflow_id, populate_existing=True
+            )
+            if remediation_link is None or not remediation_link.context_artifact_ref:
+                try:
+                    async with AsyncSession(
+                        bind=await self._session.connection(),
+                        expire_on_commit=False,
+                        join_transaction_mode="create_savepoint",
+                    ) as context_session:
+                        await self._remediation_context_builder(
+                            session=context_session
+                        ).build_context(remediation_workflow_id=workflow_id)
+                    # The producer committed through a separate session.
+                    if remediation_link is not None:
+                        await self._session.refresh(remediation_link)
+                except Exception as error:
+                    logger.exception(
+                        "Remediation context preparation failed for %s", workflow_id
+                    )
+                    await self._create_start_unconfirmed(
+                        record, intent, "remediation_context_unavailable", error
+                    )
+                # Artifact-owner commits release only savepoints, preserving
+                # admission serialization until its context and intent are durable.
+                record = await locked_record()
+                intent = dict(record.memo[_CREATE_START_MEMO_KEY])
+                if self._create_start_stopped(record, intent):
+                    return record
+
+        first_request = intent.get("firstRequestedAt")
+        if first_request is None:
+            # This commit precedes the RPC. A crash can never erase evidence that
+            # delivery was attempted, even when its acknowledgement is lost.
+            try:
+                retention = await asyncio.wait_for(
+                    self._client_adapter.namespace_retention_seconds(),
+                    _CREATE_START_RPC_TIMEOUT_SECONDS,
+                )
+                intent["retentionSeconds"] = (
+                    retention
+                    if isinstance(retention, (int, float)) and retention > 0
+                    else None
+                )
+            except Exception:
+                logger.warning(
+                    "Could not read Temporal history retention before starting %s",
+                    workflow_id,
+                    exc_info=True,
+                )
+                intent["retentionSeconds"] = None
+            intent["firstRequestedAt"] = _utc_now().isoformat()
+            record.memo = {**record.memo, _CREATE_START_MEMO_KEY: intent}
+            await self._session.commit()
+            record = await locked_record()
+            intent = dict(record.memo[_CREATE_START_MEMO_KEY])
+            if self._create_start_stopped(record, intent):
+                return record
+        else:
+            try:
+                description = await asyncio.wait_for(
+                    self._client_adapter.describe_workflow(workflow_id),
+                    _CREATE_START_RPC_TIMEOUT_SECONDS,
+                )
+            except RPCError as exc:
+                if exc.status != RPCStatusCode.NOT_FOUND:
+                    await self._create_start_unconfirmed(
+                        record, intent, "reconciliation_unavailable", exc
+                    )
+                await self._require_pending_start_absence(record, intent)
+            except Exception as exc:
+                logger.exception(
+                    "Temporal start reconciliation failed for %s", workflow_id
+                )
+                await self._create_start_unconfirmed(
+                    record, intent, "reconciliation_unavailable", exc
+                )
+            else:
+                return await self._confirm_create_start(
+                    record, intent, description.run_id
+                )
+
+        input_args = {}
+        if record.workflow_type is TemporalWorkflowType.USER_WORKFLOW:
+            input_args = {
+                "workflow_type": record.memo["runtimeWorkflowType"],
+                "title": record.memo["title"],
+                "initial_parameters": record.parameters,
+                "input_artifact_ref": record.input_ref,
+                "plan_artifact_ref": record.plan_ref,
+            }
+            if intent.get("scheduledFor"):
+                input_args["scheduled_for"] = intent["scheduledFor"]
+        for attempt in range(2):
+            delay = None
+            if (
+                record.workflow_type is not TemporalWorkflowType.USER_WORKFLOW
+                and intent.get("scheduledFor")
+            ):
+                delay = max(
+                    timedelta(),
+                    datetime.fromisoformat(intent["scheduledFor"]) - _utc_now(),
+                )
+            try:
+                result = await asyncio.wait_for(
+                    self._client_adapter.start_workflow(
+                        workflow_type=record.memo.get("runtimeWorkflowType")
+                        or record.workflow_type.value,
+                        workflow_id=workflow_id,
+                        input_args=input_args,
+                        memo=dict(record.memo),
+                        search_attributes=dict(record.search_attributes),
+                        task_queue=intent.get("taskQueue"),
+                        start_delay=delay,
+                        id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+                    ),
+                    _CREATE_START_RPC_TIMEOUT_SECONDS,
+                )
+                run_id = getattr(result, "run_id", None)
+                if not isinstance(run_id, str) or not run_id:
+                    raise RuntimeError("Temporal start returned no confirmed run ID")
+            except Exception as exc:
+                logger.exception(
+                    "Temporal start was not acknowledged for execution %s", workflow_id
+                )
+                try:
+                    description = await asyncio.wait_for(
+                        self._client_adapter.describe_workflow(workflow_id),
+                        _CREATE_START_RPC_TIMEOUT_SECONDS,
+                    )
+                    run_id = description.run_id
+                except RPCError as describe_error:
+                    transient = (
+                        isinstance(exc, (OSError, TimeoutError))
+                        or isinstance(exc, RPCError)
+                        and exc.status
+                        in {
+                            RPCStatusCode.UNAVAILABLE,
+                            RPCStatusCode.DEADLINE_EXCEEDED,
+                            RPCStatusCode.RESOURCE_EXHAUSTED,
+                            RPCStatusCode.ABORTED,
+                        }
+                    )
+                    if (
+                        attempt == 0
+                        and transient
+                        and describe_error.status == RPCStatusCode.NOT_FOUND
+                    ):
+                        await self._require_pending_start_absence(record, intent)
+                        continue
+                    await self._create_start_unconfirmed(
+                        record, intent, "start_not_confirmed", exc
+                    )
+                except Exception:
+                    logger.exception(
+                        "Temporal start readback failed for %s", workflow_id
+                    )
+                    await self._create_start_unconfirmed(
+                        record, intent, "start_not_confirmed", exc
+                    )
+            break
+        return await self._confirm_create_start(record, intent, run_id)
+
+    async def _require_pending_start_absence(
+        self, record: TemporalExecutionCanonicalRecord, intent: Mapping[str, Any]
+    ) -> None:
+        """NOT_FOUND is safe absence only before an attempted run could expire."""
+        try:
+            current_retention = await asyncio.wait_for(
+                self._client_adapter.namespace_retention_seconds(),
+                _CREATE_START_RPC_TIMEOUT_SECONDS,
+            )
+            saved_retention = intent.get("retentionSeconds")
+            if not isinstance(saved_retention, (int, float)) or saved_retention <= 0:
+                raise ValueError("Retention at the first start attempt was unavailable")
+            retention = min(saved_retention, current_retention)
+            requested_at = datetime.fromisoformat(
+                intent["firstRequestedAt"]
+            ).astimezone(UTC)
+            age = (_utc_now() - requested_at).total_seconds()
+        except Exception as error:
+            logger.exception(
+                "Temporal history retention proof failed for %s", record.workflow_id
+            )
+            await self._create_start_unconfirmed(
+                record, dict(intent), "history_retention_unavailable", error
+            )
+        if retention <= 0 or not 0 <= age < retention:
+            await self._create_start_unconfirmed(
+                record, dict(intent), "history_absence_ambiguous"
+            )
+
+    @staticmethod
+    def _create_start_stopped(
+        record: TemporalExecutionCanonicalRecord, intent: Mapping[str, Any]
+    ) -> bool:
+        audit = (record.memo or {}).get(INTERVENTION_AUDIT_MEMO_KEY) or []
+        return (
+            intent.get("state") != "pending"
+            or record.state in TERMINAL_STATES
+            or record.close_status is not None
+            or any(
+                isinstance(entry, Mapping)
+                and entry.get("action") in {"cancel", "reject"}
+                for entry in audit
+            )
+        )
+
+    async def _create_start_unconfirmed(
+        self,
+        record: TemporalExecutionCanonicalRecord,
+        intent: dict[str, Any],
+        reason: str,
+        error: Exception | None = None,
+    ) -> NoReturn:
+        logger.warning(
+            "Temporal start remains unconfirmed for %s: %s",
+            record.workflow_id,
+            reason,
+            exc_info=error is not None,
+        )
+        intent["reason"] = reason
+        if error is not None:
+            intent["lastErrorType"] = type(error).__name__
+        record.memo = {**record.memo, _CREATE_START_MEMO_KEY: intent}
+        await self._session.commit()
+        raise TemporalExecutionStartUnconfirmedError(
+            record.workflow_id, reason
+        ) from error
+
+    async def _confirm_create_start(
+        self,
+        record: TemporalExecutionCanonicalRecord,
+        intent: dict[str, Any],
+        run_id: str | None,
+    ) -> TemporalExecutionCanonicalRecord:
+        if not isinstance(run_id, str) or not run_id:
+            await self._create_start_unconfirmed(
+                record, intent, "start_returned_no_run_id"
+            )
+        old_run_id = record.run_id
+        record.run_id = run_id
+        intent = {**intent, "state": "confirmed", "runId": run_id}
+        intent.pop("reason", None)
+        intent.pop("lastErrorType", None)
+        record.memo = {**record.memo, _CREATE_START_MEMO_KEY: intent}
+        links = (
+            (
+                await self._session.execute(
+                    select(TemporalArtifactLink).where(
+                        TemporalArtifactLink.namespace == record.namespace,
+                        TemporalArtifactLink.workflow_id == record.workflow_id,
+                        TemporalArtifactLink.run_id == old_run_id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for link in links:
+            link.run_id = run_id
+        remediation = (
+            (
+                await self._session.execute(
+                    select(TemporalExecutionRemediationLink).where(
+                        TemporalExecutionRemediationLink.remediation_workflow_id
+                        == record.workflow_id,
+                        TemporalExecutionRemediationLink.remediation_run_id
+                        == old_run_id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for link in remediation:
+            link.remediation_run_id = run_id
+        workflow_id = record.workflow_id
+        try:
+            await self._session.commit()
+            await self._session.refresh(record)
+        except Exception as error:
+            await self._session.rollback()
+            logger.exception(
+                "Could not save confirmed Temporal start for %s", workflow_id
+            )
+            raise TemporalExecutionStartUnconfirmedError(
+                workflow_id, "confirmation_record_unavailable"
+            ) from error
+        return record
 
     async def list_executions(
         self,
@@ -3544,6 +3892,11 @@ class TemporalExecutionService:
         async with self._issue_claim_for_step_retry(
             record, source_run_id=source_run_id
         ):
+            await self._restore_step_retry_input_access(
+                history,
+                workflow_id=record.workflow_id,
+                run_id=source_run_id,
+            )
             new_run_id = await self._client_adapter.reset_workflow_execution(
                 record.workflow_id,
                 run_id=source_run_id,
@@ -3559,6 +3912,79 @@ class TemporalExecutionService:
             step_id=plan.logical_step_id,
             title=plan.title,
         )
+
+    async def _restore_step_retry_input_access(
+        self, history: WorkflowHistory, *, workflow_id: str, run_id: str
+    ) -> None:
+        """Restore the recorded plan's input grants before a reset can read.
+
+        Retained runs can predate input delegation at API admission. Their
+        exact Temporal start input supplies authority; current projection
+        parameters and artifact refs cannot add or replace admitted inputs.
+        """
+        if not history.events or not history.events[0].HasField(
+            "workflow_execution_started_event_attributes"
+        ):
+            return
+        from moonmind.omnigent.bridge_artifacts import (
+            OmnigentArtifactError,
+            link_verified_execution_plan_inputs,
+        )
+        from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+        from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
+        from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
+
+        try:
+            started = history.events[0].workflow_execution_started_event_attributes
+            values = MOONMIND_TEMPORAL_DATA_CONVERTER.payload_converter.from_payloads(
+                started.input.payloads
+            )
+            if len(values) != 1 or not isinstance(values[0], Mapping):
+                return
+            parameters = values[0].get("initial_parameters")
+            if not isinstance(parameters, Mapping):
+                return
+            raw_binding = parameters.get("omnigentExecutionPlan")
+            if raw_binding is None:
+                return
+            binding = OmnigentExecutionPlanBinding.model_validate(raw_binding)
+            plan = await SessionExecutionPlanStore(self._session).load(binding.plan_ref)
+            if plan is None:
+                raise OmnigentArtifactError(
+                    "The recorded execution plan is unavailable"
+                )
+            # Artifact services commit their own read accounting and links.
+            # Keep those commits inside savepoints until the entire verified
+            # closure succeeds, including on databases with deferred BEGIN.
+            async with self._session.begin_nested():
+                admission_sessions = async_sessionmaker(
+                    bind=await self._session.connection(),
+                    expire_on_commit=False,
+                    join_transaction_mode="create_savepoint",
+                )
+                await link_verified_execution_plan_inputs(
+                    session_factory=admission_sessions,
+                    plan=plan,
+                    binding=binding,
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    namespace=self._namespace,
+                )
+            # Temporal may resume immediately after reset. Grants must already
+            # be visible to its independent Activity database sessions.
+            await self._session.commit()
+        except (
+            OmnigentArtifactError,
+            HarnessPlatformError,
+            TemporalArtifactError,
+            ValueError,
+            TypeError,
+        ) as exc:
+            await self._session.rollback()
+            raise TemporalExecutionRetryUnavailableError(
+                "input_artifacts_unavailable",
+                f"The run's recorded inputs cannot be restored for step retry: {exc}",
+            ) from exc
 
     async def _save_retry_response(
         self,
@@ -4241,7 +4667,11 @@ class TemporalExecutionService:
         return correlation, record
 
     async def _require_processable_graceful_cancellation(
-        self, workflow_id: str, *, run_id: str | None = None
+        self,
+        workflow_id: str,
+        *,
+        run_id: str | None = None,
+        pending_create_record: TemporalExecutionCanonicalRecord | None = None,
     ) -> bool:
         """Refuse to report a cancel the execution cannot currently process.
 
@@ -4275,6 +4705,22 @@ class TemporalExecutionService:
                 exc_info=True,
             )
             return False
+
+        if pending_create_record is not None:
+            try:
+                await self._confirm_create_start(
+                    pending_create_record,
+                    dict(pending_create_record.memo[_CREATE_START_MEMO_KEY]),
+                    description.run_id,
+                )
+            except Exception:
+                logger.warning(
+                    "Cancellation was accepted but its run identity could not be saved for %s",
+                    workflow_id,
+                    exc_info=True,
+                )
+                await self._session.refresh(pending_create_record)
+                return False
 
         if getattr(description, "status", None) == WorkflowExecutionStatus.CANCELED:
             return True
@@ -4374,6 +4820,33 @@ class TemporalExecutionService:
         record = await self._require_cancel_target_execution(
             workflow_id, include_orphaned=not graceful
         )
+        if (
+            isinstance(record, TemporalExecutionCanonicalRecord)
+            and (record.memo or {}).get(_CREATE_START_MEMO_KEY, {}).get("state")
+            == "pending"
+        ):
+            # A pending create owns this same row through its start RPC. Wait
+            # for that outcome before dispatching cancel, rather than losing
+            # the intent to NOT_FOUND just before the start reaches Temporal.
+            record = (
+                await self._session.execute(
+                    select(TemporalExecutionCanonicalRecord)
+                    .where(
+                        TemporalExecutionCanonicalRecord.workflow_id
+                        == record.workflow_id
+                    )
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar_one()
+            if (record.memo or {}).get(_CREATE_START_MEMO_KEY, {}).get(
+                "state"
+            ) != "pending" or record.state in TERMINAL_STATES:
+                # A confirmed workflow may need this row in its terminal
+                # Activity. Never hold the admission lock while waiting for
+                # that workflow to process its cancellation.
+                await self._session.commit()
+                await self._session.refresh(record)
         if expected_run_id is not None:
             await self._session.refresh(record)
             if record.run_id != expected_run_id:
@@ -4406,6 +4879,26 @@ class TemporalExecutionService:
 
         terminal_payload = None
         force_summary = f"forced_termination: {reason_text}"
+        pending_create = (
+            isinstance(record, TemporalExecutionCanonicalRecord)
+            and (record.memo or {}).get(_CREATE_START_MEMO_KEY, {}).get("state")
+            == "pending"
+        )
+        if pending_create:
+            # Cancellation must also stop retries when Temporal never received
+            # this saved admission. Persist the existing intervention intent
+            # before asking Temporal; no later create may launch a successor.
+            self._append_intervention_audit(
+                record,
+                action=action_name,
+                transport="temporal_cancel" if graceful else "temporal_terminate",
+                summary=reason_text,
+            )
+            self._update_summary(
+                record, "Cancellation requested. Waiting for the workflow to stop."
+            )
+            await self._session.commit()
+            await self._session.refresh(record)
         try:
             if graceful:
                 # Temporal cancellation is the authoritative terminal action.
@@ -4422,6 +4915,19 @@ class TemporalExecutionService:
                         record.workflow_id, run_id=expected_run_id
                     )
             else:
+                if pending_create:
+                    # Its admitted run ID is provisional until Temporal
+                    # confirms delivery. Reconcile before pinning a force
+                    # termination to a run; absence remains only a request.
+                    description = await asyncio.wait_for(
+                        self._client_adapter.describe_workflow(record.workflow_id),
+                        timeout=10,
+                    )
+                    record = await self._confirm_create_start(
+                        record,
+                        dict(record.memo[_CREATE_START_MEMO_KEY]),
+                        description.run_id,
+                    )
                 # A local terminal flag can be an old cancellation acceptance,
                 # not a Temporal close. Always reach Temporal for force cancel,
                 # pinning the recorded run so a reused workflow ID is safe.
@@ -4430,6 +4936,15 @@ class TemporalExecutionService:
                     timeout=10,
                 )
         except Exception as exc:
+            if (
+                pending_create
+                and isinstance(exc, RPCError)
+                and exc.status == RPCStatusCode.NOT_FOUND
+            ):
+                # Absence does not prove that an earlier uncertain start can
+                # never arrive. Keep the durable request without claiming a
+                # confirmed Temporal close; a retry can reconcile it later.
+                return await self._sync_projection_best_effort(record)
             raise TemporalExecutionValidationError(
                 f"Temporal cancel failed: {str(exc) or type(exc).__name__}. Retry cancellation."
             ) from exc
@@ -4440,6 +4955,7 @@ class TemporalExecutionService:
             cancellation_confirmed = (
                 await self._require_processable_graceful_cancellation(
                     record.workflow_id,
+                    **({"pending_create_record": record} if pending_create else {}),
                     **(
                         {"run_id": expected_run_id}
                         if expected_run_id is not None
@@ -4451,12 +4967,13 @@ class TemporalExecutionService:
         if cancellation_confirmed or not graceful:
             record.paused = False
             self._clear_waiting_metadata(record)
-        self._append_intervention_audit(
-            record,
-            action=action_name,
-            transport="temporal_cancel" if graceful else "temporal_terminate",
-            summary=reason_text,
-        )
+        if not pending_create:
+            self._append_intervention_audit(
+                record,
+                action=action_name,
+                transport="temporal_cancel" if graceful else "temporal_terminate",
+                summary=reason_text,
+            )
         if cancellation_confirmed:
             self._set_state(
                 record,
@@ -4471,9 +4988,14 @@ class TemporalExecutionService:
         else:
             self._set_state(
                 record,
-                terminal_payload["state"] if terminal_payload else MoonMindWorkflowState.FAILED,
+                (
+                    terminal_payload["state"]
+                    if terminal_payload
+                    else MoonMindWorkflowState.FAILED
+                ),
                 close_status=(
-                    terminal_payload["close_status"] if terminal_payload
+                    terminal_payload["close_status"]
+                    if terminal_payload
                     else TemporalExecutionCloseStatus.TERMINATED
                 ),
             )

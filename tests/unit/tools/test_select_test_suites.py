@@ -290,6 +290,22 @@ def test_unknown_backend_path_fails_open_to_reliability_journey() -> None:
     assert outputs["reliability_journey"] == "true"
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "api_service/data/presets/github-issue-search-and-implement.yaml",
+        "api_service/data/presets/pr-resolver.yaml",
+        "moonmind/workflows/executions/preset_readiness.py",
+        "api_service/services/presets/catalog.py",
+        "api_service/services/single_user_conversion.py",
+    ],
+)
+def test_saved_preset_inputs_select_their_reliability_journey(path: str) -> None:
+    outputs = _outputs([path])
+
+    assert outputs["reliability_journey"] == "true", path
+
+
 def test_managed_session_schema_selects_boundary_and_reliability() -> None:
     outputs = _outputs(["moonmind/schemas/managed_session_models.py"])
 
@@ -1210,14 +1226,14 @@ def test_backend_matrix_retains_only_selected_rows_and_reliability_shards():
 
     assert json.loads(_outputs(["README.md"])["backend_matrix"]) == {"include": []}
     assert json.loads(_outputs(["moonmind/utils/text.py"])["backend_matrix"]) == {
-        "include": [{"suite": "unit-fast", "job_minutes": 18}]
+        "include": [{"suite": "unit-fast", "job_minutes": 21}]
     }
     rows = json.loads(
         _outputs(["tests/integration/reliability/test_checkpoint_cold_resume.py"])[
             "backend_matrix"
         ]
     )["include"]
-    assert rows == [{"suite": "unit-fast", "job_minutes": 18}] + [
+    assert rows == [{"suite": "unit-fast", "job_minutes": 21}] + [
         {"suite": f"reliability-shard-{n}", "shard": str(n), "job_minutes": 20}
         for n in range(1, 5)
     ]
@@ -1266,7 +1282,7 @@ def test_cli_emits_valid_matrices_and_booleans(monkeypatch, tmp_path, capsys):
     assert emitted == selection.as_outputs()
     assert json.loads(emitted["integration_matrix"]) == {"suite": ["hermetic"]}
     assert json.loads(emitted["backend_matrix"]) == {
-        "include": [{"suite": "unit-fast", "job_minutes": 18}]
+        "include": [{"suite": "unit-fast", "job_minutes": 21}]
     }
 
 

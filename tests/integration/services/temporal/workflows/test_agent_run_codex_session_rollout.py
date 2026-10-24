@@ -28,9 +28,7 @@ from moonmind.schemas.managed_session_models import (
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
-# NOTE: This test uses the Temporal time-skipping test server and is not
-# suitable for the required integration_ci suite.
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
 @workflow.defn(name="MoonMind.ProviderProfileManager")
 class MockProviderProfileManager:

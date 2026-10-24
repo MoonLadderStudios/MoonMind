@@ -278,6 +278,8 @@ UNIT_SLOW_PREFIXES = (
 RELIABILITY_JOURNEY_EXACT = {
     "api_service/main.py",
     "api_service/services/recurring_workflows_service.py",
+    "api_service/services/single_user_conversion.py",
+    "moonmind/workflows/executions/preset_readiness.py",
     "api_service/api/routers/recurring_workflows.py",
     "frontend/src/entrypoints/schedules.tsx",
     ".github/workflows/pytest-unit-tests.yml",
@@ -299,6 +301,9 @@ RELIABILITY_JOURNEY_EXACT = {
 }
 
 RELIABILITY_JOURNEY_PREFIXES = (
+    # Saved-preset journeys read seeded definitions and catalog readiness.
+    "api_service/data/presets/",
+    "api_service/services/presets/",
     "moonmind/schemas/container_job_models.py",
     "tools/test_worker_count.py",
     "moonmind/container_job_cli.py",
@@ -603,7 +608,12 @@ class SuiteSelection:
             separators=(",", ":"),
         )
         rows = [
-            {"suite": suite, "job_minutes": 18 if suite == "unit-fast" else 15}
+            {
+                "suite": suite,
+                "job_minutes": {
+                    "unit-fast": 21, "api-component": 18, "temporal-boundary": 20
+                }[suite],
+            }
             for suite in ("unit-fast", "api-component", "temporal-boundary")
             if getattr(self, suite.replace("-", "_"))
         ]

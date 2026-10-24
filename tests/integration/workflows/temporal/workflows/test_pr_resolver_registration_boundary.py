@@ -5,6 +5,8 @@ from typing import Any
 import uuid
 
 import pytest
+
+pytestmark = pytest.mark.integration_ci
 from temporalio import workflow
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker

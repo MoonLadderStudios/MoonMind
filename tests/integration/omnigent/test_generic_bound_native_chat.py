@@ -43,6 +43,7 @@ from moonmind.omnigent.runtime_bindings import RuntimeBindingState
 from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from tests.helpers.account_source import User
+from tests.support.native_ui import read_native_ui_bootstrap
 from tests.integration.omnigent.test_generic_native_durable_journey import (  # noqa: F401
     native_journey,
 )
@@ -185,7 +186,10 @@ async def assert_bound_native_round_trip(journey, *, account_free=False):
             f"/omnigent-ui/workflow-chat/{binding_id}?embedded=1"
         )
         assert document.status_code == 200
-        assert '"sendMessage":true' in document.text
+        assert (
+            read_native_ui_bootstrap(document.text)["capabilities"]["sendMessage"]
+            is True
+        )
         path = f"/api/workflow-chat-bindings/{binding_id}/omnigent/v1/sessions/{binding_id}"
         response = await client.get(path)
         assert response.status_code == 200, response.text

@@ -157,7 +157,7 @@ Managed and agent-owned publication results come from accepted `moonmind.publish
 
 `POST /api/executions` takes `workflowType` (required; `MoonMind.UserWorkflow` or `MoonMind.MergeAutomation`), optional `title`, `inputArtifactRef`, `planArtifactRef`, `failurePolicy` (`fail_fast | continue_and_report | best_effort`), small JSON `initialParameters`, and `idempotencyKey`. `manifestArtifactRef` is accepted for parsing older payloads but ignored for new launches, and ManifestIngest payloads are rejected. Task-shaped envelopes (section 16) go through the same admission compiler.
 
-A direct UserWorkflow request cannot select Omnigent: it returns 422 `omnigent_product_boundary_required` when `targetRuntime`, `task.targetRuntime`, or a `runtime.mode` block names Omnigent, or when no runtime is named and the deployment default is Omnigent. Omnigent work uses the task-shaped envelope, which persists the immutable execution plan before scheduling; `moonmind workflow run` submits that envelope with `--param key=value` extras in `task.inputs`. A task-shaped request whose `idempotencyKey` already names an admitted execution returns that execution before any preset, Provider Profile, or runtime-default resolution, so an uncertain submission can be reconciled even after catalog state changes.
+A direct UserWorkflow request cannot select Omnigent: it returns 422 `omnigent_product_boundary_required` when `targetRuntime`, `task.targetRuntime`, or a `runtime.mode` block names Omnigent, or when no runtime is named and the deployment default is Omnigent. Omnigent work uses the task-shaped envelope, which persists the immutable execution plan before scheduling; `moonmind workflow run` submits that envelope with `--param key=value` extras in `task.inputs`. A repeated `idempotencyKey` uses its admitted inputs before resolving mutable presets, profiles or defaults. It reconciles an uncertain Temporal start instead of compiling another plan.
 
 ### 9.2 Validation
 
@@ -185,7 +185,7 @@ Explicit None is never promoted. An incompatible publishing Skill, a parallel sh
 
 ### 9.4 Idempotency
 
-Create deduplication is scoped to owner, workflow type, and idempotency key, and a repeated equivalent request returns the existing execution. Under the single-context contract, reuse also checks admitted context, target, publication policy, and definition evidence: a conflicting request under the same key cannot mutate the existing execution or be reported as accepted, and returns a bounded conflict with the existing reference where visible.
+Create deduplication is scoped to owner, workflow type and idempotency key. A retry retains the admitted title, timing and inputs; changes in its body cannot rewrite accepted work. A new request needs a new key. Admission records start intent before delivery. Uncertain delivery is reconciled before one automatic retry of a transient failure; Temporal rejects duplicate execution IDs and confirms run identity. Older unmarked records and canceled or completed work never relaunch. An uncertain attempt whose history is absent can restart only within the recorded and current namespace retention windows; unavailable or expired evidence leaves it pending.
 
 Dependabot's cross-run repository/PR/head identity is preserved, so a policy edit does not create a competing resolver for the same head or retarget an old one. Helpers report the existing child's actual disposition and use explicit execution controls for an authorized replacement.
 
@@ -197,7 +197,7 @@ Title resolution is deterministic: a meaningful caller title wins; otherwise the
 
 ### 9.6 Errors
 
-Create validation uses 422 `invalid_execution_request` with field-addressable details for context and policy conflicts; malformed bodies may produce framework validation errors, and authentication uses the auth layer's 401/403. A conflicting idempotent intent is a distinct conflict, not a successful create.
+Create validation uses 422 `invalid_execution_request`; authentication uses 401/403. Unconfirmed start returns 503 `temporal_start_unconfirmed` with `workflowId` and a reason. Omnigent atomically saves the winning snapshot and attachment grants before start; same-key retries preserve edit/rerun authority.
 
 ## 10. List executions
 
@@ -254,9 +254,9 @@ Remediation approval uses its durable pending approval record and the endpoint i
 
 `POST /api/executions/{workflowId}/cancel` takes an optional `reason` and `graceful` (default true).
 
-Graceful cancellation durably requests Temporal cancellation. Until Temporal confirms it, the response keeps the live state and pause/wait metadata, records the request in the intervention audit, and reports cancellation as requested. Only confirmed cancellation records `canceled`, clears pause/wait metadata, and allows terminal dependency fan-out, including when a first-attempt workflow task is queued on a worker version with no pollers. A terminal record is unchanged by graceful cancellation.
+Graceful cancellation durably requests Temporal cancellation. A pending create shares its admission lock with cancellation and saves the cancellation intent even if Temporal has not received the start; later create retries cannot launch it. Until Temporal confirms cancellation, the response keeps the live state and pause/wait metadata and reports cancellation as requested. Only confirmed cancellation records `canceled`, clears pause/wait metadata, and allows terminal dependency fan-out, including when a first-attempt workflow task is queued on a worker version with no pollers. A terminal record is unchanged by graceful cancellation.
 
-Force cancel (`graceful: false`) stays available through `actions.canForceCancel` even for a terminal or orphaned record, and always targets the recorded Temporal run, independent of workers and containers. Termination records `failed` with close status `terminated` and a `forced_termination:` summary. If Temporal reports NOT_FOUND, a run-scoped describe separates an already closed run (result preserved) from an absent execution, which is recorded canceled with an orphan-repair summary and unconfirmed runtime cleanup. Transient, permission, and timeout failures never count as absence; they leave the record unchanged and return a retryable 503. Force-cancel RPCs have a ten-second budget, and ownership checks apply to orphaned records. Success is 202; invisible targets return 404.
+Force cancel (`graceful: false`) stays available through `actions.canForceCancel` even for a terminal or orphaned record, and targets its confirmed Temporal run, independent of workers and containers. An uncertain pending start first reconciles its run identity; absence preserves the cancellation request without claiming a close. Termination records `failed` with close status `terminated` and a `forced_termination:` summary. For an established run, NOT_FOUND followed by a run-scoped describe preserves an already closed result or records an absent execution canceled with an orphan-repair summary and unconfirmed runtime cleanup. Transient, permission, and timeout failures never count as absence and return a retryable 503. Force-cancel RPCs have a ten-second budget. Success is 202; invisible targets return 404.
 
 Accepted cancellation does not prove runtime teardown or rollback of remote effects. Verified pushes, PRs, merges, and accepted children remain evidence, and preservation and credential release follow their lifecycle owners.
 

@@ -14,6 +14,8 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from api_service.db import models
 from moonmind.workflows.temporal.artifacts import (
@@ -281,3 +283,151 @@ async def test_postgres_claim_failure_does_not_grant_read_access(
     assert artifact.created_by_principal == _OWNER
     assert "observation" not in caplog.text
     assert cause not in caplog.text
+
+
+@pytest.mark.parametrize("surface", ["read", "read_path"])
+@pytest.mark.parametrize("disposition", ["commit", "rollback"])
+async def test_caller_bound_read_releases_only_its_completed_observation(
+    artifact_context, tmp_path, surface, disposition
+):
+    sessions, _setup, service = artifact_context
+    artifact = await _complete_artifact(service)
+    unrelated = await _complete_artifact(service)
+    async with sessions.kw["bind"].connect() as connection:
+        outer = await connection.begin()
+        nested = async_sessionmaker(
+            connection, expire_on_commit=False, join_transaction_mode="create_savepoint"
+        )
+        async with nested() as session:
+            rows, caller_transaction = await _add_caller_work(
+                session, unrelated.artifact_id
+            )
+            row_ids = {row.id for row in rows}
+            observed = []
+
+            async def while_bytes_are_active():
+                # The uncommitted FK observation must protect this actual
+                # serving operation from the destructive row-lock owner.
+                claims = await TemporalArtifactRepository(session).list_use_claims(
+                    artifact.artifact_id
+                )
+                assert len(claims) == 1
+                async with sessions() as sweeper:
+                    await sweeper.execute(text("SET LOCAL lock_timeout = '100ms'"))
+                    with pytest.raises(DBAPIError) as blocked:
+                        await TemporalArtifactRepository(
+                            sweeper
+                        ).get_artifact_for_update(artifact.artifact_id)
+                    assert blocked.value.orig.sqlstate == "55P03"
+                observed.append(True)
+
+            class PathBoundaryStore(_ReadBoundaryStore):
+                def read_path(self, storage_key):
+                    asyncio.run_coroutine_threadsafe(
+                        self._before_read(), self._loop
+                    ).result(timeout=10)
+                    return super().read_path(storage_key)
+
+            store_type = _ReadBoundaryStore if surface == "read" else PathBoundaryStore
+            reader = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=store_type(tmp_path / "artifacts", while_bytes_are_active),
+            )
+            loaded, content = await getattr(reader, surface)(
+                artifact_id=artifact.artifact_id,
+                principal=_READER,
+                admitted_principal=_OWNER,
+            )
+            assert loaded.artifact_id == artifact.artifact_id
+            assert (content if surface == "read" else content.read_bytes()) == _PAYLOAD
+            assert observed == [True]
+            assert session.get_transaction() is caller_transaction
+            assert caller_transaction.is_active and outer.is_active
+            assert [row.label for row in rows] == ["already flushed", "still pending"]
+            assert await _claims(sessions, artifact.artifact_id) == []
+            # Read completion must release its FK lock before the caller's
+            # independently owned transaction completes.
+            async with sessions() as sweeper:
+                await sweeper.execute(text("SET LOCAL lock_timeout = '500ms'"))
+                locked = await TemporalArtifactRepository(
+                    sweeper
+                ).get_artifact_for_update(artifact.artifact_id)
+                assert locked.artifact_id == artifact.artifact_id
+            statement = select(models.TemporalArtifactLink.id).where(
+                models.TemporalArtifactLink.id.in_(row_ids)
+            )
+            assert set((await session.scalars(statement)).all()) == row_ids
+            await session.commit()
+            assert outer.is_active
+            async with sessions() as observer:
+                assert (await observer.scalars(statement)).all() == []
+        await getattr(outer, disposition)()
+    async with sessions() as observer:
+        visible = set((await observer.scalars(statement)).all())
+        assert visible == (row_ids if disposition == "commit" else set())
+
+
+async def test_caller_bound_preview_preserves_derived_preview_and_caller_writes(
+    artifact_context, tmp_path
+):
+    sessions, setup, service = artifact_context
+    artifact = await _complete_artifact(
+        service, redaction_level=models.TemporalArtifactRedactionLevel.RESTRICTED
+    )
+    # As in the retained safe-preview regression, require real lazy derivation
+    # rather than returning the preview already generated by upload completion.
+    artifact.metadata_json = {
+        key: value
+        for key, value in artifact.metadata_json.items()
+        if key != "preview_artifact_id"
+    }
+    await setup.commit()
+    unrelated = await _complete_artifact(service)
+    async with sessions.kw["bind"].connect() as connection:
+        outer = await connection.begin()
+        nested = async_sessionmaker(
+            connection, expire_on_commit=False, join_transaction_mode="create_savepoint"
+        )
+        async with nested() as session:
+            rows, _caller_transaction = await _add_caller_work(
+                session, unrelated.artifact_id
+            )
+            reader = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            preview = await reader.compute_preview(
+                artifact_id=artifact.artifact_id,
+                principal=_READER,
+                admitted_principal=_OWNER,
+            )
+            preview_row, payload = await reader.read(
+                artifact_id=preview.artifact_id, principal=_READER
+            )
+            assert payload == _PAYLOAD
+            assert (
+                preview_row.redaction_level
+                is models.TemporalArtifactRedactionLevel.PREVIEW_ONLY
+            )
+            assert outer.is_active
+            row_ids = {row.id for row in rows}
+            assert (
+                set(
+                    (
+                        await session.scalars(
+                            select(models.TemporalArtifactLink.id).where(
+                                models.TemporalArtifactLink.id.in_(row_ids)
+                            )
+                        )
+                    ).all()
+                )
+                == row_ids
+            )
+            await session.commit()
+        await outer.commit()
+    async with sessions() as observer:
+        source = await observer.get(models.TemporalArtifact, artifact.artifact_id)
+        assert source.metadata_json["preview_artifact_id"] == preview.artifact_id
+        assert (
+            await observer.get(models.TemporalArtifact, preview.artifact_id) is not None
+        )

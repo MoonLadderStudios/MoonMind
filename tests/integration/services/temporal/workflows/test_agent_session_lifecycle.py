@@ -16,9 +16,7 @@ from moonmind.workflows.temporal.workflows.agent_session import (
     MoonMindAgentSessionWorkflow,
 )
 
-# NOTE: This test uses the Temporal time-skipping test server and is not
-# suitable for the required integration_ci suite.
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
 RUNTIME_EVENTS: list[tuple[str, dict[str, Any]]] = []
 

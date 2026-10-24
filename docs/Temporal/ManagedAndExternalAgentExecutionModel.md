@@ -778,10 +778,11 @@ budget and the condition that ended it.
 Monotonic intervals resist host clock changes; persisted wall-clock timestamps
 correlate runtime evidence. Before ending for lack of progress, the supervisor
 samples CPU/workspace activity and the workflow checks fresh canonical status.
-Managed grace expiry preserves confirmed completion; a still-silent run receives
-bounded cancellation and result reconciliation so provider quota can enter
-cooldown recovery. Cancellation and status polling consume the original
-remaining execution budget. The hard ceiling ends execution without further reconciliation.
+Managed recovery preserves confirmed completion and bounds cancellation, polling
+and result fetching to the remaining budget. A fetch timeout at that deadline
+produces the normal budget result and retains its original diagnostics; other
+Activity errors keep their failure behavior. Provider quota classification still
+enters cooldown recovery. The hard ceiling ends execution without further reconciliation.
 
 ### Progress evidence
 

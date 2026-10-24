@@ -64,7 +64,7 @@ The Temporal boundary and reliability jobs prepare both SDK test-server binaries
 
 The selector fails open. Empty changed-file input, unknown paths, CI workflow changes, dependency file changes, test-runner changes, pytest configuration changes, selector changes, pushes to `main`, scheduled runs, and manual dispatches all force `full_backend=true`. That path selects every exclusive backend shard, including `unit_slow`; it does not replace `unit-fast` with the broad unit wrapper.
 
-The real ownership verifier runs when collection inputs change (tests/fixtures/conftests/markers/plugins, dependencies, workflow/selector and duration inputs), on unknown changes, and for full-main/scheduled/manual events. Policy scans stay unconditional. The selected verifier checks every eligible provider-free pytest node has exactly one CI owner and uses the installed split plugin to prove all four reliability partitions are complete and disjoint. The precedence is `slow > temporal_boundary > component > unit_fast`.
+The real ownership verifier runs when collection inputs change (tests/fixtures/conftests/markers/plugins, dependencies, workflow/selector and duration inputs), on unknown changes, and for full-main/scheduled/manual events. Policy scans stay unconditional. It rejects missing ownership for provider-free unit, API component and integration nodes, even when an integration test lacks an execution marker. External provider, GPU and installed-deployment fixtures declare their resource requirements. The installed split plugin proves all four reliability partitions complete and disjoint. Unit precedence is `slow > temporal_boundary > component > unit_fast`.
 
 The invariant fast-unit command is:
 

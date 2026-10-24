@@ -3,6 +3,7 @@ import asyncio
 import re
 import typing
 from collections.abc import Callable
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -32,6 +33,7 @@ _SIDE_EFFECT_METADATA_KEY = "sideEffect"
 _AGENT_SKILL_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$")
 _CAPABILITY_TOKEN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_.:-]{0,126}[a-z0-9])?$")
 
+
 class SkillResolutionContext:
     """Contextual parameters for skill resolution (e.g. paths, run ID)."""
 
@@ -42,7 +44,10 @@ class SkillResolutionContext:
         workspace_root: str | None = None,
         allow_repo_skills: bool = False,
         allow_local_skills: bool = False,
-        async_session_maker: Callable[[], typing.AsyncContextManager[AsyncSession]] | None = None,
+        async_session_maker: (
+            Callable[[], typing.AsyncContextManager[AsyncSession]] | None
+        ) = None,
+        db_session: AsyncSession | None = None,
     ) -> None:
         self.snapshot_id = snapshot_id
         self.deployment_id = deployment_id
@@ -50,6 +55,8 @@ class SkillResolutionContext:
         self.allow_repo_skills = allow_repo_skills
         self.allow_local_skills = allow_local_skills
         self.async_session_maker = async_session_maker
+        self.db_session = db_session
+
 
 class SkillLoader(abc.ABC):
     """Base interface for an agent skill source provider."""
@@ -134,7 +141,7 @@ class DeploymentSkillLoader(SkillLoader):
         skill_names: typing.Iterable[str],
         context: SkillResolutionContext,
     ) -> list[ResolvedSkillEntry]:
-        if not context.async_session_maker:
+        if context.db_session is None and not context.async_session_maker:
             return []
 
         requested_names = sorted(
@@ -148,10 +155,16 @@ class DeploymentSkillLoader(SkillLoader):
 
         results = []
 
-        async with context.async_session_maker() as session:
-            stmt = (
-                select(AgentSkillDefinition)
-                .where(AgentSkillDefinition.slug.in_(requested_names))
+        # Admission keeps ownership of a supplied transaction. Only sessions
+        # opened through the factory are entered and closed by this loader.
+        session_context = (
+            nullcontext(context.db_session)
+            if context.db_session is not None
+            else context.async_session_maker()
+        )
+        async with session_context as session:
+            stmt = select(AgentSkillDefinition).where(
+                AgentSkillDefinition.slug.in_(requested_names)
             )
 
             res = await session.execute(stmt)

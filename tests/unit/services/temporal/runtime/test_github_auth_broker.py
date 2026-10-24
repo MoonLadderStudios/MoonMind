@@ -102,18 +102,26 @@ def test_build_github_socket_path_keeps_direct_run_root_owned():
         shutil.rmtree(support_root, ignore_errors=True)
 
 
+@pytest.mark.parametrize("arguments", [["auth", "status"], ["--version"], ["version"]])
 def test_run_gh_wrapper_clears_ambient_gh_token(
     monkeypatch: pytest.MonkeyPatch,
+    arguments: list[str],
 ) -> None:
     monkeypatch.setenv("GH_TOKEN", "ambient-gh-token")
     monkeypatch.setenv("GITHUB_TOKEN", "stale-github-token")
+    requests = []
+
+    def request_token(socket_path):
+        requests.append(socket_path)
+        return "broker-issued-token"
+
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.github_auth_broker.request_github_token",
-        lambda _socket_path: "broker-issued-token",
+        request_token,
     )
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.github_auth_broker.sys.argv",
-        ["gh-wrapper", "auth", "status"],
+        ["gh-wrapper", *arguments],
     )
 
     captured: dict[str, object] = {}
@@ -133,11 +141,17 @@ def test_run_gh_wrapper_clears_ambient_gh_token(
         run_gh_wrapper(socket_path="/tmp/github-auth.sock", real_gh_path="/usr/bin/gh")
 
     assert captured["path"] == "/usr/bin/gh"
-    assert captured["args"] == ["/usr/bin/gh", "auth", "status"]
+    assert captured["args"] == ["/usr/bin/gh", *arguments]
     env = captured["env"]
     assert isinstance(env, dict)
-    assert env["GITHUB_TOKEN"] == "broker-issued-token"
     assert "GH_TOKEN" not in env
+    if arguments == ["auth", "status"]:
+        assert env["GITHUB_TOKEN"] == "broker-issued-token"
+        assert requests == ["/tmp/github-auth.sock"]
+    else:
+        assert "GITHUB_TOKEN" not in env
+        assert requests == []
+
 
 def test_run_gh_wrapper_resolves_real_gh_after_wrapper_path(
     monkeypatch: pytest.MonkeyPatch,

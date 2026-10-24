@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextlib
 import hmac
 import json
+import logging
 import os
 import re
 import socketserver
@@ -33,6 +34,8 @@ import lock as lock_mod
 import operator_access as operator_access_mod
 import record as record_mod
 from redact import redact_mapping, redact_text
+
+logger = logging.getLogger(__name__)
 
 LEGACY_CONTROL_SERVICE = "temporal-worker-deployment-control"
 LEGACY_PROBE_TIMEOUT_SECONDS = 30
@@ -852,10 +855,16 @@ def build_app(
                         try:
                             target = target_resolver(stack)
                         except ValueError as exc:
+                            logger.warning(
+                                "Deployment target could not be derived: %s",
+                                redact_text(str(exc)),
+                            )
                             return _json_response(
                                 start_response,
                                 "400 Bad Request",
-                                {"error": f"deployment target could not be derived: {redact_text(str(exc))}"},
+                                {
+                                    "error": "deployment target could not be derived; inspect controller logs"
+                                },
                             )
                     # Own the stack before recording intent: a refused
                     # submission leaves no open record for restart recovery.
@@ -1382,14 +1391,27 @@ def run_omnigent_step(
         command = (
             "-c",
             (
-                "import asyncio,importlib.util,json,sys; "
-                "r=__import__('moonmind.workflows.skills.deployment_release', "
-                f"fromlist=['{function}']) if importlib.util.find_spec('moonmind') else None; "
-                f"f=getattr(r,'{function}',None); "
-                "sys.exit(asyncio.run(f(sys.argv[1],json.loads(sys.argv[2]))) "
-                "if f else (print('MOONMIND_OMNIGENT_RESULT='+json.dumps({'status':'unsupported'})) or 0))"
+                "import asyncio,importlib.util,json,os,sys,traceback\n"
+                "try:\n"
+                "    r=__import__('moonmind.workflows.skills.deployment_release', "
+                f"fromlist=['{function}']) if importlib.util.find_spec('moonmind') else None\n"
+                f"    f=getattr(r,'{function}',None)\n"
+                "    code=asyncio.run(f(sys.argv[1],json.loads(sys.argv[2]))) "
+                "if f else (print('MOONMIND_OMNIGENT_RESULT='+json.dumps({'status':'unsupported'})) or 0)\n"
+                "except BaseException:\n"
+                "    traceback.print_exc()\n"
+                "    code=1\n"
+                # asyncio.run has awaited coroutine, task and executor cleanup.
+                # Native interpreter finalizers must not strand this completed
+                # one-off and make the next step's ownership probe fail.
+                "try:\n"
+                "    sys.stdout.flush()\n"
+                "    sys.stderr.flush()\n"
+                "finally:\n"
+                "    os._exit(code)\n"
             ),
-            argument, json.dumps(request, sort_keys=True),
+            argument,
+            json.dumps(request, sort_keys=True),
         )
     store.record_omnigent_step(operation_id, phase)
     try:

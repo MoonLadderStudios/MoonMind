@@ -10,6 +10,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -37,7 +38,10 @@ def _valid_user_workflow_parameters() -> dict[str, object]:
 @pytest.fixture
 def mock_client_adapter():
     adapter = MagicMock()
-    adapter.start_workflow = AsyncMock()
+    adapter.start_workflow = AsyncMock(
+        return_value=SimpleNamespace(run_id="confirmed-test-run")
+    )
+    adapter.namespace_retention_seconds = AsyncMock(return_value=86_400)
     adapter.describe_workflow = AsyncMock(return_value=None)
     adapter.update_workflow = AsyncMock()
     adapter.signal_workflow = AsyncMock()

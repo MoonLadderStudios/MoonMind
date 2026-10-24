@@ -420,7 +420,7 @@ def rewrite_asset_urls(document: str, *, scoped_base: str) -> str:
     still resolve through the scoped route rather than 404 at the origin root.
     """
 
-    base = scoped_base.rstrip("/")
+    base = html.escape(scoped_base.rstrip("/"), quote=True)
 
     def _scope_srcset(match: re.Match[str]) -> str:
         tag = match.group(0)
@@ -459,13 +459,13 @@ def render_native_ui_document(
     Injects ``<base href>`` and the binding-scoped bootstrap object as the first
     children of ``<head>`` (so the native application reads its scoped API/WS
     base, presentation mode, and capabilities before any of its own scripts run)
-    and rewrites root-absolute asset URLs onto the scoped route. The bootstrap
-    JSON is HTML-escaped for ``</script>`` safety.
+    and rewrites root-absolute asset URLs onto the scoped route. Bootstrap JSON
+    lives in an HTML-escaped data attribute and is parsed before the app runs.
     """
 
     base = scoped_base.rstrip("/")
-    payload = json.dumps(dict(bootstrap), separators=(",", ":")).replace(
-        "</", "<\\/"
+    payload = html.escape(
+        json.dumps(dict(bootstrap), separators=(",", ":")), quote=True
     )
     # The stock standalone app owns a root BrowserRouter and root-absolute
     # transport paths. Install the thin host adapter before its module executes:
@@ -718,14 +718,14 @@ def render_native_ui_document(
   }
 })();
 """.strip()
-    # ``base`` embeds the caller-supplied binding id, so HTML-escape it for the
-    # attribute context; otherwise a crafted id could break out of ``href``.
-    # The bootstrap JSON itself stays JSON-encoded (with ``</`` neutralized)
-    # for the script context.
+    # Both dynamic values are attributes; no caller value becomes script source.
     escaped_base = html.escape(base, quote=True)
     injected = (
         f'<base href="{escaped_base}/">'
-        f"<script>window.__MOONMIND_OMNIGENT_CHAT__={payload};\n{adapter}</script>"
+        f'<meta id="moonmind-omnigent-chat-bootstrap" data-bootstrap="{payload}">'
+        "<script>window.__MOONMIND_OMNIGENT_CHAT__=JSON.parse("
+        'document.getElementById("moonmind-omnigent-chat-bootstrap").getAttribute("data-bootstrap"));'
+        f"\n{adapter}</script>"
     )
     rewritten = rewrite_asset_urls(upstream_html, scoped_base=base)
     insert_at = _head_insert_position(rewritten)

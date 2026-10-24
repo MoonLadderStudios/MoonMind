@@ -286,15 +286,15 @@ class NormalizedInstallation:
 
 
 def _numeric_key(value: Any) -> str:
-    import re as _re
-
     text = str(value or "").strip()
     if not text:
         return ""
     if text.isdigit():
         return text
-    match = _re.search(r"(\d+)\s*$", text)
-    return match.group(1) if match else text
+    start = len(text)
+    while start and text[start - 1].isdecimal():
+        start -= 1
+    return text[start:] if start < len(text) else text
 
 
 def normalize_installation_record(
