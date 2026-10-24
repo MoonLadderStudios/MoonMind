@@ -2265,42 +2265,38 @@ class TemporalPlanActivities:
         )
         return PlanGenerateActivityResult(plan_ref=plan_ref)
 
-    async def _native_execution_parameters(
+    async def _admit_execution_parameters(
         self, binding_payload: Mapping[str, Any]
     ) -> Mapping[str, Any] | None:
-        """Read native consumer intent from its immutable admitted plan only."""
+        """Admit workflow inputs, then return a native graph's frozen intent.
+
+        Temporal-started children bypass API admission. Their agent Skill
+        manifest is read before AgentRun can admit its inputs, so validation
+        must establish the same verified closure for every consumer here.
+        """
         from api_service.db.base import async_session_maker
         from api_service.services.omnigent_execution_plan_service import (
             _native_review_graph,
         )
         from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
-        from moonmind.omnigent.harness_platform.execution_plan import (
-            verify_execution_plan_envelope,
-        )
-        from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
         from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
         from moonmind.workflows.temporal.activities.omnigent_session_activities import (
             _load_verified_execution_plan,
         )
 
         binding = OmnigentExecutionPlanBinding.model_validate(binding_payload)
-        persisted = await DbExecutionPlanStore(async_session_maker).load(
-            binding.plan_ref
+        execution = temporal_activity.info()
+        persisted = await _load_verified_execution_plan(
+            binding,
+            workflow_id=execution.workflow_id,
+            run_id=execution.workflow_run_id,
+            namespace=execution.namespace,
         )
-        if persisted is None:
-            raise TemporalActivityRuntimeError("bound execution plan is unavailable")
-        persisted = verify_execution_plan_envelope(persisted)
-        if binding.plan_digest != "sha256:" + persisted.planRef.rsplit(":", 1)[-1]:
-            raise TemporalActivityRuntimeError("bound execution plan digest mismatch")
         if not any(
             getattr(value, "consumer", "agent") == "native"
             for value in persisted.payload.credentialBindings.values()
         ):
             return None
-        execution = temporal_activity.info()
-        await _load_verified_execution_plan(
-            binding, workflow_id=execution.workflow_id, run_id=execution.workflow_run_id
-        )
         gateway = TemporalOmnigentArtifactGateway(
             async_session_maker, principal=f"workflow:{execution.workflow_id}"
         )
@@ -2340,12 +2336,12 @@ class TemporalPlanActivities:
     ) -> ArtifactRef | str | Mapping[str, Any]:
         native_parameters: Mapping[str, Any] | None = None
         if omnigent_execution_plan is not None:
-            native_parameters = await self._native_execution_parameters(
+            native_parameters = await self._admit_execution_parameters(
                 omnigent_execution_plan
             )
             if native_parameters is None:
-                # Do not introduce graph restrictions for ordinary/retained
-                # agent bindings. Native authorization is the sole new gate.
+                # Input admission is shared; native graph restrictions do
+                # not change the recorded agent graph's validation behavior.
                 return plan_ref
             from api_service.services.omnigent_execution_plan_service import (
                 _native_review_graph,
