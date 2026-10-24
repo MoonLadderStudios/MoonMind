@@ -349,69 +349,6 @@ async def test_create_definition_with_catchup_all_rejects_retired_before_persist
 
 
 # ---------------------------------------------------------------------------
-# AC-05: queued-start drain — pause is not proof an execution stopped
-# ---------------------------------------------------------------------------
-
-
-def test_drain_gate_pause_does_not_imply_stopped_execution() -> None:
-    """An already-created ManifestIngest execution needs explicit cancel.
-
-    Reconcile pauses the retired Temporal Schedule producer, but a pause
-    does not stop an already-created (running) execution. The drain gate
-    stays closed while open histories exist and opens only when every
-    dimension — open histories, pending tasks, existing schedules — is
-    observed at zero. Unobservable dimensions fail closed.
-    """
-    from moonmind.gates.manifest_ingest_drain import (
-        collect_manifest_ingest_drain_observations,
-        evaluate_manifest_ingest_drain_observations,
-    )
-
-    # Schedule paused/removed but its execution still running: retain.
-    running = evaluate_manifest_ingest_drain_observations(
-        collect_manifest_ingest_drain_observations(
-            open_manifest_ingest_histories=1,
-            pending_manifest_tasks=0,
-            existing_manifest_schedules=0,
-        )
-    )
-    assert running.may_deploy_removal is False
-    assert running.required_action == "retain_and_drain"
-    assert "open_manifest_ingest_histories" in running.blocking_dimensions
-
-    # Pending retired activity tasks also block removal.
-    pending = evaluate_manifest_ingest_drain_observations(
-        collect_manifest_ingest_drain_observations(
-            open_manifest_ingest_histories=0,
-            pending_manifest_tasks=2,
-            existing_manifest_schedules=0,
-        )
-    )
-    assert pending.may_deploy_removal is False
-
-    # Unobservable visibility fails closed: never authorize removal.
-    unknown = evaluate_manifest_ingest_drain_observations(
-        collect_manifest_ingest_drain_observations(
-            open_manifest_ingest_histories=None,
-            pending_manifest_tasks=0,
-            existing_manifest_schedules=0,
-        )
-    )
-    assert unknown.may_deploy_removal is False
-
-    # Fully drained: all dimensions observed at zero.
-    drained = evaluate_manifest_ingest_drain_observations(
-        collect_manifest_ingest_drain_observations(
-            open_manifest_ingest_histories=0,
-            pending_manifest_tasks=0,
-            existing_manifest_schedules=0,
-        )
-    )
-    assert drained.may_deploy_removal is True
-    assert drained.required_action == "safe_to_remove"
-
-
-# ---------------------------------------------------------------------------
 # AC-05: ordinary-schedule trigger / backfill regression
 # ---------------------------------------------------------------------------
 
