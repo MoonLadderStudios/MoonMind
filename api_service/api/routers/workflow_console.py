@@ -593,10 +593,6 @@ def _normalize_workflow_detail_path(workflow_path: str) -> str | None:
     return None
 
 
-def _is_execution_admin(user: OperatorAdmission | None) -> bool:
-    return isinstance(user, OperatorAdmission) or bool(user and getattr(user, "is_superuser", False))
-
-
 def _is_allowed_path(path: str) -> bool:
     return _normalize_workflow_detail_path(path) is not None
 
