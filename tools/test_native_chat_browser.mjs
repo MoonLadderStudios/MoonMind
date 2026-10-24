@@ -31,6 +31,11 @@ let apiReads = [];
 let submissionKeys = [];
 const acceptedSubmissions = new Set();
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const transcript = [{
+  id: 'item-fixture-1', type: 'message', status: 'completed',
+  response_id: 'turn-fixture', created_at: 1,
+  role: 'assistant', content: [{ type: 'output_text', text: 'Captured fixture response survives cleanup.' }],
+}];
 const session = {
   id: binding, object: 'session', title: 'Synthetic recorded conversation', status: 'idle',
   kind: 'conversation', harness: 'codex', labels: {}, items: [], pending_inputs: [],
@@ -76,7 +81,7 @@ const server = createServer(async (req, res) => {
       if (scenario.denied) return reply({ detail: { code: 'omnigent_chat_operation_denied' } }, 403);
       if (scenario.transient && !scenario.retried) { scenario.retried = true; return reply({}, 503); }
       if (route.endsWith('/items') && scenario.slow) await delay(scenario.slow);
-      return reply(route.endsWith('/items') ? { object: 'list', data: [], has_more: false } : session);
+      return reply(route.endsWith('/items') ? { object: 'list', data: transcript, has_more: false } : session);
     }
     if (route === `/v1/sessions/${binding}/children`) return reply({ data: [], has_more: false });
     if (route === '/v1/extensions') return reply({ extensions: [] });
@@ -112,6 +117,7 @@ try {
     scenario = { ...test };
     apiReads = [];
     const context = await browser.newContext();
+    context.setDefaultTimeout(30000);
     const page = await context.newPage();
     const requests = [];
     const errors = [];
@@ -120,6 +126,7 @@ try {
     await page.goto(origin + test.path);
     const native = test.embedded ? page.frameLocator('iframe') : page;
     await native.getByRole('log').waitFor({ timeout: 55000 });
+    await native.getByRole('log').getByText('Captured fixture response survives cleanup.', { exact: true }).waitFor();
     assert.equal(await native.getByText('Page not found', { exact: true }).count(), 0);
     assert.ok(apiReads.includes(`/v1/sessions/${binding}/items`), 'Transcript read must actually succeed');
     assert.ok(!apiReads.includes('/v1/sessions'), 'Hosted mode must suppress the global session catalog request');
