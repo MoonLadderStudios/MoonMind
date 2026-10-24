@@ -66,6 +66,13 @@ cannot authorize artifact recovery or mint operator permission. Parent/child,
 workflow/session, tool, job-owner, expiry, and action restrictions remain at the
 owning endpoint. A bare service principal is not a generic artifact-read grant.
 
+An admitted operator can inherit runtime selections from any existing instance
+workflow by naming its parent, without task identity headers. A machine needs
+the matching verified parent and both child-create and runtime-inheritance
+scopes. Recorded person ownership and retired administrator flags grant neither
+permission; missing parents remain unavailable. Headerless inheritance records
+the selected parent as lineage without granting workflow-scoped machine authority.
+
 Historical execution and job owner values retain their provenance and idempotency
 namespaces. The guarded converter grants operator access per eligible retained
 job; service-owned jobs and machine session restrictions remain separate.

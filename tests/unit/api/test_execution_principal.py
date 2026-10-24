@@ -35,7 +35,7 @@ async def test_resolve_principal_without_task_headers_has_no_task_identity() -> 
         user=_user(),
         service=_FakeService({}),
     )
-    assert principal.user_id == "user-1"
+    assert principal.is_instance_operator is False
     assert principal.workflow_id is None
     assert principal.scopes == frozenset()
 
@@ -46,7 +46,7 @@ async def test_resolve_principal_with_verified_workflow_grants_scopes() -> None:
     service = _FakeService({"mm:parent": record})
 
     principal = await resolve_execution_principal(
-        user=_user(),
+        user=OperatorAdmission(via="loopback"),
         service=service,
         workflow_id_header="mm:parent",
         run_id_header="run-1",
@@ -61,8 +61,8 @@ async def test_resolve_principal_with_verified_workflow_grants_scopes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resolve_principal_drops_unverified_workflow_id() -> None:
-    record = SimpleNamespace(owner_id="someone-else")
+async def test_machine_headers_cannot_grant_matching_owner_authority() -> None:
+    record = SimpleNamespace(owner_id="user-1")
     service = _FakeService({"mm:parent": record})
 
     principal = await resolve_execution_principal(
@@ -80,7 +80,7 @@ async def test_resolve_principal_drops_workflow_id_when_describe_fails() -> None
     service = _FakeService({})
 
     principal = await resolve_execution_principal(
-        user=_user(),
+        user=OperatorAdmission(via="loopback"),
         service=service,
         workflow_id_header="mm:does-not-exist",
     )
@@ -90,7 +90,7 @@ async def test_resolve_principal_drops_workflow_id_when_describe_fails() -> None
 
 
 @pytest.mark.asyncio
-async def test_resolve_principal_superuser_skips_ownership_check() -> None:
+async def test_retired_superuser_flag_does_not_grant_workflow_authority() -> None:
     record = SimpleNamespace(owner_id="someone-else")
     service = _FakeService({"mm:parent": record})
 
@@ -100,10 +100,21 @@ async def test_resolve_principal_superuser_skips_ownership_check() -> None:
         workflow_id_header="mm:parent",
     )
 
-    assert principal.workflow_id == "mm:parent"
-    assert principal.is_superuser is True
-    assert SCOPE_CREATE_CHILD in principal.scopes
-    assert SCOPE_INHERIT_RUNTIME in principal.scopes
+    assert principal.workflow_id is None
+    assert principal.is_instance_operator is False
+    assert not principal.scopes
+
+
+@pytest.mark.asyncio
+async def test_operator_without_task_headers_retains_instance_admission() -> None:
+    principal = await resolve_execution_principal(
+        user=OperatorAdmission(via="loopback"),
+        service=_FakeService({}),
+    )
+
+    assert principal.is_instance_operator is True
+    assert principal.workflow_id is None
+    assert not principal.scopes
 
 
 @pytest.mark.asyncio
@@ -119,8 +130,7 @@ async def test_instance_operator_can_act_on_existing_workflow(owner_id) -> None:
     assert principal.workflow_id == "mm:parent"
     assert principal.run_id == "run-1"
     assert principal.scopes == {SCOPE_CREATE_CHILD, SCOPE_INHERIT_RUNTIME}
-    assert principal.user_id is None
-    assert principal.is_superuser is False
+    assert principal.is_instance_operator is True
 
 
 @pytest.mark.asyncio

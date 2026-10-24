@@ -25,12 +25,13 @@ Docker, or Temporal) and therefore safe for required CI.
 
 from __future__ import annotations
 
+from time import monotonic
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from api_service.api.routers.omnigent_bridge import (
@@ -41,11 +42,8 @@ from api_service.api.routers.omnigent_bridge import (
     router,
 )
 from api_service.auth_providers import get_instance_access
-from tools.omnigent_faultlab.scenario import (
-    EmittedEvent,
-    FaultScenario,
-    ScenarioStep,
-)
+from moonmind.security.operator_admission import OperatorAdmission
+from tools.omnigent_faultlab.scenario import EmittedEvent, FaultScenario, ScenarioStep
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -175,15 +173,16 @@ class _FaultlabService:
         return SimpleNamespace(owner_id=str(self._owner_id))
 
 
-def _mock_user():
-    return SimpleNamespace(id=_USER_ID, email="faultlab@example.com", is_superuser=False)
+def _operator_access(request: Request):
+    request.state.operator_admitted_at = monotonic()
+    return OperatorAdmission(via="loopback")
 
 
 def _build_client(rows: list[SimpleNamespace]) -> TestClient:
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
     store = _FaultlabBridgeStore(rows)
-    app.dependency_overrides[get_instance_access] = _mock_user
+    app.dependency_overrides[get_instance_access] = _operator_access
     app.dependency_overrides[_get_execution_service] = lambda: _FaultlabService(_USER_ID)
     app.dependency_overrides[_get_bridge_store] = lambda: store
     app.dependency_overrides[_require_bridge_enabled] = lambda: SimpleNamespace(

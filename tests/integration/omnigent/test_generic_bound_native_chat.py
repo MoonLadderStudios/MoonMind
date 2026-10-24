@@ -12,12 +12,13 @@ from __future__ import annotations
 import copy
 import os
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from sqlalchemy import inspect, select
 
 from api_service.api.routers import omnigent_bridge as bridge
@@ -39,6 +40,7 @@ from moonmind.omnigent.bridge_proxy import OmnigentBridgeSessionProxy
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.control_plane.identities import canonical_turn_command_key
 from moonmind.omnigent.runtime_bindings import RuntimeBindingState
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from tests.helpers.account_source import User
 from tests.support.native_ui import read_native_ui_bootstrap
@@ -52,8 +54,8 @@ from tests.integration.omnigent.test_generic_native_durable_journey import (  # 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
 
-def _application(store, base_url, *, account_free=False):
-    user = SimpleNamespace(id=uuid4(), is_superuser=True)
+def _application(store, base_url, *, account_free=False, caller=None):
+    user = caller if caller is not None else OperatorAdmission(via="loopback")
     proxy = OmnigentBridgeSessionProxy(
         run_store=store,
         client=OmnigentHttpClient(base_url=base_url),
@@ -78,7 +80,7 @@ def _application(store, base_url, *, account_free=False):
 
         app.dependency_overrides[get_async_session] = sessions
     else:
-        # These legacy cases isolate post-admission binding behavior. The
+        # These cases isolate post-admission binding behavior. The
         # account-free journey below does not override admission dependencies.
         for mounted in (bridge.workflow_chat_router, ui.native_ui_router):
             for route in mounted.routes:
@@ -620,6 +622,14 @@ async def test_generic_native_message_requires_observed_protocol(
 async def test_generic_native_stream_rechecks_runtime_cleanup(
     native_journey, session_factory, monkeypatch
 ):
+    for key in (
+        "MOONMIND_PUBLIC_BASE_URL",
+        "MOONMIND_TRUSTED_INGRESS",
+        "MOONMIND_TRUSTED_PROXIES",
+        "MOONMIND_API_PUBLISH_HOST",
+        "MOONMIND_DEPLOYMENT_PROJECT_NAME",
+    ):
+        monkeypatch.delenv(key, raising=False)
     journey = native_journey
     store = OmnigentBridgeSessionStore(session_factory)
 
@@ -630,18 +640,33 @@ async def test_generic_native_stream_rechecks_runtime_cleanup(
         records = await _authority_records(store, row)
         try:
             initial = await store.get_session_by_chat_binding_id(row.chat_binding_id)
-            user = SimpleNamespace(id=uuid4(), is_superuser=True)
+            user = OperatorAdmission(via="loopback")
             assert bridge._effective_capabilities(initial, user).capabilities[
                 "viewTranscript"
             ]
             await _invalidate_authority(store, row, "runtime_cleanup")
             monkeypatch.setattr(bridge, "_FACADE_STREAM_REAUTH_EVERY_POLLS", 1)
 
-            async def connected():
-                return False
+            async def receive():
+                return {"type": "http.request"}
+
+            request = Request(
+                {
+                    "type": "http",
+                    "method": "GET",
+                    "path": "/",
+                    "headers": [(b"host", b"localhost")],
+                    "client": ("127.0.0.1", 43210),
+                    "server": ("localhost", 80),
+                    "scheme": "http",
+                },
+                receive=receive,
+            )
+            request.state.workflow_chat_admitted_at = monotonic()
+            await bridge.revalidate_workflow_chat_access(request, user)
 
             stream = bridge._stream_workflow_chat_events(
-                request=SimpleNamespace(is_disconnected=connected),
+                request=request,
                 chat_binding_id=row.chat_binding_id,
                 bridge_session_id=row.bridge_session_id,
                 provider_session_id=row.omnigent_session_id,
@@ -682,7 +707,7 @@ async def test_generic_native_scan_scope_and_canonical_command(
         provider_row = await store.get_session_by_provider_session_id(
             row.omnigent_session_id
         )
-        user = SimpleNamespace(id=uuid4(), is_superuser=True)
+        user = OperatorAdmission(via="loopback")
         assert bridge._effective_capabilities(provider_row, user).capabilities[
             "sendMessage"
         ], "provider lookup never refreshed"
@@ -1008,15 +1033,19 @@ async def test_account_free_operator_uses_live_durable_binding(
                 "ownerPrincipal": retained_owner,
             }
             await session.commit()
-        # Legacy authenticated callers still cannot claim another person's
-        # retained canonical session, even with facade discovery permission.
+        # A historical administrator identity does not grant operator admission
+        # or reveal another retained session's binding.
         store = OmnigentBridgeSessionStore(session_factory)
         row = await store.resolve_projection_session(
             idempotency_key=native_journey.request.idempotency_key
         )
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(
-                app=_application(store, os.environ["OMNIGENT_SERVER_URL"])
+                app=_application(
+                    store,
+                    os.environ["OMNIGENT_SERVER_URL"],
+                    caller=SimpleNamespace(id=uuid4(), is_superuser=True),
+                )
             ),
             base_url="http://moonmind.test",
         ) as client:
@@ -1025,7 +1054,8 @@ async def test_account_free_operator_uses_live_durable_binding(
                 json=_message("wrong human"),
                 headers={"Idempotency-Key": "wrong-owner"},
             )
-            assert response.status_code == 409, response.text
+            assert response.status_code == 404, response.text
+            assert response.json()["detail"]["code"] == "omnigent_chat_binding_unknown"
             assert len(native_journey.server.events) == 1
         await assert_bound_native_round_trip(native_journey, account_free=True)
         async with session_factory() as session:

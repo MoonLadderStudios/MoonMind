@@ -5558,7 +5558,6 @@ async def test_generic_omnigent_fanout_preserves_exact_caller_runtime() -> None:
     )
     service = SimpleNamespace(describe_execution=AsyncMock(return_value=parent))
     principal = ExecutionPrincipal(
-        user_id="replay-owner",
         workflow_id=manifest["incidentWorkflowId"],
         scopes=frozenset({SCOPE_CREATE_CHILD, SCOPE_INHERIT_RUNTIME}),
     )
