@@ -41,12 +41,14 @@ from sqlalchemy.orm import (
     relationship,
     validates,
 )
+from sqlalchemy.sql.elements import Grouping
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy_utils import StringEncryptedType
 
 from api_service.core.encryption import (  # Added import for get_encryption_key
     get_encryption_key,
 )
+from api_service.db.artifact_recovery import artifact_recovery_owner_class
 
 if TYPE_CHECKING:
     from moonmind.workflows.automation.models import CodexAuthVolume, CodexWorkerShard
@@ -613,6 +615,7 @@ class OmnigentBridgeSessionEvent(Base):
     __tablename__ = "omnigent_bridge_session_events"
     __table_args__ = (
         Index("ix_omnigent_bridge_session_events_session", "bridge_session_id"),
+        Index("ix_omnigent_bridge_session_events_artifact_ref", "artifact_ref"),
         Index(
             "ix_omnigent_bridge_session_events_sequence",
             "bridge_session_id",
@@ -3049,6 +3052,14 @@ class TemporalArtifact(Base):
         cascade="all, delete-orphan",
         order_by="TemporalArtifactPin.pinned_at",
     )
+
+
+Index(
+    "ix_temporal_artifacts_recovery_owner",
+    Grouping(artifact_recovery_owner_class(TemporalArtifact.created_by_principal)),
+    postgresql_where=TemporalArtifact.operator_recovery_granted.is_not(True),
+    sqlite_where=TemporalArtifact.operator_recovery_granted.is_not(True),
+)
 
 
 class TemporalArtifactLink(Base):
