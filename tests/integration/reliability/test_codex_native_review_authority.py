@@ -262,10 +262,15 @@ async def test_agent_binding_keeps_existing_effective_plan_behavior(
     context = repository_consumers
     compiled = await context.compile(profile_tools=("gh",))
     activities = TemporalPlanActivities(artifact_service=context.artifacts)
+    environment = ActivityEnvironment()
+    environment.info = replace(
+        environment.info, workflow_id=_WORKFLOW, workflow_run_id="agent-run"
+    )
     assert (
-        await activities.plan_validate(
+        await environment.run(
+            activities.plan_validate,
             plan_ref="ordinary-plan-is-read-by-the-existing-executor",
-            principal="user-1",
+            principal=f"workflow:{_WORKFLOW}",
             omnigent_execution_plan=compiled.binding.model_dump(by_alias=True),
             execution_parameters={"workflow": {"instructions": "Ordinary agent work."}},
         )
