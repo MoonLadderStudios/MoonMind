@@ -2262,15 +2262,18 @@ class TemporalArtifactService:
         if backend == db_models.TemporalArtifactStorageBackend.LOCAL_FS.value:
             return LocalTemporalArtifactStore(settings.workflow.temporal_artifact_root)
         if backend == db_models.TemporalArtifactStorageBackend.S3.value:
-            return S3TemporalArtifactStore(
-                endpoint_url=settings.workflow.temporal_artifact_s3_endpoint,
-                bucket=settings.workflow.temporal_artifact_s3_bucket,
-                access_key_id=settings.workflow.temporal_artifact_s3_access_key_id,
-                secret_access_key=settings.workflow.temporal_artifact_s3_secret_access_key,
-                region_name=settings.workflow.temporal_artifact_s3_region,
-                use_ssl=settings.workflow.temporal_artifact_s3_use_ssl,
-                public_endpoint_url=settings.workflow.temporal_artifact_s3_public_endpoint,
-            )
+            try:
+                return S3TemporalArtifactStore(
+                    endpoint_url=settings.workflow.temporal_artifact_s3_endpoint,
+                    bucket=settings.workflow.temporal_artifact_s3_bucket,
+                    access_key_id=settings.workflow.temporal_artifact_s3_access_key_id,
+                    secret_access_key=settings.workflow.temporal_artifact_s3_secret_access_key,
+                    region_name=settings.workflow.temporal_artifact_s3_region,
+                    use_ssl=settings.workflow.temporal_artifact_s3_use_ssl,
+                    public_endpoint_url=settings.workflow.temporal_artifact_s3_public_endpoint,
+                )
+            except Exception as exc:
+                _raise_storage_error(exc, artifact_id="", operation="initialize_store")
         raise TemporalArtifactValidationError(
             f"Unsupported temporal artifact backend '{backend}'"
         )

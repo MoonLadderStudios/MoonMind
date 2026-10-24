@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import timedelta
 from uuid import uuid4
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -44,6 +45,39 @@ from moonmind.workflows.temporal.artifacts import (
 )
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+
+
+@pytest.mark.parametrize(("fault", "status_code", "code"), [
+    (TimeoutError("private storage endpoint"), 503, "artifact_storage_unavailable"),
+    (PermissionError("private storage credentials"), 502, "artifact_storage_forbidden"),
+])
+async def test_real_service_initialization_maps_storage_failure(monkeypatch, fault, status_code, code):
+    from api_service.api.routers import temporal_artifacts as routes
+    from api_service.auth_providers import get_instance_access_optional
+    from api_service.db.base import get_async_session
+    from moonmind.security.operator_admission import OperatorAdmission
+    from moonmind.workflows.temporal import artifacts as module
+
+    class Client:
+        def head_bucket(self, **kwargs):
+            raise fault
+
+    monkeypatch.setattr(module.boto3, "client", lambda **kwargs: Client())
+    for field, value in {
+        "temporal_artifact_backend": "s3", "temporal_artifact_s3_endpoint": "http://fixture.invalid",
+        "temporal_artifact_s3_bucket": "fixture", "temporal_artifact_s3_access_key_id": "fixture",
+        "temporal_artifact_s3_secret_access_key": "fixture",
+    }.items():
+        monkeypatch.setattr(module.settings.workflow, field, value)
+    app = FastAPI()
+    app.include_router(routes.router)
+    app.dependency_overrides[get_async_session] = lambda: AsyncMock()
+    app.dependency_overrides[get_instance_access_optional] = lambda: OperatorAdmission(via="trusted_ingress")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://fixture") as client:
+        response = await client.get("/api/artifacts/collection")
+    assert response.status_code == status_code
+    assert response.json()["detail"]["code"] == code
+    assert "private storage" not in response.text
 
 
 async def test_admitted_collection_route_maps_real_repository_outage(tmp_path, monkeypatch):

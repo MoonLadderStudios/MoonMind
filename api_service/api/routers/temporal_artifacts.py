@@ -226,7 +226,11 @@ def _serialize_metadata(
 async def _get_temporal_artifact_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> TemporalArtifactService:
-    return TemporalArtifactService(TemporalArtifactRepository(session))
+    try:
+        return TemporalArtifactService(TemporalArtifactRepository(session))
+    except (TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError) as exc:
+        _raise_temporal_artifact_http(exc)
+        raise
 
 
 async def _resolve_principal(
