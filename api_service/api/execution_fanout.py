@@ -139,8 +139,6 @@ async def resolve_execution_request_authority(
         owner_type=parent_owner_type,
     )
     principal = ExecutionPrincipal(
-        user_id=str(owner_id),
-        is_superuser=False,
         workflow_id=capability.parent_workflow_id,
         agent_run_id=capability.agent_run_id,
         scopes=frozenset({SCOPE_CREATE_CHILD, SCOPE_INHERIT_RUNTIME}),

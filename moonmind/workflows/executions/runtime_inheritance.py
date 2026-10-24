@@ -13,10 +13,10 @@ from typing import Any, Mapping, Optional
 
 from moonmind.runtime_intent import (
     has_profile_selector,
-    provider_profile_ref_from_mapping,
     is_custom_selection,
     merge_runtime_selection,
     model_selection_fields,
+    provider_profile_ref_from_mapping,
 )
 from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
 
@@ -45,16 +45,15 @@ class RuntimeInheritanceError(Exception):
 class ExecutionPrincipal:
     """Caller identity used to gate child-agent runtime inheritance.
 
-    ``user_id`` and ``is_superuser`` describe the OIDC/user principal that
-    FastAPI resolved.  ``workflow_id`` / ``run_id`` / ``agent_run_id`` are
+    ``is_instance_operator`` carries the existing transport/ingress admission
+    without a person or role. ``workflow_id`` / ``run_id`` / ``agent_run_id`` are
     populated when the caller asserts a workflow identity through trusted
     transport headers, *and* that identity has been verified (the executions
-    router verifies ownership via ``TemporalExecutionService.describe_execution``).
+    router verifies the workflow via ``TemporalExecutionService.describe_execution``).
     ``scopes`` carries the capabilities granted to the principal.
     """
 
-    user_id: Optional[str] = None
-    is_superuser: bool = False
+    is_instance_operator: bool = False
     workflow_id: Optional[str] = None
     run_id: Optional[str] = None
     agent_run_id: Optional[str] = None
@@ -65,7 +64,7 @@ class ExecutionPrincipal:
         return bool(self.workflow_id)
 
     def has_scope(self, scope: str) -> bool:
-        return self.is_superuser or scope in self.scopes
+        return scope in self.scopes
 
 
 @dataclass(frozen=True)
@@ -142,7 +141,9 @@ def extract_inheritance_directive(
         task_payload.get("runtimeInheritance"),
         task_payload.get("runtime_inheritance"),
     ]
-    runtime_node = task_payload.get("runtime") if isinstance(task_payload, Mapping) else None
+    runtime_node = (
+        task_payload.get("runtime") if isinstance(task_payload, Mapping) else None
+    )
     if isinstance(runtime_node, Mapping):
         candidates.append(runtime_node.get("inherit"))
         candidates.append(runtime_node.get("inheritance"))
@@ -232,9 +233,11 @@ def _extract_parent_runtime_fields(record: Any) -> InheritedRuntime:
     workflow_block = (
         parameters.get("workflow")
         if isinstance(parameters.get("workflow"), Mapping)
-        else parameters.get("task")
-        if isinstance(parameters.get("task"), Mapping)
-        else {}
+        else (
+            parameters.get("task")
+            if isinstance(parameters.get("task"), Mapping)
+            else {}
+        )
     )
     workflow_runtime = (
         dict(workflow_block.get("runtime") or {})
@@ -255,13 +258,11 @@ def _extract_parent_runtime_fields(record: Any) -> InheritedRuntime:
     if target_runtime:
         target_runtime = normalize_runtime_id(target_runtime)
 
-    model = (
-        _coerce_str(parameters.get("model"))
-        or _coerce_str(workflow_runtime.get("model"))
+    model = _coerce_str(parameters.get("model")) or _coerce_str(
+        workflow_runtime.get("model")
     )
-    effort = (
-        _coerce_str(parameters.get("effort"))
-        or _coerce_str(workflow_runtime.get("effort"))
+    effort = _coerce_str(parameters.get("effort")) or _coerce_str(
+        workflow_runtime.get("effort")
     )
     profile_id = (
         _coerce_str(parameters.get("profileId"))
@@ -336,22 +337,12 @@ async def _load_authorised_parent(
 ) -> Any:
     """Load *parent_workflow_id* and verify the principal may inherit from it.
 
-    Authorisation rule: either the principal already asserts the same
-    workflow id (verified task identity) or the principal is the workflow's
-    owner.  Superusers are allowed without ownership check.  Raises
-    ``RuntimeInheritanceError`` when the parent cannot be loaded or the
+    An admitted operator may select any existing instance workflow. Machines
+    need the matching verified workflow identity and both child/runtime scopes;
+    recorded ownership is provenance, not authority to select another parent.
+    Raises ``RuntimeInheritanceError`` when the parent cannot be loaded or the
     caller lacks authority.
     """
-
-    if principal.workflow_id == parent_workflow_id:
-        # Already verified during principal resolution.
-        try:
-            return await service.describe_execution(parent_workflow_id)
-        except Exception as exc:  # pragma: no cover - defensive
-            raise RuntimeInheritanceError(
-                f"Parent execution {parent_workflow_id!r} was not found.",
-                code="parent_execution_not_found",
-            ) from exc
 
     try:
         record = await service.describe_execution(parent_workflow_id)
@@ -361,16 +352,18 @@ async def _load_authorised_parent(
             code="parent_execution_not_found",
         ) from exc
 
-    if principal.is_superuser:
+    if principal.is_instance_operator:
         return record
 
-    record_owner_id = _coerce_str(getattr(record, "owner_id", None))
-    if record_owner_id and principal.user_id and record_owner_id == principal.user_id:
+    if (
+        principal.workflow_id == parent_workflow_id
+        and principal.has_scope(SCOPE_CREATE_CHILD)
+        and principal.has_scope(SCOPE_INHERIT_RUNTIME)
+    ):
         return record
 
     raise RuntimeInheritanceError(
-        "Caller is not authorised to inherit runtime from "
-        f"{parent_workflow_id!r}.",
+        f"Caller is not authorised to inherit runtime from {parent_workflow_id!r}.",
         code="runtime_inheritance_forbidden",
     )
 
@@ -392,7 +385,8 @@ async def resolve_child_runtime_inheritance(
     1. If ``runtimeInheritance = "caller"`` and the principal is a task
        principal with the required scopes, copy the caller task's runtime.
     2. If ``runtimeInheritance = "parent"`` and ``parentWorkflowId`` is
-       provided, copy the parent's runtime after verifying ownership.
+       provided, copy the parent's runtime after verifying operator admission
+       or matching scoped workflow authority.
     3. Otherwise return ``None``.
 
     The inherited runtime is applied non-destructively by
@@ -478,9 +472,9 @@ def apply_inherited_runtime_to_payload(
         else {}
     )
 
-    explicit_target_runtime = _coerce_str(
-        payload.get("targetRuntime")
-    ) or _coerce_str(runtime_block.get("mode"))
+    explicit_target_runtime = _coerce_str(payload.get("targetRuntime")) or _coerce_str(
+        runtime_block.get("mode")
+    )
     explicit_account_intent = any(
         provider_profile_ref_from_mapping(source) or has_profile_selector(source)
         for source in (runtime_block, task_payload, payload)

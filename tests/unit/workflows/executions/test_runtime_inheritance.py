@@ -149,7 +149,6 @@ async def test_caller_inheritance_copies_parent_runtime() -> None:
     parent = _parent_record()
     service = _FakeService({"mm:parent": parent})
     principal = ExecutionPrincipal(
-        user_id="user-1",
         workflow_id="mm:parent",
         scopes=frozenset({SCOPE_CREATE_CHILD, SCOPE_INHERIT_RUNTIME}),
     )
@@ -184,7 +183,6 @@ async def test_directive_runs_inheritance_alongside_explicit_runtime_fields() ->
 
     service = _FakeService({"mm:parent": _parent_record()})
     principal = ExecutionPrincipal(
-        user_id="user-1",
         workflow_id="mm:parent",
         scopes=frozenset({SCOPE_CREATE_CHILD, SCOPE_INHERIT_RUNTIME}),
     )
@@ -212,7 +210,7 @@ async def test_directive_runs_inheritance_alongside_explicit_runtime_fields() ->
 @pytest.mark.asyncio
 async def test_caller_inheritance_rejected_for_non_task_principal() -> None:
     service = _FakeService({})
-    principal = ExecutionPrincipal(user_id="user-1")
+    principal = ExecutionPrincipal(is_instance_operator=True)
     payload = {"runtimeInheritance": "caller", "task": {}}
 
     with pytest.raises(RuntimeInheritanceError) as excinfo:
@@ -226,14 +224,22 @@ async def test_caller_inheritance_rejected_for_non_task_principal() -> None:
 
 
 @pytest.mark.asyncio
-async def test_caller_inheritance_requires_scopes() -> None:
+@pytest.mark.parametrize("directive", ["caller", "parent"])
+@pytest.mark.parametrize(
+    "scopes",
+    [frozenset(), frozenset({SCOPE_CREATE_CHILD}), frozenset({SCOPE_INHERIT_RUNTIME})],
+)
+async def test_workflow_inheritance_requires_both_scopes(directive, scopes) -> None:
     service = _FakeService({"mm:parent": _parent_record()})
     principal = ExecutionPrincipal(
-        user_id="user-1",
         workflow_id="mm:parent",
-        scopes=frozenset(),
+        scopes=scopes,
     )
-    payload = {"runtimeInheritance": "caller", "task": {}}
+    payload = {
+        "runtimeInheritance": directive,
+        "parentWorkflowId": "mm:parent",
+        "task": {},
+    }
 
     with pytest.raises(RuntimeInheritanceError) as excinfo:
         await resolve_child_runtime_inheritance(
@@ -248,7 +254,7 @@ async def test_caller_inheritance_requires_scopes() -> None:
 @pytest.mark.asyncio
 async def test_parent_inheritance_requires_parent_workflow_id() -> None:
     service = _FakeService({})
-    principal = ExecutionPrincipal(user_id="user-1")
+    principal = ExecutionPrincipal(is_instance_operator=True)
     payload = {"runtimeInheritance": "parent", "task": {}}
 
     with pytest.raises(RuntimeInheritanceError) as excinfo:
@@ -262,10 +268,13 @@ async def test_parent_inheritance_requires_parent_workflow_id() -> None:
 
 
 @pytest.mark.asyncio
-async def test_parent_inheritance_rejected_when_user_does_not_own_parent() -> None:
-    parent = _parent_record(owner_id="someone-else")
+async def test_machine_parent_inheritance_rejects_another_workflow_with_same_owner() -> None:
+    parent = _parent_record(owner_id="shared-owner")
     service = _FakeService({"mm:parent": parent})
-    principal = ExecutionPrincipal(user_id="user-1")
+    principal = ExecutionPrincipal(
+        workflow_id="mm:another-parent",
+        scopes=frozenset({SCOPE_CREATE_CHILD, SCOPE_INHERIT_RUNTIME}),
+    )
     payload = {
         "runtimeInheritance": "parent",
         "parentWorkflowId": "mm:parent",
@@ -283,10 +292,18 @@ async def test_parent_inheritance_rejected_when_user_does_not_own_parent() -> No
 
 
 @pytest.mark.asyncio
-async def test_parent_inheritance_succeeds_when_user_owns_parent() -> None:
-    parent = _parent_record(owner_id="user-1", target_runtime="claude_code", model="claude-opus-4-7", effort="medium", profile_id=None, execution_profile_ref="claude_profile")
+@pytest.mark.parametrize("owner_id", ["system", "retained-owner", None])
+async def test_parent_inheritance_succeeds_for_instance_operator(owner_id) -> None:
+    parent = _parent_record(
+        owner_id=owner_id,
+        target_runtime="claude_code",
+        model="claude-opus-4-7",
+        effort="medium",
+        profile_id=None,
+        execution_profile_ref="claude_profile",
+    )
     service = _FakeService({"mm:parent": parent})
-    principal = ExecutionPrincipal(user_id="user-1")
+    principal = ExecutionPrincipal(is_instance_operator=True)
     payload = {
         "runtimeInheritance": "parent",
         "parentWorkflowId": "mm:parent",
@@ -308,10 +325,13 @@ async def test_parent_inheritance_succeeds_when_user_owns_parent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_parent_inheritance_superuser_skips_ownership_check() -> None:
-    parent = _parent_record(owner_id="other-user")
+async def test_scoped_machine_can_inherit_from_its_verified_parent() -> None:
+    parent = _parent_record()
     service = _FakeService({"mm:parent": parent})
-    principal = ExecutionPrincipal(user_id="admin", is_superuser=True)
+    principal = ExecutionPrincipal(
+        workflow_id="mm:parent",
+        scopes=frozenset({SCOPE_CREATE_CHILD, SCOPE_INHERIT_RUNTIME}),
+    )
     payload = {
         "runtimeInheritance": "parent",
         "parentWorkflowId": "mm:parent",
@@ -332,7 +352,7 @@ async def test_parent_inheritance_superuser_skips_ownership_check() -> None:
 @pytest.mark.asyncio
 async def test_no_directive_returns_none() -> None:
     service = _FakeService({})
-    principal = ExecutionPrincipal(user_id="user-1")
+    principal = ExecutionPrincipal(is_instance_operator=True)
     payload = {"task": {}}
 
     inherited = await resolve_child_runtime_inheritance(
@@ -349,7 +369,7 @@ async def test_no_directive_returns_none() -> None:
 async def test_parent_inheritance_normalizes_alias_runtime_id() -> None:
     parent = _parent_record(target_runtime="codex")  # legacy alias
     service = _FakeService({"mm:parent": parent})
-    principal = ExecutionPrincipal(user_id="user-1")
+    principal = ExecutionPrincipal(is_instance_operator=True)
     payload = {
         "runtimeInheritance": "parent",
         "parentWorkflowId": "mm:parent",
@@ -370,7 +390,7 @@ async def test_parent_inheritance_normalizes_alias_runtime_id() -> None:
 @pytest.mark.asyncio
 async def test_parent_inheritance_returns_404_style_error_when_parent_missing() -> None:
     service = _FakeService({})
-    principal = ExecutionPrincipal(user_id="user-1")
+    principal = ExecutionPrincipal(is_instance_operator=True)
     payload = {
         "runtimeInheritance": "parent",
         "parentWorkflowId": "mm:missing",
@@ -451,7 +471,6 @@ async def test_github_3453_child_inherits_complete_omnigent_selection() -> None:
     )
     service = _FakeService({"mm:parent": parent})
     principal = ExecutionPrincipal(
-        user_id="user-1",
         workflow_id="mm:parent",
         scopes=frozenset({SCOPE_CREATE_CHILD, SCOPE_INHERIT_RUNTIME}),
     )
@@ -492,7 +511,6 @@ async def test_non_omnigent_parent_does_not_synthesize_agent_profile() -> None:
     )
     service = _FakeService({"mm:parent": parent})
     principal = ExecutionPrincipal(
-        user_id="user-1",
         workflow_id="mm:parent",
         scopes=frozenset({SCOPE_CREATE_CHILD, SCOPE_INHERIT_RUNTIME}),
     )
