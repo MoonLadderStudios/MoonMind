@@ -95,7 +95,7 @@ def _git_checkout(repo: Path) -> str:
 
 
 def _stub_host_docker(
-    monkeypatch: pytest.MonkeyPatch, revision: str
+    monkeypatch: pytest.MonkeyPatch, revision: str, *, rendered_project: str = "moonmind"
 ) -> list[list[str]]:
     original_run = subprocess.run
     commands: list[list[str]] = []
@@ -131,7 +131,7 @@ def _stub_host_docker(
             )
         elif args[1:3] == ["compose", "config"]:
             output = json.dumps(
-                {"name": "moonmind", "services": {"api": {}, "docker-proxy": {}}}
+                {"name": rendered_project, "services": {"api": {}, "docker-proxy": {}}}
             )
         elif args[1] == "pull":
             output = ""
@@ -281,7 +281,7 @@ def test_default_host_recovers_missing_identity_before_discovering_endpoint(
     (state / "controller-compose.yaml").write_text(
         "# Existing controller installation\n"
     )
-    commands = _stub_host_docker(monkeypatch, revision)
+    commands = _stub_host_docker(monkeypatch, revision, rendered_project="e" * 64)
     original_run = update.subprocess.run
 
     def run(args, **kwargs):
@@ -337,6 +337,7 @@ def test_default_host_recovers_missing_identity_before_discovering_endpoint(
     assert len([command for command in commands if "ensure" in command]) == 1
     assert len(controller.applied) == 1
     assert controller.store.load(controller.applied[0])["desired"]["image"] == IMAGE
+    assert controller.store.load(controller.applied[0])["target"]["project"] == "moonmind"
     assert json.loads((state / "controller-identity.json").read_text()) == saved
 
 
@@ -1046,6 +1047,96 @@ def test_no_argument_host_command_submits_the_controller_operation(
     assert controller.applied == [operation_id]
     # The dirty checkout is untouched.
     assert (repo / "docker-compose.yaml").read_text() == "services: {api: {}}\n"
+
+
+@pytest.mark.parametrize("explicit_project", [None, "operator-selected"])
+@pytest.mark.parametrize("repo_alias", [False, True])
+def test_host_preserves_installed_target_through_bootstrap_and_submission(
+    installed, monkeypatch, explicit_project, repo_alias
+):
+    repo, controller = installed()
+    revision = _git_checkout(repo)
+    state = repo / "deploy/state/controller"
+    identity_path = state / "controller-identity.json"
+    identity = json.loads(identity_path.read_text())
+    identity.update(
+        repo=str(repo),
+        targetProject="installed-project",
+        targetNetwork="moonmind_deployment-controller-network",
+    )
+    if repo_alias:
+        alias = repo.parent / "installed-alias"
+        alias.symlink_to(repo, target_is_directory=True)
+        identity["repo"] = str(alias)
+    identity_path.write_text(json.dumps(identity))
+    commands = _stub_host_docker(monkeypatch, revision, rendered_project="e" * 64)
+    monkeypatch.chdir(repo)
+    args = ["--compose-project", explicit_project] if explicit_project else []
+
+    assert update.main(args) == 0
+
+    expected = explicit_project or "installed-project"
+    submission = next((repo / "deploy/state/release-submissions").glob("*.json"))
+    assert json.loads(submission.read_text())["project"] == expected
+    operation_id = f"host-{submission.stem}"
+    assert controller.applied == [operation_id]
+    assert controller.store.load(operation_id)["target"]["project"] == expected
+    refresh = next(command for command in commands if "ensure" in command)
+    assert refresh[refresh.index("--target-project") + 1] == expected
+    assert update.main(["--resume", submission.stem]) == 0
+    assert controller.applied == [operation_id]
+
+
+@pytest.mark.parametrize(
+    "problem",
+    ["invalid-target", "different-repo", "missing-repo", "relative-repo", "invalid-json"],
+)
+def test_default_host_rejects_ambiguous_installed_target_before_submission(
+    installed, monkeypatch, problem
+):
+    repo, controller = installed()
+    revision = _git_checkout(repo)
+    identity_path = repo / "deploy/state/controller/controller-identity.json"
+    identity = json.loads(identity_path.read_text())
+    identity.update(repo=str(repo), targetProject="installed-project")
+    if problem == "invalid-target":
+        identity["targetProject"] = "../other"
+    elif problem == "different-repo":
+        other = repo.parent / "other"
+        other.mkdir()
+        identity["repo"] = str(other)
+    elif problem == "missing-repo":
+        identity.pop("repo")
+    elif problem == "relative-repo":
+        identity["repo"] = "."
+    identity_path.write_text("{" if problem == "invalid-json" else json.dumps(identity))
+    commands = _stub_host_docker(monkeypatch, revision)
+    monkeypatch.chdir(repo)
+
+    with pytest.raises(RuntimeError, match="controller identity"):
+        update.main([])
+
+    assert controller.applied == []
+    assert not (repo / "deploy/state/release-submissions").exists()
+    assert not any("ensure" in command for command in commands)
+
+
+def test_explicit_controller_without_local_identity_needs_no_identity_recovery(
+    installed, monkeypatch
+):
+    repo, controller = installed()
+    revision = _git_checkout(repo)
+    state = repo / "deploy/state/controller"
+    (state / "controller-identity.json").unlink()
+    (state / "controller-compose.yaml").write_text("# Local installation metadata\n")
+    commands = _stub_host_docker(monkeypatch, revision)
+    monkeypatch.chdir(repo)
+
+    assert update.main(["--controller-url", controller.url]) == 0
+
+    assert len(controller.applied) == 1
+    assert controller.store.load(controller.applied[0])["target"]["project"] == "moonmind"
+    assert not any("recover-identity" in command for command in commands)
 
 
 @pytest.mark.parametrize("reachable", [True, False])
