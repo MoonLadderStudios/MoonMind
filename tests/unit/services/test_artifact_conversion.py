@@ -643,6 +643,9 @@ async def test_recovery_schema_downgrade_preserves_published_grants(tmp_path):
     migration = importlib.import_module(
         "api_service.migrations.versions.396_artifact_operator_recovery"
     )
+    lookup_migration = importlib.import_module(
+        "api_service.migrations.versions.401_artifact_recovery_lookup_indexes"
+    )
 
     def migrate(connection, operation):
         with Operations.context(MigrationContext.configure(connection)):
@@ -653,8 +656,10 @@ async def test_recovery_schema_downgrade_preserves_published_grants(tmp_path):
             artifact_id, _owner = await seed(session, tmp_path)
             connection = await session.connection()
             # No conversion has run, so an ordinary schema rollback is safe.
+            await connection.run_sync(migrate, lookup_migration.downgrade)
             await connection.run_sync(migrate, migration.downgrade)
             await connection.run_sync(migrate, migration.upgrade)
+            await connection.run_sync(migrate, lookup_migration.upgrade)
             await session.commit()
             assert (await conversion.run_guarded_upgrade(session, operator_authorized=True)).published
         async with maker() as session:
@@ -665,6 +670,73 @@ async def test_recovery_schema_downgrade_preserves_published_grants(tmp_path):
         async with maker() as restarted:
             assert (await restarted.get(TemporalArtifact, artifact_id)).operator_recovery_granted
             assert await completed_guarded_upgrade(restarted) is not None
+
+
+async def test_admission_observes_restored_artifacts_and_revoked_recovery(
+    tmp_path, monkeypatch
+):
+    from fastapi import HTTPException, Request
+    from sqlalchemy import update
+
+    from api_service.auth_providers import get_instance_access
+
+    monkeypatch.setenv("AUTH_PROVIDER", "oidc")
+    monkeypatch.setenv("MOONMIND_PUBLIC_BASE_URL", "")
+    incoming = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/schedules",
+            "query_string": b"",
+            "headers": [(b"host", b"localhost:7000")],
+            "client": ("127.0.0.1", 43210),
+            "server": ("api", 8000),
+        }
+    )
+    async with database(tmp_path) as maker:
+        async with maker() as session:
+            artifact_id, owner = await seed(session, tmp_path)
+            assert (
+                await conversion.run_guarded_upgrade(session, operator_authorized=True)
+            ).published
+            assert await get_instance_access(incoming, session) is not None
+            session.add(
+                TemporalArtifact(
+                    artifact_id="restored-later",
+                    storage_key="restored-later",
+                    created_by_principal=owner,
+                )
+            )
+            await session.commit()
+            with pytest.raises(HTTPException) as refused:
+                await get_instance_access(incoming, session)
+            assert refused.value.status_code == 503
+            assert refused.value.detail == "conversion_required"
+            assert not (
+                await session.get(TemporalArtifact, "restored-later")
+            ).operator_recovery_granted
+            assert (
+                await conversion.run_guarded_upgrade(session, operator_authorized=True)
+            ).published
+            assert await get_instance_access(incoming, session) is not None
+            assert (
+                await session.get(TemporalArtifact, "restored-later")
+            ).operator_recovery_granted
+            await session.execute(
+                update(TemporalArtifact)
+                .where(TemporalArtifact.artifact_id == artifact_id)
+                .values(operator_recovery_granted=False)
+            )
+            await session.commit()
+        async with maker() as restarted:
+            with pytest.raises(HTTPException) as refused:
+                await get_instance_access(incoming, restarted)
+            assert refused.value.detail == "conversion_required"
+            with pytest.raises(TemporalArtifactAuthorizationError):
+                await service(restarted, tmp_path).read(
+                    artifact_id=artifact_id, principal="operator"
+                )
 
 
 @pytest.mark.parametrize("authority", ["expired_claim", "pin", "deletion_intent"])
