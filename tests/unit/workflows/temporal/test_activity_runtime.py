@@ -2420,7 +2420,11 @@ async def test_artifact_read_binding_carries_retry_meaning(tmp_path, monkeypatch
                 await binding.handler({"artifact_ref": artifact.artifact_id, "principal": "owner"})
             assert raised.value.type == code
             assert raised.value.non_retryable is non_retryable
-            assert raised.value.original_error.__cause__ is fault
+            cause = raised.value.original_error.__cause__
+            # Python 3.12's asyncio Future bridge reconstructs TimeoutError;
+            # the diagnostic contract is its type and arguments, not identity.
+            assert type(cause) is type(fault)
+            assert cause.args == fault.args
             from temporalio.api.failure.v1 import Failure
             from temporalio.converter import DefaultFailureConverter, DefaultPayloadConverter
             wire = Failure()
