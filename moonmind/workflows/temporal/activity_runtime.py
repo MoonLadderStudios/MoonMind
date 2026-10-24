@@ -10016,6 +10016,69 @@ class TemporalAgentRuntimeActivities:
             # so a transient lookup failure retries the handoff instead of
             # reporting success with diagnostics the parent cannot read.
             admitted_parent = await _parent_artifact_read_scope()
+            if admitted_parent is not None:
+                handed_off_evidence: set[str] = set()
+                for field, source_type, handoff_type in (
+                    (
+                        "terminalContractEvidenceRef",
+                        "output.terminal_evidence",
+                        "input.terminal_evidence_handoff",
+                    ),
+                    (
+                        "publishEvidence",
+                        "output.publish_evidence",
+                        "input.publish_evidence_handoff",
+                    ),
+                ):
+                    evidence_ref = _metadata_text(field)
+                    if not evidence_ref:
+                        continue
+                    artifact_id = temporal_artifact_id(evidence_ref)
+                    if artifact_id is None:
+                        raise TemporalActivityRuntimeError(
+                            f"terminal evidence {field} is not an output of this child execution"
+                        )
+                    if artifact_id in handed_off_evidence:
+                        # Auto-publish uses its terminal evidence as the receipt.
+                        continue
+                    # These refs originate in an earlier Activity. Shared writer
+                    # ownership alone cannot authorize provider-nominated refs;
+                    # require the selected artifact to be this child's output.
+                    _artifact, links, _pinned, _policy = (
+                        await self._artifact_service.get_metadata(
+                            artifact_id=artifact_id,
+                            principal=f"workflow:{info.workflow_id}",
+                        )
+                    )
+                    if not any(
+                        link.namespace == info.namespace
+                        and link.workflow_id == info.workflow_id
+                        and link.run_id == info.workflow_run_id
+                        and link.link_type == source_type
+                        for link in links
+                    ):
+                        raise TemporalActivityRuntimeError(
+                            f"terminal evidence {field} is not an output of this child execution"
+                        )
+                    handed_off_evidence.add(artifact_id)
+                    if any(
+                        link.namespace == info.namespace
+                        and link.workflow_id == _metadata_text("parentWorkflowId")
+                        and link.run_id == _metadata_text("parentRunId")
+                        and link.link_type == handoff_type
+                        for link in links
+                    ):
+                        continue
+                    await self._artifact_service.link_artifact(
+                        artifact_id=artifact_id,
+                        principal="system:agent_runtime",
+                        execution_ref=ExecutionRef(
+                            namespace=info.namespace,
+                            workflow_id=_metadata_text("parentWorkflowId"),
+                            run_id=_metadata_text("parentRunId"),
+                            link_type=handoff_type,
+                        ),
+                    )
             summary_ref = await _write_json_artifact(
                 self._artifact_service,
                 principal="system:agent_runtime",
