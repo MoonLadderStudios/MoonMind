@@ -10,6 +10,9 @@ leaking a provider session id, upstream URL, or credential to the browser.
 
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
@@ -390,6 +393,62 @@ def test_upstream_error_serves_unavailable_document() -> None:
 
     assert response.status_code == 503
     assert 'data-reason="native_ui_upstream_unavailable"' in response.text
+
+
+@pytest.mark.parametrize(
+    ("location", "expected_status"),
+    [
+        ("https://attacker.invalid/login", 302),
+        ("//attacker.invalid/login", 302),
+        ("///attacker.invalid/login", 302),
+        ("\\\\attacker.invalid\\login", 503),
+        ("/%5c%5cattacker.invalid/login", 503),
+        ("/%2e%2e/%2e%2e/api/executions", 302),
+        ("/login?next=https://attacker.invalid#section", 302),
+    ],
+)
+def test_redirect_browser_resolution_stays_on_binding(location, expected_status):
+    upstream = _FakeUpstream(
+        {
+            "/": NativeUiUpstreamResponse(
+                status_code=302,
+                content=b"",
+                media_type="text/html",
+                location=location,
+            )
+        }
+    )
+    client, _ = _build(upstream=upstream)
+    response = client.get(_url(), follow_redirects=False)
+    assert response.status_code == expected_status
+    if expected_status == 503:
+        assert "location" not in response.headers
+        return
+
+    target = response.headers["location"]
+    assert target.startswith("/") and not target.startswith("//")
+    assert "\\" not in target
+    node = shutil.which("node")
+    assert node is not None, "node is required for redirect boundary coverage"
+    resolved = subprocess.run(
+        [
+            node,
+            "-e",
+            "const fs=require('node:fs');"
+            + "const target=JSON.parse(fs.readFileSync(0,'utf8'));"
+            + "const url=new URL(target,'https://moonmind.example');"
+            + "console.log(JSON.stringify({origin:url.origin,path:url.pathname}));",
+        ],
+        input=json.dumps(target),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10,
+    )
+    browser_url = json.loads(resolved.stdout)
+    assert browser_url["origin"] == "https://moonmind.example"
+    base = scoped_ui_base(_CHAT_BINDING_ID)
+    assert browser_url["path"] == base or browser_url["path"].startswith(base + "/")
 
 
 def test_relative_redirect_traversal_fails_closed_to_scope() -> None:
