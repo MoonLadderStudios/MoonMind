@@ -12526,11 +12526,12 @@ async def _create_execution_from_workflow_request(
             },
         ) from exc
 
-    await _attach_input_attachment_artifacts_to_execution(
-        session=session,
-        record=record,
-        attachment_refs=attachment_index,
-    )
+    if persisted_omnigent_plan is None:
+        await _attach_input_attachment_artifacts_to_execution(
+            session=session,
+            record=record,
+            attachment_refs=attachment_index,
+        )
     snapshot_ref = _workflow_input_snapshot_ref_from_memo(
         dict(getattr(record, "memo", None) or {})
     )

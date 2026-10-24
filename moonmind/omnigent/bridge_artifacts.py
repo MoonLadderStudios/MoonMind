@@ -71,8 +71,8 @@ async def link_verified_execution_plan_inputs(
     run_id: str,
     namespace: str = "default",
     planning_parameters: Mapping[str, Any] | None = None,
-) -> None:
-    """Link exact verified inputs at a trusted execution admission boundary."""
+) -> tuple[str, ...]:
+    """Link exact verified inputs and return their admitted artifact IDs."""
     from moonmind.omnigent.harness_platform.execution_plan import (
         verify_execution_plan_envelope,
     )
@@ -158,14 +158,13 @@ async def link_verified_execution_plan_inputs(
                         "support evidence pointer conflicts with verified execution authority"
                     )
         service = TemporalArtifactService(repository)
-        refs.update(
-            await _frozen_planning_input_refs(
-                repository,
-                service,
-                plan=plan,
-                planning_parameters=planning_parameters,
-            )
+        frozen_refs, attachments = await _frozen_planning_input_refs(
+            repository,
+            service,
+            plan=plan,
+            planning_parameters=planning_parameters,
         )
+        refs.update(frozen_refs)
 
         async def link(artifact_id: str) -> None:
             await _link_execution_input(
@@ -176,17 +175,31 @@ async def link_verified_execution_plan_inputs(
                 namespace=namespace,
             )
 
-        for artifact_id in sorted(_artifact_ids(refs)):
+        linked_ids = _artifact_ids(refs)
+        for artifact_id in sorted(linked_ids):
             await link(artifact_id)
+        for artifact_id, label in sorted(attachments.items()):
+            await _link_execution_input(
+                repository,
+                artifact_id,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                namespace=namespace,
+                link_type="input.attachment",
+                label=label,
+            )
         # Skill bodies are part of the admitted closure through the admitted
         # manifest. They may be linked to the resolving workflow or to none
         # (catalog content), so the execution receives the same grant.
         manifest_id = _skill_manifest_id(plan)
         if manifest_id is not None:
-            for artifact_id in sorted(
-                await _skill_content_ids(service, manifest_id, workflow_id=workflow_id)
-            ):
+            content_ids = await _skill_content_ids(
+                service, manifest_id, workflow_id=workflow_id
+            )
+            for artifact_id in sorted(content_ids):
                 await link(artifact_id)
+            linked_ids.update(content_ids)
+        return tuple(sorted(linked_ids))
 
 
 async def _link_execution_input(
@@ -196,6 +209,8 @@ async def _link_execution_input(
     workflow_id: str,
     run_id: str,
     namespace: str = "default",
+    link_type: str = "input.execution_plan",
+    label: str | None = None,
 ) -> None:
     """Grant one execution read access to an input it was admitted to use."""
     from moonmind.workflows.temporal.artifacts import (
@@ -211,7 +226,7 @@ async def _link_execution_input(
         link.namespace == namespace
         and link.workflow_id == workflow_id
         and link.run_id == run_id
-        and link.link_type == "input.execution_plan"
+        and link.link_type == link_type
         for link in await repository.list_links(artifact_id)
     ):
         return
@@ -222,14 +237,15 @@ async def _link_execution_input(
             namespace=namespace,
             workflow_id=workflow_id,
             run_id=run_id,
-            link_type="input.execution_plan",
+            link_type=link_type,
+            label=label,
         ),
     )
 
 
 async def _frozen_planning_input_refs(
     repository, service, *, plan, planning_parameters
-) -> set[str]:
+) -> tuple[set[str], dict[str, str | None]]:
     """Delegate saved planning inputs through their immutable admission proof.
 
     A plan's snapshot is authority for the saved input/plan pointers, rather
@@ -242,7 +258,7 @@ async def _frozen_planning_input_refs(
             raise OmnigentArtifactError(
                 "scheduled planning lacks frozen input authority"
             )
-        return set()
+        return set(), {}
     snapshot_id = TemporalOmnigentArtifactGateway._artifact_id(
         authority.taskInputSnapshotRef
     )
@@ -266,13 +282,13 @@ async def _frozen_planning_input_refs(
     if not isinstance(source, dict):
         if planning_parameters is not None:
             raise OmnigentArtifactError("scheduled planning lacks a schedule snapshot")
-        return set()
+        return set(), {}
     scheduled = source.get("kind") == "schedule"
     target = frozen.get("target") if scheduled else frozen.get("draft")
     if not isinstance(target, dict):
         if scheduled or planning_parameters is not None:
             raise OmnigentArtifactError("schedule snapshot lacks its frozen target")
-        return set()
+        return set(), {}
     if scheduled and not str(source.get("definitionId") or "").strip():
         raise OmnigentArtifactError("schedule snapshot lacks definition authority")
     if planning_parameters is not None:
@@ -300,6 +316,20 @@ async def _frozen_planning_input_refs(
         for key in ("inputArtifactRef", "planArtifactRef")
         if target.get(key)
     }
+    raw_attachments = frozen.get("attachmentRefs", [])
+    if not isinstance(raw_attachments, list):
+        raise OmnigentArtifactError("frozen task-input attachments are invalid")
+    attachments = {}
+    for attachment in raw_attachments:
+        if not isinstance(attachment, Mapping) or not isinstance(
+            attachment.get("artifactId"), str
+        ):
+            raise OmnigentArtifactError("frozen task-input attachment is invalid")
+        artifact_id = TemporalOmnigentArtifactGateway._artifact_id(
+            attachment["artifactId"]
+        )
+        attachments[artifact_id] = str(attachment.get("filename") or "").strip() or None
+        refs.add(artifact_id)
     for artifact_id in sorted(_artifact_ids(refs)):
         # Snapshot creation does not let a machine invent permission for an
         # unrelated artifact. Its original admitted principal must be able to
@@ -309,7 +339,7 @@ async def _frozen_planning_input_refs(
             principal=principal,
             allow_restricted_raw=True,
         )
-    return refs
+    return refs, attachments
 
 
 def _execution_plan_input_refs(plan, binding) -> set[str]:
