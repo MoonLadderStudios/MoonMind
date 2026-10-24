@@ -10,7 +10,11 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    AsyncSessionTransaction,
+    create_async_engine,
+)
 from sqlalchemy.orm import sessionmaker
 from temporalio.service import RPCError, RPCStatusCode
 
@@ -76,7 +80,7 @@ async def _create(service, sessions, saved, *, key="same-request"):
         binding=saved.binding,
         artifact_refs=(),
         resolved_skillset_ref=saved.skills.manifest_id,
-        resolved_skillset_digest="sha256:" + "a" * 64,
+        resolved_skillset_digest=saved.skills.manifest_digest,
     )
     return await service.create_execution(
         workflow_type="MoonMind.UserWorkflow",
@@ -229,15 +233,27 @@ async def test_consumer_claim_failure_rolls_back_its_claim_with_the_create(
 ):
     saved = await _schedule(sessions)
 
-    async def fail_release(*_args, **_kwargs):
-        raise RuntimeError("injected consumer release failure")
+    rollback = AsyncSessionTransaction.rollback
+    failed_observation_release = False
 
-    monkeypatch.setattr(TemporalArtifactService, "_release_observed_use", fail_release)
+    async def fail_release(transaction):
+        nonlocal failed_observation_release
+        if transaction.nested and not failed_observation_release:
+            claim = await transaction.session.scalar(
+                select(TemporalArtifactUseClaim.id).limit(1)
+            )
+            if claim is not None:
+                failed_observation_release = True
+                raise RuntimeError("injected consumer release failure")
+        await rollback(transaction)
+
+    monkeypatch.setattr(AsyncSessionTransaction, "rollback", fail_release)
     adapter = SimpleNamespace(start_workflow=AsyncMock())
     async with sessions() as session:
         service = _service(session, adapter)
         with pytest.raises(RuntimeError, match="injected consumer release failure"):
             await _create(service, sessions, saved)
+        assert failed_observation_release
         adapter.start_workflow.assert_not_awaited()
     async with sessions() as session:
         assert (

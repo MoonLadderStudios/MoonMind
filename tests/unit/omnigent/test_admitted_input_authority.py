@@ -186,14 +186,24 @@ async def _skill_set(sessions, *, tag: str, owner: str, workflow_id: str | None)
     )
 
 
-async def _admitted_plan(sessions, skills, *, plan_owner: str = "operator"):
+async def _admitted_plan(
+    sessions, skills, *, plan_owner: str = "operator", manifest_digest: str | None = None
+):
     """Compile, persist and publish a verified plan admitting ``skills``."""
 
     inputs = _codex_plan_inputs()
+    if manifest_digest is None:
+        canonical = json.dumps(
+            json.loads(await _read_as_owner(sessions, skills.manifest_id)),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode()
+        manifest_digest = "sha256:" + hashlib.sha256(canonical).hexdigest()
     inputs["resolved_skills"] = ResolvedSkillSet.model_validate(
         {
             "resolvedSkillSetRef": f"artifact:{skills.manifest_id}",
-            "resolvedSkillSetDigest": skills.manifest_digest,
+            "resolvedSkillSetDigest": manifest_digest,
             "skillDeliveryRef": "skill-delivery:sha256:" + "b" * 64,
         }
     )
@@ -294,7 +304,9 @@ async def test_legacy_manifest_canonical_digest_protects_the_admitted_closure(
             link_type="",
             content_type="application/json",
         )
-    plan, binding = await _admitted_plan(artifacts, skills)
+    plan, binding = await _admitted_plan(
+        artifacts, skills, manifest_digest=skills.manifest_digest
+    )
     if corruption == "stored-bytes":
         async with artifacts() as session:
             service = TemporalArtifactService(TemporalArtifactRepository(session))
