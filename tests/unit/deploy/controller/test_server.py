@@ -2521,14 +2521,14 @@ def test_submission_without_target_applies_the_derived_target(
 
 
 def test_submission_without_a_derivable_target_is_refused_without_a_record(
-    controller_path, tmp_path
+    controller_path, tmp_path, caplog
 ):
     server_mod = load("server")
     record = load("record")
     store = record.OperationStore(tmp_path / "state")
 
     def missing(stack):
-        raise ValueError("no deployment checkout is mounted for the controller")
+        raise ValueError("no deployment checkout at /srv/operator/private-compose.yml")
 
     app = server_mod.build_app(
         store=store, secret="test-secret", applier=lambda op: None, target_resolver=missing
@@ -2542,6 +2542,8 @@ def test_submission_without_a_derivable_target_is_refused_without_a_record(
         )
         assert status == 400
         assert body["error"].startswith("deployment target could not be derived")
+        assert "/srv/operator/private-compose.yml" not in body["error"]
+        assert "/srv/operator/private-compose.yml" in caplog.text
         assert store.list_open() == []
     finally:
         httpd.shutdown()

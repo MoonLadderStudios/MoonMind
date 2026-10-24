@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextlib
 import hmac
 import json
+import logging
 import os
 import re
 import socketserver
@@ -33,6 +34,8 @@ import lock as lock_mod
 import operator_access as operator_access_mod
 import record as record_mod
 from redact import redact_mapping, redact_text
+
+logger = logging.getLogger(__name__)
 
 LEGACY_CONTROL_SERVICE = "temporal-worker-deployment-control"
 LEGACY_PROBE_TIMEOUT_SECONDS = 30
@@ -852,10 +855,16 @@ def build_app(
                         try:
                             target = target_resolver(stack)
                         except ValueError as exc:
+                            logger.warning(
+                                "Deployment target could not be derived: %s",
+                                redact_text(str(exc)),
+                            )
                             return _json_response(
                                 start_response,
                                 "400 Bad Request",
-                                {"error": f"deployment target could not be derived: {redact_text(str(exc))}"},
+                                {
+                                    "error": "deployment target could not be derived; inspect controller logs"
+                                },
                             )
                     # Own the stack before recording intent: a refused
                     # submission leaves no open record for restart recovery.
