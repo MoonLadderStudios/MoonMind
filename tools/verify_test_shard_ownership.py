@@ -20,6 +20,8 @@ Reliability coverage has two layers (MoonLadderStudios/MoonMind#4366):
 
 from __future__ import annotations
 
+import re
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -31,6 +33,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import pytest
+import yaml
 
 from tools.ci.refresh_reliability_durations import (
     RELIABILITY_MARKER_EXPR,
@@ -38,8 +41,52 @@ from tools.ci.refresh_reliability_durations import (
     RELIABILITY_SUITES,
     durations_pytest_args,
 )
+from tools.ci.run_credential_free_host_recovery import TEST_FILE, TEST_NAME
 
 PROVIDER_MARKERS = {"provider_verification", "requires_credentials"}
+EXTERNAL_RESOURCE_MARKERS = PROVIDER_MARKERS | {"requires_gpu", "requires_deployment"}
+
+
+def controller_journey_paths(workflow_path: Path) -> frozenset[str]:
+    """Read the existing host-runner selection, rather than copy its file list."""
+    workflow = yaml.safe_load(workflow_path.read_text())
+    paths: set[str] = set()
+    for step in workflow["jobs"]["integration-ci"]["steps"]:
+        if "controller-journey" not in str(step.get("if", "")):
+            continue
+        command = ""
+        for line in step.get("run", "").splitlines():
+            if not command and not re.match(
+                r"""^\s*(?:python[\d.]*|["'][^"']*python[\d.]*["'])\s+-m\s+pytest(?:\s|$)""",
+                line,
+            ):
+                continue
+            continued = line.rstrip().endswith("\\")
+            command += " " + (line.rstrip()[:-1] if continued else line)
+            if continued:
+                continue
+            try:
+                args = shlex.split(command, comments=True)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Malformed controller pytest command in {workflow_path}"
+                ) from exc
+            paths.update(
+                arg
+                for arg in args
+                if arg.startswith("tests/integration/host_update/")
+                and arg.endswith(".py")
+            )
+            command = ""
+        if command:
+            raise ValueError(f"Unfinished controller pytest command in {workflow_path}")
+    return frozenset(paths)
+
+
+CONTROLLER_JOURNEY_PATHS = controller_journey_paths(
+    REPO_ROOT / ".github/workflows/pytest-unit-tests.yml"
+)
+EXACT_RECOVERY_NODE = f"tests/integration/omnigent/{TEST_FILE}::{TEST_NAME}"
 
 # Logical owner for every reliability journey node: the backend-matrix
 # aggregate fans out to the four physical groups below.
@@ -80,10 +127,14 @@ class _Collector:
         self.nodes: list[CollectedNode] = []
 
     def pytest_collection_finish(self, session: pytest.Session) -> None:
+        paths = {
+            path: Path(path).resolve().relative_to(REPO_ROOT).as_posix()
+            for path in {str(item.fspath) for item in session.items}
+        }
         self.nodes = [
             CollectedNode(
                 nodeid=item.nodeid,
-                path=Path(str(item.fspath)).resolve().relative_to(REPO_ROOT).as_posix(),
+                path=paths[str(item.fspath)],
                 markers=frozenset(marker.name for marker in item.iter_markers()),
             )
             for item in session.items
@@ -91,16 +142,14 @@ class _Collector:
 
 
 def _eligible(node: CollectedNode) -> bool:
-    if node.markers & PROVIDER_MARKERS:
+    if node.markers & EXTERNAL_RESOURCE_MARKERS:
         return False
     if node.path.startswith("tests/unit/"):
         return True
     if node.path.startswith("tests/component/api/"):
         return True
-    return bool(
-        node.path.startswith("tests/integration/")
-        and node.markers & {"integration_ci", "reliability_journey"}
-    )
+    # Missing ownership markers are precisely what this audit must detect.
+    return node.path.startswith("tests/integration/")
 
 
 def owners(node: CollectedNode) -> set[str]:
@@ -108,6 +157,11 @@ def owners(node: CollectedNode) -> set[str]:
 
     markers = node.markers
     result: set[str] = set()
+
+    if node.path in CONTROLLER_JOURNEY_PATHS:
+        result.add("integration-controller-journey")
+    if node.nodeid == EXACT_RECOVERY_NODE:
+        result.add("omnigent-exact-artifact")
 
     if (
         node.path.startswith("tests/unit/")

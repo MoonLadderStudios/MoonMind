@@ -20,7 +20,7 @@ from moonmind.workflows.temporal.runtime.managed_session_supervisor import (
     ManagedSessionSupervisor,
 )
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
 
 class _LocalArtifactStorage:
