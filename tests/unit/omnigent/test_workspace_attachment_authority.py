@@ -39,7 +39,7 @@ async def test_attachment_outage_keeps_failure_meaning_and_original_grant(artifa
             if boundary == "metadata":
                 async def unavailable(*args, **kwargs):
                     raise original
-                injected.setattr(TemporalArtifactRepository, "list_links", unavailable)
+                injected.setattr(AsyncSession, "execute", unavailable)
             else:
                 def unavailable(*args, **kwargs):
                     raise original
