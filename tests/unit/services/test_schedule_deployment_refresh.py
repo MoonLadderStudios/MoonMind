@@ -15,6 +15,7 @@ from api_service.db.models import (
     OmnigentOAuthHostBindingRecord,
     OmnigentUpstreamAgentProjection,
     TemporalArtifact,
+    TemporalArtifactStatus,
 )
 from api_service.services import omnigent_agent_profile_selection as selection
 from api_service.services.omnigent_policies import OmnigentPolicyService
@@ -63,10 +64,20 @@ class DeploymentSession(_GenericV2Session):
             host["hostImageRef"] = "ghcr.io/example/host@sha256:" + str(v) * 64
         self.policy_states = {ref: "active" for ref in self.policies}
         self.task_inputs = {
-            artifact_id: SimpleNamespace(
-                created_by_principal="original-task-principal", sha256="a" * 64,
+            artifact_id: TemporalArtifact(
+                artifact_id=artifact_id,
+                storage_key=f"deployment-refresh/{artifact_id}",
+                status=TemporalArtifactStatus.COMPLETE,
+                hard_deleted_at=None,
+                created_by_principal="original-task-principal",
+                sha256="a" * 64,
             )
-            for artifact_id in ("art_original_task", "task-input")
+            for artifact_id in (
+                "art_original_task",
+                "task-input",
+                "art_new_plan",
+                "art_skills",
+            )
         }
 
     async def get(self, model, key):
@@ -75,6 +86,15 @@ class DeploymentSession(_GenericV2Session):
         if model is TemporalArtifact:
             return self.task_inputs.get(key)
         return await super().get(model, key)
+
+    async def execute(self, statement):
+        if statement.column_descriptions[0].get("entity") is TemporalArtifact:
+            artifact_id = statement.compile().params["artifact_id_1"]
+            artifact = self.task_inputs.get(artifact_id)
+            return SimpleNamespace(
+                scalars=lambda: SimpleNamespace(first=lambda: artifact)
+            )
+        return await super().execute(statement)
 
     async def scalar(self, statement):
         entity = statement.column_descriptions[0].get("entity")

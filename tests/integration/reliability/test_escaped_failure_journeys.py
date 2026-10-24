@@ -40,6 +40,8 @@ from api_service.db.models import (
     RecurringWorkflowDefinition,
     RecurringWorkflowScheduleType,
     RecurringWorkflowScopeType,
+    TemporalArtifact,
+    TemporalArtifactStatus,
 )
 from api_service.services import omnigent_execution_plan_service
 from api_service.services.omnigent_policies import (
@@ -1382,6 +1384,22 @@ async def test_recurring_managed_bootstrap_policy_cutover_refreshes_temporal_act
             )
             session.add_all(
                 [
+                    # The compiler double returns persisted artifact identities.
+                    # Give retention the same completed metadata as its producer.
+                    *(
+                        TemporalArtifact(
+                            artifact_id=artifact_id,
+                            storage_key=f"schedule-cutover/{artifact_id}",
+                            status=TemporalArtifactStatus.COMPLETE,
+                            created_by_principal="operator",
+                        )
+                        for artifact_id in (
+                            "art_plan",
+                            "art_task",
+                            "art_profile",
+                            "art_skills",
+                        )
+                    ),
                     definition,
                     ManagedAgentProviderProfile(
                         profile_id=old_snapshot["providerProfileRef"],
