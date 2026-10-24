@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -83,7 +84,10 @@ def _payload(**overrides: Any) -> dict[str, Any]:
 @pytest.fixture
 def mock_client_adapter():
     adapter = MagicMock()
-    adapter.start_workflow = AsyncMock()
+    adapter.start_workflow = AsyncMock(
+        side_effect=lambda **_kwargs: SimpleNamespace(run_id=str(uuid4()))
+    )
+    adapter.namespace_retention_seconds = AsyncMock(return_value=86400)
     adapter.describe_workflow = AsyncMock(return_value=None)
     adapter.update_workflow = AsyncMock()
     adapter.signal_workflow = AsyncMock()

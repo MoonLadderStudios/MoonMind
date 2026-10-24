@@ -35,7 +35,6 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactError,
     TemporalArtifactRepository,
     TemporalArtifactService,
-    TemporalArtifactStateError,
 )
 from moonmind.workflows.temporal.worker_runtime import _build_runtime_planner
 from moonmind.workflows.temporal.workflows import run as run_module
@@ -104,7 +103,7 @@ async def _schedule(sessions):
     inputs = _codex_plan_inputs()
     inputs["resolved_skills"] = {
         "resolvedSkillSetRef": f"artifact:{skills.manifest_id}",
-        "resolvedSkillSetDigest": "sha256:" + "a" * 64,
+        "resolvedSkillSetDigest": skills.manifest_digest,
         "skillDeliveryRef": "skill-delivery:sha256:" + "b" * 64,
     }
     digest = "sha256:" + hashlib.sha256(frozen).hexdigest()
@@ -330,6 +329,7 @@ async def test_fresh_admission_links_new_skillset_before_workflow_consumer(
             "resolved_skills": {
                 **saved.compile_inputs["resolved_skills"],
                 "resolvedSkillSetRef": f"artifact:{fresh_skills.manifest_id}",
+                "resolvedSkillSetDigest": fresh_skills.manifest_digest,
             },
         }
         plan = await DbExecutionPlanStore(artifacts).persist(
@@ -361,7 +361,7 @@ async def test_fresh_admission_links_new_skillset_before_workflow_consumer(
             binding=binding,
             artifact_refs=(plan_id,),
             resolved_skillset_ref=fresh_skills.manifest_id,
-            resolved_skillset_digest="sha256:" + "a" * 64,
+            resolved_skillset_digest=fresh_skills.manifest_digest,
         )
 
     monkeypatch.setattr(
@@ -516,17 +516,21 @@ async def test_admission_does_not_bypass_protected_raw_inputs(
             await _admit(saved.action)
     async with artifacts() as session:
         service = TemporalArtifactService(TemporalArtifactRepository(session))
-        # A quarantined root was never linked, so authorization rejects its
-        # reader before the raw quarantine gate. A linked manifest reaches it.
-        if protection == "restricted" or target == "input":
-            expected_error = TemporalArtifactAuthorizationError
-            expected_message = (
-                "restricted" if protection == "restricted" else "cannot read"
-            )
-        else:
-            expected_error = TemporalArtifactStateError
-            expected_message = "quarantined"
-        with pytest.raises(expected_error, match=expected_message):
+        # Rejected inputs never acquire grants; an admitted restricted root
+        # still enforces the execution's raw-byte policy at the reader.
+        admitted = target == "input" and protection == "restricted"
+        if not admitted:
+            assert not (
+                await session.scalars(
+                    select(TemporalArtifactLink).where(
+                        TemporalArtifactLink.workflow_id == WORKFLOW
+                    )
+                )
+            ).all()
+        with pytest.raises(
+            TemporalArtifactAuthorizationError,
+            match="restricted" if admitted else "cannot read",
+        ):
             await TemporalArtifactActivities(service).artifact_read(
                 {
                     "principal": f"workflow:{WORKFLOW}",
