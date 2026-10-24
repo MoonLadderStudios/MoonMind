@@ -100,8 +100,8 @@ bound sized from observed setup, testing, and bounded diagnostics/cleanup:
 
 | Lane | Per-test timeout | Test-step bound | Job bound |
 | --- | --- | --- | --- |
-| Unit-fast | 60s (`--timeout 60`) | 12-minute native test step | 18-minute job |
-| API/component | 120s (`--timeout 120`) | 7-minute native test step | 15-minute job |
+| Unit-fast | 60s (`--timeout 60`) | 15-minute native test step | 21-minute job |
+| API/component | 120s (`--timeout 120`) | 12-minute native test step | 18-minute job |
 | Temporal boundary | 120s (`--timeout 120`) | 7-minute native test step | 15-minute job |
 | Ordinary reliability shard | 150s | 600-second shell deadline inside a 12-minute Actions step | 20-minute job |
 | Scheduled reliability shard | 300s | 660-second shell deadline inside a 12-minute Actions step | 20-minute job |
@@ -123,11 +123,11 @@ evidence summary reports the termination as a cooperative deadline stop
 (124), a hard kill (137), an ordinary pytest exit, or unavailable when the
 native step bound, cancellation or runner loss stopped the step first.
 
-Unit-fast keeps six minutes outside its 12-minute test step for setup and
-reporting. Its full suite can take about nine minutes before final process
-exit. Warm setup has taken about 35 seconds; the normal summary and upload
-steps each have a 2-minute cap. API/component and Temporal retain 15-minute
-jobs and 7-minute test steps. Reliability 20-minute jobs also cover Compose
+Unit-fast and API/component keep six minutes outside their 15/12-minute test
+steps for setup and reporting. The full unit corpus can exceed twelve
+minutes while making progress; API/component can exceed seven without failures.
+The normal summary and upload steps each have a 2-minute cap. Temporal keeps
+a 15-minute job and 7-minute test step. Reliability 20-minute jobs also cover Compose
 pull/up (~1-2 minutes), their 12-minute test step, and bounded diagnostics/
 cleanup. Job deadlines remain hard ceilings: slow setup or multiple exhausted
 failure-diagnostic caps can prevent final uploads. The reliability bound
