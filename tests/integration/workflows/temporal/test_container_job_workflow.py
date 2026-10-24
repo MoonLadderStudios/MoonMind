@@ -17,7 +17,7 @@ from moonmind.workflows.temporal.workflows.container_job import (
     MoonMindContainerJobWorkflow,
 )
 
-pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
+pytestmark = [pytest.mark.integration, pytest.mark.asyncio, pytest.mark.integration_ci]
 
 JOB_ID = "container-job:fedcba9876543210fedcba9876543210"
 

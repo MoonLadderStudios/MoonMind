@@ -8,12 +8,23 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, Managed
 from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
 
 def _make_profile(**overrides) -> ManagedRuntimeProfile:
     defaults = dict(
         runtime_id="codex_cli",
+        provider_id="openai",
+        auth_mode="oauth",
+        credential_source="oauth_volume",
+        runtime_materialization_mode="oauth_home",
+        clear_env_keys=[
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+            "OPENAI_ORG_ID",
+            "OPENAI_PROJECT",
+            "MINIMAX_API_KEY",
+        ],
         command_template=["codex", "exec"],
         default_model="gpt-5.3-codex",
         default_effort=None,

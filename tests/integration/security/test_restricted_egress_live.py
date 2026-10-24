@@ -61,7 +61,7 @@ from moonmind.workflows.temporal.container_job_backend import (
 from moonmind.workloads.docker_launcher import DockerWorkloadLauncher
 from moonmind.workloads.registry import RunnerProfileRegistry
 
-pytestmark = [pytest.mark.integration]
+pytestmark = [pytest.mark.integration, pytest.mark.requires_deployment]
 
 
 def _docker(*args: str) -> subprocess.CompletedProcess[str]:

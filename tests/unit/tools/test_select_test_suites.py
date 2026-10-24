@@ -290,6 +290,22 @@ def test_unknown_backend_path_fails_open_to_reliability_journey() -> None:
     assert outputs["reliability_journey"] == "true"
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "api_service/data/presets/github-issue-search-and-implement.yaml",
+        "api_service/data/presets/pr-resolver.yaml",
+        "moonmind/workflows/executions/preset_readiness.py",
+        "api_service/services/presets/catalog.py",
+        "api_service/services/single_user_conversion.py",
+    ],
+)
+def test_saved_preset_inputs_select_their_reliability_journey(path: str) -> None:
+    outputs = _outputs([path])
+
+    assert outputs["reliability_journey"] == "true", path
+
+
 def test_managed_session_schema_selects_boundary_and_reliability() -> None:
     outputs = _outputs(["moonmind/schemas/managed_session_models.py"])
 
