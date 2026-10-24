@@ -47,6 +47,40 @@ from moonmind.workflows.temporal.artifacts import (
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
 
+@pytest.mark.parametrize("fault", [TimeoutError("private connection endpoint"), ConnectionRefusedError("private connection endpoint")])
+@pytest.mark.parametrize("surface", ["/api/artifacts/collection", "/api/artifacts/art_fixture"])
+async def test_asyncpg_connect_failures_keep_authority_category(tmp_path, fault, surface):
+    from api_service.api.routers import temporal_artifacts as routes
+    from api_service.auth_providers import get_instance_access_optional
+    from moonmind.security.operator_admission import OperatorAdmission
+
+    attempts = []
+
+    async def unavailable_connection():
+        attempts.append("connect")
+        raise fault
+
+    # Exercise SQLAlchemy's real asyncpg acquisition path; the creator never
+    # opens a socket or needs a PostgreSQL server.
+    engine = create_async_engine("postgresql+asyncpg://", async_creator=unavailable_connection)
+    try:
+        async with AsyncSession(engine) as session:
+            service = TemporalArtifactService(TemporalArtifactRepository(session), store=LocalTemporalArtifactStore(tmp_path / "artifacts"))
+            app = FastAPI()
+            app.include_router(routes.router)
+            app.dependency_overrides[routes._get_temporal_artifact_service] = lambda: service
+            app.dependency_overrides[get_instance_access_optional] = lambda: OperatorAdmission(via="trusted_ingress")
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://fixture") as client:
+                response = await client.get(surface)
+            assert response.status_code == 503
+            assert response.headers["retry-after"] == "5"
+            assert response.json()["detail"]["code"] == "artifact_authority_unavailable"
+            assert "private connection" not in response.text
+            assert attempts == ["connect"]
+    finally:
+        await engine.dispose()
+
+
 @pytest.mark.parametrize(("fault", "status_code", "code"), [
     (TimeoutError("private storage endpoint"), 503, "artifact_storage_unavailable"),
     (PermissionError("private storage credentials"), 502, "artifact_storage_forbidden"),
@@ -91,10 +125,10 @@ async def test_admitted_collection_route_maps_real_repository_outage(tmp_path, m
             repository = TemporalArtifactRepository(session)
             service = TemporalArtifactService(repository, store=LocalTemporalArtifactStore(tmp_path / "artifacts"))
 
-            async def unavailable(**kwargs):
+            async def unavailable(*args, **kwargs):
                 raise original
 
-            monkeypatch.setattr(repository, "list_collection_page", unavailable)
+            monkeypatch.setattr(session, "execute", unavailable)
             app = FastAPI()
             app.include_router(routes.router)
             app.dependency_overrides[routes._get_temporal_artifact_service] = lambda: service
@@ -132,7 +166,7 @@ async def test_real_download_boundary_maps_lazy_s3_failures(tmp_path, monkeypatc
             if isinstance(fault, OperationalError):
                 async def unavailable(*args, **kwargs):
                     raise fault
-                monkeypatch.setattr(service._repository, "list_links", unavailable)
+                monkeypatch.setattr(session, "execute", unavailable)
             else:
                 service._store = S3TemporalArtifactStore(endpoint_url="http://synthetic.invalid", bucket="fixture", access_key_id="fixture", secret_access_key="fixture", region_name="us-east-1", use_ssl=False)
             app = FastAPI()

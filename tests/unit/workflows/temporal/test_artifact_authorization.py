@@ -38,13 +38,13 @@ async def test_link_lookup_outage_preserves_authority_failure_and_recovers(
                 link=ExecutionRef(namespace="default", workflow_id="reader", run_id="run", link_type="input.test"),
             )
             await service.write_complete(artifact_id=artifact.artifact_id, principal="owner", payload=b"retained")
-            lookup = repository.list_links
+            lookup = session.execute
             original = OperationalError("SELECT links", {}, RuntimeError("synthetic DB outage"))
 
             async def unavailable(*args, **kwargs):
                 raise original
 
-            monkeypatch.setattr(repository, "list_links", unavailable)
+            monkeypatch.setattr(session, "execute", unavailable)
             with pytest.raises(TemporalArtifactError) as raised:
                 await getattr(service, surface)(artifact_id=artifact.artifact_id, principal="workflow:reader")
             error = raised.value
@@ -55,7 +55,7 @@ async def test_link_lookup_outage_preserves_authority_failure_and_recovers(
             assert error.artifact_id == artifact.artifact_id
             assert artifact.status.value == "complete"
 
-            monkeypatch.setattr(repository, "list_links", lookup)
+            monkeypatch.setattr(session, "execute", lookup)
             _, data = await service.read(artifact_id=artifact.artifact_id, principal="workflow:reader")
             assert data == b"retained"
             with pytest.raises(TemporalArtifactAuthorizationError):

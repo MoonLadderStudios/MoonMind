@@ -186,14 +186,17 @@ class TemporalArtifactBytesMissingError(TemporalArtifactStateError):
 
 
 def _artifact_authority_boundary(function):
-    """Keep known connection failures distinct from a successful access check."""
+    """Classify database failures at repository operations, never blob I/O."""
     @functools.wraps(function)
     async def wrapped(self, *args, **kwargs):
         try:
             return await function(self, *args, **kwargs)
-        except (OperationalError, InterfaceError, DisconnectionError, SQLTimeoutError) as exc:
+        except (OperationalError, InterfaceError, DisconnectionError, SQLTimeoutError,
+                ConnectionError, TimeoutError) as exc:
             artifact = kwargs.get("artifact") or (args[0] if args else None)
-            artifact_id = kwargs.get("artifact_id") or getattr(artifact, "artifact_id", "")
+            artifact_id = kwargs.get("artifact_id") or (
+                artifact if isinstance(artifact, str) else getattr(artifact, "artifact_id", "")
+            )
             raise TemporalArtifactUnavailableError(
                 artifact_id, dependency="authority", operation=function.__name__
             ) from exc
@@ -1150,12 +1153,15 @@ class TemporalArtifactRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    @_artifact_authority_boundary
     async def commit(self) -> None:
         await self._session.commit()
 
+    @_artifact_authority_boundary
     async def flush(self) -> None:
         await self._session.flush()
 
+    @_artifact_authority_boundary
     async def begin_use_claim_savepoint(
         self,
     ) -> tuple[AsyncSessionTransaction, AsyncSessionTransaction]:
@@ -1175,6 +1181,7 @@ class TemporalArtifactRepository:
         assert outer is not None
         return outer, savepoint
 
+    @_artifact_authority_boundary
     async def create_artifact(
         self,
         *,
@@ -1236,12 +1243,14 @@ class TemporalArtifactRepository:
         await self._session.flush()
         return artifact
 
+    @_artifact_authority_boundary
     async def get_artifact(self, artifact_id: str) -> db_models.TemporalArtifact:
         artifact = await self._session.get(db_models.TemporalArtifact, artifact_id)
         if artifact is None:
             raise _missing_artifact_error(artifact_id)
         return artifact
 
+    @_artifact_authority_boundary
     async def lock_storage_references(
         self,
         *,
@@ -1261,6 +1270,7 @@ class TemporalArtifactRepository:
         )
         await self._session.execute(stmt)
 
+    @_artifact_authority_boundary
     async def has_live_storage_reference(
         self,
         *,
@@ -1284,6 +1294,7 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return result.scalar() is not None
 
+    @_artifact_authority_boundary
     async def has_pending_deletion_for_storage_key(
         self,
         *,
@@ -1314,6 +1325,7 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return result.scalar() is not None
 
+    @_artifact_authority_boundary
     async def add_link(
         self,
         *,
@@ -1335,6 +1347,7 @@ class TemporalArtifactRepository:
         await self._session.flush()
         return link
 
+    @_artifact_authority_boundary
     async def list_links(
         self, artifact_id: str
     ) -> list[db_models.TemporalArtifactLink]:
@@ -1349,6 +1362,7 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    @_artifact_authority_boundary
     async def list_links_for_artifacts(
         self, artifact_ids: list[str]
     ) -> list[db_models.TemporalArtifactLink]:
@@ -1366,6 +1380,7 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    @_artifact_authority_boundary
     async def principal_owns_linked_execution(
         self, *, artifact_id: str, principal: str
     ) -> bool:
@@ -1402,6 +1417,7 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return result.scalar() is not None
 
+    @_artifact_authority_boundary
     async def list_for_execution(
         self,
         *,
@@ -1434,6 +1450,7 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().unique().all())
 
+    @_artifact_authority_boundary
     async def list_for_workflow(
         self,
         *,
@@ -1463,6 +1480,7 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().unique().all())
 
+    @_artifact_authority_boundary
     async def list_collection_page(
         self,
         *,
@@ -1524,6 +1542,7 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    @_artifact_authority_boundary
     async def latest_for_execution_link(
         self,
         *,
@@ -1555,6 +1574,7 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return result.scalars().first()
 
+    @_artifact_authority_boundary
     async def pin_artifact(
         self,
         *,
@@ -1573,12 +1593,14 @@ class TemporalArtifactRepository:
         await self._session.flush()
         return pin
 
+    @_artifact_authority_boundary
     async def unpin_artifact(self, artifact_id: str) -> None:
         stmt = delete(db_models.TemporalArtifactPin).where(
             db_models.TemporalArtifactPin.artifact_id == artifact_id
         )
         await self._session.execute(stmt)
 
+    @_artifact_authority_boundary
     async def get_pin(self, artifact_id: str) -> db_models.TemporalArtifactPin | None:
         stmt: Select[tuple[db_models.TemporalArtifactPin]] = (
             select(db_models.TemporalArtifactPin)
@@ -1658,6 +1680,7 @@ class TemporalArtifactRepository:
         )
         return or_(schedule_ref, skill_ref)
 
+    @_artifact_authority_boundary
     async def has_saved_definition_reference(self, artifact_id: str) -> bool:
         return bool(
             await self._session.scalar(
@@ -1665,6 +1688,7 @@ class TemporalArtifactRepository:
             )
         )
 
+    @_artifact_authority_boundary
     async def retain_schedule_inputs(self, target: Mapping[str, Any]) -> None:
         """Fence saved-pointer admission against GC until the caller commits."""
         for artifact_id in sorted(schedule_input_artifact_ids(target)):
@@ -1677,6 +1701,7 @@ class TemporalArtifactRepository:
                     f"Cannot retain schedule input {artifact_id}: artifact is not readable"
                 )
 
+    @_artifact_authority_boundary
     async def has_active_journal_reference(self, artifact_id: str) -> bool:
         """The current journal remains recovery data until its bridge is terminal."""
         return bool(
@@ -1685,6 +1710,7 @@ class TemporalArtifactRepository:
             )
         )
 
+    @_artifact_authority_boundary
     async def list_expired_artifacts(
         self,
         *,
@@ -1726,6 +1752,7 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    @_artifact_authority_boundary
     async def list_deleted_for_hard_delete(
         self,
         *,
@@ -1812,6 +1839,7 @@ class TemporalArtifactRepository:
             *(~protection for protection in self._purge_protections(now=now)),
         ]
 
+    @_artifact_authority_boundary
     async def list_purge_candidates(
         self,
         *,
@@ -1841,6 +1869,7 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return [(str(row[0]), str(row[1]), row[2]) for row in result.all()]
 
+    @_artifact_authority_boundary
     async def count_protected_tombstones(
         self,
         *,
@@ -1863,6 +1892,7 @@ class TemporalArtifactRepository:
         )
         return int(await self._session.scalar(stmt) or 0)
 
+    @_artifact_authority_boundary
     async def filter_purge_eligible(
         self,
         artifact_ids: list[str],
@@ -1883,6 +1913,7 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return {str(value) for value in result.scalars().all()}
 
+    @_artifact_authority_boundary
     async def storage_keys_with_live_reference(
         self,
         *,
@@ -1908,6 +1939,7 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return {str(value) for value in result.scalars().all()}
 
+    @_artifact_authority_boundary
     async def purge_artifacts(self, artifact_ids: list[str]) -> tuple[int, int]:
         """Delete tombstone rows and their links; return (rows, links)."""
         if not artifact_ids:
@@ -1930,6 +1962,7 @@ class TemporalArtifactRepository:
         )
         return int(rows.rowcount or 0), int(links.rowcount or 0)
 
+    @_artifact_authority_boundary
     async def get_artifact_for_update(
         self, artifact_id: str
     ) -> db_models.TemporalArtifact:
@@ -1949,6 +1982,7 @@ class TemporalArtifactRepository:
             raise _missing_artifact_error(artifact_id)
         return artifact
 
+    @_artifact_authority_boundary
     async def acquire_use_claim(
         self,
         *,
@@ -2022,6 +2056,7 @@ class TemporalArtifactRepository:
             )
         ).scalar_one()
 
+    @_artifact_authority_boundary
     async def release_use_claim(
         self,
         *,
@@ -2038,6 +2073,7 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return (result.rowcount or 0) > 0
 
+    @_artifact_authority_boundary
     async def release_use_claims_for_request(
         self,
         *,
@@ -2052,6 +2088,7 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return int(result.rowcount or 0)
 
+    @_artifact_authority_boundary
     async def list_use_claims(
         self, artifact_id: str
     ) -> list[db_models.TemporalArtifactUseClaim]:
@@ -2066,6 +2103,7 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    @_artifact_authority_boundary
     async def list_live_use_claims(
         self, artifact_id: str, *, now: datetime
     ) -> list[db_models.TemporalArtifactUseClaim]:
@@ -2083,6 +2121,7 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
 
+    @_artifact_authority_boundary
     async def has_live_use_claim(self, artifact_id: str, *, now: datetime) -> bool:
         stmt = (
             select(db_models.TemporalArtifactUseClaim.id)
@@ -2095,6 +2134,7 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return result.scalar() is not None
 
+    @_artifact_authority_boundary
     async def prune_expired_use_claims(self, *, now: datetime) -> int:
         """Delete expired claims so stale cleanup never pins data forever."""
         stmt = delete(db_models.TemporalArtifactUseClaim).where(
@@ -2103,6 +2143,7 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return int(result.rowcount or 0)
 
+    @_artifact_authority_boundary
     async def count_live_claims_for_owner(
         self, owner_principal: str, *, now: datetime
     ) -> int:
@@ -2115,6 +2156,7 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         return int(result.scalar() or 0)
 
+    @_artifact_authority_boundary
     async def quota_usage_for_scope(self, scope: str) -> dict[str, int]:
         """Compute per-scope logical vs physical byte usage from live rows."""
         from sqlalchemy import func as _func
@@ -2145,6 +2187,7 @@ class TemporalArtifactRepository:
         physical = int(sum(int(row[1] or 0) for row in rows))
         return {"logicalBytes": logical, "physicalBytes": physical}
 
+    @_artifact_authority_boundary
     async def record_deletion_intent(
         self, *, artifact_id: str, principal: str
     ) -> db_models.TemporalArtifactDeletionIntent:
@@ -2163,6 +2206,7 @@ class TemporalArtifactRepository:
         await self._session.flush()
         return intent
 
+    @_artifact_authority_boundary
     async def get_deletion_intent(
         self, artifact_id: str
     ) -> db_models.TemporalArtifactDeletionIntent | None:
@@ -2170,6 +2214,7 @@ class TemporalArtifactRepository:
             db_models.TemporalArtifactDeletionIntent, artifact_id
         )
 
+    @_artifact_authority_boundary
     async def note_deletion_attempt(
         self, *, artifact_id: str, error: str | None
     ) -> None:
@@ -2183,6 +2228,7 @@ class TemporalArtifactRepository:
         intent.updated_at = datetime.now(UTC)
         await self._session.flush()
 
+    @_artifact_authority_boundary
     async def clear_deletion_intent(self, artifact_id: str) -> None:
         intent = await self._session.get(
             db_models.TemporalArtifactDeletionIntent, artifact_id
@@ -2191,6 +2237,7 @@ class TemporalArtifactRepository:
             await self._session.delete(intent)
             await self._session.flush()
 
+    @_artifact_authority_boundary
     async def list_pending_deletion_intents(
         self, *, limit: int = 500
     ) -> list[db_models.TemporalArtifactDeletionIntent]:
@@ -2426,7 +2473,6 @@ class TemporalArtifactService:
             f"principal '{principal}' cannot read artifact {artifact.artifact_id}"
         )
 
-    @_artifact_authority_boundary
     async def _assert_artifact_read_access(
         self,
         artifact: db_models.TemporalArtifact,
@@ -2989,9 +3035,12 @@ class TemporalArtifactService:
             )
         except BaseException as exc:
             await savepoint.rollback()
+            database_error = exc.__cause__ if (
+                isinstance(exc, TemporalArtifactUnavailableError) and exc.dependency == "authority"
+            ) else exc
             if (
-                not isinstance(exc, DBAPIError)
-                or exc.connection_invalidated
+                not isinstance(database_error, DBAPIError)
+                or database_error.connection_invalidated
                 or not outer.is_active
             ):
                 raise
@@ -3054,9 +3103,12 @@ class TemporalArtifactService:
             )
         except BaseException as exc:
             await savepoint.rollback()
+            database_error = exc.__cause__ if (
+                isinstance(exc, TemporalArtifactUnavailableError) and exc.dependency == "authority"
+            ) else exc
             if (
-                not isinstance(exc, DBAPIError)
-                or exc.connection_invalidated
+                not isinstance(database_error, DBAPIError)
+                or database_error.connection_invalidated
                 or not outer.is_active
             ):
                 raise
@@ -3440,7 +3492,6 @@ class TemporalArtifactService:
         )
         return artifact, True
 
-    @_artifact_authority_boundary
     async def write_complete(
         self,
         *,
@@ -3831,7 +3882,6 @@ class TemporalArtifactService:
         except Exception as exc:
             _raise_storage_error(exc, artifact_id=artifact.artifact_id, operation=operation, read=True)
 
-    @_artifact_authority_boundary
     async def read(
         self,
         *,
@@ -3880,7 +3930,6 @@ class TemporalArtifactService:
         )
         return artifact, data
 
-    @_artifact_authority_boundary
     async def read_chunks(
         self,
         *,
@@ -3933,7 +3982,6 @@ class TemporalArtifactService:
 
         return artifact, remaining()
 
-    @_artifact_authority_boundary
     async def read_path(
         self,
         *,
@@ -4008,7 +4056,6 @@ class TemporalArtifactService:
             default_read_ref=default_read_ref,
         )
 
-    @_artifact_authority_boundary
     async def get_metadata(
         self,
         *,
@@ -4036,7 +4083,6 @@ class TemporalArtifactService:
         )
         return artifact, links, pinned is not None, read_policy
 
-    @_artifact_authority_boundary
     async def list_authorized_collection(
         self,
         *,
@@ -4104,7 +4150,6 @@ class TemporalArtifactService:
             (artifact, links_by_artifact[artifact.artifact_id]) for artifact in page
         ], has_more
 
-    @_artifact_authority_boundary
     async def presign_download(
         self,
         *,
@@ -4905,7 +4950,6 @@ class TemporalArtifactService:
             purge_error_count=sum(p.purge_error_count for p in pages),
         )
 
-    @_artifact_authority_boundary
     async def compute_preview(
         self,
         *,
