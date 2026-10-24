@@ -2591,6 +2591,28 @@ class TemporalExecutionService:
                 raise TemporalExecutionValidationError(
                     "Execution input delegation conflicts with admitted plan authority"
                 )
+            # Snapshot lineage is part of admission, before an uncertain Start
+            # RPC can return without the router's post-create bookkeeping.
+            # Only the validated compiler result supplies these saved inputs.
+            binding = _admitted_execution_plan.binding
+            record.memo = {
+                **record.memo,
+                "task_input_snapshot_ref": binding.task_input_snapshot_ref,
+                "task_input_snapshot_version": 1,
+                "task_input_snapshot_source_kind": "create",
+                "omnigent_execution_plan_ref": binding.plan_ref,
+                "omnigent_execution_plan_digest": binding.plan_digest,
+                "omnigent_execution_plan_artifact_ref": binding.plan_artifact_ref,
+            }
+            record.artifact_refs = list(
+                dict.fromkeys(
+                    [
+                        *record.artifact_refs,
+                        binding.task_input_snapshot_ref,
+                        *_admitted_execution_plan.artifact_refs,
+                    ]
+                )
+            )
 
         self._session.add(record)
         if normalized_depends_on:
