@@ -2,9 +2,12 @@ import asyncio
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -12,10 +15,12 @@ import pytest
 
 from moonmind.auth.github_credentials import ResolvedGitHubCredential
 from moonmind.config.settings import settings
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
-from moonmind.schemas.agent_runtime_models import resolve_execution_budget
-from moonmind.schemas.agent_runtime_models import ManagedRuntimeProfile
-from moonmind.schemas.agent_runtime_models import RuntimeCommandRenderResult
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    ManagedRuntimeProfile,
+    RuntimeCommandRenderResult,
+    resolve_execution_budget,
+)
 from moonmind.security.execution_fanout_capabilities import (
     ExecutionFanoutCapabilityError,
     verify_execution_fanout_capability,
@@ -30,15 +35,18 @@ from moonmind.workflows.executions.repository_contract import (
     materialize_resolved_repository_target,
     persist_repository_connection,
 )
-from moonmind.workflows.temporal.runtime.launcher import (
-    ManagedRuntimeLauncher,
+from moonmind.workflows.temporal.runtime.github_auth_broker import (
+    GitHubAuthBrokerManager,
 )
-from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.lore_repository_adapter import (
     LoreCliReadinessAdapter,
 )
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from tests.helpers.repository_connections import (
     github_app_provider_edge as _app_provider_edge,
+)
+from tests.helpers.repository_connections import (
     serve_repository_connections as _record_connections,
 )
 
@@ -2335,6 +2343,93 @@ def test_persist_gh_config_writes_broker_helpers_without_plaintext_token(tmp_pat
     assert "ghp_testtoken123" not in gitconfig_text
     assert "from moonmind" not in gh_wrapper.read_text(encoding="utf-8")
     assert "from moonmind" not in git_helper.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("broker_state", ["missing", "refusing"])
+@pytest.mark.parametrize(
+    "arguments, local_version",
+    [
+        (["--version"], True),
+        (["version"], True),
+        (["auth", "token", "--hostname", "github.com"], False),
+        (["api", "/user", "--version"], False),
+    ],
+)
+async def test_persisted_gh_wrapper_version_needs_no_repository_auth(
+    tmp_path, broker_state, arguments, local_version
+):
+    real_gh = shutil.which("gh")
+    if real_gh is None:
+        pytest.skip("requires real gh")
+
+    model_auth = tmp_path / "home" / ".codex" / "auth.json"
+    model_auth.parent.mkdir(parents=True)
+    model_auth.write_text('{"model_oauth": "independent-model-auth"}')
+    original_model_auth = model_auth.read_bytes()
+    environment = {
+        "HOME": str(model_auth.parent.parent),
+        "PATH": os.environ["PATH"],
+        "GH_TOKEN": "ambient-token-A",
+        "GITHUB_TOKEN": "stale-token-A",
+        "GH_CONFIG_DIR": str(tmp_path / "gh-config"),
+    }
+    broker = GitHubAuthBrokerManager()
+    renewals = []
+
+    async def refuse_renewal():
+        renewals.append("requested")
+        raise RuntimeError("selected repository authority refused")
+
+    # Keep the real Unix socket below the platform's path-length limit.
+    with tempfile.TemporaryDirectory(prefix="mm-gh-version-") as socket_dir:
+        socket_path = str(Path(socket_dir) / "github.sock")
+        try:
+            if broker_state == "refusing":
+                await broker.start(
+                    run_id=tmp_path.name,
+                    socket_path=socket_path,
+                    token="expired-selected-token-B",
+                    expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+                    renew=refuse_renewal,
+                )
+            ManagedRuntimeLauncher._persist_gh_config(
+                environment,
+                str(tmp_path),
+                github_socket_path=socket_path,
+                real_gh_path=real_gh,
+            )
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["gh", *arguments],
+                cwd=tmp_path,
+                env=environment,
+                capture_output=True,
+                timeout=10,
+            )
+            if local_version:
+                direct = subprocess.run(
+                    [real_gh, *arguments],
+                    env=environment,
+                    capture_output=True,
+                    timeout=10,
+                    check=True,
+                )
+                assert result.returncode == 0, result.stderr.decode()
+                assert result.stdout == direct.stdout
+                assert renewals == []
+            else:
+                assert result.returncode != 0
+                assert b"ambient-token-A" not in result.stdout + result.stderr
+                assert b"stale-token-A" not in result.stdout + result.stderr
+                if broker_state == "refusing":
+                    assert b"selected repository authority refused" in result.stderr
+                    assert renewals == ["requested"]
+            assert environment["HOME"] == str(model_auth.parent.parent)
+            assert model_auth.read_bytes() == original_model_auth
+        finally:
+            await broker.stop(tmp_path.name)
+
 
 def test_persist_gh_config_bash_env_restores_wrappers_and_keeps_declared_bash_env(
     tmp_path,
