@@ -3624,7 +3624,11 @@ class MoonMindAgentRun:
 
         if use_managed_status_activity:
             fetch_budget = {}
+            fetch_deadline = None
             if remaining_budget_seconds is not None:
+                fetch_deadline = workflow.now() + timedelta(
+                    seconds=remaining_budget_seconds
+                )
                 route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
                     "agent_runtime.fetch_result"
                 )
@@ -3642,12 +3646,28 @@ class MoonMindAgentRun:
                         )
                     ),
                 }
-            result_payload = await self._execute_routed_activity(
-                "agent_runtime.fetch_result",
-                self._build_managed_fetch_result_activity_input(request),
-                cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                **fetch_budget,
-            )
+            try:
+                result_payload = await self._execute_routed_activity(
+                    "agent_runtime.fetch_result",
+                    self._build_managed_fetch_result_activity_input(request),
+                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                    **fetch_budget,
+                )
+            except ActivityError as exc:
+                if (
+                    fetch_deadline is not None
+                    and isinstance(exc.cause, TemporalTimeoutError)
+                    and workflow.now() >= fetch_deadline
+                ):
+                    self._get_logger().warning(
+                        "Result fetching exhausted the remaining execution budget: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                    raise asyncio.TimeoutError(
+                        "Result fetching exhausted the remaining execution budget"
+                    ) from exc
+                raise
             return (
                 AgentRunResult(**result_payload)
                 if isinstance(result_payload, dict)

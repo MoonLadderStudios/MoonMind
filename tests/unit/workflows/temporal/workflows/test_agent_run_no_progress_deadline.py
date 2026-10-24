@@ -2,13 +2,18 @@
 
 import asyncio
 import gzip
+import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+from temporalio import activity
 from temporalio.client import WorkflowHistory
-from temporalio.worker import Replayer, UnsandboxedWorkflowRunner
+from temporalio.exceptions import ActivityError, ApplicationError, TimeoutType
+from temporalio.exceptions import TimeoutError as TemporalTimeoutError
+from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -16,6 +21,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunStatus,
 )
 from moonmind.workflows.temporal.workflows import agent_run
+from tests.integration.services.temporal.workflows import test_agent_run as harness
 
 pytestmark = pytest.mark.asyncio
 
@@ -258,6 +264,169 @@ async def test_terminal_status_inside_grace_uses_remaining_fetch_budget(
         else:
             assert "start_to_close_timeout" not in kwargs
             assert "schedule_to_close_timeout" not in kwargs
+
+
+@pytest.mark.parametrize(
+    "budget,elapsed,timeout,translated",
+    [
+        (5, 5, True, True),
+        (5, 4, True, False),
+        (None, 5, True, False),
+        (5, 5, False, False),
+    ],
+)
+async def test_fetch_timeout_only_becomes_budget_exhaustion_at_its_deadline(
+    monkeypatch, caplog, budget, elapsed, timeout, translated
+):
+    now = _clock(monkeypatch)
+    run = agent_run.MoonMindAgentRun()
+    run.run_id = "run"
+    monkeypatch.setattr(run, "_get_logger", lambda: logging.getLogger(__name__))
+    error = ActivityError(
+        "Original result-fetch failure",
+        scheduled_event_id=10,
+        started_event_id=11,
+        identity="test-worker",
+        activity_type="agent_runtime.fetch_result",
+        activity_id="fetch-1",
+        retry_state=None,
+    )
+    error.__cause__ = (
+        TemporalTimeoutError(
+            "Result fetch exceeded its Activity timeout",
+            type=TimeoutType.SCHEDULE_TO_CLOSE,
+            last_heartbeat_details=[],
+        )
+        if timeout
+        else ApplicationError("Original provider read failure")
+    )
+
+    async def fail(*_args, **_kwargs):
+        now[0] += timedelta(seconds=elapsed)
+        raise error
+
+    run._execute_routed_activity = AsyncMock(side_effect=fail)
+    expected = asyncio.TimeoutError if translated else ActivityError
+    with pytest.raises(expected) as caught:
+        await run._fetch_managed_result(
+            request=_request(),
+            adapter=object(),
+            uses_codex_session_adapter=False,
+            use_managed_status_activity=True,
+            remaining_budget_seconds=budget,
+        )
+    if translated:
+        assert caught.value.__cause__ is error
+        assert "Original result-fetch failure" in caplog.text
+    else:
+        assert caught.value is error
+
+
+async def test_actual_fetch_activity_timeout_publishes_a_budget_terminal_result(
+    monkeypatch,
+):
+    monkeypatch.setattr(harness, "_managed_launch_requests", [])
+    monkeypatch.setattr(harness, "_managed_status_mode", "silent_then_completed")
+    monkeypatch.setattr(harness, "_managed_status_poll_count", 0)
+    fetch_started = asyncio.Event()
+    published = []
+
+    def policy(request, **_options):
+        return {
+            "runtime": request.agent_id,
+            "noProgressTimeoutSeconds": 1,
+            "noProgressGraceSeconds": 5,
+            "stuckAction": "request_intervention",
+            "retryPolicy": "test_managed_grace_reconciliation",
+        }
+
+    monkeypatch.setattr(
+        agent_run.MoonMindAgentRun,
+        "_resiliency_policy_for_request",
+        staticmethod(policy),
+    )
+
+    @activity.defn(name="agent_runtime.fetch_result")
+    async def pending_result(_request: dict) -> dict:
+        fetch_started.set()
+        await asyncio.sleep(3600)
+        return {}
+
+    @activity.defn(name="agent_runtime.publish_artifacts")
+    async def publish(result: AgentRunResult) -> AgentRunResult:
+        published.append(result)
+        return result
+
+    async with (
+        await WorkflowEnvironment.start_time_skipping() as env,
+        Worker(
+            env.client,
+            task_queue="fetch-budget-timeout-workflow",
+            workflows=[
+                agent_run.MoonMindAgentRun,
+                harness.MockProviderProfileManager,
+            ],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ),
+        Worker(
+            env.client,
+            task_queue="mm.activity.artifacts",
+            activities=[
+                harness.mock_provider_profile_list,
+                harness.mock_provider_profile_ensure_manager,
+                harness.mock_provider_profile_reset_manager,
+                harness.mock_provider_profile_manager_state,
+            ],
+        ),
+        Worker(
+            env.client,
+            task_queue="mm.activity.agent_runtime",
+            activities=[
+                harness.mock_agent_runtime_build_launch_context,
+                harness.mock_agent_runtime_launch,
+                harness.mock_agent_runtime_status,
+                pending_result,
+                publish,
+            ],
+        ),
+        Worker(
+            env.client,
+            task_queue=agent_run.DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                "agent_runtime.cancel"
+            ).task_queue,
+            activities=[harness.mock_cancel],
+        ),
+    ):
+        await env.client.start_workflow(
+            harness.MockProviderProfileManager.run,
+            {"runtime_id": "claude_code"},
+            id="provider-profile-manager:claude_code",
+            task_queue="fetch-budget-timeout-workflow",
+        )
+        handle = await env.client.start_workflow(
+            agent_run.MoonMindAgentRun.run,
+            _request().model_copy(
+                update={
+                    "execution_profile_ref": "default-managed",
+                    "timeout_policy": {
+                        "timeout_seconds": 27,
+                        "max_timeout_seconds": 27,
+                        "progress_stall_seconds": 27,
+                    },
+                }
+            ),
+            id="test-managed-fetch-budget-timeout",
+            task_queue="fetch-budget-timeout-workflow",
+        )
+        result = await asyncio.wait_for(handle.result(), timeout=30)
+        assert (await handle.describe()).status.name == "COMPLETED"
+
+    assert fetch_started.is_set()
+    assert len(harness._managed_launch_requests) == 1
+    assert result.failure_class == "execution_error"
+    assert result.metadata["reason"] == "timed_out"
+    assert "timed out" in result.summary
+    assert published[-1].summary == result.summary
 
 
 @pytest.mark.parametrize("enabled,budget", [(False, 60), (True, 5)])
