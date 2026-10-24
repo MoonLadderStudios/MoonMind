@@ -1500,7 +1500,10 @@ def _websocket_headers(*, origin: str = "http://testserver") -> dict[str, str]:
     return {"Origin": origin}
 
 
-def test_websocket_stream_delivers_virtualized_events_and_terminal_close() -> None:
+@pytest.mark.parametrize("cleaned", [False, True])
+def test_websocket_stream_delivers_virtualized_events_and_terminal_close(
+    cleaned,
+) -> None:
     event = _event(
         1,
         metadata={
@@ -1508,7 +1511,12 @@ def test_websocket_stream_delivers_virtualized_events_and_terminal_close() -> No
             "nested": {"session_id": _PROVIDER_SESSION_ID},
         },
     )
-    store = _FakeStore(row=_row(status="completed"), events=[event])
+    row = _row(status="completed")
+    if cleaned:
+        row.omnigent_session_id = ""
+        row.final_snapshot_ref = "artifact:art_captured"
+        row.metadata_["capabilityAuthority"]["providerSessionId"] = _PROVIDER_SESSION_ID
+    store = _FakeStore(row=row, events=[event])
     client, _proxy, _store = _build(store=store)
 
     with client.websocket_connect(
@@ -1742,6 +1750,30 @@ def test_stream_replays_from_cursor_and_terminates() -> None:
     assert "id: 1" in response.text
     assert "id: 2" in response.text
     assert "event: terminal" in response.text
+
+
+def test_cleaned_terminal_sse_replay_redacts_retained_provider_identity() -> None:
+    row = _row(
+        status="completed",
+        omnigent_session_id="",
+        final_snapshot_ref="artifact:art_captured",
+    )
+    row.metadata_["capabilityAuthority"]["providerSessionId"] = _PROVIDER_SESSION_ID
+    event = _event(
+        1,
+        metadata={
+            "providerSession": _PROVIDER_SESSION_ID,
+            "nested": {"session_id": _PROVIDER_SESSION_ID},
+        },
+    )
+    client, _proxy, _store = _build(store=_FakeStore(row=row, events=[event]))
+
+    response = client.get(_path(f"v1/sessions/{_CHAT_BINDING_ID}/stream"))
+
+    assert response.status_code == 200
+    assert "event: terminal" in response.text
+    assert _PROVIDER_SESSION_ID not in response.text
+    assert f'"providerSession":"{_CHAT_BINDING_ID}"' in response.text
 
 
 def test_stream_last_event_id_resumes_after_delivered() -> None:

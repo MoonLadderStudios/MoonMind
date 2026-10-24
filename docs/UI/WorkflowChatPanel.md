@@ -265,7 +265,7 @@ A future workflow-level chat-steering product must use a separately labeled acti
 
 When the bound Omnigent session is terminal:
 
-- its authorized captured transcript remains readable after host and provider-lease cleanup, through the artifact's owning store and execution scope,
+- authorized captured transcripts survive host and provider-lease cleanup through their owning store and execution scope; diagnostic-only captures retain authorized provider reads while that session exists,
 - the native composer is read-only or absent,
 - mutating native controls fail closed,
 - MoonMind shows terminal Workflow and session context,
