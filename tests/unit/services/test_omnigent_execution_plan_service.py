@@ -107,7 +107,8 @@ class _LegacyClassAdmissionDecision(BaseModel):
 
 
 class _ArtifactService:
-    def __init__(self) -> None:
+    def __init__(self, db_session=None) -> None:
+        self._db_session = db_session
         self.payloads: dict[str, bytes] = {}
         self._index = 0
 
@@ -118,6 +119,23 @@ class _ArtifactService:
 
     async def write_complete(self, *, artifact_id: str, payload: bytes, **_kwargs):
         self.payloads[artifact_id] = payload
+        if self._db_session is not None:
+            from hashlib import sha256
+
+            from api_service.db.models import TemporalArtifact, TemporalArtifactStatus
+
+            # Database-backed consumers must see the durable artifact metadata
+            # promised by this compiler fixture, alongside its payload bytes.
+            self._db_session.add(
+                TemporalArtifact(
+                    artifact_id=artifact_id,
+                    status=TemporalArtifactStatus.COMPLETE,
+                    storage_key=f"plan-fixture/{artifact_id}",
+                    created_by_principal=_kwargs.get("principal"),
+                    sha256=sha256(payload).hexdigest(),
+                    size_bytes=len(payload),
+                )
+            )
         return SimpleNamespace(artifact_id=artifact_id)
 
 
@@ -716,6 +734,7 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
         Base,
         ManagedAgentProviderProfile,
         TemporalArtifact,
+        TemporalArtifactStatus,
     )
     from moonmind.omnigent.harness_platform.catalog_service import (
         DbHarnessCatalogRepository,
@@ -760,7 +779,6 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
         ),
     )
 
-    artifacts = _ArtifactService()
     snapshot = _snapshot(
         harness="opencode-native",
         policy="opencode-on-demand@1",
@@ -772,6 +790,7 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
         "implementationRef": harness.implementation.implementation_ref(),
     }
     db_session = factory()
+    artifacts = _ArtifactService(db_session)
     transaction = await db_session.begin()
     result = await service.compile_and_persist_execution_plan(
         session_factory=factory if catalog_access == "factory" else None,
@@ -816,6 +835,7 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
         db_session.add(
             TemporalArtifact(
                 artifact_id="art_request_1",
+                status=TemporalArtifactStatus.COMPLETE,
                 created_by_principal="user-1",
                 sha256="1" * 64,
                 storage_key="original-schedule-input",
