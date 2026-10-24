@@ -395,7 +395,10 @@ def test_remediation_action_authority_does_not_advertise_raw_admin_actions():
 @pytest.fixture
 def mock_client_adapter():
     adapter = MagicMock()
-    adapter.start_workflow = AsyncMock()
+    adapter.start_workflow = AsyncMock(
+        return_value=SimpleNamespace(run_id="confirmed-test-run")
+    )
+    adapter.namespace_retention_seconds = AsyncMock(return_value=86_400)
     adapter.describe_workflow = AsyncMock()
     adapter.update_workflow = AsyncMock()
     adapter.signal_workflow = AsyncMock()

@@ -9187,7 +9187,7 @@ class TemporalAgentRuntimeActivities:
             # next step. Child linkage alone does not grant the parent access.
             parent_workflow_id = str(metadata.get("parentWorkflowId") or "").strip()
             parent_run_id = str(metadata.get("parentRunId") or "").strip()
-            if parent_workflow_id and parent_run_id and info is not None:
+            if await _parent_artifact_read_scope() is not None:
                 await self._artifact_service.link_artifact(
                     artifact_id=artifact_id,
                     principal="system:agent_runtime",
@@ -9713,7 +9713,7 @@ class TemporalAgentRuntimeActivities:
                 metadata.get("parentWorkflowId") or ""
             ).strip()
             parent_run_id = str(metadata.get("parentRunId") or "").strip()
-            if parent_workflow_id and parent_run_id and info is not None:
+            if await _parent_artifact_read_scope() is not None:
                 await self._artifact_service.link_artifact(
                     artifact_id=verdict_ref.artifact_id,
                     principal="system:agent_runtime",
@@ -9805,7 +9805,7 @@ class TemporalAgentRuntimeActivities:
                 metadata.get("parentWorkflowId") or ""
             ).strip()
             parent_run_id = str(metadata.get("parentRunId") or "").strip()
-            if parent_workflow_id and parent_run_id and info is not None:
+            if await _parent_artifact_read_scope() is not None:
                 await self._artifact_service.link_artifact(
                     artifact_id=brief_ref.artifact_id,
                     principal="system:agent_runtime",
