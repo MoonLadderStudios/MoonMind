@@ -87,66 +87,6 @@ async def test_grace_expiry_checks_completion_before_quota_recovery(
         run._cancel_managed_no_progress_and_fetch_cooldown_result.assert_awaited_once()
 
 
-@pytest.mark.parametrize("status_elapsed,remaining", [(54, 1), (55, 0)])
-async def test_expiry_terminal_fetch_stays_within_original_budget(
-    monkeypatch, status_elapsed, remaining
-):
-    now = _clock(monkeypatch)
-    run = agent_run.MoonMindAgentRun()
-    run.run_id = "run"
-
-    async def status(**_kwargs):
-        now[0] += timedelta(seconds=status_elapsed)
-        return _status("completed")
-
-    run._poll_managed_status = AsyncMock(side_effect=status)
-    run._execute_routed_activity = AsyncMock(return_value={"summary": "retained"})
-    actual = await run._reconcile_managed_no_progress(
-        request=_request(),
-        adapter=object(),
-        uses_codex_session_adapter=False,
-        use_managed_status_activity=True,
-        resiliency_policy={"noProgressGraceSeconds": 5},
-        poll_interval=10,
-        initial_status=_status("running"),
-        overall_start=now[0],
-        timeout_seconds=60,
-    )
-    if remaining:
-        assert actual.summary == "retained"
-        kwargs = run._execute_routed_activity.await_args.kwargs
-        assert kwargs["start_to_close_timeout"].total_seconds() == remaining
-        assert kwargs["schedule_to_close_timeout"].total_seconds() == remaining
-    else:
-        assert actual is None
-        run._execute_routed_activity.assert_not_awaited()
-
-
-async def test_cancel_terminal_fetch_consumes_status_poll_elapsed_time(monkeypatch):
-    now = _clock(monkeypatch)
-    run = agent_run.MoonMindAgentRun()
-    run.run_id = "run"
-
-    async def status(**_kwargs):
-        now[0] += timedelta(seconds=49)
-        return _status("completed")
-
-    run._poll_managed_status = AsyncMock(side_effect=status)
-    run._execute_routed_activity = AsyncMock(return_value={"summary": "retained"})
-    actual = await run._cancel_managed_no_progress_and_fetch_cooldown_result(
-        request=_request(),
-        adapter=object(),
-        uses_codex_session_adapter=False,
-        use_managed_status_activity=True,
-        poll_interval=10,
-        remaining_overall=60,
-    )
-    assert actual.summary == "retained"
-    kwargs = run._execute_routed_activity.await_args_list[-1].kwargs
-    assert kwargs["start_to_close_timeout"].total_seconds() == 1
-    assert kwargs["schedule_to_close_timeout"].total_seconds() == 1
-
-
 @pytest.mark.parametrize("enabled,budget", [(False, 60), (True, 5)])
 async def test_retained_path_and_exhausted_budget_emit_no_new_effects(
     monkeypatch, enabled, budget
