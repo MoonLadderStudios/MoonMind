@@ -197,7 +197,7 @@ Title resolution is deterministic: a meaningful caller title wins; otherwise the
 
 ### 9.6 Errors
 
-Create validation uses 422 `invalid_execution_request`; authentication uses 401/403. An unconfirmed Temporal start returns 503 `temporal_start_unconfirmed` with `workflowId` and a reason. Its inputs remain saved; retry the original key to reconcile delivery.
+Create validation uses 422 `invalid_execution_request`; authentication uses 401/403. An unconfirmed Temporal start returns 503 `temporal_start_unconfirmed` with `workflowId` and a reason. Omnigent admission saves its original-input snapshot lineage before delivery, so retrying the original key preserves both the admitted inputs and their edit/rerun authority.
 
 ## 10. List executions
 

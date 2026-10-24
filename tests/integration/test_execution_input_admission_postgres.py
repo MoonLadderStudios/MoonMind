@@ -157,6 +157,15 @@ async def test_concurrent_same_key_different_inputs_only_grants_the_create_winne
     winner = next(saved for saved in candidates if saved.binding.plan_ref == winner_ref)
     loser = next(saved for saved in candidates if saved is not winner)
     async with sessions() as session:
+        admitted = await session.get(
+            TemporalExecutionCanonicalRecord, "mm:deterministic-api-create"
+        )
+        assert admitted.memo["task_input_snapshot_ref"] == (
+            winner.binding.task_input_snapshot_ref
+        )
+        assert {loser.snapshot_id, loser.binding.task_input_snapshot_ref}.isdisjoint(
+            admitted.artifact_refs
+        )
         service = TemporalArtifactService(TemporalArtifactRepository(session))
         _, body = await service.read(
             artifact_id=winner.input_id,

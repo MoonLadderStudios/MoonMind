@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 from sqlalchemy import select
 from temporalio import workflow
 from temporalio.service import RPCError, RPCStatusCode
@@ -104,6 +104,9 @@ async def test_admitted_create_recovers_one_original_temporal_start(
 ):
     _OBSERVED.clear()
     saved = await _api_context(sessions, monkeypatch)
+    monkeypatch.setattr(
+        settings.temporal_dashboard, "temporal_workflow_editing_enabled", True
+    )
     original_time = datetime.now(UTC) + timedelta(hours=2)
     payload = {
         "type": "workflow",
@@ -134,6 +137,11 @@ async def test_admitted_create_recovers_one_original_temporal_start(
                 )
                 assert admitted.memo["temporalStart"]["firstRequestedAt"]
                 assert admitted.memo["temporalStart"]["state"] == "pending"
+                assert admitted.memo["task_input_snapshot_ref"] == (
+                    kwargs["input_args"]["initial_parameters"]["omnigentExecutionPlan"][
+                        "taskInputSnapshotRef"
+                    ]
+                )
             if loss == "permanent" and len(attempts) == 1:
                 raise RPCError(
                     "injected permanent start rejection",
@@ -323,3 +331,33 @@ async def test_admitted_create_recovers_one_original_temporal_start(
                     .all()
                 )
                 assert links and {link.run_id for link in links} == {actual_run_id}
+                service = TemporalExecutionService(session, client_adapter=adapter)
+                detail = await executions.describe_execution(
+                    workflow_id=workflow_id,
+                    response=Response(),
+                    source="temporal",
+                    service=service,
+                    session=session,
+                    user=OperatorAdmission(via="loopback"),
+                    temporal_client=env.client,
+                    authorization=None,
+                    execution_fanout=None,
+                )
+                assert detail.actions.can_rerun
+                assert detail.actions.can_edit_for_rerun
+                await session.refresh(record)
+                assert record.memo["task_input_snapshot_ref"] == (
+                    saved.compiled[0].binding.task_input_snapshot_ref
+                )
+                restored = await executions._exact_rerun_parameters_from_snapshot(
+                    session=session,
+                    user=OperatorAdmission(via="loopback"),
+                    record=record,
+                )
+                assert restored["workflow"]["instructions"] == "Keep original inputs"
+                assert restored["workflow"]["title"] == "Original admission"
+                assert restored["workflow"]["recovery"] == {
+                    "kind": "exact_full_rerun",
+                    "sourceWorkflowId": workflow_id,
+                    "sourceRunId": actual_run_id,
+                }

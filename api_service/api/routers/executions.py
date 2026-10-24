@@ -12531,7 +12531,10 @@ async def _create_execution_from_workflow_request(
         record=record,
         attachment_refs=attachment_index,
     )
-    if persisted_omnigent_plan is not None:
+    snapshot_ref = _workflow_input_snapshot_ref_from_memo(
+        dict(getattr(record, "memo", None) or {})
+    )
+    if persisted_omnigent_plan is not None and not snapshot_ref:
         snapshot_ref = prelaunch_task_input_snapshot_ref
         # Snapshot memo keys go through the snapshot owner and the plan
         # binding keys through the canonical owner (REQ-02); both route
@@ -12597,7 +12600,7 @@ async def _create_execution_from_workflow_request(
             # Detached double without attribute-write support; durable refs
             # were already reconciled through the shared mutator above.
             pass
-    else:
+    elif persisted_omnigent_plan is None:
         snapshot_ref = await _persist_original_workflow_input_snapshot_from_parameters(
             session=session,
             record=record,
