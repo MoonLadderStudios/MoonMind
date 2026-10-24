@@ -158,13 +158,32 @@ async def link_verified_execution_plan_inputs(
                         "support evidence pointer conflicts with verified execution authority"
                     )
         service = TemporalArtifactService(repository)
-        frozen_refs, attachments = await _frozen_planning_input_refs(
+        frozen_refs, attachments, input_principal = await _frozen_planning_input_refs(
             repository,
             service,
             plan=plan,
+            binding=binding,
             planning_parameters=planning_parameters,
         )
         refs.update(frozen_refs)
+        linked_ids = _artifact_ids(refs)
+        manifest_id = _skill_manifest_id(plan)
+        if manifest_id is not None:
+            manifest_digest = plan.payload.resolvedSkills.get("resolvedSkillSetDigest")
+            if not manifest_digest:
+                raise OmnigentArtifactError("admitted Skill manifest lacks its digest")
+            # Resolve the complete immutable closure before taking any grant
+            # locks. Use the proven original input scope, or an already admitted
+            # execution, rather than creating a manifest grant to discover it.
+            linked_ids.update(
+                await _skill_content_ids(
+                    service,
+                    manifest_id,
+                    workflow_id=workflow_id,
+                    principal=input_principal or _GATEWAY_PRINCIPAL,
+                    expected_digest=manifest_digest,
+                )
+            )
 
         async def link(artifact_id: str) -> None:
             await _link_execution_input(
@@ -175,7 +194,6 @@ async def link_verified_execution_plan_inputs(
                 namespace=namespace,
             )
 
-        linked_ids = _artifact_ids(refs)
         for artifact_id in sorted(linked_ids):
             await link(artifact_id)
         for artifact_id, label in sorted(attachments.items()):
@@ -188,17 +206,6 @@ async def link_verified_execution_plan_inputs(
                 link_type="input.attachment",
                 label=label,
             )
-        # Skill bodies are part of the admitted closure through the admitted
-        # manifest. They may be linked to the resolving workflow or to none
-        # (catalog content), so the execution receives the same grant.
-        manifest_id = _skill_manifest_id(plan)
-        if manifest_id is not None:
-            content_ids = await _skill_content_ids(
-                service, manifest_id, workflow_id=workflow_id
-            )
-            for artifact_id in sorted(content_ids):
-                await link(artifact_id)
-            linked_ids.update(content_ids)
         return tuple(sorted(linked_ids))
 
 
@@ -244,8 +251,8 @@ async def _link_execution_input(
 
 
 async def _frozen_planning_input_refs(
-    repository, service, *, plan, planning_parameters
-) -> tuple[set[str], dict[str, str | None]]:
+    repository, service, *, plan, binding, planning_parameters
+) -> tuple[set[str], dict[str, str | None], str | None]:
     """Delegate saved planning inputs through their immutable admission proof.
 
     A plan's snapshot is authority for the saved input/plan pointers, rather
@@ -258,13 +265,19 @@ async def _frozen_planning_input_refs(
             raise OmnigentArtifactError(
                 "scheduled planning lacks frozen input authority"
             )
-        return set(), {}
-    snapshot_id = TemporalOmnigentArtifactGateway._artifact_id(
-        authority.taskInputSnapshotRef
-    )
+        if binding is None:
+            return set(), {}, None
+        # Retained compact plans predate the embedded authority document; their
+        # admitted binding still pins the original input bytes and read scope.
+        snapshot_ref = binding.task_input_snapshot_ref
+        snapshot_digest = binding.task_input_snapshot_digest
+    else:
+        snapshot_ref = authority.taskInputSnapshotRef
+        snapshot_digest = authority.taskInputSnapshotDigest
+    snapshot_id = TemporalOmnigentArtifactGateway._artifact_id(snapshot_ref)
     snapshot_artifact = await repository.get_artifact(snapshot_id)
     principal = str(snapshot_artifact.created_by_principal or "").strip()
-    expected_digest = authority.taskInputSnapshotDigest.removeprefix("sha256:")
+    expected_digest = snapshot_digest.removeprefix("sha256:")
     if not principal or snapshot_artifact.sha256 != expected_digest:
         raise OmnigentArtifactError("frozen task-input snapshot authority mismatch")
     _, body = await service.read(
@@ -282,13 +295,13 @@ async def _frozen_planning_input_refs(
     if not isinstance(source, dict):
         if planning_parameters is not None:
             raise OmnigentArtifactError("scheduled planning lacks a schedule snapshot")
-        return set(), {}
+        return set(), {}, principal
     scheduled = source.get("kind") == "schedule"
     target = frozen.get("target") if scheduled else frozen.get("draft")
     if not isinstance(target, dict):
         if scheduled or planning_parameters is not None:
             raise OmnigentArtifactError("schedule snapshot lacks its frozen target")
-        return set(), {}
+        return set(), {}, principal
     if scheduled and not str(source.get("definitionId") or "").strip():
         raise OmnigentArtifactError("schedule snapshot lacks definition authority")
     if planning_parameters is not None:
@@ -339,7 +352,7 @@ async def _frozen_planning_input_refs(
             principal=principal,
             allow_restricted_raw=True,
         )
-    return refs, attachments
+    return refs, attachments, principal
 
 
 def _execution_plan_input_refs(plan, binding) -> set[str]:
@@ -414,16 +427,25 @@ async def _skill_content_ids(
         principal=principal,
         admitted_principal=f"workflow:{workflow_id}" if workflow_id else None,
     )
-    if expected_digest is not None and (
-        "sha256:" + hashlib.sha256(payload).hexdigest() != expected_digest
-    ):
-        raise OmnigentArtifactError("admitted Skill manifest digest mismatch")
+    if workflow_id is not None:
+        # Original-input authority permits discovery, but may not relax the
+        # prospective execution's raw-byte protection.
+        service._assert_raw_access(_artifact, principal=f"workflow:{workflow_id}")
+    if hashlib.sha256(payload).hexdigest() != _artifact.sha256:
+        raise OmnigentArtifactError("admitted Skill manifest byte integrity mismatch")
     try:
-        skills = json.loads(payload.decode("utf-8")).get("skills") or []
+        manifest = json.loads(payload.decode("utf-8"))
+        skills = manifest.get("skills") or []
     except (UnicodeDecodeError, ValueError, AttributeError) as exc:
         raise OmnigentArtifactError(
             "admitted Skill manifest is not a resolved Skill set"
         ) from exc
+    if expected_digest is not None:
+        canonical = json.dumps(
+            manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
+        if "sha256:" + hashlib.sha256(canonical).hexdigest() != expected_digest:
+            raise OmnigentArtifactError("admitted Skill manifest digest mismatch")
     return _artifact_ids(
         {
             str(skill.get("content_ref") or "")

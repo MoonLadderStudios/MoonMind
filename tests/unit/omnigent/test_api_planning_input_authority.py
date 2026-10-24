@@ -104,7 +104,7 @@ async def _api_context(sessions, monkeypatch, *, corruption=None):
         inputs = _codex_plan_inputs()
         inputs["resolved_skills"] = {
             "resolvedSkillSetRef": f"artifact:{skills.manifest_id}",
-            "resolvedSkillSetDigest": "sha256:" + "a" * 64,
+            "resolvedSkillSetDigest": skills.manifest_digest,
             "skillDeliveryRef": "skill-delivery:sha256:" + "b" * 64,
         }
         inputs["execution_authority"] = {
@@ -156,7 +156,7 @@ async def _api_context(sessions, monkeypatch, *, corruption=None):
             binding=binding,
             artifact_refs=(envelope_id, skills.manifest_id),
             resolved_skillset_ref=skills.manifest_id,
-            resolved_skillset_digest="sha256:" + "a" * 64,
+            resolved_skillset_digest=skills.manifest_digest,
         )
         compiled.append(result)
         return result

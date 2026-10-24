@@ -42,7 +42,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import AsyncSession, AsyncSessionTransaction
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, AsyncSessionTransaction
 
 from api_service.db import models as db_models
 from moonmind.config.settings import settings
@@ -2854,7 +2854,7 @@ class TemporalArtifactService:
     ) -> str:
         return (admitted_principal or principal or "").strip()
 
-    async def _observe_consumer_use(
+    async def _begin_consumer_use(
         self,
         *,
         artifact_id: str,
@@ -2862,8 +2862,8 @@ class TemporalArtifactService:
         admitted_principal: str | None,
         operation_kind: str,
         ttl_seconds: int,
-    ) -> str | None:
-        """Best-effort in-flight consumer observation (#4017 impl-03).
+    ) -> tuple[AsyncSessionTransaction, str] | None:
+        """Begin the existing observation without committing its owner.
 
         Records a TTL-bounded use claim at each real serving boundary
         (inline reads, streaming, signed downloads, preview derivation)
@@ -2872,12 +2872,8 @@ class TemporalArtifactService:
         only the observation savepoint and are logged; the read proceeds
         under the sweep's row-lock recheck. Transaction-control failures
         propagate rather than hiding an unusable caller session.
-        Returns the claim request id when
-        recorded so bounded operations can release it on completion;
-        bearer uses (signed URLs) hold the claim for its TTL instead.
-        Claims expire on their own and are pruned by the sweeper; explicit
-        long-lived operations should use ``acquire_saved_work_use`` /
-        ``release_saved_work_use`` instead.
+        The serving boundary chooses durable TTL protection or a savepoint
+        that remains held until a caller-owned read finishes.
         """
         owner = self._consumer_claim_owner(
             principal=principal, admitted_principal=admitted_principal
@@ -2911,6 +2907,28 @@ class TemporalArtifactService:
                 exc_info=True,
             )
             return None
+        return savepoint, request_id
+
+    async def _observe_consumer_use(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        admitted_principal: str | None,
+        operation_kind: str,
+        ttl_seconds: int,
+    ) -> str | None:
+        """Commit TTL protection for independently owned or bearer reads."""
+        observation = await self._begin_consumer_use(
+            artifact_id=artifact_id,
+            principal=principal,
+            admitted_principal=admitted_principal,
+            operation_kind=operation_kind,
+            ttl_seconds=ttl_seconds,
+        )
+        if observation is None:
+            return None
+        savepoint, request_id = observation
         await savepoint.commit()
         await self._repository.commit()
         return request_id
@@ -2965,24 +2983,46 @@ class TemporalArtifactService:
         ttl_seconds: int,
     ) -> AsyncIterator[None]:
         """Release observation without replacing an existing serving failure."""
-        request_id = await self._observe_consumer_use(
-            artifact_id=artifact_id,
-            principal=principal,
-            admitted_principal=admitted_principal,
-            operation_kind="restore",
-            ttl_seconds=ttl_seconds,
-        )
-        arguments = dict(
-            artifact_id=artifact_id,
-            principal=principal,
-            admitted_principal=admitted_principal,
-            request_id=request_id,
-        )
+        bind = getattr(getattr(self._repository, "_session", None), "bind", None)
+        if isinstance(bind, AsyncConnection) and bind.in_transaction():
+            # A nested Session.commit releases its savepoint, not the caller's
+            # transaction. Keep this read's FK protection in its own savepoint
+            # and release it when the read completes, before another input is
+            # locked. Rolling it back must not discard caller-owned writes.
+            observation = await self._begin_consumer_use(
+                artifact_id=artifact_id,
+                principal=principal,
+                admitted_principal=admitted_principal,
+                operation_kind="restore",
+                ttl_seconds=ttl_seconds,
+            )
+
+            async def release() -> None:
+                if observation is not None:
+                    await observation[0].rollback()
+
+        else:
+            request_id = await self._observe_consumer_use(
+                artifact_id=artifact_id,
+                principal=principal,
+                admitted_principal=admitted_principal,
+                operation_kind="restore",
+                ttl_seconds=ttl_seconds,
+            )
+
+            async def release() -> None:
+                await self._release_observed_use(
+                    artifact_id=artifact_id,
+                    principal=principal,
+                    admitted_principal=admitted_principal,
+                    request_id=request_id,
+                )
+
         try:
             yield
         except BaseException as primary:
             try:
-                await self._release_observed_use(**arguments)
+                await release()
             except BaseException as cleanup:
                 primary.add_note(
                     "Artifact consumer-use release also failed: "
@@ -2998,7 +3038,7 @@ class TemporalArtifactService:
         else:
             # With no primary failure, cancellation and transaction/control
             # errors must still fail the operation rather than return bytes.
-            await self._release_observed_use(**arguments)
+            await release()
 
     @staticmethod
     def _normalize_parts(parts: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -4789,12 +4829,12 @@ class TemporalArtifactService:
                 raise TemporalArtifactStateError(
                     "artifact bytes are missing"
                 ) from exc
-            await self._create_preview_if_required(
-                artifact=artifact,
-                principal=principal,
-                payload=payload,
-                policy=policy or "manual",
-            )
+        await self._create_preview_if_required(
+            artifact=artifact,
+            principal=principal,
+            payload=payload,
+            policy=policy or "manual",
+        )
         preview_id = (artifact.metadata_json or {}).get("preview_artifact_id")
         if not preview_id:
             raise TemporalArtifactStateError("preview artifact is unavailable")
