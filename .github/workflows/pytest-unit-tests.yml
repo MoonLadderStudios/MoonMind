@@ -288,9 +288,8 @@ jobs:
     # `max-parallel: 4` (to be recorded on issue #4366 in the first
     # networked run): max-parallel stays unset on purpose. This is a 7-row
     # matrix (3 fast rows + 4 reliability shards); capping it at 4 would
-    # queue reliability shards behind fast rows and push the critical path
-    # past the ~10-min PR ceiling below, while the default lets all four
-    # reliability rows run concurrently with isolated services.
+    # queue reliability shards behind fast rows and extend the critical path,
+    # while the default permits four isolated reliability rows concurrently.
     # Reliability budgets (MoonLadderStudios/MoonMind#4369, #4384): short per-test
     # pytest timeout (150s PR / 300s schedule) preceded by a faulthandler
     # stack dump, a shell deadline (600s PR / 660s schedule) that interrupts
@@ -299,8 +298,8 @@ jobs:
     # (always() compose down wrapped in timeout 100s).
     # The PR ceiling stays above the heaviest duration-balanced partition
     # load (~500s) plus collection/shutdown overhead.
-    # Unit-fast and API/component have 12-minute test-step bounds; Temporal
-    # has seven minutes. Per-test timeouts stay 60s for unit-fast and 120s
+    # Unit-fast has a 15-minute test-step bound, API/component twelve and
+    # Temporal seven. Per-test timeouts stay 60s for unit-fast and 120s
     # for API/component and Temporal. Justified slow cases use the installed
     # pytest-timeout per-test marker. Each row writes a
     # uniquely named junit report and attempted cancellation diagnostics.
@@ -311,8 +310,8 @@ jobs:
       needs.select-test-suites.outputs.temporal_boundary == 'true' ||
       needs.select-test-suites.outputs.reliability_journey == 'true'
     runs-on: ubuntu-latest
-    # Unit-fast and API/component get 18 minutes: a 12-minute step leaves six
-    # for setup and reporting. Normal summary/upload steps each have a
+    # Unit-fast and API/component get 21/18 minutes: their 15/12-minute steps
+    # leave six for setup and reporting. Normal summary/upload steps each have a
     # 2-minute cap; extra failure diagnostics remain best-effort at the job
     # deadline. Temporal retains a 15-minute job bound;
     # reliability retains 20 minutes for setup, its 12-minute test step,
@@ -411,10 +410,10 @@ jobs:
       - name: Run selected unit suite
         id: run-unit
         if: matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true'
-        # The full suite can take about nine minutes before final process
-        # exit. Twelve minutes leaves execution/exit headroom while keeping
-        # the 60s per-test timeout and preceding 45s faulthandler stack dump.
-        timeout-minutes: 12
+        # The full corpus can exceed twelve minutes while making progress.
+        # Keep completion headroom, the 60s per-test timeout and preceding
+        # 45s faulthandler stack dump.
+        timeout-minutes: 15
         env:
           MOONMIND_FAULTLAB_DIAGNOSTICS_DIR: artifacts/faultlab-generated
           PYTHONUNBUFFERED: "1"
@@ -620,7 +619,7 @@ jobs:
               status_file="/tmp/backend-unit-fast-test-status.txt"
               effective_command="python -m pytest tests/unit -m unit_fast -v --tb=short -n auto --dist loadfile --durations=25 --timeout 60 -o faulthandler_timeout=45 --maxfail=1 (ordinary; omitted on schedule)"
               pytest_timeout="60s per-test"
-              step_budget="12-min test step within 18-min job" ;;
+              step_budget="15-min test step within 21-min job" ;;
             api-component)
               selected="${{ needs.select-test-suites.outputs.api_component }}"
               outcome="${{ steps.run-api.outcome }}"
@@ -1613,7 +1612,9 @@ jobs:
                   if outputs[flag] == "true" and any(outputs[key] != "true" for key in members):
                       raise ValueError(f"{flag} omits required selections")
               backend = [
-                  {"suite": suite, "job_minutes": 15 if suite == "temporal-boundary" else 18}
+                  {"suite": suite, "job_minutes": {
+                      "unit-fast": 21, "api-component": 18, "temporal-boundary": 15
+                  }[suite]}
                   for key, suite in (("unit_fast", "unit-fast"),
                                      ("api_component", "api-component"),
                                      ("temporal_boundary", "temporal-boundary"))
