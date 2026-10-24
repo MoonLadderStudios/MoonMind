@@ -46,7 +46,7 @@ jobs:
       generated_contracts: ${{ steps.detect-openapi.outputs.generated_contracts }}
     steps:
       - name: Check out code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -98,7 +98,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -146,7 +146,7 @@ jobs:
           set -euo pipefail
           python3 tools/check_github_workflow_names.py
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
       - name: Install system dependencies
@@ -208,7 +208,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload status token audit
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: status-token-audit
           path: /tmp/status-token-audit.csv
@@ -224,7 +224,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -232,7 +232,7 @@ jobs:
       - name: Initialize pinned Omnigent verifier source
         run: git submodule update --init --depth 1 -- omnigent
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
       - name: Install Python dependencies
@@ -240,7 +240,7 @@ jobs:
           python -m pip install --upgrade pip uv
           uv pip install --system -e .[tests]
       - name: Set up Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "22"
           cache: npm
@@ -254,7 +254,7 @@ jobs:
             --host-architecture linux/amd64
       - name: Upload conformance evidence
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: omnigent-deterministic-conformance
           path: artifacts/omnigent-conformance
@@ -315,7 +315,7 @@ jobs:
       matrix: ${{ fromJSON(needs.select-test-suites.outputs.backend_matrix) }}
     steps:
       - name: Check out code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -326,7 +326,7 @@ jobs:
           (matrix.suite == 'api-component' && needs.select-test-suites.outputs.api_component == 'true') ||
           (matrix.suite == 'temporal-boundary' && needs.select-test-suites.outputs.temporal_boundary == 'true') ||
           (startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true')
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
       - name: Install system dependencies
@@ -346,7 +346,7 @@ jobs:
         if: >-
           (matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true') ||
           (startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true')
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cache/pip
@@ -669,7 +669,7 @@ jobs:
             (matrix.suite == 'temporal-boundary' && needs.select-test-suites.outputs.temporal_boundary == 'true') ||
             (startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true')
           )
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: pytest-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
           path: |
@@ -682,7 +682,7 @@ jobs:
       - name: Upload generated fault-lab diagnostics
         timeout-minutes: 2
         if: failure() && matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: faultlab-generated-diagnostics-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
           path: artifacts/faultlab-generated
@@ -748,7 +748,7 @@ jobs:
       - name: Upload reliability shard diagnostics
         timeout-minutes: 2
         if: always() && startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: pytest-${{ matrix.suite }}-diagnostics-attempt-${{ github.run_attempt }}
           path: /tmp/pytest-${{ matrix.suite }}
@@ -784,7 +784,7 @@ jobs:
       - name: Upload backend-matrix cancellation diagnostics
         timeout-minutes: 2
         if: (failure() || cancelled())
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: backend-matrix-${{ matrix.suite }}-cancellation-attempt-${{ github.run_attempt }}
           path: /tmp/backend-matrix-${{ matrix.suite }}
@@ -833,13 +833,13 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Check out code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
       - name: Install system dependencies
@@ -882,7 +882,7 @@ jobs:
     steps:
       - name: Check out code
         timeout-minutes: 2
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -892,14 +892,14 @@ jobs:
         run: git submodule update --init --depth 1 -- omnigent
       - name: Set up Docker Buildx
         timeout-minutes: 2
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Build the pytest image with a shared layer cache
         # The compose ``pytest`` service otherwise rebuilds the dependency
         # layers from scratch on every run. The GitHub Actions cache keeps
         # them across runs; only the layers behind changed inputs rebuild.
         if: matrix.suite == 'hermetic'
         timeout-minutes: 6
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: api_service/Dockerfile
@@ -938,7 +938,7 @@ jobs:
         # of the deployable image's layers in the shared Actions cache.
         if: matrix.suite != 'hermetic'
         timeout-minutes: 15
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: api_service/Dockerfile
@@ -950,7 +950,7 @@ jobs:
       - name: Set up Node for the dashboard journey
         if: endsWith(matrix.suite, '-journey')
         timeout-minutes: 2
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '20'
           cache: npm
@@ -1063,7 +1063,7 @@ jobs:
       - name: Upload redacted journey startup timings and resource footprints
         if: always() && endsWith(matrix.suite, '-journey')
         timeout-minutes: 2
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: journey-startup-${{ matrix.suite }}
           path: |
@@ -1110,7 +1110,7 @@ jobs:
       - name: Upload row-owned integration report and diagnostics
         if: always() && (matrix.suite == 'hermetic' || failure() || cancelled())
         timeout-minutes: 2
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: integration-ci-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
           path: /tmp/pytest-integration-ci
@@ -1162,7 +1162,7 @@ jobs:
           --health-retries 5
     steps:
       - name: Check out code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -1170,7 +1170,7 @@ jobs:
       - name: Initialize pinned Omnigent verifier source
         run: git submodule update --init --depth 1 -- omnigent
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
       - name: Install driver dependencies via uv
@@ -1186,7 +1186,7 @@ jobs:
           omnigent/.venv/bin/python \
             tests/integration/reliability/replays/issue-brief-verification-handoff/runner_boundary.py
       - name: Set up Node for the hosted-UI capture
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '20'
           cache: npm
@@ -1198,10 +1198,10 @@ jobs:
           npm ci --no-audit --no-fund
           npx playwright install --with-deps chromium
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Build the exact deployable image
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: api_service/Dockerfile
@@ -1310,7 +1310,7 @@ jobs:
           test "$actual" = "$expected"
           echo "commit=$actual" >> "$GITHUB_OUTPUT"
       - name: Build the pinned recovery server
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: omnigent
           file: omnigent/deploy/docker/Dockerfile
@@ -1320,7 +1320,7 @@ jobs:
           cache-from: type=gha,scope=credential-free-recovery-server
           cache-to: type=gha,scope=credential-free-recovery-server,mode=max
       - name: Build the pinned recovery host base
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: omnigent
           file: omnigent/deploy/docker/Dockerfile
@@ -1405,7 +1405,7 @@ jobs:
         run: docker rm -f exact-artifact-temporal || true
       - name: Upload exact-artifact evidence
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: omnigent-exact-artifact-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/omnigent-exact-artifact
@@ -1427,13 +1427,13 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
       - name: Install system dependencies
@@ -1474,7 +1474,7 @@ jobs:
             --junitxml=artifacts/pytest-faultlab-rotating.xml
       - name: Upload rotating fault-lab diagnostics
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: faultlab-rotating-diagnostics
           path: |
@@ -1696,13 +1696,13 @@ jobs:
     timeout-minutes: 30
     steps:
     - name: Check out code
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
         token: ${{ secrets.GITHUB_TOKEN }}
         fetch-depth: 1
     - name: Set up Node.js
-      uses: actions/setup-node@v7
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
       with:
         node-version: '20'
         cache: npm
@@ -1735,13 +1735,13 @@ jobs:
         engine: ${{ fromJSON(needs.select-test-suites.outputs.frontend_browser_firefox == 'true' && '["chromium","firefox","webkit"]' || '["chromium","webkit"]') }}
     steps:
     - name: Check out code
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
         token: ${{ secrets.GITHUB_TOKEN }}
         fetch-depth: 1
     - name: Set up Node.js
-      uses: actions/setup-node@v7
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
       with:
         node-version: '20'
         cache: npm
@@ -1809,20 +1809,20 @@ jobs:
     timeout-minutes: 30
     steps:
     - name: Check out code
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
         token: ${{ secrets.GITHUB_TOKEN }}
         fetch-depth: 1
     - name: Set up Node.js
-      uses: actions/setup-node@v7
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
       with:
         node-version: '20'
         cache: npm
     - name: Install OpenAPI TypeScript generator
       run: bash tools/install_openapi_typescript.sh
     - name: Set up Python for OpenAPI generation
-      uses: actions/setup-python@v7
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
       with:
         python-version: '3.12'
     - name: Install system dependencies for backend API check
@@ -1831,7 +1831,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y libcairo2-dev pkg-config
     - name: Cache pip dependencies
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: ~/.cache/pip
         key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}

@@ -4,7 +4,7 @@ set -e
 # --- Configuration ---
 CONTAINER_NAME="postgres_alembic_gen"
 DB_USER="moonmind_user"
-DB_PASSWORD="moonmind_password"
+DB_PASSWORD=""
 DB_NAME="moonmind_db"
 DB_PORT="5432"
 POSTGRES_IMAGE="postgres:15" # Or your preferred Postgres version
@@ -28,12 +28,16 @@ is_container_running() {
 }
 
 start_postgres_container() {
+    if ! DB_PASSWORD="$(openssl rand -hex 24)" || [ -z "$DB_PASSWORD" ]; then
+        echo "ERROR: Unable to generate a PostgreSQL password. Install a working OpenSSL CLI." >&2
+        return 1
+    fi
     echo "Starting PostgreSQL container '${CONTAINER_NAME}'..."
     docker run -d --name "${CONTAINER_NAME}" \
         -e POSTGRES_USER="${DB_USER}" \
         -e POSTGRES_PASSWORD="${DB_PASSWORD}" \
         -e POSTGRES_DB="${DB_NAME}" \
-        -p "${DB_PORT}:5432" \
+        -p "127.0.0.1:${DB_PORT}:5432" \
         "${POSTGRES_IMAGE}"
 
     echo "Waiting for PostgreSQL to be ready..."
@@ -83,6 +87,12 @@ fi
 container_started_by_script=false
 if is_container_running; then
     echo "PostgreSQL container '${CONTAINER_NAME}' is already running. Using it."
+    # Reuse the container's initialization credential without printing it or
+    # storing another copy on disk. Preserve databases left running on a prior run.
+    if ! DB_PASSWORD="$(docker exec "${CONTAINER_NAME}" printenv POSTGRES_PASSWORD)" || [ -z "$DB_PASSWORD" ]; then
+        echo "ERROR: Cannot read the existing container's configured PostgreSQL password. The container was not changed." >&2
+        exit 1
+    fi
 else
     echo "PostgreSQL container '${CONTAINER_NAME}' is not running."
     read -r -p "Do you want to start it now? (y/N): " confirm_start

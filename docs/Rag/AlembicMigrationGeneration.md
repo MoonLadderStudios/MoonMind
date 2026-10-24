@@ -70,7 +70,7 @@ Use this when you want a helper that can start a dedicated Postgres container fo
 
 ### Prerequisites
 
-1. **Docker** (the script can start `postgres_alembic_gen` if needed).
+1. **Docker** (the script can start `postgres_alembic_gen` if needed) and **OpenSSL** to generate a password for a new helper database.
 2. **Poetry** with project dependencies installed (`poetry install` at the repo root). The script invokes **`poetry run alembic`**, not a global `alembic` on `PATH`.
 3. Run commands from the **repository root** (the script lives under `tools/` and resolves paths from there).
 
@@ -93,7 +93,7 @@ chmod +x tools/generate_migrations.sh   # Unix-like systems
 
 When prompted, enter a short migration message (for example `add_user_profile_table`).
 
-If the script starts Postgres, credentials are **`moonmind_user` / `moonmind_password`**, database **`moonmind_db`**, port **5432** on the host — see `tools/generate_migrations.sh` for the exact values.
+New helper databases use **`moonmind_user`**, database **`moonmind_db`**, a fresh random password, and port **5432** bound only to **127.0.0.1**. When reusing a running helper, the script reads its configured password without printing it; it does not rotate credentials or change port bindings on an existing container. Older helpers retain their original settings until you deliberately recreate them after preserving any data you need.
 
 ## Important notes
 
