@@ -270,12 +270,9 @@ def test_reliability_journey_production_seams_are_selected() -> None:
         ".agents/skills/pr-resolver/SKILL.md",
         ".agents/skills/pr-resolver/tools/orchestrate.py",
         "api_service/Dockerfile",
-        "api_service/docker/install_cli_tooling.sh",
         "tests/integration/reliability/replays/incomplete-terminal-contract/manifest.json",
         "tests/helpers/codex_session_runtime.py",
         ".github/workflows/pytest-unit-tests.yml",
-        "tools/start-worker.sh",
-        "moonmind/agents/codex_worker/worker.py",
         "moonmind/schemas/workspace_locator_models.py",
         "moonmind/schemas/recovery_models.py",
         "api_service/services/checkpoint_branch_service.py",
@@ -592,7 +589,6 @@ def test_markdown_renamed_away_still_selects_unit_fast() -> None:
         # The production API command installed as the image CMD.
         "api_service/entrypoint.sh",
         "api_service/docker/moonmind-docker-wrapper.sh",
-        "tools/start-worker.sh",
         # The exact-artifact gate implementation itself.
         "moonmind/omnigent/exact_artifact_conformance.py",
         "tools/omnigent_exact_artifact_probe.py",

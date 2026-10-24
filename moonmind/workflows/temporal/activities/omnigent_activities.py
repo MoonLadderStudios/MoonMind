@@ -295,14 +295,44 @@ async def omnigent_admit_scheduled_occurrence_plan_activity(
     initial_parameters = payload.get("initialParameters")
     if not isinstance(initial_parameters, Mapping):
         raise ValueError("initialParameters must be an object")
+    execution = activity.info()
+    if workflow_id != execution.workflow_id:
+        raise ValueError(
+            "scheduled workflow identity conflicts with Activity authority"
+        )
     async with async_session_maker() as db_session:
-        return await RecurringWorkflowsService(
+        admitted = await RecurringWorkflowsService(
             db_session,
             artifact_service=_OnDemandTemporalArtifactService(async_session_maker),
         ).admit_occurrence_execution_plan(
             workflow_id=workflow_id,
             initial_parameters=initial_parameters,
         )
+    # Temporal starts schedule occurrences directly, bypassing the API start
+    # path. Delegate their exact frozen inputs before plan.generate reads
+    # them. Activity identity supplies the grant target without changing the
+    # workflow's command sequence or trusting caller-authored run metadata.
+    from moonmind.omnigent.bridge_artifacts import link_verified_execution_plan_inputs
+    from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
+    from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
+
+    binding = OmnigentExecutionPlanBinding.model_validate(
+        admitted.get("omnigentExecutionPlan")
+        or initial_parameters.get("omnigentExecutionPlan")
+    )
+    plan = await DbExecutionPlanStore(async_session_maker).load(binding.plan_ref)
+    if plan is None:
+        raise ValueError("scheduled execution plan authority is unavailable")
+    await link_verified_execution_plan_inputs(
+        session_factory=async_session_maker,
+        plan=plan,
+        binding=binding,
+        workflow_id=execution.workflow_id,
+        run_id=execution.workflow_run_id,
+        namespace=execution.namespace,
+        planning_parameters=initial_parameters,
+    )
+    return admitted
 
 
 @activity.defn(name="omnigent.admit_step_successor_plan")

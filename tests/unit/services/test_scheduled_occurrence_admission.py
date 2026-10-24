@@ -246,8 +246,10 @@ async def test_worker_activity_admits_the_occurrence_through_the_schedule_owner(
     monkeypatch, compiler
 ) -> None:
     from contextlib import asynccontextmanager
+    from unittest.mock import AsyncMock
 
     from api_service.db import base as db_base
+    from moonmind.omnigent import bridge_artifacts
     from moonmind.workflows.temporal.activities import omnigent_activities
 
     _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
@@ -261,6 +263,21 @@ async def test_worker_activity_admits_the_occurrence_through_the_schedule_owner(
         yield session
 
     monkeypatch.setattr(db_base, "async_session_maker", session_maker)
+    monkeypatch.setattr(stores, "DbExecutionPlanStore", _PlanStore)
+    monkeypatch.setattr(
+        omnigent_activities.activity,
+        "info",
+        lambda: SimpleNamespace(
+            workflow_id="mm:schedule-1:occurrence-3",
+            workflow_run_id="occurrence-run",
+            namespace="default",
+        ),
+    )
+    # This compiler-focused fixture has no blob/metadata database. The real
+    # producer-to-planner delegation is exercised by the artifact-service test.
+    monkeypatch.setattr(
+        bridge_artifacts, "link_verified_execution_plan_inputs", AsyncMock()
+    )
     monkeypatch.setattr(
         omnigent_activities, "_OnDemandTemporalArtifactService", lambda _f: artifacts
     )
