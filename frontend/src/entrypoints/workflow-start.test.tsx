@@ -9167,7 +9167,7 @@ describe.skip("Task Create Entrypoint", () => {
     ) as HTMLSelectElement;
     expect(publishSelect.value).toBe("pr");
     expect(publishSelect.getAttribute("title")).toBe(
-      "Select how MoonMind publishes workflow changes",
+      "Opens a pull request on MoonLadderStudios/MoonMind.",
     );
     expect(publishSelect.disabled).toBe(false);
     const mergeAutomationOption = Array.from(publishSelect.options).find(
@@ -10240,13 +10240,13 @@ describe.skip("Task Create Entrypoint", () => {
         ?.getAttribute("title"),
     ).toBe("Select the branch to check out before the workflow starts");
     expect(publishModeSelect.getAttribute("title")).toBe(
-      "Select how MoonMind publishes workflow changes",
+      "Opens a pull request on MoonLadderStudios/MoonMind.",
     );
     expect(
       publishModeSelect
         .closest(".queue-inline-selector--publish")
         ?.getAttribute("title"),
-    ).toBe("Select how MoonMind publishes workflow changes");
+    ).toBe("Opens a pull request on MoonLadderStudios/MoonMind.");
   });
 
   it("exposes the canonical Create page section order in create mode", async () => {
@@ -13945,9 +13945,9 @@ describe("Task Create MM-641 authoring validation", () => {
       "Read without credentials (public repository)",
     )) as HTMLInputElement;
     expect(anonymous.checked).toBe(true);
-    expect(screen.getByText(
+    expect(screen.getByLabelText("Publish Mode").getAttribute("title")).toBe(
       "Reads octo/public without credentials and saves results on this workflow; nothing is published.",
-    )).toBeTruthy();
+    );
 
     fireEvent.change(screen.getByLabelText("Branch"), { target: { value: "docs" } });
     fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
@@ -14612,7 +14612,12 @@ describe("Task Create MM-641 authoring validation", () => {
     ).toBe(true);
     const explanation =
       "PR publishing needs a repository. Add one, or choose None to keep results save-only.";
-    expect(screen.getByText(explanation)).toBeTruthy();
+    const publishError = screen.getByText(explanation);
+    expect(publishError.classList.contains("error")).toBe(true);
+    expect(publishModeSelect.getAttribute("title")).toBe(explanation);
+    expect(publishModeSelect.getAttribute("aria-describedby")).toBe(
+      publishError.id,
+    );
 
     fireEvent.change(screen.getByLabelText("Instructions"), {
       target: { value: "Publish this work." },
@@ -14627,32 +14632,36 @@ describe("Task Create MM-641 authoring validation", () => {
 
     fireEvent.change(repoInput, { target: { value: "octo/repo" } });
     expect(publishModeSelect.value).toBe("pr");
-    const outcome = document.getElementById(
-      publishModeSelect.getAttribute("aria-describedby") || "",
+    expect(publishModeSelect.getAttribute("title")).toBe(
+      "Opens a pull request on octo/repo.",
     );
-    expect(outcome?.textContent).toBe("Opens a pull request on octo/repo.");
+    expect(publishError.isConnected).toBe(false);
+    expect(publishModeSelect.getAttribute("aria-describedby")).toBeNull();
   });
 
-  it("shows the publication outcome for the selected mode", async () => {
+  it("describes the selected publish mode only in its hover tooltip", async () => {
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 
     const publishModeSelect = (await screen.findByLabelText(
       "Publish Mode",
     )) as HTMLSelectElement;
-    expect(
-      screen.getByText("Opens a pull request on MoonLadderStudios/MoonMind."),
-    ).toBeTruthy();
-    expect(publishModeSelect.getAttribute("aria-describedby")).toBeTruthy();
-
-    fireEvent.change(publishModeSelect, { target: { value: "none" } });
-    expect(
-      screen.getByText("Saves results on this workflow; nothing is published."),
-    ).toBeTruthy();
-
-    fireEvent.change(publishModeSelect, { target: { value: "branch" } });
-    expect(
-      screen.getByText("Pushes a branch to MoonLadderStudios/MoonMind."),
-    ).toBeTruthy();
+    for (const [mode, explanation] of [
+      ["pr", "Opens a pull request on MoonLadderStudios/MoonMind."],
+      ["none", "Saves results on this workflow; nothing is published."],
+      ["branch", "Pushes a branch to MoonLadderStudios/MoonMind."],
+      [
+        "pr_with_merge_automation",
+        "Opens a pull request on MoonLadderStudios/MoonMind and enables merge automation.",
+      ],
+    ] as const) {
+      fireEvent.change(publishModeSelect, { target: { value: mode } });
+      expect(publishModeSelect.getAttribute("title")).toBe(explanation);
+      expect(publishModeSelect.closest("label")?.getAttribute("title")).toBe(
+        explanation,
+      );
+      expect(screen.queryByText(explanation)).toBeNull();
+      expect(publishModeSelect.getAttribute("aria-describedby")).toBeNull();
+    }
   });
 
   it("derives Skill publication defaults from the backend contract", async () => {
@@ -14673,6 +14682,12 @@ describe("Task Create MM-641 authoring validation", () => {
     await waitFor(() => {
       expect(publishModeSelect.value).toBe("auto");
     });
+    expect(publishModeSelect.getAttribute("title")).toBe(
+      "The selected skill decides whether and where to publish.",
+    );
+    expect(screen.queryByText(
+      "The selected skill decides whether and where to publish.",
+    )).toBeNull();
 
     fireEvent.change(skillSelect, { target: { value: "pr-resolver" } });
     await waitFor(() => {

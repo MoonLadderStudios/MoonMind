@@ -3140,7 +3140,7 @@ function isValidRepositoryInput(value: string): boolean {
   return true;
 }
 
-const PUBLICATION_OUTCOME_ID = "workflow-publication-outcome";
+const PUBLISH_MODE_ERROR_ID = "workflow-publish-mode-error";
 const SUBMIT_MESSAGE_ID = "queue-submit-message";
 
 function destinationPublishLabel(selection: string): string {
@@ -11759,14 +11759,9 @@ function WorkflowStartPageContent({
     : anonymousSource
       ? anonymousSourcePublishNotice(sourcePublishMode)
       : "";
-  const publicationOutcome =
+  const publishModeTooltip =
     sourcePublishNotice ||
     publicationOutcomeText(sourcePublishMode, repository.trim(), anonymousSource);
-  const publishModeTooltip = autoPublishAvailable
-    ? "Auto is available because the selected skill owns publishing"
-    : !mergeAutomationAvailable
-      ? "Repository publishing is unavailable for the selected preset or skill"
-      : "Select how MoonMind publishes workflow changes";
   const expandStepPresetTooltip =
     "Expand the selected preset into editable steps at this position";
   const modeLoadError =
@@ -14061,17 +14056,15 @@ function WorkflowStartPageContent({
               Read without credentials (public repository)
             </label>
           ) : null}
-          <p
-            id={PUBLICATION_OUTCOME_ID}
-            className={
-              sourcePublishNotice
-                ? "queue-authoring-controls-status small notice error"
-                : "queue-authoring-controls-status small"
-            }
-            aria-live="polite"
-          >
-            {publicationOutcome}
-          </p>
+          {sourcePublishNotice ? (
+            <p
+              id={PUBLISH_MODE_ERROR_ID}
+              className="queue-authoring-controls-status small notice error"
+              aria-live="polite"
+            >
+              {sourcePublishNotice}
+            </p>
+          ) : null}
           <div className="queue-floating-bar-row">
             <label
               className="queue-inline-selector queue-inline-selector--repo"
@@ -14126,7 +14119,9 @@ function WorkflowStartPageContent({
               <select
                 name="publishMode"
                 aria-label="Publish Mode"
-                aria-describedby={PUBLICATION_OUTCOME_ID}
+                aria-describedby={
+                  sourcePublishNotice ? PUBLISH_MODE_ERROR_ID : undefined
+                }
                 title={publishModeTooltip}
                 value={sourcePublishMode}
                 onChange={(event) => {
