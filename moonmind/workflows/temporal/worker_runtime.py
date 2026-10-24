@@ -139,7 +139,6 @@ from moonmind.workflows.temporal.workers import (
     AGENT_RUNTIME_FLEET,
     LLM_FLEET,
     DEPLOYMENT_FLEET,
-    SANDBOX_FLEET,
     WORKFLOW_FLEET,
     build_worker_activity_bindings,
     build_worker_spec,
@@ -422,10 +421,6 @@ def _build_jira_orchestrate_execution_creator():
             }
 
     return _create_execution
-
-
-_CODEX_CONFIG_FLEETS = frozenset({SANDBOX_FLEET, AGENT_RUNTIME_FLEET})
-
 
 _DEFAULT_DEPLOYMENT_LOCAL_PROJECT_DIR = "/workspace/host_project"
 
@@ -3045,33 +3040,6 @@ def _build_queue_workers(client, topology, worker_kwargs) -> list[Worker]:
     ]
 
 
-def _enforce_codex_config_for_managed_fleet(fleet: str) -> None:
-    """Apply Codex managed-runtime defaults for fleets that launch CLI tasks."""
-
-    normalized = str(fleet or "").strip().lower()
-    if normalized not in _CODEX_CONFIG_FLEETS:
-        return
-
-    from api_service.scripts.ensure_codex_config import (
-        CodexConfigError,
-        ensure_codex_config,
-    )
-
-    try:
-        result = ensure_codex_config()
-    except CodexConfigError as exc:
-        raise RuntimeError(
-            "Codex configuration enforcement failed for worker fleet "
-            f"{normalized}: {exc}"
-        ) from exc
-
-    logger.info(
-        "Codex managed defaults enforced for fleet %s at %s",
-        normalized,
-        result.path,
-    )
-
-
 async def main_async() -> None:
     """Run the Temporal worker."""
     # This worker is separately restartable and consumes the same legacy
@@ -3097,7 +3065,6 @@ async def main_async() -> None:
     except BridgeConfigError as exc:
         raise SystemExit(f"invalid Omnigent bridge configuration: {exc}") from exc
     topology = describe_configured_worker()
-    _enforce_codex_config_for_managed_fleet(topology.fleet)
 
     logger.info(
         f"Starting {topology.service_name} [{topology.fleet}] "

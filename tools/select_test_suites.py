@@ -288,7 +288,6 @@ RELIABILITY_JOURNEY_EXACT = {
     "moonmind/schemas/temporal_models.py",
     "tests/helpers/codex_session_runtime.py",
     "tools/select_test_suites.py",
-    "tools/start-worker.sh",
     # MoonLadderStudios/MoonMind#4366, #4629: reliability sharding inputs.
     # The committed pytest-split duration hints, the validate/import helper,
     # and the per-shard evidence hook (also the exact node-ID plugin) are
@@ -315,7 +314,6 @@ RELIABILITY_JOURNEY_PREFIXES = (
     "api_service/services/omnigent",
     "api_service/services/workspace",
     "docker/",
-    "moonmind/agents/codex_worker/",
     "moonmind/omnigent/",
     "moonmind/workflows/adapters/",
     "moonmind/workflows/temporal/",
@@ -495,7 +493,6 @@ EXACT_ARTIFACT_EXACT = {
     # are covered by the ``docker-compose*`` globs below.
     ".env-template",
     "api_service/entrypoint.sh",
-    "tools/start-worker.sh",
     # The exact-artifact gate implementation itself.
     "moonmind/omnigent/exact_artifact_conformance.py",
     "tools/omnigent_exact_artifact_probe.py",

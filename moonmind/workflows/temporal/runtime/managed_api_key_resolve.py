@@ -1019,8 +1019,6 @@ async def resolve_ghcr_pull_credentials_for_launch() -> tuple[str, str] | None:
     - Compose/bootstrap: ``docker-compose.yaml`` image refs and
       ``api_service/services/omnigent_policies.py`` stock-image acquisition via
       bare ``docker pull`` against the deployment backend; no source PAT.
-    - legacy worker container path: ``moonmind/agents/codex_worker/worker.py``
-      ``_ensure_container_image`` via bare ``docker pull``; no source PAT.
 
     Explicit precedence (first fully-specified source wins as one selected
     configuration):

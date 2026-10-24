@@ -61,7 +61,6 @@ PYTHON_TEST_FINGERPRINT_INPUTS: Final[tuple[str, ...]] = (
     ".dockerignore",
     "api_service/Dockerfile",
     "api_service/docker/**/*",
-    "api_service/config.template.toml",
     "pyproject.toml",
     "poetry.lock",
     "README.md",
@@ -457,7 +456,6 @@ def resolve_container_backend_settings(
             dockerfile="api_service/Dockerfile",
             target="test-runtime",
             build_args=(
-                ("INSTALL_CODEX_CLI", "false"),
                 ("INSTALL_TEST_DEPS", "true"),
             ),
             fingerprint_inputs=PYTHON_TEST_FINGERPRINT_INPUTS,

@@ -8817,13 +8817,20 @@ class TemporalAgentRuntimeActivities:
 
         def _prepare_story_breakdown_file(workspace: Path, raw_path: str) -> bytes | None:
             if raw_path not in prepared_story_payloads:
-                path = _workspace_story_path(workspace, raw_path)
-                prepared_story_payloads[raw_path] = (
-                    read_regular_file(
-                        path, limit=settings.workflow.agent_job_artifact_max_bytes
+                payload = None
+                try:
+                    path = _workspace_story_path(workspace, raw_path)
+                    if path is not None:
+                        payload = read_regular_file(
+                            path, limit=settings.workflow.agent_job_artifact_max_bytes
+                        )
+                except OSError:
+                    logger.warning(
+                        "Skipping unreadable story breakdown handoff file: %s",
+                        raw_path,
+                        exc_info=True,
                     )
-                    if path is not None else None
-                )
+                prepared_story_payloads[raw_path] = payload
             return prepared_story_payloads[raw_path]
 
         async def _publish_story_breakdown_file(
@@ -10008,6 +10015,11 @@ class TemporalAgentRuntimeActivities:
                 )
                 enriched_metadata_for_result.update(issue_brief_refs)
                 result_dict["metadata"] = enriched_metadata_for_result
+            # The parent consumes these generated envelopes after the child
+            # returns. Verify server-recorded ancestry before publishing them,
+            # so a transient lookup failure retries the handoff instead of
+            # reporting success with diagnostics the parent cannot read.
+            admitted_parent = await _parent_artifact_read_scope()
             summary_ref = await _write_json_artifact(
                 self._artifact_service,
                 principal="system:agent_runtime",
@@ -10032,6 +10044,21 @@ class TemporalAgentRuntimeActivities:
                     **step_artifact_metadata,
                 },
             )
+            if admitted_parent is not None:
+                for artifact_ref, link_type in (
+                    (summary_ref, "input.agent_summary_handoff"),
+                    (agent_result_ref, "input.agent_result_handoff"),
+                ):
+                    await self._artifact_service.link_artifact(
+                        artifact_id=artifact_ref.artifact_id,
+                        principal="system:agent_runtime",
+                        execution_ref=ExecutionRef(
+                            namespace=info.namespace,
+                            workflow_id=_metadata_text("parentWorkflowId"),
+                            run_id=_metadata_text("parentRunId"),
+                            link_type=link_type,
+                        ),
+                    )
             if report_output_enabled:
                 namespace, workflow_id, run_id = _report_execution_identity()
                 if not workflow_id or not run_id:
@@ -10181,6 +10208,10 @@ class TemporalAgentRuntimeActivities:
                 "agent_runtime.publish_artifacts failed to publish managed-session artifacts",
                 exc_info=True,
             )
+            if verified_parent_scope is not None:
+                # The verified parent needs the generated envelopes. Retrying
+                # this Activity preserves the completed child execution.
+                raise
             if report_output_enabled and report_output_required:
                 raise
             if assessment_output_required:
