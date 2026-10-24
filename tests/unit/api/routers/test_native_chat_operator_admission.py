@@ -14,6 +14,7 @@ from api_service.db.base import get_async_session
 from api_service.db.models import Base
 from api_service.services.single_user_conversion import run_guarded_upgrade
 from tests.helpers.account_source import User
+from tests.support.native_ui import read_native_ui_bootstrap
 from tests.unit.api.routers.test_omnigent_native_ui import _INDEX_HTML, _FakeUpstream
 from tests.unit.api.routers.test_omnigent_workflow_chat import (
     _fake_registry,
@@ -101,7 +102,10 @@ async def test_account_free_bootstrap_messages_reconnect_and_interrupt(chat, ret
     ) as client:
         bootstrap = await client.get(f"/omnigent-ui/workflow-chat/{BINDING}?embedded=1")
         assert bootstrap.status_code == 200, bootstrap.text
-        assert '"sendMessage":true' in bootstrap.text
+        assert (
+            read_native_ui_bootstrap(bootstrap.text)["capabilities"]["sendMessage"]
+            is True
+        )
         for key in ("first-message", "follow-up"):
             response = await client.post(
                 BASE + "/events",
@@ -654,8 +658,9 @@ async def test_retained_transcript_grant_preserves_reads_and_denies_controls(cha
     ) as client:
         bootstrap = await client.get(f"/omnigent-ui/workflow-chat/{BINDING}?embedded=1")
         assert bootstrap.status_code == 200, bootstrap.text
-        assert '"viewTranscript":true' in bootstrap.text
-        assert '"sendMessage":false' in bootstrap.text
+        capabilities = read_native_ui_bootstrap(bootstrap.text)["capabilities"]
+        assert capabilities["viewTranscript"] is True
+        assert capabilities["sendMessage"] is False
         assert (await client.get(BASE)).status_code == 200
         for suffix, payload in (
             ("/events", {"type": "message", "data": {"text": "denied"}}),
