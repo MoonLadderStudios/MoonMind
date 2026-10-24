@@ -460,7 +460,7 @@ A worker's service identity names the caller; authenticated modes apply the exis
 
 Execution inputs gain that linkage at trusted boundaries, never from agent-supplied owner strings:
 
-* Omnigent admission verifies the persisted execution plan and links its artifact inputs to the Step Execution, including the admitted Skill bodies and required strict support evidence. Plan and strict-evidence pointers must match their persisted digests before receiving grants; ordinary optional certificates remain outside the required input closure. Snapshots produced by another execution or left unlinked by the operator become readable without copying bytes or rewriting owners.
+* Omnigent admission verifies the persisted plan and frozen input authority before resolving its Skill manifest under the original read scope. Manifest digests identify canonical JSON, preserving retained formatting. The prospective execution's raw protection still applies. Admission links the complete closure, including Skill bodies and required strict evidence, in artifact-ID order so saved-definition retention cannot acquire the same locks in reverse. Optional certificates receive no grants; owners and bytes stay unchanged.
 * Session-supervisor resolve and continuation reads reuse that execution's existing grant. Continuations bind the sealed intent and plan to the canonical session; mutating commands validate ownership, revision and fence before reading plan inputs. Retries and cleanup never create replacement input grants.
 * `TemporalOmnigentArtifactGateway.read_admitted_input` re-verifies the plan on each call, rejects any ref outside that plan's input closure, and reads with the Step Execution's delegation. The gateway keeps no per-run state, so concurrent runs cannot borrow each other's delegation. Typed, retained-reference, and freshly planned dispatch all admit step-bound inputs before host resolution. Host launch resolution, native-chat bridge authorization, and generic-host/Codex Skill delivery read through it; `read_requested_skill_snapshot` serves the planner's pre-plan read of the request's own Skill set, linking that exact manifest to the Step Execution first because planning precedes admission and the plan admits it anyway, and `read_repository_access_snapshot` is limited to repository snapshots.
 * Workspace checkpoint, restore-input and attachment projection, managed-runtime Skill loading, and remediation head/evidence reads carry the Step Execution's `workflow:<id>` from the workflow-built launch envelope. Story breakdown and source-brief handoffs verify the exact Activity execution's parent and namespace against Temporal before delegating; neither artifact creator values nor provider-supplied parent fields grant access. Parent Temporal run UUIDs are recorded separately from semantic Step Execution run IDs. Semantic branch-turn identities, including retained payloads, are reconciled only against that exact child run’s recorded launch and server parent; missing or conflicting history grants no authority.
@@ -788,25 +788,24 @@ evidence does not keep its longer expiry. As with linking, the new expiry
 counts from the latest such link, never earlier than creation. Such migrations
 only change expiry; the sweep still enforces every protection before deleting.
 
-Saved schedules, including disabled definitions, retain admitted inputs and old
-frozen Skill content after edits. Bootstrap repairs incomplete lists from the
-original digest-verified manifest before launch refresh. Current Skill definitions
-retain content; unreferenced revisions resume ordinary expiry. Admission and deletion
-share artifact locks in ID order, including storage aliases. Retention adds no
-read access or pins.
+Saved schedules, including disabled definitions, retain admitted inputs and frozen
+Skill bodies after edits. Bootstrap repairs incomplete lists from the verified
+original manifest before refresh. Current Skill definitions retain their content;
+unreferenced revisions expire normally. Retention and deletion share globally
+ordered artifact/alias locks, without access grants or pins.
 
 Current raw and normalized journals referenced by non-terminal Omnigent bridge
 sessions remain recovery data. Their ordinary retention resumes when the
 session ends. Pins and live use claims protect all artifact classes.
 
-Read-use observations isolate optional claim writes in savepoints. A recoverable
-database write failure preserves the caller's work and artifact data; failed
-release leaves the committed claim protected until its TTL. Connection loss,
-outer-transaction failure and transaction-control errors propagate rather than
-returning bytes with an unusable session. If serving already failed, a release
-failure is logged and attached as a diagnostic note without replacing the
-original error or cancellation. Successful observations retain their existing
-durable commit.
+Read-use observations isolate optional claims in savepoints. In a caller-owned
+connection, a bounded byte read holds its observation until consumption ends,
+then rolls back only that savepoint, releasing foreign-key locks before later
+input grants. Independent reads commit observations; streaming and signed URLs
+retain TTL claims. Recoverable observation failures preserve caller work; failed durable
+release leaves TTL protection. Connection, outer-transaction and transaction-control
+failures propagate. Cleanup failure is logged and attached to an existing serving
+error or cancellation without replacing it.
 
 Omnigent commits each complete replacement journal pair before reclaiming its
 superseded numbered prefixes. The replacement retains the accumulated events;

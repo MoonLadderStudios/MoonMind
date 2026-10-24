@@ -12,7 +12,10 @@ from typing import Any, Protocol
 
 from temporalio.api.common.v1 import Payload, WorkflowExecution
 from temporalio.api.enums.v1 import ResetReapplyExcludeType
-from temporalio.api.workflowservice.v1 import ResetWorkflowExecutionRequest
+from temporalio.api.workflowservice.v1 import (
+    DescribeNamespaceRequest,
+    ResetWorkflowExecutionRequest,
+)
 from temporalio.client import (
     Client,
     WorkflowExecutionDescription,
@@ -599,6 +602,16 @@ class TemporalClientAdapter:
         if arg is not None:
             return await handle.execute_update(update_name, arg, **options)
         return await handle.execute_update(update_name, **options)
+
+    async def namespace_retention_seconds(self) -> float:
+        """Read the server's current history retention before uncertain admission recovery."""
+        client = await self.get_client()
+        description = await client.workflow_service.describe_namespace(
+            DescribeNamespaceRequest(namespace=client.namespace)
+        )
+        return (
+            description.config.workflow_execution_retention_ttl.ToTimedelta().total_seconds()
+        )
 
     async def describe_workflow(
         self, workflow_id: str, *, run_id: str | None = None

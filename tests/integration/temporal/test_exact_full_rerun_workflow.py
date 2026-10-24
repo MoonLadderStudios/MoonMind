@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -39,7 +40,18 @@ async def test_failed_execution_direct_rerun_creates_exact_full_rerun_from_origi
 ) -> None:
     async with _db(tmp_path) as maker:
         async with maker() as session:
-            service = TemporalExecutionService(session, client_adapter=AsyncMock(describe_workflow=AsyncMock(return_value=None)))
+            service = TemporalExecutionService(
+                session,
+                client_adapter=AsyncMock(
+                    start_workflow=AsyncMock(
+                        side_effect=lambda *_args, **_kwargs: SimpleNamespace(
+                            run_id=str(uuid4())
+                        )
+                    ),
+                    namespace_retention_seconds=AsyncMock(return_value=86400),
+                    describe_workflow=AsyncMock(return_value=None),
+                ),
+            )
             source = await service.create_execution(
                 workflow_type="MoonMind.UserWorkflow",
                 owner_id=uuid4(),
