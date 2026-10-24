@@ -29,6 +29,7 @@ from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     S3TemporalArtifactStore,
     TemporalArtifactAuthorizationError,
+    TemporalArtifactError,
     TemporalArtifactRepository,
     TemporalArtifactService,
     TemporalArtifactStateError,
@@ -46,6 +47,50 @@ from moonmind.workflows.temporal.report_artifacts import (
 
 pytestmark = [pytest.mark.asyncio]
 
+
+@pytest.mark.parametrize("surface", ["read", "read_path", "read_chunks", "compute_preview"])
+@pytest.mark.parametrize(("fault", "code", "retryable"), [
+    (TimeoutError("synthetic timeout"), "artifact_storage_unavailable", True),
+    (EndpointConnectionError(endpoint_url="http://synthetic.invalid"), "artifact_storage_unavailable", True),
+    (ClientError({"Error": {"Code": "SlowDown"}}, "GetObject"), "artifact_storage_unavailable", True),
+    (ClientError({"Error": {"Code": "AccessDenied"}}, "GetObject"), "artifact_storage_forbidden", False),
+    (PermissionError("synthetic permission"), "artifact_storage_forbidden", False),
+    (ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject"), "artifact_bytes_missing", False),
+    (FileNotFoundError("synthetic missing file"), "artifact_bytes_missing", False),
+])
+async def test_read_faults_keep_storage_meaning_and_preserve_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, surface: str,
+    fault: Exception, code: str, retryable: bool,
+) -> None:
+    async with temporal_db(tmp_path) as maker:
+        async with maker() as session:
+            repository = TemporalArtifactRepository(session)
+            store = LocalTemporalArtifactStore(tmp_path / "artifacts")
+            service = TemporalArtifactService(repository, store=store)
+            artifact, _ = await service.create(principal="owner", content_type="text/plain")
+            await service.write_complete(artifact_id=artifact.artifact_id, principal="owner", payload=b"retained")
+
+            def fail(*args, **kwargs):
+                raise fault
+
+            def fail_stream(*args, **kwargs):
+                yield fail()
+
+            target = "read_bytes" if surface == "compute_preview" else {"read": "read_bytes", "read_path": "read_path", "read_chunks": "read_chunks"}[surface]
+            original = getattr(store, target)
+            monkeypatch.setattr(store, target, fail_stream if target == "read_chunks" else fail)
+            with pytest.raises(TemporalArtifactError) as raised:
+                await getattr(service, surface)(artifact_id=artifact.artifact_id, principal="owner")
+            assert raised.value.code == code
+            assert raised.value.retryable is retryable
+            assert type(raised.value.__cause__) is type(fault)
+            assert raised.value.__cause__.args == fault.args
+            assert "synthetic" not in str(raised.value)
+            assert artifact.status is TemporalArtifactStatus.COMPLETE
+            monkeypatch.setattr(store, target, original)
+            _, data = await service.read(artifact_id=artifact.artifact_id, principal="owner")
+            assert data == b"retained"
+
 @asynccontextmanager
 async def temporal_db(tmp_path: Path):
     """Provide isolated async sqlite DB for Temporal artifact tests."""
@@ -61,6 +106,93 @@ async def temporal_db(tmp_path: Path):
         yield session_maker
     finally:
         await engine.dispose()
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_serving_failure_survives_consumer_cleanup_failure(tmp_path, monkeypatch, cancel):
+    async with temporal_db(tmp_path) as maker:
+        async with maker() as session:
+            store = LocalTemporalArtifactStore(tmp_path / "artifacts")
+            service = TemporalArtifactService(TemporalArtifactRepository(session), store=store)
+            artifact, _ = await service.create(principal="owner", content_type="text/plain")
+            await service.write_complete(artifact_id=artifact.artifact_id, principal="owner", payload=b"retained")
+            primary = asyncio.CancelledError() if cancel else TimeoutError("synthetic storage outage")
+
+            def fail(*args, **kwargs):
+                raise primary
+
+            async def cleanup(**kwargs):
+                raise ConnectionError("synthetic cleanup outage")
+
+            monkeypatch.setattr(store, "read_bytes", fail)
+            monkeypatch.setattr(service, "_release_observed_use", cleanup)
+            expected = asyncio.CancelledError if cancel else artifact_module.TemporalArtifactUnavailableError
+            with pytest.raises(expected) as raised:
+                await service.read(artifact_id=artifact.artifact_id, principal="owner")
+            if cancel:
+                assert raised.value is primary
+            else:
+                assert type(raised.value.__cause__) is type(primary)
+                assert raised.value.__cause__.args == primary.args
+            assert any("ConnectionError" in note for note in raised.value.__notes__)
+
+
+@pytest.mark.parametrize(("fault", "code", "retryable"), [
+    (TimeoutError("synthetic preview write outage"), "artifact_storage_unavailable", True),
+    (PermissionError("synthetic preview write denial"), "artifact_storage_forbidden", False),
+])
+async def test_preview_write_failure_is_storage_failure(tmp_path, monkeypatch, fault, code, retryable):
+    async with temporal_db(tmp_path) as maker:
+        async with maker() as session:
+            repository = TemporalArtifactRepository(session)
+            store = LocalTemporalArtifactStore(tmp_path / "artifacts")
+            service = TemporalArtifactService(repository, store=store)
+            artifact, _ = await service.create(principal="owner", content_type="text/plain")
+            await service.write_complete(artifact_id=artifact.artifact_id, principal="owner", payload=b"retained")
+            artifact.redaction_level = TemporalArtifactRedactionLevel.RESTRICTED
+            await repository.commit()
+
+            def fail(*args, **kwargs):
+                raise fault
+
+            with monkeypatch.context() as injected:
+                injected.setattr(store, "write_bytes", fail)
+                with pytest.raises(TemporalArtifactError) as raised:
+                    await service.compute_preview(artifact_id=artifact.artifact_id, principal="owner")
+                assert raised.value.code == code
+                assert raised.value.retryable is retryable
+            assert artifact.status is TemporalArtifactStatus.COMPLETE
+            assert not (artifact.metadata_json or {}).get("preview_artifact_id")
+            preview = await service.compute_preview(artifact_id=artifact.artifact_id, principal="owner")
+            assert preview.artifact_id != artifact.artifact_id
+            _, payload = await service.read(artifact_id=artifact.artifact_id, principal="owner")
+            assert payload == b"retained"
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_s3_serving_error_survives_stream_close_error(monkeypatch, streaming):
+    primary = TimeoutError("synthetic serving failure")
+
+    class Body:
+        def read(self):
+            raise primary
+        def iter_chunks(self, size):
+            yield self.read()
+        def close(self):
+            raise RuntimeError("synthetic cleanup failure")
+
+    class Client:
+        def head_bucket(self, **kwargs):
+            pass
+        def get_object(self, **kwargs):
+            return {"Body": Body()}
+
+    monkeypatch.setattr(artifact_module.boto3, "client", lambda **kwargs: Client())
+    store = S3TemporalArtifactStore(endpoint_url="http://synthetic.invalid", bucket="fixture", access_key_id="fixture", secret_access_key="fixture", region_name="us-east-1", use_ssl=False)
+    with pytest.raises(TimeoutError) as raised:
+        list(store.read_chunks("key")) if streaming else store.read_bytes("key")
+    assert raised.value is primary
+    assert "RuntimeError" in raised.value.__notes__[0]
 
 class _MultipartMemoryStore(TemporalArtifactStore):
     """In-memory multipart-capable store used for service unit tests."""
