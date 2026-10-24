@@ -12463,7 +12463,7 @@ async def _create_execution_from_workflow_request(
         # Persist transport-verified machine authority independently of authored
         # plans and artifacts. Child creation/runtime inheritance grants do not
         # confer deployment-control capabilities on the child execution.
-        if principal.is_workflow_principal and not principal.is_superuser:
+        if principal.is_workflow_principal:
             initial_parameters["executionPrincipal"] = {
                 "kind": "workflow",
                 "workflowId": principal.workflow_id,
