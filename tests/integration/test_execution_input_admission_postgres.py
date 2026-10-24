@@ -1,6 +1,8 @@
 """Canonical create identity and its delegated inputs share one transaction."""
 
 import asyncio
+import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -10,6 +12,7 @@ import pytest_asyncio
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from temporalio.service import RPCError, RPCStatusCode
 
 from api_service.db.models import (
     Base,
@@ -111,7 +114,16 @@ async def test_concurrent_same_key_different_inputs_only_grants_the_create_winne
         starts.append(kwargs)
         return SimpleNamespace(run_id="actual-postgres-run")
 
-    adapter = SimpleNamespace(start_workflow=AsyncMock(side_effect=start))
+    async def describe(workflow_id):
+        if starts:
+            return SimpleNamespace(run_id="actual-postgres-run")
+        raise RPCError("not started", RPCStatusCode.NOT_FOUND, b"")
+
+    adapter = SimpleNamespace(
+        start_workflow=AsyncMock(side_effect=start),
+        describe_workflow=AsyncMock(side_effect=describe),
+        namespace_retention_seconds=AsyncMock(return_value=86_400),
+    )
     ready = asyncio.Event()
     initial_lookups = 0
 
@@ -228,3 +240,210 @@ async def test_consumer_claim_failure_rolls_back_its_claim_with_the_create(
         assert (
             await session.execute(select(TemporalArtifactUseClaim))
         ).scalars().all() == []
+
+
+async def test_frozen_compile_resolves_deployment_skill_in_callers_transaction(
+    sessions, monkeypatch, tmp_path
+):
+    from api_service.db.models import AgentSkillDefinition, OmnigentExecutionPlanRecord
+    from api_service.services import omnigent_execution_plan_service as plans
+    from api_service.services.agent_skills_service import AgentSkillsService
+    from moonmind.omnigent.harness_platform.catalog import (
+        TrustState,
+        classify_harness_trust,
+        create_catalog_snapshot,
+    )
+    from moonmind.omnigent.harness_platform.catalog_service import (
+        DbHarnessCatalogRepository,
+        HarnessCatalogSyncResult,
+    )
+    from tests.unit.services.test_omnigent_execution_plan_service import (
+        _compile_opencode_plan,
+        _configure_ready_host_image_pair,
+        _protected_support_evidence,
+    )
+    from tests.unit.workflows.temporal.test_saved_work_retention_4017 import (
+        _service as local_artifacts,
+    )
+
+    provenance = _configure_ready_host_image_pair(monkeypatch)
+    provenance["hostVersion"] = "0.11.0"
+    monkeypatch.setattr(
+        plans,
+        "resolve_execution_evidence",
+        lambda payload, **_kwargs: (_protected_support_evidence(payload), "supported"),
+    )
+    catalog = create_catalog_snapshot(
+        endpointRef="default",
+        omnigentVersion="0.11.0",
+        omnigentBuildDigest="sha256:" + "b" * 64,
+        sourceDigest="sha256:" + "d" * 64,
+        observedAt=datetime.now(UTC),
+        harnesses=[
+            {
+                "id": "opencode-native",
+                "aliases": [],
+                "label": "OpenCode",
+                "implementation": {
+                    "sourceKind": "core",
+                    "package": "omnigent",
+                    "version": "0.11.0",
+                    "digest": "sha256:" + "c" * 64,
+                    "pluginEntryPoint": None,
+                },
+                "runtimeRequirements": {},
+                "capabilities": {
+                    "integrationMode": "native-server",
+                    "authModel": "own-auth",
+                    "interrupt": True,
+                    "streaming": True,
+                },
+                "setupSteps": [],
+            }
+        ],
+    )
+    harness = catalog.harnesses[0]
+    await DbHarnessCatalogRepository(sessions).persist(
+        HarnessCatalogSyncResult(
+            snapshot=catalog,
+            trust_records=(
+                classify_harness_trust(
+                    harnessId=harness.id,
+                    implementation=harness.implementation,
+                    trustState=TrustState.core_trusted,
+                ),
+            ),
+            diagnostics={},
+        )
+    )
+    parameters = {
+        "targetRuntime": "omnigent",
+        "model": "example/model",
+        "publishMode": "none",
+        "maxAttempts": 2,
+        "workflow": {
+            "instructions": "Keep this admitted Skill on re-admission.",
+            "skill": {"id": "saved-database-skill"},
+        },
+    }
+    content = (
+        "---\nname: saved-database-skill\n"
+        "metadata:\n  required-skills: saved-database-helper\n---\n"
+        "# Saved database Skill\nUse these admitted bytes.\n"
+    )
+    helper_content = "# Saved helper\nKeep the required Skill too.\n"
+    async with sessions() as writer:
+        artifacts = local_artifacts(writer, tmp_path)
+        skill_service = AgentSkillsService(writer, artifact_service=artifacts)
+        await skill_service.create_skill(
+            slug="saved-database-helper", title="Saved helper"
+        )
+        helper = await skill_service.update_skill_content(
+            skill_slug="saved-database-helper",
+            content=helper_content,
+            principal="user-1",
+        )
+        helper_ref = helper.artifact_ref
+        skill = await skill_service.create_skill(
+            slug="saved-database-skill", title="Saved database Skill"
+        )
+        skill = await skill_service.update_skill_content(
+            skill_slug=skill.slug, content=content, principal="user-1"
+        )
+        skill_id, content_ref = skill.id, skill.artifact_ref
+        task_ref, task_digest = await plans.persist_json_artifact(
+            artifact_service=artifacts,
+            principal="user-1",
+            artifact_class="original_task_input_snapshot",
+            payload={"initialParameters": parameters},
+        )
+        original = await _compile_opencode_plan(
+            monkeypatch,
+            artifacts=artifacts,
+            launch_policy_ref="opencode-on-demand@1",
+            plan_store=DbExecutionPlanStore(sessions),
+            session_factory=sessions,
+            workflow_id="mm:database-skill-original",
+            task_input_snapshot_ref=task_ref,
+            task_input_snapshot_digest=task_digest,
+            extra_parameters=parameters,
+        )
+        _, profile_body = await artifacts.read(
+            artifact_id=original.envelope.payload.agentProfileSnapshotRef.removeprefix(
+                "artifact:"
+            ),
+            principal="user-1",
+        )
+        profile_snapshot = json.loads(profile_body)
+
+    async with sessions() as caller:
+        transaction = await caller.begin()
+        current_skill = await caller.get(AgentSkillDefinition, skill_id)
+        current_skill.description = "uncommitted caller-owned marker"
+        await caller.flush()
+        # Artifact persistence owns savepoints, just as in canonical create
+        # admission; neither its commits nor Skill reads own this transaction.
+        async with AsyncSession(
+            bind=await caller.connection(),
+            expire_on_commit=False,
+            join_transaction_mode="create_savepoint",
+        ) as artifact_writer:
+            artifacts = local_artifacts(artifact_writer, tmp_path)
+            admitted = await plans.compile_frozen_execution_plan(
+                db_session=caller,
+                artifact_service=artifacts,
+                workflow_id="mm:database-skill-readmission",
+                principal="user-1",
+                snapshot=profile_snapshot,
+                provider_profile=SimpleNamespace(
+                    profile_id="provider-opencode-native",
+                    runtime_id="opencode",
+                    provider_id="opencode-go",
+                ),
+                initial_parameters=parameters,
+                binding=original.binding,
+            )
+            _, manifest = await artifacts.read(
+                artifact_id=admitted.resolved_skillset_ref, principal="user-1"
+            )
+            assert {
+                entry["skill_name"]: entry["content_ref"]
+                for entry in json.loads(manifest)["skills"]
+            } == {
+                "saved-database-skill": content_ref,
+                "saved-database-helper": helper_ref,
+            }
+            assert (await artifacts.read(artifact_id=content_ref, principal="user-1"))[
+                1
+            ] == content.encode()
+            assert (await artifacts.read(artifact_id=helper_ref, principal="user-1"))[
+                1
+            ] == helper_content.encode()
+            assert transaction.is_active
+            assert caller.get_transaction() is transaction
+            assert (
+                await caller.scalar(
+                    select(AgentSkillDefinition.description).where(
+                        AgentSkillDefinition.id == skill_id
+                    )
+                )
+                == "uncommitted caller-owned marker"
+            )
+        await transaction.rollback()
+        # The same caller session remains usable, and no child commit leaked.
+        assert (
+            await caller.scalar(
+                select(AgentSkillDefinition.description).where(
+                    AgentSkillDefinition.id == skill_id
+                )
+            )
+            is None
+        )
+    async with sessions() as verifier:
+        assert (
+            await verifier.get(OmnigentExecutionPlanRecord, admitted.binding.plan_ref)
+            is None
+        )
+        assert (
+            await verifier.get(AgentSkillDefinition, skill_id)
+        ).artifact_ref == content_ref
