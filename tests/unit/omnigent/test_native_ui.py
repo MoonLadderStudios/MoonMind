@@ -435,8 +435,10 @@ def test_render_document_keeps_untrusted_bootstrap_out_of_script_source():
         [
             "node",
             "-e",
-            "global.window={};global.document={getElementById:()=>({getAttribute:()=>process.argv[1]})};"
-            "eval(process.argv[2]);process.stdout.write(JSON.stringify(window.__MOONMIND_OMNIGENT_CHAT__));",
+            (
+                "global.window={};global.document={getElementById:()=>({getAttribute:()=>process.argv[1]})};"
+                + "eval(process.argv[2]);process.stdout.write(JSON.stringify(window.__MOONMIND_OMNIGENT_CHAT__));"
+            ),
             parsed.bootstrap,
             initialization,
         ],
