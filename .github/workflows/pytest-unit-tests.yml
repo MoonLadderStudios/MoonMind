@@ -9,13 +9,6 @@ on:
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
-  workflow_call:
-    inputs:
-      candidate_image:
-        description: Immutable registry manifest to exercise instead of rebuilding the application
-        required: false
-        type: string
-        default: ''
   schedule:
     - cron: "17 9 * * *"
 
@@ -877,9 +870,6 @@ jobs:
     needs: select-test-suites
     if: needs.select-test-suites.outputs.integration_ci == 'true'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: read
     # Hermetic worst case: 12m bounded setup + 23m execution/cleanup + 4m
     # evidence collection/upload + 1m runner/post-action overhead.
     # Journey worst case: 23m bootstrap/image/Node + 25m npm/OS/browser +
@@ -937,7 +927,6 @@ jobs:
           set -euo pipefail
           ./tools/test_integration.sh
       - name: Build the candidate deployable image for the first-run journey
-        # Release callers supply their assembled artifact and skip this build.
         # MoonLadderStudios/MoonMind#3938: the boundary journey must run the
         # checked-out revision, not an arbitrary released/cached image. This
         # builds the same default deployable target the exact-artifact gate
@@ -947,7 +936,7 @@ jobs:
         # omnigent-exact-artifact writes. That job stays the only writer, so
         # these parallel rows export nothing and each run refreshes one copy
         # of the deployable image's layers in the shared Actions cache.
-        if: matrix.suite != 'hermetic' && inputs.candidate_image == ''
+        if: matrix.suite != 'hermetic'
         timeout-minutes: 15
         uses: docker/build-push-action@v6
         with:
@@ -958,20 +947,6 @@ jobs:
           load: true
           tags: moonmind-first-run-3938:ci
           cache-from: type=gha,scope=exact-artifact-api-runtime
-      - name: Login to the release artifact registry
-        if: matrix.suite != 'hermetic' && inputs.candidate_image != ''
-        timeout-minutes: 2
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Pull the release artifact for installed journeys
-        if: matrix.suite != 'hermetic' && inputs.candidate_image != ''
-        timeout-minutes: 5
-        env:
-          CANDIDATE_IMAGE: ${{ inputs.candidate_image }}
-        run: docker pull "$CANDIDATE_IMAGE"
       - name: Set up Node for the dashboard journey
         if: endsWith(matrix.suite, '-journey')
         timeout-minutes: 2
@@ -1024,11 +999,11 @@ jobs:
         # artifacts, recurring dispatch, presets, worker restart, dashboard
         # cancellation, and generated scratch output downloaded after host/workspace
         # cleanup. Provider catalog/turn are controlled; failed or missing evidence fails.
-        # The supplied release artifact or the local candidate is exercised.
+        # MOONMIND_IMAGE pins the candidate build above.
         if: matrix.suite == 'fresh-journey'
         timeout-minutes: 20
         env:
-          MOONMIND_IMAGE: ${{ inputs.candidate_image || 'moonmind-first-run-3938:ci' }}
+          MOONMIND_IMAGE: moonmind-first-run-3938:ci
         run: |
           set -euo pipefail
           ./tools/first_run_journey_3938.sh
@@ -1041,7 +1016,7 @@ jobs:
         if: matrix.suite == 'upgrade-journey'
         timeout-minutes: 25
         env:
-          MOONMIND_IMAGE: ${{ inputs.candidate_image || 'moonmind-first-run-3938:ci' }}
+          MOONMIND_IMAGE: moonmind-first-run-3938:ci
         run: |
           set -euo pipefail
           ./tools/first_run_journey_3938.sh --upgrade
@@ -1052,11 +1027,11 @@ jobs:
         # replaced and a fresh page reconnects without submitting again, and
         # workflow-backed history stays readable without its old engine. The
         # controller has no Docker daemon, so it fails at image staging and
-        # mutates nothing. It uses the release artifact or local candidate.
+        # mutates nothing. MOONMIND_IMAGE pins the candidate build above.
         if: matrix.suite == 'controller-journey'
         timeout-minutes: 10
         env:
-          MOONMIND_IMAGE: ${{ inputs.candidate_image || 'moonmind-first-run-3938:ci' }}
+          MOONMIND_IMAGE: moonmind-first-run-3938:ci
         run: |
           set -euo pipefail
           ./tools/first_run_journey_3938.sh --controller
@@ -1072,7 +1047,7 @@ jobs:
         timeout-minutes: 10
         env:
           MOONMIND_TEST_JOURNAL_TRANSITION: "1"
-          MOONMIND_TEST_JOURNAL_APP_IMAGE: ${{ inputs.candidate_image || 'moonmind-first-run-3938:ci' }}
+          MOONMIND_TEST_JOURNAL_APP_IMAGE: moonmind-first-run-3938:ci
         run: |
           set -euo pipefail
           journal_test_env="$(mktemp -d /tmp/moonmind-journal-tests.XXXXXX)"
@@ -1144,8 +1119,8 @@ jobs:
 
   omnigent-exact-artifact:
     # Tier 1 (MoonLadderStudios/MoonMind#3710): the required, per-PR,
-    # NONCREDENTIALED exact deployable-artifact conformance gate. It builds or
-    # pulls the supplied release image and tests that artifact through its real
+    # NONCREDENTIALED exact deployable-artifact conformance gate.  It builds the
+    # exact deployable image and tests THAT IMMUTABLE ARTIFACT through its real
     # entrypoints: the in-image capability probe, HTTP/SSE/WebSocket route
     # handshakes, clean and materialized-prior-revision PostgreSQL migrations
     # against separate databases, an entrypoint restart against the migrated
@@ -1170,9 +1145,6 @@ jobs:
     needs: select-test-suites
     if: needs.select-test-suites.outputs.exact_artifact == 'true'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: read
     timeout-minutes: 90
     services:
       postgres:
@@ -1229,7 +1201,6 @@ jobs:
         uses: docker/setup-buildx-action@v3
       - name: Build the exact deployable image
         id: build
-        if: inputs.candidate_image == ''
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -1243,25 +1214,9 @@ jobs:
           # the resulting image digest is still computed from this checkout.
           cache-from: type=gha,scope=exact-artifact-api-runtime
           cache-to: type=gha,scope=exact-artifact-api-runtime,mode=max
-      - name: Login to the release artifact registry
-        if: inputs.candidate_image != ''
-        timeout-minutes: 2
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Pull the exact release artifact
-        if: inputs.candidate_image != ''
-        timeout-minutes: 5
-        env:
-          CANDIDATE_IMAGE: ${{ inputs.candidate_image }}
-        run: docker pull "$CANDIDATE_IMAGE"
       - name: Resolve the immutable image identity
         id: digest
         shell: bash
-        env:
-          CANDIDATE_IMAGE: ${{ inputs.candidate_image || 'moonmind-exact-artifact:candidate' }}
         run: |
           set -euo pipefail
           # The compiled UI is baked into the app image, and the worker runs
@@ -1272,13 +1227,11 @@ jobs:
           # `runnable` is the same content id in the form Docker can resolve
           # locally: a locally loaded image has no registry repo digest, so
           # `name@sha256:<id>` would send Docker to a registry and fail.
-          IMAGE_ID="$(docker image inspect "$CANDIDATE_IMAGE" --format '{{ .Id }}')"
+          IMAGE_ID="$(docker image inspect moonmind-exact-artifact:candidate --format '{{ .Id }}')"
           DIGEST="${IMAGE_ID#sha256:}"
           echo "ref=moonmind-exact-artifact@sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
           echo "digest=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
           echo "runnable=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
-          mkdir -p artifacts/omnigent-exact-artifact
-          printf '%s\n' "$CANDIDATE_IMAGE" > artifacts/omnigent-exact-artifact/candidate-image.txt
       - name: Start Temporal for the worker readiness probe
         shell: bash
         run: |
@@ -1467,10 +1420,9 @@ jobs:
     # main/schedule only. It is intentionally NOT a required PR gate and is not
     # in the ci-required aggregator.
     if: >-
-      inputs.candidate_image == '' && (
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
