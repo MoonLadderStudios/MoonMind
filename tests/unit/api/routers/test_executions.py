@@ -9543,6 +9543,9 @@ def test_create_task_shaped_execution_inherits_caller_runtime(
 ) -> None:
     test_client, service, user = client
     service.create_execution.return_value = _build_execution_record()
+    test_client.app.dependency_overrides[get_instance_access_optional] = (
+        lambda: OperatorAdmission(via="loopback")
+    )
     db_session = caller_runtime_profile_session
     test_client.app.dependency_overrides[get_async_session] = lambda: db_session
     service.describe_execution.return_value = SimpleNamespace(
