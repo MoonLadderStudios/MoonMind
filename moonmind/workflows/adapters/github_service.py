@@ -16,7 +16,7 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal, Mapping, Optional, Sequence
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
@@ -1890,7 +1890,7 @@ class GitHubService:
                     if not ref:
                         # No branch was observed; do not guess one.
                         continue
-                    url = url.replace("{ref}", ref)
+                    url = url.replace("{ref}", quote(ref, safe=""))
                     if operation == "branch":
                         result["testedBranch"] = ref
                 try:
