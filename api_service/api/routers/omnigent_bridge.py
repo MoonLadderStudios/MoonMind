@@ -151,6 +151,7 @@ from moonmind.omnigent.bridge_proxy import (
 )
 from moonmind.omnigent.bridge_store import (
     BRIDGE_EVENT_JOURNAL_KEY,
+    PROVIDER_SESSION_DELETED_KEY,
     SESSION_CREATED_EVENT_TYPE,
     BridgeProjectionAmbiguousError,
     OmnigentBridgeSessionStore,
@@ -3887,11 +3888,11 @@ def _durable_provider_session_id(row: Any) -> str:
             provider_session_id = str(event.get("omnigentSessionId") or "").strip()
             if provider_session_id:
                 return provider_session_id
-    return ""
+    return str(getattr(row, "omnigent_session_id", "") or "").strip()
 
 
-async def _captured_terminal_snapshot(row: Any) -> dict[str, Any]:
-    """Read recorded bytes through their owning store and execution scope."""
+async def _captured_terminal_snapshot(row: Any) -> dict[str, Any] | None:
+    """Read authorized history, or retain live reads for diagnostic-only captures."""
     from moonmind.workflows.temporal.artifacts import TemporalArtifactError
 
     ref = str(getattr(row, "final_snapshot_ref", None) or "").strip()
@@ -3907,13 +3908,31 @@ async def _captured_terminal_snapshot(row: Any) -> dict[str, Any]:
             )
         )
         captured = json.loads(await gateway.read_text(ref))
-        if not isinstance(captured, dict) or not isinstance(
-            captured.get("items"), list
-        ):
+        if not isinstance(captured, dict):
             raise ValueError("Invalid captured transcript")
         provider_id = _durable_provider_session_id(row)
         if not provider_id or captured.get("id") not in (None, provider_id):
             raise ValueError("Captured transcript identity mismatch")
+        if "items" not in captured:
+            # Error handlers capture diagnostics even when the provider's
+            # transcript remains readable. Only this authorized, valid shape
+            # can fall back; store denial or corrupt history never bypasses it.
+            diagnostic = (
+                captured.get("status") == "failed"
+                or "failureCode" in captured
+                or isinstance(captured.get("summary"), str)
+            )
+            if (
+                diagnostic
+                and getattr(row, "omnigent_session_id", None)
+                and not (getattr(row, "metadata_", None) or {}).get(
+                    PROVIDER_SESSION_DELETED_KEY
+                )
+            ):
+                return None
+            raise ValueError("Captured evidence has no transcript")
+        if not isinstance(captured["items"], list):
+            raise ValueError("Invalid captured transcript")
         return captured
     except (OmnigentArtifactError, TemporalArtifactError, OSError, ValueError) as exc:
         raise WorkflowChatFacadeError(
@@ -3929,7 +3948,7 @@ async def _durable_terminal_items_page(
     *,
     chat_binding_id: str,
     query_params: Any,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     """Page captured terminal transcript items after provider cleanup."""
 
     limit, after, before, order = _terminal_items_query(query_params)
@@ -3942,6 +3961,8 @@ async def _durable_terminal_items_page(
             code="omnigent_bridge_terminal_evidence_unavailable",
         )
     captured = await _captured_terminal_snapshot(row)
+    if captured is None:
+        return None
     raw_items = captured.get("items") if isinstance(captured, dict) else None
     items = [item for item in (raw_items or []) if isinstance(item, dict)]
     ordered = list(items if order == "asc" else reversed(items))
@@ -4696,6 +4717,7 @@ async def _stream_workflow_chat_events(
     chat_binding_id: str,
     bridge_session_id: str,
     provider_session_id: str,
+    response_provider_session_id: str,
     initial_cursor: int,
     user: OperatorAdmission,
     service: Any,
@@ -4792,7 +4814,7 @@ async def _stream_workflow_chat_events(
             event_payload = json.dumps(
                 _virtualize_facade_payload(
                     payload,
-                    provider_session_id=provider_session_id,
+                    provider_session_id=response_provider_session_id,
                     chat_binding_id=chat_binding_id,
                 ),
                 separators=(",", ":"),
@@ -5180,11 +5202,13 @@ async def _dispatch_native_ui_http(
         and is_read_only(session_status)
         and (getattr(row, "final_snapshot_ref", None) or not provider_session_id)
     ):
-        return await _durable_terminal_items_page(
+        captured_page = await _durable_terminal_items_page(
             row,
             chat_binding_id=chat_binding_id,
             query_params=request.query_params,
         )
+        if captured_page is not None:
+            return captured_page
     if not provider_session_id and route.name != "session_reconnect":
         raise WorkflowChatFacadeError(
             "The Workflow Chat binding has no active provider session yet.",
@@ -5776,6 +5800,7 @@ async def _dispatch_workflow_chat_facade(
                 chat_binding_id=chat_binding_id,
                 bridge_session_id=bridge_session_id,
                 provider_session_id=provider_session_id,
+                response_provider_session_id=_durable_provider_session_id(row),
                 initial_cursor=initial_cursor,
                 user=user,
                 service=service,
@@ -5804,7 +5829,12 @@ async def _dispatch_workflow_chat_facade(
             else await facade.get_session(provider_session_id)
         )
         if serve_durable_terminal_snapshot and getattr(row, "final_snapshot_ref", None):
-            snapshot = {**await _captured_terminal_snapshot(row), **snapshot}
+            captured = await _captured_terminal_snapshot(row)
+            snapshot = (
+                {**captured, **snapshot}
+                if captured is not None
+                else await facade.get_session(provider_session_id)
+            )
         virtualized = _virtualize_facade_payload(
             snapshot,
             provider_session_id=(
@@ -5841,7 +5871,14 @@ async def _dispatch_workflow_chat_facade(
                 capabilities=capabilities,
             )
             if getattr(row, "final_snapshot_ref", None):
-                snapshot = {**await _captured_terminal_snapshot(row), **snapshot}
+                captured = await _captured_terminal_snapshot(row)
+                snapshot = (
+                    {**captured, **snapshot}
+                    if captured is not None
+                    else await facade.get_session(provider_session_id)
+                )
+                snapshot["capabilities"] = capabilities
+                snapshot["readOnly"] = True
             return _virtualize_facade_payload(
                 snapshot,
                 provider_session_id=_durable_provider_session_id(row),
@@ -7024,6 +7061,7 @@ async def _stream_workflow_chat_events_websocket(
 
     bridge_session_id = str(getattr(row, "bridge_session_id", "") or "")
     provider_session_id = str(getattr(row, "omnigent_session_id", "") or "")
+    response_provider_session_id = _durable_provider_session_id(row)
     if not _effective_capabilities(row, user).capabilities.get("viewTranscript", False):
         await websocket.close(
             code=WS_CLOSE_CAPABILITY_DENIED, reason=CODE_OPERATION_DENIED
@@ -7105,7 +7143,7 @@ async def _stream_workflow_chat_events_websocket(
                         "sequence": event.sequence,
                         "data": _virtualize_facade_payload(
                             payload,
-                            provider_session_id=provider_session_id,
+                            provider_session_id=response_provider_session_id,
                             chat_binding_id=chat_binding_id,
                         ),
                     }
