@@ -18736,14 +18736,14 @@ _SAVED_WORK_BODY = {
 
 
 @pytest.mark.parametrize("dependency", ["authority", "storage"])
-@pytest.mark.parametrize("boundary", ["manifest", "snapshot"])
+@pytest.mark.parametrize("boundary", ["construction", "manifest", "snapshot"])
 def test_saved_work_publication_outage_does_not_start_replacement(monkeypatch, dependency, boundary):
     from moonmind.workflows.temporal.artifacts import TemporalArtifactUnavailableError
     artifacts = _SavedWorkArtifacts()
     error = TemporalArtifactUnavailableError("art_saved", dependency=dependency, operation="read")
     if boundary == "manifest":
         artifacts.read = AsyncMock(side_effect=error)
-    else:
+    elif boundary == "snapshot":
         metadata = artifacts.get_metadata
         async def part_metadata(**kwargs):
             if kwargs["artifact_id"] == "art_snapshot":
@@ -18751,6 +18751,10 @@ def test_saved_work_publication_outage_does_not_start_replacement(monkeypatch, d
             return await metadata(**kwargs)
         artifacts.get_metadata = part_metadata
     app, adapter, _record, _user = _saved_work_app(monkeypatch, artifacts)
+    if boundary == "construction":
+        def unavailable():
+            raise error
+        app.dependency_overrides[executions_module._get_saved_work_artifact_service] = lambda: unavailable
     with TestClient(app, raise_server_exceptions=False) as client:
         response = client.post("/api/executions/mm:wf-1/retry-publication", json=_SAVED_WORK_BODY)
     assert response.status_code == 503

@@ -20622,12 +20622,16 @@ async def _start_saved_work_publication(
     artifact_service: Any,
     repository_connections: Any,
 ) -> PublicationRecoveryResponse:
-    contract = await _admit_saved_work_publication(
-        canonical=canonical,
-        request=request,
-        user=user,
-        artifact_service=artifact_service(),
-    )
+    try:
+        contract = await _admit_saved_work_publication(
+            canonical=canonical,
+            request=request,
+            user=user,
+            artifact_service=artifact_service(),
+        )
+    except (TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError) as exc:
+        _raise_temporal_artifact_http(exc)
+        raise
     # A GitHub repository declared as a Lore review projection is not a
     # publication authority; Lore publication stays with its own owner.
     if await repository_connections().lore_projection_owner(
