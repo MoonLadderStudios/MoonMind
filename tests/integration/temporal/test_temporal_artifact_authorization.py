@@ -46,6 +46,33 @@ from moonmind.workflows.temporal.artifacts import (
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
 
+async def test_admitted_collection_route_maps_real_repository_outage(tmp_path, monkeypatch):
+    from api_service.api.routers import temporal_artifacts as routes
+    from api_service.auth_providers import get_instance_access_optional
+    from moonmind.security.operator_admission import OperatorAdmission
+
+    original = OperationalError("SELECT artifact collection", {}, RuntimeError("private-fixture"))
+    async with _db(tmp_path) as maker:
+        async with maker() as session:
+            repository = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(repository, store=LocalTemporalArtifactStore(tmp_path / "artifacts"))
+
+            async def unavailable(**kwargs):
+                raise original
+
+            monkeypatch.setattr(repository, "list_collection_page", unavailable)
+            app = FastAPI()
+            app.include_router(routes.router)
+            app.dependency_overrides[routes._get_temporal_artifact_service] = lambda: service
+            app.dependency_overrides[get_instance_access_optional] = lambda: OperatorAdmission(via="trusted_ingress")
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://fixture") as client:
+                response = await client.get("/api/artifacts/collection")
+            assert response.status_code == 503
+            assert response.headers["retry-after"] == "5"
+            assert response.json()["detail"]["code"] == "artifact_authority_unavailable"
+            assert "private-fixture" not in response.text
+
+
 @pytest.mark.parametrize(("fault", "status_code", "code"), [
     (TimeoutError("secret-signed-url-must-not-leak"), 503, "artifact_storage_unavailable"),
     (ClientError({"Error": {"Code": "AccessDenied", "Message": "private-fixture"}}, "GetObject"), 502, "artifact_storage_forbidden"),
