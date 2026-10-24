@@ -75,7 +75,7 @@ The standalone controller project is the replacement owner that survives target-
 
 ## Options
 
-Optional arguments are `--compose-project <name>`, `--image-repository <repository>`, and `--dry-run` (show the intended release operation without fetching or deploying). A `--dry-run` preview never establishes completion: it writes no submission and proves nothing about the installed deployment. The deployment-owned `docker-compose.override.yaml` (or `.yml`) accompanies the image's base configuration.
+Optional arguments are `--compose-project <name>`, `--image-repository <repository>`, and `--dry-run` (show the intended release operation without fetching or deploying). The default project follows the installed controller's recorded target, preserving the deployment when Compose's inferred name changes; `--compose-project` overrides it. First installs and older identities without a recorded target use Compose's rendered name. A recorded target requires a valid same-deployment identity. Dry-run writes no submission and proves nothing about installation. The deployment-owned `docker-compose.override.yaml` (or `.yml`) accompanies the image's base configuration.
 
 `--local-build` is an explicit development-only escape hatch for exercising an
 unpublished working tree (for example a feature branch awaiting its published
