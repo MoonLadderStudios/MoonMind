@@ -12138,6 +12138,8 @@ async def _create_execution_from_workflow_request(
         initial_parameters["workspaceSpec"] = workspace_spec
     if principal.is_workflow_principal:
         initial_parameters["parentWorkflowId"] = principal.workflow_id
+    elif inherited is not None and inherited.source_workflow_id:
+        initial_parameters["parentWorkflowId"] = inherited.source_workflow_id
     if isinstance(payload.get("omnigent"), Mapping):
         initial_parameters["omnigent"] = dict(payload["omnigent"])
     if isinstance(payload.get("batchDigest"), str) and payload.get("batchDigest", "").strip():
