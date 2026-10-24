@@ -1017,8 +1017,7 @@ def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> N
     assert "needs.select-test-suites.outputs.api_component" in job_if
     assert "needs.select-test-suites.outputs.temporal_boundary" in job_if
     assert "needs.select-test-suites.outputs.reliability_journey" in job_if
-    # Unit-fast retains setup/reporting room around its longer test step;
-    # API/component, Temporal and reliability keep their existing bounds.
+    # Each selected row reserves setup/reporting room around its test step.
     assert job["timeout-minutes"] == "${{ matrix.job_minutes }}"
     strategy = job["strategy"]
     # Native matrix fail-fast for PR/merge-group validation, disabled for
@@ -1043,10 +1042,33 @@ def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> N
     # pytest-split groups are 1-based (MoonLadderStudios/MoonMind#4366):
     # suite reliability-shard-N runs --group N.
     assert shards == ["1", "2", "3", "4"]
-    rows = {entry["suite"]: entry for entry in json.loads(select_suites([]).as_outputs()["backend_matrix"])["include"]}
-    assert rows["unit-fast"]["job_minutes"] == 18
-    assert rows["api-component"]["job_minutes"] == 15
-    assert rows["temporal-boundary"]["job_minutes"] == 15
+    rows = {
+        entry["suite"]: entry
+        for entry in json.loads(select_suites([]).as_outputs()["backend_matrix"])[
+            "include"
+        ]
+    }
+    assert rows["unit-fast"]["job_minutes"] == 21
+    unit_step = next(
+        step for step in job["steps"] if step["name"] == "Run selected unit suite"
+    )
+    assert unit_step["timeout-minutes"] == 15
+    assert unit_step["timeout-minutes"] + 6 <= rows["unit-fast"]["job_minutes"]
+    assert "--timeout 60" in unit_step["run"]
+    assert rows["api-component"]["job_minutes"] == 18
+    api_step = next(
+        step for step in job["steps"] if step["name"] == "Run API/component suite"
+    )
+    assert api_step["timeout-minutes"] + 6 <= rows["api-component"]["job_minutes"]
+    assert "--timeout 120" in api_step["run"]
+    assert rows["temporal-boundary"]["job_minutes"] == 20
+    temporal_step = next(
+        step for step in job["steps"] if step["name"] == "Run Temporal boundary suite"
+    )
+    assert temporal_step["timeout-minutes"] == 12
+    assert temporal_step["timeout-minutes"] + 8 <= rows["temporal-boundary"]["job_minutes"]
+    assert "--timeout 120" in temporal_step["run"]
+    assert "-o faulthandler_timeout=90" in temporal_step["run"]
     for shard in (
         "reliability-shard-1",
         "reliability-shard-2",
@@ -1392,7 +1414,7 @@ def test_required_gate_rejects_missing_or_failed_selected_result(tmp_path, resul
         tmp_path,
         outputs={
             "unit_fast": "true",
-            "backend_matrix": '{"include":[{"suite":"unit-fast","job_minutes":18}]}',
+            "backend_matrix": '{"include":[{"suite":"unit-fast","job_minutes":21}]}',
         },
         results={"backend-matrix": result},
     )
@@ -1407,6 +1429,21 @@ def test_required_gate_accepts_only_intentional_skips(tmp_path):
         ).returncode
         != 0
     )
+
+
+@pytest.mark.parametrize("job_minutes, accepted", [(20, True), (15, False)])
+def test_required_gate_validates_temporal_completion_budget(tmp_path, job_minutes, accepted):
+    result = _run_required_gate(
+        tmp_path,
+        outputs={
+            "temporal_boundary": "true",
+            "backend_matrix": json.dumps(
+                {"include": [{"suite": "temporal-boundary", "job_minutes": job_minutes}]}
+            ),
+        },
+        results={"backend-matrix": "success"},
+    )
+    assert (result.returncode == 0) == accepted, result.stdout + result.stderr
 
 
 def test_backend_and_integration_matrices_consume_selected_rows():
