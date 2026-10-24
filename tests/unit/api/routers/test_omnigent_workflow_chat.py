@@ -584,8 +584,9 @@ def test_native_http_mutation_is_scanned_receipted_and_replay_safe(
     ).encode()
 
     class _Content:
-        async def read(self, _limit: int) -> bytes:
-            return response_body
+
+        async def iter_chunked(self, _limit: int):
+            yield response_body
 
     class _Response:
         status = 307
@@ -760,8 +761,9 @@ def test_every_additional_stock_native_read_uses_the_bound_identity(
     ).encode()
 
     class _Content:
-        async def read(self, _limit: int) -> bytes:
-            return response_body
+
+        async def iter_chunked(self, _limit: int):
+            yield response_body
 
     class _Response:
         status = 200
@@ -868,8 +870,9 @@ def test_every_stock_native_http_mutation_has_a_complete_durable_receipt(
     ).encode()
 
     class _Content:
-        async def read(self, _limit: int) -> bytes:
-            return response_body
+
+        async def iter_chunked(self, _limit: int):
+            yield response_body
 
     class _Response:
         status = 200
@@ -994,8 +997,10 @@ def test_native_http_mutation_response_failure_records_delivery_unknown(
     )
 
     class _Content:
-        async def read(self, limit: int) -> bytes:
-            return b"x" * limit
+
+        async def iter_chunked(self, limit: int):
+            for _ in range(17):
+                yield b"x" * limit
 
     class _Response:
         status = 200
@@ -1542,6 +1547,29 @@ def test_websocket_reconnect_resumes_after_cursor() -> None:
 
     assert delivered["sequence"] == 2
     assert terminal["type"] == "terminal"
+
+
+def test_websocket_drains_backlog_without_waiting_for_browser_input(
+    monkeypatch,
+) -> None:
+    # A slow idle poll must never delay pages already present in the journal.
+    # Failing instead of sleeping makes this deterministic without timing tests.
+    async def no_idle_wait(*_args, **_kwargs):
+        raise AssertionError("Replay waited before draining its backlog")
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.asyncio.wait_for", no_idle_wait
+    )
+    store = _FakeStore(
+        row=_row(status="completed"), events=[_event(n) for n in range(1, 206)]
+    )
+    client, _proxy, _store = _build(store=store)
+    with client.websocket_connect(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/stream"), headers=_websocket_headers()
+    ) as websocket:
+        delivered = [websocket.receive_json()["sequence"] for _ in range(205)]
+        assert websocket.receive_json()["type"] == "terminal"
+    assert delivered == list(range(1, 206))
 
 
 def test_websocket_reports_retention_gap_before_replay() -> None:
@@ -2436,14 +2464,14 @@ def test_terminal_items_page_uses_captured_snapshot_after_provider_cleanup(
         row=_row(
             status="completed",
             omnigent_session_id="",
-            final_snapshot_ref="artifact://captured-final",
+            final_snapshot_ref="artifact://omnigent/captured-final",
             metadata_=metadata,
         )
     )
 
     class _Gateway:
         async def read_text(self, artifact_ref: str) -> str:
-            assert artifact_ref == "artifact://captured-final"
+            assert artifact_ref == "artifact://omnigent/captured-final"
             return json.dumps(
                 {
                     "items": [
@@ -2474,6 +2502,13 @@ def test_terminal_items_page_uses_captured_snapshot_after_provider_cleanup(
     ]
     assert _PROVIDER_SESSION_ID not in response.text
     assert proxy.sessions == []
+
+    # Metadata and the scoped catalog must redact captured item identities even
+    # after cleanup cleared the live provider id on the bridge row.
+    for path in ("v1/sessions", f"v1/sessions/{_CHAT_BINDING_ID}"):
+        metadata_response = client.get(_path(path))
+        assert metadata_response.status_code == 200
+        assert _PROVIDER_SESSION_ID not in metadata_response.text
 
 
 # --- Strict stream cursors ---------------------------------------------------

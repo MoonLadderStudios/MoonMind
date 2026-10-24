@@ -101,7 +101,7 @@ The preferred deployment exposes the native Omnigent web application through the
 
 `embedded=1` is a presentational mode only. It must not create a second session protocol, transcript model, composer implementation, or fork of Omnigent behavior.
 
-A same-origin embedded application boundary may use an iframe or equivalent microfrontend isolation. A full-page **Open in Omnigent** action, when offered, must open the same MoonMind-scoped surface rather than bypassing MoonMind authorization by navigating directly to the upstream server.
+A same-origin iframe opens the native conversation under the binding-scoped basename. Its deep link stays valid throughout startup, reload and retry. Full-page **Open in Omnigent** uses the same scope. The hosted adapter suppresses the native global conversation-catalog request; bound metadata and transcript reads still use the authorized facade.
 
 The integration must provide:
 
@@ -120,7 +120,7 @@ The native application is ready when the conversation for the current authorized
 
 The embedding boundary provides a bounded application-ready or fatal-failure signal to the workflow shell. Prefer a supported upstream lifecycle hook and keep host-specific signaling in the thin integration boundary, not a second renderer. When using `postMessage`, the receiver validates the message schema, exact origin, iframe window, current binding, and current mount generation. A signal from a replaced frame or earlier retry cannot mark the current application ready or failed. The sender uses the exact target origin. Signals contain only bounded presentation state and safe reason codes, never provider identity, transcript content, credentials, or new permission grants.
 
-Startup has a finite deadline. Missing required assets, failed essential reads, startup exceptions, or an application that never becomes ready produce the visible unavailable behavior in section 11. A fatal application failure after readiness produces the same visible recovery surface rather than leaving a blank frame. Ordinary transient stream loss instead uses the disconnected state and the native reconnect behavior. Presentation timers, listeners, and frame-specific state are disposed on unmount, binding replacement, or retry.
+Startup has a sixty-second deadline, including up to three attempts for transient essential reads. Missing assets, persistent read failure or startup exceptions produce the visible recovery surface in section 11 with a bounded reason. Denied reads stop immediately. Transient binding-refresh failures preserve the mounted conversation while polling backs off; authentication denial or authoritative binding loss removes it. Ordinary stream loss uses native reconnect behavior. Timers, listeners and frame state are disposed on unmount, binding replacement or retry.
 
 These are local presentation states, not new persisted Workflow or provider-session lifecycle states. Loading, retrying, or opening the full-page presentation must not create a session, replay a message, change credentials, or restart the workflow. The full-page action is a same-authority presentation alternative, not a workaround for shared bootstrap, capability, or transport defects.
 
@@ -134,8 +134,8 @@ digest, acquired provider authority, host, runner, provider session, and chat
 binding. Executions sharing an immutable plan retain independent chat authority.
 Active legacy parent-scoped bindings use the same host-lease lookup, and
 replacement acquisitions invalidate the previous session's write authority.
-Generic-host stable bindings share the binding table under their own schema and
-record no chat or runner authority, so their sessions resolve read-only.
+Generic-host stable bindings share the binding table under their own schema.
+Their recorded runtime authority and native protocol attestation govern live chat.
 
 Representative browser-safe projection:
 
@@ -224,7 +224,7 @@ In particular:
 - upstream support for an operation does not grant MoonMind authority to use it,
 - unsupported or denied controls are hidden or disabled in the native client and rejected server-side if invoked directly.
 
-Every mutating session or control request carries or receives a MoonMind idempotency key and records the actor, operation, expected identities/state, normalized outcome, upstream correlation, timestamp, and durable audit reference. Approval and control events are not authoritative unless this evidence is retained.
+Every mutation carries or receives an idempotency key and records actor, operation, expected state, outcome and durable audit evidence. The hosted client retains an unacknowledged submission's key across retry and reload; only digests and opaque keys enter session storage. After a confirmed receipt, identical text is a distinct submission. Caller-supplied keys retain their authority. Approval and control events require the same audit evidence.
 
 ## 8. Message semantics and outbound security
 
@@ -265,7 +265,7 @@ A future workflow-level chat-steering product must use a separately labeled acti
 
 When the bound Omnigent session is terminal:
 
-- the native transcript remains available when authorized,
+- its authorized captured transcript remains readable after host and provider-lease cleanup, through the artifact's owning store and execution scope,
 - the native composer is read-only or absent,
 - mutating native controls fail closed,
 - MoonMind shows terminal Workflow and session context,

@@ -105,13 +105,12 @@ def get_capability_registry(request: Request) -> RetrievalCapabilityRegistry:
         registry = RetrievalCapabilityRegistry()
         request.app.state.retrieval_capability_registry = registry
     return registry
-from api_service.services.omnigent_policies import (
-    PolicyConflict,
-    PolicyNotFound,
-)
+from api_service.db.base import async_session_maker
+from api_service.services.omnigent_policies import PolicyConflict, PolicyNotFound
 from moonmind.omnigent.bridge_artifacts import (
     LocalOmnigentArtifactGateway,
     OmnigentArtifactError,
+    TemporalOmnigentArtifactGateway,
 )
 from moonmind.omnigent.bridge_config import (
     EMBEDDED_TRANSPORT_RETIRED_CODE,
@@ -140,9 +139,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, never a runtime import
     from moonmind.omnigent.bridge_embedded import OmnigentEmbeddedHostProtocolFacade
 else:  # pragma: no cover - runtime fallback when launch modules are retired
     try:
-        from moonmind.omnigent.bridge_embedded import (
-            OmnigentEmbeddedHostProtocolFacade,
-        )
+        from moonmind.omnigent.bridge_embedded import OmnigentEmbeddedHostProtocolFacade
     except ImportError:  # retired embedded launch modules are unavailable
         OmnigentEmbeddedHostProtocolFacade = Any  # type: ignore[no-redef]
 from moonmind.omnigent.bridge_proxy import (
@@ -235,9 +232,7 @@ from moonmind.omnigent.workflow_chat_facade import (
 )
 from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.utils.build_info import resolve_moonmind_build_id
-from moonmind.workflows.adapters.omnigent_agent_adapter import (
-    OmnigentAgentSelection,
-)
+from moonmind.workflows.adapters.omnigent_agent_adapter import OmnigentAgentSelection
 
 logger = logging.getLogger(__name__)
 
@@ -3829,10 +3824,9 @@ def _durable_terminal_snapshot(
 ) -> dict[str, Any]:
     """Build a read-only bootstrap snapshot from the durable projection.
 
-    Used when a terminal binding's provider session was deleted after harvest:
-    the durable row still carries final snapshots, event journals, and terminal
-    refs, so the native application can display its read-only transcript without
-    a live upstream session id. No server-side identity is included.
+    Captured final snapshots, journals, and terminal refs remain readable after
+    runtime cleanup without a live upstream session. No server-side identity
+    is included.
     """
 
     envelope = _terminal_envelope(row)
@@ -3896,6 +3890,40 @@ def _durable_provider_session_id(row: Any) -> str:
     return ""
 
 
+async def _captured_terminal_snapshot(row: Any) -> dict[str, Any]:
+    """Read recorded bytes through their owning store and execution scope."""
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactError
+
+    ref = str(getattr(row, "final_snapshot_ref", None) or "").strip()
+    try:
+        if not ref:
+            raise OmnigentArtifactError("No captured final snapshot")
+        gateway = (
+            LocalOmnigentArtifactGateway()
+            if ref.startswith("artifact://omnigent/")
+            else TemporalOmnigentArtifactGateway(
+                async_session_maker,
+                principal=f"workflow:{row.moonmind_workflow_id}",
+            )
+        )
+        captured = json.loads(await gateway.read_text(ref))
+        if not isinstance(captured, dict) or not isinstance(
+            captured.get("items"), list
+        ):
+            raise ValueError("Invalid captured transcript")
+        provider_id = _durable_provider_session_id(row)
+        if not provider_id or captured.get("id") not in (None, provider_id):
+            raise ValueError("Captured transcript identity mismatch")
+        return captured
+    except (OmnigentArtifactError, TemporalArtifactError, OSError, ValueError) as exc:
+        raise WorkflowChatFacadeError(
+            "The captured terminal transcript is unavailable.",
+            failure_class="integration_error",
+            status_code=503,
+            code="omnigent_bridge_terminal_evidence_unavailable",
+        ) from exc
+
+
 async def _durable_terminal_items_page(
     row: Any,
     *,
@@ -3905,15 +3933,6 @@ async def _durable_terminal_items_page(
     """Page captured terminal transcript items after provider cleanup."""
 
     limit, after, before, order = _terminal_items_query(query_params)
-    final_snapshot_ref = str(getattr(row, "final_snapshot_ref", None) or "").strip()
-    if not final_snapshot_ref:
-        return {
-            "object": "list",
-            "data": [],
-            "first_id": None,
-            "last_id": None,
-            "has_more": False,
-        }
     provider_session_id = _durable_provider_session_id(row)
     if not provider_session_id:
         raise WorkflowChatFacadeError(
@@ -3922,17 +3941,7 @@ async def _durable_terminal_items_page(
             status_code=503,
             code="omnigent_bridge_terminal_evidence_unavailable",
         )
-    try:
-        captured = json.loads(
-            await LocalOmnigentArtifactGateway().read_text(final_snapshot_ref)
-        )
-    except (OmnigentArtifactError, OSError, ValueError) as exc:
-        raise WorkflowChatFacadeError(
-            "The captured terminal transcript is unavailable.",
-            failure_class="integration_error",
-            status_code=503,
-            code="omnigent_bridge_terminal_evidence_unavailable",
-        ) from exc
+    captured = await _captured_terminal_snapshot(row)
     raw_items = captured.get("items") if isinstance(captured, dict) else None
     items = [item for item in (raw_items or []) if isinstance(item, dict)]
     ordered = list(items if order == "asc" else reversed(items))
@@ -5169,7 +5178,7 @@ async def _dispatch_native_ui_http(
     if (
         route.name == "session_items"
         and is_read_only(session_status)
-        and not provider_session_id
+        and (getattr(row, "final_snapshot_ref", None) or not provider_session_id)
     ):
         return await _durable_terminal_items_page(
             row,
@@ -5350,23 +5359,36 @@ async def _dispatch_native_ui_http(
                 allow_redirects=False,
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as upstream:
-                payload = await upstream.content.read(_FACADE_MAX_BODY_BYTES + 1)
-                if len(payload) > _FACADE_MAX_BODY_BYTES:
-                    raise WorkflowChatFacadeError(
-                        "The upstream response exceeds the facade limit.",
-                        failure_class="integration_error",
-                        status_code=502,
-                        code=CODE_PAYLOAD_TOO_LARGE,
-                    )
+                chunks: list[bytes] = []
+                received = 0
+                async for chunk in upstream.content.iter_chunked(64 * 1024):
+                    received += len(chunk)
+                    if received > _FACADE_MAX_BODY_BYTES:
+                        raise WorkflowChatFacadeError(
+                            "The upstream response exceeds the facade limit.",
+                            failure_class="integration_error",
+                            status_code=502,
+                            code=CODE_PAYLOAD_TOO_LARGE,
+                        )
+                    chunks.append(chunk)
+                payload = b"".join(chunks)
                 response_type = str(
                     upstream.headers.get("content-type") or "application/octet-stream"
                 )
                 normalized_json: Any = None
-                if "json" in response_type.lower() and payload:
+                if "json" in response_type.lower() and upstream.status not in {
+                    204,
+                    304,
+                }:
                     try:
                         value = json.loads(payload)
-                    except (json.JSONDecodeError, ValueError):
-                        value = None
+                    except (json.JSONDecodeError, ValueError) as exc:
+                        raise WorkflowChatFacadeError(
+                            "The upstream response is not valid JSON.",
+                            failure_class="integration_error",
+                            status_code=502,
+                            code="omnigent_bridge_upstream_payload",
+                        ) from exc
                     if value is not None:
                         value = _virtualize_facade_payload(
                             value,
@@ -5640,7 +5662,7 @@ async def _dispatch_workflow_chat_facade(
     serve_durable_terminal_snapshot = (
         operation.name in {"get_session", "list_sessions"}
         and is_read_only(session_status)
-        and not provider_session_id
+        and (getattr(row, "final_snapshot_ref", None) or not provider_session_id)
     )
     if (
         operation.requires_provider_session
@@ -5781,9 +5803,15 @@ async def _dispatch_workflow_chat_facade(
             if serve_durable_terminal_snapshot
             else await facade.get_session(provider_session_id)
         )
+        if serve_durable_terminal_snapshot and getattr(row, "final_snapshot_ref", None):
+            snapshot = {**await _captured_terminal_snapshot(row), **snapshot}
         virtualized = _virtualize_facade_payload(
             snapshot,
-            provider_session_id=provider_session_id,
+            provider_session_id=(
+                _durable_provider_session_id(row)
+                if serve_durable_terminal_snapshot
+                else provider_session_id
+            ),
             chat_binding_id=chat_binding_id,
         )
         if not isinstance(virtualized, dict):
@@ -5806,12 +5834,18 @@ async def _dispatch_workflow_chat_facade(
     # 9. Session snapshot / bootstrap / history.
     if operation.name == "get_session":
         if serve_durable_terminal_snapshot:
-            # Provider session was deleted after harvest; bootstrap the read-only
-            # transcript from the durable projection instead of a live upstream id.
-            return _durable_terminal_snapshot(
+            # Captured history survives runtime and provider cleanup.
+            snapshot = _durable_terminal_snapshot(
                 row,
                 chat_binding_id=chat_binding_id,
                 capabilities=capabilities,
+            )
+            if getattr(row, "final_snapshot_ref", None):
+                snapshot = {**await _captured_terminal_snapshot(row), **snapshot}
+            return _virtualize_facade_payload(
+                snapshot,
+                provider_session_id=_durable_provider_session_id(row),
+                chat_binding_id=chat_binding_id,
             )
         snapshot = await facade.get_session(provider_session_id)
         virtualized = _virtualize_facade_payload(
@@ -7093,6 +7127,8 @@ async def _stream_workflow_chat_events_websocket(
                 )
                 await websocket.close(code=1000)
                 return
+            if page.has_more:
+                continue
             try:
                 await asyncio.wait_for(
                     websocket.receive_text(), timeout=poll_timeout

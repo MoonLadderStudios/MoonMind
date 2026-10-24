@@ -376,12 +376,12 @@ def test_render_document_injects_bootstrap_and_base() -> None:
     # root-relative transport through the binding-scoped facade.
     assert document.index("window.fetch =") < document.index("index-abc.js")
     assert '"/c/" + bindingId' in document
-    assert "apiBase + url.pathname" in document
+    assert "window.__OMNIGENT_BASE_PATH__ = uiBase" in document
     assert "sameSocketHost" in document
     assert "window.EventSource =" in document
     assert "window.WebSocket =" in document
     assert "MutationObserver" in document
-    assert "restoreScopedDocumentUrl" in document
+    assert "restoreScopedDocumentUrl" not in document
     assert "beforeunload" not in document
     # Assets are scoped in the rendered document too.
     assert f'src="{base}/assets/index-abc.js"' in document
@@ -893,11 +893,15 @@ def test_injected_adapter_waits_for_authorized_render_and_reports_handled_failur
     assert match is not None
     adapter_path = tmp_path / "adapter.js"
     adapter_path.write_text(match.group(1), encoding="utf-8")
-    harness = Path(__file__).parents[2] / "fixtures/omnigent/native_ui_readiness.cjs"
-    completed = subprocess.run(
-        [node, str(harness), str(adapter_path)], capture_output=True, text=True, timeout=15
-    )
-    assert completed.returncode == 0, completed.stdout + completed.stderr
+    for name in ("native_ui_readiness.cjs", "native_ui_submissions.cjs"):
+        harness = Path(__file__).parents[2] / "fixtures/omnigent" / name
+        completed = subprocess.run(
+            [node, str(harness), str(adapter_path)],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
 def test_is_valid_chat_binding_id_accepts_both_server_shapes() -> None:

@@ -27,6 +27,7 @@ function mockBinding(
     const url = String(input);
     if (url.includes('/chat-binding')) {
       const { status = 200, body } = responder();
+      if (status === 0) return Promise.reject(new TypeError('Network unavailable'));
       return Promise.resolve({
         ok: status >= 200 && status < 300,
         status,
@@ -322,6 +323,37 @@ describe('WorkflowNativeChatRoute', () => {
     expect(screen.queryByText('Native chat could not load')).toBeNull();
     signal(newFrame, 'ready');
     expect(screen.queryByText('Loading conversation…')).toBeNull();
+  });
+
+  it.each([0, 408, 429, 500, 503])('preserves a mounted conversation through transient refresh failure %s', async (failure) => {
+    vi.useFakeTimers();
+    let status = 200;
+    mockBinding(() => ({ status, body: status === 200 ? AVAILABLE : {} }));
+    renderRoute();
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    const frame = screen.getByTitle('Ship the thing — Omnigent chat') as HTMLIFrameElement;
+    signal(frame, 'ready');
+    status = failure;
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(screen.getByTitle('Ship the thing — Omnigent chat')).toBe(frame);
+    expect(screen.getByText(/Unable to refresh chat status/)).toBeTruthy();
+    status = 200;
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(screen.getByTitle('Ship the thing — Omnigent chat')).toBe(frame);
+    expect(screen.queryByText(/Unable to refresh chat status/)).toBeNull();
+  });
+
+  it.each([401, 403, 404, 409])('removes the cached frame when revalidation denies it (%s)', async (failure) => {
+    vi.useFakeTimers();
+    let status = 200;
+    mockBinding(() => ({ status, body: status === 200 ? AVAILABLE : {} }));
+    renderRoute();
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    const frame = screen.getByTitle('Ship the thing — Omnigent chat') as HTMLIFrameElement;
+    signal(frame, 'ready');
+    status = failure;
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(document.querySelector('iframe')).toBeNull();
   });
 
   it('backs off repeated server errors, keeps polling, and retries on demand', async () => {
