@@ -1136,7 +1136,10 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event(
                         "product workflow completed before AgentRun dispatch; "
                         f"result={parent_result!r}, calls={CALLS}"
                     )
-                raise AssertionError(f"AgentRun dispatch timed out; calls={CALLS}")
+                raise AssertionError(
+                    f"AgentRun dispatch timed out; calls={CALLS}"
+                )
+            parent_result_task.cancel()
             agent_run_workflow_id = str(STATE["agent_run_id"])
             agent_handle = env.client.get_workflow_handle(agent_run_workflow_id)
             session_id = canonical_omnigent_session_id(
@@ -1148,11 +1151,17 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event(
                 omnigent_session_workflow_id(session_id)
             )
             try:
-                # Only the started parent handle enables automatic time skipping;
-                # the attached child handle does not. Keep its result wait alive
-                # through the child's reconciliation timers, then drain it.
+                await env.sleep(5)
+            except Exception as exc:
+                raise AssertionError(
+                    "time-skipping stalled while the supervisor was active; "
+                    f"state={STATE}, calls={CALLS[-40:]}"
+                ) from exc
+            try:
                 result = AgentRunResult.model_validate(
-                    await asyncio.wait_for(agent_handle.result(), timeout=20)
+                    await asyncio.wait_for(
+                        agent_handle.result(), timeout=20
+                    )
                 )
             except TimeoutError as exc:
                 await session_handle.terminate("supervisor test timeout")
@@ -1162,9 +1171,6 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event(
                     "AgentRun did not reach terminal state; "
                     f"state={STATE}, calls={CALLS}"
                 ) from exc
-            finally:
-                parent_result_task.cancel()
-                await asyncio.gather(parent_result_task, return_exceptions=True)
             parent_history = await handle.fetch_history()
             validation_event = next(
                 event

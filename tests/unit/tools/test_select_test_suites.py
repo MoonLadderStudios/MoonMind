@@ -1226,14 +1226,14 @@ def test_backend_matrix_retains_only_selected_rows_and_reliability_shards():
 
     assert json.loads(_outputs(["README.md"])["backend_matrix"]) == {"include": []}
     assert json.loads(_outputs(["moonmind/utils/text.py"])["backend_matrix"]) == {
-        "include": [{"suite": "unit-fast", "job_minutes": 21}]
+        "include": [{"suite": "unit-fast", "job_minutes": 18}]
     }
     rows = json.loads(
         _outputs(["tests/integration/reliability/test_checkpoint_cold_resume.py"])[
             "backend_matrix"
         ]
     )["include"]
-    assert rows == [{"suite": "unit-fast", "job_minutes": 21}] + [
+    assert rows == [{"suite": "unit-fast", "job_minutes": 18}] + [
         {"suite": f"reliability-shard-{n}", "shard": str(n), "job_minutes": 20}
         for n in range(1, 5)
     ]
@@ -1282,7 +1282,7 @@ def test_cli_emits_valid_matrices_and_booleans(monkeypatch, tmp_path, capsys):
     assert emitted == selection.as_outputs()
     assert json.loads(emitted["integration_matrix"]) == {"suite": ["hermetic"]}
     assert json.loads(emitted["backend_matrix"]) == {
-        "include": [{"suite": "unit-fast", "job_minutes": 21}]
+        "include": [{"suite": "unit-fast", "job_minutes": 18}]
     }
 
 
