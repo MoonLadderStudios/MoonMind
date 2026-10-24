@@ -380,13 +380,17 @@ async def list_artifact_collection(
     service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
 ) -> ArtifactCollectionResponse:
     """List authorized evidence without storage paths, principals, or bodies."""
-    rows, has_more = await service.list_authorized_collection(
-        principal=principal,
-        category=category,
-        query=q,
-        offset=offset,
-        limit=limit,
-    )
+    try:
+        rows, has_more = await service.list_authorized_collection(
+            principal=principal,
+            category=category,
+            query=q,
+            offset=offset,
+            limit=limit,
+        )
+    except Exception as exc:
+        _raise_temporal_artifact_http(exc)
+        raise
     prefixes = COLLECTION_CATEGORY_LINK_PREFIXES[category]
     items: list[ArtifactCollectionRowModel] = []
     for artifact, links in rows:

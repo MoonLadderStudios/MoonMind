@@ -191,8 +191,7 @@ def _artifact_authority_boundary(function):
     async def wrapped(self, *args, **kwargs):
         try:
             return await function(self, *args, **kwargs)
-        except (OperationalError, InterfaceError, DisconnectionError, SQLTimeoutError,
-                ConnectionError, TimeoutError) as exc:
+        except (OperationalError, InterfaceError, DisconnectionError, SQLTimeoutError) as exc:
             artifact = kwargs.get("artifact") or (args[0] if args else None)
             artifact_id = kwargs.get("artifact_id") or getattr(artifact, "artifact_id", "")
             raise TemporalArtifactUnavailableError(
@@ -201,14 +200,14 @@ def _artifact_authority_boundary(function):
     return wrapped
 
 
-def _raise_storage_read_error(exc: Exception, *, artifact_id: str, operation: str) -> NoReturn:
+def _raise_storage_error(exc: Exception, *, artifact_id: str, operation: str, read: bool = False) -> NoReturn:
     """Translate only known storage outcomes; unknown errors retain their type."""
-    missing = isinstance(exc, FileNotFoundError)
+    missing = read and isinstance(exc, FileNotFoundError)
     denied = isinstance(exc, PermissionError)
     unavailable = isinstance(exc, (ConnectionError, TimeoutError, S3ConnectionError, ReadTimeoutError))
     if isinstance(exc, ClientError):
         code = str(exc.response.get("Error", {}).get("Code", ""))
-        missing = code in {"NoSuchKey", "NotFound", "404"}
+        missing = read and code in {"NoSuchKey", "NotFound", "404"}
         denied = code in {"AccessDenied", "403", "InvalidAccessKeyId", "SignatureDoesNotMatch", "ExpiredToken", "InvalidToken"}
         status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 0)
         unavailable = code in {"SlowDown", "RequestTimeout", "RequestTimeoutException", "InternalError", "InternalFailure", "ServiceUnavailable", "Throttling", "NoSuchBucket"} or status == 429 or status >= 500
@@ -3438,6 +3437,7 @@ class TemporalArtifactService:
         )
         return artifact, True
 
+    @_artifact_authority_boundary
     async def write_complete(
         self,
         *,
@@ -3513,14 +3513,17 @@ class TemporalArtifactService:
                 await self._repository.commit()
                 raise
 
-        await asyncio.get_running_loop().run_in_executor(
-            None,
-            lambda: self._store.write_bytes(
-                artifact.storage_key,
-                payload,
-                content_type=content_type or artifact.content_type,
-            ),
-        )
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: self._store.write_bytes(
+                    artifact.storage_key,
+                    payload,
+                    content_type=content_type or artifact.content_type,
+                ),
+            )
+        except Exception as exc:
+            _raise_storage_error(exc, artifact_id=artifact.artifact_id, operation="write_complete")
         artifact.sha256 = digest
         artifact.size_bytes = actual_size
         artifact.content_type = content_type or artifact.content_type or None
@@ -3823,7 +3826,7 @@ class TemporalArtifactService:
                 None, self._store.read_bytes, artifact.storage_key
             )
         except Exception as exc:
-            _raise_storage_read_error(exc, artifact_id=artifact.artifact_id, operation=operation)
+            _raise_storage_error(exc, artifact_id=artifact.artifact_id, operation=operation, read=True)
 
     @_artifact_authority_boundary
     async def read(
@@ -3910,7 +3913,7 @@ class TemporalArtifactService:
             try:
                 yield from self._store.read_chunks(artifact.storage_key, chunk_size=chunk_size)
             except Exception as exc:
-                _raise_storage_read_error(exc, artifact_id=artifact.artifact_id, operation="read_chunks")
+                _raise_storage_error(exc, artifact_id=artifact.artifact_id, operation="read_chunks", read=True)
 
         iterator = chunks()
         # Open lazy transports before HTTP response headers commit to success.
@@ -3963,7 +3966,7 @@ class TemporalArtifactService:
             except TemporalArtifactValidationError:
                 raise
             except Exception as exc:
-                _raise_storage_read_error(exc, artifact_id=artifact.artifact_id, operation="read_path")
+                _raise_storage_error(exc, artifact_id=artifact.artifact_id, operation="read_path", read=True)
             return artifact, path
 
     async def get_read_policy(

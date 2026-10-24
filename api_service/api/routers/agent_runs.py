@@ -44,6 +44,8 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactNotFoundError,
     TemporalArtifactService,
     TemporalArtifactStateError,
+    TemporalArtifactStorageAccessError,
+    TemporalArtifactUnavailableError,
     TemporalArtifactValidationError,
 )
 from moonmind.utils.metrics import get_metrics_emitter
@@ -215,6 +217,9 @@ async def _resolve_projection_artifact(
             principal=principal,
             recovery_principal=recovery_principal,
         )
+    except (TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError) as exc:
+        _raise_temporal_artifact_http(exc)
+        raise
     except (
         TemporalArtifactAuthorizationError,
         TemporalArtifactNotFoundError,

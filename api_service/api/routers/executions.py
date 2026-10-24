@@ -20547,6 +20547,9 @@ async def _admit_saved_work_publication(
                 content_type=publication_object.content_type,
                 digest=publication_object.digest,
             )
+    except (TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError) as exc:
+        _raise_temporal_artifact_http(exc)
+        raise
     except SavedPublicationError as exc:
         raise _saved_work_publication_error(
             status.HTTP_422_UNPROCESSABLE_CONTENT, "saved_work_invalid", str(exc)

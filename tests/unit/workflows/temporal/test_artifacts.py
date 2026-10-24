@@ -137,6 +137,38 @@ async def test_serving_failure_survives_consumer_cleanup_failure(tmp_path, monke
             assert any("ConnectionError" in note for note in raised.value.__notes__)
 
 
+@pytest.mark.parametrize(("fault", "code", "retryable"), [
+    (TimeoutError("synthetic preview write outage"), "artifact_storage_unavailable", True),
+    (PermissionError("synthetic preview write denial"), "artifact_storage_forbidden", False),
+])
+async def test_preview_write_failure_is_storage_failure(tmp_path, monkeypatch, fault, code, retryable):
+    async with temporal_db(tmp_path) as maker:
+        async with maker() as session:
+            repository = TemporalArtifactRepository(session)
+            store = LocalTemporalArtifactStore(tmp_path / "artifacts")
+            service = TemporalArtifactService(repository, store=store)
+            artifact, _ = await service.create(principal="owner", content_type="text/plain")
+            await service.write_complete(artifact_id=artifact.artifact_id, principal="owner", payload=b"retained")
+            artifact.redaction_level = TemporalArtifactRedactionLevel.RESTRICTED
+            await repository.commit()
+
+            def fail(*args, **kwargs):
+                raise fault
+
+            with monkeypatch.context() as injected:
+                injected.setattr(store, "write_bytes", fail)
+                with pytest.raises(TemporalArtifactError) as raised:
+                    await service.compute_preview(artifact_id=artifact.artifact_id, principal="owner")
+                assert raised.value.code == code
+                assert raised.value.retryable is retryable
+            assert artifact.status is TemporalArtifactStatus.COMPLETE
+            assert not (artifact.metadata_json or {}).get("preview_artifact_id")
+            preview = await service.compute_preview(artifact_id=artifact.artifact_id, principal="owner")
+            assert preview.artifact_id != artifact.artifact_id
+            _, payload = await service.read(artifact_id=artifact.artifact_id, principal="owner")
+            assert payload == b"retained"
+
+
 @pytest.mark.parametrize("streaming", [False, True])
 async def test_s3_serving_error_survives_stream_close_error(monkeypatch, streaming):
     primary = TimeoutError("synthetic serving failure")
