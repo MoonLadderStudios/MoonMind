@@ -39,9 +39,9 @@ jobs:
         mode: [browser, product, cumulative, stock, static, ondemand, failures, workflow_chat]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - name: Install test dependencies
@@ -153,7 +153,7 @@ jobs:
           fi
       - name: Upload case evidence
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: omnigent-live-${{ matrix.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/omnigent-conformance/upload/${{ matrix.mode }}
@@ -174,15 +174,15 @@ jobs:
       actions: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - name: Install acceptance validator dependencies
         run: python -m pip install -e .
       - name: Download passing case evidence
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: omnigent-live-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/omnigent-conformance/published
@@ -554,7 +554,7 @@ jobs:
           )
           PY
       - name: Upload published matrix
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: omnigent-live-published-matrix-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/omnigent-conformance/published
