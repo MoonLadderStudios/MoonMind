@@ -9,6 +9,13 @@ on:
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      candidate_image:
+        description: Immutable assembled application manifest to exercise instead of rebuilding
+        required: false
+        type: string
+        default: ''
   schedule:
     - cron: "17 9 * * *"
 
@@ -870,6 +877,9 @@ jobs:
     needs: select-test-suites
     if: needs.select-test-suites.outputs.integration_ci == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     # Hermetic worst case: 12m bounded setup + 23m execution/cleanup + 4m
     # evidence collection/upload + 1m runner/post-action overhead.
     # Journey worst case: 23m bootstrap/image/Node + 25m npm/OS/browser +
@@ -927,16 +937,11 @@ jobs:
           set -euo pipefail
           ./tools/test_integration.sh
       - name: Build the candidate deployable image for the first-run journey
-        # MoonLadderStudios/MoonMind#3938: the boundary journey must run the
-        # checked-out revision, not an arbitrary released/cached image. This
-        # builds the same default deployable target the exact-artifact gate
-        # uses (api_service/Dockerfile, no target override, same build
-        # arguments) from this checkout; the steps below pin MOONMIND_IMAGE at
-        # it. Being the same build, it reads the layer cache scope that
-        # omnigent-exact-artifact writes. That job stays the only writer, so
-        # these parallel rows export nothing and each run refreshes one copy
-        # of the deployable image's layers in the shared Actions cache.
-        if: matrix.suite != 'hermetic'
+        # Ordinary CI builds the same default deployable target as the
+        # exact-artifact gate. Release qualification pulls its supplied
+        # assembled manifest instead. These parallel builds only read the
+        # cache; the exact-artifact build remains its sole writer.
+        if: matrix.suite != 'hermetic' && inputs.candidate_image == ''
         timeout-minutes: 15
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
@@ -947,6 +952,23 @@ jobs:
           load: true
           tags: moonmind-first-run-3938:ci
           cache-from: type=gha,scope=exact-artifact-api-runtime
+      - name: Login to the release artifact registry
+        if: matrix.suite != 'hermetic' && inputs.candidate_image != ''
+        timeout-minutes: 2
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull the release artifact for installed journeys
+        if: matrix.suite != 'hermetic' && inputs.candidate_image != ''
+        timeout-minutes: 5
+        env:
+          CANDIDATE_IMAGE: ${{ inputs.candidate_image }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]
+          docker pull "$CANDIDATE_IMAGE"
       - name: Set up Node for the dashboard journey
         if: endsWith(matrix.suite, '-journey')
         timeout-minutes: 2
@@ -1003,7 +1025,7 @@ jobs:
         if: matrix.suite == 'fresh-journey'
         timeout-minutes: 20
         env:
-          MOONMIND_IMAGE: moonmind-first-run-3938:ci
+          MOONMIND_IMAGE: ${{ inputs.candidate_image || 'moonmind-first-run-3938:ci' }}
         run: |
           set -euo pipefail
           ./tools/first_run_journey_3938.sh
@@ -1016,7 +1038,7 @@ jobs:
         if: matrix.suite == 'upgrade-journey'
         timeout-minutes: 25
         env:
-          MOONMIND_IMAGE: moonmind-first-run-3938:ci
+          MOONMIND_IMAGE: ${{ inputs.candidate_image || 'moonmind-first-run-3938:ci' }}
         run: |
           set -euo pipefail
           ./tools/first_run_journey_3938.sh --upgrade
@@ -1031,7 +1053,7 @@ jobs:
         if: matrix.suite == 'controller-journey'
         timeout-minutes: 10
         env:
-          MOONMIND_IMAGE: moonmind-first-run-3938:ci
+          MOONMIND_IMAGE: ${{ inputs.candidate_image || 'moonmind-first-run-3938:ci' }}
         run: |
           set -euo pipefail
           ./tools/first_run_journey_3938.sh --controller
@@ -1047,7 +1069,7 @@ jobs:
         timeout-minutes: 10
         env:
           MOONMIND_TEST_JOURNAL_TRANSITION: "1"
-          MOONMIND_TEST_JOURNAL_APP_IMAGE: moonmind-first-run-3938:ci
+          MOONMIND_TEST_JOURNAL_APP_IMAGE: ${{ inputs.candidate_image || 'moonmind-first-run-3938:ci' }}
         run: |
           set -euo pipefail
           journal_test_env="$(mktemp -d /tmp/moonmind-journal-tests.XXXXXX)"
@@ -1145,6 +1167,9 @@ jobs:
     needs: select-test-suites
     if: needs.select-test-suites.outputs.exact_artifact == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     timeout-minutes: 90
     services:
       postgres:
@@ -1215,6 +1240,7 @@ jobs:
           node tools/test_native_chat_browser.mjs
       - name: Build the exact deployable image
         id: build
+        if: inputs.candidate_image == ''
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
@@ -1228,9 +1254,28 @@ jobs:
           # the resulting image digest is still computed from this checkout.
           cache-from: type=gha,scope=exact-artifact-api-runtime
           cache-to: type=gha,scope=exact-artifact-api-runtime,mode=max
+      - name: Login to the release artifact registry
+        if: inputs.candidate_image != ''
+        timeout-minutes: 2
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull the exact release artifact
+        if: inputs.candidate_image != ''
+        timeout-minutes: 5
+        env:
+          CANDIDATE_IMAGE: ${{ inputs.candidate_image }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]
+          docker pull "$CANDIDATE_IMAGE"
       - name: Resolve the immutable image identity
         id: digest
         shell: bash
+        env:
+          RELEASE_IMAGE: ${{ inputs.candidate_image }}
         run: |
           set -euo pipefail
           # The compiled UI is baked into the app image, and the worker runs
@@ -1238,14 +1283,22 @@ jobs:
           # deployable roles share one immutable digest.
           #
           # `ref` is the digest-pinned identity recorded in the evidence.
-          # `runnable` is the same content id in the form Docker can resolve
-          # locally: a locally loaded image has no registry repo digest, so
-          # `name@sha256:<id>` would send Docker to a registry and fail.
-          IMAGE_ID="$(docker image inspect moonmind-exact-artifact:candidate --format '{{ .Id }}')"
-          DIGEST="${IMAGE_ID#sha256:}"
-          echo "ref=moonmind-exact-artifact@sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
-          echo "digest=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
-          echo "runnable=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
+          # For local builds, `runnable` is the content id Docker can resolve:
+          # a loaded image has no registry repo digest, so using its content
+          # id as `name@sha256:<id>` would request a nonexistent manifest.
+          if [[ -n "$RELEASE_IMAGE" ]]; then
+            # Registry manifests and local platform content IDs are different.
+            # Run and record the immutable manifest the release caller supplied.
+            echo "ref=$RELEASE_IMAGE" >> "$GITHUB_OUTPUT"
+            echo "digest=${RELEASE_IMAGE##*@}" >> "$GITHUB_OUTPUT"
+            echo "runnable=$RELEASE_IMAGE" >> "$GITHUB_OUTPUT"
+          else
+            IMAGE_ID="$(docker image inspect moonmind-exact-artifact:candidate --format '{{ .Id }}')"
+            DIGEST="${IMAGE_ID#sha256:}"
+            echo "ref=moonmind-exact-artifact@sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
+            echo "digest=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
+            echo "runnable=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
+          fi
       - name: Start Temporal for the worker readiness probe
         shell: bash
         run: |
@@ -1434,9 +1487,10 @@ jobs:
     # main/schedule only. It is intentionally NOT a required PR gate and is not
     # in the ci-required aggregator.
     if: >-
+      inputs.candidate_image == '' && (
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      (github.event_name == 'push' && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

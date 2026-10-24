@@ -97,7 +97,7 @@ The access preflight preserves `.env`, Compose overrides, project identity, cred
 
 Persist selected concrete images and the operation identity before recreating services. A pulled image alone is not an installed release.
 
-The default host update (`tools/update-moonmind.sh`) pulls `<image-repository>:latest` once and installs what it currently names, without Git-derived selection, source-revision checks, ancestor fallback, or waiting for a build. Newly merged code becomes installable after its image publishes. The resolved digest keeps services on the same artifact within the operation; an explicit operator target is never silently substituted.
+The default host update (`tools/update-moonmind.sh`) pulls `<image-repository>:latest` once and installs what it currently names, without Git-derived selection, source-revision checks, ancestor fallback, or waiting for a build. New code reaches `latest` after image qualification. The resolved digest keeps services on the same artifact within the operation; an explicit operator target is never silently substituted.
 
 The installed Omnigent server/host selection belongs to the same deployment owner. Future managed launches resolve it from installed deployment intent, and historical attempt records retain the actual image and session that executed them.
 
