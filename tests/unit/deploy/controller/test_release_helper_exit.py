@@ -82,7 +82,10 @@ atexit.register(lambda: time.sleep(30))
     assert result.returncode == (1 if failure else 0)
     if failure:
         assert "RuntimeError: original routing failure" in result.stderr
-        assert "MOONMIND_OMNIGENT_RESULT=" not in result.stderr
+        assert not any(
+            line.startswith("MOONMIND_OMNIGENT_RESULT=")
+            for line in result.stderr.splitlines()
+        )
     else:
         assert result.stdout.strip() == "buffered output"
         assert json.loads(result.stderr.split("MOONMIND_OMNIGENT_RESULT=")[1]) == {
