@@ -64,7 +64,7 @@ The dashboard uses a strict surface hierarchy.
 | **Matte data slab** | Tables, dense cards, long-form content, logs, form bodies | Opaque or near-opaque, crisp borders, low reflection |
 | **Satin form surface** | Standard inputs, textareas, selects, secondary cards | Slight sheen, inset depth, stronger inner contrast |
 | **Glass control surface** | Nav rails, sticky toolbars, utility bars, elevated panels | Translucent fill, blur, border light, soft shadow |
-| **liquidGL hero surface** | Small number of premium elevated controls | Real-time refraction, specular highlight, obvious separation from content |
+| **Hero glass surface** | Small number of premium elevated controls | CSS edge highlights and strong separation from content |
 | **Accent/live surface** | Active states, executing badges, selected pills, critical actions | Controlled neon energy, never used as a page-wide base |
 
 ### 4.1 Matte data slabs
@@ -94,27 +94,11 @@ Use glass for:
 
 Glass surfaces should feel elevated above content, not interchangeable with it.
 
-### 4.3 liquidGL hero surfaces
+### 4.3 Hero glass surfaces
 
-The dashboard now uses **liquidGL** for premium liquid-glass treatment on select elevated surfaces. liquidGL is an enhancement layer, not the baseline styling system.
+The Create launch rail uses token-based CSS glass: translucent fill, backdrop blur, gradient sheen, inset edge highlights, and a floating shadow. The appearance is decorative; foreground controls and text remain crisp and readable without backdrop filtering.
 
-Rules:
-
-1. Use liquidGL only on **bounded, elevated, fixed or sticky surfaces** where refraction materially improves the experience.
-2. The element must remain fully legible and correctly styled **without** liquidGL.
-3. The CSS shell defines the component’s layout, border radius, padding, border, shadow, and fallback appearance. liquidGL enhances that shell rather than replacing it.
-4. Do not use liquidGL on dense tables, large cards, long forms, or large scrolling containers.
-5. Do not use liquidGL on large textareas or any surface where refraction would reduce editing comfort.
-6. Prefer one liquidGL hero surface per page; two is the maximum when the hierarchy is unmistakable.
-7. When performance, browser support, or user settings require it, fall back to the standard CSS glass treatment.
-
-Recommended liquidGL targets:
-
-- the Start Workflow floating launch rail
-- compact sticky utility rails
-- modals and drawers with bounded dimensions
-- selected high-value popovers or command surfaces
-- optional focused nav emphasis when it does not compete with the page hero surface
+Keep premium treatments on bounded elevated surfaces. Dense tables, long forms, and large textareas stay matte or satin so decoration does not interfere with reading and editing.
 
 ---
 
@@ -265,7 +249,7 @@ Guidance:
 
 ### 8.1 CSS glass foundation
 
-The default glass system is token-driven CSS and must exist even when liquidGL is disabled or unsupported.
+The glass system uses token-driven CSS, with a near-opaque fallback when backdrop filtering is unsupported.
 
 Core requirements:
 
@@ -288,7 +272,7 @@ Outer shells may be glassy. Inner editing surfaces should usually be more ground
 
 Example:
 
-- floating dock shell: glass or liquidGL
+- floating dock shell: CSS glass
 - inputs inside dock: darker inset wells with crisp text and lower blur
 
 This layered contrast is what makes the outer shell feel convincingly premium.
@@ -297,21 +281,13 @@ This layered contrast is what makes the outer shell feel convincingly premium.
 
 Prefer edge highlights, shadow separation, and a small amount of specular light over broad glow floods. Broad neon fog weakens hierarchy and legibility.
 
-### 8.4 liquidGL implementation stance
+### 8.4 Floating surface layering
 
-liquidGL should be treated as a **premium enhancement** for a small number of elevated surfaces.
-
-Requirements:
-
-- the component must still ship a full CSS appearance without JavaScript enhancement
-- the liquidGL layer must not be the only source of edge definition or text contrast
-- any target surface must be stable in shape and bounded in size
-- overflow, z-index, and stacking behavior must be explicit so helper layers do not clip unexpectedly
-- liquidGL should not become the default for all `.panel` or `.card` surfaces
+The shell owns layout, border radius, padding, border, and shadow. Decorative pseudo-elements ignore pointer events, and foreground controls sit above them. The Create button's click ring is portaled outside the rail so the shell's overflow does not clip it.
 
 ### 8.5 Fallback posture
 
-When liquidGL or `backdrop-filter` is unavailable, the UI must gracefully fall back to token-based CSS glass or matte surfaces. The dashboard must remain coherent and premium-looking without advanced rendering.
+When `backdrop-filter` is unavailable, token-based near-opaque surfaces preserve contrast and elevation.
 
 ---
 
@@ -350,28 +326,28 @@ The reduced-motion path covers every non-essential dashboard effect, not only th
 - executing sweep effects and status-pill shimmer/glint
 - the masked conic border beam
 - submit arrow animation and click ring
-- LiquidGL hero surface transition and animation durations
+- hero glass surface transition and animation durations
 - hover scan / glint effects
 - general button transform/glow motion
 
-No readable text may depend on blur or refraction to be legible. LiquidGL is a decorative surface only; when it is disabled or unsupported it must fall back to the CSS glass/matte surface, and text remains readable on the fallback.
+No readable text may depend on blur to be legible. Text remains readable on the CSS glass/matte fallback.
 
 ### 9.5 Performance fallbacks
 
 Effects that are cheap on desktop can be expensive on mobile and touch/low-power devices:
 
 - `background-attachment: fixed` on the page atmosphere falls back to `scroll` on narrow viewports and on coarse-pointer / no-hover devices, where fixed attachment commonly causes scroll-repaint jank. The atmosphere stays visually intact.
-- LiquidGL is opt-in and must never be applied to dense default surfaces (panels, cards, tables, data slabs); it degrades to the CSS glass/matte fallback when backdrop filtering is unavailable.
+- Elevated glass surfaces use the near-opaque CSS fallback when backdrop filtering is unavailable; dense default surfaces remain grounded.
 
-### 9.6 Manual QA checklist (motion and performance fallbacks)
+### 9.6 Motion and fallback verification
 
-Run this checklist when changing dashboard motion, glass/LiquidGL surfaces, or atmosphere. Verify each combination on a representative route (e.g. the workflows home and a workflow details page):
+Exercise these states through browser tests or artifact review when changing dashboard motion, glass surfaces, or atmosphere. Use a representative route, including Create when changing the launch rail:
 
-- **Normal motion (default):** panel enter animation plays once; executing sweeps, shimmer/glint, border beam, submit click ring, hover scans, and LiquidGL hero motion are present and low-amplitude.
-- **Reduced motion (`prefers-reduced-motion: reduce`):** no panel enter animation; sweeps, shimmer/glint, border beam, segmented-control shimmer/scan, submit arrow and click ring, and LiquidGL hero motion are stopped or softened; nothing pulses or drifts.
+- **Normal motion (default):** panel enter animation plays once; executing sweeps, shimmer/glint, border beam, submit click ring, and hover scans are present and low-amplitude.
+- **Reduced motion (`prefers-reduced-motion: reduce`):** no panel enter animation; sweeps, shimmer/glint, border beam, segmented-control shimmer/scan, submit arrow and click ring are stopped or softened; nothing pulses or drifts.
 - **Dark mode:** atmosphere, glass surfaces, and text contrast read correctly; no readable text relies on blur/refraction.
 - **Light mode:** same verification as dark mode through the light token swap.
-- **Narrow viewport (mobile width) and touch/low-power devices:** background atmosphere uses scroll attachment (no fixed-attachment scroll jank); layout and motion remain comfortable; LiquidGL falls back cleanly where unsupported.
+- **Narrow viewport (mobile width) and touch/low-power devices:** background atmosphere uses scroll attachment (no fixed-attachment scroll jank); layout, motion, and CSS glass remain comfortable.
 
 ---
 
@@ -398,7 +374,7 @@ Collection-sidebar rules:
 - header copy, row data, compact metadata, filter labels, and accessible names are supplied by the entity adapter;
 - the right divider clearly separates local collection navigation from the primary pane;
 - active state remains visible without relying on color alone;
-- the rail and sidebar remain coherent without liquidGL;
+- the rail and sidebar remain coherent without backdrop filtering;
 - use glass only for bounded control shells and matte/satin row interiors for sustained scanning.
 
 ### 10.2 Buttons
@@ -502,7 +478,7 @@ Floating rails are the best place to emphasize the liquid-glass system.
 Rules:
 
 - the rail must read as a truly elevated surface
-- its shell may be glass or liquidGL
+- its shell uses CSS glass
 - internal controls should be more grounded than the shell
 - the rail should have clear separation from underlying content via shadow, edge light, and offset
 - the rail should be slightly narrower than the content column when that improves intentionality
@@ -524,7 +500,7 @@ Transient/elevated UI is the right place for glass.
 
 Rules:
 
-- shell may use glass or liquidGL depending on size and importance
+- shell may use CSS glass depending on size and importance
 - text and fields inside should remain grounded and readable
 - shadows and layering must make elevation obvious
 - do not stack multiple competing glass effects inside one overlay
@@ -576,8 +552,7 @@ Desired composition:
 
 Specific guidance:
 
-- the floating launch rail is the strongest candidate for liquidGL treatment in the product
-- the rail shell may be premium glass; controls inside remain grounded and crisp
+- the floating launch rail uses CSS blur, sheen, edge highlights, and shadow; controls inside remain grounded and crisp
 - the primary CTA should feel like a clear launch/commit action
 - large textareas should remain matte and comfortable for sustained reading/editing
 - small utility buttons inside step cards should align with the same button language as the rest of the system
@@ -622,18 +597,17 @@ All decorative styling must maintain clear contrast for:
 
 Every interactive surface must provide a visible, high-contrast `:focus-visible` state. Focus is a first-class design element, not an implementation afterthought.
 
-### 12.3 Blur and WebGL fallbacks
+### 12.3 Blur and motion fallbacks
 
 The system must degrade gracefully when:
 
 - `backdrop-filter` is unavailable
-- liquidGL is unavailable or disabled
 - device performance is insufficient
 - user motion or power-saving preferences suggest a quieter mode
 
 ### 12.4 Performance posture
 
-Backdrop blur, glow layers, sticky glass surfaces, and liquidGL targets should be used strategically. Performance is part of the design system.
+Backdrop blur, glow layers, and sticky glass surfaces should be used strategically. Performance is part of the design system.
 
 Heavy premium effects belong on a small number of surfaces with clear value.
 
@@ -693,19 +667,7 @@ The source of truth for dashboard styling remains:
 
 Generated assets under `api_service/static/workflow_console/dist/` are build artifacts and should not be hand-edited.
 
-### 13.5 liquidGL enhancement contract
-
-Any liquidGL-enabled surface must satisfy all of the following:
-
-- the component is laid out and styled correctly without WebGL enhancement
-- the enhancement is bounded to a specific target surface
-- the foreground text and controls remain readable independent of refraction
-- browser/performance fallback resolves to the standard CSS glass system without breaking the component
-- the effect is used because the surface is elevated and interactive, not merely because the page has room for more shine
-
----
-
-### 13.6 shared responsive layout contract
+### 13.5 Shared responsive layout contract
 
 Non-workflow surfaces share one responsive implementation in
 `frontend/src/styles/dashboard.css`, owned by the existing
@@ -757,7 +719,7 @@ The dashboard’s design system is built on a simple hierarchy:
 
 - **Space-program structure** for layout and discipline
 - **Matte slabs** for dense information and editing
-- **Glass and liquidGL** for elevated controls and premium floating surfaces
+- **CSS glass** for elevated controls and premium floating surfaces
 - **Synthwave lighting** for atmosphere and brand energy
 - **Cyberpunk micro-details** for edge, never for noise
 
