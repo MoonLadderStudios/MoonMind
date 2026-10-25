@@ -135,7 +135,7 @@ def test_partial_projection_retry_preserves_frozen_identity(
     else:
         result = parent._map_agent_run_result(
             {
-                "failureClass": "launch_failed",
+                "failureClass": "system_error",
                 "metadata": {
                     "providerProfileId": "work",
                     "providerProfileLabel": "Changed after grant",
