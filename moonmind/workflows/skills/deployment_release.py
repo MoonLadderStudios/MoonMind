@@ -883,10 +883,19 @@ def controller_release_runner(payload):
     if store is None:
         raise ValueError("Controller release steps require durable deployment state")
     project_dir = str(target["projectDir"])
-    local_dir = Path(os.environ.get("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR") or "/workspace/host_project")
+    local_dir = Path(
+        os.environ.get("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR")
+        or "/workspace/host_project"
+    )
     files = list(target.get("composeFiles") or ["docker-compose.yaml"])
 
     def local_file(name):
+        if Path(name).name == target.get("releaseComposeFile"):
+            controller_state = Path(
+                os.environ.get("MOONMIND_CONTROLLER_STATE_DIR")
+                or "/workspace/deployment_state/controller"
+            )
+            return str(controller_state / "image-overlays" / Path(name).name)
         path = Path(name)
         if path.is_absolute():
             path = path.relative_to(project_dir)
@@ -895,9 +904,12 @@ def controller_release_runner(payload):
         return str(local_dir / path)
 
     return HostDockerComposeRunner(
-        project_dir=project_dir, project_name=str(target["project"]),
-        local_project_dir=str(local_dir), compose_file=local_file(files[0]),
-        override_files=tuple(local_file(name) for name in files[1:]), env_file=store.env_file_path,
+        project_dir=project_dir,
+        project_name=str(target["project"]),
+        local_project_dir=str(local_dir),
+        compose_file=local_file(files[0]),
+        override_files=tuple(local_file(name) for name in files[1:]),
+        env_file=store.env_file_path,
     )
 
 

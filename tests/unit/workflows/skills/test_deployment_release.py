@@ -7,6 +7,46 @@ import pytest
 from moonmind.workflows.skills import deployment_release as release
 
 
+def test_controller_helper_reads_staged_release_base_and_deployment_overrides(
+    tmp_path, monkeypatch
+):
+    controller = tmp_path / "controller"
+    exported = controller / "image-overlays" / "update-compose.json"
+    exported.parent.mkdir(parents=True)
+    exported.write_text('{"services":{"api":{"image":"selected-release"}}}')
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+    (repo / "docker-compose.override.yaml").write_text(
+        "services: {api: {ports: ['7000:8000']}}"
+    )
+    monkeypatch.setenv("MOONMIND_CONTROLLER_STATE_DIR", str(controller))
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR", str(repo))
+    monkeypatch.setattr(
+        release,
+        "_omnigent_release_store",
+        lambda: SimpleNamespace(env_file_path=str(tmp_path / ".env.deploy")),
+    )
+    runner = release.controller_release_runner(
+        {
+            "target": {
+                "project": "moonmind-test",
+                "projectDir": "/host/checkout",
+                "composeFiles": [
+                    "/var/lib/moonmind-controller/image-overlays/update-compose.json",
+                    "docker-compose.override.yaml",
+                ],
+                "releaseComposeFile": "update-compose.json",
+            }
+        }
+    )
+    command = runner._compose_base_command()
+    assert [command[i + 1] for i, arg in enumerate(command) if arg == "-f"] == [
+        str(exported),
+        str(repo / "docker-compose.override.yaml"),
+    ]
+    assert command[command.index("--project-directory") + 1] == "/host/checkout"
+
+
 @pytest.mark.parametrize(
     "children,expected",
     [
