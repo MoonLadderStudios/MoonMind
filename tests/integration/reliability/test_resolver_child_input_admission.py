@@ -2,9 +2,16 @@
 
 import json
 from dataclasses import replace
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+import pytest_asyncio
 from sqlalchemy import select
+from temporalio.api.workflowservice.v1 import (
+    DescribeNamespaceResponse,
+    DescribeWorkflowExecutionResponse,
+)
 from temporalio.testing import ActivityEnvironment
 
 from api_service.db import models
@@ -12,7 +19,11 @@ from moonmind.omnigent import bridge_artifacts
 from moonmind.omnigent.bridge_artifacts import OmnigentArtifactError
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.activities import omnigent_activities as children
-from moonmind.workflows.temporal.activity_runtime import TemporalPlanActivities
+from moonmind.workflows.temporal.activity_runtime import (
+    ArtifactParentAuthorityUnavailable,
+    TemporalAgentRuntimeActivities,
+    TemporalPlanActivities,
+)
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
     TemporalArtifactRepository,
@@ -39,6 +50,208 @@ pytestmark = [
 ]
 
 _CHILD = "resolver:pr:350:head:candidate:1"
+
+
+@pytest_asyncio.fixture
+async def resolver_parent(repository_consumers):
+    context = repository_consumers
+    parent = await context.compile(
+        "pr", profile_tools=("gh",), mergeAutomation={"enabled": True}
+    )
+    await context.link_inputs(parent)
+    binding = parent.binding.model_dump(by_alias=True)
+    async with context.sessions() as session:
+        session.add(
+            models.TemporalExecutionCanonicalRecord(
+                workflow_id=_WORKFLOW,
+                run_id="parent-run",
+                owner_id="system",
+                workflow_type=models.TemporalWorkflowType.USER_WORKFLOW,
+                entry="run",
+                parameters={"omnigentExecutionPlan": binding},
+            )
+        )
+        session.add(
+            models.ManagedAgentProviderProfile(
+                profile_id="provider-opencode-native",
+                runtime_id="opencode",
+                provider_id="opencode-go",
+            )
+        )
+        await session.commit()
+    described = DescribeWorkflowExecutionResponse(
+        workflow_execution_info={
+            "execution": {"workflow_id": "merge-gate", "run_id": "gate-run"},
+            "parent_execution": {"workflow_id": _WORKFLOW, "run_id": "parent-run"},
+            "parent_namespace_id": "namespace-default",
+        }
+    )
+    server = SimpleNamespace(
+        describe_workflow_execution=AsyncMock(return_value=described),
+        describe_namespace=AsyncMock(
+            return_value=DescribeNamespaceResponse(
+                namespace_info={"id": "namespace-default"},
+            )
+        ),
+    )
+    environment = ActivityEnvironment(
+        client=SimpleNamespace(namespace="default", workflow_service=server)
+    )
+    environment.info = replace(
+        environment.info, workflow_id="merge-gate", workflow_run_id="gate-run"
+    )
+    payload = {
+        "principal": "system",
+        "parentWorkflowId": _WORKFLOW,
+        "parentExecutionPlan": binding,
+        "childWorkflowId": _CHILD,
+        "childWorkflowRequest": {
+            "initial_parameters": {
+                "targetRuntime": "omnigent",
+                "repository": _target(),
+                "publishMode": "auto",
+                "workflow": {
+                    "instructions": "Resolve the selected pull request.",
+                    "tool": {"type": "skill", "name": "pr-resolver"},
+                    "inputs": {"pr": "350", "finishMode": "fix_only"},
+                },
+            }
+        },
+    }
+    return SimpleNamespace(
+        context=context,
+        parent=parent,
+        environment=environment,
+        server=server,
+        record=described.workflow_execution_info,
+        payload=payload,
+    )
+
+
+@pytest.mark.parametrize("binding_source", ["carried", "canonical"])
+async def test_system_resolver_preparation_reuses_verified_parent_grant(
+    resolver_parent,
+    binding_source,
+):
+    state = resolver_parent
+    context = state.context
+    if binding_source == "canonical":
+        state.payload.pop("parentExecutionPlan")
+    parent_ref = state.parent.binding.plan_artifact_ref
+    async with context.sessions() as session:
+        repository = TemporalArtifactRepository(session)
+        original = await repository.get_artifact(parent_ref)
+        original_identity = (original.sha256, original.created_by_principal)
+        original_links = {link.id for link in await repository.list_links(parent_ref)}
+        # The failure requires machine provenance and a different artifact owner.
+        with pytest.raises(TemporalArtifactAuthorizationError):
+            await TemporalArtifactService(repository).read(
+                artifact_id=parent_ref,
+                principal="service:omnigent_session_supervisor",
+                admitted_principal="system",
+            )
+
+    for _ in range(2):
+        prepared = await state.environment.run(
+            TemporalAgentRuntimeActivities().omnigent_prepare_child_execution_plan,
+            state.payload,
+        )
+        parameters = prepared["initial_parameters"]
+        assert (
+            parameters["omnigentExecutionPlan"]["planRef"]
+            != state.parent.binding.plan_ref
+        )
+        async with context.sessions() as session:
+            repository = TemporalArtifactRepository(session)
+            child = await repository.get_artifact(
+                parameters["omnigentExecutionPlan"]["planArtifactRef"]
+            )
+            assert child.created_by_principal == "system"
+            retained = await repository.get_artifact(parent_ref)
+            assert (retained.sha256, retained.created_by_principal) == original_identity
+            assert {
+                link.id for link in await repository.list_links(parent_ref)
+            } == original_links
+
+    # The resolver's actual run still admits its own fresh Skill closure.
+    child_environment = ActivityEnvironment()
+    child_environment.info = replace(
+        child_environment.info, workflow_id=_CHILD, workflow_run_id="actual-child-run"
+    )
+    await child_environment.run(
+        TemporalPlanActivities(artifact_service=context.artifacts).plan_validate,
+        plan_ref="validated-agent-plan",
+        principal=f"workflow:{_CHILD}",
+        omnigent_execution_plan=parameters["omnigentExecutionPlan"],
+        execution_parameters=parameters,
+    )
+    async with context.sessions() as session:
+        service = TemporalArtifactService(TemporalArtifactRepository(session))
+        assert (
+            await service.read(
+                artifact_id=parameters["resolvedSkillsetRef"],
+                principal=f"workflow:{_CHILD}",
+            )
+        )[1]
+        with pytest.raises(TemporalArtifactAuthorizationError):
+            await service.read(artifact_id=parent_ref, principal=f"workflow:{_CHILD}")
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "parent",
+        "activity-run",
+        "namespace",
+        "no-parent",
+        "missing-parent",
+        "unlinked-plan",
+        "unavailable",
+    ],
+)
+async def test_resolver_preparation_rejects_unverified_parent_before_writing(
+    resolver_parent,
+    monkeypatch,
+    fault,
+):
+    state = resolver_parent
+    error_match = "parent"
+    if fault == "parent":
+        state.payload["parentWorkflowId"] = "unrelated-parent"
+        state.payload["principal"] = "operator"
+    elif fault == "activity-run":
+        state.record.execution.run_id = "another-gate-run"
+    elif fault == "namespace":
+        state.record.parent_namespace_id = "another-namespace"
+    elif fault == "no-parent":
+        state.record.ClearField("parent_execution")
+    elif fault == "missing-parent":
+        state.payload.pop("parentWorkflowId")
+    elif fault == "unlinked-plan":
+        unrelated = await state.context.compile()
+        state.payload["parentExecutionPlan"] = unrelated.binding.model_dump(
+            by_alias=True
+        )
+        error_match = "cannot read artifact"
+    else:
+        state.server.describe_workflow_execution.side_effect = TimeoutError(
+            "Temporal unavailable"
+        )
+    from api_service.services import omnigent_execution_plan_service as writer
+
+    write = AsyncMock(wraps=writer.persist_json_artifact)
+    monkeypatch.setattr(writer, "persist_json_artifact", write)
+    expected = (
+        ArtifactParentAuthorityUnavailable
+        if fault == "unavailable"
+        else TemporalArtifactAuthorizationError
+    )
+    with pytest.raises(expected, match=error_match):
+        await state.environment.run(
+            TemporalAgentRuntimeActivities().omnigent_prepare_child_execution_plan,
+            state.payload,
+        )
+    write.assert_not_awaited()
 
 
 async def _prepare_child(context):
