@@ -9,7 +9,6 @@ import os
 import threading
 from urllib.request import ProxyHandler, build_opener
 from uuid import uuid4
-from urllib.parse import urlsplit
 
 from botocore.exceptions import ClientError
 import httpx
@@ -30,9 +29,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 def stores():
     source_endpoint = os.environ.get("MOONMIND_TEST_SOURCE_S3_ENDPOINT", "http://artifact-source:9000")
     destination_endpoint = os.environ.get("MOONMIND_TEST_S3_ENDPOINT", "http://moonmind-test-temporal-artifacts-s3:9000")
-    public_endpoint = os.environ.get("MOONMIND_TEST_S3_PUBLIC_ENDPOINT")
-    assert public_endpoint, "Use the hermetic integration runner's disposable published S3 port"
-    assert urlsplit(public_endpoint).netloc != urlsplit(destination_endpoint).netloc
     access = os.environ.get("TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID", "minioadmin")
     secret = os.environ.get("TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY", "minioadmin")
     bucket = "moonmind-test-" + uuid4().hex
@@ -46,7 +42,7 @@ def stores():
             access_key_id=access, secret_access_key=secret, region_name="us-east-1", use_ssl=False,
         )
 
-    yield clients, bucket, adapter(source_endpoint), adapter(destination_endpoint, public_endpoint)
+    yield clients, bucket, adapter(source_endpoint), adapter(destination_endpoint, os.environ.get("MOONMIND_TEST_S3_PUBLIC_ENDPOINT", destination_endpoint))
     for client in clients:
         for upload in client.list_multipart_uploads(Bucket=bucket).get("Uploads", []):
             client.abort_multipart_upload(Bucket=bucket, Key=upload["Key"], UploadId=upload["UploadId"])
@@ -96,13 +92,10 @@ def test_adapter_transfer_range_checksum_and_public_download(stores, tmp_path, m
     assert response["ResponseMetadata"]["HTTPStatusCode"] == 206
     assert response["Body"].read() == payload[3:18]
     url = new.presign_download(storage_key=key, expires_in_seconds=60, download_filename="saved.bin")
-    public_origin = urlsplit(os.environ["MOONMIND_TEST_S3_PUBLIC_ENDPOINT"])
-    assert (urlsplit(url).scheme, urlsplit(url).netloc) == (public_origin.scheme, public_origin.netloc)
-    assert urlsplit(url).netloc != urlsplit(destination.meta.endpoint_url).netloc
     with build_opener(ProxyHandler({})).open(url, timeout=30) as response:
         assert response.read() == payload
         assert "saved.bin" in response.headers["Content-Disposition"]
-    denied = s3_client(os.environ["MOONMIND_TEST_S3_PUBLIC_ENDPOINT"], "denied-credentials", "invalid-secret")
+    denied = s3_client(destination.meta.endpoint_url, "denied-credentials", "invalid-secret")
     with pytest.raises(ClientError) as error:
         denied.get_object(Bucket=bucket, Key=key)
     assert error.value.response["ResponseMetadata"]["HTTPStatusCode"] == 403

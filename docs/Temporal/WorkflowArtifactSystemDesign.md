@@ -238,10 +238,9 @@ external endpoints, buckets and credentials remain operator settings.
 | [SeaweedFS](https://github.com/seaweedfs/seaweedfs/wiki/Quick-Start-with-weed-mini) | Maintained single-process S3 option; introduces filer/master configuration and different credential administration. |
 | [Garage](https://garagehq.deuxfleurs.fr/documentation/reference-manual/s3-compatibility/) | Supports core/multipart operations; different authorization and no signature-v2 support require more adapter/configuration changes. |
 
-Compatibility checks exercise bucket, PUT/GET/HEAD/range, checksum, multipart
-completion/abort and presigned HTTP operations. The hermetic integration runner
-fetches public downloads through the disposable store's published host port,
-using Docker's host gateway from the test container.
+Compatibility is qualified through actual bucket, PUT/GET/HEAD/range, checksum,
+multipart completion/abort and presigned HTTP operations, rather than inferred
+from the S3 label.
 
 ## 6.3 Docker Compose default
 
