@@ -170,9 +170,10 @@ agent callbacks, and auth-profile controls, see
 
 `AgentRunResult` preserves execution state, objective outcome, publication/output
 availability, original failure, retry disposition, and diagnostic references.
-Secondary reporting errors stay separate. Explicit failure identity and retry
-disposition survive provider decoding, child cooldown, and parent retry selection;
-display text never decides policy. Unavailable observations without a state stay
+Secondary reporting errors stay separate. Publication failures refresh objective,
+failure identity, and retry facts while preserving completed execution and outputs;
+these facts survive decoding, child cooldown, and parent retry selection. Display
+text never decides policy. Unavailable observations without a state stay
 unknown, including in terminal memos when the workflow fails. The agent's task
 outcome stays separate from explicit workflow goal settlement. Legacy snake/camel
 results decode once. Temporal patches preserve older decisions; finish summaries
