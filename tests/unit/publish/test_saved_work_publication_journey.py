@@ -814,6 +814,36 @@ async def test_a_transient_authority_outage_is_retried_before_publication(
 
 
 @pytest.mark.asyncio
+async def test_decision_read_outage_preserves_recorded_publication(tmp_path, monkeypatch):
+    from moonmind.workflows.temporal.artifacts import (
+        TemporalArtifactUnavailableError, find_saved_work_publication_decisions,
+    )
+
+    async with journey(tmp_path, monkeypatch, destination_files={"README.md": "x\n"}) as state:
+        contract = state.contract(objective="pr", baseBranch="main", strategy="additive_import")
+        first = await state.run(contract)
+        assert first["outcome"] == "published"
+        workflow_id = workflow_module.workflow.info().workflow_id
+        assert await find_saved_work_publication_decisions(state.service, workflow_id=workflow_id, operation_key=contract["publicationIdempotencyKey"])
+        read = state.service._store.read_bytes
+
+        def unavailable(*args, **kwargs):
+            raise TimeoutError("synthetic decision read outage")
+
+        monkeypatch.setattr(state.service._store, "read_bytes", unavailable)
+        with pytest.raises(TemporalArtifactUnavailableError):
+            await find_saved_work_publication_decisions(
+                state.service, workflow_id=workflow_id,
+                operation_key=contract["publicationIdempotencyKey"],
+            )
+        monkeypatch.setattr(state.service._store, "read_bytes", read)
+        second = await state.run(contract)
+        assert second["outcome"] == "published"
+        assert len(state.pushes()) == 1
+        assert len(state.provider.creates) == 1
+
+
+@pytest.mark.asyncio
 async def test_verified_existing_pr_is_adopted_without_create_or_metadata_write(
     tmp_path, monkeypatch
 ):

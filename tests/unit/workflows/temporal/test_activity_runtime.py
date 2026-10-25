@@ -2395,6 +2395,43 @@ async def test_build_activity_bindings_artifact_read_accepts_request_mapping(
 
             assert payload == b'{"ok": true}'
 
+@pytest.mark.parametrize(("fault", "code", "non_retryable"), [
+    (TimeoutError("synthetic timeout"), "artifact_storage_unavailable", False),
+    (PermissionError("synthetic storage credentials"), "artifact_storage_forbidden", True),
+    (FileNotFoundError("synthetic missing object"), "artifact_bytes_missing", True),
+])
+async def test_artifact_read_binding_carries_retry_meaning(tmp_path, monkeypatch, fault, code, non_retryable):
+    async with temporal_db(tmp_path) as maker:
+        async with maker() as session:
+            store = LocalTemporalArtifactStore(tmp_path / "artifacts")
+            service = TemporalArtifactService(TemporalArtifactRepository(session), store=store)
+            artifact, _ = await service.create(principal="owner", content_type="text/plain")
+            await service.write_complete(artifact_id=artifact.artifact_id, principal="owner", payload=b"retained")
+
+            def fail(*args, **kwargs):
+                raise fault
+
+            monkeypatch.setattr(store, "read_bytes", fail)
+            binding = next(b for b in build_activity_bindings(
+                build_default_activity_catalog(), artifact_activities=TemporalArtifactActivities(service),
+                agent_skills_activities=AgentSkillsActivities(), fleets=(ARTIFACTS_FLEET,),
+            ) if b.activity_type == "artifact.read")
+            with pytest.raises(temporal_exceptions.ApplicationError) as raised:
+                await binding.handler({"artifact_ref": artifact.artifact_id, "principal": "owner"})
+            assert raised.value.type == code
+            assert raised.value.non_retryable is non_retryable
+            cause = raised.value.original_error.__cause__
+            # Python 3.12's asyncio Future bridge reconstructs TimeoutError;
+            # the diagnostic contract is its type and arguments, not identity.
+            assert type(cause) is type(fault)
+            assert cause.args == fault.args
+            from temporalio.api.failure.v1 import Failure
+            from temporalio.converter import DefaultFailureConverter, DefaultPayloadConverter
+            wire = Failure()
+            DefaultFailureConverter().to_failure(raised.value, DefaultPayloadConverter(), wire)
+            assert "synthetic" not in str(wire)
+
+
 async def test_build_activity_bindings_artifact_handlers_preserve_typed_request_signature(
     tmp_path: Path,
 ):
