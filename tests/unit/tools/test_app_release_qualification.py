@@ -6,6 +6,7 @@ import ast
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -418,3 +419,128 @@ def test_exact_probe_and_recovery_consumers_keep_registry_and_local_identities_d
         )
         assert match is not None, f"{consumer} lost the prepared application image"
         assert values[match[1]] == expected
+
+
+@pytest.mark.parametrize("candidate", ["", CANDIDATE])
+def test_supplied_image_selects_every_required_journey_on_a_narrow_pr(
+    tmp_path, candidate
+):
+    jobs = _workflow("pytest-unit-tests.yml")["jobs"].values()
+    selection = next(
+        step
+        for job in jobs
+        for step in job.get("steps", [])
+        if "python3 tools/select_test_suites.py" in step.get("run", "")
+    )
+    changes = tmp_path / "changes"
+    changes.write_text("docs/README.md\n")
+    output = tmp_path / "selection"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            selection["run"].replace(
+                "/tmp/changed-files.txt", shlex.quote(str(changes))
+            ),
+        ],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "GITHUB_EVENT_NAME": "pull_request",
+            "GITHUB_REF_NAME": "fixture-qualification",
+            "GITHUB_OUTPUT": str(output),
+            "QUALIFICATION_IMAGE": candidate,
+            "QUALIFICATION_ARCHIVE": "",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert values["full_backend"] == ("true" if candidate else "false")
+    if candidate:
+        for key in (
+            "exact_artifact",
+            "integration_fresh_journey",
+            "integration_upgrade_journey",
+            "integration_controller_journey",
+        ):
+            assert values[key] == "true", (
+                f"Supplied image lost required {key} execution"
+            )
+
+
+def test_isolated_caller_qualifies_one_archive_without_a_publication_path():
+    fixture = _workflow("app-image-qualification.yml")
+    jobs = fixture["jobs"]
+    caller_name, caller = next(
+        (name, job)
+        for name, job in jobs.items()
+        if job.get("uses") == "./.github/workflows/pytest-unit-tests.yml"
+    )
+    producers = []
+    for key in ("candidate_image", "candidate_oci_artifact"):
+        producer, output = re.fullmatch(
+            r"\$\{\{\s*needs\.([^.]+)\.outputs\.([^\s]+)\s*\}\}", caller["with"][key]
+        ).groups()
+        assert producer in _ancestors(jobs, caller_name)
+        assert output in jobs[producer]["outputs"]
+        producers.append(producer)
+    assert len(set(producers)) == 1, "One owner must assemble the shared candidate"
+    builder = jobs[producers[0]]
+    image_builds = [
+        step
+        for step in builder["steps"]
+        if step.get("with", {}).get("file") == "api_service/Dockerfile"
+    ]
+    assert len(image_builds) == 1
+    build = image_builds[0]["with"]
+    assert build["outputs"].startswith("type=oci,")
+    assert build.get("push", False) is False
+    assert "github.event.pull_request.head.sha || github.sha" in build["build-args"]
+    assert any(
+        "release_image_fixture.py describe" in step.get("run", "")
+        for step in builder["steps"]
+    )
+    assert any(
+        step.get("uses", "").startswith("actions/upload-artifact@")
+        for step in builder["steps"]
+    )
+    for job in jobs.values():
+        assert "write" not in job.get("permissions", {}).values()
+        assert job.get("uses") != "./.github/workflows/docker-publish.yml"
+        assert not any(
+            "imagetools create" in step.get("run", "") for step in job.get("steps", [])
+        )
+    for job in _workflow("pytest-unit-tests.yml")["jobs"].values():
+        steps = job.get("steps", [])
+        if not any(
+            "first_run_journey_3938.sh" in step.get("run", "")
+            or "gather_exact_artifact_runtime_evidence.py" in step.get("run", "")
+            for step in steps
+        ):
+            continue
+        restores = [
+            step
+            for step in steps
+            if "release_image_fixture.py restore" in step.get("run", "")
+        ]
+        assert len(restores) == 1
+        restore = restores[0]
+        assert _image_value(restore["env"]["CANDIDATE_IMAGE"], CANDIDATE) == CANDIDATE
+        downloads = [
+            step
+            for step in steps
+            if step.get("with", {}).get("name")
+            == "${{ inputs.candidate_oci_artifact }}"
+        ]
+        assert len(downloads) == 1
+        assert steps.index(downloads[0]) < steps.index(restore)
+        cleanup = next(
+            step
+            for step in steps
+            if "release_image_fixture.py cleanup" in step.get("run", "")
+        )
+        assert "always()" in cleanup["if"]
+        assert cleanup["env"]["FIXTURE_OWNER"] == restore["env"]["FIXTURE_OWNER"]
