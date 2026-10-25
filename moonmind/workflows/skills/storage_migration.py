@@ -8,14 +8,17 @@ source's data are rewritten. The SQLite receipt lives on deployment state.
 from __future__ import annotations
 
 import asyncio
-from contextlib import closing
 import hashlib
 import json
 import os
-from pathlib import Path
 import sqlite3
+import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import closing
+from itertools import islice
+from pathlib import Path
 from urllib.parse import urlencode
 from uuid import uuid4
 
@@ -24,12 +27,15 @@ from boto3.s3.transfer import TransferConfig
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
-
 CONTENT_FIELDS = (
     "ContentType", "CacheControl", "ContentDisposition", "ContentEncoding",
     "ContentLanguage", "Expires", "WebsiteRedirectLocation", "Metadata",
 )
 MISSING = {"404", "NoSuchKey", "NotFound", "NoSuchBucket"}
+TRANSFER_CONCURRENCY = 16
+# A volume-format migration scales with retained data, unlike a service
+# restart. Leave controller time for isolation, qualification and recovery.
+STORAGE_TRANSFER_TIMEOUT_SECONDS = 4 * 60 * 60
 
 
 def _missing(exc, codes=MISSING):
@@ -38,10 +44,19 @@ def _missing(exc, codes=MISSING):
 
 def s3_client(endpoint, access, secret):
     return boto3.client(
-        "s3", endpoint_url=endpoint, aws_access_key_id=access,
-        aws_secret_access_key=secret, region_name="us-east-1",
-        config=Config(connect_timeout=5, read_timeout=30, proxies={},
-                      retries={"max_attempts": 2}, s3={"addressing_style": "path"}),
+        "s3",
+        endpoint_url=endpoint,
+        aws_access_key_id=access,
+        aws_secret_access_key=secret,
+        region_name="us-east-1",
+        config=Config(
+            connect_timeout=5,
+            read_timeout=30,
+            proxies={},
+            max_pool_connections=TRANSFER_CONCURRENCY,
+            retries={"max_attempts": 2},
+            s3={"addressing_style": "path"},
+        ),
     )
 
 
@@ -123,11 +138,99 @@ def _bucket_configuration(source, destination, bucket):
         getattr(destination, put_name)(Bucket=bucket, **{field: content})
 
 
-def transfer_buckets(source, destination, state_path, *, binding=None, buckets=None, timeout_seconds=840):
-    """Copy once, reconcile uncertain uploads, then verify every required byte.
+def _object_state(head, attributes):
+    # These are opaque S3 mutation indicators, not checksums to compare across
+    # servers. Tags can change without changing ETag/LastModified, so include
+    # freshly observed attributes as well. Incomplete observations cannot reuse
+    # a prior byte verification.
+    if any(
+        head.get(field) is None for field in ("ETag", "LastModified", "ContentLength")
+    ):
+        return None
+    return json.dumps(
+        {
+            field: head.get(field)
+            for field in ("ETag", "LastModified", "ContentLength", "VersionId")
+        }
+        | {"attributes": attributes},
+        sort_keys=True,
+        default=str,
+    )
 
-    Existing mismatches stop the operation rather than silently replacing
-    evidence. Committed receipts never replace a fresh read of either store.
+
+def _copy_object(source, destination, bucket, key, expected_size, saved, deadline):
+    _deadline_check(deadline)
+    if (
+        saved
+        and saved[2] is not None
+        and saved[3] is not None
+        and saved[1] == expected_size
+    ):
+        source_head = source.head_object(Bucket=bucket, Key=key)
+        source_state = _object_state(
+            source_head, _attributes(source, bucket, key, source_head)
+        )
+        try:
+            head = destination.head_object(Bucket=bucket, Key=key)
+        except ClientError as exc:
+            if not _missing(exc):
+                raise
+        else:
+            destination_state = _object_state(
+                head, _attributes(destination, bucket, key, head)
+            )
+            if (source_state, destination_state) == saved[2:]:
+                return saved[0], saved[1], saved[2], saved[3], True
+    response = source.get_object(Bucket=bucket, Key=key)
+    # Close the response even if reading its tags fails before hashing starts.
+    with closing(response["Body"]), tempfile.SpooledTemporaryFile(
+        max_size=8 * 1024 * 1024
+    ) as spool:
+        attributes = _attributes(source, bucket, key, response)
+        source_state = _object_state(response, attributes)
+        digest, size = _hash_stream(response["Body"], deadline, spool)
+        if size != expected_size:
+            raise ValueError("Source inventory changed during transfer")
+        try:
+            head = destination.head_object(Bucket=bucket, Key=key)
+        except ClientError as exc:
+            if not _missing(exc):
+                raise
+            spool.seek(0)
+            destination.upload_fileobj(
+                spool,
+                bucket,
+                key,
+                ExtraArgs=attributes,
+                Config=TransferConfig(
+                    multipart_threshold=8 * 1024 * 1024,
+                    multipart_chunksize=8 * 1024 * 1024,
+                    max_concurrency=1,
+                    use_threads=False,
+                ),
+            )
+            head = destination.head_object(Bucket=bucket, Key=key)
+        target_attributes = _attributes(destination, bucket, key, head)
+        copied_digest, copied_size = _hash_stream(
+            destination.get_object(Bucket=bucket, Key=key)["Body"],
+            deadline,
+        )
+        if (digest, size, attributes) != (
+            copied_digest,
+            copied_size,
+            target_attributes,
+        ):
+            raise ValueError(
+                "Destination content/metadata mismatch; cutover refused, source retained"
+            )
+    return digest, size, source_state, _object_state(head, target_attributes), False
+
+
+def transfer_buckets(source, destination, state_path, *, binding=None, buckets=None, timeout_seconds=840):
+    """Bounded parallel copy with durable, mutation-checked byte verifications.
+
+    Existing mismatches stop rather than silently replacing evidence. Reuse
+    requires fresh object identity and metadata observations from both stores.
     Extra retained destination objects are not deleted, including on rollback.
     """
     deadline = time.monotonic() + timeout_seconds
@@ -135,66 +238,136 @@ def transfer_buckets(source, destination, state_path, *, binding=None, buckets=N
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = json.dumps(binding or {}, sort_keys=True)
     run = uuid4().hex
-    with closing(sqlite3.connect(path)) as db:
-        os.chmod(path, 0o600)
-        db.execute("CREATE TABLE IF NOT EXISTS identity (binding TEXT NOT NULL)")
-        db.execute("CREATE TABLE IF NOT EXISTS objects (bucket TEXT, key TEXT, sha256 TEXT, size INTEGER, verified_run TEXT, PRIMARY KEY(bucket,key))")
-        identity = db.execute("SELECT binding FROM identity").fetchone()
-        if identity is not None and identity[0] != descriptor:
-            raise ValueError("Storage receipt identity differs from requested source/destination")
-        if identity is None:
-            db.execute("INSERT INTO identity VALUES (?)", (descriptor,))
-            db.commit()
-        selected_buckets = sorted(buckets) if buckets is not None else None
-        buckets = selected_buckets if selected_buckets is not None else sorted(row["Name"] for row in source.list_buckets()["Buckets"])
-        for bucket in buckets:
-            _bucket_configuration(source, destination, bucket)
-        count, total = 0, 0
-        for bucket, key, expected_size, inventory in _inventory(source, buckets, deadline):
-            if bucket is None:
-                initial_inventory = inventory.hexdigest()
-                break
-            _deadline_check(deadline)
-            response = source.get_object(Bucket=bucket, Key=key)
-            attributes = _attributes(source, bucket, key, response)
-            with tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024) as spool:
-                digest, size = _hash_stream(response["Body"], deadline, spool)
-                if size != expected_size:
-                    raise ValueError("Source inventory changed during transfer")
-                try:
-                    head = destination.head_object(Bucket=bucket, Key=key)
-                except ClientError as exc:
-                    if not _missing(exc):
-                        raise
-                    spool.seek(0)
-                    destination.upload_fileobj(
-                        spool, bucket, key, ExtraArgs=attributes,
-                        Config=TransferConfig(multipart_threshold=8 * 1024 * 1024,
-                                              multipart_chunksize=8 * 1024 * 1024,
-                                              max_concurrency=1, use_threads=False),
-                    )
-                    head = destination.head_object(Bucket=bucket, Key=key)
-                target_attributes = _attributes(destination, bucket, key, head)
-                copied_digest, copied_size = _hash_stream(
-                    destination.get_object(Bucket=bucket, Key=key)["Body"], deadline,
+    count = total = reused = 0
+    try:
+        with closing(sqlite3.connect(path)) as db:
+            os.chmod(path, 0o600)
+            db.execute("CREATE TABLE IF NOT EXISTS identity (binding TEXT NOT NULL)")
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS objects (bucket TEXT, key TEXT, sha256 TEXT, size INTEGER, verified_run TEXT, PRIMARY KEY(bucket,key))"
+            )
+            identity = db.execute("SELECT binding FROM identity").fetchone()
+            if identity is not None and identity[0] != descriptor:
+                raise ValueError(
+                    "Storage receipt identity differs from requested source/destination"
                 )
-                if (digest, size, attributes) != (copied_digest, copied_size, target_attributes):
-                    raise ValueError("Destination content/metadata mismatch; cutover refused, source retained")
-            db.execute("INSERT OR REPLACE INTO objects VALUES (?,?,?,?,?)", (bucket, key, digest, size, run))
+            if identity is None:
+                db.execute("INSERT INTO identity VALUES (?)", (descriptor,))
+            # Keep the five-column object receipt writable by retained release
+            # helpers. Their new verified_run invalidates these observations.
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS observations (bucket TEXT, key TEXT, verified_run TEXT, source_state TEXT, destination_state TEXT, PRIMARY KEY(bucket,key))"
+            )
             db.commit()
-            count += 1
-            total += size
-        current_buckets = selected_buckets if selected_buckets is not None else sorted(row["Name"] for row in source.list_buckets()["Buckets"])
-        final_inventory = None
-        for _, _, _, inventory in _inventory(source, current_buckets, deadline):
-            final_inventory = inventory.hexdigest()
-        if buckets != current_buckets or initial_inventory != final_inventory:
-            raise ValueError("Source inventory changed; cutover refused")
-        for bucket in buckets:
-            if source.list_multipart_uploads(Bucket=bucket, MaxUploads=1).get("Uploads"):
-                raise ValueError("Concurrent multipart upload prevents cutover")
-        return {"verifiedObjects": count, "verifiedBytes": total,
-                "inventorySha256": final_inventory, "buckets": buckets}
+            selected_buckets = sorted(buckets) if buckets is not None else None
+            buckets = (
+                selected_buckets
+                if selected_buckets is not None
+                else sorted(row["Name"] for row in source.list_buckets()["Buckets"])
+            )
+            for bucket in buckets:
+                _bucket_configuration(source, destination, bucket)
+            entries = _inventory(source, buckets, deadline)
+            progress_at = time.monotonic()
+            with ThreadPoolExecutor(max_workers=TRANSFER_CONCURRENCY) as pool:
+                while batch := list(islice(entries, TRANSFER_CONCURRENCY)):
+                    if batch[-1][0] is None:
+                        initial_inventory = batch.pop()[3].hexdigest()
+                    pending = {}
+                    for bucket, key, expected_size, _ in batch:
+                        saved = db.execute(
+                            "SELECT o.sha256,o.size,v.source_state,v.destination_state "
+                            "FROM objects o LEFT JOIN observations v "
+                            "ON o.bucket=v.bucket AND o.key=v.key AND o.verified_run=v.verified_run "
+                            "WHERE o.bucket=? AND o.key=?",
+                            (bucket, key),
+                        ).fetchone()
+                        pending[
+                            pool.submit(
+                                _copy_object,
+                                source,
+                                destination,
+                                bucket,
+                                key,
+                                expected_size,
+                                saved,
+                                deadline,
+                            )
+                        ] = (bucket, key)
+                    failure = None
+                    completed = []
+                    for future in as_completed(pending):
+                        try:
+                            completed.append((*pending[future], *future.result()))
+                        except Exception as exc:
+                            if failure is None:
+                                failure = exc
+                    # Commit successful peers even when another object fails.
+                    # One small transaction amortizes fsync without an unbounded
+                    # queue or letting worker threads own the SQLite connection.
+                    db.executemany(
+                        "INSERT OR REPLACE INTO objects VALUES (?,?,?,?,?)",
+                        [
+                            (bucket, key, digest, size, run)
+                            for bucket, key, digest, size, _, _, cached in completed
+                            if not cached
+                        ],
+                    )
+                    db.executemany(
+                        "INSERT OR REPLACE INTO observations VALUES (?,?,?,?,?)",
+                        [
+                            (
+                                bucket,
+                                key,
+                                run,
+                                source_state,
+                                destination_state,
+                            )
+                            for bucket, key, digest, size, source_state, destination_state, cached in completed
+                            if not cached
+                        ],
+                    )
+                    db.commit()
+                    for _, _, _, size, _, _, cached in completed:
+                        count += 1
+                        total += size
+                        reused += cached
+                    if time.monotonic() - progress_at >= 10:
+                        print(
+                            f"Storage transfer: verified {count} objects / {total} bytes ({reused} reused)",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        progress_at = time.monotonic()
+                    if failure is not None:
+                        raise failure
+            current_buckets = (
+                selected_buckets
+                if selected_buckets is not None
+                else sorted(row["Name"] for row in source.list_buckets()["Buckets"])
+            )
+            final_inventory = None
+            for _, _, _, inventory in _inventory(source, current_buckets, deadline):
+                final_inventory = inventory.hexdigest()
+            if buckets != current_buckets or initial_inventory != final_inventory:
+                raise ValueError("Source inventory changed; cutover refused")
+            for bucket in buckets:
+                if source.list_multipart_uploads(Bucket=bucket, MaxUploads=1).get(
+                    "Uploads"
+                ):
+                    raise ValueError("Concurrent multipart upload prevents cutover")
+            return {
+                "verifiedObjects": count,
+                "verifiedBytes": total,
+                "reusedObjects": reused,
+                "inventorySha256": final_inventory,
+                "buckets": buckets,
+            }
+    except TimeoutError as exc:
+        raise TimeoutError(
+            f"Storage transfer budget exhausted after verifying {count} objects / {total} bytes "
+            f"({reused} reused); resume the retained receipt"
+        ) from exc
 
 
 def qualify_store(client, bucket):
@@ -312,8 +485,12 @@ async def _resume_active_consumers(docker, project, active, directory, selected)
 async def verified_cutover(isolate, activate, state_path, *, binding=None, qualify=None):
     source, destination = await isolate()
     receipt = await asyncio.to_thread(
-        transfer_buckets, source, destination, state_path,
-        binding=binding, timeout_seconds=480,
+        transfer_buckets,
+        source,
+        destination,
+        state_path,
+        binding=binding,
+        timeout_seconds=STORAGE_TRANSFER_TIMEOUT_SECONDS,
     )
     if qualify is not None:
         await qualify(destination, receipt)

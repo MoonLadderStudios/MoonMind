@@ -50,6 +50,7 @@ STACK_LOCK_WAIT_SECONDS = 180
 SERVICE_READINESS_TIMEOUT_SECONDS = 900
 OMNIGENT_OPERATION_LABEL = "moonmind.controller.omnigent.operation"
 OMNIGENT_RESULT_PREFIX = "MOONMIND_OMNIGENT_RESULT="
+OMNIGENT_STEP_TIMEOUT_SECONDS = 900
 # Behavior submitters require before trusting an answer. ``request-identity``:
 # a completed operation answers only its own identity, so a new request for a
 # mutable tag such as ``latest`` applies again instead of returning an earlier
@@ -63,6 +64,7 @@ CONTROLLER_CAPABILITIES = (
     "request-identity",
     "unversioned-routing-cutover",
     "controller-handoff",
+    "storage-transfer-budget",
 )
 # Full Docker inspection includes mounts, network state, and environment
 # secrets. Project only journal ownership; rows are parsed from the runner's
@@ -1605,7 +1607,11 @@ def run_omnigent_step(
                 LEGACY_CONTROL_SERVICE,
                 *command,
             ),
-            timeout_seconds=engine.MAX_COMMAND_TIMEOUT_SECONDS,
+            timeout_seconds=(
+                engine.MAX_COMMAND_TIMEOUT_SECONDS
+                if phase == "storage-prepare"
+                else OMNIGENT_STEP_TIMEOUT_SECONDS
+            ),
         )
     except engine.CommandError as exc:
         raise _omnigent_step_error(phase, exc.exit_status, exc.output) from exc
@@ -1633,11 +1639,26 @@ def prepare_controller_storage(store, operation, *, runner, overlay, observe=Fal
         installed_controller = json.loads((store.state_dir / "controller-image.json").read_text())
     except (OSError, ValueError, AttributeError):
         installed_controller = {}
-    candidates = list(dict.fromkeys(filter(None, [
-        selected_image(operation), previous.get("helperImage"),
-        journals.get("helperImage"), *journals.get("sourceImages", ()),
-        installed_controller.get("pinned") if installed_controller.get("verified") else None,
-    ])))
+    # The installed controller's data owner also handles rollback: an older
+    # target helper must not restore serial copying and discard resumability.
+    candidates = list(
+        dict.fromkeys(
+            filter(
+                None,
+                [
+                    (
+                        installed_controller.get("pinned")
+                        if installed_controller.get("verified")
+                        else None
+                    ),
+                    selected_image(operation),
+                    previous.get("helperImage"),
+                    journals.get("helperImage"),
+                    *journals.get("sourceImages", ()),
+                ],
+            )
+        )
+    )
     for helper_image in candidates:
         receipt = run_omnigent_step(
             store, operation, runner=runner, overlay=overlay,

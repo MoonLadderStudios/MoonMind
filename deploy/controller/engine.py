@@ -37,7 +37,9 @@ from redact import redact_text, tail_text
 PULL_TIMEOUT_SECONDS = 600
 UP_TIMEOUT_SECONDS = 900
 SERVICE_READINESS_POLL_SECONDS = 5
-MAX_COMMAND_TIMEOUT_SECONDS = 900
+# Storage preparation can move an entire retained installation. Other commands
+# keep their existing per-call budgets; the copy gets four hours plus cleanup.
+MAX_COMMAND_TIMEOUT_SECONDS = 4 * 60 * 60 + 900
 SERVICE_OBSERVATION_FORMAT = (
     '{"Service":{{json .Service}},"State":{{json .State}},'
     '"Health":{{json .Health}},"ExitCode":{{json .ExitCode}},"Labels":{'
