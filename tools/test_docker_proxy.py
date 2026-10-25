@@ -129,6 +129,12 @@ def client_checks(phase, project):
         api("DELETE", prefix + "/containers/absent", status=403)
         print("Read-only method policy passed.")
         return
+    if phase == "capabilities-disabled":
+        api("GET", prefix + "/containers/json", status=403)
+        api("POST", prefix + "/session", status=403)
+        api("GET", prefix + "/images/json")
+        print("Disabled container/session capabilities passed.")
+        return
 
     containers = []
     network = None
@@ -171,22 +177,22 @@ def client_checks(phase, project):
         api("POST", f"{prefix}/containers/{container}/start", status=204)
         api("GET", f"{prefix}/containers/{container}/json")
         command = "printf 'begun\\n'; sleep 4; printf 'finished\\n'"
-        if phase == "timeouts":
+        if phase == "long-streams":
             command = "for i in 1 2 3 4 5 6; do echo tick; sleep 1; done; echo finished"
         output, execution = exec_output(prefix, container, command)
         assert b"finished" in output, output
         observed = json.loads(api("GET", f"{prefix}/exec/{execution}/json"))
         assert not observed["Running"] and observed["ExitCode"] == 0, observed
-        if phase == "timeouts":
+        if phase == "long-streams":
             started = time.monotonic()
             output, _ = exec_output(
                 prefix, container, "echo begun; sleep 9; echo overdue"
             )
             elapsed = time.monotonic() - started
-            assert b"begun" in output and b"overdue" not in output, output
-            assert 2 <= elapsed < 8, elapsed
+            assert b"begun" in output and b"overdue" in output, output
+            assert elapsed >= 9, elapsed
             print(
-                f"Active hijack survived 6s; idle tunnel closed after {elapsed:.2f}s (3s policy)."
+                f"Active and idle hijacks preserved output; idle period {elapsed:.2f}s."
             )
             return
         if phase == "smoke":
@@ -220,6 +226,26 @@ def client_checks(phase, project):
             api("POST", f"{prefix}/containers/{attached}/start", status=204)
             stream.sendall(b"probe\n")
             assert b"attached:probe" in drain(stream, initial)
+        finally:
+            stream.close()
+
+        # Docker CLI closes its write half after piped stdin reaches EOF.
+        # The reverse proxy must still deliver output produced after that EOF.
+        piped = create(
+            "cat; sleep 1; printf 'stdout-after-eof\\n'",
+            OpenStdin=True,
+            StdinOnce=True,
+            Tty=False,
+        )
+        stream, initial = hijack(
+            f"{prefix}/containers/{piped}/attach?stream=1&stdin=1&stdout=1&stderr=1"
+        )
+        try:
+            api("POST", f"{prefix}/containers/{piped}/start", status=204)
+            stream.sendall(b"stdin-marker\n")
+            stream.shutdown(socket.SHUT_WR)
+            output = drain(stream, initial)
+            assert b"stdin-marker" in output and b"stdout-after-eof" in output, output
         finally:
             stream.close()
 
@@ -324,8 +350,22 @@ def host_checks():
     docker("compose", "version")
     docker("info")
     project = "moonmind-test-proxy-" + uuid4().hex[:10]
-    client_image = os.environ.get("MOONMIND_PYTHON_TEST_IMAGE", "python:3.12-alpine")
-    if docker("image", "inspect", client_image, check=False).returncode:
+    client_image = os.environ.get("MOONMIND_PYTHON_TEST_IMAGE")
+    built_client_image = client_image is None
+    if built_client_image:
+        client_image = project + ":proxy-runtime"
+        docker(
+            "build",
+            "--target",
+            "docker-proxy-runtime",
+            "-f",
+            str(ROOT / "api_service/Dockerfile"),
+            "-t",
+            client_image,
+            str(ROOT),
+            timeout=300,
+        )
+    elif docker("image", "inspect", client_image, check=False).returncode:
         docker("pull", client_image, timeout=300)
     sys.path.insert(0, str(ROOT / "deploy/controller"))
     import engine
@@ -360,16 +400,9 @@ def host_checks():
             for mount in service.get("volumes", []):
                 if mount.get("source") == "/var/run/docker.sock":
                     assert name == "docker-proxy", (name, mount)
-        template = ROOT / "docker/docker-proxy/haproxy.cfg.template"
-        mounts = [
-            mount
-            for mount in proxy["volumes"]
-            if mount["target"] == "/usr/local/etc/haproxy/haproxy.cfg.template"
-        ]
-        assert len(mounts) == 1 and mounts[0]["read_only"]
-        # Render uses a test-owned .env/project directory, then restores this
-        # one repository bind source for actual isolated container startup.
-        mounts[0]["source"] = str(template)
+        # The supplied CI image carries the candidate proxy payload. Local
+        # runs build the small target that release images copy unchanged.
+        proxy["image"] = client_image
         original = copy.deepcopy(proxy)
         stack = directory / "compose.json"
 
@@ -408,9 +441,7 @@ def host_checks():
             ]
             print(docker(*args).stdout, flush=True)
 
-        def check_effective(expected):
-            # Compose returns before the entrypoint necessarily renders the
-            # config. Its exec into HAProxy proves that write has finished.
+        def check_effective():
             for attempt in range(30):
                 process = docker(
                     *base,
@@ -418,48 +449,33 @@ def host_checks():
                     "-T",
                     "docker-proxy",
                     "cat",
-                    "/proc/1/comm",
+                    "/proc/1/cmdline",
                     check=False,
                     timeout=5,
                 )
-                if process.returncode == 0 and process.stdout.strip() == "haproxy":
+                if (
+                    process.returncode == 0
+                    and process.stdout.split("\0")[0]
+                    == "/usr/local/bin/moonmind-socket-proxy"
+                ):
                     break
                 if attempt == 29:
                     raise RuntimeError(
-                        "Docker proxy did not finish initialization:\n"
-                        f"{process.stdout}\n{process.stderr}"
+                        "Docker proxy did not finish initialization: " + process.stderr
                     )
                 time.sleep(0.5)
-            actual = docker(
-                *base, "exec", "-T", "docker-proxy", "cat", "/tmp/haproxy.cfg"
-            ).stdout
-            assert actual == expected
-            docker(
-                *base,
-                "exec",
-                "-T",
-                "docker-proxy",
-                "haproxy",
-                "-c",
-                "-f",
-                "/tmp/haproxy.cfg",
-            )
-            command = docker(
-                *base, "exec", "-T", "docker-proxy", "cat", "/proc/1/cmdline"
-            ).stdout
-            assert "haproxy" in command and "/tmp/haproxy.cfg" in command, command
             ident = docker(*base, "ps", "-q", "docker-proxy").stdout.strip()
             inspected = json.loads(docker("inspect", ident).stdout)[0]
             assert not inspected["HostConfig"]["PortBindings"]
             assert len(inspected["NetworkSettings"]["Networks"]) == 1
             print(
-                "Effective generated config, process, internal network and unpublished port passed.",
+                "Proxy payload, internal network and unpublished port passed.",
                 flush=True,
             )
 
         try:
             docker(*base, "up", "-d", "docker-proxy")
-            check_effective(template.read_text())
+            check_effective()
             client("matrix")
             client("isolated", isolated=True)
             docker(*base, "restart", "docker-proxy")
@@ -468,38 +484,38 @@ def host_checks():
             # The portable controller's actual Compose owner repairs a stopped
             # proxy with no application/API/Temporal services in the fixture.
             docker(*base, "stop", "docker-proxy")
-            result = engine.apply(
+            # The candidate is already staged locally. Exercise the owner's
+            # real apply phase without trying to pull an unpublished CI tag.
+            result = engine.apply_services(
                 engine.subprocess_runner(),
-                project=project,
-                project_dir=str(directory),
-                compose_files=[str(stack)],
-                services=["docker-proxy"],
-                images=[proxy["image"]],
+                engine.compose_base(
+                    project=project,
+                    project_dir=str(directory),
+                    compose_files=[str(stack)],
+                ),
+                ["docker-proxy"],
             )
             assert result["recreated"] == ["docker-proxy"], result
             client("smoke")
             docker(*base, "up", "-d", "--force-recreate", "docker-proxy")
-            check_effective(template.read_text())
+            check_effective()
             client("smoke")
 
             proxy["environment"]["POST"] = "0"
             write_stack(proxy)
             docker(*base, "up", "-d", "docker-proxy")
             client("readonly")
-            short = template.read_text()
-            for kind in ("client", "server", "tunnel"):
-                assert f"timeout {kind} 75m" in short
-                short = short.replace(f"timeout {kind} 75m", f"timeout {kind} 3s")
-            short_template = directory / "short.cfg.template"
-            short_template.write_text(short)
             proxy = copy.deepcopy(original)
-            for mount in proxy["volumes"]:
-                if mount["target"] == "/usr/local/etc/haproxy/haproxy.cfg.template":
-                    mount["source"] = str(short_template)
+            proxy["environment"]["CONTAINERS"] = "0"
+            proxy["environment"]["SESSION"] = "0"
             write_stack(proxy)
             docker(*base, "up", "-d", "docker-proxy")
-            check_effective(short)
-            client("timeouts")
+            client("capabilities-disabled")
+            proxy = copy.deepcopy(original)
+            write_stack(proxy)
+            docker(*base, "up", "-d", "docker-proxy")
+            client("long-streams")
+
         finally:
             original_error = sys.exc_info()[0]
             cleanup_errors = []
@@ -529,6 +545,8 @@ def host_checks():
                 if ids:
                     cleanup(*remove, *ids)
             cleanup("image", "rm", project + ":probe")
+            if built_client_image:
+                cleanup("image", "rm", client_image)
             cleanup(*base, "down", "--volumes", "--remove-orphans")
             if cleanup_errors:
                 print(
@@ -541,7 +559,15 @@ def host_checks():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--client", choices=("matrix", "smoke", "readonly", "timeouts", "isolated")
+        "--client",
+        choices=(
+            "matrix",
+            "smoke",
+            "readonly",
+            "capabilities-disabled",
+            "long-streams",
+            "isolated",
+        ),
     )
     parser.add_argument("--project")
     args = parser.parse_args()
