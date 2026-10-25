@@ -77,3 +77,56 @@ def test_host_checks_reject_socket_mounts_outside_proxy(harness, rendered_config
 
     with pytest.raises(AssertionError, match="worker"):
         harness.host_checks()
+
+
+@pytest.mark.parametrize("starts", [True, False])
+def test_host_checks_wait_for_proxy_initialization(
+    harness, rendered_config, monkeypatch, starts
+):
+    process_checks = 0
+    config_validated = False
+    sleeps = []
+
+    def docker(*args, **kwargs):
+        nonlocal process_checks, config_validated
+        output = ""
+        if "config" in args:
+            output = json.dumps(rendered_config)
+        elif args[-2:] == ("cat", "/proc/1/comm"):
+            process_checks += 1
+            output = "haproxy\n" if starts and process_checks > 1 else "sh\n"
+        elif args[-2:] == ("cat", "/tmp/haproxy.cfg"):
+            assert process_checks > 1, "read config before the entrypoint finished"
+            output = (
+                harness.ROOT / "docker/docker-proxy/haproxy.cfg.template"
+            ).read_text()
+        elif args[-4:] == ("haproxy", "-c", "-f", "/tmp/haproxy.cfg"):
+            config_validated = True
+        elif args[-2:] == ("cat", "/proc/1/cmdline"):
+            output = "haproxy\0-W\0-db\0-f\0/tmp/haproxy.cfg\0"
+        elif args[0] == "inspect":
+            output = json.dumps(
+                [
+                    {
+                        "HostConfig": {"PortBindings": {}},
+                        "NetworkSettings": {"Networks": {"proxy": {}}},
+                    }
+                ]
+            )
+        elif args[0] == "run":
+            raise ProxyStartupReached
+        return SimpleNamespace(stdout=output, stderr="", returncode=0)
+
+    monkeypatch.setattr(harness, "docker", docker)
+    monkeypatch.setattr(harness.time, "sleep", sleeps.append)
+    if starts:
+        with pytest.raises(ProxyStartupReached):
+            harness.host_checks()
+        assert config_validated
+        assert sleeps == [0.5]
+    else:
+        with pytest.raises(RuntimeError, match="proxy.*initializ"):
+            harness.host_checks()
+        assert not config_validated
+        assert 1 < process_checks <= 30
+        assert len(sleeps) == process_checks - 1

@@ -409,6 +409,27 @@ def host_checks():
             print(docker(*args).stdout, flush=True)
 
         def check_effective(expected):
+            # Compose returns before the entrypoint necessarily renders the
+            # config. Its exec into HAProxy proves that write has finished.
+            for attempt in range(30):
+                process = docker(
+                    *base,
+                    "exec",
+                    "-T",
+                    "docker-proxy",
+                    "cat",
+                    "/proc/1/comm",
+                    check=False,
+                    timeout=5,
+                )
+                if process.returncode == 0 and process.stdout.strip() == "haproxy":
+                    break
+                if attempt == 29:
+                    raise RuntimeError(
+                        "Docker proxy did not finish initialization:\n"
+                        f"{process.stdout}\n{process.stderr}"
+                    )
+                time.sleep(0.5)
             actual = docker(
                 *base, "exec", "-T", "docker-proxy", "cat", "/tmp/haproxy.cfg"
             ).stdout
