@@ -9,12 +9,19 @@ name: CI / Alembic Migration Gate
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      qualification_run_id:
+        description: Caller run to isolate release qualification from standalone cancellation
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
 
 concurrency:
-  group: alembic-migration-gate-${{ github.event.pull_request.number || github.ref }}
+  group: alembic-migration-gate-${{ github.workflow }}-${{ inputs.qualification_run_id || github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
