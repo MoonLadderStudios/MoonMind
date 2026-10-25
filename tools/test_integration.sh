@@ -44,12 +44,15 @@ cleanup() {
     kill "$TEST_PID" >/dev/null 2>&1 || true
   fi
   if (( ${#COMPOSE_CMD[@]} )); then
-    compose "$CLEANUP_TIMEOUT" down --remove-orphans >/dev/null 2>&1 || true
+    compose "$CLEANUP_TIMEOUT" down --volumes --remove-orphans >/dev/null 2>&1 || true
   fi
   if [[ -n "$TEMP_COMPOSE_PROJECT_DIR" ]]; then
-    if [[ -f "$TEMP_COMPOSE_PROJECT_DIR/$REPORT_PATH/$JUNIT_NAME" ]]; then
-      cp "$TEMP_COMPOSE_PROJECT_DIR/$REPORT_PATH/$JUNIT_NAME" "$REPORT_DIR/" >/dev/null 2>&1 || true
-    fi
+    for report in "$TEMP_COMPOSE_PROJECT_DIR/$REPORT_PATH/"*.xml \
+      "$TEMP_COMPOSE_PROJECT_DIR/$REPORT_PATH/storage-images.json"; do
+      if [[ -f "$report" ]]; then
+        cp "$report" "$REPORT_DIR/" >/dev/null 2>&1 || true
+      fi
+    done
     rm -rf "$TEMP_COMPOSE_PROJECT_DIR" >/dev/null 2>&1 || true
   fi
 }
@@ -143,37 +146,57 @@ pytest_args="tests/integration -m 'integration_ci' --tb=short --timeout 120 --ti
 if [[ "${MOONMIND_INTEGRATION_FAIL_FAST:-0}" == "1" ]]; then
   pytest_args+=" --maxfail=1"
 fi
-run_bound=()
-if [[ -n "${MOONMIND_INTEGRATION_TIMEOUT:-}" ]]; then
-  run_bound=(timeout --signal=INT --kill-after=30s "${MOONMIND_INTEGRATION_TIMEOUT}s")
+budget="${MOONMIND_INTEGRATION_TIMEOUT:-0}"
+if [[ ! "$budget" =~ ^[0-9]+$ ]]; then
+  echo "Error: MOONMIND_INTEGRATION_TIMEOUT must be a number of seconds." >&2
+  exit 2
 fi
+RUN_BUDGET_SECONDS=$((10#$budget))
+RUN_STARTED_SECONDS=$SECONDS
+pipeline_compose=("${COMPOSE_CMD[@]}" --project-name "$TEST_COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" --project-directory "$COMPOSE_PROJECT_DIR")
+
+# All pytest and restart phases share one deadline, signal handling, and log.
+# A phase failure stops the pipeline and still reaches diagnostics/teardown.
+run_phase() {
+  local output="$1"
+  shift
+  if (( TEST_STATUS != 0 )); then return; fi
+  local -a bound=()
+  if (( RUN_BUDGET_SECONDS > 0 )); then
+    local remaining=$((RUN_BUDGET_SECONDS - (SECONDS - RUN_STARTED_SECONDS)))
+    if (( remaining <= 0 )); then TEST_STATUS=124; return; fi
+    bound=(timeout --signal=INT --kill-after=30s "${remaining}s")
+  fi
+  if [[ -n "$output" ]]; then
+    ${bound[@]+"${bound[@]}"} "$@" > "$output" 2> >(tee -a "$REPORT_DIR/pytest-integration-ci.log" >&2) &
+  else
+    ${bound[@]+"${bound[@]}"} "$@" > >(tee -a "$REPORT_DIR/pytest-integration-ci.log") 2>&1 &
+  fi
+  TEST_PID=$!
+  wait "$TEST_PID" || TEST_STATUS=$?
+  TEST_PID=""
+}
 
 # A report left by an earlier run must never stand in for a missing one.
 mkdir -p "$REPORT_DIR"
-rm -f "$REPORT_DIR/$JUNIT_NAME" "$REPORT_DIR"/compose-*.txt
-
-compose "$CLEANUP_TIMEOUT" up -d --wait --wait-timeout 90 minio artifact-source
-compose "$CLEANUP_TIMEOUT" images --format json > "$REPORT_DIR/storage-images.json"
-
-# Persist DB references and saved inputs, remove the worker workspace, then
-# physically restart the replacement before verifying historical reads/claims.
-compose "$CLEANUP_TIMEOUT" run --rm pytest pytest -q \
-  tests/integration/temporal/test_storage_restart.py::test_seed_migrated_saved_inputs \
-  --timeout 90 --junitxml="$REPORT_PATH/storage-restart-seed.xml"
-compose "$CLEANUP_TIMEOUT" restart minio
-compose "$CLEANUP_TIMEOUT" up -d --no-recreate --wait --wait-timeout 90 minio
-compose "$CLEANUP_TIMEOUT" run --rm pytest pytest -q \
-  tests/integration/temporal/test_storage_restart.py::test_retrieve_migrated_saved_inputs_after_restart \
-  --timeout 90 --junitxml="$REPORT_PATH/storage-restart-verify.xml"
+rm -f "$REPORT_DIR/$JUNIT_NAME" "$REPORT_DIR"/storage-restart-*.xml \
+  "$REPORT_DIR/storage-images.json" "$REPORT_DIR/pytest-integration-ci.log" "$REPORT_DIR"/compose-*.txt
 
 # Run in the background so a signal reaches the traps while pytest runs.
-${run_bound[@]+"${run_bound[@]}"} "${COMPOSE_CMD[@]}" --project-name "$TEST_COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" --project-directory "$COMPOSE_PROJECT_DIR" run --rm \
+run_phase "" "${pipeline_compose[@]}" run --rm \
   -e MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS=1 \
   pytest \
-  bash -lc "pytest $pytest_args" > >(tee "$REPORT_DIR/pytest-integration-ci.log") 2>&1 &
-TEST_PID=$!
-wait "$TEST_PID" || TEST_STATUS=$?
-TEST_PID=""
+  bash -lc "pytest $pytest_args"
+
+# Persist saved inputs, remove their worker workspace, restart the real store,
+# then retrieve historical bytes and independent claims through the adapter.
+run_phase "$REPORT_DIR/storage-images.json" "${pipeline_compose[@]}" images --format json
+run_phase "" "${pipeline_compose[@]}" run --rm pytest bash -lc \
+  "pytest -q tests/integration/temporal/test_storage_restart.py::test_seed_migrated_saved_inputs --timeout 90 --junitxml=$REPORT_PATH/storage-restart-seed.xml"
+run_phase "" "${pipeline_compose[@]}" restart minio
+run_phase "" "${pipeline_compose[@]}" up -d --no-recreate --wait --wait-timeout 90 minio
+run_phase "" "${pipeline_compose[@]}" run --rm pytest bash -lc \
+  "pytest -q tests/integration/temporal/test_storage_restart.py::test_retrieve_migrated_saved_inputs_after_restart --timeout 90 --junitxml=$REPORT_PATH/storage-restart-verify.xml"
 
 if (( TEST_STATUS != 0 )); then
   compose "$CLEANUP_TIMEOUT" ps -a > "$REPORT_DIR/compose-ps.txt" 2>&1 \
