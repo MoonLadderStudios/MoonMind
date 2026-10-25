@@ -123,9 +123,10 @@ generated table keeps distinct; they are not a second inventory.
   implies a safe paused state (§6.2). Do not infer a universal control
   contract from handler or type names.
 - **Retired types stay out of the catalog.** `MoonMind.ManifestIngest` has
-  no workflow module, registration, Activities, or lifecycle section. Old
-  histories may retain the historical type string as replay evidence; the
-  current release never registers, starts, or updates it.
+  no current workflow module, registration, or Activities. Old histories may
+  retain the type string; the current release never registers, starts, or
+  updates it. [Section 11.2](#112-moonmindmanifestingest-lifecycle-retired)
+  preserves old-release retirement and upgrade guidance.
 - **Current routing is not historical routing.** The workflow-queue lane in
   the generated reference separates the current handler lane from
   historical-only handlers retained for pre-cutover histories; module
@@ -568,12 +569,39 @@ Key notes:
 
 ## 11.2 `MoonMind.ManifestIngest` lifecycle (retired)
 
-MoonMind has no native Manifest product: there is no `MoonMind.ManifestIngest`
-workflow module, registration, Activities (`manifest.compile`,
-`manifest.write_summary`), or lifecycle. Old-release histories may retain the
-historical type string as replay evidence; the current release never
-registers, starts, or updates it.
-The section number is preserved so surviving cross-references keep resolving.
+Current workers do not register `MoonMind.ManifestIngest` or its
+`manifest.compile` / `manifest.write_summary` Activities. Schema and service
+boundaries reject new launches and controls; recurring reconciliation pauses
+retired targets without recreating their Temporal actions. Historical execution
+lineage and artifacts remain readable through generic execution views. These
+guards prevent new work; they do not observe whether a deployment has drained.
+
+For an upgrade from an old release that still ran Manifest work:
+
+1. Use Temporal visibility to list
+   `WorkflowType="MoonMind.ManifestIngest" AND ExecutionStatus="Running"`.
+   Describe those executions and inspect `pendingActivities` for
+   `manifest.compile` and `manifest.write_summary` tasks.
+2. Inspect enabled recurring definitions and Temporal Schedule actions targeting
+   the retired type through the recurring service and Temporal schedule tooling.
+   Pause those producers, then inspect executions again: a paused schedule does
+   not stop an execution it already created.
+3. Let old-release workers finish outstanding work before replacing them.
+   Unavailable execution, activity, or schedule visibility leaves that dimension
+   unknown; retain the old release for unresolved work. Source inspection,
+   historical rows, and fixture tests cannot establish live deployment counts.
+
+Registry-data preservation is separate. After registry writers stop,
+`tools/manifest_registry_export_4191.py` verifies protected snapshots and isolated
+restore rehearsals. Alembic revisions `376_drop_manifest_registry_4192` and
+`381_manifest_drain_audit_4191` use `manifest_registry_migration_4191` to guard
+registry disposition; an empty registry does not prove that workflow histories
+have drained. Keep protected exports and historical artifacts available.
+
+Checkpoint compatibility has its own Temporal consumer observer,
+`TemporalExecutionService.observe_checkpoint_compat_drain`, and retained activity
+registrations. Its old-queue consumers and supported resets remain governed by
+the separate checkpoint drain gate.
 
 ## 11.3 `MoonMind.AgentRun` lifecycle
 
