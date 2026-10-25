@@ -1618,7 +1618,9 @@ services:
     restart: "no"
 
   docker-proxy:
-    image: tecnativa/docker-socket-proxy:0.1.1
+    image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
+    user: "0:0"
+    entrypoint: ["python", "/app/docker/docker-proxy/start.py"]
     environment:
       INFO: 1
       CONTAINERS: 1
@@ -1630,8 +1632,7 @@ services:
       POST: 1
       VOLUMES: 1
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./docker/docker-proxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - docker-proxy-network
     restart: unless-stopped
