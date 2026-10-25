@@ -183,8 +183,13 @@ def _activity_context(monkeypatch, sessions):
     )
 
 
-async def _admit(action, *, workflow_id=WORKFLOW):
-    return await omnigent_activities.omnigent_admit_scheduled_occurrence_plan_activity(
+async def _admit(action, *, workflow_id=WORKFLOW, admission="scheduled"):
+    admit = (
+        omnigent_activities.omnigent_admit_step_successor_plan_activity
+        if admission == "step-successor"
+        else omnigent_activities.omnigent_admit_scheduled_occurrence_plan_activity
+    )
+    return await admit(
         {
             "workflowId": workflow_id,
             "initialParameters": action["initial_parameters"],
@@ -302,8 +307,10 @@ async def test_scheduled_admission_uses_temporal_identity_without_a_name_convent
         assert json.loads(body)["instructions"] == "Inspect the repository"
 
 
+@pytest.mark.parametrize("admission", ["scheduled", "step-successor"])
+@pytest.mark.parametrize("auth_mode", ["oidc", "disabled"])
 async def test_fresh_admission_links_new_skillset_before_workflow_consumer(
-    artifacts, monkeypatch
+    artifacts, monkeypatch, admission, auth_mode
 ):
     saved = await _schedule(artifacts)
     _activity_context(monkeypatch, artifacts)
@@ -367,13 +374,12 @@ async def test_fresh_admission_links_new_skillset_before_workflow_consumer(
     monkeypatch.setattr(
         plan_service, "compile_frozen_execution_plan", compile_installed_runtime
     )
-    admitted = await _admit(saved.action)
+    admitted = await _admit(saved.action, admission=admission)
     assert admitted["disposition"] == "admitted"
+    await _admit(saved.action, admission=admission)  # Lost Activity acknowledgements.
     workflow = run_module.MoonMindRunWorkflow()
     workflow._original_input_payload = {"initial_parameters": dict(parameters)}
-    workflow._adopt_admitted_execution_plan(
-        parameters, admitted, subject="Scheduled occurrence"
-    )
+    workflow._adopt_admitted_execution_plan(parameters, admitted, subject=admission)
     assert parameters["resolvedSkillsetRef"] == fresh_skills.manifest_id
     assert parameters["omnigentExecutionPlan"] != saved.binding.model_dump(
         mode="json", by_alias=True
@@ -424,6 +430,78 @@ async def test_fresh_admission_links_new_skillset_before_workflow_consumer(
             artifact_id=fresh_skills.body_id, principal=f"workflow:{WORKFLOW}"
         )
         assert body == fresh_skills.body
+        for artifact_id in (fresh_skills.manifest_id, fresh_skills.body_id):
+            with pytest.raises(TemporalArtifactAuthorizationError):
+                await service.read(
+                    artifact_id=artifact_id, principal="workflow:unrelated"
+                )
+            artifact = await session.get(TemporalArtifact, artifact_id)
+            assert artifact.created_by_principal == OWNER
+            links = await service._repository.list_links(artifact_id)
+            assert len(links) == 1
+            assert (links[0].namespace, links[0].workflow_id, links[0].run_id) == (
+                "default",
+                WORKFLOW,
+                RUN,
+            )
+
+
+async def test_step_successor_rejects_a_different_workflow_before_compiling(
+    artifacts, monkeypatch
+):
+    from unittest.mock import AsyncMock
+
+    saved = await _schedule(artifacts)
+    _activity_context(monkeypatch, artifacts)
+    readmit = AsyncMock(return_value={"disposition": "recorded"})
+    monkeypatch.setattr(plan_service, "readmit_frozen_execution_plan", readmit)
+
+    with pytest.raises(ValueError, match="workflow identity"):
+        await _admit(saved.action, workflow_id="unrelated", admission="step-successor")
+    readmit.assert_not_awaited()
+
+
+@pytest.mark.parametrize("missing_plan", [False, True])
+async def test_successor_cannot_return_a_plan_without_verified_input_grants(
+    artifacts, monkeypatch, missing_plan
+):
+    from copy import deepcopy
+    from unittest.mock import AsyncMock
+
+    from moonmind.omnigent import bridge_artifacts
+
+    saved = await _schedule(artifacts)
+    _activity_context(monkeypatch, artifacts)
+    parameters = deepcopy(saved.action["initial_parameters"])
+    monkeypatch.setattr(
+        plan_service,
+        "readmit_frozen_execution_plan",
+        AsyncMock(
+            return_value={
+                "disposition": "admitted",
+                "omnigentExecutionPlan": saved.binding.model_dump(
+                    mode="json", by_alias=True
+                ),
+                "resolvedSkillsetRef": saved.skills.manifest_id,
+            }
+        ),
+    )
+    if missing_plan:
+        monkeypatch.setattr(DbExecutionPlanStore, "load", AsyncMock(return_value=None))
+    else:
+        monkeypatch.setattr(
+            bridge_artifacts,
+            "link_verified_execution_plan_inputs",
+            AsyncMock(side_effect=TemporalArtifactError("input linkage failed")),
+        )
+
+    with pytest.raises(
+        (ValueError, TemporalArtifactError), match="unavailable|linkage failed"
+    ):
+        await _admit(saved.action, admission="step-successor")
+    assert saved.action["initial_parameters"] == parameters
+    async with artifacts() as session:
+        assert not (await session.scalars(select(TemporalArtifactLink))).all()
 
 
 @pytest.mark.parametrize(

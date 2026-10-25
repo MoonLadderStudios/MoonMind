@@ -217,6 +217,11 @@ A batch child receives its parent's frozen publishing/finish intent and validate
 The batch helper queues every open same-repository PR unless `pullRequests`
 (`--pull-requests`) narrows discovery to listed numbers or inclusive ranges;
 listed numbers that are not open are recorded as `not-open` skips.
+Child idempotency follows the parent workflow across step attempts, so shared
+container paths cannot join unrelated batches. Saved child references for the
+same workflow, repository and PR branch are verified through the scoped API
+before any repeat submission, including references accepted under older keys.
+Uncertain lookups retain their IDs for reconciliation instead of resubmission.
 
 The batch helper appends explicit `childInstructions` to each per-PR task.
 Existing-PR adoption retains those task instructions through the durable merge
