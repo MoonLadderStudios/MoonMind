@@ -798,6 +798,9 @@ def test_partial_recreation_requiesces_and_recompacts_before_retry(
             return {"exit": 0, "output": ""}
 
     def helper(store, operation, **kwargs):
+        if kwargs["phase"] in ("storage-prepare", "storage-observe"):
+            phases.append(kwargs["phase"])
+            return {"status": "skipped"}
         assert storage_running
         assert kwargs["helper_image"] == "sha256:source"
         phases.append(kwargs["phase"])
@@ -808,8 +811,8 @@ def test_partial_recreation_requiesces_and_recompacts_before_retry(
     result = server._apply_with_bounded_retries(store, op["operationId"],
         lambda operation: server.production_apply(store, operation))
     assert result["status"] == "succeeded"
-    assert phases == ["pull", "storage", "journal-prepare", "up", "journal-quiesce",
-                      "pull", "storage", "journal-prepare", "up"]
+    assert phases == ["pull", "storage-prepare", "storage", "journal-prepare", "up", "journal-quiesce",
+                      "pull", "storage-prepare", "storage", "journal-prepare", "up", "storage-observe"]
     assert "only writer recreated" in result["attempts"][0]["error"]
 
 
@@ -833,7 +836,7 @@ def _exhausted_apply(server, record, store, tmp_path, monkeypatch, *, recovery_e
 
     def helper(store, operation, **kwargs):
         events.append((kwargs["phase"], None))
-        return {"status": "prepared" if kwargs["phase"] == "journal-prepare" else "quiesced"}
+        return {"status": "prepared" if kwargs["phase"] in ("journal-prepare", "storage-prepare") else "quiesced"}
 
     monkeypatch.setattr(server.engine, "subprocess_runner", Runner)
     monkeypatch.setattr(server, "run_omnigent_step", helper)
