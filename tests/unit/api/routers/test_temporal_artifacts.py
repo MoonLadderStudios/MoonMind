@@ -8,6 +8,7 @@ from typing import Iterator
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -19,10 +20,33 @@ from api_service.auth_providers import get_instance_access_optional
 from api_service.db import models as db_models
 from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal.artifacts import (
+    TemporalArtifactAuthorizationError,
+    TemporalArtifactBytesMissingError,
     TemporalArtifactExpiredError,
     TemporalArtifactNotFoundError,
+    TemporalArtifactStorageAccessError,
+    TemporalArtifactUnavailableError,
     TemporalArtifactValidationError,
 )
+
+
+@pytest.mark.parametrize(("error", "status_code", "code"), [
+    (TemporalArtifactUnavailableError("art_fixture", dependency="authority", operation="read"), 503, "artifact_authority_unavailable"),
+    (TemporalArtifactUnavailableError("art_fixture", dependency="storage", operation="read"), 503, "artifact_storage_unavailable"),
+    (TemporalArtifactStorageAccessError("art_fixture", operation="read"), 502, "artifact_storage_forbidden"),
+    (TemporalArtifactBytesMissingError("art_fixture", operation="read"), 409, "artifact_bytes_missing"),
+    (TemporalArtifactAuthorizationError("reader denied"), 403, "artifact_forbidden"),
+])
+@pytest.mark.parametrize("surface", ["metadata", "download", "presign-download"])
+def test_artifact_routes_preserve_failure_categories(error, status_code, code, surface):
+    for client, service in _client_with_service():
+        method = {"metadata": "get_metadata", "download": "read_path", "presign-download": "presign_download"}[surface]
+        getattr(service, method).side_effect = error
+        path = "/api/artifacts/art_fixture" + ("" if surface == "metadata" else f"/{surface}")
+        response = client.post(path) if surface == "presign-download" else client.get(path)
+        assert response.status_code == status_code
+        assert response.json()["detail"]["code"] == code
+        assert (response.headers.get("retry-after") == "5") is (status_code == 503)
 
 def _build_artifact() -> SimpleNamespace:
     now = datetime.now(UTC)

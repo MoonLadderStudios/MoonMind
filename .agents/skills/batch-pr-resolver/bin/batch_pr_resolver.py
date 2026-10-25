@@ -37,6 +37,7 @@ class JobSubmission:
     queue_request: dict[str, Any]
     pr_number: int | str
     branch: str
+    existing_workflow_id: str | None = None
 
 @dataclass(frozen=True)
 class RuntimeSelection:
@@ -290,6 +291,9 @@ def _parent_run_scope_from_artifacts_dir(path: Path) -> str | None:
     return _stable_scope_from_path(resolved.parent)
 
 def _parent_run_scope(task_context_path: str | None = None) -> str | None:
+    workflow_id = _task_workflow_id_from_env()
+    if workflow_id:
+        return workflow_id
     for env_key in ("MOONMIND_TASK_RUN_ID", "MOONMIND_RUN_ID", "TASK_RUN_ID"):
         value = _runtime_text(os.getenv(env_key))
         if value:
@@ -300,6 +304,8 @@ def _parent_run_scope(task_context_path: str | None = None) -> str | None:
         return _parent_run_scope_from_artifacts_dir(spool_path)
 
     for candidate in _repo_context_candidates(task_context_path):
+        if not candidate.is_file():
+            continue
         artifacts_dir = _artifacts_dir_from_task_context_path(candidate)
         if artifacts_dir is not None:
             return _parent_run_scope_from_artifacts_dir(artifacts_dir)
@@ -804,10 +810,13 @@ async def _submit_jobs_via_http(
                 "maxAttempts": int(request.get("maxAttempts", 3)),
             }
             try:
-                response = await client.post(API_EXECUTIONS_ENDPOINT, json=body)
-                response.raise_for_status()
-                data = response.json()
-                workflow_id = str(data.get("workflowId") or "").strip()
+                workflow_id = submission.existing_workflow_id
+                data = {}
+                if not workflow_id:
+                    response = await client.post(API_EXECUTIONS_ENDPOINT, json=body)
+                    response.raise_for_status()
+                    data = response.json()
+                    workflow_id = str(data.get("workflowId") or "").strip()
                 if not workflow_id:
                     raise RuntimeError("create response did not include workflowId")
                 described = await _verify_execution_visible(
@@ -831,6 +840,7 @@ async def _submit_jobs_via_http(
                     {
                         "pr": submission.pr_number,
                         "branch": submission.branch,
+                        **({"workflowId": workflow_id} if workflow_id else {}),
                         "error": _http_error_text(exc),
                     }
                 )
@@ -904,11 +914,13 @@ async def _submit_jobs(
         for submission in queue_requests
     ]
 
+
 def _build_request_records(
     repo: str,
     open_prs: list[dict[str, Any]],
     args: argparse.Namespace,
     runtime: RuntimeSelection,
+    previous_children: dict[tuple[str, str], str] | None = None,
 ) -> tuple[list[JobSubmission], list[dict[str, Any]]]:
     queue_requests: list[JobSubmission] = []
     skipped: list[dict[str, Any]] = []
@@ -951,10 +963,49 @@ def _build_request_records(
             repository_connection_ref=repository_connection_ref,
         )
         queue_requests.append(
-            JobSubmission(queue_request=queue_request, pr_number=number, branch=branch)
+            JobSubmission(
+                queue_request=queue_request,
+                pr_number=number,
+                branch=branch,
+                existing_workflow_id=(previous_children or {}).get(
+                    (str(number), branch)
+                ),
+            )
         )
 
     return queue_requests, skipped
+
+
+def _previous_children(artifacts_dir: Path, repo: str) -> dict[tuple[str, str], str]:
+    """Recover confirmed child refs for this workflow; API reads still verify them."""
+    workflow_id = _task_workflow_id_from_env()
+    if not workflow_id:
+        return {}
+    try:
+        saved = json.loads(
+            (artifacts_dir / "batch_pr_resolver_result.json").read_text()
+        )
+    except (OSError, ValueError):
+        return {}
+    if (
+        not isinstance(saved, dict)
+        or saved.get("schemaVersion") != "moonmind.batch-pr-resolver-result.v1"
+        or saved.get("repository") != repo
+        or not str(saved.get("executionRef") or "").startswith(workflow_id + ":")
+        or not isinstance(saved.get("queued"), list)
+        or not isinstance(saved.get("errors", []), list)
+    ):
+        return {}
+    return {
+        (str(child["pr"]), child["branch"]): child["workflowId"]
+        for child in (*saved["queued"], *saved.get("errors", []))
+        if isinstance(child, dict)
+        and isinstance(child.get("pr"), (int, str))
+        and isinstance(child.get("branch"), str)
+        and isinstance(child.get("workflowId"), str)
+        and child["workflowId"].strip()
+    }
+
 
 def _write_artifacts(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1009,6 +1060,7 @@ async def main() -> int:
         print(f"warning: non-open state requested: {args.state}")
     runtime = _resolve_runtime_selection(args)
     artifacts_dir = _resolve_artifacts_dir(args.artifacts_dir, args.task_context_path)
+    previous_children = _previous_children(artifacts_dir, repo)
     contract = {
         "schemaVersion": "moonmind.batch-pr-resolver-result.v1",
         "contractId": "batch_pr_resolver_fanout.v1",
@@ -1021,9 +1073,14 @@ async def main() -> int:
         {
             **contract,
             "status": "running",
+            "repository": repo,
             "requested": 0,
             "created": 0,
-            "queued": [],
+            # Retain known effects across a crash before discovery/verification.
+            "queued": [
+                {"pr": pr, "branch": branch, "workflowId": workflow_id}
+                for (pr, branch), workflow_id in previous_children.items()
+            ],
             "skipped": [],
             "errors": [],
         },
@@ -1061,7 +1118,9 @@ async def main() -> int:
     not_open: list[dict[str, Any]] = []
     if selected_ranges is not None:
         open_prs, not_open = _select_pull_requests(open_prs, selected_ranges)
-    queue_requests, skipped = _build_request_records(repo, open_prs, args, runtime)
+    queue_requests, skipped = _build_request_records(
+        repo, open_prs, args, runtime, previous_children
+    )
     skipped.extend(not_open)
     created, errors = await _submit_jobs(queue_requests)
 

@@ -20,7 +20,7 @@ import json
 import os
 import tempfile
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -59,7 +59,7 @@ def _utc_now() -> str:
     # Millisecond resolution keeps rapid successive operations (restart
     # recovery, double-submit) distinctly ordered; second resolution ties
     # and makes "newest open" selection nondeterministic.
-    return datetime.now(UTC).isoformat(timespec="milliseconds")
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:

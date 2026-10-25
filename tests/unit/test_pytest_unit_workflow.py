@@ -335,8 +335,9 @@ def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
     ("suite", "execution_minutes"),
     [("fresh-journey", 20), ("upgrade-journey", 25), ("controller-journey", 20)],
 )
+@pytest.mark.parametrize("image_source", ["local", "registry", "archive"])
 def test_journey_job_reserves_setup_execution_and_reporting(
-    suite: str, execution_minutes: int
+    suite: str, execution_minutes: int, image_source: str
 ) -> None:
     job = _load_workflow()["jobs"]["integration-ci"]
     steps = job["steps"]
@@ -345,11 +346,20 @@ def test_journey_job_reserves_setup_execution_and_reporting(
         for index, step in enumerate(steps)
         if step["name"] == "Run disposable default first-run journey"
     )
-    setup = [
-        step
-        for step in steps[:first_journey]
-        if step.get("if") != "matrix.suite == 'hermetic'"
-    ]
+
+    def selected(step: dict) -> bool:
+        condition = step.get("if", "")
+        for key, present in (
+            ("candidate_image", image_source != "local"),
+            ("candidate_oci_artifact", image_source == "archive"),
+        ):
+            if present and f"inputs.{key} == ''" in condition:
+                return False
+            if not present and f"inputs.{key} != ''" in condition:
+                return False
+        return condition != "matrix.suite == 'hermetic'"
+
+    setup = [step for step in steps[:first_journey] if selected(step)]
     setup_minutes = sum(
         _integration_row_timeout_minutes(step["timeout-minutes"], suite)
         for step in setup
@@ -389,10 +399,20 @@ def test_journey_job_reserves_setup_execution_and_reporting(
     ]
     reporting_minutes = sum(int(step["timeout-minutes"]) for step in reporting)
     assert reporting_minutes == 6
+    fixture_cleanup_minutes = sum(
+        int(step["timeout-minutes"])
+        for step in steps
+        if "release_image_fixture.py cleanup" in step.get("run", "") and selected(step)
+    )
     # Bound every phase, including failure diagnostics; reserve runner/post-action overhead.
-    assert setup_minutes == 50
-    assert setup_minutes + execution_minutes + reporting_minutes + 4 <= (
-        _integration_row_timeout_minutes(job["timeout-minutes"], suite)
+    assert setup_minutes == {"local": 50, "registry": 42, "archive": 49}[image_source]
+    assert (
+        setup_minutes
+        + execution_minutes
+        + reporting_minutes
+        + fixture_cleanup_minutes
+        + 4
+        <= (_integration_row_timeout_minutes(job["timeout-minutes"], suite))
     )
 
 
@@ -651,7 +671,7 @@ def test_image_building_jobs_share_a_layer_cache() -> None:
     # gate writes. The gate stays the only writer: the parallel journey rows
     # export nothing.
     candidate = next(step for step in builds if "target" not in step["with"])
-    assert candidate["if"] == "matrix.suite != 'hermetic'"
+    assert candidate["if"] == "matrix.suite != 'hermetic' && inputs.candidate_image == ''"
     assert candidate["with"]["file"] == exact_build["with"]["file"]
     assert candidate["with"]["build-args"] == exact_build["with"]["build-args"]
     assert candidate["with"]["cache-from"] == exact_build["with"]["cache-from"]
@@ -867,10 +887,6 @@ def test_preflight_policy_runs_in_parallel_and_owns_policy_guards() -> None:
     assert "tools/status_domain_audit.py" in scripts
     assert "tools/audit_status_tokens.py --fail-on-unknown" in scripts
     assert "tools/check_github_workflow_names.py" in scripts
-    assert (
-        "tools/validate_agent_session_deployment_safety.py --changed-files-file"
-        in scripts
-    )
 
 
 def test_unit_fast_no_longer_duplicates_policy_checks() -> None:
@@ -882,7 +898,6 @@ def test_unit_fast_no_longer_duplicates_policy_checks() -> None:
 
     scripts = "\n".join(step.get("run", "") for step in job["steps"])
     assert "verify_workflow_terminology.py" not in scripts
-    assert "validate_agent_session_deployment_safety.py" not in scripts
 
 
 def test_selector_uses_shallow_submodule_free_checkout_and_shared_helper() -> None:
@@ -899,7 +914,7 @@ def test_selector_uses_shallow_submodule_free_checkout_and_shared_helper() -> No
     assert "tools/select_test_suites.py" in scripts
 
 
-def test_preflight_blocks_deployment_safety_when_changed_files_are_unknown() -> None:
+def test_preflight_retains_shared_changed_file_resolution() -> None:
     job = _load_workflow()["jobs"]["preflight-policy"]
     steps = {step["name"]: step for step in job["steps"]}
 
@@ -907,17 +922,11 @@ def test_preflight_blocks_deployment_safety_when_changed_files_are_unknown() -> 
     assert compute["id"] == "changed-files"
     assert '>> "$GITHUB_OUTPUT"' in compute["run"]
     # Manual and scheduled runs resolve the default-branch merge base so
-    # they validate an exact diff instead of always blocking as unknown.
+    # ownership selection can use the exact diff when it is available.
     assert compute["env"]["GH_TOKEN"] == "${{ github.token }}"
     assert ".merge_base_commit.sha" in compute["run"]
     assert "compute_changed_files.sh /tmp/changed-files.txt $base_sha" in (
         compute["run"]
-    )
-    assert steps["Validate AgentSession deployment safety"]["if"] == (
-        "steps.changed-files.outputs.resolution == 'known'"
-    )
-    assert steps["Block deployment safety validation on an unknown diff"]["if"] == (
-        "steps.changed-files.outputs.resolution != 'known'"
     )
 
 

@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from temporalio import workflow as temporal_workflow
 from temporalio.api.enums.v1 import EventType
+from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment, WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
@@ -305,7 +306,7 @@ async def test_registered_dispatch_cannot_read_another_execution_registry(
         _, plan = await _admit(
             bindings, _parameters(tmp_path, mixed=False), "workflow:document-journey"
         )
-        with pytest.raises(TemporalArtifactAuthorizationError):
+        with pytest.raises(ApplicationError) as raised:
             await ActivityEnvironment().run(
                 bindings["mm.tool.execute"],
                 {
@@ -320,6 +321,11 @@ async def test_registered_dispatch_cannot_read_another_execution_registry(
                     },
                 },
             )
+        assert raised.value.type == TemporalArtifactAuthorizationError.__name__
+        assert raised.value.non_retryable is True
+        assert isinstance(
+            raised.value.original_error, TemporalArtifactAuthorizationError
+        )
 
 
 @temporal_workflow.defn

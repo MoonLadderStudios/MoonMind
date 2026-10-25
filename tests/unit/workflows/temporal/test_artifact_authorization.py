@@ -14,11 +14,52 @@ from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
     LocalTemporalArtifactStore,
     TemporalArtifactAuthorizationError,
+    TemporalArtifactError,
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
 
 pytestmark = [pytest.mark.asyncio]
+
+
+@pytest.mark.parametrize("surface", ["read", "read_path", "read_chunks", "get_metadata", "presign_download", "compute_preview"])
+async def test_link_lookup_outage_preserves_authority_failure_and_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, surface: str,
+) -> None:
+    from sqlalchemy.exc import OperationalError
+
+    async with temporal_db(tmp_path) as maker:
+        async with maker() as session:
+            repository = TemporalArtifactRepository(session)
+            store = LocalTemporalArtifactStore(tmp_path / "artifacts")
+            service = TemporalArtifactService(repository, store=store)
+            artifact, _ = await service.create(
+                principal="owner", content_type="text/plain",
+                link=ExecutionRef(namespace="default", workflow_id="reader", run_id="run", link_type="input.test"),
+            )
+            await service.write_complete(artifact_id=artifact.artifact_id, principal="owner", payload=b"retained")
+            lookup = session.execute
+            original = OperationalError("SELECT links", {}, RuntimeError("synthetic DB outage"))
+
+            async def unavailable(*args, **kwargs):
+                raise original
+
+            monkeypatch.setattr(session, "execute", unavailable)
+            with pytest.raises(TemporalArtifactError) as raised:
+                await getattr(service, surface)(artifact_id=artifact.artifact_id, principal="workflow:reader")
+            error = raised.value
+            assert not isinstance(error, TemporalArtifactAuthorizationError)
+            assert error.code == "artifact_authority_unavailable"
+            assert error.retryable is True
+            assert error.__cause__ is original
+            assert error.artifact_id == artifact.artifact_id
+            assert artifact.status.value == "complete"
+
+            monkeypatch.setattr(session, "execute", lookup)
+            _, data = await service.read(artifact_id=artifact.artifact_id, principal="workflow:reader")
+            assert data == b"retained"
+            with pytest.raises(TemporalArtifactAuthorizationError):
+                await service.read(artifact_id=artifact.artifact_id, principal="workflow:stranger")
 
 @asynccontextmanager
 async def temporal_db(tmp_path: Path):

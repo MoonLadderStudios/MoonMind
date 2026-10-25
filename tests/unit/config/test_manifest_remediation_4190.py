@@ -353,7 +353,6 @@ async def test_manifest_artifact_ref_propagates_to_user_workflow_memo(
 def test_retained_manifest_strings_are_guards_history_or_excluded() -> None:
     """No live Manifest-only branch remains outside the allowlisted owners."""
     allowed_path_fragments = (
-        "moonmind/gates/manifest_ingest_drain.py",
         "moonmind/gates/manifest_registry_migration_4191.py",
         "moonmind/workflows/temporal/service.py",
         "moonmind/workflows/temporal/workflow_registry.py",

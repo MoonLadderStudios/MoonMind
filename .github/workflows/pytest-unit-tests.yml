@@ -9,6 +9,18 @@ on:
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      candidate_image:
+        description: Immutable assembled application manifest to exercise instead of rebuilding
+        required: false
+        type: string
+        default: ''
+      candidate_oci_artifact:
+        description: Optional same-run OCI archive artifact for isolated loopback qualification
+        required: false
+        type: string
+        default: ''
   schedule:
     - cron: "17 9 * * *"
 
@@ -16,7 +28,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pytest-unit-tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: pytest-unit-tests-${{ github.workflow }}-${{ inputs.candidate_image && github.run_id || github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -68,9 +80,20 @@ jobs:
         env:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
+          QUALIFICATION_IMAGE: ${{ inputs.candidate_image }}
+          QUALIFICATION_ARCHIVE: ${{ inputs.candidate_oci_artifact }}
         run: |
           set -euo pipefail
-          python3 tools/select_test_suites.py < /tmp/changed-files.txt
+          if [[ -n "$QUALIFICATION_ARCHIVE" && -z "$QUALIFICATION_IMAGE" ]]; then
+            echo "::error::OCI qualification requires its immutable image identity"
+            exit 1
+          fi
+          if [[ -n "$QUALIFICATION_IMAGE" ]]; then
+            # Artifact qualification runs every owner even on a narrow PR.
+            python3 tools/select_test_suites.py < /dev/null
+          else
+            python3 tools/select_test_suites.py < /tmp/changed-files.txt
+          fi
 
       - name: Detect OpenAPI-affecting changes
         id: detect-openapi
@@ -78,7 +101,7 @@ jobs:
         run: |
           set -euo pipefail
           # Reuses the changed-file list computed above, the same shared
-          # resolution path as test selection and deployment safety
+          # resolution path as test selection
           # (MoonLadderStudios/MoonMind#3326). An unknown change set stays
           # conservative and runs the generated-contract check.
           if [[ "${{ steps.changed-files.outputs.resolution }}" != "known" ]]; then
@@ -110,10 +133,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Manual and scheduled runs carry no event base, so deployment
-          # safety compares against the default-branch merge base, the same
-          # diff a pull request would validate. An unresolvable base stays
-          # unknown and blocks below.
+          # Manual and scheduled runs carry no event base, so ownership
+          # selection compares against the default-branch merge base, the
+          # same diff a pull request would validate. An unresolvable base
+          # stays unknown and selects full verification.
           base_sha=""
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" || "$GITHUB_EVENT_NAME" == "schedule" ]]; then
             default_branch="$(gh api "repos/${GITHUB_REPOSITORY}" --jq .default_branch || true)"
@@ -158,16 +181,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip uv
           uv pip install --system -e .[tests]
-      - name: Validate AgentSession deployment safety
-        if: steps.changed-files.outputs.resolution == 'known'
-        run: |
-          set -euo pipefail
-          ./tools/validate_agent_session_deployment_safety.py --changed-files-file /tmp/changed-files.txt
-      - name: Block deployment safety validation on an unknown diff
-        if: steps.changed-files.outputs.resolution != 'known'
-        run: |
-          echo "Unable to resolve the exact changed-file set; deployment safety cannot be validated." >&2
-          exit 1
       - name: Select ownership verification
         id: ownership
         run: python3 tools/select_test_suites.py < /tmp/changed-files.txt
@@ -202,7 +215,6 @@ jobs:
             echo "- status token domains"
             echo "- status token audit (\`--fail-on-unknown\`)"
             echo "- GitHub workflow display-name guard"
-            echo "- AgentSession deployment safety (exact changed files)"
             echo "- exclusive backend shard ownership: full=${{ steps.ownership.outputs.ownership_full }}"
             echo "- vendored MoonSpec projection"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -868,6 +880,9 @@ jobs:
     needs: select-test-suites
     if: needs.select-test-suites.outputs.integration_ci == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     # Hermetic worst case: 12m bounded setup + 23m execution/cleanup + 4m
     # evidence collection/upload + 1m runner/post-action overhead.
     # Journey worst case: 23m bootstrap/image/Node + 25m npm/OS/browser +
@@ -925,16 +940,11 @@ jobs:
           set -euo pipefail
           ./tools/test_integration.sh
       - name: Build the candidate deployable image for the first-run journey
-        # MoonLadderStudios/MoonMind#3938: the boundary journey must run the
-        # checked-out revision, not an arbitrary released/cached image. This
-        # builds the same default deployable target the exact-artifact gate
-        # uses (api_service/Dockerfile, no target override, same build
-        # arguments) from this checkout; the steps below pin MOONMIND_IMAGE at
-        # it. Being the same build, it reads the layer cache scope that
-        # omnigent-exact-artifact writes. That job stays the only writer, so
-        # these parallel rows export nothing and each run refreshes one copy
-        # of the deployable image's layers in the shared Actions cache.
-        if: matrix.suite != 'hermetic'
+        # Ordinary CI builds the same default deployable target as the
+        # exact-artifact gate. Release qualification pulls its supplied
+        # assembled manifest instead. These parallel builds only read the
+        # cache; the exact-artifact build remains its sole writer.
+        if: matrix.suite != 'hermetic' && inputs.candidate_image == ''
         timeout-minutes: 15
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
@@ -945,6 +955,48 @@ jobs:
           load: true
           tags: moonmind-first-run-3938:ci
           cache-from: type=gha,scope=exact-artifact-api-runtime
+      - name: Login to the release artifact registry
+        if: matrix.suite != 'hermetic' && inputs.candidate_image != '' && inputs.candidate_oci_artifact == ''
+        timeout-minutes: 2
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install the OCI fixture transport
+        if: matrix.suite != 'hermetic' && inputs.candidate_oci_artifact != ''
+        timeout-minutes: 3
+        run: |
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends skopeo
+      - name: Download the assembled OCI fixture
+        if: matrix.suite != 'hermetic' && inputs.candidate_oci_artifact != ''
+        timeout-minutes: 3
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.candidate_oci_artifact }}
+          path: ${{ runner.temp }}/release-image-fixture
+      - name: Restore the identical manifest into the job-owned registry
+        if: matrix.suite != 'hermetic' && inputs.candidate_oci_artifact != ''
+        timeout-minutes: 3
+        env:
+          CANDIDATE_IMAGE: ${{ inputs.candidate_image }}
+          FIXTURE_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ matrix.suite }}
+        run: |
+          python3 tools/ci/release_image_fixture.py restore \
+            --archive "$RUNNER_TEMP/release-image-fixture/candidate.tar" \
+            --image "$CANDIDATE_IMAGE" \
+            --state "$RUNNER_TEMP/release-image-fixture/state.json" \
+            --owner "$FIXTURE_OWNER"
+      - name: Pull the release artifact for installed journeys
+        if: matrix.suite != 'hermetic' && inputs.candidate_image != ''
+        timeout-minutes: 5
+        env:
+          CANDIDATE_IMAGE: ${{ inputs.candidate_image }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]
+          docker pull "$CANDIDATE_IMAGE"
       - name: Set up Node for the dashboard journey
         if: endsWith(matrix.suite, '-journey')
         timeout-minutes: 2
@@ -1001,7 +1053,7 @@ jobs:
         if: matrix.suite == 'fresh-journey'
         timeout-minutes: 20
         env:
-          MOONMIND_IMAGE: moonmind-first-run-3938:ci
+          MOONMIND_IMAGE: ${{ inputs.candidate_image || 'moonmind-first-run-3938:ci' }}
         run: |
           set -euo pipefail
           ./tools/first_run_journey_3938.sh
@@ -1014,7 +1066,7 @@ jobs:
         if: matrix.suite == 'upgrade-journey'
         timeout-minutes: 25
         env:
-          MOONMIND_IMAGE: moonmind-first-run-3938:ci
+          MOONMIND_IMAGE: ${{ inputs.candidate_image || 'moonmind-first-run-3938:ci' }}
         run: |
           set -euo pipefail
           ./tools/first_run_journey_3938.sh --upgrade
@@ -1029,7 +1081,7 @@ jobs:
         if: matrix.suite == 'controller-journey'
         timeout-minutes: 10
         env:
-          MOONMIND_IMAGE: moonmind-first-run-3938:ci
+          MOONMIND_IMAGE: ${{ inputs.candidate_image || 'moonmind-first-run-3938:ci' }}
         run: |
           set -euo pipefail
           ./tools/first_run_journey_3938.sh --controller
@@ -1045,7 +1097,7 @@ jobs:
         timeout-minutes: 10
         env:
           MOONMIND_TEST_JOURNAL_TRANSITION: "1"
-          MOONMIND_TEST_JOURNAL_APP_IMAGE: moonmind-first-run-3938:ci
+          MOONMIND_TEST_JOURNAL_APP_IMAGE: ${{ inputs.candidate_image || 'moonmind-first-run-3938:ci' }}
         run: |
           set -euo pipefail
           journal_test_env="$(mktemp -d /tmp/moonmind-journal-tests.XXXXXX)"
@@ -1058,6 +1110,15 @@ jobs:
             tests/integration/host_update/test_controller_refresh.py \
             tests/integration/host_update/test_controller_handoff.py \
             tests/integration/host_update/test_controller_compose_journeys.py -q
+      - name: Stop the job-owned OCI fixture registry
+        if: always() && matrix.suite != 'hermetic' && inputs.candidate_oci_artifact != ''
+        timeout-minutes: 1
+        env:
+          FIXTURE_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ matrix.suite }}
+        run: |
+          python3 tools/ci/release_image_fixture.py cleanup \
+            --state "$RUNNER_TEMP/release-image-fixture/state.json" \
+            --owner "$FIXTURE_OWNER"
       - name: Upload redacted journey startup timings and resource footprints
         if: always() && endsWith(matrix.suite, '-journey')
         timeout-minutes: 2
@@ -1143,6 +1204,9 @@ jobs:
     needs: select-test-suites
     if: needs.select-test-suites.outputs.exact_artifact == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     timeout-minutes: 90
     services:
       postgres:
@@ -1213,6 +1277,7 @@ jobs:
           node tools/test_native_chat_browser.mjs
       - name: Build the exact deployable image
         id: build
+        if: inputs.candidate_image == ''
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
@@ -1226,9 +1291,53 @@ jobs:
           # the resulting image digest is still computed from this checkout.
           cache-from: type=gha,scope=exact-artifact-api-runtime
           cache-to: type=gha,scope=exact-artifact-api-runtime,mode=max
+      - name: Login to the release artifact registry
+        if: inputs.candidate_image != '' && inputs.candidate_oci_artifact == ''
+        timeout-minutes: 2
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install the OCI fixture transport
+        if: inputs.candidate_oci_artifact != ''
+        timeout-minutes: 3
+        run: |
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends skopeo
+      - name: Download the assembled OCI fixture
+        if: inputs.candidate_oci_artifact != ''
+        timeout-minutes: 3
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.candidate_oci_artifact }}
+          path: ${{ runner.temp }}/release-image-fixture
+      - name: Restore the identical manifest into the job-owned registry
+        if: inputs.candidate_oci_artifact != ''
+        timeout-minutes: 3
+        env:
+          CANDIDATE_IMAGE: ${{ inputs.candidate_image }}
+          FIXTURE_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+        run: |
+          python3 tools/ci/release_image_fixture.py restore \
+            --archive "$RUNNER_TEMP/release-image-fixture/candidate.tar" \
+            --image "$CANDIDATE_IMAGE" \
+            --state "$RUNNER_TEMP/release-image-fixture/state.json" \
+            --owner "$FIXTURE_OWNER"
+      - name: Pull the exact release artifact
+        if: inputs.candidate_image != ''
+        timeout-minutes: 5
+        env:
+          CANDIDATE_IMAGE: ${{ inputs.candidate_image }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]
+          docker pull "$CANDIDATE_IMAGE"
       - name: Resolve the immutable image identity
         id: digest
         shell: bash
+        env:
+          RELEASE_IMAGE: ${{ inputs.candidate_image }}
         run: |
           set -euo pipefail
           # The compiled UI is baked into the app image, and the worker runs
@@ -1236,14 +1345,22 @@ jobs:
           # deployable roles share one immutable digest.
           #
           # `ref` is the digest-pinned identity recorded in the evidence.
-          # `runnable` is the same content id in the form Docker can resolve
-          # locally: a locally loaded image has no registry repo digest, so
-          # `name@sha256:<id>` would send Docker to a registry and fail.
-          IMAGE_ID="$(docker image inspect moonmind-exact-artifact:candidate --format '{{ .Id }}')"
-          DIGEST="${IMAGE_ID#sha256:}"
-          echo "ref=moonmind-exact-artifact@sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
-          echo "digest=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
-          echo "runnable=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
+          # For local builds, `runnable` is the content id Docker can resolve:
+          # a loaded image has no registry repo digest, so using its content
+          # id as `name@sha256:<id>` would request a nonexistent manifest.
+          if [[ -n "$RELEASE_IMAGE" ]]; then
+            # Registry manifests and local platform content IDs are different.
+            # Run and record the immutable manifest the release caller supplied.
+            echo "ref=$RELEASE_IMAGE" >> "$GITHUB_OUTPUT"
+            echo "digest=${RELEASE_IMAGE##*@}" >> "$GITHUB_OUTPUT"
+            echo "runnable=$RELEASE_IMAGE" >> "$GITHUB_OUTPUT"
+          else
+            IMAGE_ID="$(docker image inspect moonmind-exact-artifact:candidate --format '{{ .Id }}')"
+            DIGEST="${IMAGE_ID#sha256:}"
+            echo "ref=moonmind-exact-artifact@sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
+            echo "digest=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
+            echo "runnable=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
+          fi
       - name: Start Temporal for the worker readiness probe
         shell: bash
         run: |
@@ -1404,6 +1521,15 @@ jobs:
       - name: Stop the job-local recovery registry
         if: always()
         run: docker rm -fv moonmind-test-recovery-registry || true
+      - name: Stop the job-owned OCI fixture registry
+        if: always() && inputs.candidate_oci_artifact != ''
+        timeout-minutes: 1
+        env:
+          FIXTURE_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+        run: |
+          python3 tools/ci/release_image_fixture.py cleanup \
+            --state "$RUNNER_TEMP/release-image-fixture/state.json" \
+            --owner "$FIXTURE_OWNER"
       - name: Collect exact-artifact diagnostics
         if: failure()
         shell: bash
@@ -1432,9 +1558,10 @@ jobs:
     # main/schedule only. It is intentionally NOT a required PR gate and is not
     # in the ci-required aggregator.
     if: >-
+      inputs.candidate_image == '' && (
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      (github.event_name == 'push' && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

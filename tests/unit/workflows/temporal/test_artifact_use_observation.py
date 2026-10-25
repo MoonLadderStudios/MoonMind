@@ -705,8 +705,8 @@ async def test_release_failure_preserves_primary_serving_failure(
         event.listen(engine, "before_cursor_execute", fail_release)
         try:
             expected = (
-                TemporalArtifactValidationError if primary_kind == "invalid" and surface == "read_path"
-                else TemporalArtifactStateError if primary_kind in {"missing", "invalid"}
+                TemporalArtifactValidationError if primary_kind == "invalid"
+                else TemporalArtifactStateError if primary_kind == "missing"
                 else asyncio.CancelledError if primary_kind == "cancelled"
                 else sqlite3.OperationalError if release_kind == "control"
                 else DBAPIError if release_kind == "invalidated"
@@ -720,12 +720,10 @@ async def test_release_failure_preserves_primary_serving_failure(
             event.remove(engine, "before_cursor_execute", fail_release)
         if primary_kind == "missing":
             assert "bytes are missing" in str(caught.value)
-            if surface == "read_path":
-                assert caught.value.__cause__ is None
-            else:
-                assert isinstance(caught.value.__cause__, FileNotFoundError)
+            assert caught.value.code == "artifact_bytes_missing"
+            assert isinstance(caught.value.__cause__, FileNotFoundError)
         elif primary_kind == "invalid":
-            assert (caught.value if surface == "read_path" else caught.value.__cause__) is primary
+            assert caught.value is primary
         elif primary_kind == "cancelled":
             assert caught.value is primary
         elif release_kind != "control":

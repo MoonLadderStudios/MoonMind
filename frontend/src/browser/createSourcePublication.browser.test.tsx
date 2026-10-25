@@ -4,6 +4,7 @@ import { commands, page, userEvent } from 'vitest/browser';
 import type { BootPayload } from '../boot/parseBootPayload';
 import { DashboardApp } from '../entrypoints/dashboard-app';
 import { renderWithClient, screen, waitFor, within } from '../utils/test-utils';
+import { contrast } from './colorContrast';
 import '../styles/dashboard.css';
 
 declare module 'vitest/browser' {
@@ -154,6 +155,7 @@ beforeEach(() => {
 afterEach(async () => {
   cleanupRender?.();
   cleanupRender = null;
+  document.documentElement.classList.remove('dark');
   fetchSpy.mockRestore();
   window.sessionStorage.clear();
   window.localStorage.clear();
@@ -172,7 +174,6 @@ async function replaceWithKeyboard(input: HTMLInputElement, text: string) {
       connected: input.isConnected,
       activeElement: active?.getAttribute('aria-label') || active?.tagName,
       documentHasFocus: document.hasFocus(),
-      snapshotFrames: document.querySelectorAll('iframe.html2canvas-container').length,
     });
     expect(input.value, state).toBe(text);
     expect(active, state).toBe(input);
@@ -180,6 +181,51 @@ async function replaceWithKeyboard(input: HTMLInputElement, text: string) {
 }
 
 describe('Create workspace source and publication intent', () => {
+  for (const theme of ['light', 'dark']) {
+    for (const viewport of [DESKTOP, MOBILE]) {
+      it(`keeps the CSS glass controls readable and keyboard operable in ${theme} at ${viewport.width}px`, async () => {
+        document.documentElement.classList.toggle('dark', theme === 'dark');
+        await page.viewport(viewport.width, viewport.height);
+        const { unmount } = renderWithClient(<DashboardApp payload={payload} />);
+        cleanupRender = unmount;
+        await screen.findByLabelText('Instructions');
+        const bar = screen.getByRole('group', { name: 'Workflow submission controls' });
+        const repository = within(bar).getByLabelText('Repository') as HTMLInputElement;
+        const branch = within(bar).getByLabelText('Branch') as HTMLInputElement;
+        const publish = within(bar).getByLabelText('Publish Mode') as HTMLSelectElement;
+        const start = within(bar).getByRole('button', { name: 'Start Workflow' });
+        const backdrop = theme === 'dark' ? 'rgb(8, 8, 16)' : 'rgb(248, 247, 255)';
+        const fill = getComputedStyle(bar).backgroundColor;
+        for (const control of [repository, branch, publish]) {
+          const style = getComputedStyle(control);
+          expect(contrast(style.color, backdrop, fill, style.backgroundColor)).toBeGreaterThanOrEqual(4.5);
+          const rect = control.getBoundingClientRect();
+          expect(rect.left).toBeGreaterThanOrEqual(0);
+          expect(rect.right).toBeLessThanOrEqual(window.innerWidth);
+        }
+        await replaceWithKeyboard(repository, 'octo/repo');
+        await userEvent.tab();
+        expect(document.activeElement).toBe(branch);
+        await userEvent.tab();
+        expect(document.activeElement).toBe(publish);
+        await userEvent.tab();
+        expect(document.activeElement).toBe(start);
+        expect(getComputedStyle(start).outlineStyle).toBe('solid');
+        expect(parseFloat(getComputedStyle(start).outlineWidth)).toBeGreaterThanOrEqual(2);
+        if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          await userEvent.hover(start);
+          expect(getComputedStyle(start.querySelector('.queue-submit-primary-arrow svg')!).animationName).toBe('none');
+        }
+        expect(window).not.toHaveProperty('html2canvas');
+        expect(window).not.toHaveProperty('liquidGL');
+        expect(document.querySelector('canvas[data-liquid-ignore], iframe.html2canvas-container')).toBeNull();
+        unmount();
+        cleanupRender = null;
+        expect(document.querySelector('canvas[data-liquid-ignore], iframe.html2canvas-container')).toBeNull();
+      });
+    }
+  }
+
   for (const viewport of [DESKTOP, MOBILE]) {
     it(`authors scratch and repository work by keyboard at ${viewport.width}px`, async () => {
       await page.viewport(viewport.width, viewport.height);

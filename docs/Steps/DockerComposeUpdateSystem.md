@@ -97,7 +97,7 @@ The access preflight preserves `.env`, Compose overrides, project identity, cred
 
 Persist selected concrete images and the operation identity before recreating services. A pulled image alone is not an installed release.
 
-The default host update (`tools/update-moonmind.sh`) pulls `<image-repository>:latest` once and installs what it currently names, without Git-derived selection, source-revision checks, ancestor fallback, or waiting for a build. Newly merged code becomes installable after its image publishes. The resolved digest keeps services on the same artifact within the operation; an explicit operator target is never silently substituted.
+The default host update (`tools/update-moonmind.sh`) pulls `<image-repository>:latest` once and installs what it currently names, without Git-derived selection, source-revision checks, ancestor fallback, or waiting for a build. New code reaches `latest` after image qualification. The resolved digest keeps services on the same artifact within the operation; an explicit operator target is never silently substituted.
 
 The installed Omnigent server/host selection belongs to the same deployment owner. Future managed launches resolve it from installed deployment intent, and historical attempt records retain the actual image and session that executed them.
 
@@ -173,6 +173,7 @@ operator-path reads/writes and rollback are verified for the installed inventory
 Repository qualification does not retire deployment data. Existing deployments
 must use this controller transition rather than replacing the storage image or
 running an unchecked `compose up` over a changed data mount.
+Dependency order and `init-db`/schema migration gating apply before dependent services start. A failed migration preserves the original error and data. Startup's legacy conversion scan reads distinct principal identities and skips artifact hashing once unreadable evidence requires refusal; it preserves source data and access guards without making retained history size a Python row-processing cost. Old Manifest releases use the [retirement upgrade procedure](../Temporal/WorkflowTypeCatalogAndLifecycle.md#112-moonmindmanifestingest-lifecycle-retired).
 
 **Active journals and recovery.** After storage qualification, the journal
 helper stops actual `agent_runtime` writers and `artifacts` sweepers, verifies

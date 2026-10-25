@@ -697,7 +697,16 @@ class TestTriggerSchedule:
     """DOC-REQ-002: trigger schedule."""
 
     @pytest.mark.asyncio
-    async def test_calls_handle_trigger(self) -> None:
+    @pytest.mark.parametrize(
+        "scheduled_at",
+        [
+            datetime(2026, 10, 25, 1, 2, 3, 123456, tzinfo=timezone.utc),
+            datetime(1969, 12, 31, 23, 59, 59, 654321, tzinfo=timezone.utc),
+        ],
+    )
+    async def test_calls_handle_trigger(self, scheduled_at: datetime) -> None:
+        from temporalio.api.workflowservice.v1 import PatchScheduleRequest
+
         handle = _mock_schedule_handle()
         mock_client = MagicMock()
         mock_client.get_schedule_handle = MagicMock(return_value=handle)
@@ -707,12 +716,18 @@ class TestTriggerSchedule:
         mock_client.workflow_service.patch_schedule = AsyncMock()
 
         adapter = _make_adapter(mock_client)
-        await adapter.trigger_schedule(definition_id=_TEST_UUID)
+        await adapter.trigger_schedule(
+            definition_id=_TEST_UUID, scheduled_at=scheduled_at
+        )
         mock_client.workflow_service.patch_schedule.assert_awaited_once()
         patch = mock_client.workflow_service.patch_schedule.call_args.args[0]
         assert patch.schedule_id == _SCHEDULE_ID
         assert patch.request_id
         assert patch.patch.trigger_immediately.HasField("scheduled_time")
+        decoded = PatchScheduleRequest.FromString(patch.SerializeToString())
+        assert decoded.patch.trigger_immediately.scheduled_time.ToDatetime(
+            tzinfo=timezone.utc
+        ) == scheduled_at
         handle.trigger.assert_not_awaited()
 
     @pytest.mark.asyncio

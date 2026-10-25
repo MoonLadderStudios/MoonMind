@@ -3530,7 +3530,7 @@ describe('Dashboard shared entry', () => {
     expect(mobileCardListBlock).toContain('display: grid');
   });
 
-  it('keeps liquidGL opt-in and away from default dense surfaces', async () => {
+  it('keeps hero glass bounded and default dense surfaces grounded', async () => {
     expect(cssRuleBlock(dashboardCss, '.panel')).not.toContain('liquid');
     expect(cssRuleBlock(dashboardCss, '.card')).not.toContain('liquid');
     expect(cssRuleBlock(dashboardCss, 'table')).not.toContain('liquid');

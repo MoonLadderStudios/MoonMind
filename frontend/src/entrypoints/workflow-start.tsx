@@ -30,7 +30,6 @@ import {
   unsupportedAttachmentMessage,
 } from "../lib/attachmentDrop";
 import { DashboardErrorDetails } from "../components/dashboard/DashboardErrorDetails";
-import { useLiquidGL } from "../lib/liquidGL/useLiquidGL";
 import { navigateTo } from "../lib/navigation";
 import {
   CreateSubmissionIntents, createSubmissionScope, createSubmissionDestination, createSubmissionResult, createAttachmentFingerprint,
@@ -5613,21 +5612,6 @@ function InfoTooltip({
   );
 }
 
-export const LIQUID_GL_OPTIONS = {
-  target: ".queue-floating-bar--liquid-glass",
-  snapshot: "body",
-  resolution: 2,
-  refraction: 0.018,
-  bevelDepth: 0.12,
-  bevelWidth: 0.16,
-  frost: 6,
-  shadow: true,
-  specular: true,
-  reveal: false,
-  tilt: false,
-  magnify: 1,
-} as const;
-
 // Defaults applied when the advanced execution controls (Priority / Max
 // Attempts) are hidden. Submission uses these so toggling Advanced mode off
 // never silently submits stale values nor blocks on a hidden invalid one.
@@ -6050,7 +6034,6 @@ function WorkflowStartPageContent({
   searchString: string;
   navigationKey?: string;
 }) {
-  useLiquidGL({ options: LIQUID_GL_OPTIONS });
   const dashboardConfig = readDashboardConfig(payload);
   // Create, Edit and Compare share one route, so the mode follows the URL
   // while the editor (and its draft) stays mounted.
@@ -13997,7 +13980,7 @@ function WorkflowStartPageContent({
             </InfoTooltip>
           </div>
         <div
-          className="queue-floating-bar queue-floating-bar--liquid-glass queue-step-actions queue-step-submit-actions"
+          className="queue-floating-bar queue-step-actions queue-step-submit-actions"
           role="group"
           aria-label="Workflow submission controls"
         >
