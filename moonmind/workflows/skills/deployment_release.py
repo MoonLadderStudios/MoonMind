@@ -262,19 +262,30 @@ def hand_off_controller(payload) -> dict:
     try:
         completed = subprocess.run(
             [
-                sys.executable, str(CONTROLLER_BOOTSTRAP), "handoff",
-                "--state-dir", state_dir,
-                "--operation", str(payload["operationId"]),
-                "--image", str(payload["moonmindImage"]),
+                sys.executable,
+                str(CONTROLLER_BOOTSTRAP),
+                "handoff",
+                "--state-dir",
+                state_dir,
+                "--operation",
+                str(payload["operationId"]),
+                "--image",
+                str(payload.get("resolvedMoonmindImage") or payload["moonmindImage"]),
             ],
-            capture_output=True, text=True, check=False, timeout=300,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=300,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        return {"status": "unavailable", "reason": f"controller handoff did not run: {exc}"}
+        return {
+            "status": "unavailable",
+            "reason": f"controller handoff did not run: {exc}",
+        }
     for line in reversed((completed.stdout or "").splitlines()):
         if line.startswith(CONTROLLER_HANDOFF_PREFIX):
             try:
-                receipt = json.loads(line[len(CONTROLLER_HANDOFF_PREFIX):])
+                receipt = json.loads(line[len(CONTROLLER_HANDOFF_PREFIX) :])
             except ValueError:
                 break
             if isinstance(receipt, dict):
@@ -325,14 +336,25 @@ async def controller_storage_cli(phase, payload):
 
     if phase not in ("storage-prepare", "storage-observe"):
         raise ValueError("Unknown storage transition phase")
+    payload = {
+        **payload,
+        "moonmindImage": payload.get("resolvedMoonmindImage")
+        or payload["moonmindImage"],
+    }
     runner = controller_release_runner(payload)
     async with _deployment_lock():
         receipt = await prepare_compose_storage(
-            runner, docker, payload, state_root().parent / "storage-transfers",
+            runner,
+            docker,
+            payload,
+            state_root().parent / "storage-transfers",
             observe_only=phase == "storage-observe",
         )
-    print("MOONMIND_OMNIGENT_RESULT=" + json.dumps(receipt, sort_keys=True),
-          file=sys.stderr, flush=True)
+    print(
+        "MOONMIND_OMNIGENT_RESULT=" + json.dumps(receipt, sort_keys=True),
+        file=sys.stderr,
+        flush=True,
+    )
     return 0
 
 
@@ -883,10 +905,19 @@ def controller_release_runner(payload):
     if store is None:
         raise ValueError("Controller release steps require durable deployment state")
     project_dir = str(target["projectDir"])
-    local_dir = Path(os.environ.get("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR") or "/workspace/host_project")
+    local_dir = Path(
+        os.environ.get("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR")
+        or "/workspace/host_project"
+    )
     files = list(target.get("composeFiles") or ["docker-compose.yaml"])
 
     def local_file(name):
+        if Path(name).name == target.get("releaseComposeFile"):
+            controller_state = Path(
+                os.environ.get("MOONMIND_CONTROLLER_STATE_DIR")
+                or "/workspace/deployment_state/controller"
+            )
+            return str(controller_state / "image-overlays" / Path(name).name)
         path = Path(name)
         if path.is_absolute():
             path = path.relative_to(project_dir)
@@ -895,9 +926,12 @@ def controller_release_runner(payload):
         return str(local_dir / path)
 
     return HostDockerComposeRunner(
-        project_dir=project_dir, project_name=str(target["project"]),
-        local_project_dir=str(local_dir), compose_file=local_file(files[0]),
-        override_files=tuple(local_file(name) for name in files[1:]), env_file=store.env_file_path,
+        project_dir=project_dir,
+        project_name=str(target["project"]),
+        local_project_dir=str(local_dir),
+        compose_file=local_file(files[0]),
+        override_files=tuple(local_file(name) for name in files[1:]),
+        env_file=store.env_file_path,
     )
 
 
@@ -953,7 +987,8 @@ async def run_controller_omnigent_step(phase, payload):
 
     operation_id = str(payload["operationId"])
     target = dict(payload["target"])
-    image = str(payload["moonmindImage"])
+    requested_image = str(payload["moonmindImage"])
+    image = str(payload.get("resolvedMoonmindImage") or requested_image)
     store = _omnigent_release_store()
     if store is None:
         raise ValueError("Controller Omnigent steps require durable deployment state")
@@ -961,7 +996,11 @@ async def run_controller_omnigent_step(phase, payload):
     key = hashlib.sha256(operation_id.encode()).hexdigest()[:32]
     directory = Path(store.env_file_path).parent / "controller-omnigent-jobs" / key
     directory.mkdir(parents=True, exist_ok=True)
-    identity = {"operationId": operation_id, "moonmindImage": image, "target": target}
+    identity = {
+        "operationId": operation_id,
+        "moonmindImage": requested_image,
+        "target": target,
+    }
     if reserve_record(directory / "request.json", identity) != identity:
         raise ValueError(
             "Controller operation was reused with different release inputs"

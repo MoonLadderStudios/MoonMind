@@ -138,12 +138,12 @@ docker compose pull --policy always
 docker compose up -d --pull never --no-build --remove-orphans
 ```
 
-Commands are bounded. MoonMind images pull with `--policy always`; other
-infrastructure uses `--policy missing`. The deployment's Compose file set,
-`.env`, overrides, credentials, ports and ingress settings remain authoritative.
-Routine updates never run `down`, fleet-wide force recreation or pruning.
-`docker-proxy` and `sandbox-egress-proxy` stay outside the main pass; the
-controller uses its own Docker transport.
+The controller saves the selected image's base Compose configuration before
+staging dependencies or changing storage. Helpers and retries reuse that image
+and configuration, preventing checkouts from bypassing release
+migrations. New updates resolve `latest` afresh. Deployment settings, overrides
+and custom bases retain authority. Routine updates avoid teardown, forced
+recreation and pruning; proxy services remain outside the main pass.
 
 **Artifact storage cutover.** Silo defaults to `latest`, honoring
 `TEMPORAL_ARTIFACT_S3_IMAGE`. Before recreation, the controller's

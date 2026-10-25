@@ -8,7 +8,18 @@ from pathlib import Path
 from wsgiref.simple_server import make_server
 
 import pytest
-from conftest import load
+from conftest import load as load_controller_module
+
+
+def load(name):
+    module = load_controller_module(name)
+    if name == "server":
+        # These HTTP/recovery tests start after release configuration staging.
+        # test_release_configuration exercises that boundary through apply.
+        module.prepare_release_configuration = (
+            lambda store, operation, **kwargs: operation
+        )
+    return module
 
 
 class _Harness:
@@ -2382,6 +2393,7 @@ def test_default_target_is_derived_from_the_mounted_checkout(
         "projectDir": str(repo),
         "composeFiles": ["docker-compose.yaml", "site.yaml"],
         "services": ["api", "postgres"],
+        "serviceSelection": "all",
         "envFile": str(repo / ".env"),
     }
     assert commands[0][-2:] == ("config", "--services")

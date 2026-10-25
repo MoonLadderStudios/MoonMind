@@ -138,9 +138,11 @@ def journey(controller, tmp_path, request):
                 "timeout": "1s",
                 "retries": 1,
             }
-        (repo / "docker-compose.yaml").write_text(json.dumps(config, indent=2))
+        # This synthetic BusyBox target owns a custom base; it does not ship
+        # the MoonMind release's packaged application configuration.
+        (repo / "stack.yaml").write_text(json.dumps(config, indent=2))
         # Operator-owned configuration the controller must keep applying.
-        (repo / ".env").write_text("HERMETIC_SETTING=from-dotenv\n")
+        (repo / ".env").write_text("HERMETIC_SETTING=from-dotenv\nCOMPOSE_FILE=stack.yaml:docker-compose.override.yaml\n")
         override = {"services": {"app": {"labels": {"moonmind.test.override": "kept"}}}}
         (repo / "docker-compose.override.yaml").write_text(json.dumps(override))
 
@@ -152,7 +154,7 @@ def journey(controller, tmp_path, request):
             "--project-directory",
             str(repo),
             "-f",
-            str(repo / "docker-compose.yaml"),
+            str(repo / "stack.yaml"),
             "-f",
             str(repo / "docker-compose.override.yaml"),
             *args,
