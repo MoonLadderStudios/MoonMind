@@ -15,7 +15,10 @@ IMAGE = "sha256:" + "a" * 64
 
 
 @pytest.fixture
-def checkout(tmp_path):
+def checkout(tmp_path, monkeypatch):
+    # These adapter tests substitute Docker; legacy-writer inventory belongs
+    # to the real disposable Compose journey.
+    monkeypatch.setattr(controller, "reconcile_retired_shell_controller", lambda: False)
     repo = tmp_path / "moonmind-upgrade-4356.fixture"
     repo.mkdir()
     (repo / ".git").write_text("gitdir: ../fixture\n")
@@ -35,6 +38,14 @@ def adapter():
 
 def test_upgrade_uses_the_production_apply_owner(checkout, monkeypatch):
     applied = []
+    submissions = []
+    build_app = controller.build_app
+
+    def observe_submission(**kwargs):
+        submissions.append(kwargs["store"].state_dir)
+        return build_app(**kwargs)
+
+    monkeypatch.setattr(controller, "build_app", observe_submission)
 
     class Runner:
         def run(self, args, timeout_seconds):
@@ -64,6 +75,7 @@ def test_upgrade_uses_the_production_apply_owner(checkout, monkeypatch):
     assert adapter().run_cutover(**kwargs)["passed"]
     assert adapter().run_cutover(**kwargs)["passed"]
     assert len(applied) == 1  # A saved completion is not another image apply.
+    assert len(submissions) == 2  # Both requests enter controller admission.
 
 
 @pytest.mark.parametrize("complete", [False, True])
@@ -462,3 +474,207 @@ def test_real_runner_redaction_composes_without_leaking_header_values(tmp_path, 
     captured = json.loads(text)
     assert captured["firstFailure"]["exitStatus"] == 124
     assert "helper stalled" in captured["helpers"][helper_id]["logs"]
+
+
+def test_upgrade_faults_resume_the_submitted_operation_once(
+    checkout, monkeypatch, record_property
+):
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    # Keep WSGI admission, production_apply, journal preparation, the stack
+    # lock and durable recovery intact. Docker and release-helper responses
+    # are controlled transports; this is not qualification of a running stack.
+    services = ("api", "postgres", "temporal-worker-agent-runtime")
+    applied = []
+    storage_starts = []
+    helper_phases = []
+    requests = []
+    ready = [True]
+    # The controlled loopback origin must not use the runner's outbound proxy.
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+
+    class Operator(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append(self.path)
+            self.send_response(200 if ready[0] else 503)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *_args):
+            pass
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Operator)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    api_base = f"http://127.0.0.1:{httpd.server_port}"
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            if args[-2:] == ("config", "--services"):
+                return {"exit": 0, "output": "\n".join(services)}
+            if args[-3:] == ("config", "--format", "json"):
+                return {
+                    "exit": 0,
+                    "output": json.dumps(
+                        {
+                            "services": {
+                                "api": {
+                                    "environment": {
+                                        "MOONMIND_PUBLIC_BASE_URL": api_base,
+                                    }
+                                }
+                            }
+                        }
+                    ),
+                }
+            if args[:2] == ("docker", "ps"):
+                # Operation-labelled one-offs have exited; the ordinary worker
+                # remains observable to both journal and routing inventories.
+                oneoff = any(controller.OMNIGENT_OPERATION_LABEL in arg for arg in args)
+                return {"exit": 0, "output": "" if oneoff else "worker"}
+            if args[:2] == ("docker", "inspect"):
+                worker_image = IMAGE if applied else "sha256:prior-release"
+                projection = args[args.index("--format") + 1]
+                if projection == controller.JOURNAL_CONSUMER_INSPECT_FORMAT:
+                    row = {
+                        "Image": worker_image,
+                        "Config": {
+                            "Env": [],
+                            "Labels": {
+                                "com.docker.compose.project": "moonmind-test-upgrade",
+                                "com.docker.compose.service": services[-1],
+                            },
+                        },
+                    }
+                else:
+                    assert projection == controller.TEMPORAL_WORKER_INSPECT_FORMAT
+                    row = {
+                        "Image": worker_image,
+                        "Worker": True,
+                        "Service": services[-1],
+                        "OneOff": "False",
+                    }
+                return {"exit": 0, "output": json.dumps(row)}
+            if args[:3] == ("docker", "image", "inspect"):
+                return {"exit": 0, "output": IMAGE}
+            if "ps" in args:
+                return {
+                    "exit": 0,
+                    "stdout": json.dumps(
+                        [
+                            {
+                                "Service": service,
+                                "ID": (
+                                    "postgres"
+                                    if service == "postgres"
+                                    else f"{'new' if applied else 'old'}-{service}"
+                                ),
+                                "State": "running",
+                                "Health": (
+                                    "starting"
+                                    if service == "api" and not ready[0]
+                                    else "healthy"
+                                ),
+                            }
+                            for service in services
+                        ]
+                    ),
+                }
+            if "run" in args:
+                assert args[-2] in ("journal-prepare", "apply")
+                helper_phases.append(args[-2])
+                # Exercise the shipped command/receipt adapter. The controlled
+                # helper prepares journals; Temporal routing is outside this
+                # regression and explicitly reports unsupported.
+                reply = {
+                    "status": (
+                        "prepared" if args[-2] == "journal-prepare" else "unsupported"
+                    )
+                }
+                return {
+                    "exit": 0,
+                    "output": controller.OMNIGENT_RESULT_PREFIX + json.dumps(reply),
+                }
+            if "up" in args:
+                if "--no-recreate" in args:
+                    assert args[-1] == "postgres" and "--wait" in args
+                    storage_starts.append(tuple(args))
+                    return {"exit": 0, "output": ""}
+                assert storage_starts and helper_phases == ["journal-prepare"]
+                applied.append(tuple(args))
+                ready[0] = False
+            elif "exec" in args:
+                if args[-2:] == ("touch", "/tmp/moonmind-journey-start"):
+                    ready[0] = True
+                else:
+                    assert args[-1] == controller.CONVERSION_PROBE_SCRIPT
+                    assert ready[0]
+                    return {
+                        "exit": 0,
+                        "output": controller.CONVERSION_RESULT_PREFIX
+                        + json.dumps(
+                            {
+                                "published": True,
+                                "disposition": "fresh_init",
+                            }
+                        ),
+                    }
+            else:
+                assert "pull" in args
+            return {"exit": 0, "output": ""}
+
+    runner = Runner()
+    monkeypatch.setattr(controller.engine, "subprocess_runner", lambda: runner)
+    module = adapter()
+    try:
+        result = module.run_recovery_cutover(
+            repo=checkout,
+            project="moonmind-test-upgrade",
+            image=IMAGE,
+            revision="candidate-sha",
+            compose_files=[str(checkout / "docker-compose.yaml")],
+            controller=controller,
+            api_base=api_base,
+            diagnostics_path=checkout / "evidence/cutover.json",
+        )
+    finally:
+        httpd.shutdown()
+        thread.join(timeout=5)
+        httpd.server_close()
+    assert result["passed"]
+    assert result["recovery"]["apply_count"] == len(applied) == 1
+    assert len(storage_starts) == 1
+    assert helper_phases.count("journal-prepare") == 1
+    assert result["recovery"]["resumed_once"]
+    assert result["recovery"]["delayed_api_observed"]
+    assert "registry unavailable before mutation" in result["operation"]["errorSummary"]
+    assert result["recovery"]["workers_preserved_on_pull_failure"]
+    assert "/healthz" in requests and "/api/v1/settings/catalog" in requests
+    persisted = controller.record_mod.OperationStore(
+        checkout / "deploy/state/controller"
+    )
+    assert persisted.load(result["operation"]["operationId"]) == result["operation"]
+    assert persisted.list_open() == []
+    record_property(
+        "upgrade_recovery",
+        json.dumps(
+            {
+                "recovery": result["recovery"],
+                "operation": result["operation"],
+                "journal_storage_starts": len(storage_starts),
+                "application_recreations": len(applied),
+                "operator_paths": requests,
+                "substitutions": [
+                    "Docker command transport",
+                    "release-helper response",
+                    "HTTP application",
+                ],
+                "temporal_routing": "controlled helper reports unsupported; not qualified",
+            },
+            sort_keys=True,
+        ),
+    )

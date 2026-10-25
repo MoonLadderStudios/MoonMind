@@ -303,7 +303,7 @@ def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
             "controller-journey",
         )
     } == {
-        "hermetic": 45,
+        "hermetic": 50,
         "fresh-journey": 85,
         "upgrade-journey": 85,
         "controller-journey": 85,
