@@ -358,7 +358,7 @@ def host_checks():
         assert rendered["networks"]["docker-proxy-network"]["internal"]
         for name, service in rendered["services"].items():
             for mount in service.get("volumes", []):
-                if mount["source"] == "/var/run/docker.sock":
+                if mount.get("source") == "/var/run/docker.sock":
                     assert name == "docker-proxy", (name, mount)
         template = ROOT / "docker/docker-proxy/haproxy.cfg.template"
         mounts = [
