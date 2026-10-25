@@ -60,7 +60,6 @@ def test_pytest_split_is_a_test_extra_dependency() -> None:
         "aiosqlite",
         "pytest-split",
         "jsonschema",
-        "toml",
     }
 
 
