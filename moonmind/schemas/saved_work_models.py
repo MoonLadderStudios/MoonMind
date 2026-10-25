@@ -59,9 +59,28 @@ def saved_work_path_exclusion(path: str) -> str | None:
     value = PurePosixPath(path.replace("\\", "/"))
     if value.name in {".env", ".env.local", "credentials", "credentials.json"}:
         return "sensitive-filename-policy"
-    if any(part in {".git", ".codex", ".ssh", ".gnupg", "node_modules", "__pycache__",
-                    ".cache", ".docker", "credentials", "managed_runs", "managed_sessions"}
-           for part in value.parts):
+    # A workspace-root credential store is runtime data. A source package such
+    # as omnigent/runtime/credentials is code; its directory name alone does
+    # not make every implementation file secret. Nested workspaces apply this
+    # same policy relative to their own root.
+    if value.parts and value.parts[0] == "credentials":
+        return "sensitive-path-policy"
+    if any(
+        part
+        in {
+            ".git",
+            ".codex",
+            ".ssh",
+            ".gnupg",
+            "node_modules",
+            "__pycache__",
+            ".cache",
+            ".docker",
+            "managed_runs",
+            "managed_sessions",
+        }
+        for part in value.parts
+    ):
         return "sensitive-path-policy"
     if value.parts[:2] in {(".agents", "skills"), (".gemini", "skills")}:
         return "runtime-skill-overlay"

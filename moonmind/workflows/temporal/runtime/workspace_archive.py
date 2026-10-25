@@ -18,7 +18,11 @@ from moonmind.schemas.saved_work_models import (
 
 
 def build_workspace_archive(
-    workspace: Path, *, members: set[str] | None = None, high_security_mode: bool = True
+    workspace: Path,
+    *,
+    members: set[str] | None = None,
+    high_security_mode: bool = True,
+    excluded_paths: set[str] | None = None,
 ):
     """Enforce export bounds and exclusions, with explicitly selected scanning."""
     limits = SAVED_WORK_FORMAT_SIZE_LIMITS
@@ -36,7 +40,9 @@ def build_workspace_archive(
         ) as archive:
             for path in sorted(paths):
                 relative = path.relative_to(workspace).as_posix()
-                if saved_work_path_exclusion(relative):
+                if saved_work_path_exclusion(relative) or relative in (
+                    excluded_paths or ()
+                ):
                     continue
                 if not path.exists() and not path.is_symlink():
                     continue

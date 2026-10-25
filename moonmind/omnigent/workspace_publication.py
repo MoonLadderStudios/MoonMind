@@ -22,7 +22,10 @@ from moonmind.omnigent.git_identity import (
     publication_git_identity_projection,
     resolve_publication_git_identity,
 )
-from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+from moonmind.omnigent.harness_platform.failures import (
+    HarnessPlatformError,
+    HarnessPlatformFailure,
+)
 from moonmind.omnigent.workspace_intent import (
     authored_repository_source,
     authored_starting_branch,
@@ -346,18 +349,45 @@ class OmnigentWorkspacePublicationService:
         identity = request.step_execution
         if identity is None:
             raise HarnessPlatformError("Saving work requires the admitted Step Execution identity", code="WORKSPACE_SAVE_UNAVAILABLE")
-        capture = await Capture(workspace_root=self._workspace_root).workspace_capture_checkpoint(
-            WorkspaceCheckpointCaptureInput(
-                identity={"workflowId": identity.workflow_id, "runId": identity.run_id,
-                          "logicalStepId": identity.logical_step_id, "executionOrdinal": identity.execution_ordinal},
-                boundary="after_execution", kind="worktree_archive",
-                workspaceLocator=request.workspace_spec["workspaceLocator"],
-                artifactNamespace=workflow_id, idempotencyKey=f"{request.idempotency_key}:saved-work",
-                includeUntracked=True,
+        try:
+            capture = await Capture(
+                workspace_root=self._workspace_root
+            ).workspace_capture_checkpoint(
+                WorkspaceCheckpointCaptureInput(
+                    identity={
+                        "workflowId": identity.workflow_id,
+                        "runId": identity.run_id,
+                        "logicalStepId": identity.logical_step_id,
+                        "executionOrdinal": identity.execution_ordinal,
+                    },
+                    boundary="after_execution",
+                    kind="worktree_archive",
+                    workspaceLocator=request.workspace_spec["workspaceLocator"],
+                    artifactNamespace=workflow_id,
+                    idempotencyKey=f"{request.idempotency_key}:saved-work",
+                    includeUntracked=True,
+                )
             )
-        )
+        except (ValueError, RuntimeError) as exc:
+            if isinstance(exc, HarnessPlatformError):
+                raise
+            raise HarnessPlatformError(
+                "Workspace checkpoint capture failed: "
+                + redact_sensitive_text(str(exc))[:1000],
+                code=HarnessPlatformFailure.OMNIGENT_WORKSPACE_SAVE_FAILED,
+            ) from exc
         if capture.get("status") != "captured":
-            raise HarnessPlatformError("Workspace checkpoint was not captured", code="WORKSPACE_SAVE_UNAVAILABLE")
+            raise HarnessPlatformError(
+                "Workspace checkpoint capture failed: "
+                + redact_sensitive_text(
+                    str(
+                        capture.get("summary")
+                        or capture.get("failureCode")
+                        or "unknown capture failure"
+                    )
+                )[:1000],
+                code=HarnessPlatformFailure.OMNIGENT_WORKSPACE_SAVE_FAILED,
+            )
         workspace_evidence = capture["workspace"]
         # The generic plan already owns immutable task inputs. Retain a complete
         # canonical checkpoint instead of leaving an archive with no resume input.
