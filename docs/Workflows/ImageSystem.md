@@ -306,7 +306,10 @@ Rules:
 
 `PreparedInputManifest` preserves source artifact refs, metadata, workspace paths
 and objective/step targets. Its `derivedContextRef` identifies prepared target
-context; it does not establish that image captioning or OCR ran.
+metadata; it does not establish that image captioning or OCR ran. Synthetic
+`prepared-context://` refs are carried in
+`parameters.metadata.moonmind.preparedContext`; they are not stored artifacts
+to fetch or prompt content to inject.
 
 `WorkspaceArtifactProjector.project_attachments` reads admitted artifact bytes
 under the workflow's authority and reconciles them into the runtime workspace.
@@ -320,15 +323,19 @@ automatic captions, OCR text or a `.moonmind/vision/` output tree.
 
 ### 10.1 Text-first runtimes
 
-Text-first runtimes consume image context through an injected `INPUT ATTACHMENTS` block.
+Runtime artifact inputs use raw `artifact://` refs and authorized files
+materialized into the workspace. Prompt formatting belongs to the runtime
+adapter.
 
 Rules:
 
-- the `INPUT ATTACHMENTS` block appears before `WORKSPACE`
-- the block references:
-  - relevant workspace paths
-  - relevant manifest entries
-  - relevant prepared context refs
+- external adapter `inputRefs` contain raw source artifact refs, not synthetic
+  prepared-context refs
+- prepared target bindings remain in
+  `parameters.metadata.moonmind.preparedContext`; adapters do not inject its
+  synthetic refs into the user prompt or resolve them as context artifacts
+- managed workspace projection reads authorized source bytes and exposes the
+  materialized files to the runtime
 - step execution receives only:
   - objective-scoped attachment context
   - the current step’s attachment context
