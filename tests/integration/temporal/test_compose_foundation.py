@@ -69,6 +69,39 @@ def _load_compose() -> dict:
     )
 
 
+def test_docker_proxy_preserves_policy_with_upstream_template_loading():
+    compose = _load_compose()
+    proxy = compose["services"]["docker-proxy"]
+    assert proxy["image"] == "ghcr.io/tecnativa/docker-socket-proxy:v0.5.0"
+    assert proxy["volumes"] == [
+        "/var/run/docker.sock:/var/run/docker.sock",
+        "./docker/docker-proxy/haproxy.cfg.template:"
+        "/usr/local/etc/haproxy/haproxy.cfg.template:ro",
+    ]
+    assert "entrypoint" not in proxy and "command" not in proxy
+    assert not proxy.get("ports")
+    assert proxy["networks"] == ["docker-proxy-network"]
+    assert compose["networks"]["docker-proxy-network"]["internal"] is True
+    assert all(
+        proxy["environment"][name] == 1
+        for name in (
+            "CONTAINERS",
+            "IMAGES",
+            "EXEC",
+            "BUILD",
+            "SESSION",
+            "NETWORKS",
+            "VOLUMES",
+            "POST",
+        )
+    )
+    template = (REPO_ROOT / "docker/docker-proxy/haproxy.cfg.template").read_text()
+    for kind in ("client", "server", "tunnel"):
+        assert f"timeout {kind} 75m" in template
+    assert "http-request deny unless METH_GET || { env(POST) -m bool }" in template
+    assert "    http-request deny\n    default_backend dockerbackend" in template
+
+
 def _render_codex_host_compose() -> dict:
     _require_docker_compose()
     result = subprocess.run(
