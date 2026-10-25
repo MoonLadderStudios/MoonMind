@@ -51,6 +51,9 @@ from api_service.services.provider_profile_creation_presets import (
     apply_provider_profile_creation_preset,
     get_provider_profile_creation_preset,
 )
+from api_service.services.provider_profile_readiness import (
+    provider_profile_readiness_reason,
+)
 from moonmind.auth.secret_refs import (
     ParsedSecretRef,
     SecretBackend,
@@ -757,6 +760,7 @@ class ProviderReadinessCheck(BaseModel):
 class ProviderProfileReadiness(BaseModel):
     status: str = Field(..., pattern="^(ready|warning|blocked)$")
     launch_ready: bool
+    reason_code: str = "configuration_required"
     summary: str
     checks: list[ProviderReadinessCheck]
 
@@ -3422,6 +3426,9 @@ def _provider_profile_readiness(
     return {
         "status": status,
         "launch_ready": launch_ready,
+        "reason_code": provider_profile_readiness_reason(
+            row, launch_ready=launch_ready
+        ),
         "summary": summary,
         "checks": checks,
     }

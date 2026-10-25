@@ -7629,28 +7629,31 @@ async def test_terminal_evidence_activity_does_not_trust_rejected_failure_metada
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("message", "expected_class"),
+    ("message", "expected_class", "provider_failure"),
     [
         (
             "HTTP Error 403: Forbidden: execution fanout capability required",
-            "user_error",
+            "execution_error",
+            None,
         ),
         (
             "submit failed: connection reset by peer",
             "execution_error",
+            None,
         ),
+        ("Any display text", "user_error", {"providerErrorClass": "credential_scope", "providerErrorCode": "403"}),
     ],
 )
 async def test_terminal_evidence_activity_surfaces_batch_fanout_cause(
-    tmp_path: Path, message: str, expected_class: str
+    tmp_path: Path, message: str, expected_class: str, provider_failure: dict | None
 ) -> None:
     """A failed fan-out must report its cause, not generic missing evidence.
 
     Regression for mm:031c2a9c-8d55-44c7-98e5-3f1dff66ac0c: the agent wrote
     valid terminal evidence reporting BATCH_FANOUT_FAILED, but the operator
     saw only "Agent completed without required terminal evidence: valid
-    terminal evidence". Auth/scope causes (401/403) are user action and must
-    not retry behind the same unreachable path.
+    terminal evidence". Structured auth/scope causes require user action;
+    display text alone cannot establish that classification.
     """
 
     workspace = tmp_path / "repo"
@@ -7691,12 +7694,15 @@ async def test_terminal_evidence_activity_surfaces_batch_fanout_cause(
                 "expectedSchemaVersion": "moonmind.batch-workflows-result.v1",
                 "executionRef": "step-fanout-failed",
             },
-            "result": {"summary": "Omnigent session completed"},
+            "result": {"summary": "Omnigent session completed", "providerFailure": provider_failure},
         }
     )
 
     assert result.provider_error_code == "BATCH_FANOUT_FAILED"
     assert result.failure_class == expected_class
+    if provider_failure:
+        assert result.provider_failure["providerErrorCode"] == "403"
+        assert result.failure_id == "403"
     assert message in result.summary
     assert "private-fanout-token" not in result.summary
     assert "[REDACTED" in result.summary

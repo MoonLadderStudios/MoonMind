@@ -168,6 +168,16 @@ For the full agent execution model including managed runtime supervision, extern
 agent callbacks, and auth-profile controls, see
 [`ManagedAndExternalAgentExecutionModel.md`](ManagedAndExternalAgentExecutionModel.md).
 
+`AgentRunResult` preserves execution state, objective outcome, publication/output
+availability, original failure, retry disposition, and diagnostic references.
+Secondary reporting errors stay separate. Parent retry and terminal projections
+consume its compact `agentResult` envelope; display text never decides policy.
+The agent's task outcome stays separate from the workflow's goal settlement.
+Legacy snake/camel results decode at this boundary. A Temporal patch preserves
+older parent decisions, and the existing finish summary retains confirmed facts
+using run/Step execution order rather than observation time. Recovery manifests
+carry the same failure facts without granting new restart authority.
+
 ---
 
 ## 3. Contract Reference

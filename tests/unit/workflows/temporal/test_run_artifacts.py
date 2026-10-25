@@ -629,7 +629,8 @@ async def test_run_finalizing_stage_writes_structured_moonspec_failure_summary(
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: finish_time)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
+    # This retained prose-only summary predates the typed outcome marker.
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch: patch != "run-typed-agent-outcomes-v1" and _all_patches_except_empty_skillset(patch))
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "upsert_memo",

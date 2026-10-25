@@ -2615,7 +2615,7 @@ class MoonMindAgentRun:
             return False
         metadata = result.metadata if isinstance(result.metadata, Mapping) else {}
         provider_failure_event = provider_failure_event_from_metadata(
-            metadata.get("providerFailure")
+            result.provider_failure or metadata.get("providerFailure")
         )
         if provider_failure_event is not None:
             return provider_failure_event_requires_cooldown(provider_failure_event)
@@ -3849,6 +3849,10 @@ class MoonMindAgentRun:
                     "failure_class": None,
                     "provider_error_code": None,
                     "retry_recommendation": None,
+                    "failure_id": None,
+                    "provider_failure": None,
+                    "objective_outcome": "unknown",
+                    "retry_disposition": "wait",
                     "metadata": metadata,
                     "metrics": metrics,
                 }
@@ -9020,7 +9024,8 @@ class MoonMindAgentRun:
                 )
                 provider_failure_event = (
                     provider_failure_event_from_metadata(
-                        self.final_result.metadata.get("providerFailure")
+                        self.final_result.provider_failure
+                        or self.final_result.metadata.get("providerFailure")
                     )
                     if self.final_result is not None
                     else None

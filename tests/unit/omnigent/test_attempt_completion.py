@@ -401,6 +401,9 @@ async def test_publication_exhaustion_preserves_valid_save_without_republishing(
     # The operator sees the publisher's own diagnostic, not only a code.
     assert "remote publication unavailable" in finished.summary
     assert finished.metadata["unfinishedPhase"] == "publication"
+    assert finished.failure_id == finished.provider_error_code
+    assert finished.objective_outcome == "failed"
+    assert finished.retry_disposition == "no_retry"
     assert finished.metadata["workPreserved"] is True
     assert finished.metadata["savedWorkspaceCheckpoint"] == saved
     stored = (await store.get(binding.bindingId)).phaseResults or {}

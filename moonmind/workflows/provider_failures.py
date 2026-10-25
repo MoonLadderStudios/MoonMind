@@ -14,7 +14,7 @@ leaked into ordinary logs or workflow payloads.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
@@ -195,6 +195,9 @@ class ProviderFailureEvent:
     provider_request_id: str | None = None
     raw_error_ref: str | None = None
     sanitized_summary: str | None = None
+    observation: str = "confirmed"
+    failure_id: str | None = None
+    retry_disposition: str | None = None
 
     def requires_cooldown(self) -> bool:
         return provider_failure_event_requires_cooldown(self)
@@ -294,6 +297,7 @@ def sanitized_summary_for_class(provider_error_class: Any) -> str | None:
         f"(provider_error_class={safe_label})."
     )
 
+
 def build_provider_failure_event(
     *,
     classification: ProviderFailureClassification | None = None,
@@ -307,6 +311,9 @@ def build_provider_failure_event(
     credential_scope: Any = None,
     provider_request_id: Any = None,
     raw_error_ref: Any = None,
+    observation: str = "confirmed",
+    failure_id: str | None = None,
+    retry_disposition: str | None = None,
 ) -> ProviderFailureEvent | None:
     """Build the canonical structured failure event.
 
@@ -360,6 +367,7 @@ def build_provider_failure_event(
             quota is not None,
             credential is not None,
             request_id is not None,
+            observation != "confirmed",
         )
     )
     if not has_signal:
@@ -375,8 +383,24 @@ def build_provider_failure_event(
         credential_scope=credential,
         provider_request_id=request_id,
         raw_error_ref=raw_ref,
-        sanitized_summary=sanitized_summary_for_class(resolved_class),
+        sanitized_summary=(
+            sanitized_summary_for_class(resolved_class)
+            if observation == "confirmed" else "Provider observation is unavailable."
+        ),
+        observation=observation,
+        failure_id=failure_id or resolved_code or resolved_class,
+        retry_disposition=retry_disposition
+        or (
+            "unknown"
+            if observation != "confirmed"
+            else (
+                "no_retry"
+                if resolved_class in {"auth", "credential_scope"}
+                else "wait" if resolved_class in _COOLDOWN_CLASSES else "unknown"
+            )
+        ),
     )
+
 
 def provider_error_requires_cooldown(
     *,
@@ -402,6 +426,8 @@ def provider_failure_event_requires_cooldown(
     """Decide cooldown routing, preferring structured fields over markers."""
 
     if event is None:
+        return False
+    if event.observation != "confirmed":
         return False
     # Structured retry/quota signals take precedence over marker-derived codes.
     if event.retry_after_seconds is not None and event.retry_after_seconds > 0:
@@ -485,6 +511,11 @@ def provider_failure_event_to_metadata(
         metadata["rawErrorRef"] = event.raw_error_ref
     if event.sanitized_summary is not None:
         metadata["sanitizedSummary"] = event.sanitized_summary
+    metadata["observation"] = event.observation
+    if event.failure_id is not None:
+        metadata["failureId"] = event.failure_id
+    if event.retry_disposition is not None:
+        metadata["retryDisposition"] = event.retry_disposition
     return metadata
 
 def provider_failure_event_from_metadata(
@@ -494,17 +525,15 @@ def provider_failure_event_from_metadata(
 
     if not isinstance(metadata, Mapping):
         return None
-    return build_provider_failure_event(
-        provider_error_class=metadata.get("providerErrorClass"),
-        provider_error_code=metadata.get("providerErrorCode"),
-        retry_recommendation=metadata.get("retryRecommendation"),
-        retry_after_seconds=metadata.get("retryAfterSeconds"),
-        reset_at=metadata.get("resetAt"),
-        quota_scope=metadata.get("quotaScope"),
-        credential_scope=metadata.get("credentialScope"),
-        provider_request_id=metadata.get("providerRequestId"),
-        raw_error_ref=metadata.get("rawErrorRef"),
-    )
+    decoded: dict[str, Any] = {}
+    for field in fields(ProviderFailureEvent):
+        if field.name == "sanitized_summary":
+            continue  # Display summaries are regenerated from structured causes.
+        first, *rest = field.name.split("_")
+        alias = first + "".join(part.title() for part in rest)
+        if alias in metadata or field.name in metadata:
+            decoded[field.name] = metadata.get(alias, metadata.get(field.name))
+    return build_provider_failure_event(**decoded)
 
 def provider_failure_search_markers() -> tuple[str, ...]:
     """Return the provider-failure markers suitable for coarse log searches."""
