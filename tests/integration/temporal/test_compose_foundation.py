@@ -75,8 +75,7 @@ def test_docker_proxy_preserves_policy_with_upstream_template_loading():
     assert proxy["image"] == "ghcr.io/tecnativa/docker-socket-proxy:v0.5.0"
     assert proxy["volumes"] == [
         "/var/run/docker.sock:/var/run/docker.sock",
-        "./docker/docker-proxy/haproxy.cfg.template:"
-        "/usr/local/etc/haproxy/haproxy.cfg.template:ro",
+        "./docker/docker-proxy/haproxy.cfg.template:/usr/local/etc/haproxy/haproxy.cfg.template:ro",
     ]
     assert "entrypoint" not in proxy and "command" not in proxy
     assert not proxy.get("ports")
