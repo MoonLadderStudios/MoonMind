@@ -9,6 +9,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
+from urllib.parse import urlsplit
 
 import pytest
 import uvicorn
@@ -32,6 +33,7 @@ os.environ.setdefault(
 from playwright.sync_api import expect, sync_playwright
 
 from api_service.auth_providers import get_instance_access
+from api_service.db import base as db_base
 from api_service.db.base import get_async_session
 from api_service.db.models import Base
 from api_service.main import app as main_app
@@ -40,7 +42,7 @@ from tests.helpers.account_source import User
 
 @contextmanager
 def _playwright_page(playwright_obj, *, width: int = 1366, height: int = 900):
-    browser = playwright_obj.chromium.launch()
+    browser = playwright_obj.chromium.launch(channel=os.getenv("PLAYWRIGHT_CHROMIUM_CHANNEL") or None)
     try:
         page = browser.new_page(viewport={"width": width, "height": height})
         try:
@@ -53,6 +55,8 @@ def _playwright_page(playwright_obj, *, width: int = 1366, height: int = 900):
 
 @pytest.fixture(scope="module")
 def server():
+    original_overrides = dict(main_app.dependency_overrides)
+    original_session_maker = db_base.async_session_maker
     test_user = User(id=uuid4(), email="mm-1114@example.com")
     main_app.dependency_overrides[get_instance_access] = lambda: test_user
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -67,16 +71,25 @@ def server():
 
     async_session_maker = async_sessionmaker(bind=engine, expire_on_commit=False)
     main_app.dependency_overrides[get_async_session] = lambda: async_session_maker()
+    db_base.async_session_maker = async_session_maker
 
     config = uvicorn.Config(main_app, host="127.0.0.1", port=8013, log_level="warning")
     server_inst = uvicorn.Server(config)
     thread = threading.Thread(target=server_inst.run, daemon=True)
-    thread.start()
-    time.sleep(1.5)
-    yield
-    server_inst.should_exit = True
-    thread.join(timeout=5)
-    main_app.dependency_overrides.clear()
+    try:
+        thread.start()
+        deadline = time.monotonic() + 5
+        while not server_inst.started and thread.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert server_inst.started, "Browser fixture HTTP server failed to start"
+        yield
+    finally:
+        server_inst.should_exit = True
+        thread.join(timeout=5)
+        assert not thread.is_alive(), "Browser fixture HTTP server failed to stop"
+        db_base.async_session_maker = original_session_maker
+        main_app.dependency_overrides = original_overrides
+        asyncio.run(engine.dispose())
 
 
 @pytest.mark.parametrize("path", ["/workflows", "/workflows/new", "/workflows/mm%3A1114"])
@@ -110,8 +123,8 @@ def test_mm1114_keyboard_changes_options_and_restores_route_focus(server) -> Non
             expect(page.get_by_role("radio", name="Sidebar list")).to_have_attribute("aria-checked", "true")
             expect(page.get_by_role("radio", name="Sidebar list")).to_be_enabled()
 
-            page.get_by_role("radio", name="Full screen table").click()
-            page.wait_for_url("**/workflows")
+            page.get_by_role("radio", name="Sidebar list").press("ArrowRight")
+            page.wait_for_url(lambda url: urlsplit(url).path == "/workflows")
             expect(page.get_by_role("radio", name="Full screen table")).to_have_attribute("aria-checked", "true")
             expect(page.get_by_role("radio", name="Full screen table")).to_be_focused()
 
