@@ -1247,7 +1247,7 @@ async def test_capacity_wait_cancel_through_production_workflow(
 # the production ``docker`` command path with disposable ``moonmind-test-*``
 # containers and isolated fixtures.
 
-_REAL_TEST_IMAGE = "alpine:3.20"
+_REAL_TEST_IMAGE = "alpine:3.24"
 
 
 def _require_real_docker_image() -> None:
