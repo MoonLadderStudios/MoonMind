@@ -3368,6 +3368,7 @@ async def _validate_openai_api_key(api_key: str) -> None:
             ):
                 code = error["code"]
         except (ValueError, AttributeError):
+            # Malformed error bodies still retain the HTTP authentication rejection.
             pass
         raise _ProviderApiKeyValidationError(
             build_provider_failure_event(
@@ -3393,6 +3394,7 @@ async def _validate_openai_api_key(api_key: str) -> None:
                     status_code=502,
                 )
         except (ValueError, AttributeError):
+            # Malformed bodies use the generic upstream-error response below.
             pass
         raise HTTPException(status_code=502, detail="API key validation failed.")
 
