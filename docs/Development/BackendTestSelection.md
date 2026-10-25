@@ -89,7 +89,7 @@ The workflow initializes only submodules a selected job needs. In the reviewed i
 
 ### Selective Ownership Preflight
 
-Policy scans, deployment safety, and MoonSpec projection remain unconditional in the existing parallel preflight job. `ownership_full` selects the unchanged real verifier for tests (including fixtures, conftests, markers, plugins and duration data), collection/reporting tools, dependencies, workflow/selector changes, unknown or malformed inputs, and full-main/scheduled/manual events. Known production-only and audited prose changes do not rerun collection. The selector's tested input map is the authority; new collection inputs must extend it.
+Policy scans and MoonSpec projection remain unconditional in the existing parallel preflight job. `ownership_full` selects the unchanged real verifier for tests (including fixtures, conftests, markers, plugins and duration data), collection/reporting tools, dependencies, workflow/selector changes, unknown or malformed inputs, and full-main/scheduled/manual events. Known production-only and audited prose changes do not rerun collection. The selector's tested input map is the authority; new collection inputs must extend it.
 
 A selected verification still collects real pytest nodes, proves exactly one logical owner, and invokes the installed pytest-split plugin for all four partitions to prove completeness and disjointness. No replicated partition algorithm or cached assertion substitutes for that proof. The verifier's failure remains a preflight failure.
 
