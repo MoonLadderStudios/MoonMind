@@ -23,10 +23,10 @@ import contextlib
 import socket
 import threading
 import time
+import tomllib
 from pathlib import Path
 
 import pytest
-import toml
 import uvicorn
 from starlette.applications import Starlette
 from starlette.routing import WebSocketRoute
@@ -47,10 +47,7 @@ HANDSHAKE_TIMEOUT_SECONDS = 15.0
 
 def test_websockets_is_a_declared_main_dependency() -> None:
     """The WebSocket library must be declared, not inherited transitively."""
-    # `toml` rather than `tomllib`: pyproject declares python >=3.10 and
-    # tomllib only exists from 3.11, so importing it would break collection of
-    # this module on a supported interpreter.
-    pyproject = toml.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))
+    pyproject = tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))
     dependencies = pyproject["tool"]["poetry"]["dependencies"]
 
     assert "websockets" in dependencies, (
