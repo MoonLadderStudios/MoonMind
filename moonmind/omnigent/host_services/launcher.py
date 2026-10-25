@@ -17,6 +17,9 @@ from moonmind.omnigent.harness_platform.host_classes import HostClass, LaunchPol
 from moonmind.omnigent.host_ports import HostLaunchSpec, host_correlation_identity
 from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
 from moonmind.omnigent.host_services.mounted_tools import classify_tool_attachment
+from moonmind.omnigent.host_services.project_environment import (
+    approved_project_environment,
+)
 from moonmind.omnigent.host_services.runtime_scripts import OmnigentRuntimeScriptService
 from moonmind.security.egress import omnigent_proxy_env
 
@@ -373,7 +376,11 @@ class DockerOmnigentHostLauncher:
             "MOONMIND_CONTAINER_JOBS_WORKSPACE_ID",
             "MOONMIND_CONTAINER_JOBS_WORKSPACE_RELATIVE_PATH",
         }
-        if set(supplied_runtime_environment) - allowed_runtime_environment:
+        try:
+            approved_project_environment(
+                supplied_runtime_environment, reserved=allowed_runtime_environment
+            )
+        except ValueError:
             raise HarnessPlatformError(
                 "generic host received unsupported runtime environment names",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,

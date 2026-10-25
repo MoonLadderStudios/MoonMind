@@ -1606,12 +1606,17 @@ async def test_github_projection_failed_rewrite_keeps_live_same_owner_volume(
     ],
 )
 async def test_host_volume_initializers_use_setup_authority(
+    monkeypatch,
     host_api_token: str,
     expected_secret_payloads: list[bytes],
     expected_host_id: str | None,
     capability_name: str,
     capability_file: str,
 ) -> None:
+    monkeypatch.setenv(
+        "MOONMIND_MANAGED_SESSION_NON_SECRET_ENV_KEYS", "PROJECT_ASSET_SERVER"
+    )
+    monkeypatch.setenv("PROJECT_ASSET_SERVER", "asset://assets.example:41337")
     calls: list[tuple[list[str], dict[str, object]]] = []
 
     class Backend:
@@ -1696,6 +1701,7 @@ async def test_host_volume_initializers_use_setup_authority(
         credential_handles=[],
         runtime_environment={
             "MOONMIND_URL": "http://api:8000",
+            "PROJECT_ASSET_SERVER": "asset://assets.example:41337",
             "MOONMIND_AGENT_RUN_ID": "agent-run-1",
             "MOONMIND_TASK_WORKFLOW_ID": "workflow-1",
             "MOONMIND_STEP_ID": "step-1",
@@ -1724,6 +1730,7 @@ async def test_host_volume_initializers_use_setup_authority(
     ] == expected_secret_payloads
     assert script_inputs["runtime_environment"] == {
         "MOONMIND_URL": "http://api:8000",
+        "PROJECT_ASSET_SERVER": "asset://assets.example:41337",
         "MOONMIND_AGENT_RUN_ID": "agent-run-1",
         "MOONMIND_TASK_WORKFLOW_ID": "workflow-1",
         "MOONMIND_STEP_ID": "step-1",

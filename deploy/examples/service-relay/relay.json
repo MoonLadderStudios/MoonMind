@@ -1,0 +1,10 @@
+{
+  "targetHost": "192.0.2.25",
+  "targetPort": 41300,
+  "listenHost": "172.30.77.2",
+  "listenPort": 41300,
+  "protocols": ["tcp", "udp"],
+  "maxConnections": 64,
+  "idleSeconds": 60,
+  "maxDatagramBytes": 65507
+}
