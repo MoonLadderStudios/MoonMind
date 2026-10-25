@@ -643,9 +643,16 @@ async def test_gate_owned_pr_resolver_continuation_bypasses_runtime_capability(
     result = await run._evaluate_terminal_contract(
         request=request, result=AgentRunResult(summary="initial")
     )
+    result = AgentRunResult.model_validate_json(result.model_dump_json(by_alias=True))
 
     assert result.failure_class is None
     assert result.provider_error_code is None
+    assert result.execution_state == "completed"
+    assert result.objective_outcome == "unknown"
+    assert result.retry_disposition == "wait"
+    from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
+    assert MoonMindRunWorkflow()._map_agent_run_result(result)["status"] == "COMPLETED"
     assert (
         result.metadata["terminalContractRecoveryOutcome"]
         == "durable_parent_handoff"
