@@ -12,6 +12,7 @@ from tools.verify_test_shard_ownership import (
     PluginUnavailable,
     collect_group_node_ids,
     controller_journey_paths,
+    hermetic_phase_nodes,
     owners,
     verify,
     verify_physical_partitions,
@@ -128,6 +129,27 @@ def test_host_owned_integration_nodes_have_their_actual_runner_owner() -> None:
     assert owners(exact) == {"omnigent-exact-artifact"}
     assert verify([*nodes, exact]) == []
     assert verify([_node("tests/integration/host_update/test_new.py", "integration")])
+
+
+@pytest.mark.parametrize("name", [
+    "test_seed_migrated_saved_inputs",
+    "test_retrieve_migrated_saved_inputs_after_restart",
+])
+def test_hermetic_restart_phases_keep_the_actual_runner_owner(name) -> None:
+    path = "tests/integration/temporal/test_storage_restart.py"
+    node = CollectedNode(f"{path}::{name}", path, frozenset({"integration", "asyncio"}))
+    assert owners(node) == {"integration-ci"}
+    assert verify([node]) == []
+
+
+def test_hermetic_phase_selection_follows_the_executable_wrapper(tmp_path) -> None:
+    script = tmp_path / "integration.sh"
+    script.write_text('''# pytest tests/integration/test_comment.py::test_unused
+run_phase "" "${pipeline_compose[@]}" run --rm pytest bash -lc \\
+  "pytest -q tests/integration/test_changed.py::test_seed --timeout 90"
+echo "tests/integration/test_echo.py::test_unused"
+''')
+    assert hermetic_phase_nodes(script) == {"tests/integration/test_changed.py::test_seed"}
 
 
 def test_controller_selection_follows_the_executable_workflow_command(tmp_path) -> None:

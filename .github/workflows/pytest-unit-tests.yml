@@ -283,7 +283,7 @@ jobs:
     # first definitive required-backend failure, excluding queued time).
     # Per-row setup stays isolated: fast rows never build images or start
     # Compose services; each reliability shard starts its own isolated
-    # Compose PostgreSQL/Temporal/MinIO under its own Docker project name.
+    # Compose PostgreSQL/Temporal/Silo under its own Docker project name.
     # Shard shape (MoonLadderStudios/MoonMind#4366): suite
     # reliability-shard-N runs pytest-split --group N (groups are 1-based)
     # with --splits 4 and least_duration over the committed advisory hints.
@@ -397,21 +397,19 @@ jobs:
         timeout-minutes: 5
         run: |
           set -euo pipefail
-          # postgres/temporal/minio are pinned prebuilt registry images, so
-          # `pull` only fetches immutable layers. Each shard starts isolated
-          # services under its own Compose project name with fresh volumes;
-          # no volume, network, or routing state is shared between shards.
-          docker compose -p moonmind-reliability-${{ matrix.suite }} -f tests/integration/reliability/compose.yaml pull --quiet
-          docker compose -p moonmind-reliability-${{ matrix.suite }} -f tests/integration/reliability/compose.yaml up -d --wait --wait-timeout 180
+          # Each shard starts isolated prebuilt dependencies with fresh
+          # volumes; storage uses the same Silo selection as production.
+          docker compose -p moonmind-test-reliability-${{ matrix.suite }} -f tests/integration/reliability/compose.yaml pull --quiet
+          docker compose -p moonmind-test-reliability-${{ matrix.suite }} -f tests/integration/reliability/compose.yaml up -d --wait --wait-timeout 180
           dependency_ip() {
             local container
-            container=$(docker compose -p moonmind-reliability-${{ matrix.suite }} -f tests/integration/reliability/compose.yaml ps -q "$1")
+            container=$(docker compose -p moonmind-test-reliability-${{ matrix.suite }} -f tests/integration/reliability/compose.yaml ps -q "$1")
             docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$container"
           }
           echo "MOONMIND_TEST_POSTGRES_URL=postgresql+asyncpg://postgres:reliability-test-only@$(dependency_ip postgres):5432/postgres" >> "$GITHUB_ENV"
           echo "MOONMIND_TEST_TEMPORAL_ADDRESS=$(dependency_ip temporal):7233" >> "$GITHUB_ENV"
           echo "MOONMIND_TEST_MINIO_ENDPOINT=http://$(dependency_ip minio):9000" >> "$GITHUB_ENV"
-          echo "MOONMIND_TEST_DOCKER_NETWORK=moonmind-reliability-${{ matrix.suite }}_default" >> "$GITHUB_ENV"
+          echo "MOONMIND_TEST_DOCKER_NETWORK=moonmind-test-reliability-${{ matrix.suite }}_default" >> "$GITHUB_ENV"
       - name: Run selected unit suite
         id: run-unit
         if: matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true'
@@ -559,7 +557,7 @@ jobs:
           # inputs; new tests without history run via the plugin fallback
           # and are always selected, never skipped. Serial pytest inside
           # each isolated runner (no -n): each entry boots its own Compose
-          # PostgreSQL/Temporal/MinIO stack, never a shared service stack.
+          # PostgreSQL/Temporal/Silo stack, never a shared service stack.
           # DURATIONS_ARGS is the pre-validated flag list from the step
           # above (empty when hints are missing/unusable); word-splitting
           # here is intentional. The marker expression is the provider-free
@@ -714,7 +712,7 @@ jobs:
           set -uo pipefail
           mkdir -p /tmp/pytest-${{ matrix.suite }}
           echo "collection started" > /tmp/pytest-${{ matrix.suite }}/collection-status.txt
-          timeout 100s docker compose -p moonmind-reliability-${{ matrix.suite }} -f tests/integration/reliability/compose.yaml logs --no-color > /tmp/pytest-${{ matrix.suite }}/dependencies.log 2>&1 \
+          timeout 100s docker compose -p moonmind-test-reliability-${{ matrix.suite }} -f tests/integration/reliability/compose.yaml logs --no-color > /tmp/pytest-${{ matrix.suite }}/dependencies.log 2>&1 \
             || echo "compose logs failed or timed out (exit=$?)" > /tmp/pytest-${{ matrix.suite }}/dependencies.log
           for known in "artifacts/pytest-backend-${{ matrix.suite }}.xml" "artifacts/pytest-backend-${{ matrix.suite }}.log" "artifacts/pytest-backend-${{ matrix.suite }}-slowest.txt" "artifacts/pytest-backend-${{ matrix.suite }}-durations.json"; do
             if [[ -e "$known" ]]; then
@@ -805,7 +803,7 @@ jobs:
       - name: Remove isolated reliability dependencies
         timeout-minutes: 2
         if: always() && startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
-        run: timeout 100s docker compose -p moonmind-reliability-${{ matrix.suite }} -f tests/integration/reliability/compose.yaml down -v || echo "compose down failed or timed out; continuing cleanup"
+        run: timeout 100s docker compose -p moonmind-test-reliability-${{ matrix.suite }} -f tests/integration/reliability/compose.yaml down -v || echo "compose down failed or timed out; continuing cleanup"
       - name: Report secondary diagnostics failures
         # MoonLadderStudios/MoonMind#4371 R6: secondary diagnostics/teardown
         # failures are surfaced distinctly (annotation + summary note) while
