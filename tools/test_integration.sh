@@ -48,7 +48,8 @@ cleanup() {
   fi
   if [[ -n "$TEMP_COMPOSE_PROJECT_DIR" ]]; then
     for report in "$TEMP_COMPOSE_PROJECT_DIR/$REPORT_PATH/"*.xml \
-      "$TEMP_COMPOSE_PROJECT_DIR/$REPORT_PATH/storage-images.json"; do
+      "$TEMP_COMPOSE_PROJECT_DIR/$REPORT_PATH/storage-images.json" \
+      "$TEMP_COMPOSE_PROJECT_DIR/$REPORT_PATH/storage-public-port.txt"; do
       if [[ -f "$report" ]]; then
         cp "$report" "$REPORT_DIR/" >/dev/null 2>&1 || true
       fi
@@ -180,7 +181,25 @@ run_phase() {
 # A report left by an earlier run must never stand in for a missing one.
 mkdir -p "$REPORT_DIR"
 rm -f "$REPORT_DIR/$JUNIT_NAME" "$REPORT_DIR"/storage-restart-*.xml \
-  "$REPORT_DIR/storage-images.json" "$REPORT_DIR/pytest-integration-ci.log" "$REPORT_DIR"/compose-*.txt
+  "$REPORT_DIR/storage-images.json" "$REPORT_DIR/storage-public-port.txt" \
+  "$REPORT_DIR/pytest-integration-ci.log" "$REPORT_DIR"/compose-*.txt
+
+# Presigned downloads cross the same host-published port boundary as an
+# operator's browser. Never fall back to a possibly installed localhost store
+# when this disposable project's public binding is unavailable.
+run_phase "" "${pipeline_compose[@]}" up -d --wait --wait-timeout 90 minio artifact-source
+run_phase "$REPORT_DIR/storage-public-port.txt" "${pipeline_compose[@]}" port minio 9000
+if (( TEST_STATUS == 0 )); then
+  public_binding=""
+  IFS= read -r public_binding < "$REPORT_DIR/storage-public-port.txt" || true
+  public_port="${public_binding##*:}"
+  if [[ "$public_port" =~ ^[0-9]{1,5}$ ]] && (( 10#$public_port > 0 && 10#$public_port <= 65535 )); then
+    export MOONMIND_TEST_S3_PUBLIC_ENDPOINT="http://host.docker.internal:$public_port"
+  else
+    echo "Error: disposable storage public port is unavailable or invalid." >&2
+    TEST_STATUS=2
+  fi
+fi
 
 # Run in the background so a signal reaches the traps while pytest runs.
 run_phase "" "${pipeline_compose[@]}" run --rm \

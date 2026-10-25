@@ -545,7 +545,7 @@ jobs:
           # inputs; new tests without history run via the plugin fallback
           # and are always selected, never skipped. Serial pytest inside
           # each isolated runner (no -n): each entry boots its own Compose
-    # PostgreSQL/Temporal/Silo stack, never a shared service stack.
+          # PostgreSQL/Temporal/Silo stack, never a shared service stack.
           # DURATIONS_ARGS is the pre-validated flag list from the step
           # above (empty when hints are missing/unusable); word-splitting
           # here is intentional. The marker expression is the provider-free

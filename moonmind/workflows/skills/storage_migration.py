@@ -517,7 +517,7 @@ async def prepare_compose_storage(runner, docker, payload, directory, *, observe
         # retries through its existing owner, preserving the logical step.
         if not stopped:
             return
-        identifiers = (await docker("ps", "--all", "--quiet", "--filter",
+        identifiers = (await docker("ps", "--all", "--quiet", "--no-trunc", "--filter",
                                     f"label=com.docker.compose.project={project}")).split()
         recoverable = [identifier for identifier in stopped if identifier in identifiers]
         rows = json.loads(await docker("inspect", *recoverable)) if recoverable else []
