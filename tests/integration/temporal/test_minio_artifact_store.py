@@ -1,8 +1,4 @@
-"""Exercise the Compose MinIO image through the production artifact adapter.
-
-Regression coverage for PR #4263's image-pull failure: the integration runner
-must start the real MinIO service, and the image must support artifact I/O.
-"""
+"""Exercise the default Compose S3 service through the production adapter."""
 
 from hashlib import sha256
 import os

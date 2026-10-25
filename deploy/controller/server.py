@@ -98,6 +98,8 @@ CAPABILITY_STEPS = {
     "controller-handoff": ("controller_handoff_cli", "handoff"),
     "journal-prepare": ("controller_journal_cli", "journal-prepare"),
     "journal-quiesce": ("controller_journal_cli", "journal-quiesce"),
+    "storage-prepare": ("controller_storage_cli", "storage-prepare"),
+    "storage-observe": ("controller_storage_cli", "storage-observe"),
     "routing-cutover-probe": ("controller_routing_cutover_cli", "probe"),
     "routing-cutover-apply": ("controller_routing_cutover_cli", "apply"),
 }
@@ -243,7 +245,7 @@ def default_legacy_writer_probe() -> bool:
         )
         for operation in (*store.list_open(), *store.list_terminal())
         if operation.get("omnigentStep") in (
-            "controller-handoff", "select", "migrate", "journal-prepare", "journal-quiesce",
+            "controller-handoff", "select", "migrate", "journal-prepare", "journal-quiesce", "storage-prepare", "storage-observe",
         )
         and operation.get("status") in (*record_mod.OPEN_STATUSES, "succeeded")
         and lock_mod.StackLock(store.state_dir, operation["stack"]).probe()
@@ -1451,6 +1453,38 @@ def run_omnigent_step(
     raise ValueError(f"Omnigent {phase} returned no release receipt")
 
 
+def prepare_controller_storage(store, operation, *, runner, overlay, observe=False):
+    """Use the existing release owner for a verified storage-volume transition."""
+    if "minio" not in (operation.get("target") or {}).get("services", ()):
+        return {"status": "skipped"}
+    current = store.load(operation["operationId"])
+    journals = current.get("journalTransition") or {}
+    previous = current.get("storageTransition") or {}
+    try:
+        installed_controller = json.loads((store.state_dir / "controller-image.json").read_text())
+    except (OSError, ValueError, AttributeError):
+        installed_controller = {}
+    candidates = list(dict.fromkeys(filter(None, [
+        operation["desired"]["image"], previous.get("helperImage"),
+        journals.get("helperImage"), *journals.get("sourceImages", ()),
+        installed_controller.get("pinned") if installed_controller.get("verified") else None,
+    ])))
+    for helper_image in candidates:
+        receipt = run_omnigent_step(
+            store, operation, runner=runner, overlay=overlay,
+            phase="storage-observe" if observe else "storage-prepare", helper_image=helper_image,
+        )
+        if receipt.get("status") == "unsupported":
+            continue
+        if receipt.get("status") not in ("skipped", "prepared"):
+            raise ValueError("storage cutover returned no verified receipt")
+        store.record_storage_transition(operation["operationId"], {
+            "helperImage": helper_image, "observation" if observe else "receipt": receipt,
+        })
+        return receipt
+    raise ValueError("No available release helper can verify storage cutover")
+
+
 def prepare_controller_journals(store, operation, *, runner, overlay, compact=True):
     """Prepare active data using installed-image provenance, under stack ownership."""
     operation_id = operation["operationId"]
@@ -1726,9 +1760,10 @@ def hand_off_to_requested_controller(store, operation, *, runner, overlay) -> No
     """Let the controller the requested release ships apply it.
 
     A release can need controller behavior the installed controller predates,
-    as the unversioned routing cutover did. Before this operation changes
-    anything, the requested image's one-off replaces a controller running
-    other code; this process ends and the replacement resumes the operation.
+    as the unversioned routing cutover did. The requested image's one-off
+    replaces a controller running other code; the replacement resumes the
+    operation. A selected storage transition completes first so rollback
+    cannot hand unverified volume selection to an older controller.
     Any other answer leaves this controller applying: ``current``,
     ``unsupported`` from a target predating handoff (a rollback), or
     ``unavailable`` with the reason kept on the operation.
@@ -1814,7 +1849,8 @@ def production_apply(
     overlay = write_image_overlay(
         str(store.state_dir), operation["operationId"], operation["desired"]["image"]
     )
-    if os.environ.get("MOONMIND_CONTROLLER_MANAGED") == "1":
+    storage_selected = "minio" in target.get("services", ())
+    if os.environ.get("MOONMIND_CONTROLLER_MANAGED") == "1" and not storage_selected:
         hand_off_to_requested_controller(store, operation, runner=runner, overlay=overlay)
     channels = omnigent_channels_for_target(target)
     selection = store.load(operation["operationId"]).get("omnigentSelection") or {}
@@ -1863,6 +1899,20 @@ def production_apply(
 
     def before_compose():
         require_routing_floor(store, operation, runner=runner, overlay=overlay)
+        try:
+            # Fence and copy before journal preparation can start a newly
+            # declared store. Compaction then reads the verified destination.
+            prepare_controller_storage(store, operation, runner=runner, overlay=overlay)
+        except Exception as exc:
+            raise engine.ApplyError(
+                "storage-prepare", 1,
+                redact_text(f"{exc} {getattr(exc, 'output', '')}"),
+            ) from exc
+        # Complete a reverse copy before handing rollback to a controller
+        # predating storage cutover. Its first apply then sees the verified
+        # source-format volume, including writes made after forward cutover.
+        if os.environ.get("MOONMIND_CONTROLLER_MANAGED") == "1" and storage_selected:
+            hand_off_to_requested_controller(store, operation, runner=runner, overlay=overlay)
         try:
             return prepare_controller_journals(
                 store, operation, runner=runner, overlay=overlay
@@ -2019,6 +2069,14 @@ def _verify_applied_release(
     # Readiness precedes routing and dispatch verification. A slow or failed
     # startup leaves routing untouched and retains the installed checkpoint.
     if services_running and all(services_running.values()):
+        if "minio" in services:
+            try:
+                prepare_controller_storage(store, operation, runner=runner, overlay=overlay, observe=True)
+                recorded.append({"name": "storage-owner-observation", "status": "passed",
+                                 "detail": "Recorded the installed storage process and volume for recovery"})
+            except Exception as exc:
+                recorded.append({"name": "storage-owner-observation", "status": "unavailable",
+                                 "detail": redact_text(f"Storage recovery ownership could not be observed: {exc}")})
         routing_cutover = converge_routing_cutover(
             store, operation, runner=runner, overlay=overlay
         )

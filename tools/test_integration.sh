@@ -152,6 +152,20 @@ fi
 mkdir -p "$REPORT_DIR"
 rm -f "$REPORT_DIR/$JUNIT_NAME" "$REPORT_DIR"/compose-*.txt
 
+compose "$CLEANUP_TIMEOUT" up -d --wait --wait-timeout 90 minio artifact-source
+compose "$CLEANUP_TIMEOUT" images --format json > "$REPORT_DIR/storage-images.json"
+
+# Persist DB references and saved inputs, remove the worker workspace, then
+# physically restart the replacement before verifying historical reads/claims.
+compose "$CLEANUP_TIMEOUT" run --rm pytest pytest -q \
+  tests/integration/temporal/test_storage_restart.py::test_seed_migrated_saved_inputs \
+  --timeout 90 --junitxml="$REPORT_PATH/storage-restart-seed.xml"
+compose "$CLEANUP_TIMEOUT" restart minio
+compose "$CLEANUP_TIMEOUT" up -d --no-recreate --wait --wait-timeout 90 minio
+compose "$CLEANUP_TIMEOUT" run --rm pytest pytest -q \
+  tests/integration/temporal/test_storage_restart.py::test_retrieve_migrated_saved_inputs_after_restart \
+  --timeout 90 --junitxml="$REPORT_PATH/storage-restart-verify.xml"
+
 # Run in the background so a signal reaches the traps while pytest runs.
 ${run_bound[@]+"${run_bound[@]}"} "${COMPOSE_CMD[@]}" --project-name "$TEST_COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" --project-directory "$COMPOSE_PROJECT_DIR" run --rm \
   -e MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS=1 \

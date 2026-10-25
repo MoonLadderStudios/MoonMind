@@ -367,6 +367,14 @@ class OperationStore:
         }
         return self._write(operation)
 
+    def record_storage_transition(self, operation_id: str, values: Mapping[str, Any]) -> dict:
+        """Keep verified copy provenance separate from application readiness."""
+        operation = self.load(operation_id)
+        operation["storageTransition"] = {
+            **(operation.get("storageTransition") or {}), **dict(values)
+        }
+        return self._write(operation)
+
     def record_routing_cutover(
         self, operation_id: str, values: Mapping[str, Any]
     ) -> dict:

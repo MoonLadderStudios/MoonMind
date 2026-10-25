@@ -713,7 +713,7 @@ class LocalTemporalArtifactStore(TemporalArtifactStore):
         return ""
 
 class S3TemporalArtifactStore(TemporalArtifactStore):
-    """S3-compatible store adapter used by MinIO-first local/dev runtime."""
+    """S3-compatible artifact adapter for local and external object stores."""
 
     def __init__(
         self,
