@@ -14,7 +14,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 @pytest.mark.parametrize(
     ("image", "command"),
     [
-        ("alpine:3.20", ["true"]),
+        ("alpine:3.24", ["true"]),
         ("mcr.microsoft.com/dotnet/sdk:8.0", ["dotnet", "test"]),
     ],
 )

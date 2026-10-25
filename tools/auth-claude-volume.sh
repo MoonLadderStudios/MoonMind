@@ -63,7 +63,7 @@ cmd_sync() {
   docker run --rm \
     -v "${VOLUME_NAME}:${CLAUDE_HOME}" \
     -v "${HOST_CLAUDE_DIR}:/host-claude-auth:ro" \
-    alpine:3.20 sh -c "
+    alpine:3.24 sh -c "
       cp -a /host-claude-auth/. '${CLAUDE_HOME}/' &&
       chown -R 1000:1000 '${CLAUDE_HOME}' &&
       chmod 0700 '${CLAUDE_HOME}' &&
@@ -122,7 +122,7 @@ cmd_check() {
 
   docker run --rm \
     -v "${VOLUME_NAME}:${CLAUDE_HOME}:ro" \
-    alpine:3.20 sh -c "
+    alpine:3.24 sh -c "
       dot_creds='${CLAUDE_HOME}/.credentials.json'
       creds='${CLAUDE_HOME}/credentials.json'
       settings='${CLAUDE_HOME}/settings.json'
