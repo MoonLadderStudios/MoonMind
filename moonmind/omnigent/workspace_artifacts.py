@@ -1681,6 +1681,9 @@ class WorkspaceArtifactProjector:
         expected_digest: str | None = None,
         strict_metadata: bool = False,
     ) -> AdmittedSource:
+        from moonmind.workflows.temporal.artifacts import (
+            TemporalArtifactStorageAccessError, TemporalArtifactUnavailableError,
+        )
         get_metadata = getattr(service, "get_metadata", None)
         if get_metadata is None:
             # A read-bytes-only adapter cannot establish owner, digest, or
@@ -1709,7 +1712,7 @@ class WorkspaceArtifactProjector:
                 principal=principal,
                 **_admitted_scope(admitted_principal),
             )
-        except WorkspaceArtifactProjectionError:
+        except (WorkspaceArtifactProjectionError, TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError):
             raise
         except Exception as exc:
             raise WorkspaceArtifactProjectionError(
@@ -1780,6 +1783,9 @@ class WorkspaceArtifactProjector:
         admitted_principal: str | None = None,
         expected_digest: str | None = None,
     ) -> int:
+        from moonmind.workflows.temporal.artifacts import (
+            TemporalArtifactStorageAccessError, TemporalArtifactUnavailableError,
+        )
         want = expected_digest.strip().lower() if expected_digest else None
         read_chunks = getattr(service, "read_chunks", None)
         if read_chunks is not None:
@@ -1791,7 +1797,7 @@ class WorkspaceArtifactProjector:
                     allow_restricted_raw=True,
                     chunk_size=STREAM_CHUNK_BYTES,
                 )
-            except WorkspaceArtifactProjectionError:
+            except (WorkspaceArtifactProjectionError, TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError):
                 raise
             except Exception as exc:
                 raise WorkspaceArtifactProjectionError(
@@ -1821,7 +1827,7 @@ class WorkspaceArtifactProjector:
                             )
                         digest.update(chunk)
                         stream.write(chunk)
-            except WorkspaceArtifactProjectionError:
+            except (WorkspaceArtifactProjectionError, TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError):
                 target.unlink(missing_ok=True)
                 raise
             except OSError as exc:
@@ -1844,7 +1850,7 @@ class WorkspaceArtifactProjector:
                 **_admitted_scope(admitted_principal),
                 allow_restricted_raw=True,
             )
-        except WorkspaceArtifactProjectionError:
+        except (WorkspaceArtifactProjectionError, TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError):
             raise
         except Exception as exc:
             raise WorkspaceArtifactProjectionError(

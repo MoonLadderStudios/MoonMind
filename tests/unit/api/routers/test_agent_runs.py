@@ -3020,6 +3020,23 @@ def test_get_agent_run_artifact_session_projection_reads_durable_state_only(
     assert response.status_code == 200
     assert response.json()["session_epoch"] == 2
 
+@pytest.mark.parametrize("dependency", ["authority", "storage"])
+def test_list_session_resources_preserves_artifact_outage(dependency):
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactUnavailableError
+    user_id = uuid4()
+    user = SimpleNamespace(id=user_id, email="owner@example.com", is_superuser=False)
+    artifact_service = AsyncMock()
+    artifact_service.get_metadata.side_effect = TemporalArtifactUnavailableError("art_stdout", dependency=dependency, operation="get_metadata")
+    app = _app_with_agent_and_session_routers(user, artifact_service)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        with patch("api_service.api.routers.agent_runs.ManagedSessionStore.load", return_value=_build_session_record()):
+            with patch("api_service.api.routers.agent_runs._load_execution_owner_binding", new=AsyncMock(return_value=("user", str(user_id)))):
+                response = client.get("/api/sessions/sess:wf-task-1:codex_cli/resources")
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == f"artifact_{dependency}_unavailable"
+    assert response.headers["retry-after"] == "5"
+
+
 def test_list_session_resources_returns_authorized_redacted_artifact_projection() -> None:
     user_id = uuid4()
     user = SimpleNamespace(id=user_id, email="owner@example.com", is_superuser=False)
