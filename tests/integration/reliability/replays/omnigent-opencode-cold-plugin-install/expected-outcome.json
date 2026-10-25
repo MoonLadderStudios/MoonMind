@@ -15,6 +15,6 @@
   "dockerfileCacheArg": "ARG OPENCODE_PLUGIN_NPM_CACHE=/opt/moonmind/opencode-npm-cache",
   "dockerfilePackageJson": "{\"dependencies\":{\"@opencode-ai/plugin\":\"%s\"}}",
   "dockerfileOfflineVerify": "--cache \"${OPENCODE_PLUGIN_NPM_CACHE}\" --no-audit --no-fund --offline",
-  "releaseVerifyScript": "services/omnigent/opencode-host/verify-warm-plugin-cache.sh",
-  "releaseWorkflow": ".github/workflows/docker-publish-opencode-host.yml"
+  "releaseVerifyScript": "services/omnigent/moonmind-host/verify-warm-plugin-cache.sh",
+  "releaseWorkflow": ".github/workflows/docker-publish-moonmind-host.yml"
 }

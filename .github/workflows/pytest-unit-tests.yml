@@ -1496,11 +1496,11 @@ jobs:
             127.0.0.1:5000/moonmind-test-omnigent-server)"
           base="$(pin_local_image moonmind-test-omnigent-host-base:candidate \
             127.0.0.1:5000/moonmind-test-omnigent-host-base)"
-          # Use the existing OpenCode host layer and warmed offline plugin
+          # Use the shared host image and warmed offline plugin
           # cache over the exact upstream base just built from the gitlink.
           # The daemon-backed default builder can resolve the loopback registry.
           docker buildx build --builder default --load \
-            -f services/omnigent/opencode-host/Dockerfile \
+            -f services/omnigent/moonmind-host/Dockerfile \
             --build-arg "OMNIGENT_HOST_BASE_IMAGE=$base" \
             --build-arg "OMNIGENT_BUILD_DIGEST=${base##*@}" \
             --label "org.opencontainers.image.revision=${{ steps.recovery-source.outputs.commit }}" \

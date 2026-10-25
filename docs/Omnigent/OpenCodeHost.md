@@ -191,7 +191,7 @@ host launch:   test -d /opt/moonmind/opencode-npm-cache || exit 78
                  audit=false
                  fund=false
                  update-notifier=false
-release CI:    services/omnigent/opencode-host/verify-warm-plugin-cache.sh <digest>
+release CI:    services/omnigent/moonmind-host/verify-warm-plugin-cache.sh <digest>
                (opencode serve becomes ready with --network none)
 ```
 
@@ -633,7 +633,7 @@ The deployment resolver probes `omnigent --version` in both immutable images
 and records each build identity separately. A release-number difference alone
 does not quarantine an otherwise qualified host. The host's
 `moonmind.omnigent.build_digest` label records host provenance. The resolver runs
-`services/omnigent/opencode-host/verify-warm-plugin-cache.sh` against the exact
+`services/omnigent/moonmind-host/verify-warm-plugin-cache.sh` against the exact
 selected OpenCode image, proving plugin-enabled server startup with networking
 disabled. Missing or incomplete caches, failed startup, and probe timeouts
 block compatibility even when labels and versions match. Host Class selection
