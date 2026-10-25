@@ -2095,11 +2095,29 @@ class TemporalExecutionProjectionSourceMode(str, enum.Enum):
     TEMPORAL_AUTHORITATIVE = "temporal_authoritative"
 
 
+# Use the same literal predicate for discovery and its partial index. Bound
+# JSON path/state parameters can make PostgreSQL's generic plans miss an index.
+TEMPORAL_EXECUTION_PENDING_INTENTS_SQL = (
+    "close_status IS NULL "
+    "AND state NOT IN ('no_commit', 'completed', 'failed', 'canceled') "
+    "AND ((memo -> 'temporalStart' ->> 'state') = 'pending' "
+    "OR (memo -> 'temporalCancel' ->> 'state') = 'pending')"
+)
+
+
 class TemporalExecutionCanonicalRecord(Base):
     """Authoritative execution state mirrored from the Temporal control plane."""
 
     __tablename__ = "temporal_execution_sources"
     __table_args__ = (
+        Index(
+            "ix_temporal_execution_pending_intents",
+            "namespace",
+            "updated_at",
+            "workflow_id",
+            postgresql_where=text(TEMPORAL_EXECUTION_PENDING_INTENTS_SQL),
+            sqlite_where=text(TEMPORAL_EXECUTION_PENDING_INTENTS_SQL),
+        ),
         Index(
             "ix_temporal_execution_sources_state_updated_at",
             "state",
