@@ -115,6 +115,7 @@ def _wait_registry() -> None:
                 if response.status == 200:
                     return
         except (urllib.error.URLError, OSError):
+            # Connection errors are expected until the local registry starts.
             pass
         time.sleep(0.25)
     raise FixtureError("The job-local test registry did not become ready")
