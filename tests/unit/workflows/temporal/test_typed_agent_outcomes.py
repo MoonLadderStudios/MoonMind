@@ -139,37 +139,144 @@ def test_compatibility_decode_and_retry_ignore_display_text(monkeypatch, spellin
         )
 
 
-def test_nested_provider_failure_aliases_decode_once_without_classifying_display(
-    monkeypatch,
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spelling", ["snake", "camel"])
+@pytest.mark.parametrize("disposition", ["no_retry", "wait", "retry", "unknown"])
+async def test_nested_provider_failure_aliases_decode_once_without_classifying_display(
+    monkeypatch, tmp_path, spelling, disposition,
 ):
+    from moonmind.omnigent.bridge_artifacts import build_omnigent_result
+    from moonmind.workflows.provider_failures import provider_failure_event_from_metadata
+    from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+    from tests.unit.omnigent.test_execute import _bundle, _request
+
     monkeypatch.setattr(run_module.workflow, "patched", lambda _: True)
     parent = run_module.MoonMindRunWorkflow()
-    for event in (
+    event = (
         {
             "provider_error_class": "capacity",
             "retry_after_seconds": 30,
             "raw_error_ref": "art_cause",
-        },
+            "retry_disposition": disposition,
+            "failure_id": "original-operation-error",
+        } if spelling == "snake" else
         {
             "providerErrorClass": "capacity",
             "retryAfterSeconds": 30,
             "rawErrorRef": "art_cause",
-        },
-    ):
-        mapped = parent._map_agent_run_result(
-            {
-                "failure_class": "execution_error",
-                "summary": "credentials revoked",
-                "metadata": {"providerFailure": event},
-            }
+            "retryDisposition": disposition,
+            "failureId": "original-operation-error",
+        }
+    )
+    for text in ("credentials revoked", "success", "please retry", "HTTP 429"):
+        produced = build_omnigent_result(
+            request=_request(), terminal_status="failed", session_id="session",
+            agent_id="agent", final_snapshot={"providerFailure": event, "summary": text},
+            event_count=1, capture_bundle=_bundle(diagnostics_ref="art_cause"),
         )
+        assert produced.failure_id == "original-operation-error"
+        assert produced.retry_disposition == disposition
+        assert MoonMindAgentRun._result_requires_provider_cooldown(produced) is (disposition == "wait")
+        assert provider_failure_event_from_metadata(produced.provider_failure).requires_cooldown() is (disposition == "wait")
+        mapped = parent._map_agent_run_result(produced)
         canonical = mapped["outputs"]["agentResult"]
-        assert canonical["retryDisposition"] == "wait"
+        assert canonical["retryDisposition"] == disposition
+        assert canonical["failureId"] == "original-operation-error"
         assert canonical["providerFailure"]["providerErrorClass"] == "capacity"
         assert canonical["providerFailure"]["rawErrorRef"] == "art_cause"
         assert parent._activity_result_retryable(
             mapped, failure_message="execution_error", tool_type="agent_runtime"
-        )
+        ) is (disposition in {"retry", "wait"})
+    async with _persisted_execution(tmp_path) as (session, record, service):
+        service._record_finish_summary(record, finish_outcome_code=None,
+                                      finish_summary={"agentResult": canonical})
+        await session.commit()
+        session.expire_all()
+        reloaded = await session.get(type(record), "mm:typed")
+        for serializer in (_serialize_execution, _serialize_execution_list_item):
+            projected = serializer(reloaded).agent_result
+            assert projected["failureId"] == "original-operation-error"
+            assert projected["retryDisposition"] == disposition
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [
+    {"observation": "unavailable"},
+    {"providerFailure": {"observation": "unavailable"}},
+    {"metadata": {"provider_failure": {"observation": "unavailable"}}},
+    {"providerFailure": {"observation": "unavailable", "providerErrorClass": "capacity", "retryDisposition": "wait"}},
+])
+async def test_unavailable_observation_without_execution_state_stays_unknown(
+    monkeypatch, tmp_path, payload,
+):
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _: True)
+    mapped = run_module.MoonMindRunWorkflow()._map_agent_run_result(
+        payload
+    )
+    assert mapped["status"] == "UNKNOWN"
+    canonical = mapped["outputs"]["agentResult"]
+    assert canonical["executionState"] == canonical["objectiveOutcome"] == "unknown"
+    assert canonical["retryDisposition"] == "unknown"
+    assert not run_module.MoonMindRunWorkflow()._activity_result_retryable(
+        mapped, failure_message="", tool_type="agent_runtime"
+    )
+    async with _persisted_execution(tmp_path) as (session, record, service):
+        record.state = MoonMindWorkflowState.FAILED
+        service._record_finish_summary(record, finish_outcome_code=None,
+                                      finish_summary={"agentResult": canonical})
+        await session.commit()
+        session.expire_all()
+        reloaded = await session.get(type(record), "mm:typed")
+        for serializer in (_serialize_execution, _serialize_execution_list_item):
+            assert serializer(reloaded).objective_outcome == "unknown"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_class,expected", [("capacity", "capacity_wait"), ("rate_limit", "quota_wait")])
+async def test_manager_projects_accepted_cooldown_and_recovery(monkeypatch, failure_class, expected):
+    from datetime import UTC, datetime, timedelta
+    from moonmind.workflows.temporal.workflows import provider_profile_manager as manager
+    from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+    from moonmind.omnigent.bridge_artifacts import build_omnigent_result
+    from tests.unit.omnigent.test_execute import _bundle, _request
+
+    now = datetime(2026, 10, 25, tzinfo=UTC)
+    monkeypatch.setattr(manager.workflow, "patched", lambda _: True)
+    monkeypatch.setattr(manager.workflow, "now", lambda: now)
+    owner = manager.MoonMindProviderProfileManagerWorkflow()
+    owner._startup_restored = True
+    owner._apply_profile_sync([dict(profile_id="profile", enabled=True, launch_ready=True,
+                                   readiness_reason="ready", max_parallel_runs=1)])
+    class ManagerHandle:
+        async def signal(self, name, payload):
+            assert name == "report_cooldown"
+            await owner.report_cooldown(payload)
+
+    monkeypatch.setattr(manager.workflow, "get_external_workflow_handle", lambda _: ManagerHandle())
+    child = MoonMindAgentRun()
+    child._omnigent_capacity_profile_id = "profile"
+    child._omnigent_capacity_runtime_id = "codex_cli"
+    child.final_result = build_omnigent_result(
+        request=_request(), terminal_status="failed", session_id="session", agent_id="agent",
+        final_snapshot={"providerFailure": {"providerErrorClass": failure_class, "retryDisposition": "wait"}},
+        event_count=1, capture_bundle=_bundle(),
+    )
+    assert child._result_requires_provider_cooldown(child.final_result)
+    assert await child._report_omnigent_provider_cooldown(cooldown_seconds=30)
+    state = owner.get_state()["profiles"]["profile"]
+    assert state["readiness_reason"] == expected
+    assert state["cooldown_until"] or any(scope["cooldown_until"] for scope in owner.get_state()["scopes"])
+    assert not (owner._profiles["profile"].is_available() and owner._profile_scope_available(owner._profiles["profile"]))
+    carried = owner._build_continue_as_new_input()
+    resumed = manager.MoonMindProviderProfileManagerWorkflow()
+    resumed._restore_state(carried)
+    assert resumed.get_state()["profiles"]["profile"]["readiness_reason"] == expected
+    now += timedelta(seconds=31)
+    resumed._clear_expired_cooldowns()
+    recovered = resumed.get_state()["profiles"]["profile"]
+    assert recovered["readiness_reason"] == "ready"
+    assert recovered["cooldown_until"] is None
+    assert recovered["current_leases"] == []
 
 
 @pytest.mark.asyncio

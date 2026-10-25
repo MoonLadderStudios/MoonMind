@@ -60,8 +60,10 @@ class _LegacyTypedOutcomeReplayFixture:
             parent._workflow_patch_enabled = lambda _: False
             mapped = {"status": parent._moonspec_gate_failure_summary()["recommendedNextAction"]}
         else:
-            mapped = parent._map_legacy_agent_run_result(result)
-        await workflow.sleep(1 if mapped["status"] in {"COMPLETED", "restore_validation_environment"} else 2)
+            mapped = parent._map_legacy_agent_run_result({k: v for k, v in result.items() if k != "retryDecision"})
+            if result.get("retryDecision"):
+                mapped["status"] = "RETRY" if parent._activity_result_retryable(mapped, failure_message="execution_error", tool_type="agent_runtime") else "NO_RETRY"
+        await workflow.sleep(1 if mapped["status"] in {"COMPLETED", "restore_validation_environment", "RETRY"} else 2)
         return mapped["status"]
 
 
@@ -74,8 +76,10 @@ class _CurrentTypedOutcomeReplayFixture:
             parent._publish_context = _typed_gate_replay_context()
             mapped = {"status": parent._moonspec_gate_failure_summary()["recommendedNextAction"]}
         else:
-            mapped = parent._map_agent_run_result(result)
-        await workflow.sleep(1 if mapped["status"] in {"COMPLETED", "restore_validation_environment"} else 2)
+            mapped = parent._map_agent_run_result({k: v for k, v in result.items() if k != "retryDecision"})
+            if result.get("retryDecision"):
+                mapped["status"] = "RETRY" if parent._activity_result_retryable(mapped, failure_message="execution_error", tool_type="agent_runtime") else "NO_RETRY"
+        await workflow.sleep(1 if mapped["status"] in {"COMPLETED", "restore_validation_environment", "RETRY"} else 2)
         return mapped["status"]
 
 
@@ -91,6 +95,20 @@ async def test_typed_outcome_parent_mapping_replays_old_and_current_decisions():
             (_LegacyTypedOutcomeReplayFixture, {"gate": True}, "restore_validation_environment"),
             (_CurrentTypedOutcomeReplayFixture, {"gate": True}, "reattempt_current_step"),
             (_LegacyTypedOutcomeReplayFixture, {}, "COMPLETED"),
+            (_LegacyTypedOutcomeReplayFixture, {"observation": "unavailable"}, "COMPLETED"),
+            (_CurrentTypedOutcomeReplayFixture, {"observation": "unavailable"}, "UNKNOWN"),
+            (_LegacyTypedOutcomeReplayFixture, {"providerFailure": {"observation": "unavailable"}}, "COMPLETED"),
+            (_CurrentTypedOutcomeReplayFixture, {"providerFailure": {"observation": "unavailable"}}, "UNKNOWN"),
+            (
+                _LegacyTypedOutcomeReplayFixture,
+                {"retryDecision": True, "failureClass": "execution_error", "providerFailure": {"providerErrorClass": "capacity", "retryDisposition": "no_retry", "failureId": "original"}},
+                "RETRY",
+            ),
+            (
+                _CurrentTypedOutcomeReplayFixture,
+                {"retryDecision": True, "failureClass": "execution_error", "providerFailure": {"providerErrorClass": "capacity", "retryDisposition": "no_retry", "failureId": "original"}},
+                "NO_RETRY",
+            ),
             (
                 _LegacyTypedOutcomeReplayFixture,
                 {"failure_class": "user_error", "provider_error_code": "401"},

@@ -2540,17 +2540,36 @@ def test_build_agent_execution_request_enforces_read_repository_operation(
     assert request.parameters["publishMode"] == "none"
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("result_kind", ["execution_error", "delivery_unknown", "unavailable"])
 async def test_run_execution_stage_fail_fast_raises_when_tool_returns_failed_status(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    result_kind: str,
 ) -> None:
+    from moonmind.omnigent.bridge_artifacts import build_omnigent_result
+    from moonmind.statuses.workflow import MoonMindWorkflowState
+    from moonmind.workflows.temporal.artifacts import (
+        TemporalArtifactActivities, TemporalArtifactRepository, TemporalArtifactService,
+    )
+    from contextlib import asynccontextmanager
+    from api_service.db import base as db_base
+    from tests.unit.omnigent.test_execute import _bundle, _request
+    from tests.unit.workflows.temporal.test_typed_agent_outcomes import (
+        _persisted_execution, _serialize_execution, _serialize_execution_list_item,
+    )
+
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
+    memo_updates = []
+    written = []
 
     async def fake_execute_activity(
         activity_type: str,
         payload: dict[str, object],
         **_kwargs: object,
     ) -> object:
+        if activity_type == "artifact.create":
+            return ({"artifact_id": f"art_written_{len(written)}"}, {"upload_url": "unused"})
         if activity_type == "artifact.read":
             return json.dumps(
                 {
@@ -2575,16 +2594,36 @@ async def test_run_execution_stage_fail_fast_raises_when_tool_returns_failed_sta
         _args: object,
         **_kwargs: object,
     ) -> object:
+        if result_kind == "delivery_unknown":
+            return build_omnigent_result(
+                request=_request(), terminal_status="delivery_unknown",
+                session_id="session", agent_id="agent", final_snapshot={},
+                event_count=1, capture_bundle=_bundle(diagnostics_ref="art_original"),
+            )
+        if result_kind == "unavailable":
+            return {"observation": "unavailable", "diagnosticsRef": "art_original"}
         return {
             "summary": "Failed to execute generic LLM handler",
-            "failureClass": "gemini CLI command failed",
+            "failureClass": "execution_error",
+            "failureId": "cli_command_failed",
+            "diagnosticsRef": "art_original",
+            "retryDisposition": "no_retry",
             "metadata": {},
             "output_refs": [],
         }
 
+    async def execute_typed(activity_type, payload, **kwargs):
+        if activity_type == "execution.record_terminal_state":
+            return await terminal_activities.execution_record_terminal_state(payload.model_dump(by_alias=True))
+        if activity_type == "artifact.write_complete":
+            written.append(json.loads(payload.payload))
+            return {"ok": True}
+        return await fake_execute_activity(activity_type, payload, **kwargs)
+
     monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_workflow_module, "execute_typed_activity", execute_typed)
     monkeypatch.setattr(run_workflow_module.workflow, "execute_child_workflow", fake_execute_child_workflow)
-    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda memo: memo_updates.append(memo))
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "upsert_search_attributes",
@@ -2594,7 +2633,7 @@ async def test_run_execution_stage_fail_fast_raises_when_tool_returns_failed_sta
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        {"task_queue": "mm.workflow.user.v2", "namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "start_time": datetime.now(timezone.utc)},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
@@ -2606,10 +2645,56 @@ async def test_run_execution_stage_fail_fast_raises_when_tool_returns_failed_sta
         )
 
     message = str(exc_info.value)
-    assert "Plan step 'step-1' (codex_cli) returned status FAILED" in message
-    assert "Failed to execute generic LLM handler" in message
-    assert "lastError=gemini CLI command failed" in message
-    assert "childWorkflowId=wf-1:agent:step-1" in message
+    if result_kind == "execution_error":
+        assert message == (
+            "Agent runtime failed with execution_error: Failed to execute generic LLM handler "
+            "(diagnosticsRef: art_original)"
+        )
+        assert workflow._failure_diagnostic["category"] == "execution_error"
+    else:
+        assert message == "Agent runtime observation is unavailable; the execution outcome is unknown."
+    assert workflow._failure_diagnostic["childWorkflowId"] == "wf-1:agent:step-1"
+    assert workflow._failure_diagnostic["diagnosticsRef"] == "art_original"
+
+    # Exercise the real terminal memo/finalizer and persist its emitted envelope.
+    workflow._set_state(run_workflow_module.STATE_FAILED)
+    expected_objective = "failed" if result_kind == "execution_error" else "unknown"
+    assert memo_updates[-1]["objectiveOutcome"] == expected_objective
+    await workflow._run_finalizing_stage(parameters={"publishMode": "none"}, status="failed", error=message)
+    summary = next(payload for payload in written if "finishOutcome" in payload)
+    canonical = summary["agentResult"]
+    assert canonical == workflow._step_ledger_rows[0]["executionOutcome"]["agentResult"]
+    assert summary["resultOrder"]["runId"] == workflow_info.run_id
+    assert canonical["diagnosticsRef"] == "art_original"
+    if result_kind == "execution_error":
+        assert canonical["failureId"] == "cli_command_failed"
+        assert canonical["retryDisposition"] == "no_retry"
+    else:
+        assert canonical["objectiveOutcome"] == "unknown"
+        manifest = next(payload for payload in written if payload.get("agentResult") == canonical and "finishOutcome" not in payload)
+        assert manifest["agentResult"]["objectiveOutcome"] == "unknown"
+    async with _persisted_execution(tmp_path) as (session, record, _service):
+        record.workflow_id = workflow_info.workflow_id
+        record.run_id = workflow_info.run_id
+        record.state = MoonMindWorkflowState.EXECUTING
+        record.memo = memo_updates[-1]
+        await session.commit()
+        @asynccontextmanager
+        async def database_context():
+            yield session
+
+        monkeypatch.setattr(db_base, "get_async_session_context", database_context)
+        terminal_activities = TemporalArtifactActivities(
+            TemporalArtifactService(TemporalArtifactRepository(session))
+        )
+        await workflow._record_terminal_state(state="failed", close_status="failed", summary=message)
+        session.expire_all()
+        reloaded = await session.get(type(record), workflow_info.workflow_id)
+        assert reloaded.state == MoonMindWorkflowState.FAILED
+        for serializer in (_serialize_execution, _serialize_execution_list_item):
+            payload = serializer(reloaded)
+            assert payload.objective_outcome == expected_objective
+            assert payload.agent_result == canonical
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_continue_mode_keeps_running_after_failed_status(
@@ -3898,13 +3983,20 @@ async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
         ValueError,
         match=(
             "Provider authentication failed with HTTP 401 for profile "
-            "codex_default: http 401"
+            "codex_default: Provider authentication failed"
         ),
     ):
         await workflow._run_execution_stage(
             parameters={"repo": "MoonLadderStudios/MoonMind"},
             plan_ref="art_plan_1",
         )
+
+    facts = workflow._failure_diagnostic["agentResult"]
+    assert facts["failureId"] == "401"
+    assert facts["providerFailure"]["providerErrorClass"] == "auth"
+    assert facts["retryDisposition"] == "no_retry"
+    assert facts["retryRecommendation"] == "reauthenticate"
+    assert workflow._failure_diagnostic["childWorkflowId"] == "wf-1:agent:node-1"
 
 
 @pytest.mark.asyncio

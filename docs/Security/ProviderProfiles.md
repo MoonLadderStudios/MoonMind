@@ -214,14 +214,14 @@ Enabling is correct because the user is configuring the provider to use it; such
 an action may also clear `user_disabled`.
 
 Passive validation — background checks, migrations, repair jobs, readiness
-refreshes, health probes, manager sync — may update `auth_state`, timestamps,
-and diagnostics but never re-enables a `user_disabled` profile. Readiness
-`reason_code` distinguishes ready, expired/revoked or rejected credentials,
-unavailable observation, quota/capacity wait, unsupported selection, and setup
-requirements. API, manager snapshots, and Settings carry these structured reasons
-without parsing display text. An unavailable probe cannot invalidate credentials;
-existing launch predicates and credential-generation-fenced rejection checks keep
-their authority.
+refreshes, health probes, manager sync — may update observations and diagnostics
+but never re-enable a `user_disabled` profile. API-key and OAuth validation record
+structured observations for API, manager, and Settings readiness reasons:
+ready, expired/revoked or rejected credentials, unavailable checks, quota/capacity
+wait, unsupported selection, and setup requirements. Manager cooldown reasons
+survive Continue-As-New and clear on expiry. Unavailable checks preserve confirmed
+credential rejection until successful validation; they never invalidate credentials
+or replace existing launch predicates and credential-generation fences.
 
 ### 5.4 Disable, disconnect, failure, and policy states
 

@@ -5264,7 +5264,7 @@ class TemporalExecutionService:
         )
         record.finish_outcome_code = str(outcome_code).strip() if outcome_code else None
         record.finish_summary_json = normalized_summary
-        if record.state is MoonMindWorkflowState.COMPLETED:
+        if record.state in TERMINAL_STATES:
             memo = record.memo or {}
             if replace_terminal and isinstance(previous_summary, dict) and isinstance(previous_summary.get("agentResult"), dict):
                 # A newly admitted attempt (or a confirmed observation replacing

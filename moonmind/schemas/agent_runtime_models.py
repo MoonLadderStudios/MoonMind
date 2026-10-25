@@ -1491,13 +1491,28 @@ class AgentRunResult(BaseModel):
             if data.get(alias) is None:
                 data[alias] = metadata.get(alias, metadata.get(name))
         failure = data.get("failureClass")
+        raw_event = data.get("providerFailure") or metadata.get(
+            "providerFailure", metadata.get("provider_failure")
+        )
+        event = provider_failure_event_from_metadata(raw_event) or (
+            build_provider_failure_event(
+                provider_error_code=data.get("providerErrorCode"),
+                retry_recommendation=data.get("retryRecommendation"),
+            )
+        )
+        if event is not None and event.observation != "confirmed":
+            data.setdefault("observation", event.observation)
         terminal = metadata.get("terminalState", metadata.get("normalizedStatus"))
         if "executionState" not in data:
             data["executionState"] = (
                 terminal
                 if terminal
                 in {"completed", "failed", "canceled", "timed_out", "delivery_unknown"}
-                else "failed" if failure else "completed"
+                else (
+                    "unknown"
+                    if data.get("observation") in {"unavailable", "unknown"}
+                    else "failed" if failure else "completed"
+                )
             )
         if "observation" not in data:
             data["observation"] = (
@@ -1507,12 +1522,6 @@ class AgentRunResult(BaseModel):
             )
         if data.get("outputRefs") and "outputAvailability" not in data:
             data["outputAvailability"] = "available"
-        event = provider_failure_event_from_metadata(
-            data.get("providerFailure") or metadata.get("providerFailure")
-        ) or build_provider_failure_event(
-            provider_error_code=data.get("providerErrorCode"),
-            retry_recommendation=data.get("retryRecommendation"),
-        )
         if event:
             data["providerFailure"] = event.to_metadata()
             if data.get("providerErrorCode") is None:
@@ -1528,7 +1537,12 @@ class AgentRunResult(BaseModel):
                 ]
             )
         )
-        data.setdefault("failureId", data.get("providerErrorCode") or failure)
+        data.setdefault(
+            "failureId",
+            (event.failure_id if event else None)
+            or data.get("providerErrorCode")
+            or failure,
+        )
         turn = metadata.get("turnMetadata") or {}
         if isinstance(turn, Mapping):
             data.setdefault(
@@ -1542,8 +1556,13 @@ class AgentRunResult(BaseModel):
             )
         if "retryDisposition" not in data:
             recommendation = data.get("retryRecommendation")
+            explicit_event_disposition = isinstance(raw_event, Mapping) and (
+                "retryDisposition" in raw_event or "retry_disposition" in raw_event
+            )
             if event is not None and event.observation != "confirmed":
                 disposition = "unknown"
+            elif event is not None and explicit_event_disposition:
+                disposition = event.retry_disposition
             elif (
                 failure in {"user_error", "permanent", "canceled"}
                 or isinstance(turn, Mapping)

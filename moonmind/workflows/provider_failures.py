@@ -367,6 +367,9 @@ def build_provider_failure_event(
             quota is not None,
             credential is not None,
             request_id is not None,
+            raw_ref is not None,
+            failure_id is not None,
+            retry_disposition is not None,
             observation != "confirmed",
         )
     )
@@ -396,7 +399,14 @@ def build_provider_failure_event(
             else (
                 "no_retry"
                 if resolved_class in {"auth", "credential_scope"}
-                else "wait" if resolved_class in _COOLDOWN_CLASSES else "unknown"
+                else (
+                    "wait"
+                    if resolved_class in _COOLDOWN_CLASSES
+                    or retry_after
+                    or reset
+                    or quota
+                    else "unknown"
+                )
             )
         ),
     )
@@ -429,6 +439,8 @@ def provider_failure_event_requires_cooldown(
         return False
     if event.observation != "confirmed":
         return False
+    if event.retry_disposition is not None:
+        return event.retry_disposition == "wait"
     # Structured retry/quota signals take precedence over marker-derived codes.
     if event.retry_after_seconds is not None and event.retry_after_seconds > 0:
         return True
