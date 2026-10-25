@@ -28,7 +28,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pytest-unit-tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: pytest-unit-tests-${{ github.workflow }}-${{ inputs.candidate_image && github.run_id || github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:

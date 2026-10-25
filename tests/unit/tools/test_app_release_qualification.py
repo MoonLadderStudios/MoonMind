@@ -544,3 +544,92 @@ def test_isolated_caller_qualifies_one_archive_without_a_publication_path():
         )
         assert "always()" in cleanup["if"]
         assert cleanup["env"]["FIXTURE_OWNER"] == restore["env"]["FIXTURE_OWNER"]
+
+
+def _concurrency_value(expression, context):
+    """Evaluate dotted fields and the fallback operators used by these groups."""
+
+    def field(token):
+        token = token.strip()
+        assert re.fullmatch(r"[\w.]+", token), f"Unsupported concurrency field: {token}"
+        value = context
+        for key in token.split("."):
+            value = value.get(key, "") if isinstance(value, dict) else ""
+        return value
+
+    def resolve(match):
+        value = ""
+        for alternative in match[1].split("||"):
+            for token in alternative.split("&&"):
+                value = field(token)
+                if not value:
+                    break
+            if value:
+                break
+        return str(value or "")
+
+    return re.sub(r"\$\{\{\s*(.*?)\s*\}\}", resolve, expression)
+
+
+@pytest.mark.parametrize(
+    "owner", ["pytest-unit-tests.yml", "alembic-migration-gate.yml"]
+)
+def test_older_release_rerun_cannot_cancel_current_candidate_qualification(owner):
+    config = _workflow(owner)
+    call = next(
+        job
+        for job in _workflow("docker-publish.yml")["jobs"].values()
+        if job.get("uses") == "./.github/workflows/" + owner
+    )
+    groups = []
+    for run in ("older-run", "current-run"):
+        context = {
+            "github": {
+                "workflow": "Release / Build App Image",
+                "ref": "refs/heads/main",
+                "run_id": run,
+                "event": {},
+            },
+            "needs": _qualification_context(),
+        }
+        context["inputs"] = {
+            key: _concurrency_value(value, context)
+            for key, value in call.get("with", {}).items()
+        }
+        groups.append(_concurrency_value(config["concurrency"]["group"], context))
+    assert groups[0] != groups[1], "An older rerun must not cancel the current release"
+
+
+@pytest.mark.parametrize(
+    "owner", ["pytest-unit-tests.yml", "alembic-migration-gate.yml"]
+)
+@pytest.mark.parametrize(
+    "event", ["pull_request", "push", "schedule", "workflow_dispatch"]
+)
+def test_ordinary_ci_keeps_latest_run_cancellation_within_its_existing_owner(
+    owner, event
+):
+    config = _workflow(owner)
+    assert config["concurrency"]["cancel-in-progress"] is True
+
+    def group(run, *, number=73, ref="refs/heads/main"):
+        return _concurrency_value(
+            config["concurrency"]["group"],
+            {
+                "github": {
+                    "workflow": config["name"],
+                    "ref": ref,
+                    "run_id": run,
+                    "event": {"pull_request": {"number": number}}
+                    if event == "pull_request"
+                    else {},
+                },
+                "inputs": {},
+            },
+        )
+
+    assert group("older-head") == group("newer-head")
+    if event == "pull_request":
+        assert group("same-run", number=73) != group("same-run", number=74)
+    else:
+        assert group("same-run") != group("same-run", ref="refs/heads/another")
