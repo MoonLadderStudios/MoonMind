@@ -2098,9 +2098,9 @@ class TemporalExecutionProjectionSourceMode(str, enum.Enum):
 # Use the same literal predicate for discovery and its partial index. Bound
 # JSON path/state parameters can make PostgreSQL's generic plans miss an index.
 TEMPORAL_EXECUTION_PENDING_INTENTS_SQL = (
-    "close_status IS NULL "
+    "((close_status IS NULL "
     "AND state NOT IN ('no_commit', 'completed', 'failed', 'canceled') "
-    "AND ((memo -> 'temporalStart' ->> 'state') = 'pending' "
+    "AND (memo -> 'temporalStart' ->> 'state') = 'pending') "
     "OR (memo -> 'temporalCancel' ->> 'state') = 'pending')"
 )
 

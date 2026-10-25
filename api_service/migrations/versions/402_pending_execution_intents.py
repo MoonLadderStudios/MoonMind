@@ -11,9 +11,9 @@ depends_on = None
 # Freeze the predicate installed by this revision, independently of future
 # model changes. This is also the discovery predicate in this release.
 _PENDING = (
-    "close_status IS NULL "
+    "((close_status IS NULL "
     "AND state NOT IN ('no_commit', 'completed', 'failed', 'canceled') "
-    "AND ((memo -> 'temporalStart' ->> 'state') = 'pending' "
+    "AND (memo -> 'temporalStart' ->> 'state') = 'pending') "
     "OR (memo -> 'temporalCancel' ->> 'state') = 'pending')"
 )
 
