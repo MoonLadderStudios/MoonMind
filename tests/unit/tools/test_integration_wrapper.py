@@ -30,6 +30,7 @@ directory = Path(args[args.index("--project-directory") + 1])
 command = args[args.index("--project-directory") + 2:]
 if command[:1] == ["run"]:
     junit = re.search(r"--junitxml=(\S+)", command[-1])
+    phase = "seed" if "storage-restart-seed.xml" in command[-1] else "verify" if "storage-restart-verify.xml" in command[-1] else "main"
 
     def report(status):
         if junit and config.get("write_junit", True):
@@ -43,7 +44,9 @@ if command[:1] == ["run"]:
     print("tests/integration/test_example.py::test_case FAILED", flush=True)
     Path(os.environ["WRAPPER_TEST_STARTED"]).write_text("started")
     time.sleep(config.get("run_sleep", 0))
-    report(config.get("run_status", 0))
+    report(config.get(phase + "_status", config.get("run_status", 0)))
+if command[:1] == ["restart"]:
+    raise SystemExit(config.get("restart_status", 0))
 if command[:1] in (["down"], ["logs"], ["ps"]):
     print(f"{command[0]} sk-live-wrapper_test_secret observation", flush=True)
     time.sleep(config.get(command[0] + "_sleep", 0))
@@ -86,7 +89,7 @@ class Wrapper:
         ]
 
     def pytest_command(self) -> str:
-        runs = [command for command in self.compose_commands() if command[0] == "run"]
+        runs = [command for command in self.compose_commands() if command[0] == "run" and "pytest-integration-ci.xml" in command[-1]]
         assert len(runs) == 1
         return runs[0][-1]
 
@@ -171,6 +174,11 @@ def test_interactive_and_scheduled_runs_keep_collecting_without_maxfail(
     assert (wrapper.repo / REPORT / "pytest-integration-ci.xml").is_file()
     assert not (wrapper.repo / REPORT / "compose-logs.txt").exists()
     assert wrapper.downs() == 1
+    commands = wrapper.compose_commands()
+    assert [command[0] for command in commands] == ["run", "images", "run", "restart", "up", "run", "down"]
+    assert "storage-restart-seed.xml" in commands[2][-1]
+    assert "storage-restart-verify.xml" in commands[5][-1]
+    assert "--volumes" in commands[-1]
 
 
 def test_stale_report_never_stands_in_for_a_missing_one(wrapper: Wrapper) -> None:
@@ -182,6 +190,18 @@ def test_stale_report_never_stands_in_for_a_missing_one(wrapper: Wrapper) -> Non
 
     assert status == 3
     assert not report.exists()
+
+
+def test_failed_storage_restart_keeps_reports_and_stops_without_repeating_main(wrapper: Wrapper) -> None:
+    status, _, _ = wrapper.run(restart_status=5)
+    assert status == 5
+    report = wrapper.repo / REPORT
+    assert (report / "pytest-integration-ci.xml").exists()
+    assert (report / "storage-restart-seed.xml").exists()
+    assert not (report / "storage-restart-verify.xml").exists()
+    assert (report / "compose-logs.txt").exists()
+    assert len([command for command in wrapper.compose_commands() if command[0] == "run"]) == 2
+    assert wrapper.downs() == 1
 
 
 def test_temporary_checkout_exports_report_before_removal(tmp_path: Path) -> None:
