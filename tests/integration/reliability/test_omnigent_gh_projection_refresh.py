@@ -37,9 +37,7 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformFailure,
 )
 from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
-from moonmind.omnigent.host_services.github_credentials import (
-    github_projection_script,
-)
+from moonmind.omnigent.host_services.github_credentials import github_projection_script
 from moonmind.omnigent.host_services.runtime_scripts import OmnigentRuntimeScriptService
 from moonmind.omnigent.runtime_bindings import (
     RuntimeBindingSessionAuthoritySink,
@@ -61,11 +59,9 @@ from tests.helpers.repository_connections import (
     record_repository_connections,
 )
 from tests.unit.services.test_omnigent_execution_plan_service import (  # noqa: F401
-    _ready_opencode_image_pair,
-)
-from tests.unit.services.test_omnigent_execution_plan_service import (
     _ArtifactService,
     _compile_opencode_plan,
+    _ready_opencode_image_pair,
 )
 
 pytestmark = [
@@ -81,6 +77,25 @@ _OPERATIONS = ("read", "write", "branch_write", "review_request", "merge_request
 _ACTIONS = ("reserve", "publish", "inspect", "retire", "retire_legacy")
 #: An App installation token that lapses well inside the refresh lead.
 _LIFETIME_SECONDS = 120
+
+
+@pytest.fixture(autouse=True)
+def runner_checkout(tmp_path, monkeypatch):
+    """Model the unrelated authenticated checkout used by Actions runners."""
+    checkout = tmp_path / "runner-checkout"
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(checkout),
+            "config",
+            "http.https://github.com/.extraheader",
+            f"Authorization: {basic_authorization('runner-checkout-canary')}",
+        ],
+        check=True,
+    )
+    monkeypatch.chdir(checkout)
 
 
 @pytest_asyncio.fixture
@@ -445,6 +460,9 @@ def _repository_readers(tmp_path, backend, context):
                 "refs/heads/main",
             ],
             check=False,
+            # The reader host has its own workspace; the Actions checkout's
+            # local authentication must not enter this synthetic Git request.
+            cwd=home,
             env=environment,
             capture_output=True,
             text=True,
