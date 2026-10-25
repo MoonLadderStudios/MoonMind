@@ -11,8 +11,6 @@ services:
       timeout: 5s
       retries: 45
     command: server /data
-    volumes:
-      - artifact-data:/data
     environment:
       MINIO_ROOT_USER: reliability
       MINIO_ROOT_PASSWORD: reliability-test-only
@@ -40,6 +38,3 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-
-volumes:
-  artifact-data:
