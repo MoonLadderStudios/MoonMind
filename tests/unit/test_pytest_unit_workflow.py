@@ -1108,15 +1108,15 @@ def test_backend_matrix_keeps_setup_isolated_per_row() -> None:
     assert "moonmind-python-tests:ci" not in scripts
     # Reliability rows keep isolated Compose with per-shard project names.
     start = steps["Start isolated reliability dependencies"]["run"]
-    assert "moonmind-reliability-${{ matrix.suite }}" in start
+    assert "moonmind-test-reliability-${{ matrix.suite }}" in start
     assert "tests/integration/reliability/compose.yaml up -d --wait" in start
-    assert "MOONMIND_TEST_DOCKER_NETWORK=moonmind-reliability-${{ matrix.suite }}_default" in start
+    assert "MOONMIND_TEST_DOCKER_NETWORK=moonmind-test-reliability-${{ matrix.suite }}_default" in start
     assert steps["Start isolated reliability dependencies"].get("if", "").startswith(
         "startsWith(matrix.suite, 'reliability-')"
     )
     cleanup = steps["Remove isolated reliability dependencies"]
     assert cleanup["if"].startswith("always()")
-    assert "moonmind-reliability-${{ matrix.suite }}" in cleanup["run"]
+    assert "moonmind-test-reliability-${{ matrix.suite }}" in cleanup["run"]
     # Only reliability rows touch Docker Compose; fast test commands do not.
     for name in (
         "Run selected unit suite",
@@ -1340,9 +1340,9 @@ def test_reliability_fixtures_reuse_registry_layers_without_shared_state() -> No
             assert ":ro" in str(volume), f"{name} must not share mutable state: {volume}"
     workflow = _load_workflow()
     steps = {step["name"]: step for step in workflow["jobs"]["backend-matrix"]["steps"]}
-    assert "moonmind-reliability-${{ matrix.suite }}" in steps["Start isolated reliability dependencies"]["run"]
-    assert "moonmind-reliability-${{ matrix.suite }}" in steps["Remove isolated reliability dependencies"]["run"]
-    assert "MOONMIND_TEST_DOCKER_NETWORK=moonmind-reliability-${{ matrix.suite }}_default" in steps[
+    assert "moonmind-test-reliability-${{ matrix.suite }}" in steps["Start isolated reliability dependencies"]["run"]
+    assert "moonmind-test-reliability-${{ matrix.suite }}" in steps["Remove isolated reliability dependencies"]["run"]
+    assert "MOONMIND_TEST_DOCKER_NETWORK=moonmind-test-reliability-${{ matrix.suite }}_default" in steps[
         "Start isolated reliability dependencies"
     ]["run"]
 
