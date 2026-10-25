@@ -5187,9 +5187,12 @@ class TemporalExecutionService:
             cancellation = dict(record.memo[_CANCEL_INTENT_MEMO_KEY])
             cancel_request_id = cancellation.setdefault("requestId", str(uuid4()))
             record.memo = {**record.memo, _CANCEL_INTENT_MEMO_KEY: cancellation}
-            self._update_summary(
-                record, "Cancellation requested. Waiting for the workflow to stop."
-            )
+            if record.state not in TERMINAL_STATES or record.close_status is None:
+                # Retrying force cancel still observes the saved run. Its
+                # recorded close diagnostics must survive this pending RPC.
+                self._update_summary(
+                    record, "Cancellation requested. Waiting for the workflow to stop."
+                )
             await self._session.commit()
             await self._session.refresh(record)
         try:
