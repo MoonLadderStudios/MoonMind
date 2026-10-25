@@ -573,27 +573,6 @@ class WorkflowSettings(BaseSettings):
             description="Allowed MIME types for input attachments.",
         )
     )
-    vision_context_enabled: bool = Field(
-        True,
-        validation_alias=AliasChoices("MOONMIND_VISION_CONTEXT_ENABLED"),
-        description="Enable attachment vision context generation during worker prepare stages.",
-    )
-    vision_provider: str = Field(
-        "gemini",
-        validation_alias=AliasChoices("MOONMIND_VISION_PROVIDER"),
-        description="Vision provider identifier (gemini, openai, anthropic, off).",
-    )
-    vision_model: str = Field(
-        "models/gemini-2.5-flash",
-        validation_alias=AliasChoices("MOONMIND_VISION_MODEL"),
-        description="Default caption/OCR model for the configured provider.",
-    )
-    vision_max_tokens: int = Field(
-        512,
-        validation_alias=AliasChoices("MOONMIND_VISION_MAX_TOKENS"),
-        ge=64,
-        description="Maximum token budget allocated per vision prompt batch.",
-    )
     memory_context_budget_tokens: int = Field(
         4096,
         validation_alias=AliasChoices(
@@ -605,11 +584,6 @@ class WorkflowSettings(BaseSettings):
             "Maximum token budget for normalized memory context-pack items "
             "assembled before runtime injection."
         ),
-    )
-    vision_ocr_enabled: bool = Field(
-        True,
-        validation_alias=AliasChoices("MOONMIND_VISION_OCR_ENABLED"),
-        description="Toggle OCR extraction when rendering image context.",
     )
     agent_job_max_runtime_seconds: int = Field(
         4 * 3600,
@@ -1152,23 +1126,6 @@ class WorkflowSettings(BaseSettings):
             if text:
                 normalized.append(text)
         return tuple(dict.fromkeys(normalized))
-
-    @field_validator("vision_provider", mode="before")
-    @classmethod
-    def _normalize_vision_provider(cls, value: object) -> str:
-        candidate = str(value or "").strip().lower() or "gemini"
-        if candidate == "gemini_cli":
-            candidate = "gemini"
-        allowed = {"gemini", "openai", "anthropic", "off"}
-        if candidate not in allowed:
-            supported = ", ".join(sorted(allowed))
-            raise ValueError(f"MOONMIND_VISION_PROVIDER must be one of: {supported}")
-        return candidate
-
-    @field_validator("vision_model", mode="before")
-    @classmethod
-    def _normalize_vision_model(cls, value: object) -> str:
-        return str(value or "").strip() or "models/gemini-2.5-flash"
 
     @field_validator("skill_policy_mode", mode="before")
     @classmethod
