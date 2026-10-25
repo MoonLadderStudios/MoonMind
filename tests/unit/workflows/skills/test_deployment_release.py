@@ -819,8 +819,9 @@ def _wedged_manager_disposition(blocked: bool = True) -> dict:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_handoff", [False, True])
 async def test_controller_omnigent_steps_reuse_selection_after_restart(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, legacy_handoff
 ):
     repo = tmp_path / "mounted-project"
     repo.mkdir()
@@ -839,6 +840,7 @@ async def test_controller_omnigent_steps_reuse_selection_after_restart(
 
     async def select(runner, owner, image):
         calls.append(("select", owner, image))
+        assert image == "example/moonmind@sha256:selected"
         assert runner.project_name == "moonmind-test-custom"
         assert runner.project_dir == "/host/installed-project"
         assert runner.local_project_dir == str(repo)
@@ -865,15 +867,21 @@ async def test_controller_omnigent_steps_reuse_selection_after_restart(
             "composeFiles": ["docker-compose.yaml", "docker-compose.override.yaml"],
         },
     }
+    if legacy_handoff:
+        payload["resolvedMoonmindImage"] = payload["moonmindImage"]
+        payload["moonmindImage"] = "example/moonmind:rollback"
     selected = await release.run_controller_omnigent_step("select", payload)
     assert selected == {"status": "advanced", "revision": 7}
     # Lost acknowledgment/restart reattaches to the durable selection; it
     # must not resolve a moved channel into another desired-state revision.
     again = await release.run_controller_omnigent_step("select", payload)
     assert again == selected
-    migrated = await release.run_controller_omnigent_step(
-        "migrate", {**payload, "selectedRevision": 7}
-    )
+    migration_payload = {**payload, "selectedRevision": 7}
+    if legacy_handoff:
+        # The receiving controller predates resolvedMoonmindImage and sends
+        # its original request identity, including after a failed handoff.
+        migration_payload.pop("resolvedMoonmindImage")
+    migrated = await release.run_controller_omnigent_step("migrate", migration_payload)
     assert migrated == {"status": "converged", "revision": 7}
     assert [call[0] for call in calls] == ["select", "migrate"]
     assert calls[-1][-1] == 7

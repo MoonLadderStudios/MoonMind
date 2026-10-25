@@ -1092,7 +1092,15 @@ def prepare_release_configuration(store, operation, *, runner, overlay):
         image = operation["desired"]["image"]
         checked(("docker", "pull", image), engine.PULL_TIMEOUT_SECONDS)
         (observed,) = json.loads(checked(("docker", "image", "inspect", image)))
-        resolved = next(iter(observed.get("RepoDigests") or ()), None)
+
+        def repository(reference):
+            name = reference.partition("@")[0]
+            if ":" in name.rsplit("/", 1)[-1]:
+                name = name.rsplit(":", 1)[0]
+            name = name.removeprefix("docker.io/").removeprefix("index.docker.io/")
+            return "library/" + name if "/" not in name else name
+
+        resolved = next((ref for ref in observed.get("RepoDigests", ()) if repository(ref) == repository(image)), None)
         if not resolved:
             raise ValueError(
                 "Selected release has no pullable immutable image reference"
@@ -1424,6 +1432,42 @@ def _omnigent_step_error(phase: str, exit_status: int, output: str) -> engine.Co
     )
 
 
+def _controller_state_bind(store, runner) -> dict:
+    """Use the daemon's observed state bind when launching release helpers."""
+    source = str(store.state_dir.resolve())
+    if os.environ.get("MOONMIND_CONTROLLER_MANAGED") == "1":
+        observed = engine.run_command(
+            runner,
+            (
+                "docker",
+                "inspect",
+                "--format",
+                "{{json .Mounts}}",
+                os.environ["HOSTNAME"],
+            ),
+            timeout_seconds=LEGACY_PROBE_TIMEOUT_SECONDS,
+        )
+        if int(observed.get("exit", 0)):
+            raise ValueError("Controller state mount could not be observed")
+        candidates = []
+        for mount in json.loads(engine.command_stdout(observed)):
+            destination = Path(mount["Destination"])
+            if mount.get("Type") == "bind" and store.state_dir.is_relative_to(
+                destination
+            ):
+                candidates.append((destination, mount["Source"]))
+        if not candidates:
+            raise ValueError("Controller state has no observed host bind")
+        destination, host_source = max(candidates, key=lambda pair: len(pair[0].parts))
+        source = str(Path(host_source) / store.state_dir.relative_to(destination))
+    return {
+        "type": "bind",
+        "source": source,
+        "target": "/workspace/deployment_state/controller",
+        "bind": {"create_host_path": False},
+    }
+
+
 def run_omnigent_step(
     store: record_mod.OperationStore,
     operation: dict,
@@ -1466,6 +1510,14 @@ def run_omnigent_step(
     helper_config = os.path.join(
         str(store.state_dir), "image-overlays", f"{operation_id}-omnigent.json"
     )
+    volumes = ["/var/run/docker.sock:/var/run/docker.sock:ro"]
+    helper_environment = {
+        "DOCKER_HOST": "unix:///var/run/docker.sock",
+        "SYSTEM_DOCKER_HOST": "unix:///var/run/docker.sock",
+    }
+    if target.get("releaseComposeFile"):
+        volumes.append(_controller_state_bind(store, runner))
+        helper_environment["MOONMIND_CONTROLLER_STATE_DIR"] = volumes[-1]["target"]
     record_mod._atomic_write_json(
         Path(helper_config),
         {
@@ -1473,11 +1525,8 @@ def run_omnigent_step(
                 LEGACY_CONTROL_SERVICE: {
                     "image": helper_image or selected_image(operation),
                     "user": "0:0",
-                    "environment": {
-                        "DOCKER_HOST": "unix:///var/run/docker.sock",
-                        "SYSTEM_DOCKER_HOST": "unix:///var/run/docker.sock",
-                    },
-                    "volumes": ["/var/run/docker.sock:/var/run/docker.sock:ro"],
+                    "environment": helper_environment,
+                    "volumes": volumes,
                 }
             }
         },
@@ -1493,7 +1542,9 @@ def run_omnigent_step(
     )
     request = {
         "operationId": operation_id,
-        "moonmindImage": selected_image(operation),
+        # Retained controllers use this submitted identity for the same job.
+        "moonmindImage": operation["desired"]["image"],
+        "resolvedMoonmindImage": selected_image(operation),
         "target": target,
         "controllerCapabilities": list(CONTROLLER_CAPABILITIES),
     }
@@ -1968,9 +2019,15 @@ def production_apply(
         str(store.state_dir), operation["operationId"], selected_image(operation)
     )
     if operation.get("installed") is None:
-        operation = prepare_release_configuration(
-            store, operation, runner=runner, overlay=overlay
-        )
+        try:
+            operation = prepare_release_configuration(
+                store, operation, runner=runner, overlay=overlay
+            )
+        except engine.StageError as exc:
+            store.record_attempt_error(
+                operation["operationId"], error=f"release configuration staging failed: {exc} {exc.output}"
+            )
+            raise
         target = operation["target"]
         project = target.get("project", operation.get("stack"))
     storage_selected = "minio" in target.get("services", ())

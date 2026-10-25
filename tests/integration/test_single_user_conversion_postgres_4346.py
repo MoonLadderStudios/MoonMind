@@ -1955,6 +1955,13 @@ async def test_postgres_controller_startup_conversion_recovery(
                     raise controller.engine.StageError(
                         "pull", 1, "registry unavailable before mutation"
                     )
+                if args[:3] == ("docker", "image", "inspect"):
+                    return {"exit": 0, "stdout": json.dumps([{"Id": "conversion-image", "RepoDigests": ["moonmind@sha256:conversion"]}])}
+                if args[:2] == ("docker", "run"):
+                    assert "--network" in args and args[args.index("--network") + 1] == "none"
+                    return {"exit": 0, "stdout": json.dumps({"services": {"api": {"image": "${MOONMIND_IMAGE}"}}})}
+                if args[-2:] == ("config", "--services"):
+                    return {"exit": 0, "stdout": "api\n"}
                 if "up" in args:
                     asyncio.run_coroutine_threadsafe(startup(), loop).result(30)
                 if args[:2] == ("docker", "ps"):
