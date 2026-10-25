@@ -1990,6 +1990,18 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.queryByText(/sk-ant/)).toBeNull();
   });
 
+  it.each([
+    ['observation_unavailable', 'Provider check unavailable'],
+    ['auth_expired', 'Credentials expired'],
+    ['ready', 'Ready'],
+  ])('renders the structured readiness reason %s', (reason, label) => {
+    renderProviderProfilesManager([{
+      ...profileWithReadiness,
+      readiness: { status: 'blocked', launch_ready: false, reason_code: reason, summary: 'Display text may vary', checks: [] },
+    }]);
+    expect(screen.getByText(`Provider status: ${label}`)).toBeTruthy();
+  });
+
   it('keeps capacity and readiness visible while credential internals sit in row Details', () => {
     renderProviderProfilesManager([profileWithReadiness]);
 

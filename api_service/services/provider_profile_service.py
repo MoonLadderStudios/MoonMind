@@ -14,6 +14,7 @@ from api_service.db.models import (
     ProviderProfileDisabledReason,
 )
 from api_service.services.provider_profile_readiness import (
+    provider_profile_readiness_reason,
     provider_profile_launch_ready,
 )
 from moonmind.provider_profiles.model_tiers import coerce_model_effort_tier_policy
@@ -148,6 +149,9 @@ def _manager_profile_payload(
     *,
     managed_secret_statuses: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    launch_ready = provider_profile_launch_ready(
+        row, managed_secret_statuses=managed_secret_statuses
+    )
     model_tiers, default_model_tier = coerce_model_effort_tier_policy(
         model_tiers=row.model_tiers,
         default_model_tier=row.default_model_tier,
@@ -191,9 +195,10 @@ def _manager_profile_payload(
         "disabled_reason": (
             row.disabled_reason.value if row.disabled_reason else None
         ),
-        "launch_ready": provider_profile_launch_ready(
+        "launch_ready": launch_ready,
+        "readiness_reason": provider_profile_readiness_reason(
             row,
-            managed_secret_statuses=managed_secret_statuses,
+            launch_ready=launch_ready,
         ),
         "first_authenticated_at": (
             row.first_authenticated_at.isoformat()

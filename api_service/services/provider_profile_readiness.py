@@ -16,8 +16,74 @@ from api_service.services.provider_profile_creation import (
     provider_profile_creation_capabilities,
     required_secret_roles,
 )
-from moonmind.auth.secret_refs import SecretBackend, SecretReferenceError, parse_secret_ref
+from moonmind.auth.secret_refs import (
+    SecretBackend,
+    SecretReferenceError,
+    parse_secret_ref,
+)
 from moonmind.provider_profiles.oauth_policy import is_codex_oauth_profile
+from moonmind.workflows.provider_failures import provider_failure_event_from_metadata
+
+
+def provider_profile_readiness_reason(
+    profile: Any, *, launch_ready: bool | None = None
+) -> str:
+    """Describe observed readiness without interpreting display/error prose.
+
+    This is a projection of the existing launch authority, not another launch
+    predicate. Unavailable probes cannot invalidate a credential generation.
+    """
+
+    def get(key: str, default: Any = None) -> Any:
+        value = (
+            profile.get(key, default)
+            if isinstance(profile, dict)
+            else getattr(profile, key, default)
+        )
+        return getattr(value, "value", value)
+
+    behavior = get("command_behavior") or {}
+    readiness = behavior.get("auth_readiness") or {}
+    event = provider_failure_event_from_metadata(readiness.get("providerFailure"))
+    credential_invalid = (
+        get("disabled_reason") == "auth_invalid"
+        or get("auth_state") == "validation_failed"
+    )
+    if credential_invalid and not (
+        event is not None
+        and event.observation == "confirmed"
+        and event.provider_error_class == "auth"
+    ):
+        return "auth_invalid"
+    if event is not None:
+        if event.observation != "confirmed":
+            return "observation_unavailable"
+        if event.provider_error_class == "auth":
+            return {
+                "token_expired": "auth_expired",
+                "token_revoked": "auth_revoked",
+            }.get(event.provider_error_code, "auth_invalid")
+        if event.provider_error_class == "rate_limit":
+            return "quota_wait"
+        if event.provider_error_class == "capacity":
+            return "capacity_wait"
+        if event.provider_error_class == "unsupported_selection":
+            return "unsupported_selection"
+    if readiness.get("observation") == "unavailable":
+        return "observation_unavailable"
+    capabilities = provider_profile_creation_capabilities(
+        runtime_id=str(get("runtime_id") or ""),
+        provider_id=str(get("provider_id") or ""),
+    )
+    if not capabilities["supported"]:
+        return "unsupported_selection"
+    if not get("enabled", True):
+        return "disabled"
+    if launch_ready is None:
+        launch_ready = get("launch_ready", readiness.get("launch_ready"))
+    if launch_ready is True:
+        return "ready"
+    return "configuration_required"
 
 
 def provider_profile_launch_ready(
@@ -35,11 +101,14 @@ def provider_profile_launch_ready(
         return False
     if not row.max_parallel_runs or row.max_parallel_runs <= 0:
         return False
-    if is_codex_oauth_profile(
-        runtime_id=row.runtime_id,
-        credential_source=row.credential_source,
-        materialization_mode=row.runtime_materialization_mode,
-    ) and row.max_parallel_runs != 1:
+    if (
+        is_codex_oauth_profile(
+            runtime_id=row.runtime_id,
+            credential_source=row.credential_source,
+            materialization_mode=row.runtime_materialization_mode,
+        )
+        and row.max_parallel_runs != 1
+    ):
         return False
     if row.cooldown_after_429_seconds is None or row.cooldown_after_429_seconds < 0:
         return False
@@ -92,16 +161,19 @@ def provider_profile_launch_ready_from_payload(
         return False
     if profile.get("launch_ready") is False or profile.get("launchReady") is False:
         return False
-    if is_codex_oauth_profile(
-        runtime_id=profile.get("runtime_id", profile.get("runtimeId")),
-        credential_source=profile.get(
-            "credential_source", profile.get("credentialSource")
-        ),
-        materialization_mode=profile.get(
-            "runtime_materialization_mode",
-            profile.get("runtimeMaterializationMode"),
-        ),
-    ) and profile.get("max_parallel_runs", profile.get("maxParallelRuns")) != 1:
+    if (
+        is_codex_oauth_profile(
+            runtime_id=profile.get("runtime_id", profile.get("runtimeId")),
+            credential_source=profile.get(
+                "credential_source", profile.get("credentialSource")
+            ),
+            materialization_mode=profile.get(
+                "runtime_materialization_mode",
+                profile.get("runtimeMaterializationMode"),
+            ),
+        )
+        and profile.get("max_parallel_runs", profile.get("maxParallelRuns")) != 1
+    ):
         return False
 
     credential_source = profile.get(
@@ -127,9 +199,7 @@ def provider_profile_launch_ready_from_payload(
             ),
             secret_refs=profile.get("secret_refs", profile.get("secretRefs")),
             env_template=profile.get("env_template", profile.get("envTemplate")),
-            file_templates=profile.get(
-                "file_templates", profile.get("fileTemplates")
-            ),
+            file_templates=profile.get("file_templates", profile.get("fileTemplates")),
             home_path_overrides=profile.get(
                 "home_path_overrides", profile.get("homePathOverrides")
             ),
@@ -169,9 +239,7 @@ def provider_profile_launch_ready_from_payload(
         credential_source=credential_source,
         materialization_mode=materialization_mode,
         auth_state=profile.get("auth_state", profile.get("authState")),
-        last_auth_method=profile.get(
-            "last_auth_method", profile.get("lastAuthMethod")
-        ),
+        last_auth_method=profile.get("last_auth_method", profile.get("lastAuthMethod")),
         clear_env_keys=profile.get("clear_env_keys", profile.get("clearEnvKeys")),
         command_behavior=command_behavior,
     ):
@@ -275,16 +343,15 @@ def _isolation_policy_launch_ready(
             runtime_materialization_mode=materialization_mode,
         )
         stored = (
-            list(clear_env_keys)
-            if isinstance(clear_env_keys, (list, tuple))
-            else []
+            list(clear_env_keys) if isinstance(clear_env_keys, (list, tuple)) else []
         )
         if stored and isinstance(command_behavior, dict):
             marker = command_behavior.get("_isolation_override")
             if (
                 isinstance(marker, dict)
                 and isinstance(marker.get("keys"), list)
-                and sorted(str(k) for k in marker["keys"]) == sorted(str(k) for k in stored)
+                and sorted(str(k) for k in marker["keys"])
+                == sorted(str(k) for k in stored)
             ):
                 return True
         classification = classify_existing_policy(

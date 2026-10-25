@@ -835,6 +835,20 @@ const ModelTierResolutionSchema = z
   })
   .passthrough();
 
+const AgentResultProjectionSchema = z.object({
+  executionState: z.string().optional(),
+  objectiveOutcome: z.string().optional(),
+  publicationState: z.string().optional(),
+  outputAvailability: z.string().optional(),
+  retryDisposition: z.string().optional(),
+  diagnosticsRef: z.string().nullable().optional(),
+  secondaryErrors: z.array(z.object({ code: z.string() })).optional(),
+});
+
+function agentResultFactLabel(value?: string): string {
+  return formatStatusLabel(value, 'Unknown').replace(/^./, (first) => first.toUpperCase());
+}
+
 const ExecutionDetailSchema = z
   .object({
     taskId: z.string().optional(),
@@ -851,6 +865,7 @@ const ExecutionDetailSchema = z
     status: z.string(),
     completionDisposition: z.string().nullable().optional(),
     objectiveOutcome: z.enum(WORKFLOW_OBJECTIVE_OUTCOMES).nullable().optional().catch(undefined),
+    agentResult: AgentResultProjectionSchema.nullable().optional(),
     state: z.string(),
     rawState: z.string().optional(),
     temporalStatus: z.string().optional(),
@@ -1826,6 +1841,7 @@ const StepLedgerSnapshotSchema = z.object({
 
 const RunSummaryArtifactSchema = z
   .object({
+    agentResult: AgentResultProjectionSchema.nullable().optional(),
     finishOutcome: z
       .object({
         code: z.string().optional(),
@@ -9336,6 +9352,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const runSummary =
     runSummaryQuery.data ||
     (executionRunSummary.success ? executionRunSummary.data : null);
+  const agentResult = execution?.agentResult ?? runSummary?.agentResult;
   const displayedMergeAutomation =
     execution?.mergeAutomation || runSummary?.mergeAutomation || null;
   const workflowDisplayStatus = resolveWorkflowDisplayStatus(execution?.rawState, execution?.state, execution?.status);
@@ -10429,6 +10446,18 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
 
           {overviewTabActive ? (
             <div className="td-facts-region">
+              {agentResult ? (
+                <FactGroup title="Agent result">
+                  <Fact label="Execution result">{agentResultFactLabel(agentResult.executionState)}</Fact>
+                  <Fact label="Objective result">{agentResultFactLabel(agentResult.objectiveOutcome)}</Fact>
+                  <Fact label="Publication">{agentResultFactLabel(agentResult.publicationState)}</Fact>
+                  <Fact label="Outputs">{agentResultFactLabel(agentResult.outputAvailability)}</Fact>
+                  <Fact label="Retry">{agentResultFactLabel(agentResult.retryDisposition)}</Fact>
+                  {agentResult.secondaryErrors?.length ? (
+                    <Fact label="Reporting">{agentResult.secondaryErrors.length} reporting error{agentResult.secondaryErrors.length === 1 ? '' : 's'}</Fact>
+                  ) : null}
+                </FactGroup>
+              ) : null}
               <FactGroup title="Agent">
                 {execution.agentRequired === false ? (
                   <Fact label="Execution">No agent harness is used; this workflow runs native tools.</Fact>

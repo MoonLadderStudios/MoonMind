@@ -215,7 +215,13 @@ an action may also clear `user_disabled`.
 
 Passive validation — background checks, migrations, repair jobs, readiness
 refreshes, health probes, manager sync — may update `auth_state`, timestamps,
-and diagnostics but never re-enables a `user_disabled` profile.
+and diagnostics but never re-enables a `user_disabled` profile. Readiness
+`reason_code` distinguishes ready, expired/revoked or rejected credentials,
+unavailable observation, quota/capacity wait, unsupported selection, and setup
+requirements. API, manager snapshots, and Settings carry these structured reasons
+without parsing display text. An unavailable probe cannot invalidate credentials;
+existing launch predicates and credential-generation-fenced rejection checks keep
+their authority.
 
 ### 5.4 Disable, disconnect, failure, and policy states
 

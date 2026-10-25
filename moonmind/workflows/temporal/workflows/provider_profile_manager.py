@@ -511,6 +511,7 @@ class ProfileSlotState:
     rate_limit_policy: str
     enabled: bool
     launch_ready: bool = True
+    readiness_reason: str | None = None
     is_default: bool = False
     max_lease_duration_seconds: int = _MAX_LEASE_DURATION_SECONDS
     current_leases: list[str] = field(default_factory=list)
@@ -1010,6 +1011,7 @@ class ProfileSlotState:
             "rate_limit_policy": self.rate_limit_policy,
             "enabled": self.enabled,
             "launch_ready": self.launch_ready,
+            "readiness_reason": self.readiness_reason,
             "is_default": self.is_default,
             "max_lease_duration_seconds": self.max_lease_duration_seconds,
             "current_leases": list(self.current_leases),
@@ -3528,6 +3530,7 @@ class MoonMindProviderProfileManagerWorkflow:
                 rate_limit_policy=p.get("rate_limit_policy", "backoff"),
                 enabled=p.get("enabled", True),
                 launch_ready=p.get("launch_ready", p.get("launchReady", True)),
+                readiness_reason=p.get("readiness_reason"),
                 is_default=p.get("is_default", False),
                 max_lease_duration_seconds=p.get(
                     "max_lease_duration_seconds", _MAX_LEASE_DURATION_SECONDS
@@ -3777,6 +3780,9 @@ class MoonMindProviderProfileManagerWorkflow:
                     "launch_ready",
                     p.get("launchReady", existing.launch_ready),
                 )
+                existing.readiness_reason = p.get(
+                    "readiness_reason", existing.readiness_reason
+                )
                 existing.is_default = p.get("is_default", existing.is_default)
                 existing.max_lease_duration_seconds = p.get(
                     "max_lease_duration_seconds", existing.max_lease_duration_seconds
@@ -3867,6 +3873,7 @@ class MoonMindProviderProfileManagerWorkflow:
                     rate_limit_policy=p.get("rate_limit_policy", "backoff"),
                     enabled=p.get("enabled", True),
                     launch_ready=p.get("launch_ready", p.get("launchReady", True)),
+                    readiness_reason=p.get("readiness_reason"),
                     is_default=p.get("is_default", False),
                     max_lease_duration_seconds=p.get(
                         "max_lease_duration_seconds", _MAX_LEASE_DURATION_SECONDS
