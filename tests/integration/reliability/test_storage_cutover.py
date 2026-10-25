@@ -77,7 +77,9 @@ async def test_controller_active_write_cutover_and_reverse_copy(tmp_path, monkey
         urls = [source.generate_presigned_url("put_object", Params={"Bucket": bucket, "Key": f"workflow/logical-step/{i}"}, ExpiresIn=600) for i in range(100)]
         (tmp_path / "urls.json").write_text(json.dumps(urls))
         writer = """
-import http.client,json,os,time,urllib.parse
+import http.client,json,os,signal,sys,time,urllib.parse
+# Docker stop must interrupt this PID 1 producer before its workload completes.
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 for i,url in enumerate(json.load(open('/work/urls.json'))):
     parsed=urllib.parse.urlsplit(url)
     connection=http.client.HTTPConnection(parsed.hostname,parsed.port,timeout=15)

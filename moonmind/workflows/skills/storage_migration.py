@@ -519,6 +519,7 @@ async def prepare_compose_storage(runner, docker, payload, directory, *, observe
                 if attempt == 19:
                     raise
                 await asyncio.sleep(1)
+        raise RuntimeError("Private storage did not become ready")
 
     async def isolate():
         nonlocal stopped
