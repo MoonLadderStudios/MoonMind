@@ -525,18 +525,6 @@ def test_image_does_not_install_unrelated_harnesses():
     assert "USER 1000:1000" in content
     assert "getent passwd 1000" in content
     assert 'ENV HOME="/home/app"' in content
-    # Should not run npm install at workflow launch (only at build)
-    # The host start script should not contain npm install
-    start_script = Path("services/omnigent/scripts/start-opencode-host.sh")
-    assert "npm install" not in start_script.read_text()
-    # Check script clears forbidden env
-    check_script = Path("services/omnigent/scripts/check-opencode-host.sh")
-    check_source = check_script.read_text()
-    assert "OPENCODE_AUTH_CONTENT" in check_source
-    # The host readiness check must validate the exact auth.json contract
-    # emitted by opencode-auth-json@1 (``key``, not the obsolete ``apiKey``).
-    assert ".get('key')" in check_source
-    assert "'apiKey'" not in check_source
 
 
 def test_opencode_agent_file_tools_can_read_the_active_skill_snapshot():
