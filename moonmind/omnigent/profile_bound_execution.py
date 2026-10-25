@@ -2035,7 +2035,10 @@ class OmnigentProfileBoundExecutionCoordinator:
                             update={
                                 "failure_class": "integration_error",
                                 "provider_error_code": code,
+                                "failure_id": code,
+                                "objective_outcome": "failed",
                                 "retry_recommendation": "retry",
+                                "retry_disposition": "retry",
                                 "summary": (
                                     "Omnigent terminal session evidence was "
                                     "unavailable before repository publication."
@@ -2121,7 +2124,10 @@ class OmnigentProfileBoundExecutionCoordinator:
                                 update={
                                     "failure_class": "integration_error",
                                     "provider_error_code": code,
+                                    "failure_id": code,
+                                    "objective_outcome": "failed",
                                     "retry_recommendation": "retry",
+                                    "retry_disposition": "retry",
                                     "summary": (
                                         "Omnigent repository publication failed "
                                         "before the remote branch was verified."
@@ -2206,7 +2212,10 @@ class OmnigentProfileBoundExecutionCoordinator:
                                 "provider_error_code": (
                                     "OMNIGENT_REPOSITORY_OUTPUT_MISSING"
                                 ),
+                                "failure_id": "OMNIGENT_REPOSITORY_OUTPUT_MISSING",
+                                "objective_outcome": "failed",
                                 "retry_recommendation": "retry",
+                                "retry_disposition": "retry",
                                 "summary": (
                                     "Agent execution completed without repository "
                                     "changes required by publishMode."
