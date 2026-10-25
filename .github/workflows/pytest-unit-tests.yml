@@ -883,12 +883,12 @@ jobs:
     permissions:
       contents: read
       packages: read
-    # Hermetic worst case: 12m bounded setup + 23m execution/cleanup + 4m
+    # Hermetic worst case: 12m bounded setup + 28m execution/cleanup + 4m
     # evidence collection/upload + 1m runner/post-action overhead.
     # Journey worst case: 23m bootstrap/image/Node + 25m npm/OS/browser +
     # 2m disk diagnostics + 25m tests + 6m reporting + 4m post-action reserve.
     # Setup gets its own budget; the journey test deadlines are unchanged.
-    timeout-minutes: ${{ matrix.suite == 'hermetic' && 40 || 85 }}
+    timeout-minutes: ${{ matrix.suite == 'hermetic' && 45 || 85 }}
     strategy:
       fail-fast: ${{ github.event_name != 'schedule' }}
       matrix: ${{ fromJSON(needs.select-test-suites.outputs.integration_matrix) }}
@@ -924,18 +924,18 @@ jobs:
           cache-from: type=gha,scope=integration-ci-test-runtime
           cache-to: type=gha,scope=integration-ci-test-runtime,mode=max
       - name: Run hermetic integration CI suite
-        # Healthy pytest execution can take about 10 minutes before Compose
-        # startup overhead. Allow 15 minutes for the combined run, then 30s
+        # The suite can reach the 15-minute limit before the storage
+        # restart checks. Allow 20 minutes for the combined run, then 30s
         # to interrupt and 3 * (120s + 10s kill grace) for diagnostics and
         # teardown, leaving another minute before the native step deadline.
         # Ordinary runs stop at the first failure; schedules keep collecting.
         if: matrix.suite == 'hermetic'
-        timeout-minutes: 23
+        timeout-minutes: 28
         env:
           MOONMIND_FORCE_LOCAL_TESTS: "1"
           MOONMIND_PYTHON_TEST_IMAGE: moonmind-python-tests:ci
           MOONMIND_INTEGRATION_FAIL_FAST: ${{ github.event_name != 'schedule' && '1' || '0' }}
-          MOONMIND_INTEGRATION_TIMEOUT: "900"
+          MOONMIND_INTEGRATION_TIMEOUT: "1200"
         run: |
           set -euo pipefail
           ./tools/test_integration.sh
