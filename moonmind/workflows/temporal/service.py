@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
-from sqlalchemy import Select, and_, case, func, or_, select
+from sqlalchemy import Select, and_, case, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
@@ -28,6 +28,7 @@ from temporalio.common import WorkflowIDReusePolicy
 from temporalio.service import RPCError, RPCStatusCode
 
 from api_service.db.models import (
+    TEMPORAL_EXECUTION_PENDING_INTENTS_SQL,
     MoonMindWorkflowState,
     SettingsOverride,
     TemporalArtifact,
@@ -161,6 +162,7 @@ CREATE_IDEMPOTENCY_KEY_MAX_LENGTH = 128
 _BEST_EFFORT_SESSION_TERMINATION_TIMEOUT_SECONDS = 5.0
 _CREATE_START_RPC_TIMEOUT_SECONDS = 10.0
 _CREATE_START_MEMO_KEY = "temporalStart"
+_CANCEL_INTENT_MEMO_KEY = "temporalCancel"
 
 
 # Edits apply a shallow parameters patch, where an omitted key keeps its stored
@@ -662,6 +664,159 @@ def _validate_publish_authority(initial_parameters: Mapping[str, Any] | None) ->
         )
     except WorkflowContractError as exc:
         raise TemporalExecutionValidationError(str(exc)) from exc
+
+
+async def reconcile_pending_execution_intents(
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    client_adapter: TemporalClientAdapter,
+    namespace: str,
+    limit: int = 10,
+) -> dict[str, Any]:
+    """Resume admitted delivery through its existing owner, without a client."""
+    deadline = asyncio.get_running_loop().time() + 30
+    eligible = (
+        TemporalExecutionCanonicalRecord.namespace == namespace,
+        text(TEMPORAL_EXECUTION_PENDING_INTENTS_SQL),
+    )
+    async with asyncio.timeout(5):
+        async with session_factory() as session:
+            identifiers = list(
+                (
+                    await session.execute(
+                        select(TemporalExecutionCanonicalRecord.workflow_id)
+                        .where(*eligible)
+                        .order_by(
+                            TemporalExecutionCanonicalRecord.updated_at,
+                            TemporalExecutionCanonicalRecord.workflow_id,
+                        )
+                        .limit(max(1, min(int(limit), 50)))
+                    )
+                ).scalars()
+            )
+    items: list[dict[str, Any]] = []
+    targets = iter(identifiers)
+
+    async def worker() -> None:
+        for workflow_id in targets:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                return
+            item = {"workflowId": workflow_id, "state": "pending"}
+            try:
+                async with asyncio.timeout(min(20, remaining)):
+                    async with session_factory() as session:
+                        record = (
+                            await session.execute(
+                                select(TemporalExecutionCanonicalRecord)
+                                .where(
+                                    *eligible,
+                                    TemporalExecutionCanonicalRecord.workflow_id
+                                    == workflow_id,
+                                )
+                                .with_for_update(skip_locked=True)
+                            )
+                        ).scalar_one_or_none()
+                        if record is None:
+                            item["state"] = "busy_or_settled"
+                            continue
+                        memo = dict(record.memo or {})
+                        cancel = dict(memo.get(_CANCEL_INTENT_MEMO_KEY) or {})
+                        previous_cancel = next(
+                            (
+                                entry
+                                for entry in reversed(
+                                    memo.get(INTERVENTION_AUDIT_MEMO_KEY) or []
+                                )
+                                if isinstance(entry, Mapping)
+                                and entry.get("action") in {"cancel", "reject"}
+                            ),
+                            None,
+                        )
+                        key = (
+                            _CANCEL_INTENT_MEMO_KEY
+                            if cancel.get("state") == "pending"
+                            else _CREATE_START_MEMO_KEY
+                        )
+                        # Move attempted work to the back of the indexed queue,
+                        # even if observation subsequently becomes unavailable.
+                        record.memo = {
+                            **memo,
+                            key: {
+                                **dict(memo.get(key) or {}),
+                                "lastReconcileAttemptAt": _utc_now().isoformat(),
+                            },
+                        }
+                        await session.commit()
+                        await session.refresh(record)
+                        service = TemporalExecutionService(
+                            session,
+                            client_adapter=client_adapter,
+                            namespace=namespace,
+                        )
+                        if cancel.get("state") == "pending" or previous_cancel:
+                            request = cancel if cancel.get("state") == "pending" else previous_cancel
+                            graceful = (
+                                bool(request["graceful"])
+                                if "graceful" in request
+                                else request.get("transport") == "temporal_cancel"
+                            )
+                            if not cancel and request.get("transport") not in {
+                                "temporal_cancel", "temporal_terminate"
+                            }:
+                                item["reason"] = "retained_cancel_transport_unknown"
+                                continue
+                            start_pending = (
+                                (record.memo or {}).get(_CREATE_START_MEMO_KEY, {}).get("state")
+                                == "pending"
+                            )
+                            await service.cancel_execution(
+                                workflow_id=workflow_id,
+                                reason=request.get("reason") or request.get("summary"),
+                                graceful=graceful,
+                                action=str(request.get("action") or "cancel"),
+                                expected_run_id=(
+                                    None
+                                    if start_pending
+                                    else request.get("targetRunId") or record.run_id
+                                ),
+                            )
+                        else:
+                            await service.ensure_create_started(record)
+                        await session.refresh(record)
+                        intent = (record.memo or {}).get(
+                            _CANCEL_INTENT_MEMO_KEY
+                            if cancel or previous_cancel
+                            else _CREATE_START_MEMO_KEY,
+                            {},
+                        )
+                        item["state"] = str(intent.get("state") or "pending")
+                        if intent.get("reason"):
+                            item["reason"] = intent["reason"]
+            except TemporalExecutionStartUnconfirmedError as error:
+                item["reason"] = error.detail["reason"]
+            except TimeoutError:
+                item["reason"] = "observation_timeout"
+            except Exception as error:
+                logger.warning(
+                    "Execution delivery reconciliation unavailable for %s",
+                    workflow_id,
+                    exc_info=True,
+                )
+                item["reason"] = "observation_unavailable"
+                item["errorType"] = type(error).__name__
+            finally:
+                items.append(item)
+
+    async with asyncio.TaskGroup() as group:
+        for _ in range(min(2, len(identifiers))):
+            group.create_task(worker())
+    return {
+        "selected": len(identifiers),
+        "observed": len(items),
+        "pending": sum(item["state"] == "pending" for item in items),
+        "items": items,
+    }
 
 
 class TemporalExecutionService:
@@ -3027,6 +3182,13 @@ class TemporalExecutionService:
             )
         old_run_id = record.run_id
         record.run_id = run_id
+        cancellation = dict((record.memo or {}).get(_CANCEL_INTENT_MEMO_KEY) or {})
+        if (
+            cancellation.get("state") == "pending"
+            and cancellation.get("targetRunId") == old_run_id
+        ):
+            cancellation["targetRunId"] = run_id
+            record.memo = {**record.memo, _CANCEL_INTENT_MEMO_KEY: cancellation}
         intent = {**intent, "state": "confirmed", "runId": run_id}
         intent.pop("reason", None)
         intent.pop("lastErrorType", None)
@@ -4884,16 +5046,36 @@ class TemporalExecutionService:
             and (record.memo or {}).get(_CREATE_START_MEMO_KEY, {}).get("state")
             == "pending"
         )
-        if pending_create:
+        if isinstance(record, TemporalExecutionCanonicalRecord):
             # Cancellation must also stop retries when Temporal never received
             # this saved admission. Persist the existing intervention intent
             # before asking Temporal; no later create may launch a successor.
-            self._append_intervention_audit(
-                record,
-                action=action_name,
-                transport="temporal_cancel" if graceful else "temporal_terminate",
-                summary=reason_text,
+            previous = dict((record.memo or {}).get(_CANCEL_INTENT_MEMO_KEY) or {})
+            same_request = (
+                previous.get("state") == "pending"
+                and previous.get("targetRunId") == record.run_id
+                and previous.get("action") == action_name
+                and previous.get("graceful") == graceful
+                and previous.get("reason") == reason_text
             )
+            if not same_request:
+                self._append_intervention_audit(
+                    record,
+                    action=action_name,
+                    transport="temporal_cancel" if graceful else "temporal_terminate",
+                    summary=reason_text,
+                )
+                record.memo = {
+                    **record.memo,
+                    _CANCEL_INTENT_MEMO_KEY: {
+                        "state": "pending",
+                        "targetRunId": record.run_id,
+                        "action": action_name,
+                        "graceful": graceful,
+                        "reason": reason_text,
+                        "requestedAt": _utc_now().isoformat(),
+                    },
+                }
             self._update_summary(
                 record, "Cancellation requested. Waiting for the workflow to stop."
             )
@@ -4967,7 +5149,7 @@ class TemporalExecutionService:
         if cancellation_confirmed or not graceful:
             record.paused = False
             self._clear_waiting_metadata(record)
-        if not pending_create:
+        if not isinstance(record, TemporalExecutionCanonicalRecord):
             self._append_intervention_audit(
                 record,
                 action=action_name,
@@ -5003,6 +5185,12 @@ class TemporalExecutionService:
                 record.closed_at = terminal_payload["closed_at"]
             self._update_summary(record, force_summary)
 
+        if isinstance(record, TemporalExecutionCanonicalRecord):
+            cancellation = dict(record.memo[_CANCEL_INTENT_MEMO_KEY])
+            cancellation["state"] = (
+                "confirmed" if cancellation_confirmed or not graceful else "pending"
+            )
+            record.memo = {**record.memo, _CANCEL_INTENT_MEMO_KEY: cancellation}
         await self._sync_integration_correlation_record(record)
         await self._session.commit()
         await self._session.refresh(record)
