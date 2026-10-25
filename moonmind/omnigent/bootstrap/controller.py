@@ -744,7 +744,7 @@ class BootstrapController:
                     # For now, fail with actionable message
                     raise RuntimeError(
                         "OpenCode host image is not available. "
-                        "Run: docker build -f services/omnigent/opencode-host/Dockerfile "
+                        "Run: docker build -f services/omnigent/moonmind-host/Dockerfile "
                         "or set OMNIGENT_OPENCODE_HOST_IMAGE_REF to a digest-pinned image."
                     )
             model_info = resolve_bootstrap_model(

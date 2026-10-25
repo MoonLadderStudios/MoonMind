@@ -33,7 +33,6 @@ def test_current_workflows_have_stable_names() -> None:
         "codex-conformance-canary.yml": "Provider / Codex Conformance Canary",
         "docker-publish.yml": "Release / Build App Image",
         "docker-publish-moonmind-host.yml": "Release / Build omnigent-host-moonmind Image",
-        "docker-publish-opencode-host.yml": "Release / Build omnigent-host-opencode Image",
         "omnigent-concurrency-qualification.yml": (
             "Provider / Omnigent Concurrency Qualification"
         ),
