@@ -234,6 +234,8 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/alembic-migration-gate.yml
+    with:
+      qualification_run_id: ${{ github.run_id }}
 
   publish-latest:
     needs:
