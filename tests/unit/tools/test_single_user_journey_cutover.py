@@ -476,91 +476,205 @@ def test_real_runner_redaction_composes_without_leaking_header_values(tmp_path, 
     assert "helper stalled" in captured["helpers"][helper_id]["logs"]
 
 
-def test_upgrade_faults_resume_the_submitted_operation_once(checkout, monkeypatch):
+def test_upgrade_faults_resume_the_submitted_operation_once(
+    checkout, monkeypatch, record_property
+):
     import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-    base = ("docker", "compose", "--project-name", "moonmind-test-upgrade")
+    # Keep WSGI admission, production_apply, journal preparation, the stack
+    # lock and durable recovery intact. Docker and release-helper responses
+    # are controlled transports; this is not qualification of a running stack.
+    services = ("api", "postgres", "temporal-worker-agent-runtime")
     applied = []
+    storage_starts = []
+    helper_phases = []
+    requests = []
     ready = [True]
+    # The controlled loopback origin must not use the runner's outbound proxy.
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+
+    class Operator(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append(self.path)
+            self.send_response(200 if ready[0] else 503)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *_args):
+            pass
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Operator)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    api_base = f"http://127.0.0.1:{httpd.server_port}"
 
     class Runner:
         def run(self, args, timeout_seconds):
             if args[-2:] == ("config", "--services"):
-                return {"exit": 0, "output": "api\ntemporal-worker-workflow\n"}
+                return {"exit": 0, "output": "\n".join(services)}
+            if args[-3:] == ("config", "--format", "json"):
+                return {
+                    "exit": 0,
+                    "output": json.dumps(
+                        {
+                            "services": {
+                                "api": {
+                                    "environment": {
+                                        "MOONMIND_PUBLIC_BASE_URL": api_base,
+                                    }
+                                }
+                            }
+                        }
+                    ),
+                }
+            if args[:2] == ("docker", "ps"):
+                # Operation-labelled one-offs have exited; the ordinary worker
+                # remains observable to both journal and routing inventories.
+                oneoff = any(controller.OMNIGENT_OPERATION_LABEL in arg for arg in args)
+                return {"exit": 0, "output": "" if oneoff else "worker"}
+            if args[:2] == ("docker", "inspect"):
+                worker_image = IMAGE if applied else "sha256:prior-release"
+                projection = args[args.index("--format") + 1]
+                if projection == controller.JOURNAL_CONSUMER_INSPECT_FORMAT:
+                    row = {
+                        "Image": worker_image,
+                        "Config": {
+                            "Env": [],
+                            "Labels": {
+                                "com.docker.compose.project": "moonmind-test-upgrade",
+                                "com.docker.compose.service": services[-1],
+                            },
+                        },
+                    }
+                else:
+                    assert projection == controller.TEMPORAL_WORKER_INSPECT_FORMAT
+                    row = {
+                        "Image": worker_image,
+                        "Worker": True,
+                        "Service": services[-1],
+                        "OneOff": "False",
+                    }
+                return {"exit": 0, "output": json.dumps(row)}
+            if args[:3] == ("docker", "image", "inspect"):
+                return {"exit": 0, "output": IMAGE}
             if "ps" in args:
                 return {
                     "exit": 0,
-                    "stdout": (
-                        json.dumps(
-                            [
-                                {
-                                    "Service": "api",
-                                    "ID": "new-api" if applied else "old-api",
-                                    "State": "running",
-                                    "Health": "healthy" if ready[0] else "starting",
-                                },
-                                {
-                                    "Service": "temporal-worker-workflow",
-                                    "ID": "worker",
-                                    "State": "running",
-                                    "Health": "healthy",
-                                },
-                            ]
-                        )
-                        if "compose" in args
-                        else ""
+                    "stdout": json.dumps(
+                        [
+                            {
+                                "Service": service,
+                                "ID": (
+                                    "postgres"
+                                    if service == "postgres"
+                                    else f"{'new' if applied else 'old'}-{service}"
+                                ),
+                                "State": "running",
+                                "Health": (
+                                    "starting"
+                                    if service == "api" and not ready[0]
+                                    else "healthy"
+                                ),
+                            }
+                            for service in services
+                        ]
                     ),
                 }
+            if "run" in args:
+                assert args[-2] in ("journal-prepare", "apply")
+                helper_phases.append(args[-2])
+                # Exercise the shipped command/receipt adapter. The controlled
+                # helper prepares journals; Temporal routing is outside this
+                # regression and explicitly reports unsupported.
+                reply = {
+                    "status": (
+                        "prepared" if args[-2] == "journal-prepare" else "unsupported"
+                    )
+                }
+                return {
+                    "exit": 0,
+                    "output": controller.OMNIGENT_RESULT_PREFIX + json.dumps(reply),
+                }
             if "up" in args:
+                if "--no-recreate" in args:
+                    assert args[-1] == "postgres" and "--wait" in args
+                    storage_starts.append(tuple(args))
+                    return {"exit": 0, "output": ""}
+                assert storage_starts and helper_phases == ["journal-prepare"]
                 applied.append(tuple(args))
                 ready[0] = False
-            if "exec" in args and args[-2:] == ("touch", "/tmp/moonmind-journey-start"):
-                ready[0] = True
+            elif "exec" in args:
+                if args[-2:] == ("touch", "/tmp/moonmind-journey-start"):
+                    ready[0] = True
+                else:
+                    assert args[-1] == controller.CONVERSION_PROBE_SCRIPT
+                    assert ready[0]
+                    return {
+                        "exit": 0,
+                        "output": controller.CONVERSION_RESULT_PREFIX
+                        + json.dumps(
+                            {
+                                "published": True,
+                                "disposition": "fresh_init",
+                            }
+                        ),
+                    }
+            else:
+                assert "pull" in args
             return {"exit": 0, "output": ""}
 
     runner = Runner()
     monkeypatch.setattr(controller.engine, "subprocess_runner", lambda: runner)
-
-    def apply(store, operation):
-        current = controller.engine.subprocess_runner()
-        if operation.get("installed") is None:
-            try:
-                controller.engine.stage_images(
-                    current, base, (IMAGE,), services=("api",)
-                )
-            except controller.engine.StageError as exc:
-                store.record_attempt_error(operation["operationId"], error=exc.output)
-                raise
-            current.run((*base, "up", "-d"), 30)
-            store.confirm_installed(
-                operation["operationId"], image=IMAGE, verification_pending=True
-            )
-        observed = controller.engine.wait_for_services(
-            current, base, ("api", "temporal-worker-workflow"), timeout_seconds=30
-        )
-        assert all(observed["services"].values())
-        store.record_verification(
-            operation["operationId"], name="service:api", status="passed"
-        )
-        store.finish_verification(operation["operationId"], complete=True)
-
-    monkeypatch.setattr(controller, "production_apply", apply)
     module = adapter()
-    # Only the operator HTTP transport is controlled in this adapter unit test.
-    monkeypatch.setattr(module, "operator_health", lambda _url: 200, raising=False)
-    result = module.run_recovery_cutover(
-        repo=checkout,
-        project="moonmind-test-upgrade",
-        image=IMAGE,
-        revision="candidate-sha",
-        compose_files=[str(checkout / "docker-compose.yaml")],
-        controller=controller,
-        api_base="http://127.0.0.1:7000",
-        diagnostics_path=checkout / "evidence/cutover.json",
-    )
+    try:
+        result = module.run_recovery_cutover(
+            repo=checkout,
+            project="moonmind-test-upgrade",
+            image=IMAGE,
+            revision="candidate-sha",
+            compose_files=[str(checkout / "docker-compose.yaml")],
+            controller=controller,
+            api_base=api_base,
+            diagnostics_path=checkout / "evidence/cutover.json",
+        )
+    finally:
+        httpd.shutdown()
+        thread.join(timeout=5)
+        httpd.server_close()
     assert result["passed"]
     assert result["recovery"]["apply_count"] == len(applied) == 1
+    assert len(storage_starts) == 1
+    assert helper_phases.count("journal-prepare") == 1
     assert result["recovery"]["resumed_once"]
     assert result["recovery"]["delayed_api_observed"]
     assert "registry unavailable before mutation" in result["operation"]["errorSummary"]
     assert result["recovery"]["workers_preserved_on_pull_failure"]
+    assert "/healthz" in requests and "/api/v1/settings/catalog" in requests
+    persisted = controller.record_mod.OperationStore(
+        checkout / "deploy/state/controller"
+    )
+    assert persisted.load(result["operation"]["operationId"]) == result["operation"]
+    assert persisted.list_open() == []
+    record_property(
+        "upgrade_recovery",
+        json.dumps(
+            {
+                "recovery": result["recovery"],
+                "operation": result["operation"],
+                "journal_storage_starts": len(storage_starts),
+                "application_recreations": len(applied),
+                "operator_paths": requests,
+                "substitutions": [
+                    "Docker command transport",
+                    "release-helper response",
+                    "HTTP application",
+                ],
+                "temporal_routing": "controlled helper reports unsupported; not qualified",
+            },
+            sort_keys=True,
+        ),
+    )
