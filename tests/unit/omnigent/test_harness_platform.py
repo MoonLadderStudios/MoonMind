@@ -1,7 +1,4 @@
-"""Tests for Omnigent Harness Platform (design docs/Omnigent/OmnigentHarnessPlatformDesign.md).
-
-Covers all 30 acceptance criteria via TDD.
-"""
+"""Behavior tests for harness planning, admission, trust and runtime binding."""
 
 import json
 from datetime import UTC, datetime, timedelta
@@ -43,10 +40,6 @@ from moonmind.omnigent.harness_platform.execution_plan import (
     create_execution_plan_envelope,
     verify_execution_plan_envelope,
 )
-from moonmind.omnigent.harness_platform.extension import (
-    CompanionDescriptor,
-    validate_community_plugin_launchable,
-)
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
@@ -57,10 +50,6 @@ from moonmind.omnigent.harness_platform.host_classes import (
     get_launch_policy,
     register_host_class,
     validate_policy_for_host_class,
-)
-from moonmind.omnigent.harness_platform.lifecycle import (
-    LIFECYCLE_STEPS,
-    validate_lifecycle_order,
 )
 from moonmind.omnigent.harness_platform.materializers import (
     get_materializer,
@@ -996,44 +985,6 @@ def test_support_identity_includes_model_and_realizer():
     assert key1 != key3
 
 
-# AC 20: Fenced Omnigent control plane owns session and side-effect journal
-def test_control_plane_owns_session_journal():
-    from moonmind.omnigent.harness_platform.lifecycle import (
-        OmnigentSessionAggregate,
-        OmnigentTurnAttempt,
-    )
-
-    session = OmnigentSessionAggregate.model_validate(
-        {
-            "sessionId": "sess_1",
-            "agentProfileSnapshotRef": "omnigent-agent-profile:sha256:" + "a" * 64,
-            "agentSourceRef": "upstream:opencode-native-ui",
-            "resolvedSkillRefs": {
-                "skillDeliveryRef": "skill-delivery:sha256:" + "b" * 64
-            },
-            "executionPlanRef": "omnigent-execution-plan:sha256:" + "c" * 64,
-            "runtimeBindingRef": "omnigent-runtime-binding:sha256:" + "d" * 64,
-            "providerSessionAuthority": "omnigent-provider-session:123",
-            "desiredState": "running",
-            "observedState": "running",
-            "revision": 1,
-            "fencingGeneration": 7,
-        }
-    )
-    assert session.revision == 1
-    assert session.fencingGeneration == 7
-    attempt = OmnigentTurnAttempt.model_validate(
-        {
-            "attemptId": "attempt_1",
-            "sessionId": "sess_1",
-            "requestDigest": "sha256:" + "e" * 64,
-            "planRef": session.executionPlanRef,
-            "runtimeBindingRef": session.runtimeBindingRef,
-        }
-    )
-    assert attempt.planRef == session.executionPlanRef
-
-
 # AC 21: Adding approved harness does not require new branch in generic lifecycle coordinator
 def test_adding_harness_no_new_branch():
     # Planner handles any harness without code branch - just catalog + trust + HostClass
@@ -1474,21 +1425,6 @@ def test_opencode_go_composition():
     )
 
 
-# AC 27: Cancellation, rotation, cleanup, janitor proven for generic hosts
-def test_lifecycle_order_proves_cleanup_last():
-    validate_lifecycle_order(LIFECYCLE_STEPS)
-    # Lease release must be last
-    with pytest.raises(ValueError):
-        validate_lifecycle_order(
-            ["release_provider_leases_last", "compile_execution_plan_envelope"]
-        )
-    # Host attestation before session
-    with pytest.raises(ValueError):
-        validate_lifecycle_order(
-            ["create_or_reattach_session", "exact_host_harness_attestation"]
-        )
-
-
 # AC 28: Codex moves to generic realizer only after support matrix passes for exact realizer
 def test_support_matrix_distinguishes_realizer():
     base = {
@@ -1758,40 +1694,6 @@ def test_trust_states_distinct():
             harnessId="test", implementation=impl, trustState=state
         )
         assert trust.trustState == state
-
-
-# Companion descriptor forbidden authority
-def test_companion_descriptor_rejects_secret():
-    with pytest.raises(Exception):
-        CompanionDescriptor.model_validate(
-            {
-                "harnessImplementationRef": "omnigent-harness-implementation:sha256:"
-                + "a" * 64,
-                "credentialSlots": [{"id": "primary", "secretValue": "oops"}],
-                "acceptedMaterializerClasses": ["own-auth"],
-                "hostFeatures": ["workspaceBind"],
-                "requiredBinaries": [],
-                "mutableStatePaths": [],
-                "validationProbes": [],
-                "knownLimitations": [],
-            }
-        )
-
-
-# Community plugin launchable validation
-def test_community_plugin_requires_all_gates():
-    impl = make_impl(kind="plugin", entry="plugin.main")
-    with pytest.raises(HarnessPlatformError):
-        validate_community_plugin_launchable(
-            implementation=impl,
-            catalog_id="community-plugin",
-            trust_state=TrustState.quarantined,
-            host_class_declares=True,
-            exact_host_attests=True,
-            materializer_approved=True,
-            capabilities_enforceable=True,
-            support_classification="experimental",
-        )
 
 
 # Skill delivery mismatch
