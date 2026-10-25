@@ -560,3 +560,48 @@ async def test_public_cancel_preserves_supported_identifier_aliases(
     async with artifacts() as session:
         record = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
         assert record.memo["temporalCancel"]["state"] == "confirmed"
+
+
+@pytest.mark.parametrize("observation_fails", [False, True])
+async def test_retained_start_failure_survives_background_recovery(
+    artifacts, monkeypatch, observation_fails,
+):
+    await _api_context(artifacts, monkeypatch)
+    monkeypatch.setattr(settings.temporal, "namespace", "default")
+    adapter = SimpleNamespace(
+        start_workflow=AsyncMock(),
+        describe_workflow=AsyncMock(return_value=SimpleNamespace(run_id="accepted")),
+    )
+    workflow_id, _, _ = await admit_then_disappear(artifacts, adapter)
+    async with artifacts() as session:
+        record = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+        # This is the pre-change on-disk shape, not a failure created by the
+        # new writer that already populates firstFailure.
+        record.memo = {**record.memo, "temporalStart": {
+            **record.memo["temporalStart"],
+            "firstRequestedAt": datetime.now(UTC).isoformat(),
+            "retentionSeconds": 86400,
+            "reason": "start_not_confirmed",
+            "lastErrorType": "ConnectionError",
+        }}
+        await session.commit()
+    if observation_fails:
+        adapter.describe_workflow.side_effect = TimeoutError("fixture later observation")
+        await operational_tick(adapter).agent_runtime_reconcile_managed_sessions({})
+        async with artifacts() as session:
+            record = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+            assert record.memo["temporalStart"]["reason"] == "reconciliation_unavailable"
+            assert record.memo["temporalStart"]["firstFailure"] == {
+                "reason": "start_not_confirmed", "errorType": "ConnectionError",
+                "observedAt": None,
+            }
+        adapter.describe_workflow.side_effect = None
+    await operational_tick(adapter).agent_runtime_reconcile_managed_sessions({})
+    adapter.start_workflow.assert_not_awaited()
+    async with artifacts() as session:
+        record = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+        assert record.memo["temporalStart"]["state"] == "confirmed"
+        assert record.memo["temporalStart"]["firstFailure"] == {
+            "reason": "start_not_confirmed", "errorType": "ConnectionError",
+            "observedAt": None,
+        }

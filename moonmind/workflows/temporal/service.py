@@ -666,6 +666,16 @@ def _validate_publish_authority(initial_parameters: Mapping[str, Any] | None) ->
         raise TemporalExecutionValidationError(str(exc)) from exc
 
 
+def _preserve_retained_start_failure(intent: dict[str, Any]) -> None:
+    if intent.get("reason") and not intent.get("firstFailure"):
+        intent["firstFailure"] = {
+            "reason": intent["reason"],
+            "errorType": intent.get("lastErrorType"),
+            # Older writers did not record when the failure was observed.
+            "observedAt": None,
+        }
+
+
 def _cancel_request_identity(memo: Mapping[str, Any]) -> str | None:
     intent = memo.get(_CANCEL_INTENT_MEMO_KEY) or {}
     if intent.get("requestId"):
@@ -3192,6 +3202,7 @@ class TemporalExecutionService:
             reason,
             exc_info=error is not None,
         )
+        _preserve_retained_start_failure(intent)
         intent["reason"] = reason
         intent.setdefault(
             "firstFailure",
@@ -3233,6 +3244,7 @@ class TemporalExecutionService:
         intent = dict(record.memo.get(_CREATE_START_MEMO_KEY) or {})
         if intent.get("state") != "pending":
             return record
+        _preserve_retained_start_failure(intent)
         old_run_id = record.run_id
         record.run_id = run_id
         cancellation = dict((record.memo or {}).get(_CANCEL_INTENT_MEMO_KEY) or {})
