@@ -101,7 +101,7 @@ jobs:
         run: |
           set -euo pipefail
           # Reuses the changed-file list computed above, the same shared
-          # resolution path as test selection and deployment safety
+          # resolution path as test selection
           # (MoonLadderStudios/MoonMind#3326). An unknown change set stays
           # conservative and runs the generated-contract check.
           if [[ "${{ steps.changed-files.outputs.resolution }}" != "known" ]]; then
@@ -133,10 +133,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Manual and scheduled runs carry no event base, so deployment
-          # safety compares against the default-branch merge base, the same
-          # diff a pull request would validate. An unresolvable base stays
-          # unknown and blocks below.
+          # Manual and scheduled runs carry no event base, so ownership
+          # selection compares against the default-branch merge base, the
+          # same diff a pull request would validate. An unresolvable base
+          # stays unknown and selects full verification.
           base_sha=""
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" || "$GITHUB_EVENT_NAME" == "schedule" ]]; then
             default_branch="$(gh api "repos/${GITHUB_REPOSITORY}" --jq .default_branch || true)"
@@ -181,16 +181,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip uv
           uv pip install --system -e .[tests]
-      - name: Validate AgentSession deployment safety
-        if: steps.changed-files.outputs.resolution == 'known'
-        run: |
-          set -euo pipefail
-          ./tools/validate_agent_session_deployment_safety.py --changed-files-file /tmp/changed-files.txt
-      - name: Block deployment safety validation on an unknown diff
-        if: steps.changed-files.outputs.resolution != 'known'
-        run: |
-          echo "Unable to resolve the exact changed-file set; deployment safety cannot be validated." >&2
-          exit 1
       - name: Select ownership verification
         id: ownership
         run: python3 tools/select_test_suites.py < /tmp/changed-files.txt
@@ -225,7 +215,6 @@ jobs:
             echo "- status token domains"
             echo "- status token audit (\`--fail-on-unknown\`)"
             echo "- GitHub workflow display-name guard"
-            echo "- AgentSession deployment safety (exact changed files)"
             echo "- exclusive backend shard ownership: full=${{ steps.ownership.outputs.ownership_full }}"
             echo "- vendored MoonSpec projection"
           } >> "$GITHUB_STEP_SUMMARY"

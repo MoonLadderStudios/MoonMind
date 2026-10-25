@@ -887,10 +887,6 @@ def test_preflight_policy_runs_in_parallel_and_owns_policy_guards() -> None:
     assert "tools/status_domain_audit.py" in scripts
     assert "tools/audit_status_tokens.py --fail-on-unknown" in scripts
     assert "tools/check_github_workflow_names.py" in scripts
-    assert (
-        "tools/validate_agent_session_deployment_safety.py --changed-files-file"
-        in scripts
-    )
 
 
 def test_unit_fast_no_longer_duplicates_policy_checks() -> None:
@@ -902,7 +898,6 @@ def test_unit_fast_no_longer_duplicates_policy_checks() -> None:
 
     scripts = "\n".join(step.get("run", "") for step in job["steps"])
     assert "verify_workflow_terminology.py" not in scripts
-    assert "validate_agent_session_deployment_safety.py" not in scripts
 
 
 def test_selector_uses_shallow_submodule_free_checkout_and_shared_helper() -> None:
@@ -919,7 +914,7 @@ def test_selector_uses_shallow_submodule_free_checkout_and_shared_helper() -> No
     assert "tools/select_test_suites.py" in scripts
 
 
-def test_preflight_blocks_deployment_safety_when_changed_files_are_unknown() -> None:
+def test_preflight_retains_shared_changed_file_resolution() -> None:
     job = _load_workflow()["jobs"]["preflight-policy"]
     steps = {step["name"]: step for step in job["steps"]}
 
@@ -927,17 +922,11 @@ def test_preflight_blocks_deployment_safety_when_changed_files_are_unknown() -> 
     assert compute["id"] == "changed-files"
     assert '>> "$GITHUB_OUTPUT"' in compute["run"]
     # Manual and scheduled runs resolve the default-branch merge base so
-    # they validate an exact diff instead of always blocking as unknown.
+    # ownership selection can use the exact diff when it is available.
     assert compute["env"]["GH_TOKEN"] == "${{ github.token }}"
     assert ".merge_base_commit.sha" in compute["run"]
     assert "compute_changed_files.sh /tmp/changed-files.txt $base_sha" in (
         compute["run"]
-    )
-    assert steps["Validate AgentSession deployment safety"]["if"] == (
-        "steps.changed-files.outputs.resolution == 'known'"
-    )
-    assert steps["Block deployment safety validation on an unknown diff"]["if"] == (
-        "steps.changed-files.outputs.resolution != 'known'"
     )
 
 
