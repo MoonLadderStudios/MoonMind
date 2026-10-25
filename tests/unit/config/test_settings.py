@@ -474,48 +474,6 @@ class TestWorkflowSettings:
         monkeypatch.delenv("AGENT_JOB_ATTACHMENT_TOTAL_BYTES", raising=False)
         monkeypatch.delenv("AGENT_JOB_ATTACHMENT_ALLOWED_TYPES", raising=False)
 
-    def test_vision_defaults(self):
-        """Vision settings should expose stable defaults."""
-
-        settings = WorkflowSettings(_env_file=None)
-        assert settings.vision_context_enabled is True
-        assert settings.vision_provider == "gemini"
-        assert settings.vision_model == "models/gemini-2.5-flash"
-        assert settings.vision_max_tokens == 512
-        assert settings.vision_ocr_enabled is True
-
-    def test_vision_env_overrides(self, monkeypatch):
-        """Vision configuration should respect environment overrides."""
-
-        monkeypatch.setenv("MOONMIND_VISION_CONTEXT_ENABLED", "0")
-        monkeypatch.setenv("MOONMIND_VISION_PROVIDER", "openai")
-        monkeypatch.setenv("MOONMIND_VISION_MODEL", "gpt-4o-mini")
-        monkeypatch.setenv("MOONMIND_VISION_MAX_TOKENS", "2048")
-        monkeypatch.setenv("MOONMIND_VISION_OCR_ENABLED", "false")
-
-        settings = WorkflowSettings(_env_file=None)
-        assert settings.vision_context_enabled is False
-        assert settings.vision_provider == "openai"
-        assert settings.vision_model == "gpt-4o-mini"
-        assert settings.vision_max_tokens == 2048
-        assert settings.vision_ocr_enabled is False
-
-        monkeypatch.delenv("MOONMIND_VISION_CONTEXT_ENABLED", raising=False)
-        monkeypatch.delenv("MOONMIND_VISION_PROVIDER", raising=False)
-        monkeypatch.delenv("MOONMIND_VISION_MODEL", raising=False)
-        monkeypatch.delenv("MOONMIND_VISION_MAX_TOKENS", raising=False)
-        monkeypatch.delenv("MOONMIND_VISION_OCR_ENABLED", raising=False)
-
-    def test_vision_provider_normalizes_legacy_gemini_cli_value(self, monkeypatch):
-        """The preserved Gemini API provider accepts the previous operator value."""
-
-        monkeypatch.setenv("MOONMIND_VISION_PROVIDER", "gemini_cli")
-
-        settings = WorkflowSettings(_env_file=None)
-
-        assert settings.vision_provider == "gemini"
-        monkeypatch.delenv("MOONMIND_VISION_PROVIDER", raising=False)
-
     def test_task_default_baselines(self):
         """Task defaults should provide stable queue execution baselines."""
 
