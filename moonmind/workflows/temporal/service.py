@@ -504,7 +504,7 @@ class TemporalExecutionStartUnconfirmedError(TemporalExecutionError):
             "code": "temporal_start_unconfirmed",
             "workflowId": workflow_id,
             "reason": reason,
-            "message": "Execution inputs are saved, but its Temporal start is unconfirmed. Retry the original idempotency key to reconcile this admission.",
+            "message": "Execution inputs are saved, but its Temporal start is unconfirmed. Background reconciliation will resume this admission; an optional retry must use the original idempotency key.",
         }
         super().__init__(self.detail["message"])
 
@@ -722,6 +722,18 @@ async def reconcile_pending_execution_intents(
                             continue
                         memo = dict(record.memo or {})
                         cancel = dict(memo.get(_CANCEL_INTENT_MEMO_KEY) or {})
+                        if (
+                            cancel.get("state") == "pending"
+                            and cancel.get("targetRunId") != record.run_id
+                        ):
+                            # A saved cancellation never acquires authority over
+                            # a successor just because discovery found this row.
+                            cancel["reasonCode"] = "target_run_changed"
+                            cancel["lastReconcileAttemptAt"] = _utc_now().isoformat()
+                            record.memo = {**memo, _CANCEL_INTENT_MEMO_KEY: cancel}
+                            await session.commit()
+                            item["reason"] = "target_run_changed"
+                            continue
                         previous_cancel = next(
                             (
                                 entry
@@ -791,7 +803,9 @@ async def reconcile_pending_execution_intents(
                             {},
                         )
                         item["state"] = str(intent.get("state") or "pending")
-                        if intent.get("reason"):
+                        if intent.get("reasonCode"):
+                            item["reason"] = intent["reasonCode"]
+                        elif key == _CREATE_START_MEMO_KEY and intent.get("reason"):
                             item["reason"] = intent["reason"]
             except TemporalExecutionStartUnconfirmedError as error:
                 item["reason"] = error.detail["reason"]
@@ -3162,6 +3176,14 @@ class TemporalExecutionService:
             exc_info=error is not None,
         )
         intent["reason"] = reason
+        intent.setdefault(
+            "firstFailure",
+            {
+                "reason": reason,
+                "errorType": type(error).__name__ if error is not None else None,
+                "observedAt": _utc_now().isoformat(),
+            },
+        )
         if error is not None:
             intent["lastErrorType"] = type(error).__name__
         record.memo = {**record.memo, _CREATE_START_MEMO_KEY: intent}
@@ -3180,6 +3202,20 @@ class TemporalExecutionService:
             await self._create_start_unconfirmed(
                 record, intent, "start_returned_no_run_id"
             )
+        # Cancellation can observe an existing start without retaining the
+        # admission lock across its remote call. Refresh under the same lock
+        # before confirming, preserving any newer control intent or outcome.
+        record = (
+            await self._session.execute(
+                select(TemporalExecutionCanonicalRecord)
+                .where(TemporalExecutionCanonicalRecord.workflow_id == record.workflow_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one()
+        intent = dict(record.memo.get(_CREATE_START_MEMO_KEY) or {})
+        if intent.get("state") != "pending":
+            return record
         old_run_id = record.run_id
         record.run_id = run_id
         cancellation = dict((record.memo or {}).get(_CANCEL_INTENT_MEMO_KEY) or {})
@@ -4982,11 +5018,7 @@ class TemporalExecutionService:
         record = await self._require_cancel_target_execution(
             workflow_id, include_orphaned=not graceful
         )
-        if (
-            isinstance(record, TemporalExecutionCanonicalRecord)
-            and (record.memo or {}).get(_CREATE_START_MEMO_KEY, {}).get("state")
-            == "pending"
-        ):
+        if isinstance(record, TemporalExecutionCanonicalRecord):
             # A pending create owns this same row through its start RPC. Wait
             # for that outcome before dispatching cancel, rather than losing
             # the intent to NOT_FOUND just before the start reaches Temporal.
@@ -5001,14 +5033,6 @@ class TemporalExecutionService:
                     .execution_options(populate_existing=True)
                 )
             ).scalar_one()
-            if (record.memo or {}).get(_CREATE_START_MEMO_KEY, {}).get(
-                "state"
-            ) != "pending" or record.state in TERMINAL_STATES:
-                # A confirmed workflow may need this row in its terminal
-                # Activity. Never hold the admission lock while waiting for
-                # that workflow to process its cancellation.
-                await self._session.commit()
-                await self._session.refresh(record)
         if expected_run_id is not None:
             await self._session.refresh(record)
             if record.run_id != expected_run_id:
@@ -5026,6 +5050,42 @@ class TemporalExecutionService:
         reason_text = (reason or default_reason).strip() or default_reason
 
         if graceful and record.state in TERMINAL_STATES:
+            if isinstance(record, TemporalExecutionCanonicalRecord):
+                pending_cancel = dict(record.memo.get(_CANCEL_INTENT_MEMO_KEY) or {})
+                target_run = record.run_id
+                await self._session.commit()
+                if (
+                    pending_cancel.get("state") == "pending"
+                    and pending_cancel.get("targetRunId") == target_run
+                ):
+                    # Polling can observe the close before an interrupted
+                    # control request records confirmation. A local terminal
+                    # flag alone is insufficient evidence of cancellation.
+                    confirmed = await self._require_processable_graceful_cancellation(
+                        workflow_id, run_id=target_run,
+                    )
+                    record = (
+                        await self._session.execute(
+                            select(TemporalExecutionCanonicalRecord)
+                            .where(TemporalExecutionCanonicalRecord.workflow_id == workflow_id)
+                            .with_for_update()
+                            .execution_options(populate_existing=True)
+                        )
+                    ).scalar_one()
+                    current = dict(record.memo.get(_CANCEL_INTENT_MEMO_KEY) or {})
+                    if (
+                        record.run_id == target_run
+                        and current.get("state") == "pending"
+                        and current.get("targetRunId") == target_run
+                        and current.get("requestId") == pending_cancel.get("requestId")
+                    ):
+                        current["state"] = "confirmed" if confirmed else "pending"
+                        if confirmed:
+                            current.pop("reasonCode", None)
+                        else:
+                            current["reasonCode"] = "closed_run_cancellation_unconfirmed"
+                        record.memo = {**record.memo, _CANCEL_INTENT_MEMO_KEY: current}
+                    await self._session.commit()
             if record.workflow_type is TemporalWorkflowType.USER_WORKFLOW:
                 # The Temporal close may have committed before auxiliary
                 # managed-session cleanup ran. Retrying cancel against a
@@ -5046,6 +5106,7 @@ class TemporalExecutionService:
             and (record.memo or {}).get(_CREATE_START_MEMO_KEY, {}).get("state")
             == "pending"
         )
+        cancel_request_id = None
         if isinstance(record, TemporalExecutionCanonicalRecord):
             # Cancellation must also stop retries when Temporal never received
             # this saved admission. Persist the existing intervention intent
@@ -5076,6 +5137,9 @@ class TemporalExecutionService:
                         "requestedAt": _utc_now().isoformat(),
                     },
                 }
+            cancellation = dict(record.memo[_CANCEL_INTENT_MEMO_KEY])
+            cancel_request_id = cancellation.setdefault("requestId", str(uuid4()))
+            record.memo = {**record.memo, _CANCEL_INTENT_MEMO_KEY: cancellation}
             self._update_summary(
                 record, "Cancellation requested. Waiting for the workflow to stop."
             )
@@ -5145,6 +5209,30 @@ class TemporalExecutionService:
                     ),
                 )
             )
+
+        if isinstance(record, TemporalExecutionCanonicalRecord):
+            # The remote effect does not hold a DB lock. A newer request can
+            # legitimately supersede this one while that RPC is in flight.
+            record = (
+                await self._session.execute(
+                    select(TemporalExecutionCanonicalRecord)
+                    .where(TemporalExecutionCanonicalRecord.workflow_id == workflow_id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar_one()
+            current_cancel = dict(record.memo.get(_CANCEL_INTENT_MEMO_KEY) or {})
+            if (
+                current_cancel.get("requestId") != cancel_request_id
+                or current_cancel.get("state") != "pending"
+            ):
+                await self._session.commit()
+                return await self._sync_projection_best_effort(record)
+            if current_cancel.get("targetRunId") != record.run_id:
+                current_cancel["reasonCode"] = "target_run_changed"
+                record.memo = {**record.memo, _CANCEL_INTENT_MEMO_KEY: current_cancel}
+                await self._session.commit()
+                return await self._sync_projection_best_effort(record)
 
         if cancellation_confirmed or not graceful:
             record.paused = False
