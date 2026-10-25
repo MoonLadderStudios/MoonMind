@@ -1579,20 +1579,8 @@ class AtlassianSettings(BaseSettings):
             )
 
 class MemorySettings(BaseSettings):
-    """Runtime controls for memory and procedural-learning surfaces."""
+    """Reject configuration that selects a retired long-term memory provider."""
 
-    enabled: bool = Field(
-        True,
-        description="Master toggle for MoonMind memory context and writeback surfaces.",
-    )
-    planning: Literal["off", "beads"] = Field(
-        "off",
-        description="Planning-memory provider. Allowed values: off, beads.",
-    )
-    history: Literal["off", "digest"] = Field(
-        "off",
-        description="Run-history memory provider. Allowed values: off, digest.",
-    )
     long_term: Literal["off"] = Field(
         "off",
         description=(
@@ -1602,36 +1590,13 @@ class MemorySettings(BaseSettings):
             "A stale 'mem0' value fails fast instead of being silently ignored."
         ),
     )
-    fail_open: bool = Field(
-        True,
-        description=(
-            "Allow chat and workflow execution to continue when memory providers fail."
-        ),
-    )
-    context_budget_tokens: int = Field(
-        4096,
-        gt=0,
-        description="Maximum token budget for memory context packed into a request.",
-    )
 
-    @field_validator("planning", "history", "long_term", mode="before")
+    @field_validator("long_term", mode="before")
     @classmethod
     def _normalize_provider(cls, value: Any) -> Any:
         if isinstance(value, str):
             return value.strip().lower()
         return value
-
-    @property
-    def planning_enabled(self) -> bool:
-        """Return whether planning-memory retrieval should run."""
-
-        return self.enabled and self.planning != "off"
-
-    @property
-    def history_enabled(self) -> bool:
-        """Return whether run-history memory retrieval/writeback should run."""
-
-        return self.enabled and self.history != "off"
 
     model_config = SettingsConfigDict(
         populate_by_name=True,
