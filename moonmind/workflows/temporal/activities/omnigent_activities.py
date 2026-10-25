@@ -278,6 +278,34 @@ async def omnigent_prepare_child_execution_plan_activity(
     return child_request
 
 
+async def _link_execution_plan_inputs(
+    binding_value: Any,
+    *,
+    execution: activity.Info,
+    planning_parameters: Mapping[str, Any] | None = None,
+) -> None:
+    """Delegate a persisted plan's verified inputs before a workflow consumes it."""
+
+    from api_service.db.base import async_session_maker
+    from moonmind.omnigent.bridge_artifacts import link_verified_execution_plan_inputs
+    from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
+    from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
+
+    binding = OmnigentExecutionPlanBinding.model_validate(binding_value)
+    plan = await DbExecutionPlanStore(async_session_maker).load(binding.plan_ref)
+    if plan is None:
+        raise ValueError("execution plan authority is unavailable")
+    await link_verified_execution_plan_inputs(
+        session_factory=async_session_maker,
+        plan=plan,
+        binding=binding,
+        workflow_id=execution.workflow_id,
+        run_id=execution.workflow_run_id,
+        namespace=execution.namespace,
+        planning_parameters=planning_parameters,
+    )
+
+
 @activity.defn(name="omnigent.admit_scheduled_occurrence_plan")
 async def omnigent_admit_scheduled_occurrence_plan_activity(
     payload: Mapping[str, Any],
@@ -308,28 +336,12 @@ async def omnigent_admit_scheduled_occurrence_plan_activity(
             workflow_id=workflow_id,
             initial_parameters=initial_parameters,
         )
-    # Temporal starts schedule occurrences directly, bypassing the API start
-    # path. Delegate their exact frozen inputs before plan.generate reads
-    # them. Activity identity supplies the grant target without changing the
-    # workflow's command sequence or trusting caller-authored run metadata.
-    from moonmind.omnigent.bridge_artifacts import link_verified_execution_plan_inputs
-    from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
-    from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
-
-    binding = OmnigentExecutionPlanBinding.model_validate(
+    # Temporal starts occurrences outside API admission. Commit their exact
+    # input grants before planning under the Activity's actual execution.
+    await _link_execution_plan_inputs(
         admitted.get("omnigentExecutionPlan")
-        or initial_parameters.get("omnigentExecutionPlan")
-    )
-    plan = await DbExecutionPlanStore(async_session_maker).load(binding.plan_ref)
-    if plan is None:
-        raise ValueError("scheduled execution plan authority is unavailable")
-    await link_verified_execution_plan_inputs(
-        session_factory=async_session_maker,
-        plan=plan,
-        binding=binding,
-        workflow_id=execution.workflow_id,
-        run_id=execution.workflow_run_id,
-        namespace=execution.namespace,
+        or initial_parameters.get("omnigentExecutionPlan"),
+        execution=execution,
         planning_parameters=initial_parameters,
     )
     return admitted
@@ -357,8 +369,13 @@ async def omnigent_admit_step_successor_plan_activity(
     initial_parameters = payload.get("initialParameters")
     if not isinstance(initial_parameters, Mapping):
         raise ValueError("initialParameters must be an object")
+    execution = activity.info()
+    if workflow_id != execution.workflow_id:
+        raise ValueError(
+            "successor workflow identity conflicts with Activity authority"
+        )
     async with async_session_maker() as db_session:
-        return await readmit_frozen_execution_plan(
+        admitted = await readmit_frozen_execution_plan(
             db_session=db_session,
             artifact_service=_OnDemandTemporalArtifactService(async_session_maker),
             workflow_id=workflow_id,
@@ -366,6 +383,13 @@ async def omnigent_admit_step_successor_plan_activity(
             subject="Interrupted Step successor of",
             preserve_recorded_intent=True,
         )
+    if admitted.get("disposition") == "admitted":
+        # Recompilation creates new Skill/snapshot artifacts. The workflow
+        # reads them before AgentRun starts, so launch-time grants are too late.
+        await _link_execution_plan_inputs(
+            admitted["omnigentExecutionPlan"], execution=execution
+        )
+    return admitted
 
 
 def _checkpoint_branch_capable(recovery: dict[str, Any]) -> bool:

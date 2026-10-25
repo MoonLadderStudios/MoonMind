@@ -94,7 +94,7 @@ def test_portable_bundle_replays_discovery_submission_and_verification(
             assert self.headers["X-MoonMind-Execution-Fanout"] == "v1"
             assert (
                 self.headers["X-MoonMind-Task-Workflow-Id"]
-                == incident["incidentWorkflowId"]
+                == env["MOONMIND_TASK_WORKFLOW_ID"]
             )
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
@@ -123,6 +123,7 @@ def test_portable_bundle_replays_discovery_submission_and_verification(
                     "workflowId": f"mm:test-child-{len(records)}",
                     "runId": f"test-run-{len(records)}",
                     "state": "running",
+                    "parentWorkflowId": self.headers["X-MoonMind-Task-Workflow-Id"],
                 },
             )
             self.respond(record, 201)
@@ -130,11 +131,16 @@ def test_portable_bundle_replays_discovery_submission_and_verification(
         def do_GET(self) -> None:
             workflow_id = unquote(self.path.removeprefix("/api/executions/"))
             descriptions.append(workflow_id)
-            self.respond(
-                next(
-                    row for row in records.values() if row["workflowId"] == workflow_id
-                )
+            record = next(
+                row for row in records.values() if row["workflowId"] == workflow_id
             )
+            if (
+                record["parentWorkflowId"]
+                != self.headers["X-MoonMind-Task-Workflow-Id"]
+            ):
+                self.respond({"detail": {"code": "execution_not_found"}}, 404)
+                return
+            self.respond(record)
 
     # Block installed server packages as well as checkout imports. Ordinary
     # in-process tests can hide this regression by importing MoonMind first.
@@ -163,8 +169,45 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH": str(spool),
         "MOONMIND_STEP_EXECUTION_ID": "batch:run:node-1:execution:1",
     }
+    # One child was already accepted under the old shared-path key. Restored
+    # evidence must reconcile it before changing the key's scope.
+    first_pr = discovery[0]
+    records["legacy-shared-path-key"] = {
+        "workflowId": "mm:previously-accepted",
+        "runId": "previous-run",
+        "state": "running",
+        "parentWorkflowId": incident["incidentWorkflowId"],
+    }
+    spool.mkdir()
+    (spool / "batch_pr_resolver_result.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": "moonmind.batch-pr-resolver-result.v1",
+                "repository": incident["repository"],
+                "executionRef": incident["incidentWorkflowId"]
+                + ":old-run:node-1:execution:1",
+                "queued": [
+                    {
+                        "pr": first_pr["number"],
+                        "branch": first_pr["headRefName"],
+                        "workflowId": "mm:previously-accepted",
+                    }
+                ],
+            }
+        )
+    )
     try:
-        for _ in range(2):
+        for attempt, parent_id in enumerate(
+            (
+                incident["incidentWorkflowId"],
+                incident["incidentWorkflowId"],  # A retried attempt of the same parent.
+                incident["incidentWorkflowId"] + ":independent",
+            )
+        ):
+            env["MOONMIND_TASK_WORKFLOW_ID"] = parent_id
+            env["MOONMIND_STEP_EXECUTION_ID"] = (
+                parent_id + f":run:node-1:execution:{attempt + 1}"
+            )
             result = subprocess.run(
                 [
                     sys.executable,
@@ -204,10 +247,13 @@ runpy.run_path(sys.argv[0], run_name='__main__')
             )
             assert evaluation.satisfied, evaluation
             assert {item["workflowId"] for item in summary["queued"]} == {
-                item["workflowId"] for item in records.values()
+                item["workflowId"]
+                for item in records.values()
+                if item["parentWorkflowId"] == parent_id
             }
-        assert len(records) == 4  # A retry reuses each child's stable identity.
-        assert len(descriptions) == len(submissions) == 8
+        assert len(records) == 8  # Retries reuse children; independent parents do not.
+        assert len(descriptions) == 12
+        assert len(submissions) == 7  # No repeat POST for saved or retried children.
         for body in submissions:
             payload = body["payload"]
             assert payload["repository"]["repository"]["name"] == incident["repository"]
@@ -300,6 +346,39 @@ def test_discovery_failure_replaces_previous_success_evidence(tmp_path, monkeypa
     assert payload["status"] == "running"
     assert payload["executionRef"] == "current-attempt"
     assert payload["created"] == 0
+
+
+def test_discovery_failure_retains_known_child_for_later_reconciliation(
+    tmp_path, monkeypatch
+):
+    module = _load_module()
+    monkeypatch.setenv("MOONMIND_TASK_WORKFLOW_ID", "mm:parent")
+    monkeypatch.setenv("MOONMIND_STEP_EXECUTION_ID", "mm:parent:replacement-attempt")
+    monkeypatch.setenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", str(tmp_path))
+    monkeypatch.setattr(sys, "argv", ["batch_pr_resolver.py", "--repo", "owner/repo"])
+    (tmp_path / "batch_pr_resolver_result.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": "moonmind.batch-pr-resolver-result.v1",
+                "repository": "owner/repo",
+                "executionRef": "mm:parent:previous-attempt",
+                "queued": [
+                    {"pr": 42, "branch": "saved-branch", "workflowId": "mm:accepted"}
+                ],
+            }
+        )
+    )
+
+    def unavailable(**kwargs):
+        raise RuntimeError("discovery unavailable")
+
+    module["main"].__globals__["_run_pr_list"] = unavailable
+    with pytest.raises(RuntimeError, match="discovery unavailable"):
+        asyncio.run(module["main"]())
+    assert module["_previous_children"](tmp_path, "owner/repo") == {
+        ("42", "saved-branch"): "mm:accepted"
+    }
+
 
 def _expected_child_idempotency_key(
     *,
@@ -632,6 +711,53 @@ def test_parent_run_scope_reuses_task_context_artifacts_helper(
     task_context.write_text("{}", encoding="utf-8")
 
     assert parent_run_scope(str(task_context)) == "task-parent"
+
+
+@pytest.mark.parametrize(
+    "workflow_env",
+    ["MOONMIND_TASK_WORKFLOW_ID", "MOONMIND_WORKFLOW_ID", "TEMPORAL_WORKFLOW_ID"],
+)
+def test_parent_run_scope_uses_workflow_identity_across_attempts(
+    monkeypatch, tmp_path, workflow_env
+):
+    module = _load_module()
+    for key in (
+        "MOONMIND_TASK_WORKFLOW_ID",
+        "MOONMIND_WORKFLOW_ID",
+        "TEMPORAL_WORKFLOW_ID",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(
+        "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", str(tmp_path / "artifacts")
+    )
+    monkeypatch.setenv(workflow_env, "mm:first-parent")
+    for attempt in ("first-attempt", "replacement-attempt"):
+        monkeypatch.setenv("MOONMIND_TASK_RUN_ID", attempt)
+        assert module["_parent_run_scope"]() == "mm:first-parent"
+    monkeypatch.setenv(workflow_env, "mm:second-parent")
+    assert module["_parent_run_scope"]() == "mm:second-parent"
+
+
+def test_parent_run_scope_does_not_invent_scope_for_absent_context(
+    monkeypatch, tmp_path
+):
+    module = _load_module()
+    for key in (
+        "MOONMIND_TASK_WORKFLOW_ID",
+        "MOONMIND_WORKFLOW_ID",
+        "TEMPORAL_WORKFLOW_ID",
+        "MOONMIND_TASK_RUN_ID",
+        "MOONMIND_RUN_ID",
+        "TASK_RUN_ID",
+        "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH",
+        "MOONMIND_TASK_CONTEXT_PATH",
+        "TASK_CONTEXT_PATH",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert module["_parent_run_scope"]() is None
+
 
 def test_load_parent_repository_reads_task_context(tmp_path: Path):
     module = _load_module()
@@ -1110,6 +1236,73 @@ def test_submit_jobs_rejects_create_without_workflow_id(monkeypatch: Any) -> Non
 
     assert created == []
     assert errors[0]["error"] == "create response did not include workflowId"
+
+
+@pytest.mark.parametrize("saved_child", [True, False])
+@pytest.mark.parametrize("lookup_status", [404, 503])
+def test_uncertain_child_lookup_survives_retry_without_another_post(
+    monkeypatch, tmp_path, saved_child, lookup_status
+):
+    import httpx
+
+    module = _load_module()
+    monkeypatch.setenv("MOONMIND_TASK_WORKFLOW_ID", "mm:parent")
+    requests = []
+    lookup_available = False
+
+    def api(request):
+        requests.append(request.method)
+        if request.method == "GET" and not lookup_available:
+            return httpx.Response(lookup_status, json={"detail": "lookup unavailable"})
+        return httpx.Response(
+            200,
+            json={
+                "workflowId": "mm:accepted",
+                "runId": "accepted-run",
+                "state": "running",
+            },
+        )
+
+    client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: client(transport=httpx.MockTransport(api), **kwargs),
+    )
+    submission = _make_submission(module)
+    submission.existing_workflow_id = "mm:accepted" if saved_child else None
+    kwargs = {
+        "moonmind_url": "http://api:8000",
+        "worker_token": None,
+        "verify_attempts": 1,
+        "verify_delay_seconds": 0,
+    }
+    created, errors = asyncio.run(
+        module["_submit_jobs_via_http"]([submission], **kwargs)
+    )
+    assert created == []
+    assert errors[0]["workflowId"] == "mm:accepted"
+    (tmp_path / "batch_pr_resolver_result.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": "moonmind.batch-pr-resolver-result.v1",
+                "repository": "MoonLadderStudios/MoonMind",
+                "executionRef": "mm:parent:attempt-1",
+                "queued": created,
+                "errors": errors,
+            }
+        )
+    )
+    retained = module["_previous_children"](tmp_path, "MoonLadderStudios/MoonMind")
+    submission.existing_workflow_id = retained[("42", "feature/test")]
+    lookup_available = True
+    created, errors = asyncio.run(
+        module["_submit_jobs_via_http"]([submission], **kwargs)
+    )
+    assert errors == []
+    assert created[0]["workflowId"] == "mm:accepted"
+    assert requests == (["GET", "GET"] if saved_child else ["POST", "GET", "GET"])
+
 
 def test_submit_jobs_uses_http_when_moonmind_url_set(monkeypatch: Any) -> None:
     """_submit_jobs dispatches to HTTP when MOONMIND_URL is configured."""
