@@ -154,17 +154,18 @@ private endpoint, without its public ports or DNS aliases. This fences direct
 presigned writes as well as application writes. Incomplete source multipart
 uploads refuse cutover and remain resumable on the source.
 
-The owner copies through S3 into separate `artifact-data`, retaining keys,
-consumer metadata and bucket policies/CORS/lifecycle settings. A private
-`deploy/state/storage-transfers/` receipt retains source image/mount provenance
-and per-object progress. Each attempt has a bounded copy budget; retry verifies
-already copied bytes instead of repeating confirmed uploads. Full inventories,
-streamed SHA-256 checks and destination read/write/multipart/presigned probes
-precede activation. Mismatches or unavailable observations prevent activation;
-source objects and `minio-data` are never deleted. Versioned/locked buckets and
-nonstandard mounts require a separately qualified transfer. Application
-credentials must work without privilege escalation; restore any custom IAM
-configuration to the protected destination before retrying a denied probe.
+S3 copying into separate `artifact-data` retains keys, consumer metadata and
+bucket policies/CORS/lifecycle settings. Private `deploy/state/storage-transfers/`
+receipts save source image/mount provenance, consumer stop intent, private server
+identities and per-object progress. Intent precedes Docker calls so retry
+reconciles lost acknowledgements and recovers consumers after activation;
+one-offs stay stopped. Bounded retries verify copied bytes. Inventories, streamed
+SHA-256 checks and read/write/multipart/presigned probes precede activation.
+Mismatches or missing observations refuse activation; source objects and
+`minio-data` remain recoverable. Versioned/locked buckets and nonstandard mounts
+require a separately qualified transfer. Restore custom IAM to the protected
+destination before retrying denied application credentials; qualification never
+escalates privilege.
 
 A rollback follows the same fenced, verified procedure in reverse, copying new
 objects back before an older controller takes over. Neither direction prunes
@@ -173,7 +174,8 @@ operator-path reads/writes and rollback are verified for the installed inventory
 Repository qualification does not retire deployment data. Existing deployments
 must use this controller transition rather than replacing the storage image or
 running an unchecked `compose up` over a changed data mount.
-Dependency order and `init-db`/schema migration gating apply before dependent services start. A failed migration preserves the original error and data. Startup's legacy conversion scan reads distinct principal identities and skips artifact hashing once unreadable evidence requires refusal; it preserves source data and access guards without making retained history size a Python row-processing cost. Old Manifest releases use the [retirement upgrade procedure](../Temporal/WorkflowTypeCatalogAndLifecycle.md#112-moonmindmanifestingest-lifecycle-retired).
+
+Dependency and `init-db`/schema gates precede dependent services. Failed migration preserves errors and data. Legacy conversion scans distinct principals and skips artifact hashing once unreadable evidence requires refusal, preserving access guards without Python row processing over retained history. Old Manifest releases use the [retirement upgrade procedure](../Temporal/WorkflowTypeCatalogAndLifecycle.md#112-moonmindmanifestingest-lifecycle-retired).
 
 **Active journals and recovery.** After storage qualification, the journal
 helper stops actual `agent_runtime` writers and `artifacts` sweepers, verifies
@@ -188,9 +190,7 @@ After a partial apply, every journal consumer is stopped again. Retry recompacts
 before recreation because a partial writer may have committed more chunks.
 After the final automatic attempt, consumer services are recreated on the
 selected release; stopped one-offs remain stopped. Recovery/reporting failures
-are recorded beside the original apply error. Dependency order and schema
-migration gates precede dependent services; failure preserves data and the
-original error.
+are recorded beside the original apply error.
 
 Once detached apply confirms installation, readiness has a fifteen-minute
 budget measured from that checkpoint, including controller restarts. An early
