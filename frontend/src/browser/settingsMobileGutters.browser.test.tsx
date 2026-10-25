@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
-import { BrowserRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router-dom';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { ProvidersSecretsSettingsPage } from '../entrypoints/settings';
@@ -69,9 +69,10 @@ function rootContentInset(): number {
 
 async function renderProvidersPage(): Promise<void> {
   renderWithClient(
-    <BrowserRouter>
+    // Keep visual fixtures independent of WebKit's shared history-write budget.
+    <MemoryRouter initialEntries={['/settings/providers-secrets']}>
       <ProvidersSecretsSettingsPage payload={payload} />
-    </BrowserRouter>,
+    </MemoryRouter>,
     { container: panel },
   );
   // The profile editor opens from Add profile rather than always rendering.
@@ -82,7 +83,6 @@ async function renderProvidersPage(): Promise<void> {
 
 beforeEach(() => {
   document.body.style.margin = '0';
-  window.history.pushState({}, 'Settings', '/settings/providers-secrets');
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
@@ -116,6 +116,21 @@ afterEach(async () => {
 });
 
 describe('Providers & Secrets phone gutters', () => {
+  it('renders without changing the browser navigation state', async () => {
+    const navigation = {
+      url: window.location.href,
+      state: window.history.state,
+      length: window.history.length,
+    };
+
+    await renderProvidersPage();
+
+    expect({
+      url: window.location.href,
+      state: window.history.state,
+      length: window.history.length,
+    }).toEqual(navigation);
+  });
   it('keeps removal of an unsaved tier neutral', async () => {
     await renderProvidersPage();
     await userEvent.click(screen.getByRole('button', { name: 'Duplicate Tier 1 as new last tier' }));
