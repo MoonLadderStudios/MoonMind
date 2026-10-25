@@ -260,7 +260,7 @@ deletion removes its row in the same change rather than leaving a stale entry.
 | Claude static host scripts and Compose profile | `omnigent.legacy.claude_static_host_startup` | `active_product_path` |
 | Pre-consolidation `omnigent-host` service and projection entrypoint | `omnigent.legacy.projection_host_startup` | `active_product_path` |
 | Legacy generic host image variables | `omnigent.legacy.host_image_variable_alias` | `active_product_path` |
-| OpenCode shared-image variable / `omnigent-host-opencode` alias | `omnigent.legacy.opencode_host_image_alias` | `active_product_path` |
+| OpenCode image variable for existing deployments / legacy Host Classes | `omnigent.legacy.opencode_host_image_alias` | `active_product_path` |
 | Pi host image variable | `omnigent.legacy.pi_host_image_alias` | `active_product_path` |
 | `native_ui_compat.py` chat projection | `omnigent.legacy.native_ui_compat` | `active_product_path` |
 | Embedded host/runner transport admission | `omnigent.legacy.embedded_host_transport` | `new_admission_disabled` |
