@@ -4,16 +4,20 @@ The generic realizer re-issues the attempt-owned ``hosts.yml`` through the
 same frozen collaboration binding before an expiring GitHub App token lapses.
 A refused re-issue (revoked or changed connection) writes nothing, so the
 running ``gh`` never receives another account's or a lapsed credential.
-Only Docker and the GitHub App provider are replaced; the plan compiler,
+Docker execution and the GitHub App/code-host edges are controlled; the plan compiler,
 recorded connections, bound acquirer, runtime binding store, realizer and
-projection protocol are production code.
+projection protocol are production code. Real Git reads a synthetic HTTPS
+repository through the generated gh wrapper, including after a writer loses
+its acknowledgment. No live GitHub account or host-container lifecycle is claimed.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -36,6 +40,7 @@ from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
 from moonmind.omnigent.host_services.github_credentials import (
     github_projection_script,
 )
+from moonmind.omnigent.host_services.runtime_scripts import OmnigentRuntimeScriptService
 from moonmind.omnigent.runtime_bindings import (
     RuntimeBindingSessionAuthoritySink,
     RuntimeBindingState,
@@ -44,6 +49,11 @@ from moonmind.omnigent.runtime_bindings import (
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.activities import omnigent_session_activities as reader
+from tests.helpers.git_transport import (
+    basic_authorization,
+    start_synthetic_github,
+    write_proxy_git_shim,
+)
 from tests.helpers.repository_connections import (
     github_app_connection,
     github_app_provider_edge,
@@ -80,7 +90,12 @@ async def app_context(tmp_path, monkeypatch):
     issued = github_app_provider_edge(
         monkeypatch,
         # The source clone and the collaboration projection each issue.
-        ["ghs_source_clone", "ghs_first_issuance", "ghs_second_issuance", "ghs_unexpected"],
+        [
+            "ghs_source_clone",
+            "ghs_first_issuance",
+            "ghs_second_issuance",
+            "ghs_unexpected",
+        ],
         repositories=(_REPO,),
         lifetime_seconds=_LIFETIME_SECONDS,
     )
@@ -129,17 +144,31 @@ async def app_context(tmp_path, monkeypatch):
 
     artifacts.read = read
     monkeypatch.setattr(reader, "_read_json_artifact", read_json)
+    transport_generator = start_synthetic_github(
+        tmp_path / "transport", required_token="ghs_source_clone"
+    )
+    transport = next(transport_generator)
+    # Serve the admitted repository using the existing controlled Git fixture.
+    repository = transport.repository_root / "MoonLadderStudios"
+    repository.mkdir()
+    (repository / "MoonMind.git").symlink_to(
+        transport.repository_root / "owner/repo.git"
+    )
+    shim = write_proxy_git_shim(tmp_path, transport)
     try:
         yield SimpleNamespace(
             sessions=sessions,
             artifacts=artifacts,
             issued=issued,
+            transport=transport,
+            git_path=f"{shim}:{os.environ['PATH']}",
             gateway=SimpleNamespace(
                 read_bytes=read_bytes,
                 read_repository_access_snapshot=read_repository_access_snapshot,
             ),
         )
     finally:
+        transport_generator.close()
         from moonmind.omnigent.production import close_omnigent_transport_pool
 
         await close_omnigent_transport_pool()
@@ -162,6 +191,7 @@ class _ProjectionBackend:
         self.config_dir = config_dir
         self.owner = ""
         self.writes: list[bytes] = []
+        self.lose_publish_ack = False
 
     async def run(self, argv, **kwargs):
         if argv[1:3] == ["volume", "inspect"]:
@@ -170,7 +200,11 @@ class _ProjectionBackend:
             return 0, "", ""
         script = argv[argv.index("-ceu") + 1]
         action = next(
-            (name for name in _ACTIONS if script == github_projection_script(action=name)),
+            (
+                name
+                for name in _ACTIONS
+                if script == github_projection_script(action=name)
+            ),
             None,
         )
         if action is None:
@@ -190,6 +224,7 @@ class _ProjectionBackend:
                 host,
                 stamp,
             ],
+            check=False,
             input=token or b"",
             capture_output=True,
         )
@@ -198,13 +233,14 @@ class _ProjectionBackend:
                 "projection writer failed",
                 code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
             )
+        if action == "publish" and self.lose_publish_ack:
+            self.lose_publish_ack = False
+            raise ConnectionError("projection committed; acknowledgment lost")
         return 0, completed.stdout.decode().strip(), ""
 
     def projected(self) -> tuple[dict, str]:
         stamp_line, *rest = (self.config_dir / "hosts.yml").read_text().splitlines()
-        token = next(
-            line.split(": ", 1)[1] for line in rest if "oauth_token" in line
-        )
+        token = next(line.split(": ", 1)[1] for line in rest if "oauth_token" in line)
         return json.loads(stamp_line.split(": ", 1)[1]), token
 
 
@@ -225,9 +261,25 @@ async def _prepared_live_host(monkeypatch, context, tmp_path):
 
     async def clone_runner(argv, input_bytes=None):
         if "-ceu" in argv:
-            checkout = tmp_path / Path(argv[-3].removeprefix("/work/"))
-            (checkout / ".git").mkdir(parents=True)
-            (checkout / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+            start = argv.index("--") + 1
+            positional = list(argv[start:])
+            checkout = tmp_path / Path(positional[2].removeprefix("/work/"))
+            checkout.parent.mkdir(parents=True, exist_ok=True)
+            positional[2] = str(checkout)
+            completed = await asyncio.to_thread(
+                subprocess.run,
+                ["sh", "-ceu", argv[argv.index("-ceu") + 1], "--", *positional],
+                check=False,
+                input=input_bytes,
+                env={**os.environ, "PATH": context.git_path},
+                capture_output=True,
+                timeout=30,
+            )
+            return (
+                completed.returncode,
+                completed.stdout.decode(),
+                completed.stderr.decode(),
+            )
         return 0, "", ""
 
     from moonmind.omnigent import production
@@ -254,9 +306,7 @@ async def _prepared_live_host(monkeypatch, context, tmp_path):
     )
     runtime._tools = SimpleNamespace(materialize=AsyncMock(return_value=()))
     runtime._egress = SimpleNamespace(attest=AsyncMock(return_value={}))
-    workspace_id = hashlib.sha256(f"{_WORKFLOW}:attempt-4011".encode()).hexdigest()[
-        :24
-    ]
+    workspace_id = hashlib.sha256(f"{_WORKFLOW}:attempt-4011".encode()).hexdigest()[:24]
     request = AgentExecutionRequest(
         agentKind="external",
         agentId="omnigent",
@@ -318,14 +368,117 @@ async def _prepared_live_host(monkeypatch, context, tmp_path):
     return realizer, request, plan, sink, backend, prepared, renewal_settings
 
 
+def _repository_readers(tmp_path, backend, context):
+    """Run the generated host projection/profile with real local Git and gh.
+
+    Only mount paths and the final Omnigent process are substituted. The
+    shell profile, gh wrapper and Git credential helper remain generated by
+    the production entrypoint; no test-authored credential helper repairs it.
+    """
+    gh = shutil.which("gh") or "/opt/moonmind-tools/bin/gh"
+    assert Path(gh).is_file(), "the credential-reader lane requires GitHub CLI"
+    home = tmp_path / "reader-home"
+    home.mkdir(exist_ok=True)
+    skills = tmp_path / "reader-skills"
+    skills.mkdir(exist_ok=True)
+    script, environment = OmnigentRuntimeScriptService().build_entrypoint(
+        credential_handles=[],
+        skill_attachment={"targetPath": str(skills)},
+        step_execution_id="workflow:run:node:execution:1",
+        github_credential_attachment={
+            "targetPath": "/run/mm-credentials/github",
+            "githubHost": "github.com",
+        },
+    )
+
+    def local(value):
+        return (
+            value.replace("/home/app", str(home))
+            .replace("/run/mm-credentials/github", str(backend.config_dir))
+            .replace("/opt/moonmind-tools/bin/gh", os.path.realpath(gh))
+        )
+
+    environment = {
+        **os.environ,
+        **{key: local(value) for key, value in environment.items()},
+        "HOME": str(home),
+        "GH_TOKEN": "sibling-secret-canary",
+        "GITHUB_TOKEN": "ambient-secret-canary",
+        "GH_CONFIG_DIR": str(tmp_path / "sibling-login"),
+        "HTTPS_PROXY": context.transport.proxy_url,
+        "https_proxy": context.transport.proxy_url,
+        "GIT_SSL_CAINFO": str(context.transport.ca_path),
+        "NO_PROXY": "",
+        "no_proxy": "",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+    script = local(script).removesuffix(
+        'exec omnigent host --server "$1" --non-interactive'
+    )
+    subprocess.run(["sh", "-ceu", script], env=environment, check=True, timeout=10)
+    profile = home / ".omnigent/moonmind/runtime-context/shell-profile"
+    gh_wrapper = home / ".omnigent/moonmind/bin/gh"
+
+    def read(expected_token, *, allowed=True):
+        # A fresh CLI process, as after a reader interruption, uses the same
+        # live mount; an environment token or sibling login cannot take over.
+        result = subprocess.run(
+            [str(gh_wrapper), "auth", "token"],
+            check=False,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == expected_token
+        context.transport.requests.clear()
+        result = subprocess.run(
+            [
+                "sh",
+                "-ceu",
+                '. "$1"; shift; exec git "$@"',
+                "--",
+                str(profile),
+                "ls-remote",
+                f"https://github.com/{_REPO}.git",
+                "refs/heads/main",
+            ],
+            check=False,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert (result.returncode == 0) is allowed, result.stderr
+        if allowed:
+            assert result.stdout.strip().endswith("refs/heads/main")
+        else:
+            assert "Authentication failed" in result.stderr
+        assert set(context.transport.sent_authorizations()) == {
+            basic_authorization(expected_token)
+        }
+        assert not any(
+            canary in value
+            for value in context.transport.header_values()
+            for canary in ("ambient-secret-canary", "sibling-secret-canary")
+        )
+
+    return read
+
+
+@pytest.mark.parametrize("lost_ack", [False, True])
 async def test_live_projection_is_reissued_before_the_app_token_lapses(
-    app_context, monkeypatch, tmp_path
+    app_context, monkeypatch, tmp_path, lost_ack
 ):
     realizer, request, plan, sink, backend, prepared, settings = (
         await _prepared_live_host(monkeypatch, app_context, tmp_path)
     )
     first_stamp, first_token = backend.projected()
     assert first_token == "ghs_first_issuance"
+    read = _repository_readers(tmp_path, backend, app_context)
+    app_context.transport.required_token = first_token
+    read(first_token)
     expires_at = datetime.fromisoformat(prepared.github_issuance_expires_at)
     lifetime = (expires_at - datetime.now(timezone.utc)).total_seconds()
     assert 0 < lifetime <= _LIFETIME_SECONDS
@@ -342,6 +495,7 @@ async def test_live_projection_is_reissued_before_the_app_token_lapses(
     # Scheduled before the issuance lapses, never after it.
     assert renewal.due_at - time.monotonic() < lifetime
 
+    backend.lose_publish_ack = lost_ack
     renewed = await realizer._refresh_github_projection(renewal)
 
     second_stamp, second_token = backend.projected()
@@ -349,6 +503,11 @@ async def test_live_projection_is_reissued_before_the_app_token_lapses(
     assert second_stamp["ownerRef"] == first_stamp["ownerRef"]
     assert second_stamp["revision"] > first_stamp["revision"]
     assert renewed is not None and renewed.due_at > time.monotonic()
+    app_context.transport.required_token = second_token
+    read(second_token)
+    assert (
+        len(backend.writes) == 2
+    )  # Lost acknowledgment is reconciled, never republished.
     # The same frozen binding: one App installation, repository and scope.
     first, second = app_context.issued[-2:]
     assert first == second
@@ -366,12 +525,15 @@ async def test_live_projection_is_reissued_before_the_app_token_lapses(
 
 @pytest.mark.parametrize("change", ["disabled", "credential_changed"])
 async def test_refused_reissue_never_replaces_the_live_projection(
-    app_context, monkeypatch, tmp_path, change
+    app_context, monkeypatch, tmp_path, change, caplog
 ):
     realizer, request, plan, sink, backend, prepared, settings = (
         await _prepared_live_host(monkeypatch, app_context, tmp_path)
     )
     live = backend.projected()
+    read = _repository_readers(tmp_path, backend, app_context)
+    app_context.transport.required_token = live[1]
+    read(live[1])
     issued = len(app_context.issued)
     async with app_context.sessions() as session:
         connection = await session.get(RepositoryConnectionRecord, _CONNECTION)
@@ -395,6 +557,14 @@ async def test_refused_reissue_never_replaces_the_live_projection(
     assert backend.projected() == live
     assert len(app_context.issued) == issued
     assert len(backend.writes) == 1
+    assert "projection refresh failed" in caplog.text
+    assert (
+        "connection is not active" if change == "disabled" else "revision"
+    ) in caplog.text
+    # The controlled code host revokes the old issuance. Neither a restarted
+    # CLI nor ambient/sibling credentials may turn that refusal into success.
+    app_context.transport.required_token = "revoked-at-code-host"
+    read(live[1], allowed=False)
     # The session keeps running and retries while the current token is valid.
     assert retry is not None
     assert retry.due_at - time.monotonic() <= realizer._heartbeat_interval + 1

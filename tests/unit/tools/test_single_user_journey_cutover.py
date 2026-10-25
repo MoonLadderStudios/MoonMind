@@ -15,7 +15,10 @@ IMAGE = "sha256:" + "a" * 64
 
 
 @pytest.fixture
-def checkout(tmp_path):
+def checkout(tmp_path, monkeypatch):
+    # These adapter tests substitute Docker; legacy-writer inventory belongs
+    # to the real disposable Compose journey.
+    monkeypatch.setattr(controller, "reconcile_retired_shell_controller", lambda: False)
     repo = tmp_path / "moonmind-upgrade-4356.fixture"
     repo.mkdir()
     (repo / ".git").write_text("gitdir: ../fixture\n")
@@ -35,6 +38,14 @@ def adapter():
 
 def test_upgrade_uses_the_production_apply_owner(checkout, monkeypatch):
     applied = []
+    submissions = []
+    build_app = controller.build_app
+
+    def observe_submission(**kwargs):
+        submissions.append(kwargs["store"].state_dir)
+        return build_app(**kwargs)
+
+    monkeypatch.setattr(controller, "build_app", observe_submission)
 
     class Runner:
         def run(self, args, timeout_seconds):
@@ -64,6 +75,7 @@ def test_upgrade_uses_the_production_apply_owner(checkout, monkeypatch):
     assert adapter().run_cutover(**kwargs)["passed"]
     assert adapter().run_cutover(**kwargs)["passed"]
     assert len(applied) == 1  # A saved completion is not another image apply.
+    assert len(submissions) == 2  # Both requests enter controller admission.
 
 
 @pytest.mark.parametrize("complete", [False, True])
@@ -462,3 +474,93 @@ def test_real_runner_redaction_composes_without_leaking_header_values(tmp_path, 
     captured = json.loads(text)
     assert captured["firstFailure"]["exitStatus"] == 124
     assert "helper stalled" in captured["helpers"][helper_id]["logs"]
+
+
+def test_upgrade_faults_resume_the_submitted_operation_once(checkout, monkeypatch):
+    import json
+
+    base = ("docker", "compose", "--project-name", "moonmind-test-upgrade")
+    applied = []
+    ready = [True]
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            if args[-2:] == ("config", "--services"):
+                return {"exit": 0, "output": "api\ntemporal-worker-workflow\n"}
+            if "ps" in args:
+                return {
+                    "exit": 0,
+                    "stdout": (
+                        json.dumps(
+                            [
+                                {
+                                    "Service": "api",
+                                    "ID": "new-api" if applied else "old-api",
+                                    "State": "running",
+                                    "Health": "healthy" if ready[0] else "starting",
+                                },
+                                {
+                                    "Service": "temporal-worker-workflow",
+                                    "ID": "worker",
+                                    "State": "running",
+                                    "Health": "healthy",
+                                },
+                            ]
+                        )
+                        if "compose" in args
+                        else ""
+                    ),
+                }
+            if "up" in args:
+                applied.append(tuple(args))
+                ready[0] = False
+            if "exec" in args and args[-2:] == ("touch", "/tmp/moonmind-journey-start"):
+                ready[0] = True
+            return {"exit": 0, "output": ""}
+
+    runner = Runner()
+    monkeypatch.setattr(controller.engine, "subprocess_runner", lambda: runner)
+
+    def apply(store, operation):
+        current = controller.engine.subprocess_runner()
+        if operation.get("installed") is None:
+            try:
+                controller.engine.stage_images(
+                    current, base, (IMAGE,), services=("api",)
+                )
+            except controller.engine.StageError as exc:
+                store.record_attempt_error(operation["operationId"], error=exc.output)
+                raise
+            current.run((*base, "up", "-d"), 30)
+            store.confirm_installed(
+                operation["operationId"], image=IMAGE, verification_pending=True
+            )
+        observed = controller.engine.wait_for_services(
+            current, base, ("api", "temporal-worker-workflow"), timeout_seconds=30
+        )
+        assert all(observed["services"].values())
+        store.record_verification(
+            operation["operationId"], name="service:api", status="passed"
+        )
+        store.finish_verification(operation["operationId"], complete=True)
+
+    monkeypatch.setattr(controller, "production_apply", apply)
+    module = adapter()
+    # Only the operator HTTP transport is controlled in this adapter unit test.
+    monkeypatch.setattr(module, "operator_health", lambda _url: 200, raising=False)
+    result = module.run_recovery_cutover(
+        repo=checkout,
+        project="moonmind-test-upgrade",
+        image=IMAGE,
+        revision="candidate-sha",
+        compose_files=[str(checkout / "docker-compose.yaml")],
+        controller=controller,
+        api_base="http://127.0.0.1:7000",
+        diagnostics_path=checkout / "evidence/cutover.json",
+    )
+    assert result["passed"]
+    assert result["recovery"]["apply_count"] == len(applied) == 1
+    assert result["recovery"]["resumed_once"]
+    assert result["recovery"]["delayed_api_observed"]
+    assert "registry unavailable before mutation" in result["operation"]["errorSummary"]
+    assert result["recovery"]["workers_preserved_on_pull_failure"]
