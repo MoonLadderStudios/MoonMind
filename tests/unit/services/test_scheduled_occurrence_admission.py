@@ -87,7 +87,23 @@ def _install(monkeypatch, *, host: str, server: str) -> None:
 
 
 @pytest.fixture
-def compiler(monkeypatch):
+def plan_input_delegation(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from moonmind.omnigent import bridge_artifacts
+
+    monkeypatch.setattr(stores, "DbExecutionPlanStore", _PlanStore)
+    # Compiler fixtures have no artifact metadata database. Real delegation
+    # and workflow reads are covered by test_scheduled_planning_input_authority.
+    delegate = AsyncMock()
+    monkeypatch.setattr(
+        bridge_artifacts, "link_verified_execution_plan_inputs", delegate
+    )
+    return delegate
+
+
+@pytest.fixture
+def compiler(monkeypatch, plan_input_delegation):
     # Resolved state follows the installed env refs and records provenance.
     _configure_ready_host_image_pair(monkeypatch)
     monkeypatch.delenv("MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK", raising=False)
@@ -318,6 +334,15 @@ async def _successor_admission(monkeypatch, artifacts, parameters, session):
     monkeypatch.setattr(
         omnigent_activities, "_OnDemandTemporalArtifactService", lambda _f: artifacts
     )
+    monkeypatch.setattr(
+        omnigent_activities.activity,
+        "info",
+        lambda: SimpleNamespace(
+            workflow_id="mm:interrupted-run",
+            workflow_run_id="successor-run",
+            namespace="default",
+        ),
+    )
     # Temporal delivers the workflow's parameters as JSON.
     return await omnigent_activities.omnigent_admit_step_successor_plan_activity(
         {
@@ -465,7 +490,7 @@ class _ChildSuccessorSession:
 
 @pytest.mark.asyncio
 async def test_resolver_child_successor_binds_the_installed_runtime_with_its_authority(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, plan_input_delegation
 ) -> None:
     """A merge-automation resolver child is admitted like any other Run.
 
@@ -599,6 +624,15 @@ async def test_resolver_child_successor_binds_the_installed_runtime_with_its_aut
         # An update replaced the host and server while the resolver Step ran.
         monkeypatch.setenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", _REPO + "8" * 64)
         monkeypatch.setenv("OMNIGENT_IMAGE_REF", _SERVER + "9" * 64)
+        monkeypatch.setattr(
+            omnigent_activities.activity,
+            "info",
+            lambda: SimpleNamespace(
+                workflow_id="resolver:mm:merge-parent:1",
+                workflow_run_id="successor-run",
+                namespace="default",
+            ),
+        )
         admitted = (
             await omnigent_activities.omnigent_admit_step_successor_plan_activity(
                 {
@@ -656,7 +690,7 @@ async def test_resolver_child_successor_binds_the_installed_runtime_with_its_aut
 
 @pytest.mark.asyncio
 async def test_step_successor_keeps_the_recorded_plan_when_its_repository_route_moves(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, plan_input_delegation
 ) -> None:
     """A successor never moves to another repository route or endpoint.
 
@@ -712,6 +746,15 @@ async def test_step_successor_keeps_the_recorded_plan_when_its_repository_route_
     monkeypatch.setattr(db_base, "async_session_maker", session_maker)
     monkeypatch.setattr(
         omnigent_activities, "_OnDemandTemporalArtifactService", lambda _f: artifacts
+    )
+    monkeypatch.setattr(
+        omnigent_activities.activity,
+        "info",
+        lambda: SimpleNamespace(
+            workflow_id="mm:test-deployment-evidence",
+            workflow_run_id="successor-run",
+            namespace="default",
+        ),
     )
 
     async def admit(parameters):
