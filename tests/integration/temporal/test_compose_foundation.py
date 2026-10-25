@@ -69,6 +69,31 @@ def _load_compose() -> dict:
     )
 
 
+def test_docker_proxy_preserves_policy_and_socket_boundary():
+    compose = _load_compose()
+    proxy = compose["services"]["docker-proxy"]
+    assert proxy["image"] == compose["services"]["api"]["image"]
+    assert proxy["user"] == "0:0"
+    assert proxy["entrypoint"] == ["python", "/app/docker/docker-proxy/start.py"]
+    assert proxy["volumes"] == ["/var/run/docker.sock:/var/run/docker.sock:ro"]
+    assert not proxy.get("ports")
+    assert proxy["networks"] == ["docker-proxy-network"]
+    assert compose["networks"]["docker-proxy-network"]["internal"] is True
+    assert all(
+        proxy["environment"][name] == 1
+        for name in (
+            "CONTAINERS",
+            "IMAGES",
+            "EXEC",
+            "BUILD",
+            "SESSION",
+            "NETWORKS",
+            "VOLUMES",
+            "POST",
+        )
+    )
+
+
 def _render_codex_host_compose() -> dict:
     _require_docker_compose()
     result = subprocess.run(

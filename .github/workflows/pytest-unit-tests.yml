@@ -883,12 +883,12 @@ jobs:
     permissions:
       contents: read
       packages: read
-    # Hermetic worst case: 12m bounded setup + 28m execution/cleanup + 4m
+    # Hermetic worst case: 17m bounded setup/proxy checks + 28m execution/cleanup + 4m
     # evidence collection/upload + 1m runner/post-action overhead.
     # Journey worst case: 23m bootstrap/image/Node + 25m npm/OS/browser +
     # 2m disk diagnostics + 25m tests + 6m reporting + 4m post-action reserve.
     # Setup gets its own budget; the journey test deadlines are unchanged.
-    timeout-minutes: ${{ matrix.suite == 'hermetic' && 45 || 85 }}
+    timeout-minutes: ${{ matrix.suite == 'hermetic' && 50 || 85 }}
     strategy:
       fail-fast: ${{ github.event_name != 'schedule' }}
       matrix: ${{ fromJSON(needs.select-test-suites.outputs.integration_matrix) }}
@@ -923,6 +923,16 @@ jobs:
           tags: moonmind-python-tests:ci
           cache-from: type=gha,scope=integration-ci-test-runtime
           cache-to: type=gha,scope=integration-ci-test-runtime,mode=max
+      - name: Verify isolated Docker socket proxy
+        if: matrix.suite == 'hermetic'
+        timeout-minutes: 5
+        env:
+          MOONMIND_PYTHON_TEST_IMAGE: moonmind-python-tests:ci
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/integration-ci
+          timeout --signal=INT --kill-after=20s 260s python3 tools/test_docker_proxy.py \
+            2>&1 | tee artifacts/integration-ci/docker-proxy.log
       - name: Run hermetic integration CI suite
         # The suite can reach the 15-minute limit before the storage
         # restart checks. Allow 20 minutes for the combined run, then 30s
