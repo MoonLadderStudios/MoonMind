@@ -1217,6 +1217,7 @@ def _submit_via_controller(
         "projectDir": str(repo),
         "composeFiles": compose_files,
         "services": services,
+        "serviceSelection": "all",
         "idempotencyKey": context.get("idempotency_key", ""),
     }
     if deployment_env.is_file():
