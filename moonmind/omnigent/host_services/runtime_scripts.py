@@ -12,7 +12,7 @@ _RUNTIME_CONTEXT_DIR = "/home/app/.omnigent/moonmind/runtime-context"
 # with ``npm install`` inside each fresh per-session config directory the first
 # time ``opencode serve`` starts. The pinned host image warms exactly that
 # dependency closure into an image-owned npm cache at build time (see
-# services/omnigent/opencode-host/Dockerfile). The entrypoint copies the seed
+# services/omnigent/moonmind-host/Dockerfile). The entrypoint copies the seed
 # into the run-owned state volume and points npm at it through the runtime
 # home's ``.npmrc``: npm reads ``$HOME/.npmrc`` and ``HOME`` is one of the few
 # variables Omnigent forwards to the OpenCode server, so no ``npm_config_*``

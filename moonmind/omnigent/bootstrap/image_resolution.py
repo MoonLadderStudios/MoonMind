@@ -719,7 +719,7 @@ async def _image_opencode_bootstrap_ready(image_ref: str) -> bool:
     """
     probe = (
         Path(__file__).resolve().parents[3]
-        / "services/omnigent/opencode-host/verify-warm-plugin-cache.sh"
+        / "services/omnigent/moonmind-host/verify-warm-plugin-cache.sh"
     )
     code, _, _ = await _run(
         ["sh", str(probe), image_ref, "60"],

@@ -9072,7 +9072,7 @@ async def test_omnigent_opencode_host_seeds_plugin_npm_cache_before_host_start()
     )
     assert syntax.returncode == 0, syntax.stderr
 
-    dockerfile = Path("services/omnigent/opencode-host/Dockerfile").read_text(
+    dockerfile = Path("services/omnigent/moonmind-host/Dockerfile").read_text(
         encoding="utf-8"
     )
     assert f"ARG OPENCODE_VERSION={manifest['opencodeVersion']}" in dockerfile

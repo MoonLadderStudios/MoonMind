@@ -1,7 +1,7 @@
-"""Tests for dedicated OpenCode host (issue 3752).
+"""Tests for OpenCode on the shared Omnigent host.
 
 Covers:
-- Digest-pinned omnigent-host-opencode image expectations
+- Digest-pinned shared host image expectations
 - Host Class omnigent-opencode@1 vs Codex preservation
 - opencode-auth-json@1 materializer filesystem, permissions, secret-free, generation fencing
 - Forbidden ambient env rejection
@@ -45,7 +45,7 @@ from moonmind.omnigent.harness_platform.runtime_packs import (
     is_vendor_version_supported,
 )
 
-_RELEASE_WORKFLOW = Path(".github/workflows/docker-publish-opencode-host.yml")
+_RELEASE_WORKFLOW = Path(".github/workflows/docker-publish-moonmind-host.yml")
 _SERVER_REF = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "b" * 64
 
 
@@ -80,27 +80,8 @@ def _ready_image_pair_evidence(monkeypatch):
     monkeypatch.setattr(store, "load_resolved_state", load_state)
 
 
-def test_opencode_release_recurs_and_only_rebuilds_on_upstream_drift():
+def test_shared_host_release_verifies_offline_opencode_startup():
     workflow = yaml.safe_load(_RELEASE_WORKFLOW.read_text(encoding="utf-8"))
-    triggers = workflow.get("on") or workflow.get(True)
-
-    assert triggers["schedule"] == [{"cron": "23 */6 * * *"}]
-    assert (
-        workflow["jobs"]["metadata"]["outputs"]["rebuild_required"]
-        == "${{ steps.drift.outputs.rebuild_required }}"
-    )
-    assert (
-        workflow["jobs"]["build"]["if"]
-        == "needs.metadata.outputs.rebuild_required == 'true'"
-    )
-    assert (
-        workflow["jobs"]["merge"]["if"]
-        == "needs.metadata.outputs.rebuild_required == 'true'"
-    )
-    assert workflow["concurrency"] == {
-        "group": "release-omnigent-host-opencode",
-        "cancel-in-progress": True,
-    }
     # The published digest must prove it starts `opencode serve` offline from
     # the warm plugin npm cache before it can become launch authority.
     verify_steps = [
@@ -111,7 +92,7 @@ def test_opencode_release_recurs_and_only_rebuilds_on_upstream_drift():
     assert len(verify_steps) == 1
     assert "${{ steps.build.outputs.digest }}" in verify_steps[0]["run"]
     verify_script = Path(
-        "services/omnigent/opencode-host/verify-warm-plugin-cache.sh"
+        "services/omnigent/moonmind-host/verify-warm-plugin-cache.sh"
     ).read_text(encoding="utf-8")
     assert "--network none" in verify_script
     assert "/opt/moonmind/opencode-npm-cache" in verify_script
@@ -490,18 +471,12 @@ def test_exact_host_preflight_fails_when_harness_not_opencode():
     assert exc.value.code == HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH
 
 
-def test_image_does_not_install_unrelated_harnesses():
-    # The dedicated image Dockerfile should only install opencode, not codex/claude etc.
-    # We verify via code inspection: the Dockerfile exists and contains only opencode install
-    dockerfile = Path("services/omnigent/opencode-host/Dockerfile")
-    assert dockerfile.exists()
+def test_shared_image_installs_all_supported_harnesses_and_offline_plugin_cache():
+    dockerfile = Path("services/omnigent/moonmind-host/Dockerfile")
     content = dockerfile.read_text()
-    assert "opencode-ai@" in content
-    assert (
-        "codex" not in content.lower()
-        or "codex" in content.lower()
-        and "opencode" in content.lower()
-    )
+    assert '"@openai/codex@${CODEX_CLI_VERSION}"' in content
+    assert '"@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}"' in content
+    assert '"opencode-ai@${OPENCODE_VERSION}"' in content
     # Should verify opencode version
     assert "1.18.11" in content
     # OpenCode installs `@opencode-ai/plugin@<version>` into each fresh config
