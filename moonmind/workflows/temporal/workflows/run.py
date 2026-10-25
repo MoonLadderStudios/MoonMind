@@ -1164,6 +1164,12 @@ RUN_LATE_REMEDIATION_HEAD_ATTEMPT_ORDINAL_PATCH = (
 RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH = (
     "run-omnigent-publication-checkpoint-restore-v1"
 )
+# Branch-backed remediation already saved its candidate through publication.
+# Do not overlay an earlier implementation archive on that accepted branch.
+# Retained histories keep their recorded checkpoint-bearing child requests.
+RUN_OMNIGENT_PUBLISHED_CANDIDATE_RESTORE_PATCH = (
+    "run-omnigent-published-candidate-restore-v1"
+)
 # MoonMind#4627: an Omnigent Step retried after its host was lost or replaced
 # restores the predecessor's verified after-execution worktree archive into the
 # successor sandbox. Without one, the successor restarts from its admitted
@@ -7974,11 +7980,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         node: Mapping[str, Any],
         node_inputs: Mapping[str, Any],
     ) -> str | None:
-        """Return the verified candidate archive consumed by a PR handoff.
+        """Select checkpoint authority when a PR handoff needs a restore.
 
-        A doc-reconciliation Step launched before MoonMind#4808 continues from
-        the same candidate, and its completed archive is what the PR handoff
-        publishes.
+        Branch-backed candidates use their accepted remote revision. A legacy
+        doc-reconciliation Step continues from the same candidate, and its
+        completed archive is what the PR handoff publishes.
         """
 
         annotations = self._node_annotations_mapping(node)
@@ -8014,6 +8020,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         head = self._remediation_workspace_head
         if head is not None:
             restore_ref = head.head_checkpoint_ref
+        elif self._accepted_published_head() is not None and workflow.patched(
+            RUN_OMNIGENT_PUBLISHED_CANDIDATE_RESTORE_PATCH
+        ):
+            # The request builder already selects the accepted published branch.
+            # Its latest remediation can be newer than the implementation archive;
+            # restoring that archive would turn old files into a new reverse commit.
+            return None
         else:
             candidate = self._latest_prior_remediation_candidate_checkpoint_evidence(
                 node_id

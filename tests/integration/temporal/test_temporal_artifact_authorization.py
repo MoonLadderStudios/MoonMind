@@ -8,10 +8,22 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
+from datetime import timedelta
+from uuid import uuid4
+from unittest.mock import AsyncMock
 
+import httpx
 import pytest
+from botocore.exceptions import ClientError
+from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import OperationalError
+from temporalio import workflow
+from temporalio.client import WorkflowFailureError
+from temporalio.exceptions import ApplicationError
+from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from api_service.auth_providers import instance_operator_principal
 from api_service.db.models import (
@@ -25,12 +37,211 @@ from api_service.db.models import (
 from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
     LocalTemporalArtifactStore,
+    S3TemporalArtifactStore,
+    TemporalArtifactActivities,
     TemporalArtifactAuthorizationError,
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+
+
+@pytest.mark.parametrize("fault", [TimeoutError("private connection endpoint"), ConnectionRefusedError("private connection endpoint")])
+@pytest.mark.parametrize("surface", ["/api/artifacts/collection", "/api/artifacts/art_fixture"])
+async def test_asyncpg_connect_failures_keep_authority_category(tmp_path, fault, surface):
+    from api_service.api.routers import temporal_artifacts as routes
+    from api_service.auth_providers import get_instance_access_optional
+    from moonmind.security.operator_admission import OperatorAdmission
+
+    attempts = []
+
+    async def unavailable_connection():
+        attempts.append("connect")
+        raise fault
+
+    # Exercise SQLAlchemy's real asyncpg acquisition path; the creator never
+    # opens a socket or needs a PostgreSQL server.
+    engine = create_async_engine("postgresql+asyncpg://", async_creator=unavailable_connection)
+    try:
+        async with AsyncSession(engine) as session:
+            service = TemporalArtifactService(TemporalArtifactRepository(session), store=LocalTemporalArtifactStore(tmp_path / "artifacts"))
+            app = FastAPI()
+            app.include_router(routes.router)
+            app.dependency_overrides[routes._get_temporal_artifact_service] = lambda: service
+            app.dependency_overrides[get_instance_access_optional] = lambda: OperatorAdmission(via="trusted_ingress")
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://fixture") as client:
+                response = await client.get(surface)
+            assert response.status_code == 503
+            assert response.headers["retry-after"] == "5"
+            assert response.json()["detail"]["code"] == "artifact_authority_unavailable"
+            assert "private connection" not in response.text
+            assert attempts == ["connect"]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize(("fault", "status_code", "code"), [
+    (TimeoutError("private storage endpoint"), 503, "artifact_storage_unavailable"),
+    (PermissionError("private storage credentials"), 502, "artifact_storage_forbidden"),
+])
+async def test_real_service_initialization_maps_storage_failure(monkeypatch, fault, status_code, code):
+    from api_service.api.routers import temporal_artifacts as routes
+    from api_service.auth_providers import get_instance_access_optional
+    from api_service.db.base import get_async_session
+    from moonmind.security.operator_admission import OperatorAdmission
+    from moonmind.workflows.temporal import artifacts as module
+
+    class Client:
+        def head_bucket(self, **kwargs):
+            raise fault
+
+    monkeypatch.setattr(module.boto3, "client", lambda **kwargs: Client())
+    for field, value in {
+        "temporal_artifact_backend": "s3", "temporal_artifact_s3_endpoint": "http://fixture.invalid",
+        "temporal_artifact_s3_bucket": "fixture", "temporal_artifact_s3_access_key_id": "fixture",
+        "temporal_artifact_s3_secret_access_key": "fixture",
+    }.items():
+        monkeypatch.setattr(module.settings.workflow, field, value)
+    app = FastAPI()
+    app.include_router(routes.router)
+    app.dependency_overrides[get_async_session] = lambda: AsyncMock()
+    app.dependency_overrides[get_instance_access_optional] = lambda: OperatorAdmission(via="trusted_ingress")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://fixture") as client:
+        response = await client.get("/api/artifacts/collection")
+    assert response.status_code == status_code
+    assert response.json()["detail"]["code"] == code
+    assert "private storage" not in response.text
+
+
+async def test_admitted_collection_route_maps_real_repository_outage(tmp_path, monkeypatch):
+    from api_service.api.routers import temporal_artifacts as routes
+    from api_service.auth_providers import get_instance_access_optional
+    from moonmind.security.operator_admission import OperatorAdmission
+
+    original = OperationalError("SELECT artifact collection", {}, RuntimeError("private-fixture"))
+    async with _db(tmp_path) as maker:
+        async with maker() as session:
+            repository = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(repository, store=LocalTemporalArtifactStore(tmp_path / "artifacts"))
+
+            async def unavailable(*args, **kwargs):
+                raise original
+
+            monkeypatch.setattr(session, "execute", unavailable)
+            app = FastAPI()
+            app.include_router(routes.router)
+            app.dependency_overrides[routes._get_temporal_artifact_service] = lambda: service
+            app.dependency_overrides[get_instance_access_optional] = lambda: OperatorAdmission(via="trusted_ingress")
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://fixture") as client:
+                response = await client.get("/api/artifacts/collection")
+            assert response.status_code == 503
+            assert response.headers["retry-after"] == "5"
+            assert response.json()["detail"]["code"] == "artifact_authority_unavailable"
+            assert "private-fixture" not in response.text
+
+
+@pytest.mark.parametrize(("fault", "status_code", "code"), [
+    (TimeoutError("secret-signed-url-must-not-leak"), 503, "artifact_storage_unavailable"),
+    (ClientError({"Error": {"Code": "AccessDenied", "Message": "private-fixture"}}, "GetObject"), 502, "artifact_storage_forbidden"),
+    (ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject"), 409, "artifact_bytes_missing"),
+    (OperationalError("SELECT links", {}, RuntimeError("private-fixture")), 503, "artifact_authority_unavailable"),
+])
+async def test_real_download_boundary_maps_lazy_s3_failures(tmp_path, monkeypatch, fault, status_code, code):
+    from api_service.api.routers import temporal_artifacts as routes
+    from moonmind.workflows.temporal import artifacts as module
+
+    class Client:
+        def head_bucket(self, **kwargs):
+            pass
+        def get_object(self, **kwargs):
+            raise fault
+
+    monkeypatch.setattr(module.boto3, "client", lambda **kwargs: Client())
+    async with _db(tmp_path) as maker:
+        async with maker() as session:
+            service = TemporalArtifactService(TemporalArtifactRepository(session), store=LocalTemporalArtifactStore(tmp_path / "artifacts"))
+            artifact, _ = await service.create(principal="owner", content_type="text/plain", link=ExecutionRef(namespace="default", workflow_id="reader", run_id="run", link_type="input.test"))
+            await service.write_complete(artifact_id=artifact.artifact_id, principal="owner", payload=b"retained")
+            if isinstance(fault, OperationalError):
+                async def unavailable(*args, **kwargs):
+                    raise fault
+                monkeypatch.setattr(session, "execute", unavailable)
+            else:
+                service._store = S3TemporalArtifactStore(endpoint_url="http://synthetic.invalid", bucket="fixture", access_key_id="fixture", secret_access_key="fixture", region_name="us-east-1", use_ssl=False)
+            app = FastAPI()
+            app.include_router(routes.router)
+            app.dependency_overrides[routes._get_temporal_artifact_service] = lambda: service
+            app.dependency_overrides[routes._resolve_principal] = lambda: "workflow:reader"
+            app.dependency_overrides[routes._resolve_recovery_principal] = lambda: None
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://fixture") as client:
+                response = await client.get(f"/api/artifacts/{artifact.artifact_id}/download")
+            assert response.status_code == status_code
+            assert response.json()["detail"]["code"] == code
+            assert "secret-signed-url" not in response.text
+            assert "private-fixture" not in response.text
+            assert artifact.status.value == "complete"
+
+
+@workflow.defn
+class ArtifactFailureJourney:
+    @workflow.run
+    async def run(self, request: dict) -> bytes:
+        from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
+        from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+        route = build_default_activity_catalog().resolve_activity("artifact.read")
+        kwargs = MoonMindRunWorkflow()._execute_kwargs_for_route(route)
+        kwargs["task_queue"] = workflow.info().task_queue
+        return await workflow.execute_activity("artifact.read", request, **kwargs)
+
+
+@pytest.mark.parametrize(("fault_kind", "expected_attempts"), [("transient", 2), ("persistent", 3), ("denied", 1), ("missing", 1)])
+async def test_temporal_read_retries_only_transient_failures(tmp_path, monkeypatch, fault_kind, expected_attempts):
+    from moonmind.workflows.agent_skills.agent_skills_activities import AgentSkillsActivities
+    from moonmind.workflows.temporal.activity_catalog import ARTIFACTS_FLEET, build_default_activity_catalog
+    from moonmind.workflows.temporal.activity_runtime import build_activity_bindings
+
+    async with _db(tmp_path) as maker:
+        async with maker() as session:
+            store = LocalTemporalArtifactStore(tmp_path / "artifacts")
+            service = TemporalArtifactService(TemporalArtifactRepository(session), store=store)
+            artifact, _ = await service.create(principal="owner", content_type="text/plain")
+            await service.write_complete(artifact_id=artifact.artifact_id, principal="owner", payload=b"retained")
+            read = store.read_bytes
+            attempts = []
+
+            def injected(key):
+                attempts.append(key)
+                if (fault_kind == "transient" and len(attempts) == 1) or fault_kind == "persistent":
+                    raise TimeoutError("synthetic storage outage")
+                if fault_kind == "denied":
+                    raise PermissionError("synthetic rejected storage credentials")
+                if fault_kind == "missing":
+                    raise FileNotFoundError("synthetic missing object")
+                return read(key)
+
+            monkeypatch.setattr(store, "read_bytes", injected)
+            handler = next(binding.handler for binding in build_activity_bindings(
+                build_default_activity_catalog(), artifact_activities=TemporalArtifactActivities(service),
+                agent_skills_activities=AgentSkillsActivities(), fleets=(ARTIFACTS_FLEET,),
+            ) if binding.activity_type == "artifact.read")
+            queue = f"artifact-failure-{uuid4().hex}"
+            async with await WorkflowEnvironment.start_time_skipping() as env:
+                async with Worker(env.client, task_queue=queue, workflows=[ArtifactFailureJourney], activities=[handler], workflow_runner=UnsandboxedWorkflowRunner()):
+                    result = env.client.execute_workflow(ArtifactFailureJourney.run,
+                        {"artifact_ref": artifact.artifact_id, "principal": "owner"}, id=queue, task_queue=queue,
+                        execution_timeout=timedelta(minutes=1))
+                    if fault_kind == "transient":
+                        assert await result == b"retained"
+                    else:
+                        with pytest.raises(WorkflowFailureError) as raised:
+                            await result
+                        error = raised.value.cause.cause
+                        assert isinstance(error, ApplicationError)
+                        assert error.type == {"persistent": "artifact_storage_unavailable", "denied": "artifact_storage_forbidden", "missing": "artifact_bytes_missing"}[fault_kind]
+            assert len(attempts) == expected_attempts
+            assert set(attempts) == {artifact.storage_key}
+            assert artifact.status.value == "complete"
 
 @asynccontextmanager
 async def _db(tmp_path: Path):

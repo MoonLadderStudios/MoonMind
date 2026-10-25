@@ -739,7 +739,7 @@ def test_no_live_manifest_product_imports() -> None:
 
     ``moonmind/manifest/*``, the execution ``manifest_contract``, and the
     Temporal ``manifest_ingest`` modules were removed by #4192; a live import
-    of any of them is a reintroduction. Drain-gate, cutover-rehearsal, and
+    of any of them is a reintroduction. Cutover-rehearsal and
     retirement-guard modules may reference the retired names in prose.
     """
     offender_pattern = re.compile(
@@ -749,10 +749,8 @@ def test_no_live_manifest_product_imports() -> None:
         r"|import\s+moonmind\.workflows\.temporal(\.workflows)?\.manifest_ingest)",
     )
     allowed_name_res = (
-        re.compile(r"manifest_ingest_drain"),
         re.compile(r"test_vector_free_regression_4114"),
         re.compile(r"test_manifest_retirement_qualification_4193"),
-        re.compile(r"test_manifest_ingest_drain"),
     )
     offenders: list[str] = []
     for path in _python_sources_under("moonmind", "api_service", "services"):
@@ -787,11 +785,9 @@ def test_surviving_dependency_libraries_remain_supported() -> None:
     ``tests/integration/test_installed_graph_vector_free_4111.py``; this
     hermetic pin keeps declaration support explicit without an install.
     """
-    # ``toml`` rather than ``tomllib``: pyproject declares python >=3.10 and
-    # tomllib only exists from 3.11.
-    import toml
+    import tomllib
 
-    pyproject = toml.loads(
+    pyproject = tomllib.loads(
         (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     )
     declared = {
@@ -1369,27 +1365,6 @@ def test_worker_catalog_has_no_manifest_workflow_or_activity() -> None:
     assert not list((REPO_ROOT / "api_service/api/routers").glob("*manifest*"))
 
 
-def test_manifest_drain_gate_blocks_on_open_histories() -> None:
-    """Drain predicate allows removal only when every dimension drains to zero.
-
-    Hermetic predicate logic (live counts stay protected): zero open
-    histories/tasks/schedules is removable; any nonzero dimension retains the
-    old release. Fixture replay never authorizes deployment drainage.
-    """
-    from moonmind.gates.manifest_ingest_drain import (
-        ManifestIngestDrainUsage,
-        evaluate_manifest_ingest_drain,
-    )
-
-    drained = evaluate_manifest_ingest_drain(ManifestIngestDrainUsage(0, 0, 0))
-    assert drained.may_deploy_removal is True
-    assert drained.outstanding == 0
-    blocked = evaluate_manifest_ingest_drain(ManifestIngestDrainUsage(1, 0, 0))
-    assert blocked.may_deploy_removal is False
-    assert blocked.outstanding == 1
-    assert "open_manifest_ingest_histories" in blocked.blocking_dimensions
-
-
 # ---------------------------------------------------------------------------
 # #4111-owned API-composition smoke (installed-graph checks run in the built
 # image: tests/integration/test_installed_graph_vector_free_4111.py).
@@ -1439,8 +1414,8 @@ def test_vector_free_startup_imports_without_vector_env() -> None:
     Clean-default hermetic slice of R2: a fresh interpreter with a sanitized
     env (no ``QDRANT_*`` / ``VECTOR_*`` / embedding keys) imports the shipped
     startup path -- settings, execution contract, agent runtime schemas,
-    checkpoint branch models, retrieval capabilities, worker registry, drain
-    gate, and capability resolution. A fresh process is required because
+    checkpoint branch models, retrieval capabilities, worker registry, and
+    capability resolution. A fresh process is required because
     ``importlib.import_module`` returns modules already cached by collection
     or earlier tests. A vector-gated import (missing-env failure or a live
     ``qdrant_client`` import at module scope) fails here.
@@ -1461,7 +1436,6 @@ def test_vector_free_startup_imports_without_vector_env() -> None:
         "moonmind.schemas.checkpoint_branch_models",
         "api_service.retrieval_capabilities",
         "moonmind.workflows.temporal.workflow_registry",
-        "moonmind.gates.manifest_ingest_drain",
         "moonmind.omnigent.effective_capabilities",
     )
     script = f"""
@@ -1740,7 +1714,6 @@ def test_vector_free_reuses_sibling_evidence_without_duplication() -> None:
         )
         or (
             "manifest_ingest" in line
-            and "manifest_ingest_drain" not in line
             and re.match(r"\s*(import|from)\s+", line)
         )
     ]

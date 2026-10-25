@@ -451,6 +451,197 @@ async def test_checkpoint_restore_reconciles_existing_pr_publication(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("role_key", ["issueImplementRole", "jiraOrchestrateRole"])
+async def test_pr_handoff_keeps_published_remediation_instead_of_stale_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, role_key: str
+) -> None:
+    from moonmind.omnigent.realizers.turn_delivery import execution_identity
+    from moonmind.workflows.adapters.github_service import GitHubService
+    from moonmind.workflows.temporal.workflows import run as run_module
+
+    monkeypatch.setattr(settings.security, "high_security_mode", False)
+    for prefix in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{prefix}_NAME", "Test")
+        monkeypatch.setenv(f"GIT_{prefix}_EMAIL", "test@example.invalid")
+    origin = tmp_path / "origin.git"
+    git("init", "--bare", "--initial-branch=main", str(origin), cwd=tmp_path)
+    source = tmp_path / "source"
+    source.mkdir()
+    git("init", "--initial-branch=main", cwd=source)
+    (source / "work.txt").write_text("base\n")
+    git("add", ".", cwd=source)
+    git("commit", "-m", "base", cwd=source)
+    git("remote", "add", "origin", str(origin), cwd=source)
+    git("push", "origin", "main", cwd=source)
+    git("checkout", "-b", "candidate", cwd=source)
+    (source / "work.txt").write_text("initial implementation\n")
+    git("commit", "-am", "initial implementation", cwd=source)
+    archive, _ = TemporalSandboxActivities(
+        workspace_root=tmp_path
+    )._build_worktree_archive(source)
+    (source / "work.txt").write_text("verified remediation\n")
+    git("commit", "-am", "remediate verification findings", cwd=source)
+    verified_sha = git("rev-parse", "HEAD", cwd=source)
+    git("push", "origin", "candidate", cwd=source)
+
+    patches = {
+        run_module.RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH,
+        run_module.RUN_OMNIGENT_ORCHESTRATE_PUBLICATION_CHECKPOINT_RESTORE_PATCH,
+        run_module.RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,
+        run_module.RUN_ACCEPTED_PUBLISHED_BRANCH_HANDOFF_PATCH,
+        run_module.RUN_ACCEPTED_PUBLICATION_HEAD_HANDOFF_PATCH,
+        run_module.RUN_ACCEPTED_PUBLICATION_BASE_HANDOFF_PATCH,
+        run_module.RUN_OMNIGENT_PUBLISHED_CANDIDATE_RESTORE_PATCH,
+    }
+    monkeypatch.setattr(run_module.workflow, "patched", lambda key: key in patches)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "info",
+        lambda: SimpleNamespace(
+            workflow_id="workflow", run_id="run", task_queue="test"
+        ),
+    )
+    parent = run_module.MoonMindRunWorkflow()
+    parent._repo = "example/repository"
+    parent._remediation_loop_runtime = {"mode": "omnigent"}
+    parent._publish_context["acceptedPublishedHead"] = {
+        "branch": "candidate",
+        "headSha": verified_sha,
+        "baseBranch": "main",
+    }
+    # Dynamic attempts are appended to the ledger after the authored PR node.
+    # Branch-backed remediation deliberately has no cumulative checkpoint head.
+    parent._step_ledger_rows = [
+        {"logicalStepId": "implementation", "status": "completed"},
+        {"logicalStepId": "publish-pr", "status": "executing"},
+        {"logicalStepId": "remediation-1", "status": "completed"},
+    ]
+    parent._step_checkpoint_workspace_evidence_by_boundary = {
+        "implementation": {
+            "before_publication": {
+                "checkpointRef": "art_initial_checkpoint",
+                "workspaceArchiveRef": "art_initial_archive",
+                "workspaceKind": "worktree_archive",
+                "workspaceDigest": "sha256:" + "a" * 64,
+                "workspaceIdentityDigest": "sha256:" + "b" * 64,
+                "checkpointManifestRef": "art_initial_manifest",
+            }
+        }
+    }
+    node = {
+        "id": "publish-pr",
+        "tool": {"type": "agent_runtime", "name": "omnigent"},
+        "annotations": {role_key: "pull-request-handoff"},
+        "inputs": {
+            "runtime": {"mode": "omnigent", "publishMode": "pr"},
+            "repository": "example/repository",
+            "startingBranch": "main",
+            "repositoryOperation": "write",
+        },
+    }
+    restore_ref = parent._omnigent_publication_checkpoint_restore_ref(
+        node=node,
+        node_inputs=node["inputs"],
+    )
+    request = parent._build_agent_execution_request(
+        node_inputs=node["inputs"],
+        node_id=node["id"],
+        tool_name="omnigent",
+        workflow_parameters={},
+        step_execution=1,
+        trusted_remediation_checkpoint_restore_ref=restore_ref,
+    )
+    workflow_id, step_id = execution_identity(request)
+    workspace_id = request.workspace_spec["workspaceLocator"]["workspaceId"]
+    workspace = tmp_path / "temporal_sandbox" / workspace_id / "repo"
+    workspace.parent.mkdir(parents=True)
+    assert request.workspace_spec["repositoryTarget"]["revision"] == {
+        "kind": "git_commit",
+        "commitSha": verified_sha,
+    }
+    git(
+        "clone",
+        "--branch",
+        request.workspace_spec["branch"],
+        str(origin),
+        str(workspace),
+        cwd=tmp_path,
+    )
+
+    class Artifacts:
+        async def get_metadata(self, **_kwargs):
+            return SimpleNamespace(size_bytes=len(archive)), []
+
+        async def read_chunks(self, **_kwargs):
+            return SimpleNamespace(), iter((archive,))
+
+    await OmnigentWorkspaceMaterializer(
+        command_runner=AsyncMock(side_effect=AssertionError("must reuse checkout")),
+        workspace_root=tmp_path,
+        artifact_service=Artifacts(),
+    ).materialize(request, runtime_uid=os.getuid(), runtime_gid=os.getgid())
+    assert (workspace / "work.txt").read_text() == "verified remediation\n"
+    assert git("status", "--porcelain", cwd=workspace) == ""
+
+    pr_url = "https://github.com/example/repository/pull/7"
+    monkeypatch.setattr(
+        "moonmind.omnigent.workspace_publication.resolve_github_credential",
+        AsyncMock(return_value=SimpleNamespace(token="fixture-credential")),
+    )
+    monkeypatch.setattr(
+        GitHubService,
+        "resolve_pull_request_selector",
+        AsyncMock(return_value=SimpleNamespace(resolved=True, pr_url=pr_url)),
+    )
+    evidence = await OmnigentWorkspacePublicationService(
+        tmp_path
+    ).publish_request_workspace(
+        request=request,
+        current_workflow_id=workflow_id,
+        current_step_execution_id=step_id,
+    )
+    assert evidence["push_head_sha"] == verified_sha
+    assert evidence["pull_request_url"] == pr_url
+    assert git("rev-parse", "candidate", cwd=origin) == verified_sha
+    assert git("rev-list", "--count", "main..candidate", cwd=origin) == "2"
+
+    comments = []
+
+    def github(http_request):
+        if http_request.url.path.endswith("/comments"):
+            if http_request.method == "POST":
+                comment = {"id": 1, **json.loads(http_request.content)}
+                comments.append(comment)
+                return httpx.Response(201, json=comment)
+            return httpx.Response(200, json=comments)
+        return httpx.Response(
+            200,
+            json={
+                "state": "open",
+                "head": {"sha": git("rev-parse", "candidate", cwd=origin)},
+            },
+        )
+
+    client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: client(transport=httpx.MockTransport(github), **kw),
+    )
+    service = GitHubService()
+    service.resolve_github_token = AsyncMock(return_value=("fixture-credential", None))
+    for _attempt in range(2):
+        await service.sync_pull_request_unverified_criteria(
+            repo=parent._repo,
+            pr_url=pr_url,
+            section="Real-store qualification remains Unverified.",
+            expected_head_sha=verified_sha,
+        )
+    assert len(comments) == 1
+    assert verified_sha in comments[0]["body"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("base_branch", [None, "main", "missing", "candidate"])
 @pytest.mark.parametrize("publish_mode", ["branch", "pr"])
 @pytest.mark.parametrize(

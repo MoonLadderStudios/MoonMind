@@ -152,16 +152,13 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  merge:
+  assemble:
     runs-on: ubuntu-latest
     needs:
       - metadata
       - build
-    # Serialize the main-tip check and tagging so two publishes cannot
-    # interleave and leave `latest` on the older build.
-    concurrency:
-      group: app-image-latest
-      cancel-in-progress: false
+    outputs:
+      image_ref: ${{ steps.manifest.outputs.image_ref }}
     permissions:
       contents: read
       packages: write
@@ -187,24 +184,16 @@ jobs:
         id: manifest
         working-directory: /tmp/digests
         env:
-          GH_TOKEN: ${{ github.token }}
           IMAGE_NAME: ${{ needs.metadata.outputs.image_name }}
           VERSION_TAG: ${{ needs.metadata.outputs.version_tag }}
         run: |
+          set -euo pipefail
           TAGS=(-t "${IMAGE_NAME}:${VERSION_TAG}" -t "${IMAGE_NAME}:sha-${GITHUB_SHA}")
-          # `latest` is what host updates install, so only a build of the
-          # current main tip may move it: a manual dispatch from another
-          # branch, or an older main build finishing late, must not.
-          MAIN_HEAD="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
-          if [ "${GITHUB_REF}" = "refs/heads/main" ] && [ "${MAIN_HEAD}" = "${GITHUB_SHA}" ]; then
-            TAGS+=(-t "${IMAGE_NAME}:latest")
-            echo "moved_latest=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "moved_latest=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Not moving latest: ${GITHUB_SHA} on ${GITHUB_REF} is not the main tip (${MAIN_HEAD})"
-          fi
           docker buildx imagetools create "${TAGS[@]}" \
             $(printf "${IMAGE_NAME}@sha256:%s " *)
+          DIGEST="$(docker buildx imagetools inspect "${IMAGE_NAME}:${VERSION_TAG}" --format '{{.Manifest.Digest}}')"
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "image_ref=${IMAGE_NAME}@${DIGEST}" >> "$GITHUB_OUTPUT"
 
       - name: Inspect image and write build summary
         run: |
@@ -224,13 +213,80 @@ jobs:
             echo "### App image published"
             echo ""
             echo "- Version tag: \`${IMAGE_NAME}:${VERSION}\`"
-            if [ "${{ steps.manifest.outputs.moved_latest }}" = "true" ]; then
-              echo "- Moved \`${IMAGE_NAME}:latest\` to this build"
-            else
-              echo "- \`${IMAGE_NAME}:latest\` not moved: this build is not the current main tip"
-            fi
+            echo "- Default channel waits for required CI and installed-artifact journeys"
             echo "- Digest: \`${DIGEST}\`"
             echo "- Digest-pinned reference: \`${IMAGE_NAME}:${VERSION}@${DIGEST}\`"
             echo ""
             echo "To promote this build, run **Actions → Release / Promote Stable** with image \`app\` and source tag \`${VERSION}\`."
           } >> "${GITHUB_STEP_SUMMARY}"
+
+  qualify:
+    needs: assemble
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/pytest-unit-tests.yml
+    with:
+      candidate_image: ${{ needs.assemble.outputs.image_ref }}
+
+  qualify-migrations:
+    needs: assemble
+    permissions:
+      contents: read
+    uses: ./.github/workflows/alembic-migration-gate.yml
+    with:
+      qualification_run_id: ${{ github.run_id }}
+
+  publish-latest:
+    needs:
+      - metadata
+      - assemble
+      - qualify
+      - qualify-migrations
+    runs-on: ubuntu-latest
+    # Preserve ordering when multiple qualified builds finish out of order.
+    concurrency:
+      group: app-image-latest
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Publish the qualified default channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_NAME: ${{ needs.metadata.outputs.image_name }}
+          CANDIDATE_IMAGE: ${{ needs.assemble.outputs.image_ref }}
+          ASSEMBLY_RESULT: ${{ needs.assemble.result }}
+          QUALIFICATION_RESULT: ${{ needs.qualify.result }}
+          MIGRATION_RESULT: ${{ needs.qualify-migrations.result }}
+        run: |
+          set -euo pipefail
+          # Job dependencies and the actual mutation boundary both fail closed.
+          for gate in ASSEMBLY_RESULT QUALIFICATION_RESULT MIGRATION_RESULT; do
+            if [[ "${!gate:-}" != "success" ]]; then
+              echo "::error::Required release result $gate did not succeed"
+              exit 1
+            fi
+          done
+          digest="${CANDIDATE_IMAGE##*@}"
+          if [[ "$CANDIDATE_IMAGE" != "${IMAGE_NAME}@${digest}" ]] || [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Release qualification requires this image's immutable assembled manifest"
+            exit 1
+          fi
+          MAIN_HEAD="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          if [ "${GITHUB_REF}" != "refs/heads/main" ] || [ "${MAIN_HEAD}" != "${GITHUB_SHA}" ]; then
+            echo "::notice::Not moving latest: ${GITHUB_SHA} on ${GITHUB_REF} is not the main tip (${MAIN_HEAD})"
+            exit 0
+          fi
+          docker buildx imagetools create -t "${IMAGE_NAME}:latest" "$CANDIDATE_IMAGE"
+          echo "Runtime qualification: amd64; arm64 is build-only." >> "$GITHUB_STEP_SUMMARY"
+          echo "Qualified default image: \`${CANDIDATE_IMAGE}\`" >> "$GITHUB_STEP_SUMMARY"

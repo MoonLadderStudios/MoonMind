@@ -738,7 +738,8 @@ async def test_r5_artifact_control_and_raw_boundary():
     """R5: owning-execution control succeeds; cross-execution control denied."""
     service = TemporalArtifactService.__new__(TemporalArtifactService)
     service._repository = SimpleNamespace(
-        principal_owns_linked_execution=AsyncMock(return_value=False)
+        list_links=AsyncMock(return_value=[]),
+        principal_owns_linked_execution=AsyncMock(return_value=False),
     )
 
     owned = SimpleNamespace(

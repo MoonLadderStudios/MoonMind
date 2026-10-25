@@ -1,0 +1,83 @@
+name: CI / Supplied App Image Qualification
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - .github/workflows/app-image-qualification.yml
+      - .github/workflows/docker-publish.yml
+      - .github/workflows/pytest-unit-tests.yml
+      - api_service/Dockerfile
+      - tools/ci/release_image_fixture.py
+      - tests/unit/tools/test_release_image_fixture.py
+      - tests/unit/tools/test_app_release_qualification.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-image-qualification-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  assemble-fixture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      image_ref: ${{ steps.identity.outputs.image_ref }}
+      artifact_name: ${{ steps.identity.outputs.artifact_name }}
+    steps:
+      - name: Check out the candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Initialize pinned Omnigent source
+        run: git submodule update --init --depth 1 -- omnigent
+      - name: Install the OCI fixture transport
+        timeout-minutes: 3
+        run: |
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends skopeo
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build one disposable application archive
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: api_service/Dockerfile
+          target: api-runtime
+          platforms: linux/amd64
+          outputs: type=oci,dest=${{ runner.temp }}/candidate.tar
+          build-args: |
+            MOONMIND_BUILD_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            MOONMIND_BUILD_ID=qualification-${{ github.run_id }}-${{ github.run_attempt }}
+          cache-from: type=gha,scope=exact-artifact-api-runtime
+      - name: Identify the archived manifest
+        id: identity
+        run: |
+          set -euo pipefail
+          python3 tools/ci/release_image_fixture.py describe \
+            --archive "$RUNNER_TEMP/candidate.tar" > "$RUNNER_TEMP/candidate-description.json"
+          jq -er '"image_ref=" + .image' "$RUNNER_TEMP/candidate-description.json" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=app-image-qualification-candidate" >> "$GITHUB_OUTPUT"
+      - name: Upload the identical archive for every consumer
+        timeout-minutes: 5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.identity.outputs.artifact_name }}
+          path: ${{ runner.temp }}/candidate.tar
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
+  qualify-supplied-image:
+    needs: assemble-fixture
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/pytest-unit-tests.yml
+    with:
+      candidate_image: ${{ needs.assemble-fixture.outputs.image_ref }}
+      candidate_oci_artifact: ${{ needs.assemble-fixture.outputs.artifact_name }}

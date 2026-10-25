@@ -1,24 +1,24 @@
 # AgentSession deployment safety cutover
 
-Operator playbook for **replay-safe rollout** of durable `AgentSession` workflow changes. The deployment-safety gate expects this file to mention the topics below when sensitive workflow paths change.
+Operator playbook for replay-safe rollout of durable `AgentSession` workflow changes. Compatibility evidence comes from executing worker and replayer tests against representative histories.
 
 ## Shared prerequisites
 
-- **replay-safe rollout** gates are in place before production promotion.
-- **replay** validation (managed-session replayer tests) passes on representative histories.
+- Managed-session worker and replayer tests pass on representative histories before rollout.
+- Verify affected callers and workers support changed workflow commands.
 
 ## Enabling `SteerTurn`
 
-`SteerTurn` changes require explicit validation gates and staged rollout.
+Exercise `SteerTurn` updates against running sessions before rollout.
 
 ## Enabling Continue-As-New
 
-**Continue-As-New** migrations require explicit validation gates and operator sign-off.
+Validate Continue-As-New state transfer and replay across the rollover boundary.
 
 ## CancelSession and TerminateSession
 
-Changing cancel/terminate semantics must go through **CancelSession** and **TerminateSession** rollout gates with clear operator messaging.
+Exercise `CancelSession` and `TerminateSession` completion, cleanup and operator-visible outcomes when their semantics change.
 
 ## Search Attributes
 
-Introducing **Search Attributes** or visibility metadata requires registry updates before relying on new fields in production.
+Register new Search Attributes before relying on those visibility fields in production.

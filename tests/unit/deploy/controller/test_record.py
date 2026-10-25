@@ -1,5 +1,6 @@
 """Local operation record: desired vs installed, crash-safe, bounded retry."""
 import json
+from datetime import datetime, timedelta
 
 from conftest import load
 
@@ -19,6 +20,8 @@ def test_begin_records_desired_and_concrete_images_once(controller_path, tmp_pat
     assert op["desired"]["image"] == "ghcr.io/org/app@sha256:abc"
     assert op["installed"] is None
     assert op["status"] == "pending"
+    for field in ("createdAt", "updatedAt"):
+        assert datetime.fromisoformat(op[field]).utcoffset() == timedelta(0)
     # Concrete images recorded once: a second begin for the same target
     # reattaches to the open operation instead of forking a duplicate.
     again = store.begin(

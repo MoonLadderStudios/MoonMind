@@ -29,7 +29,6 @@ import {
   buildCapabilityChips,
   CAPABILITY_CATALOG,
   capabilityChipProvenanceLabel,
-  LIQUID_GL_OPTIONS,
   OMNIGENT_READINESS_REFRESH_MS,
   buildEditParametersPatch,
   omnigentReadinessRefetchInterval,
@@ -11004,7 +11003,7 @@ describe.skip("Task Create Entrypoint", () => {
       '[data-canonical-create-section="Submit"]',
     );
     const floatingBars = document.querySelectorAll<HTMLElement>(
-      ".queue-floating-bar.queue-floating-bar--liquid-glass.queue-step-submit-actions",
+      ".queue-floating-bar.queue-step-submit-actions",
     );
     const createButton = screen.getByRole("button", { name: "Start Workflow" });
 
@@ -11157,16 +11156,13 @@ describe.skip("Task Create Entrypoint", () => {
     ).toBeTruthy();
   });
 
-  it("applies the liquid glass treatment to the bottom submission controls without changing accessible controls", async () => {
+  it("keeps accessible controls in the CSS glass submission bar", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const createButton = await screen.findByRole("button", { name: "Start Workflow" });
     const floatingBar = createButton.closest<HTMLElement>(".queue-floating-bar");
 
     expect(floatingBar).not.toBeNull();
-    expect(floatingBar?.classList.contains("queue-floating-bar--liquid-glass")).toBe(
-      true,
-    );
     expect(within(floatingBar as HTMLElement).getByLabelText("Repository")).toBe(
       screen.getByLabelText("Repository"),
     );
@@ -11184,16 +11180,12 @@ describe.skip("Task Create Entrypoint", () => {
     );
   });
 
-  it("keeps the bottom submission controls present during liquid glass initialization", () => {
-    expect(LIQUID_GL_OPTIONS.reveal).toBe(false);
-  });
-
-  it("keeps MM-429 liquid glass fallback shell complete before enhancement initializes", async () => {
+  it("keeps the CSS glass shell complete", async () => {
     expect(dashboardCss).toMatch(
       /\.queue-floating-bar\s*\{[^}]*position:\s*fixed;[^}]*background:\s*var\(--mm-glass-fill\);[^}]*border:\s*1px solid var\(--mm-glass-border\);[^}]*box-shadow:\s*var\(--mm-elevation-floating\);[^}]*display:\s*grid;/s,
     );
     expect(dashboardCss).toMatch(
-      /\.queue-floating-bar--liquid-glass\s*\{[^}]*position:\s*fixed;[^}]*isolation:\s*isolate;[^}]*overflow:\s*hidden;/s,
+      /\.queue-floating-bar\s*\{[^}]*position:\s*fixed;[^}]*isolation:\s*isolate;[^}]*overflow:\s*hidden;/s,
     );
     expect(dashboardCss).toMatch(
       /\.queue-submit-primary-ripple\s*\{[^}]*inset:\s*-1\.35rem;[^}]*border:\s*0;[^}]*box-shadow:[^}]*rgb\(var\(--mm-action-primary\) \/ 0\.54\)[^}]*filter:\s*blur\(2px\);/s,
@@ -11204,11 +11196,8 @@ describe.skip("Task Create Entrypoint", () => {
     expect(dashboardCss).toMatch(
       /\.queue-floating-bar::after\s*\{[^}]*box-shadow:\s*inset 0 1px 0 rgb\(255 255 255 \/ 0\.32\)/s,
     );
-    expect(dashboardCss).not.toMatch(
-      /\.queue-floating-bar:not\(\[data-liquid-gl-renderer="canvas"\]\)::before/,
-    );
     expect(dashboardCss).toMatch(
-      /\.queue-floating-bar--liquid-glass\[data-liquid-gl-initialized="true"\]\s*>\s*\*\s*\{[^}]*pointer-events:\s*auto;/s,
+      /\.queue-floating-bar\s*>\s*\*\s*\{[^}]*position:\s*relative;[^}]*z-index:\s*2;/s,
     );
     expect(dashboardCss).toMatch(
       /@supports not \(\(backdrop-filter:\s*blur\(2px\)\) or \(-webkit-backdrop-filter:\s*blur\(2px\)\)\)\s*\{[^}]*\.queue-floating-bar\s*\{[^}]*background:\s*rgb\(var\(--mm-panel\) \/ 0\.94\);/s,
@@ -14934,15 +14923,30 @@ describe("Task Create submit arrow animation", () => {
     );
   });
 
-  it("keeps the floating-bar sheen visible alongside the liquidGL canvas surface", async () => {
+  it("keeps submission controls usable without installing a document snapshot renderer", async () => {
+    const { unmount } = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    try {
+      const start = await screen.findByRole("button", { name: "Start Workflow" });
+      const bar = screen.getByRole("group", { name: "Workflow submission controls" });
+      for (const label of ["Repository", "Branch", "Publish Mode"]) {
+        const control = within(bar).getByLabelText(label);
+        control.focus();
+        expect(document.activeElement).toBe(control);
+      }
+      expect(within(bar).getByRole("button", { name: "Start Workflow" })).toBe(start);
+      expect(window).not.toHaveProperty("html2canvas");
+      expect(window).not.toHaveProperty("liquidGL");
+    } finally {
+      unmount();
+    }
+  });
+
+  it("keeps the CSS glass sheen and edge highlights visible", async () => {
     expect(css).toMatch(
       /\.queue-floating-bar::before\s*\{[^}]*background:\s*linear-gradient/s,
     );
     expect(css).toMatch(
       /\.queue-floating-bar::after\s*\{[^}]*box-shadow:\s*inset 0 1px 0 rgb\(255 255 255 \/ 0\.32\)/s,
-    );
-    expect(css).not.toMatch(
-      /\.queue-floating-bar:not\(\[data-liquid-gl-renderer="canvas"\]\)::before/,
     );
   });
   // Submit interaction is covered in createValidationFeedback.browser.test.tsx.

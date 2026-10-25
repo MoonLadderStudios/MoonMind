@@ -16,29 +16,12 @@ Last updated: 2026-10-06
 
 ## 1. Context
 
-MoonMind is built around **Temporal** as the durable orchestration substrate.
-
-- **Workflow Executions** are the primary durable orchestration primitive.
-- **Activities** perform all side effects.
-- Temporal history and payloads must remain **small**, **bounded**, and **safe**.
-
-Some public MoonMind surfaces still carry legacy task-named fields (they rename in the hard switch). This document defines the artifact contract at the Temporal/runtime layer.
-
-Therefore, workflows and activities must pass **artifact references** rather than large payloads. This ensures large immutable inputs and outputs such as:
-
-- plans
-- manifests
-- diffs and patches
-- logs
-- resolved skill snapshots
-- prompt indexes
-- runtime materialization bundles
-- provider result snapshots
-- managed runtime diagnostics
-
-are safely stored outside workflow history.
-
-This document defines the artifact system: storage, identity, linkage, authorization, API posture, retention, and activity-boundary usage.
+Temporal owns durable orchestration; Activities perform side effects. Compact
+artifact references keep large immutable plans, manifests, patches, logs, Skill
+snapshots, prompts, runtime bundles, provider results and diagnostics outside
+workflow history. Legacy task-named public fields do not change this runtime
+contract, which covers storage, identity, linkage, authorization, APIs, retention
+and Activity boundaries.
 
 ---
 
@@ -459,8 +442,8 @@ A worker's service identity names the caller; machine reads require artifact own
 
 Execution inputs gain that linkage at trusted boundaries, never from agent-supplied owner strings:
 
-* Admission verifies the persisted plan and frozen inputs before reading the Skill manifest under its original scope. Canonical JSON digests preserve retained formatting. API admission commits input links before start; schedules admit before planning. Temporal-started children admit during `plan.validate`, before workflow Skill reads or AgentRun launch. Native and agent plans use the verified loader and the Activity's actual namespace/workflow/run identity. Grants include Skill bodies and required strict evidence, in artifact-ID order to avoid reversed retention locks. Optional certificates receive no grants; owners and bytes stay unchanged.
-* Session-supervisor resolve and continuation reads reuse that execution's existing grant. Continuations bind the sealed intent and plan to the canonical session; mutating commands validate ownership, revision and fence before reading plan inputs. Retries and cleanup never create replacement input grants.
+* Admission verifies the persisted plan and frozen inputs before reading the Skill manifest under its original scope. Canonical JSON digests preserve retained formatting. API admission commits input links before start; schedules admit before planning; step successors link refreshed inputs before returning their new binding. Temporal-started children admit during `plan.validate`, before workflow Skill reads or AgentRun launch. These boundaries use the Activity's actual namespace/workflow/run identity. Grants include Skill bodies and required strict evidence, in artifact-ID order to avoid reversed retention locks. Optional certificates receive no grants; owners and bytes stay unchanged.
+* Session-supervisor resolve, continuation reads, retries and cleanup reuse that execution's existing grant. Continuations bind the sealed intent and plan to the canonical session; mutating commands validate ownership, revision and fence before reading plan inputs.
 * `TemporalOmnigentArtifactGateway.read_admitted_input` re-verifies the plan on each call, rejects any ref outside that plan's input closure, and reads with the Step Execution's delegation. The gateway keeps no per-run state, so concurrent runs cannot borrow each other's delegation. Typed, retained-reference, and freshly planned dispatch all admit step-bound inputs before host resolution. Host launch resolution, native-chat bridge authorization, and generic-host/Codex Skill delivery read through it; `read_requested_skill_snapshot` serves the planner's pre-plan read of the request's own Skill set, linking that exact manifest to the Step Execution first because planning precedes admission and the plan admits it anyway, and `read_repository_access_snapshot` is limited to repository snapshots.
 * Workspace, checkpoint, attachment, Skill, and remediation readers carry the Step Execution's `workflow:<id>` from its workflow-built launch envelope. Parent handoffs verify the exact Activity execution's parent and namespace against Temporal, never provider-supplied identities or artifact creators. AgentRun publication links selected terminal evidence and publish receipts from that child's output artifacts to its verified parent. Parent Temporal UUIDs stay separate from semantic Step Execution run IDs; retained branch-turn identities must match that exact child run’s recorded launch and server parent. Missing or conflicting history grants no authority.
 * Writers keep least privilege: managed runtime workers write stdout/stderr/diagnostics for runs they handle, and integration workers write provider snapshots linked to their execution.
@@ -797,14 +780,22 @@ Current raw and normalized journals referenced by non-terminal Omnigent bridge
 sessions remain recovery data. Their ordinary retention resumes when the
 session ends. Pins and live use claims protect all artifact classes.
 
-Read-use observations isolate optional claims in savepoints. In a caller-owned
-connection, a bounded byte read holds its observation until consumption ends,
-then rolls back only that savepoint, releasing foreign-key locks before later
-input grants. Independent reads commit observations; streaming and signed URLs
-retain TTL claims. Recoverable observation failures preserve caller work; failed durable
-release leaves TTL protection. Connection, outer-transaction and transaction-control
-failures propagate. Cleanup failure is logged and attached to an existing serving
-error or cancellation without replacing it.
+Read-use observations use savepoints; caller-owned reads release only their
+observation. Independent reads commit observations; streams and signed URLs retain
+TTL claims. Connection and transaction-control failures propagate. Cleanup faults
+attach a safe diagnostic to the serving error or cancellation, preserving its
+cause and TTL protection.
+
+Known database connection failures return `artifact_authority_unavailable`;
+storage timeouts return `artifact_storage_unavailable` (HTTP 503, `Retry-After: 5`).
+Storage credential rejection is `artifact_storage_forbidden` (502); confirmed
+object absence is `artifact_bytes_missing` (409). Reader denial, quarantine,
+expiry and integrity checks retain their own semantics. Failures never change
+artifact availability or grants. Activities retry unavailability within existing
+budgets; permanent artifact errors stop. Lazy downloads open before response
+headers; later transport failures terminate the stream and retain their cause.
+Unreadable publication decisions stop reconciliation rather than authorize
+replacement publication.
 
 Omnigent commits each complete replacement journal pair before reclaiming its
 superseded numbered prefixes. The replacement retains the accumulated events;
