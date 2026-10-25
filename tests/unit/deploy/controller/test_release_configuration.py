@@ -39,6 +39,7 @@ class ReleaseRunner:
     def __init__(self, *, fail=False):
         self.commands = []
         self.fail = fail
+        self.digests = ["example/app@sha256:selected"]
         self.compose = {
             "services": {
                 "api": {"image": "${MOONMIND_IMAGE}"},
@@ -57,7 +58,7 @@ class ReleaseRunner:
                     [
                         {
                             "Id": "sha256:installed",
-                            "RepoDigests": ["example/app@sha256:selected"],
+                            "RepoDigests": self.digests,
                         }
                     ]
                 ),
@@ -127,6 +128,18 @@ def test_retry_reuses_resolved_release_after_tag_and_checkout_advance(
         )
         == prepared
     )
+
+
+def test_image_aliases_do_not_change_the_requested_repository(
+    controller_path, tmp_path
+):
+    server, store, op = installation(controller_path, tmp_path)
+    runner = ReleaseRunner()
+    runner.digests.insert(0, "another-registry/foreign-app@sha256:other")
+    prepared = server.prepare_release_configuration(
+        store, op, runner=runner, overlay="image.env"
+    )
+    assert prepared["resolvedImage"] == "example/app@sha256:selected"
 
 
 def test_export_failure_preserves_target_without_recreation(controller_path, tmp_path):
@@ -236,3 +249,83 @@ def test_apply_uses_release_configuration_before_storage_and_recreation(
         assert result["installed"]["image"] == "example/app@sha256:selected"
         assert len([args for args in runner.commands if "up" in args]) == 1
     assert len(prepared) == 1
+
+
+def test_release_staging_failures_exhaust_as_retryable_recorded_operations(
+    controller_path, tmp_path, monkeypatch
+):
+    server, store, op = installation(controller_path, tmp_path)
+    monkeypatch.setattr(
+        server.engine, "subprocess_runner", lambda: ReleaseRunner(fail=True)
+    )
+    monkeypatch.setattr(
+        server, "require_previous_oneoffs_exited", lambda *a, **kw: None
+    )
+    result = server._apply_recording_failure(
+        store,
+        op["operationId"],
+        lambda current: server.production_apply(store, current),
+    )
+    assert result["status"] == "failed"
+    assert result["autoAttemptsExhausted"]
+    assert len(result["attempts"]) == server.record_mod.MAX_AUTO_ATTEMPTS
+    assert "release configuration unavailable" in result["errorSummary"].lower()
+    assert store.begin_retry(op["operationId"])["status"] == "pending"
+
+
+def test_custom_controller_state_is_mounted_into_the_release_helper(
+    controller_path, tmp_path, monkeypatch
+):
+    server, store, op = installation(controller_path, tmp_path)
+    op = server.prepare_release_configuration(
+        store, op, runner=ReleaseRunner(), overlay="image.env"
+    )
+    monkeypatch.setenv("MOONMIND_CONTROLLER_MANAGED", "1")
+    monkeypatch.setenv("HOSTNAME", "controller-container")
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            if args[:2] == ("docker", "ps"):
+                return {"exit": 0, "stdout": ""}
+            if args[:2] == ("docker", "inspect"):
+                assert "controller-container" in args
+                return {
+                    "exit": 0,
+                    "stdout": json.dumps(
+                        [
+                            {
+                                "Type": "bind",
+                                "Destination": str(store.state_dir),
+                                "Source": "/host/custom/controller-state",
+                            }
+                        ]
+                    ),
+                }
+            files = [args[i + 1] for i, arg in enumerate(args) if arg == "-f"]
+            helper = json.loads(Path(files[-1]).read_text())["services"][
+                server.LEGACY_CONTROL_SERVICE
+            ]
+            mounts = [
+                v
+                for v in helper["volumes"]
+                if isinstance(v, dict)
+                and v["target"] == "/workspace/deployment_state/controller"
+            ]
+            assert len(mounts) == 1
+            assert mounts[0]["source"] == "/host/custom/controller-state"
+            assert mounts[0]["bind"]["create_host_path"] is False
+            assert (
+                helper["environment"]["MOONMIND_CONTROLLER_STATE_DIR"]
+                == mounts[0]["target"]
+            )
+            return {
+                "exit": 0,
+                "output": 'MOONMIND_OMNIGENT_RESULT={"status":"skipped"}',
+            }
+
+    assert (
+        server.run_omnigent_step(
+            store, op, runner=Runner(), overlay="image.env", phase="select"
+        )["status"]
+        == "skipped"
+    )
