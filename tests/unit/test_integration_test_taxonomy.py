@@ -5,6 +5,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 COMPOSE_TEST_RUNNERS = (
@@ -133,19 +135,21 @@ def test_compose_tests_use_an_explicit_isolated_project() -> None:
 
 
 def test_compose_test_artifact_endpoints_ignore_deployment_env() -> None:
-    compose_file = (REPO_ROOT / "docker-compose.test.yaml").read_text(
-        encoding="utf-8"
+    compose = yaml.safe_load(
+        (REPO_ROOT / "docker-compose.test.yaml").read_text(encoding="utf-8")
+    )
+    environment = dict(
+        entry.split("=", 1) for entry in compose["services"]["pytest"]["environment"]
     )
     isolated_endpoint = "http://moonmind-test-temporal-artifacts-s3:9000"
 
-    assert (
-        f"TEMPORAL_ARTIFACT_S3_ENDPOINT={isolated_endpoint}" in compose_file
-    )
-    assert (
-        f"TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT={isolated_endpoint}" in compose_file
-    )
-    assert "TEMPORAL_ARTIFACT_S3_ENDPOINT=${" not in compose_file
-    assert "TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT=${" not in compose_file
+    assert environment["TEMPORAL_ARTIFACT_S3_ENDPOINT"] == isolated_endpoint
+    # The runner discovers this test project's published port before pytest.
+    # Both public-download clients must receive that endpoint, even when the
+    # deployment .env supplies its own TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT.
+    public_endpoint = "${MOONMIND_TEST_S3_PUBLIC_ENDPOINT:-}"
+    assert environment["TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT"] == public_endpoint
+    assert environment["MOONMIND_TEST_S3_PUBLIC_ENDPOINT"] == public_endpoint
 
 
 def test_powershell_compose_runners_preserve_test_exit_codes_after_cleanup() -> None:

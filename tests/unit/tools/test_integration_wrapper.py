@@ -186,11 +186,26 @@ def test_interactive_and_scheduled_runs_keep_collecting_without_maxfail(
     assert "--volumes" in commands[-1]
 
 
-def test_public_downloads_use_the_disposable_published_port(wrapper: Wrapper) -> None:
+@pytest.mark.parametrize(
+    "inherited_test_endpoint", [None, "", "http://installed-storage.invalid:9000"]
+)
+def test_public_downloads_use_the_disposable_published_port(
+    wrapper: Wrapper, inherited_test_endpoint: str | None
+) -> None:
+    wrapper.env.update(
+        {
+            "TEMPORAL_ARTIFACT_S3_ENDPOINT": "http://installed-storage.invalid:9000",
+            "TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT": "http://installed-storage.invalid:9000",
+        }
+    )
+    if inherited_test_endpoint is not None:
+        wrapper.env["MOONMIND_TEST_S3_PUBLIC_ENDPOINT"] = inherited_test_endpoint
+
     status, output, _ = wrapper.run()
 
     assert status == 0
     assert "public storage endpoint: http://host.docker.internal:43127" in output
+    assert "installed-storage.invalid" not in output
     commands = wrapper.compose_commands()
     assert commands[0] == ["up", "-d", "--wait", "--wait-timeout", "90", "minio", "artifact-source"]
     assert commands[1] == ["port", "minio", "9000"]
