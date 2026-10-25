@@ -633,6 +633,7 @@ RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH = "run-trusted-issue-brief-authority-v1"
 RUN_ACCEPTANCE_EVIDENCE_PATCH = "run-acceptance-evidence-v1"
 RUN_ACCEPTANCE_SOURCE_HANDOFF_PATCH = "run-acceptance-source-handoff-v1"
 RUN_ISSUE_EVIDENCE_CONTINUATION_PATCH = "run-issue-evidence-continuation-v1"
+RUN_ISSUE_EVIDENCE_ELIGIBILITY_PATCH = "run-issue-evidence-eligibility-v1"
 # Issue-driven PRs and preserved-draft summaries name the trusted source issue
 # and the continuation owner's recorded next action; retained histories keep
 # the search-instruction title and generic draft summary they recorded.
@@ -10002,15 +10003,26 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 isinstance(gate, Mapping)
                 and gate.get("recommendedNextAction") == "needs_human"
             )
-            parts = [
-                prefix,
-                "The verifier requested a human decision."
-                if needs_human
-                else "No evidence continuation was accepted; next action: supply "
-                "the missing verification evidence for this pull request's "
-                "current head.",
-                reason,
-            ]
+            ineligible = (
+                isinstance(gate, Mapping)
+                and gate.get("evidenceContinuationEligible") is False
+                and self._patched_or_false_outside_workflow(
+                    RUN_ISSUE_EVIDENCE_ELIGIBILITY_PATCH
+                )
+            )
+            if needs_human:
+                next_step = "The verifier requested a human decision."
+            elif ineligible:
+                next_step = (
+                    "No evidence continuation was accepted; next action: resolve "
+                    "the verifier's remaining work and prerequisites on this pull request."
+                )
+            else:
+                next_step = (
+                    "No evidence continuation was accepted; next action: supply "
+                    "the missing verification evidence for this pull request's current head."
+                )
+            parts = [prefix, next_step, reason]
         return " ".join(part for part in parts if part)
 
     def _moonspec_draft_publication_body_section(self) -> str:
@@ -21835,6 +21847,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self, *, parameters: Mapping[str, Any], ordered_nodes: list[dict[str, Any]],
     ) -> None:
         if not self._patched_or_false_outside_workflow(RUN_ISSUE_EVIDENCE_CONTINUATION_PATCH):
+            return
+        gate = self._publish_context.get("moonSpecGate")
+        if (
+            isinstance(gate, Mapping)
+            and gate.get("evidenceContinuationEligible") is False
+            and self._patched_or_false_outside_workflow(RUN_ISSUE_EVIDENCE_ELIGIBILITY_PATCH)
+        ):
+            # Missing implementation or an invalid report cannot be repaired
+            # by waiting for CI. Retained histories keep their recorded route.
             return
         from moonmind.workflows.temporal.workflows.issue_evidence_continuation import (
             resume_published_issue_evidence,

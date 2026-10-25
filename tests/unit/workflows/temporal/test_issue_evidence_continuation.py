@@ -112,6 +112,75 @@ def admitted(owner):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("budget_expired", [False, True])
+async def test_missing_implementation_does_not_enter_ci_evidence_wait(
+    admitted, monkeypatch, budget_expired
+):
+    from datetime import timedelta
+    from moonmind.workflows.skills.approval_policy import StepGateResult
+    from moonmind.workflows.temporal.workflows import (
+        issue_evidence_continuation as continuation,
+    )
+
+    owner, nodes = admitted
+    now = run_module.workflow.now()
+    owner._remediation_loop_spec = owner._remediation_loop_spec.model_copy(
+        update={
+            "budgets": owner._remediation_loop_spec.budgets.model_copy(
+                update={"max_wall_clock_seconds": 7200}
+            )
+        }
+    )
+    monkeypatch.setattr(
+        run_module.workflow, "info",
+        lambda: SimpleNamespace(
+            workflow_id="issue-owner", run_id="run-1",
+            start_time=now - timedelta(seconds=10470 if budget_expired else 60),
+        ),
+    )
+    gate = StepGateResult(
+        verdict="ADDITIONAL_WORK_NEEDED",
+        recommended_next_action="blocked",
+        recoverable_in_current_runtime=False,
+        validated_refs={"acceptanceProjection": {"reportDigest": "sha256:report"}},
+    )
+    monkeypatch.setattr(owner, "_moonspec_verify_gate_result", lambda _: gate)
+    owner._record_moonspec_verify_gate(
+        node_id="verify",
+        outputs={
+            "summary": "Saved worlds are missing; licensed Content is unavailable",
+            "remainingWork": [
+                {"requirement": "map", "gapType": "implementation"},
+                {"requirement": "playthrough", "gapType": "verification"},
+            ],
+        },
+    )
+    assert owner._publish_context["moonSpecGate"]["evidenceContinuationEligible"] is False
+    owner._moonspec_draft_publication_reason = owner._moonspec_gate_reason
+    state = owner._remediation_loop_state
+    reader = AsyncMock(return_value={"status": "pending", "headSha": "a" * 40})
+    verifier = AsyncMock()
+    monkeypatch.setattr(continuation, "_activity", reader)
+    monkeypatch.setattr(continuation, "_verify", verifier)
+
+    await owner._resume_published_issue_evidence(
+        parameters={"publishMode": "pr"}, ordered_nodes=nodes
+    )
+
+    reader.assert_not_awaited()
+    verifier.assert_not_awaited()
+    owner._write_json_artifact.assert_not_awaited()
+    assert owner._remediation_loop_state == state
+    assert "issueEvidenceContinuation" not in owner._publish_context
+    assert owner._moonspec_draft_publication_reason
+    message = owner._moonspec_draft_terminal_message()
+    assert "resolve the verifier's remaining work and prerequisites" in message
+    assert "licensed Content is unavailable" in message
+    assert "collect CI evidence" not in message
+    assert "wait budget expired" not in message
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("disclosure_enabled", [True, False])
 @pytest.mark.parametrize("unverified", [True, False])
 async def test_new_exact_head_bytes_resume_verifier_then_persist_acceptance(
