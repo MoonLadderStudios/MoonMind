@@ -316,6 +316,26 @@ async def controller_journal_cli(phase, payload):
     return 0
 
 
+async def controller_storage_cli(phase, payload):
+    """The controller holds stack ownership while this bounded one-off copies."""
+    import sys
+
+    from moonmind.workflows.skills.storage_migration import prepare_compose_storage
+    from moonmind.workflows.skills.omnigent_release import _deployment_lock
+
+    if phase not in ("storage-prepare", "storage-observe"):
+        raise ValueError("Unknown storage transition phase")
+    runner = controller_release_runner(payload)
+    async with _deployment_lock():
+        receipt = await prepare_compose_storage(
+            runner, docker, payload, state_root().parent / "storage-transfers",
+            observe_only=phase == "storage-observe",
+        )
+    print("MOONMIND_OMNIGENT_RESULT=" + json.dumps(receipt, sort_keys=True),
+          file=sys.stderr, flush=True)
+    return 0
+
+
 async def controller_routing_cutover_cli(phase, payload):
     """Operation-scoped one-off for the one-time unversioned routing cutover.
 
@@ -854,6 +874,33 @@ async def migrate_omnigent(runner, owner, image, *, selected_revision=None):
     )
 
 
+def controller_release_runner(payload):
+    """Render the deployment's same files and env through its existing runner."""
+    from moonmind.workflows.skills.deployment_execution import HostDockerComposeRunner
+
+    target = payload["target"]
+    store = _omnigent_release_store()
+    if store is None:
+        raise ValueError("Controller release steps require durable deployment state")
+    project_dir = str(target["projectDir"])
+    local_dir = Path(os.environ.get("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR") or "/workspace/host_project")
+    files = list(target.get("composeFiles") or ["docker-compose.yaml"])
+
+    def local_file(name):
+        path = Path(name)
+        if path.is_absolute():
+            path = path.relative_to(project_dir)
+        if ".." in path.parts:
+            raise ValueError("Compose file escapes the deployment checkout")
+        return str(local_dir / path)
+
+    return HostDockerComposeRunner(
+        project_dir=project_dir, project_name=str(target["project"]),
+        local_project_dir=str(local_dir), compose_file=local_file(files[0]),
+        override_files=tuple(local_file(name) for name in files[1:]), env_file=store.env_file_path,
+    )
+
+
 async def run_controller_omnigent_step(phase, payload):
     """Run the existing Omnigent helper under the standalone controller.
 
@@ -899,7 +946,6 @@ async def run_controller_omnigent_step(phase, payload):
             "this release."
         )
 
-    from moonmind.workflows.skills.deployment_execution import HostDockerComposeRunner
     from moonmind.workflows.skills.omnigent_release import (
         _deployment_lock,
         read_omnigent_release,
@@ -911,29 +957,7 @@ async def run_controller_omnigent_step(phase, payload):
     store = _omnigent_release_store()
     if store is None:
         raise ValueError("Controller Omnigent steps require durable deployment state")
-    project_dir = str(target["projectDir"])
-    local_dir = Path(
-        os.environ.get("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR")
-        or "/workspace/host_project"
-    )
-    files = list(target.get("composeFiles") or ["docker-compose.yaml"])
-
-    def local_file(name):
-        path = Path(name)
-        if path.is_absolute():
-            path = path.relative_to(project_dir)
-        if ".." in path.parts:
-            raise ValueError("Compose file escapes the deployment checkout")
-        return str(local_dir / path)
-
-    runner = HostDockerComposeRunner(
-        project_dir=project_dir,
-        project_name=str(target["project"]),
-        local_project_dir=str(local_dir),
-        compose_file=local_file(files[0]),
-        override_files=tuple(local_file(name) for name in files[1:]),
-        env_file=store.env_file_path,
-    )
+    runner = controller_release_runner(payload)
     key = hashlib.sha256(operation_id.encode()).hexdigest()[:32]
     directory = Path(store.env_file_path).parent / "controller-omnigent-jobs" / key
     directory.mkdir(parents=True, exist_ok=True)
@@ -1434,6 +1458,8 @@ async def submit(payload):
 if __name__ == "__main__":
     import sys
 
+    if sys.argv[1] in ("--omnigent-storage-prepare", "--omnigent-storage-observe"):
+        raise SystemExit(asyncio.run(controller_storage_cli(sys.argv[1].removeprefix("--omnigent-"), json.loads(sys.argv[2]))))
     if sys.argv[1] in ("--omnigent-journal-prepare", "--omnigent-journal-quiesce"):
         raise SystemExit(asyncio.run(controller_journal_cli(
             sys.argv[1].removeprefix("--omnigent-"), json.loads(sys.argv[2])

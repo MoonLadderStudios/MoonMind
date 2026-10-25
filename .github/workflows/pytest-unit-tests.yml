@@ -271,7 +271,7 @@ jobs:
     # first definitive required-backend failure, excluding queued time).
     # Per-row setup stays isolated: fast rows never build images or start
     # Compose services; each reliability shard starts its own isolated
-    # Compose PostgreSQL/Temporal/MinIO under its own Docker project name.
+    # Compose PostgreSQL/Temporal/Silo under its own Docker project name.
     # Shard shape (MoonLadderStudios/MoonMind#4366): suite
     # reliability-shard-N runs pytest-split --group N (groups are 1-based)
     # with --splits 4 and least_duration over the committed advisory hints.
@@ -385,10 +385,8 @@ jobs:
         timeout-minutes: 5
         run: |
           set -euo pipefail
-          # postgres/temporal/minio are pinned prebuilt registry images, so
-          # `pull` only fetches immutable layers. Each shard starts isolated
-          # services under its own Compose project name with fresh volumes;
-          # no volume, network, or routing state is shared between shards.
+          # Each shard starts isolated prebuilt dependencies with fresh
+          # volumes; storage uses the same Silo selection as production.
           docker compose -p moonmind-reliability-${{ matrix.suite }} -f tests/integration/reliability/compose.yaml pull --quiet
           docker compose -p moonmind-reliability-${{ matrix.suite }} -f tests/integration/reliability/compose.yaml up -d --wait --wait-timeout 180
           dependency_ip() {
@@ -547,7 +545,7 @@ jobs:
           # inputs; new tests without history run via the plugin fallback
           # and are always selected, never skipped. Serial pytest inside
           # each isolated runner (no -n): each entry boots its own Compose
-          # PostgreSQL/Temporal/MinIO stack, never a shared service stack.
+    # PostgreSQL/Temporal/Silo stack, never a shared service stack.
           # DURATIONS_ARGS is the pre-validated flag list from the step
           # above (empty when hints are missing/unusable); word-splitting
           # here is intentional. The marker expression is the provider-free

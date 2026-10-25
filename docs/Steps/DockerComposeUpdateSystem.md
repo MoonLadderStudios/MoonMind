@@ -138,17 +138,64 @@ docker compose pull --policy always
 docker compose up -d --pull never --no-build --remove-orphans
 ```
 
-under bounded timeouts, after staging every image the update needs and before any recreation. Services built from the MoonMind image pull with `--policy always`; other reconciled infrastructure services pull with `--policy missing`, so an infrastructure image the release newly pins (for example a MinIO digest change) is staged while present images are not refreshed, and `up --pull never` cannot fail on a missing image. The deployment-owned Compose file set (including `COMPOSE_FILE`) passes through unchanged, and the deployment-owned `.env` layers under the controller-generated image overlay, so operator authentication, bindings, and infrastructure versions are preserved. Privileged-endpoint submissions validate project, paths, services, and image references before persistence. Routine updates do not use `docker compose down`, fleet-wide force-recreate, or pruning.
+Commands are bounded. MoonMind images pull with `--policy always`; other
+infrastructure uses `--policy missing`. The deployment's Compose file set,
+`.env`, overrides, credentials, ports and ingress settings remain authoritative.
+Routine updates never run `down`, fleet-wide force recreation or pruning.
+`docker-proxy` and `sandbox-egress-proxy` stay outside the main pass; the
+controller uses its own Docker transport.
 
-After detached apply succeeds, the controller records installation and observes service readiness for up to fifteen minutes from that checkpoint. Compose's first `unhealthy` observation does not trigger another pull, journal transition, or recreation. Restart recovery uses the checkpoint's remaining budget. Exhaustion records failed or unavailable checks as `partially_verified`, retaining installation; readiness precedes routing cutover and operator-access verification.
+**Artifact storage cutover.** Silo defaults to `latest`, honoring
+`TEMPORAL_ARTIFACT_S3_IMAGE`. Before recreation, the controller's
+`--omnigent-storage-prepare` one-off detects a changed `/data` volume. It stops
+API/worker writers and sweepers, including project one-offs, then stops the
+public source server. The same source image opens its original volume on a
+private endpoint, without its public ports or DNS aliases. This fences direct
+presigned writes as well as application writes. Incomplete source multipart
+uploads refuse cutover and remain resumable on the source.
 
-The main pass excludes `docker-proxy` and `sandbox-egress-proxy`. The standalone controller uses its own Docker socket and does not depend on a healthy API or worker.
+The owner copies through S3 into separate `artifact-data`, retaining keys,
+consumer metadata and bucket policies/CORS/lifecycle settings. A private
+`deploy/state/storage-transfers/` receipt retains source image/mount provenance
+and per-object progress. Each attempt has a bounded copy budget; retry verifies
+already copied bytes instead of repeating confirmed uploads. Full inventories,
+streamed SHA-256 checks and destination read/write/multipart/presigned probes
+precede activation. Mismatches or unavailable observations prevent activation;
+source objects and `minio-data` are never deleted. Versioned/locked buckets and
+nonstandard mounts require a separately qualified transfer. Application
+credentials must work without privilege escalation; restore any custom IAM
+configuration to the protected destination before retrying a denied probe.
 
-Dependency order and `init-db`/schema migration gating apply before dependent services start. A failed migration preserves the original error and data. Startup's legacy conversion scan reads distinct principal identities and skips artifact hashing once unreadable evidence requires refusal; it preserves source data and access guards without making retained history size a Python row-processing cost.
+A rollback follows the same fenced, verified procedure in reverse, copying new
+objects back before an older controller takes over. Neither direction prunes
+extra retained bytes. Preserve both volumes and receipts until completeness,
+operator-path reads/writes and rollback are verified for the installed inventory.
+Repository qualification does not retire deployment data. Existing deployments
+must use this controller transition rather than replacing the storage image or
+running an unchecked `compose up` over a changed data mount.
 
-**Active Omnigent journal transition.** Supported rollback targets can read only complete JSONL journals, so active journals are compacted after image staging and before service recreation, under the same owner and lock (the controller's `before_compose` step). The owner observes the project's actual `agent_runtime` writers and `artifacts` lifecycle sweepers, including overrides and one-offs, stops them with a bounded Docker stop, and inspects them again, because pausing API submissions or enumerating workflows does not prove quiescence. Durable Activities recover from saved progress, so workflows need not finish first and keep their intent.
+**Active journals and recovery.** After storage qualification, the journal
+helper stops actual `agent_runtime` writers and `artifacts` sweepers, verifies
+quiescence and compacts committed chunks into complete JSONL journals for old
+readers. References/event locators commit atomically; original chunks remain
+recoverable until that commit. Recorded source helper images support rollback.
+Unavailable storage, artifacts or consumer observations prevent recreation.
+Interrupted Activities recover under their existing logical steps and budgets;
+completed workflow effects are not repeated.
 
-Through `deployment_release --omnigent-journal-prepare`, the bridge store replaces committed active chunks with complete, old-reader-compatible journals and atomically updates references and event locators; original chunks stay recoverable until that commit. The controller records observed consumer image identities first, so a rollback to a target that predates the helper can use the source image's helper. Preparation starts only the `postgres`/`minio` services it needs and does not require a healthy API or worker. A failed storage connection, unavailable artifact, or unknown consumer state prevents recreation and keeps saved work and the original error. After a failed Compose apply, the owner stops every consumer, because a partially recreated writer may sit beside an old reader. A retry repeats observation and compaction, since that writer may have committed more chunks. When the controller's automatic attempts are exhausted and no retry follows, it recreates the consumer services on the release that apply selected, so agent launches keep a worker; stopped one-offs stay stopped, and a recovery failure is recorded beside the original apply error.
+After a partial apply, every journal consumer is stopped again. Retry recompacts
+before recreation because a partial writer may have committed more chunks.
+After the final automatic attempt, consumer services are recreated on the
+selected release; stopped one-offs remain stopped. Recovery/reporting failures
+are recorded beside the original apply error. Dependency order and schema
+migration gates precede dependent services; failure preserves data and the
+original error.
+
+Once detached apply confirms installation, readiness has a fifteen-minute
+budget measured from that checkpoint, including controller restarts. An early
+`unhealthy` observation does not trigger another apply. Exhaustion records
+`partially_verified` while retaining installation. Readiness precedes routing
+cutover and operator-access checks.
 
 ### 10.7 Verify desired state
 
@@ -200,7 +247,7 @@ The host derives its endpoint and default project from the installed controller 
 
 **Refresh.** The default host command refreshes an idle controller from the selected release before submission. It extracts the stdlib bootstrap from the staged target, falling back to an observed installed application image when a rollback target lacks that lifecycle. Bootstrap runs in a temporary trusted image container with the Docker socket and writable controller state on the private controller network, so root-owned records and locks stay readable without host privilege changes; it needs no healthy API or worker and leaves the host checkout, Compose project, mounts, network, and credentials in place. If the identity file is lost, bootstrap first recovers it from the Compose installation without replacing the controller. Replacement holds the stack lock; a capable controller with open work keeps ownership, and an explicitly selected controller, endpoint, or secret keeps its release choice.
 
-**Handoff.** Before applying a release, a managed controller runs its `controller-handoff` one-off to replace a controller running other code. The old process and kernel lock end; the replacement resumes once the one-off exits. Only that operation may be open, and each attempt group hands off once. This lets Settings Operations install new controller behavior without a host step. Older controllers enter through the requested image's `--omnigent-select` callback; otherwise an owner lacking `active-journal-transition` or `unversioned-routing-cutover` is refused before mutation and directed to `./tools/update-moonmind.sh`.
+**Handoff.** A selected storage-volume transition finishes before handoff so an older rollback controller sees verified data. Before applying application services, a managed controller runs its `controller-handoff` one-off to replace a controller running other code. The old process and kernel lock end; the replacement resumes once the one-off exits. Only that operation may be open, and each attempt group hands off once. This lets Settings Operations install new controller behavior without a host step. Older controllers enter through the requested image's `--omnigent-select` callback; otherwise an owner lacking `active-journal-transition` or `unversioned-routing-cutover` is refused before mutation and directed to `./tools/update-moonmind.sh`.
 
 Handoff shares one monotonic deadline within the caller's 300-second allowance, reserving recovery time. Subprocesses consume the remaining budget. Linux process groups are terminated, killed if necessary, and reaped before recovery reconciles known running or stopped candidates, including created replacements, and attempts saved-configuration restoration. New replacements require zero restarts; recovery permits history only with stable identity, restart count, start time and healthy state. Receipts retain the original failure and distinguish verified restoration from failed or unverified recovery. An available controller can continue applying, including targets predating handoff.
 
