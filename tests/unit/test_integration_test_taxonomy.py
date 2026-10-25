@@ -250,6 +250,29 @@ def test_control_plane_lifecycle_conformance_uses_compose_network_authority() ->
         assert f"export {environment_name}=" in helper
 
 
+def test_phase6_integration_ci_suite_stays_focused_on_highest_risk_seams() -> None:
+    """Phase 6: the required integration_ci suite must stay focused on artifacts,
+    worker topology, live logs, managed runtime, and compose foundation.
+
+    Tests that require external credentials or third-party providers must NOT
+    be in the integration_ci suite.
+    """
+    # Verify the performance test uses deterministic bounds (Phase 6 hardening)
+    perf_test = (
+        REPO_ROOT
+        / "tests"
+        / "integration"
+        / "temporal"
+        / "test_live_logs_performance.py"
+    ).read_text(encoding="utf-8")
+    assert (
+        "10000" not in perf_test
+    ), "Performance test should not use 10k events — use deterministic bounds"
+    assert (
+        "500" in perf_test
+    ), "Performance test should use 500 deterministic event count"
+
+
 def test_operator_access_boundaries_select_integration_ci() -> None:
     """MoonLadderStudios/MoonMind#4128: auth/provider/session/configuration,
     route/dependency, and Compose changes must run the hermetic integration_ci

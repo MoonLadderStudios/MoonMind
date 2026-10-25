@@ -265,9 +265,15 @@ That plane remains explicitly separate from the managed-run log viewer.
 
 ## 6.4 Cross-process transport boundary
 
-`RuntimeLogStreamer` publishes through `SpoolLogPublisher` in `moonmind/observability/transport.py`, appending events to `live_streams.spool` under the run workspace. The admitted `GET /api/agent-runs/{id}/logs/stream` route tails that file through `SpoolLogReader`. The shared spool carries events across the runtime producer and API process boundary, including cursor-based reconnection.
+**Critical constraint:** the live stream publisher must be cross-process or otherwise shared across the producer and API/UI boundary.
 
-Transport safeguards:
+An API-process-local in-memory publisher is **not** sufficient as the canonical architecture boundary.
+
+Rules:
+- the live stream transport must not assume the log producer runs in the same API process
+- a process-local replay buffer may exist as an optimization, but it is not the architecture boundary
+- live publication must target a shared MoonMind observability transport such as Redis pub/sub, a shared append-only spool, or DB-backed tailing
+- the current implementation choice of a shared append-only spool file under the run workspace remains valid
 - spool reads and appends pin every directory component and reject symlink or special-file endpoints; appends also reject hardlinks, and readers retain partial records until a complete newline-delimited event arrives
 - managed-session snapshots and finalization redact raw stream captures up to 64 MiB; oversized streams publish a bounded truncation message and diagnostics recording the source size and zero retained content, preserving source logs and their original byte offsets; unreadable or unsafe streams publish an explicit unavailability annotation and retain the previous offsets
 
