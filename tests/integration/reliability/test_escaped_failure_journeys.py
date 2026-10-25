@@ -5830,7 +5830,20 @@ async def test_sandbox_checkpoint_git_trusts_resolved_omnigent_workspace(
         resolved_workspace,
     ]
     commands: list[list[str]] = []
+    git_processes: list[list[str]] = []
     run_command = activity_runtime_module._run_command
+    popen = subprocess.Popen
+
+    def enforce_process_directory(command, *args, **kwargs):
+        normalized = [str(part) for part in command]
+        if normalized[0] == "git":
+            # Selection/history use the bounded runner; status/HEAD use the
+            # Activity runner. Both must trust only this resolved workspace.
+            if normalized[1:2] == ["--literal-pathspecs"]:
+                normalized.pop(1)
+            assert normalized[: len(safe_prefix)] == safe_prefix
+            git_processes.append(normalized)
+        return popen(command, *args, **kwargs)
 
     async def enforce_safe_directory(command, **_kwargs):
         normalized = [str(part) for part in command]
@@ -5842,6 +5855,7 @@ async def test_sandbox_checkpoint_git_trusts_resolved_omnigent_workspace(
     monkeypatch.setattr(
         activity_runtime_module, "_run_command", enforce_safe_directory
     )
+    monkeypatch.setattr(subprocess, "Popen", enforce_process_directory)
     activities = TemporalSandboxActivities(
         workspace_root=tmp_path,
         artifact_store=InMemoryArtifactStore(),
@@ -5865,8 +5879,9 @@ async def test_sandbox_checkpoint_git_trusts_resolved_omnigent_workspace(
 
     assert result["status"] == expected["checkpointStatus"]
     assert sum(cmd[len(safe_prefix)] == "rev-parse" for cmd in commands) == expected["gitCommandCount"]
-    assert any(cmd[len(safe_prefix)] == "ls-files" for cmd in commands)
+    assert any(cmd[len(safe_prefix)] == "ls-files" for cmd in git_processes)
     assert all(command[: len(safe_prefix)] == safe_prefix for command in commands)
+    assert all(command[: len(safe_prefix)] == safe_prefix for command in git_processes)
 
 
 async def test_invalid_required_omnigent_checkpoint_blocks_publication(
