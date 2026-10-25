@@ -444,3 +444,119 @@ async def test_delayed_observation_cannot_downgrade_confirmed_cancel(artifacts, 
         record = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
         assert record.memo["temporalCancel"]["state"] == "confirmed"
         assert record.memo["summary"] == "same stop"
+
+
+@pytest.mark.parametrize("intent_format", ["current", "retained-request", "retained-audit"])
+async def test_background_replay_cannot_replace_a_newer_undelivered_force_request(
+    artifacts, monkeypatch, intent_format,
+):
+    await _api_context(artifacts, monkeypatch)
+    monkeypatch.setattr(settings.temporal, "namespace", "default")
+    monkeypatch.setattr(
+        TemporalExecutionService,
+        "_best_effort_terminate_workflow_scoped_managed_sessions", AsyncMock(),
+    )
+    adapter = SimpleNamespace(
+        start_workflow=AsyncMock(return_value=SimpleNamespace(run_id="original")),
+        namespace_retention_seconds=AsyncMock(return_value=86400),
+        cancel_workflow=AsyncMock(side_effect=RequestDisappeared()),
+        terminate_workflow=AsyncMock(side_effect=RequestDisappeared()),
+        describe_workflow=AsyncMock(return_value=SimpleNamespace(
+            run_id="original", status=WorkflowExecutionStatus.CANCELED,
+        )),
+    )
+    workflow_id, _, _ = await admit_then_disappear(
+        artifacts, adapter, disappear=intent_format == "retained-audit",
+    )
+    original_cancel = TemporalExecutionService.cancel_execution
+    async with artifacts() as session:
+        with pytest.raises(RequestDisappeared):
+            await original_cancel(
+                TemporalExecutionService(session, client_adapter=adapter),
+                workflow_id=workflow_id, reason="old graceful stop", graceful=True,
+            )
+    if intent_format != "current":
+        async with artifacts() as session:
+            record = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+            memo = deepcopy(record.memo)
+            if intent_format == "retained-request":
+                del memo["temporalCancel"]["requestId"]
+            else:
+                del memo["temporalCancel"]
+            record.memo = memo
+            await session.commit()
+    adapter.cancel_workflow = AsyncMock()
+    inserted = False
+
+    async def replay(service, **kwargs):
+        nonlocal inserted
+        if not inserted:
+            inserted = True
+            async with artifacts() as session:
+                with pytest.raises(RequestDisappeared):
+                    await original_cancel(
+                        TemporalExecutionService(session, client_adapter=adapter),
+                        workflow_id=workflow_id, reason="new force stop", graceful=False,
+                    )
+        return await original_cancel(service, **kwargs)
+
+    monkeypatch.setattr(TemporalExecutionService, "cancel_execution", replay)
+    await operational_tick(adapter).agent_runtime_reconcile_managed_sessions({})
+    adapter.cancel_workflow.assert_not_awaited()
+    async with artifacts() as session:
+        record = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+        assert record.memo["temporalCancel"]["reason"] == "new force stop"
+        assert record.memo["temporalCancel"]["graceful"] is False
+        assert record.memo["temporalCancel"]["state"] == "pending"
+    adapter.terminate_workflow.side_effect = None
+    await operational_tick(adapter).agent_runtime_reconcile_managed_sessions({})
+    adapter.cancel_workflow.assert_not_awaited()
+    assert adapter.terminate_workflow.await_count == 2
+    async with artifacts() as session:
+        record = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+        assert record.memo["temporalCancel"]["state"] == "confirmed"
+        assert record.close_status.value == "terminated"
+
+
+@pytest.mark.parametrize("prefix", ["execution:", "workflow:", "task:"])
+@pytest.mark.parametrize("closed", [False, True])
+async def test_public_cancel_preserves_supported_identifier_aliases(
+    artifacts, monkeypatch, prefix, closed,
+):
+    await _api_context(artifacts, monkeypatch)
+    monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", True)
+    monkeypatch.setattr(
+        TemporalExecutionService,
+        "_best_effort_terminate_workflow_scoped_managed_sessions", AsyncMock(),
+    )
+    adapter = SimpleNamespace(
+        start_workflow=AsyncMock(return_value=SimpleNamespace(run_id="original")),
+        namespace_retention_seconds=AsyncMock(return_value=86400),
+        cancel_workflow=AsyncMock(),
+        describe_workflow=AsyncMock(return_value=SimpleNamespace(
+            run_id="original", status=WorkflowExecutionStatus.CANCELED,
+        )),
+    )
+    workflow_id, _, _ = await admit_then_disappear(artifacts, adapter, disappear=False)
+    if closed:
+        async with artifacts() as session:
+            record = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+            record.state = MoonMindWorkflowState.CANCELED
+            record.close_status = TemporalExecutionCloseStatus.CANCELED
+            record.memo = {**record.memo, "temporalCancel": {
+                "state": "pending", "targetRunId": "original",
+                "requestId": "saved-request", "action": "cancel", "graceful": True,
+            }}
+            await session.commit()
+    async with artifacts() as session:
+        reply = await executions.cancel_execution(
+            workflow_id=prefix + workflow_id, response=Response(),
+            payload=executions.CancelExecutionRequest(graceful=True),
+            service=TemporalExecutionService(session, client_adapter=adapter),
+            user=OperatorAdmission(via="loopback"), _actions_enabled=None,
+            authorization=None, execution_fanout=None,
+        )
+        assert reply.workflow_id == workflow_id
+    async with artifacts() as session:
+        record = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+        assert record.memo["temporalCancel"]["state"] == "confirmed"

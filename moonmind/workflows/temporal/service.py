@@ -666,6 +666,18 @@ def _validate_publish_authority(initial_parameters: Mapping[str, Any] | None) ->
         raise TemporalExecutionValidationError(str(exc)) from exc
 
 
+def _cancel_request_identity(memo: Mapping[str, Any]) -> str | None:
+    intent = memo.get(_CANCEL_INTENT_MEMO_KEY) or {}
+    if intent.get("requestId"):
+        return str(intent["requestId"])
+    if intent.get("requestedAt"):
+        return f"retained-request:{intent['requestedAt']}"
+    for entry in reversed(memo.get(INTERVENTION_AUDIT_MEMO_KEY) or []):
+        if isinstance(entry, Mapping) and entry.get("action") in {"cancel", "reject"}:
+            return f"retained-audit:{entry['createdAt']}" if entry.get("createdAt") else None
+    return None
+
+
 async def reconcile_pending_execution_intents(
     *,
     session_factory: async_sessionmaker[AsyncSession],
@@ -778,6 +790,10 @@ async def reconcile_pending_execution_intents(
                             }:
                                 item["reason"] = "retained_cancel_transport_unknown"
                                 continue
+                            request_identity = _cancel_request_identity(memo)
+                            if request_identity is None:
+                                item["reason"] = "retained_cancel_identity_unknown"
+                                continue
                             start_pending = (
                                 (record.memo or {}).get(_CREATE_START_MEMO_KEY, {}).get("state")
                                 == "pending"
@@ -787,6 +803,7 @@ async def reconcile_pending_execution_intents(
                                 reason=request.get("reason") or request.get("summary"),
                                 graceful=graceful,
                                 action=str(request.get("action") or "cancel"),
+                                expected_cancel_request_id=request_identity,
                                 expected_run_id=(
                                     None
                                     if start_pending
@@ -5014,10 +5031,12 @@ class TemporalExecutionService:
         graceful: bool,
         action: str = "cancel",
         expected_run_id: str | None = None,
+        expected_cancel_request_id: str | None = None,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         record = await self._require_cancel_target_execution(
             workflow_id, include_orphaned=not graceful
         )
+        workflow_id = record.workflow_id
         if isinstance(record, TemporalExecutionCanonicalRecord):
             # A pending create owns this same row through its start RPC. Wait
             # for that outcome before dispatching cancel, rather than losing
@@ -5033,6 +5052,21 @@ class TemporalExecutionService:
                     .execution_options(populate_existing=True)
                 )
             ).scalar_one()
+            if expected_cancel_request_id is not None:
+                current_cancel = dict(record.memo.get(_CANCEL_INTENT_MEMO_KEY) or {})
+                if (
+                    _cancel_request_identity(record.memo) != expected_cancel_request_id
+                    or current_cancel and current_cancel.get("state") != "pending"
+                ):
+                    # A maintenance replay observes existing intent; it does
+                    # not have an operator's authority to replace that intent.
+                    await self._session.commit()
+                    return record
+                expected_run_id = (
+                    None
+                    if record.memo.get(_CREATE_START_MEMO_KEY, {}).get("state") == "pending"
+                    else current_cancel.get("targetRunId") or record.run_id
+                )
         if expected_run_id is not None:
             await self._session.refresh(record)
             if record.run_id != expected_run_id:
@@ -5086,6 +5120,7 @@ class TemporalExecutionService:
                             current["reasonCode"] = "closed_run_cancellation_unconfirmed"
                         record.memo = {**record.memo, _CANCEL_INTENT_MEMO_KEY: current}
                     await self._session.commit()
+                    await self._session.refresh(record)
             if record.workflow_type is TemporalWorkflowType.USER_WORKFLOW:
                 # The Temporal close may have committed before auxiliary
                 # managed-session cleanup ran. Retrying cancel against a
