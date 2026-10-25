@@ -236,7 +236,7 @@ def qualify_store(client, bucket):
             failure.add_note("Storage qualification cleanup also failed; original failure retained")
 
 
-async def quiesce_clients(docker, project, *, exclude=()):
+async def quiesce_clients(docker, project, *, exclude=(), record_stopped=None):
     """Stop real producers, including project one-offs, before fencing S3."""
     identifiers = (await docker("ps", "--all", "--quiet", "--filter",
                                 f"label=com.docker.compose.project={project}")).split()
@@ -256,12 +256,57 @@ async def quiesce_clients(docker, project, *, exclude=()):
             continue
         if row["State"]["Running"] or row["State"].get("Restarting"):
             selected.append(row["Id"])
+    # Persist intent before an uncertain stop or its following observation.
+    if record_stopped is not None:
+        record_stopped(selected)
     if selected:
         await docker("stop", "--time", "60", *selected, timeout_seconds=120)
         observed = json.loads(await docker("inspect", *selected))
         if len(observed) != len(selected) or any(row["State"]["Running"] or row["State"].get("Restarting") for row in observed):
             raise ValueError("Storage writers are still running")
     return selected
+
+
+async def _resume_consumers(docker, project, stopped, *, selected=()):
+    if not stopped:
+        return
+    identifiers = (await docker("ps", "--all", "--quiet", "--no-trunc", "--filter",
+                                f"label=com.docker.compose.project={project}")).split()
+    recoverable = [identifier for identifier in stopped if identifier in identifiers]
+    rows = json.loads(await docker("inspect", *recoverable)) if recoverable else []
+    if len(rows) != len(recoverable):
+        raise ValueError("Storage consumer recovery observation is incomplete")
+    resume = []
+    for row in rows:
+        labels = row["Config"].get("Labels", {})
+        if labels.get("com.docker.compose.project") != project:
+            raise ValueError("Storage consumer recovery escaped deployment authority")
+        # One-offs may have confirmed effects. Their durable owner, rather
+        # than Docker start, owns retries under the same logical step.
+        if str(labels.get("com.docker.compose.oneoff", "false")).lower() == "true":
+            continue
+        if labels.get("com.docker.compose.service") not in selected and not row["State"]["Running"]:
+            resume.append(row["Id"])
+    if resume:
+        await docker("start", *resume)
+
+
+def _transfer_key(binding):
+    return hashlib.sha256(json.dumps(binding, sort_keys=True).encode()).hexdigest()[:24]
+
+
+async def _resume_active_consumers(docker, project, active, directory, selected):
+    receipt = active.get("receipt") or {}
+    if not receipt:
+        return
+    binding = {field: receipt[field] for field in ("project", "source", "destination")}
+    if binding["project"] != project or binding["destination"] != active["volume"]:
+        raise ValueError("Storage recovery receipt differs from the active owner")
+    fence_path = directory / _transfer_key(binding) / "fence.json"
+    fence = json.loads(fence_path.read_text())
+    if fence["binding"] != binding:
+        raise ValueError("Storage consumer recovery fence identity differs")
+    await _resume_consumers(docker, project, fence["stopped"], selected=selected)
 
 
 async def verified_cutover(isolate, activate, state_path, *, binding=None, qualify=None):
@@ -362,6 +407,7 @@ async def prepare_compose_storage(runner, docker, payload, directory, *, observe
             if result["exitCode"] or restored is None or _data_mount(restored) != destination_volume or not restored["State"]["Running"]:
                 raise ValueError("Verified storage volume could not be restored after container cleanup")
             _write_private(active_path, {**active, "container": restored, "phase": "active"})
+            await _resume_active_consumers(docker, project, active, state_directory, payload["target"].get("services", []))
             return {**(active.get("receipt") or {"status": "skipped"}), "recoveredAfterContainerCleanup": True}
         original = active.get("container")
     if original is None:
@@ -393,9 +439,11 @@ async def prepare_compose_storage(runner, docker, payload, directory, *, observe
     _write_private(active_path, {"project": project, "volume": source_volume, "container": original,
                                  "phase": "observed", "receipt": active.get("receipt", {}) if active.get("volume") == source_volume else {}})
     if source_volume == destination_volume:
+        if not observe_only:
+            await _resume_active_consumers(docker, project, active, state_directory, payload["target"].get("services", []))
         return {"status": "skipped", "reason": "storage volume already selected"}
     binding = {"project": project, "source": source_volume, "destination": destination_volume}
-    key = hashlib.sha256(json.dumps(binding, sort_keys=True).encode()).hexdigest()[:24]
+    key = _transfer_key(binding)
     directory = Path(directory) / key
     directory.mkdir(parents=True, exist_ok=True)
     # This private descriptor retains the source image, command, credentials
@@ -412,17 +460,37 @@ async def prepare_compose_storage(runner, docker, payload, directory, *, observe
     if not common_networks:
         raise ValueError("Storage transfer helper has no deployment network")
     network = common_networks[0]
-    temporary = []
     fence_path = directory / "fence.json"
     fence = json.loads(fence_path.read_text()) if fence_path.exists() else {}
     if fence and fence["binding"] != binding:
         raise ValueError("Storage fence identity differs")
     stopped = list(fence.get("stopped", []))
+    temporary = dict(fence.get("temporary", {}))
     activated = False
     copy_proof = None
 
+    def save_fence():
+        _write_private(fence_path, {"binding": binding, "stopped": stopped,
+                                    "sourceContainer": original["Id"], "temporary": temporary})
+
+    async def stop_temporary(name, volume):
+        identifiers = (await docker("ps", "--all", "--quiet", "--filter", f"name=^/{name}$")).split()
+        if not identifiers:
+            return
+        rows = json.loads(await docker("inspect", *identifiers))
+        if len(rows) != 1 or rows[0]["Config"].get("Labels", {}).get("moonmind.storage.transfer") != key or _data_mount(rows[0]) != volume:
+            raise ValueError("Temporary storage identity differs; writers remain fenced")
+        await docker("stop", "--time", "30", name, timeout_seconds=60)
+        observed = json.loads(await docker("inspect", rows[0]["Id"]))
+        if len(observed) != 1 or observed[0]["State"]["Running"] or observed[0]["State"].get("Restarting"):
+            raise ValueError("Private storage stop is unconfirmed; writers remain fenced")
+
     async def temporary_store(role, image, volume, env, entrypoint, command):
         name = f"moonmind-storage-{key}-{role}"
+        # Creation may succeed even when Docker's acknowledgement is lost.
+        # Cleanup must reconcile this identity before reopening the source.
+        temporary[name] = volume
+        save_fence()
         identifiers = await docker("ps", "--all", "--quiet", "--filter", f"name=^/{name}$")
         if identifiers.strip():
             row = json.loads(await docker("inspect", identifiers.strip()))[0]
@@ -431,7 +499,7 @@ async def prepare_compose_storage(runner, docker, payload, directory, *, observe
             # Recreate only the disposable server, retaining its named data.
             # Qualification must use this attempt's staged image/settings,
             # rather than a process left by a prior latest resolution.
-            await docker("stop", "--time", "30", name, timeout_seconds=60)
+            await stop_temporary(name, volume)
             await docker("rm", name)
         args = ["run", "-d", "--name", name, "--label", f"moonmind.storage.transfer={key}",
                 "--network", network, "--mount", f"type=volume,source={volume},target=/data",
@@ -440,7 +508,6 @@ async def prepare_compose_storage(runner, docker, payload, directory, *, observe
             args += ["--entrypoint", entrypoint[0]]
         args += [image, *(entrypoint[1:] if entrypoint else []), *command]
         await docker(*args, input_bytes=("\n".join(f"{k}={v}" for k, v in env.items()) + "\n").encode())
-        temporary.append(name)
         row = json.loads(await docker("inspect", name))[0]
         ip = row["NetworkSettings"]["Networks"][network]["IPAddress"]
         client = s3_client(f"http://{ip}:9000", env.get("MINIO_ROOT_USER", "minioadmin"), env.get("MINIO_ROOT_PASSWORD", "minioadmin"))
@@ -455,8 +522,13 @@ async def prepare_compose_storage(runner, docker, payload, directory, *, observe
 
     async def isolate():
         nonlocal stopped
-        stopped = list(dict.fromkeys([*stopped, *await quiesce_clients(docker, project, exclude=(helper["Id"],))]))
-        _write_private(fence_path, {"binding": binding, "stopped": stopped, "sourceContainer": original["Id"]})
+
+        def record_stopped(selected):
+            nonlocal stopped
+            stopped = list(dict.fromkeys([*stopped, *selected]))
+            save_fence()
+
+        await quiesce_clients(docker, project, exclude=(helper["Id"],), record_stopped=record_stopped)
         if not source_container_missing:
             await docker("stop", "--time", "60", original["Id"], timeout_seconds=120)
             observed = json.loads(await docker("inspect", original["Id"]))[0]
@@ -491,9 +563,9 @@ async def prepare_compose_storage(runner, docker, payload, directory, *, observe
 
     async def activate():
         nonlocal activated
-        destination_row = json.loads(await docker("inspect", temporary[-1]))[0]
-        for name in temporary:
-            await docker("stop", "--time", "30", name, timeout_seconds=60)
+        destination_row = json.loads(await docker("inspect", f"moonmind-storage-{key}-destination"))[0]
+        for name, volume in temporary.items():
+            await stop_temporary(name, volume)
         # Set before the uncertain boundary. Failure here never restarts old
         # writers beside an unobserved new server.
         activated = True
@@ -511,41 +583,20 @@ async def prepare_compose_storage(runner, docker, payload, directory, *, observe
         _write_private(active_path, {"project": project, "volume": destination_volume,
                                      "container": current, "phase": "active", "receipt": copy_proof})
 
-    async def resume_consumers(*, selected_release):
-        # A Compose one-off may have already confirmed a publication effect.
-        # Its entrypoint is never re-executed by storage cleanup. Durable work
-        # retries through its existing owner, preserving the logical step.
-        if not stopped:
-            return
-        identifiers = (await docker("ps", "--all", "--quiet", "--filter",
-                                    f"label=com.docker.compose.project={project}")).split()
-        recoverable = [identifier for identifier in stopped if identifier in identifiers]
-        rows = json.loads(await docker("inspect", *recoverable)) if recoverable else []
-        selected = set(payload["target"].get("services", [])) if selected_release else set()
-        resume = []
-        for row in rows:
-            labels = row["Config"].get("Labels", {})
-            if str(labels.get("com.docker.compose.oneoff", "false")).lower() == "true":
-                continue
-            if labels.get("com.docker.compose.service") not in selected:
-                resume.append(row["Id"])
-        if resume:
-            await docker("start", *resume)
-
     try:
         receipt = await verified_cutover(isolate, activate, directory / "copy.sqlite", binding=binding, qualify=qualify)
         _write_private(directory / "receipt.json", {**receipt, **binding, "sourceRetained": True})
-        await resume_consumers(selected_release=True)
+        await _resume_consumers(docker, project, stopped, selected=payload["target"].get("services", []))
         return {**receipt, **binding, "sourceRetained": True}
     finally:
         # Never delete volumes or copy state. Cleanup errors must not start
         # two servers over one source volume, or mask a confirmed activation.
         clean = True
-        for name in temporary:
+        for name, volume in temporary.items():
             try:
-                await docker("stop", "--time", "30", name, timeout_seconds=60)
+                await stop_temporary(name, volume)
             except Exception:
                 clean = False
         if not activated and clean and not source_container_missing:
             await docker("start", original["Id"])
-            await resume_consumers(selected_release=False)
+            await _resume_consumers(docker, project, stopped)

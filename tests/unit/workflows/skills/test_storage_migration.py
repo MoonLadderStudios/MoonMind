@@ -372,6 +372,149 @@ async def test_storage_only_update_resumes_consumers_outside_main_apply(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_stop_succeeded_inspection_failed_retains_consumers_for_retry(tmp_path, monkeypatch):
+    import json
+
+    deployment = Deployment(monkeypatch)
+    docker = deployment.docker
+    lost_inspection = False
+
+    async def lose_inspection(*args, **kwargs):
+        nonlocal lost_inspection
+        if args == ("inspect", "api") and "stop:api" in deployment.events and not lost_inspection:
+            lost_inspection = True
+            raise OSError("lost post-stop inspection")
+        return await docker(*args, **kwargs)
+
+    deployment.docker = lose_inspection
+    with pytest.raises(OSError, match="post-stop inspection"):
+        await deployment.prepare(tmp_path, selected=("minio",))
+    fence = json.loads(next(tmp_path.glob("*/fence.json")).read_text())
+    assert "api" in fence["stopped"]
+    await deployment.prepare(tmp_path, selected=("minio",))
+    assert deployment.rows["api"]["State"]["Running"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("container_cleanup", [False, True])
+async def test_activated_retry_finishes_pending_consumer_recovery(tmp_path, monkeypatch, container_cleanup):
+    deployment = Deployment(monkeypatch)
+    docker = deployment.docker
+    failed_start = False
+
+    async def lose_start(*args, **kwargs):
+        nonlocal failed_start
+        if args == ("start", "api") and not failed_start:
+            failed_start = True
+            raise OSError("consumer start unavailable")
+        return await docker(*args, **kwargs)
+
+    deployment.docker = lose_start
+    with pytest.raises(OSError, match="consumer start unavailable"):
+        await deployment.prepare(tmp_path, selected=("minio",))
+    assert not deployment.rows["api"]["State"]["Running"]
+    puts = list(deployment.destination.puts)
+    if container_cleanup:
+        deployment.current = ""
+        deployment.rows.pop("active")
+    await deployment.prepare(tmp_path, selected=("minio",))
+    assert deployment.rows["api"]["State"]["Running"]
+    assert deployment.destination.puts == puts
+    assert deployment.events.count("private-source") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unavailable_cleanup", [False, True])
+async def test_lost_private_creation_ack_keeps_source_volume_exclusive(tmp_path, monkeypatch, unavailable_cleanup):
+    import json
+
+    deployment = Deployment(monkeypatch)
+    docker = deployment.docker
+
+    async def lose_creation(*args, **kwargs):
+        if args[0] == "run" and args[args.index("--name") + 1].endswith("-source"):
+            await docker(*args, **kwargs)
+            raise OSError("lost private creation acknowledgement")
+        if unavailable_cleanup and args[0] == "stop" and args[-1].endswith("-source"):
+            raise OSError("private source stop unavailable")
+        return await docker(*args, **kwargs)
+
+    deployment.docker = lose_creation
+    with pytest.raises(OSError, match="creation acknowledgement"):
+        await deployment.prepare(tmp_path, selected=("minio",))
+    fence = json.loads(next(tmp_path.glob("*/fence.json")).read_text())
+    assert list(fence["temporary"].values()) == ["old-volume"]
+    owners = [row for row in deployment.rows.values() if row["State"]["Running"]
+              and any(mount["Name"] == "old-volume" for mount in row["Mounts"])]
+    assert len(owners) <= 1
+    assert deployment.rows["api"]["State"]["Running"] is not unavailable_cleanup
+    assert deployment.rows["original"]["State"]["Running"] is not unavailable_cleanup
+    assert deployment.source.objects["workflow/step"]["Body"] == b"confirmed saved work"
+
+
+@pytest.mark.asyncio
+async def test_retry_reconciles_saved_private_server_before_source_recovery(tmp_path, monkeypatch):
+    deployment = Deployment(monkeypatch)
+    docker = deployment.docker
+
+    async def unavailable_source(*args, **kwargs):
+        if args[0] == "run" and args[args.index("--name") + 1].endswith("-source"):
+            await docker(*args, **kwargs)
+            raise OSError("lost private creation acknowledgement")
+        if args[0] == "stop" and args[-1].endswith("-source"):
+            raise OSError("private stop unavailable")
+        return await docker(*args, **kwargs)
+
+    deployment.docker = unavailable_source
+    with pytest.raises(OSError, match="creation acknowledgement"):
+        await deployment.prepare(tmp_path, selected=("minio",))
+    assert not deployment.rows["original"]["State"]["Running"]
+
+    async def failed_retry_inventory(*args, **kwargs):
+        if args == ("inspect", "original", "api", "helper"):
+            raise OSError("retry inventory unavailable")
+        return await docker(*args, **kwargs)
+
+    deployment.docker = failed_retry_inventory
+    with pytest.raises(OSError, match="retry inventory unavailable"):
+        await deployment.prepare(tmp_path, selected=("minio",))
+    assert deployment.rows["original"]["State"]["Running"]
+    assert deployment.rows["api"]["State"]["Running"]
+    assert all(not row["State"]["Running"] for name, row in deployment.rows.items()
+               if name.startswith("moonmind-storage-"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("corrupt,oneoff", [(False, False), (True, False), (False, True), (True, True)])
+async def test_docker_full_inspect_and_short_listing_ids_recover_without_repeating_oneoffs(tmp_path, monkeypatch, corrupt, oneoff):
+    import hashlib
+
+    deployment = Deployment(monkeypatch, corrupt=corrupt, oneoff=oneoff)
+    docker = deployment.docker
+    identifiers = {name: hashlib.sha256(name.encode()).hexdigest() for name in deployment.rows}
+    for name, identifier in identifiers.items():
+        deployment.rows[name]["Id"] = identifier
+
+    async def realistic_ids(*args, **kwargs):
+        names = {value: name for name, identifier in identifiers.items() for value in (identifier, identifier[:12])}
+        translated = tuple(names.get(arg, arg) for arg in args)
+        result = await docker(*translated, **kwargs)
+        if args[0] == "ps":
+            return "\n".join((identifiers[value] if "--no-trunc" in args else identifiers[value][:12])
+                             if value in identifiers else value
+                             for value in result.split())
+        return result
+
+    deployment.docker = realistic_ids
+    if corrupt:
+        with pytest.raises(ValueError, match="mismatch"):
+            await deployment.prepare(tmp_path, selected=("minio",))
+    else:
+        await deployment.prepare(tmp_path, selected=("minio",))
+    assert deployment.rows["api"]["State"]["Running"] is not oneoff
+
+
+@pytest.mark.asyncio
 async def test_verified_destination_is_restored_after_container_cleanup(tmp_path, monkeypatch):
     deployment = Deployment(monkeypatch)
     first = await deployment.prepare(tmp_path)
