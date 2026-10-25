@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 from copy import deepcopy
 
@@ -236,7 +237,7 @@ class Deployment:
         self.current = "original"
 
         def row(name, volume=None, env=(), running=True, oneoff=False):
-            return {"Id": name, "Image": "original-image", "Config": {
+            return {"Id": hashlib.sha256(name.encode()).hexdigest(), "Image": "original-image", "Config": {
                 "Env": list(env), "Cmd": ["server", "/data"], "Entrypoint": None,
                 "Labels": {"com.docker.compose.project": "moonmind-test", "com.docker.compose.service": name,
                            "com.docker.compose.oneoff": str(oneoff)},
@@ -270,18 +271,32 @@ class Deployment:
 
     async def docker(self, *args, **kwargs):
         import json
+
+        def name_for(identifier):
+            if identifier in self.rows:
+                return identifier
+            matches = [name for name, row in self.rows.items() if row["Id"].startswith(identifier)]
+            assert len(matches) == 1, identifier
+            return matches[0]
+
+        def listed(name):
+            if not name:
+                return ""
+            identifier = self.rows[name]["Id"]
+            return identifier if "--no-trunc" in args else identifier[:12]
+
         if args[:2] == ("volume", "ls"):
             return "new-volume" if "name=^new-volume$" in args else "old-volume"
         if args[0] == "ps":
             name_filter = next((value for value in args if value.startswith("name=")), None)
             if name_filter:
                 name = name_filter.removeprefix("name=^/").removesuffix("$")
-                return name if name in self.rows else ""
+                return listed(name) if name in self.rows else ""
             if "label=com.docker.compose.service=minio" in args:
-                return self.current
-            return "\n".join((self.current, "api", "helper"))
+                return listed(self.current)
+            return "\n".join(listed(name) for name in (self.current, "api", "helper") if name)
         if args[0] == "inspect":
-            return json.dumps([self.rows[name] for name in args[1:]])
+            return json.dumps([self.rows[name_for(identifier)] for identifier in args[1:]])
         if args[0] == "run":
             if "--rm" in args:
                 assert "readonly" in args[args.index("--mount") + 1]
@@ -301,13 +316,15 @@ class Deployment:
             self.rows.pop(args[1])
             return ""
         if args[0] == "stop":
-            self.events.append("stop:" + ",".join(args[3:]))
-            for name in args[3:]:
+            names = [name_for(identifier) for identifier in args[3:]]
+            self.events.append("stop:" + ",".join(names))
+            for name in names:
                 self.rows[name]["State"]["Running"] = False
             return ""
         if args[0] == "start":
-            self.events.append("start:" + ",".join(args[1:]))
-            for name in args[1:]:
+            names = [name_for(identifier) for identifier in args[1:]]
+            self.events.append("start:" + ",".join(names))
+            for name in names:
                 self.rows[name]["State"]["Running"] = True
             return ""
         raise AssertionError(args)
@@ -356,12 +373,16 @@ async def test_uncertain_activation_stays_fenced_and_retry_reuses_verified_copy(
 
 
 @pytest.mark.asyncio
-async def test_source_recovery_never_reexecutes_oneoff_effects(tmp_path, monkeypatch):
-    deployment = Deployment(monkeypatch, corrupt=True, oneoff=True)
-    with pytest.raises(ValueError, match="mismatch"):
-        await deployment.prepare(tmp_path)
+@pytest.mark.parametrize("corrupt", [False, True])
+async def test_source_recovery_never_reexecutes_oneoff_effects(tmp_path, monkeypatch, corrupt):
+    deployment = Deployment(monkeypatch, corrupt=corrupt, oneoff=True)
+    if corrupt:
+        with pytest.raises(ValueError, match="mismatch"):
+            await deployment.prepare(tmp_path)
+        assert deployment.rows["original"]["State"]["Running"]
+    else:
+        await deployment.prepare(tmp_path, selected=("minio",))
     assert not deployment.rows["api"]["State"]["Running"]
-    assert deployment.rows["original"]["State"]["Running"]
 
 
 @pytest.mark.asyncio
