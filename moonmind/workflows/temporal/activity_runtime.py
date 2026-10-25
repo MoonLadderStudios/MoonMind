@@ -1434,15 +1434,16 @@ def _temporal_snapshot_from_payload(
     )
 
 async def _verified_artifact_parent_scope(
-    *, info: Any, parent_workflow_id: str, parent_run_id: str,
+    *, info: Any, parent_workflow_id: str, parent_run_id: str | None,
     parent_temporal_run_id: str | None = None,
 ) -> str | None:
     """Delegate only to this exact Activity run's server-recorded parent.
 
     Retained AgentRun histories may carry provider-authored parent metadata.
     It cannot grant artifact access without independent Temporal ancestry.
+    Pass ``None`` when the server alone supplies the parent run identity.
     """
-    if info is None or not parent_workflow_id or not parent_run_id:
+    if info is None or not parent_workflow_id or parent_run_id == "":
         return None
     from temporalio.api.common.v1 import WorkflowExecution
     from temporalio.api.workflowservice.v1 import (
@@ -1487,7 +1488,10 @@ async def _verified_artifact_parent_scope(
                 return None
             if parent_temporal_run_id and record.parent_execution.run_id != parent_temporal_run_id:
                 return None
-            if record.parent_execution.run_id != parent_run_id:
+            if (
+                parent_run_id is not None
+                and record.parent_execution.run_id != parent_run_id
+            ):
                 # Branch turns retain a semantic Step Execution run ID. Even
                 # with the server UUID, prove the semantic link from this exact
                 # launch: retained inputs may contain provider-authored fields.
@@ -7736,7 +7740,18 @@ class TemporalAgentRuntimeActivities:
             activity_type="omnigent.prepare_child_execution_plan",
             kwargs=kwargs,
         )
-        return await omnigent_prepare_child_execution_plan_activity(payload)
+        parent_scope = await _verified_artifact_parent_scope(
+            info=temporal_activity.info(),
+            parent_workflow_id=str(payload.get("parentWorkflowId") or "").strip(),
+            parent_run_id=None,
+        )
+        if parent_scope is None:
+            raise TemporalArtifactAuthorizationError(
+                "Resolver parent artifact authority could not be verified"
+            )
+        return await omnigent_prepare_child_execution_plan_activity(
+            payload, admitted_principal=parent_scope
+        )
 
     async def omnigent_admit_scheduled_occurrence_plan(
         self, request: Any = None, /, **kwargs: Any
