@@ -26875,6 +26875,18 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             }
             if self._issue_search_capacity_retry_enabled:
                 terminal_outcomes[STATE_NO_COMMIT] = "succeeded"
+            if (
+                self._state in {STATE_FAILED, STATE_COMPLETED, STATE_NO_COMMIT}
+                and self._terminal_agent_result is not None
+                and self._terminal_agent_result.get("executionState")
+                in {"unknown", "delivery_unknown"}
+                and self._terminal_agent_result.get("objectiveOutcome") == "unknown"
+                and workflow.patched("run-typed-terminal-objective-v1")
+            ):
+                # Closing the workflow after an unavailable observation does
+                # not confirm the operation failed. Explicit workflow-level
+                # objective evidence below still takes precedence.
+                terminal_outcomes[self._state] = "unknown"
             incomplete_objective = (
                 self._incomplete_draft_objective_outcome()
                 if self._state == STATE_COMPLETED

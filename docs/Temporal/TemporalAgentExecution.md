@@ -170,12 +170,13 @@ agent callbacks, and auth-profile controls, see
 
 `AgentRunResult` preserves execution state, objective outcome, publication/output
 availability, original failure, retry disposition, and diagnostic references.
-Secondary reporting errors stay separate. Parent retry and terminal projections
-consume its compact `agentResult` envelope; display text never decides policy.
-The agent's task outcome stays separate from the workflow's goal settlement.
-Legacy snake/camel results decode at this boundary. A Temporal patch preserves
-older parent decisions, and the existing finish summary retains confirmed facts
-using run/Step execution order rather than observation time. Recovery manifests
+Secondary reporting errors stay separate. Explicit failure identity and retry
+disposition survive provider decoding, child cooldown, and parent retry selection;
+display text never decides policy. Unavailable observations without a state stay
+unknown, including in terminal memos when the workflow fails. The agent's task
+outcome stays separate from explicit workflow goal settlement. Legacy snake/camel
+results decode once. Temporal patches preserve older decisions; finish summaries
+retain facts using run/Step execution order rather than observation time. Recovery manifests
 carry the same failure facts without granting new restart authority.
 
 ---

@@ -1993,6 +1993,11 @@ describe('ProviderProfilesManager form controls', () => {
   it.each([
     ['observation_unavailable', 'Provider check unavailable'],
     ['auth_expired', 'Credentials expired'],
+    ['auth_revoked', 'Credentials revoked'],
+    ['auth_invalid', 'Credentials rejected'],
+    ['quota_wait', 'Waiting for provider quota'],
+    ['capacity_wait', 'Waiting for provider capacity'],
+    ['unsupported_selection', 'Unsupported selection'],
     ['ready', 'Ready'],
   ])('renders the structured readiness reason %s', (reason, label) => {
     renderProviderProfilesManager([{
@@ -2000,6 +2005,35 @@ describe('ProviderProfilesManager form controls', () => {
       readiness: { status: 'blocked', launch_ready: false, reason_code: reason, summary: 'Display text may vary', checks: [] },
     }]);
     expect(screen.getByText(`Provider status: ${label}`)).toBeTruthy();
+  });
+
+  it('refreshes observation, rejection, wait, and recovery reasons without changing launch authority', async () => {
+    const { queryClient } = renderProviderProfilesManagerWithQuery([profileWithReadiness]);
+    for (const [reason, label, ready] of [
+      ['observation_unavailable', 'Provider check unavailable', true],
+      ['auth_expired', 'Credentials expired', false],
+      ['auth_revoked', 'Credentials revoked', false],
+      ['quota_wait', 'Waiting for provider quota', true],
+      ['capacity_wait', 'Waiting for provider capacity', true],
+      ['ready', 'Ready', true],
+    ] as const) {
+      await act(async () => {
+        queryClient.setQueryData(PROVIDER_PROFILE_QUERY_KEY, [{
+          ...profileWithReadiness,
+          enabled: ready,
+          launch_ready: ready,
+          auth_state: ready ? 'connected' : 'validation_failed',
+          readiness: {
+            status: ready ? 'ready' : 'blocked', launch_ready: ready,
+            reason_code: reason, summary: 'A display message that does not control readiness', checks: [],
+          },
+        }]);
+      });
+      expect(await screen.findByText(`Provider status: ${label}`)).toBeTruthy();
+      expect(screen.getByText(`Readiness: ${ready ? 'Ready' : 'Blocked'}`)).toBeTruthy();
+    }
+    expect(screen.queryByText('Provider status: Credentials expired')).toBeNull();
+    expect(screen.queryByText('Provider status: Waiting for provider capacity')).toBeNull();
   });
 
   it('keeps capacity and readiness visible while credential internals sit in row Details', () => {

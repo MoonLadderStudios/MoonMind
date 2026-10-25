@@ -518,6 +518,7 @@ class ProfileSlotState:
     lease_granted_at: dict[str, str] = field(default_factory=dict)  # wf_id -> ISO ts
     lease_metadata: dict[str, dict[str, Any]] = field(default_factory=dict)
     cooldown_until: Optional[str] = None  # ISO timestamp string or None
+    cooldown_reason: str | None = None
     provider_id: Optional[str] = None
     credential_source: Optional[str] = None
     tags: list[str] = field(default_factory=list)
@@ -2115,6 +2116,11 @@ class MoonMindProviderProfileManagerWorkflow:
                 "cooldown_seconds", profile.cooldown_after_429_seconds
             )
             profile.cooldown_until = (now + timedelta(seconds=cooldown_seconds)).isoformat()
+            profile.cooldown_reason = (
+                "capacity_wait"
+                if failure_class in {"capacity", "provider_capacity"}
+                else "observation_unavailable"
+            )
             return
         if self._workflow_patch_enabled(SHARED_THROTTLE_OWNERSHIP_PATCH):
             self._report_scope_throttle(profile_id, profile, payload, now)
@@ -3035,6 +3041,22 @@ class MoonMindProviderProfileManagerWorkflow:
 
     # -- Queries ---------------------------------------------------------------
 
+    def _profile_readiness_snapshot(self, profile: ProfileSlotState) -> dict[str, Any]:
+        snapshot = profile.to_dict()
+        if (
+            profile.enabled
+            and profile.launch_ready
+            and profile.readiness_reason in {None, "ready"}
+        ):
+            scope = self._scopes.get(
+                profile.capacity_scope_ref or f"provider-profile:{profile.profile_id}"
+            )
+            if profile.cooldown_until:
+                snapshot["readiness_reason"] = profile.cooldown_reason or "quota_wait"
+            elif scope is not None and scope.cooldown_until:
+                snapshot["readiness_reason"] = "quota_wait"
+        return snapshot
+
     @workflow.query
     def get_state(self) -> dict[str, Any]:
         """Return current manager state for observability."""
@@ -3044,7 +3066,10 @@ class MoonMindProviderProfileManagerWorkflow:
             # caller that replaced a wedged run waits for this before
             # resubmitting, so no admission is decided against empty state.
             "startup_restored": self._startup_restored,
-            "profiles": {pid: p.to_dict() for pid, p in self._profiles.items()},
+            "profiles": {
+                pid: self._profile_readiness_snapshot(p)
+                for pid, p in self._profiles.items()
+            },
             "pending_requests": [
                 {
                     "requester_workflow_id": r.requester_workflow_id,
@@ -3539,6 +3564,7 @@ class MoonMindProviderProfileManagerWorkflow:
                 lease_granted_at=dict(lease_times_data.get(pid, {})),
                 lease_metadata=dict(lease_metadata_data.get(pid, {})),
                 cooldown_until=cooldowns_data.get(pid),
+                cooldown_reason=p.get("cooldown_reason"),
                 provider_id=p.get("provider_id"),
                 credential_source=restored_credential_source,
                 tags=p.get("tags") or [],
@@ -5812,8 +5838,10 @@ class MoonMindProviderProfileManagerWorkflow:
                         cooldown_dt = cooldown_dt.replace(tzinfo=timezone.utc)
                     if now >= cooldown_dt:
                         profile.cooldown_until = None
+                        profile.cooldown_reason = None
                 except (ValueError, TypeError):
                     profile.cooldown_until = None
+                    profile.cooldown_reason = None
         if workflow.patched(PROVIDER_CAPACITY_SCOPE_PATCH):
             self._clear_expired_scope_cooldowns(now)
             self._recover_scope_capacity(now)
@@ -6090,6 +6118,17 @@ class MoonMindProviderProfileManagerWorkflow:
                     "cooldown_after_429_seconds": state.cooldown_after_429_seconds,
                     "rate_limit_policy": state.rate_limit_policy,
                     "enabled": state.enabled,
+                    **(
+                        {
+                            "launch_ready": state.launch_ready,
+                            "readiness_reason": state.readiness_reason,
+                            "cooldown_reason": state.cooldown_reason,
+                        }
+                        if self._workflow_patch_enabled(
+                            "provider-profile-readiness-observations-v1"
+                        )
+                        else {}
+                    ),
                     "is_default": state.is_default,
                     "max_lease_duration_seconds": state.max_lease_duration_seconds,
                     "provider_id": state.provider_id,

@@ -4431,7 +4431,99 @@ async def test_provider_api_key_setup_transient_validation_error_preserves_profi
     assert profile_payload["disabled_reason"] is None
     assert profile_payload["secret_refs"] == {}
     assert profile_payload["env_template"] == {}
-    assert synced_runtimes == []
+    assert synced_runtimes == ["codex_cli"]
+    observation = profile_payload["command_behavior"]["auth_readiness"]
+    assert observation["observation"] == "unavailable"
+    assert observation["providerFailure"]["retryDisposition"] == "unknown"
+    assert profile_payload["readiness"]["reason_code"] == "observation_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_real_api_key_probe_reasons_reach_api_manager_and_recover(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+    from moonmind.workflows.temporal.workflows import provider_profile_manager as manager
+
+    profile_id = "typed-probe-" + uuid4().hex
+    raw_key = "sk-test-probe-credential"
+    phase = "ready"
+    monkeypatch.setattr(manager.workflow, "patched", lambda _: True)
+    owner = manager.MoonMindProviderProfileManagerWorkflow()
+    observed = []
+
+    async def sync(*, session, runtime_id):
+        row = await session.get(ManagedAgentProviderProfile, profile_id)
+        statuses = await _managed_secret_statuses_for_profiles(session=session, rows=[row])
+        # Real producer and payload compiler feed the real manager consumer.
+        owner._apply_profile_sync([_manager_profile_payload(row, managed_secret_statuses=statuses)])
+        observed.append(owner.get_state()["profiles"][profile_id])
+
+    def provider(request):
+        assert request.headers["authorization"] == f"Bearer {raw_key}"
+        if phase == "transport":
+            raise httpx.ConnectError("provider transport unavailable", request=request)
+        if phase in {"token_expired", "token_revoked"}:
+            return httpx.Response(401, json={"error": {"code": phase, "message": "display text may vary"}})
+        if phase == "unknown_auth_code":
+            return httpx.Response(401, json={"error": {"code": [], "message": "token_expired"}})
+        if phase == "quota":
+            return httpx.Response(429, json={"error": {"message": "ready"}})
+        if phase == "capacity":
+            return httpx.Response(503, json={"error": {"code": "model_at_capacity", "message": "credentials expired"}})
+        return httpx.Response(200, json={"data": []})
+
+    monkeypatch.setattr(provider_profiles_router, "sync_provider_profile_manager", sync)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as provider_client:
+        monkeypatch.setattr(provider_profiles_router, "_get_claude_manual_validation_client", lambda: provider_client)
+        async with db_base.async_session_maker() as session:
+            session.add(ManagedAgentProviderProfile(
+                profile_id=profile_id, runtime_id="codex_cli", provider_id="openai",
+                credential_source=ProviderCredentialSource.NONE,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                enabled=False, auth_state=ProviderProfileAuthState.NOT_CONFIGURED,
+            ))
+            await session.commit()
+        async with client_app as client:
+            for phase, status, reason, auth in (
+                ("ready", 200, "ready", "connected"),
+                ("transport", 502, "observation_unavailable", "connected"),
+                ("quota", 502, "quota_wait", "connected"),
+                ("capacity", 502, "capacity_wait", "connected"),
+                ("token_expired", 401, "auth_expired", "validation_failed"),
+                ("transport", 502, "auth_expired", "validation_failed"),
+                ("token_revoked", 401, "auth_revoked", "validation_failed"),
+                ("unknown_auth_code", 401, "auth_invalid", "validation_failed"),
+                ("ready", 200, "ready", "connected"),
+            ):
+                response = await client.post(
+                    f"/api/v1/provider-profiles/{profile_id}/credentials/api-key",
+                    json={"api_key": raw_key},
+                )
+                assert response.status_code == status, response.text
+                detail = await client.get(f"/api/v1/provider-profiles/{profile_id}")
+                listing = await client.get("/api/v1/provider-profiles", params={"runtime_id": "codex_cli"})
+                assert detail.status_code == listing.status_code == 200
+                payload = detail.json()
+                assert payload["readiness"]["reason_code"] == reason
+                assert payload["auth_state"] == auth
+                assert payload["enabled"] is (auth == "connected")
+                assert raw_key not in detail.text + listing.text
+                assert observed[-1]["readiness_reason"] == reason
+                assert observed[-1]["launch_ready"] is payload["launch_ready"]
+                assert observed[-1]["current_leases"] == []
+                listed = next(row for row in listing.json() if row["profile_id"] == profile_id)
+                assert listed["readiness"] == payload["readiness"]
+
+            # Passive unavailability must preserve an operator's disable choice.
+            disabled = await client.patch(f"/api/v1/provider-profiles/{profile_id}", json={"enabled": False})
+            assert disabled.status_code == 200
+            phase = "transport"
+            response = await client.post(f"/api/v1/provider-profiles/{profile_id}/credentials/api-key", json={"api_key": raw_key})
+            assert response.status_code == 502
+            payload = (await client.get(f"/api/v1/provider-profiles/{profile_id}")).json()
+            assert payload["disabled_reason"] == "user_disabled"
+            assert payload["enabled"] is payload["launch_ready"] is False
 
 
 @pytest.mark.asyncio
