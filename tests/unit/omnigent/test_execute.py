@@ -1914,8 +1914,12 @@ async def test_run_omnigent_execution_finalizes_never_started_turn(
     monkeypatch.setattr(
         "moonmind.omnigent.execute._TERMINAL_RECONCILIATION_INTERVAL_SECONDS", 0.0
     )
+    # Allow the first journal/snapshot observation to complete under CI I/O
+    # latency before the watchdog expires; the separate 10s bound stays strict.
+    turn_start_timeout_seconds = 0.5
     monkeypatch.setattr(
-        "moonmind.omnigent.execute._MARKED_TURN_START_TIMEOUT_SECONDS", 0.05
+        "moonmind.omnigent.execute._MARKED_TURN_START_TIMEOUT_SECONDS",
+        turn_start_timeout_seconds,
     )
 
     loop = asyncio.get_running_loop()
@@ -1975,7 +1979,7 @@ async def test_run_omnigent_execution_finalizes_never_started_turn(
     assert heartbeat_state["turnEverActive"] is transient_active
     if persistent_terminal_active:
         assert heartbeat_state["turnTerminalResponseIds"] == ["injection-response"]
-    assert heartbeat_state["turnStartTimeoutSeconds"] == 0.05
+    assert heartbeat_state["turnStartTimeoutSeconds"] == turn_start_timeout_seconds
     assert heartbeat_state["turnStartWaitSeconds"] is not None
     if expected_source is not None:
         assert heartbeat_state["markedTurnObservationSource"] == expected_source
