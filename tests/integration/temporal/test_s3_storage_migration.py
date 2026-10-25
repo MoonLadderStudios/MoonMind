@@ -3,23 +3,30 @@
 from __future__ import annotations
 
 import base64
-from datetime import UTC, datetime, timedelta
 import hashlib
 import os
+import sqlite3
 import threading
+from datetime import UTC, datetime, timedelta
+from urllib.parse import urlsplit
 from urllib.request import ProxyHandler, build_opener
 from uuid import uuid4
-from urllib.parse import urlsplit
 
-from botocore.exceptions import ClientError
 import httpx
 import pytest
+from botocore.exceptions import ClientError
 
 from api_service.db.models import TemporalArtifactRedactionLevel
-from moonmind.workflows.skills.storage_migration import qualify_store, s3_client, transfer_buckets
+from moonmind.workflows.skills.storage_migration import (
+    qualify_store,
+    s3_client,
+    transfer_buckets,
+)
 from moonmind.workflows.temporal.artifacts import (
-    S3TemporalArtifactStore, TemporalArtifactAuthorizationError,
-    TemporalArtifactRepository, TemporalArtifactService,
+    S3TemporalArtifactStore,
+    TemporalArtifactAuthorizationError,
+    TemporalArtifactRepository,
+    TemporalArtifactService,
 )
 from tests.integration.temporal.test_temporal_artifact_lifecycle import _db
 
@@ -128,6 +135,81 @@ def test_transfer_resumes_uncertain_upload_and_refuses_corrupt_copy(stores, tmp_
     with pytest.raises(ValueError, match="mismatch"):
         transfer_buckets(source, destination, state, buckets=[bucket])
     assert old.read_bytes("history") == b"historical bytes"
+
+
+def test_partial_batch_checkpoints_survive_a_new_transfer_process(
+    stores, tmp_path, monkeypatch
+):
+    (source, destination), bucket, _, _ = stores
+    for index in range(32):
+        source.put_object(
+            Bucket=bucket,
+            Key=f"saved-{index:03}",
+            Body=f"confirmed-{index}".encode(),
+            ContentType="text/plain",
+            Metadata={"use": "saved-work"},
+            Tagging="retained=true",
+        )
+    get = source.get_object
+
+    def interrupted_get(**kwargs):
+        if kwargs["Key"] == "saved-000":
+            raise TimeoutError("interrupted object read")
+        return get(**kwargs)
+
+    monkeypatch.setattr(source, "get_object", interrupted_get)
+    state = tmp_path / "partial.sqlite"
+    with pytest.raises(TimeoutError, match="resume the retained receipt"):
+        transfer_buckets(source, destination, state, buckets=[bucket])
+    with sqlite3.connect(state) as db:
+        verified = {row[0] for row in db.execute("SELECT key FROM objects")}
+    assert verified and "saved-000" not in verified
+    # New clients and a reopened receipt exercise recovery without in-memory
+    # state. Previously hashed objects must use fresh HEAD/tag observations.
+    access = os.environ.get("TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID", "minioadmin")
+    secret = os.environ.get("TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY", "minioadmin")
+    fresh = [
+        s3_client(client.meta.endpoint_url, access, secret)
+        for client in (source, destination)
+    ]
+    for client in fresh:
+        original = client.get_object
+
+        def only_unverified(*, original=original, **kwargs):
+            assert (
+                kwargs["Key"] not in verified
+            ), "recovery downloaded already verified bytes"
+            return original(**kwargs)
+
+        monkeypatch.setattr(client, "get_object", only_unverified)
+    receipt = transfer_buckets(*fresh, state, buckets=[bucket])
+    assert receipt["verifiedObjects"] == 32
+    assert receipt["reusedObjects"] == len(verified)
+    for index in range(32):
+        assert (
+            destination.get_object(Bucket=bucket, Key=f"saved-{index:03}")[
+                "Body"
+            ].read()
+            == f"confirmed-{index}".encode()
+        )
+
+
+def test_retry_refuses_tag_mutation_with_unchanged_object_etag(stores, tmp_path):
+    (source, destination), bucket, _, _ = stores
+    source.put_object(
+        Bucket=bucket, Key="saved", Body=b"confirmed work", Tagging="retained=true"
+    )
+    state = tmp_path / "tags.sqlite"
+    transfer_buckets(source, destination, state, buckets=[bucket])
+    before = destination.head_object(Bucket=bucket, Key="saved")["ETag"]
+    destination.put_object_tagging(
+        Bucket=bucket,
+        Key="saved",
+        Tagging={"TagSet": [{"Key": "retained", "Value": "false"}]},
+    )
+    assert destination.head_object(Bucket=bucket, Key="saved")["ETag"] == before
+    with pytest.raises(ValueError, match="metadata mismatch"):
+        transfer_buckets(source, destination, state, buckets=[bucket])
 
 
 def test_unfinished_multipart_is_preserved_until_completed(stores, tmp_path):

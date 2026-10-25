@@ -146,34 +146,36 @@ and custom bases retain authority. Routine updates avoid teardown, forced
 recreation and pruning; proxy services remain outside the main pass.
 
 **Artifact storage cutover.** Silo defaults to `latest`, honoring
-`TEMPORAL_ARTIFACT_S3_IMAGE`. Before recreation, the controller's
-`--omnigent-storage-prepare` one-off detects a changed `/data` volume. It stops
-API/worker writers and sweepers, including project one-offs, then stops the
-public source server. The same source image opens its original volume on a
-private endpoint, without its public ports or DNS aliases. This fences direct
-presigned writes as well as application writes. Incomplete source multipart
-uploads refuse cutover and remain resumable on the source.
+`TEMPORAL_ARTIFACT_S3_IMAGE`. On a changed `/data` volume, storage preparation
+stops API/worker writers, sweepers, project one-offs and the public source.
+The source image opens its retained volume privately, fencing application and
+presigned writes. Incomplete multipart uploads refuse cutover and remain resumable.
 
-S3 copying into separate `artifact-data` retains keys, consumer metadata and
-bucket policies/CORS/lifecycle settings. Private `deploy/state/storage-transfers/`
-receipts save source image/mount provenance, consumer stop intent, private server
-identities and per-object progress. Intent precedes Docker calls so retry
-reconciles lost acknowledgements and recovers consumers after activation;
-one-offs stay stopped. Bounded retries verify copied bytes. Inventories, streamed
-SHA-256 checks and read/write/multipart/presigned probes precede activation.
-Mismatches or missing observations refuse activation; source objects and
-`minio-data` remain recoverable. Versioned/locked buckets and nonstandard mounts
-require a separately qualified transfer. Restore custom IAM to the protected
-destination before retrying denied application credentials; qualification never
+Copying to `artifact-data` preserves keys, metadata, tags and bucket
+policies/CORS/lifecycle settings. Sixteen concurrent object transfers share a
+four-hour budget; the controller allows fifteen additional minutes for
+isolation, qualification and recovery. Host observation follows each copy
+attempt. Other helpers keep their budgets. An older controller hands off
+before fencing clients.
+
+Private `deploy/state/storage-transfers/` receipts retain provenance, stop
+intent, private server identities and SHA-256 verifications. Successful peers
+checkpoint even when a transfer fails; diagnostics include verified counts and
+bytes. Retry reuses bytes only after both stores' ETag, last-modified time,
+size, metadata and tags match their recorded observations. Older receipts or
+incomplete identities require fresh hashing. Inventories and
+read/write/multipart/presigned probes precede activation. Mismatches refuse
+activation; source objects and `minio-data` remain recoverable.
+
+The installed controller's helper also copies new objects back before handing
+rollback to an older controller. Neither direction prunes retained bytes.
+Intent precedes Docker calls; recovery reconciles lost acknowledgements and
+resumes consumers, leaving one-offs stopped. Preserve volumes and receipts
+until installed-inventory completeness, operator-path reads/writes and rollback
+are verified. Use this transition instead of unchecked image/mount replacement.
+Versioned/locked buckets and nonstandard mounts need separate qualification.
+Restore custom IAM before retrying denied credentials; qualification never
 escalates privilege.
-
-A rollback follows the same fenced, verified procedure in reverse, copying new
-objects back before an older controller takes over. Neither direction prunes
-extra retained bytes. Preserve both volumes and receipts until completeness,
-operator-path reads/writes and rollback are verified for the installed inventory.
-Repository qualification does not retire deployment data. Existing deployments
-must use this controller transition rather than replacing the storage image or
-running an unchecked `compose up` over a changed data mount.
 
 Dependency and `init-db`/schema gates precede dependent services. Failed migration preserves errors and data. Legacy conversion scans distinct principals and skips artifact hashing once unreadable evidence requires refusal, preserving access guards without Python row processing over retained history. Old Manifest releases use the [retirement upgrade procedure](../Temporal/WorkflowTypeCatalogAndLifecycle.md#112-moonmindmanifestingest-lifecycle-retired).
 

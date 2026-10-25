@@ -331,11 +331,25 @@ async def controller_storage_cli(phase, payload):
     """The controller holds stack ownership while this bounded one-off copies."""
     import sys
 
-    from moonmind.workflows.skills.storage_migration import prepare_compose_storage
     from moonmind.workflows.skills.omnigent_release import _deployment_lock
+    from moonmind.workflows.skills.storage_migration import prepare_compose_storage
 
     if phase not in ("storage-prepare", "storage-observe"):
         raise ValueError("Unknown storage transition phase")
+    if phase == "storage-prepare" and "storage-transfer-budget" not in (
+        payload.get("controllerCapabilities") or ()
+    ):
+        # The installed controller may still kill one-offs after 15 minutes.
+        # Upgrade its existing owner before fencing clients, not after copying.
+        handoff = await asyncio.to_thread(hand_off_controller, payload)
+        if handoff.get("status") == "handed-off":
+            raise RuntimeError(
+                "Handed storage preparation to the requested release's controller, which resumes it"
+            )
+        raise RuntimeError(
+            "The controller cannot provide the storage transfer budget; "
+            f"controller handoff did not complete: {handoff.get('reason') or handoff.get('status')}"
+        )
     payload = {
         **payload,
         "moonmindImage": payload.get("resolvedMoonmindImage")
