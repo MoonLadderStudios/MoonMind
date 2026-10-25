@@ -180,7 +180,7 @@ def _copy_object(source, destination, bucket, key, expected_size, saved, deadlin
                 head, _attributes(destination, bucket, key, head)
             )
             if (source_state, destination_state) == saved[2:]:
-                return (*saved, True)
+                return saved[0], saved[1], saved[2], saved[3], True
     response = source.get_object(Bucket=bucket, Key=key)
     # Close the response even if reading its tags fails before hashing starts.
     with closing(response["Body"]), tempfile.SpooledTemporaryFile(
