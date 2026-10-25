@@ -4291,6 +4291,8 @@ async def test_after_execution_finalization_failure_preserves_primary_outcome(
     step = workflow.get_step_ledger()["steps"][0]
     assert step["executionOutcome"] == {
         "status": "succeeded",
+        "agentResult": None,
+        "resultOrder": None,
         "resultRef": "artifact://result",
         "outputRefs": [
             "artifact://result",
