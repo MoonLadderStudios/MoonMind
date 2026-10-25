@@ -51,8 +51,13 @@ stack (`restart: unless-stopped`). This is the default always-on footprint.
 | `temporal-worker-deployment-control` | none | Deployment-control worker |
 | `temporal-worker-integrations` | none | External-integrations worker |
 | `omnigent` | `8000:8000` (via `OMNIGENT_PORT`) | Omnigent server and UI |
-| `docker-proxy` | none | Restricted system-Docker access for trusted MoonMind backend execution; never exposed to managed sessions or Omnigent runners |
+| `docker-proxy` | none | Restricted system-Docker access for trusted MoonMind backend execution; upstream renders the mounted `haproxy.cfg.template` into `/tmp/haproxy.cfg`, retaining 75-minute exec/attach transport timeouts; never exposed to managed sessions or Omnigent runners |
 | `sandbox-egress-proxy` | none | Sandbox egress proxy boundary |
+
+On a disposable Docker/Compose host, `python3 tools/test_docker_proxy.py` checks
+the effective proxy configuration, real API allow/deny and streaming behavior,
+shortened idle timeouts, and controller repair using only `moonmind-test-*`
+resources. The hermetic CI lane runs it before the broader integration suite.
 
 ## Init and one-shot dependencies
 
