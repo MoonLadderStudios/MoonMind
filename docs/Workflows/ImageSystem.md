@@ -15,7 +15,7 @@ The system exists to let users:
 - store uploaded bytes securely in the Artifact Store
 - submit lightweight artifact references into `MoonMind.UserWorkflow`
 - preserve attachment targeting through create, edit, and rerun flows
-- generate deterministic image-derived context for text-first runtimes
+- prepare target-aware attachment references for runtimes
 - materialize raw image bytes into the workspace when a runtime or step requires direct file access
 - preview and download workflow images through MoonMind-owned APIs
 
@@ -81,7 +81,7 @@ interface AttachmentManifestEntry {
   stepRef?: string;
   stepOrdinal?: number;
   workspacePath: string;
-  visionContextPath?: string;
+  derivedContextRef?: string;
   sourceArtifactPath?: string;
 }
 ```
@@ -104,7 +104,6 @@ sequenceDiagram
     participant E as Executions API
     participant W as MoonMind.UserWorkflow
     participant P as Prepare / Artifact Activities
-    participant V as Vision Activity
     participant R as Runtime Step Executor
 
     U->>C: Select or drag images onto objective target or step target
@@ -116,8 +115,6 @@ sequenceDiagram
     E->>W: Start or update MoonMind.UserWorkflow with refs
     W->>P: Download and materialize image inputs
     P->>P: Write attachments manifest
-    W->>V: Generate target-aware image context
-    V->>P: Write context artifacts
     W->>R: Execute planning or step runtime with attachment context
 ```
 
@@ -126,7 +123,7 @@ Rules:
 - upload completes before create, update, or rerun submission is accepted
 - the execution API persists the authoritative snapshot of attachment targeting
 - workflow prepare is responsible for deterministic local materialization and manifest generation
-- runtime adapters consume structured refs and derived context, not browser-local state
+- runtime adapters consume structured refs and prepared attachment context, not browser-local state
 
 ---
 
@@ -305,31 +302,20 @@ Rules:
 
 ---
 
-## 9. Vision context generation contract
+## 9. Prepared attachment context
 
-Image-derived text context is generated as a deterministic secondary artifact.
+`PreparedInputManifest` preserves source artifact refs, metadata, workspace paths
+and objective/step targets. Its `derivedContextRef` identifies prepared target
+metadata; it does not establish that image captioning or OCR ran. Synthetic
+`prepared-context://` refs are carried in
+`parameters.metadata.moonmind.preparedContext`; they are not stored artifacts
+to fetch or prompt content to inject.
 
-Rules:
-
-- context generation is target-aware
-- context generation may be enabled or disabled by runtime configuration
-- when disabled, manifest generation and raw file materialization still occur
-- generated text must remain traceable back to the source image artifact refs
-
-Desired-state output paths:
-
-```text
-.moonmind/vision/task/image_context.md
-.moonmind/vision/steps/<stepRef>/image_context.md
-.moonmind/vision/image_context_index.json
-```
-
-Rules:
-
-- objective-scoped images produce objective-scoped context
-- step-scoped images produce step-scoped context
-- the index artifact summarizes what context exists for which target
-- generated context may include OCR, captions, and security or policy notes, but must remain deterministic and auditable for a given source image set and model configuration
+`WorkspaceArtifactProjector.project_attachments` reads admitted artifact bytes
+under the workflow's authority and reconciles them into the runtime workspace.
+Source images and their target bindings remain authoritative. Attachment
+preparation has no separate vision-provider configuration and does not generate
+automatic captions, OCR text or a `.moonmind/vision/` output tree.
 
 ---
 
@@ -337,15 +323,19 @@ Rules:
 
 ### 10.1 Text-first runtimes
 
-Text-first runtimes consume image context through an injected `INPUT ATTACHMENTS` block.
+Runtime artifact inputs use raw `artifact://` refs and authorized files
+materialized into the workspace. Prompt formatting belongs to the runtime
+adapter.
 
 Rules:
 
-- the `INPUT ATTACHMENTS` block appears before `WORKSPACE`
-- the block references:
-  - relevant workspace paths
-  - relevant manifest entries
-  - relevant generated context paths
+- external adapter `inputRefs` contain raw source artifact refs, not synthetic
+  prepared-context refs
+- prepared target bindings remain in
+  `parameters.metadata.moonmind.preparedContext`; adapters do not inject its
+  synthetic refs into the user prompt or resolve them as context artifacts
+- managed workspace projection reads authorized source bytes and exposes the
+  materialized files to the runtime
 - step execution receives only:
   - objective-scoped attachment context
   - the current step’s attachment context
@@ -460,13 +450,10 @@ Recommended event classes:
 - prepare download started
 - prepare download completed
 - prepare download failed
-- image context generation started
-- image context generation completed
-- image context generation failed
 
 Rules:
 
-- attachment manifest path and generated context paths should be discoverable from workflow diagnostics
+- attachment manifest paths and prepared context refs should be discoverable from workflow diagnostics
 - workflow detail and debugging surfaces should expose target-aware attachment metadata
 - step-level failures must identify the affected step target
 
@@ -492,7 +479,7 @@ The desired-state image system is simple in principle:
 1. the Create page binds images to an explicit target
 2. MoonMind stores those images as artifacts
 3. the execution API preserves the binding in the execution payload and authoritative snapshot
-4. workflow prepare materializes the files and generates target-aware image context
+4. workflow prepare materializes the files and preserves target-aware attachment context
 5. runtimes consume only the context that belongs to the objective or step they are executing
 
 That is the canonical contract.
