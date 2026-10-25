@@ -733,7 +733,7 @@ def test_parent_run_scope_uses_workflow_identity_across_attempts(
     )
     monkeypatch.setenv(workflow_env, "mm:first-parent")
     for attempt in ("first-attempt", "replacement-attempt"):
-        monkeypatch.setenv("MOONMIND_TASK_RUN_ID", attempt)
+        monkeypatch.setenv("MOONMIND_RUN_ID", attempt)
         assert module["_parent_run_scope"]() == "mm:first-parent"
     monkeypatch.setenv(workflow_env, "mm:second-parent")
     assert module["_parent_run_scope"]() == "mm:second-parent"
@@ -747,9 +747,7 @@ def test_parent_run_scope_does_not_invent_scope_for_absent_context(
         "MOONMIND_TASK_WORKFLOW_ID",
         "MOONMIND_WORKFLOW_ID",
         "TEMPORAL_WORKFLOW_ID",
-        "MOONMIND_TASK_RUN_ID",
         "MOONMIND_RUN_ID",
-        "TASK_RUN_ID",
         "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH",
         "MOONMIND_TASK_CONTEXT_PATH",
         "TASK_CONTEXT_PATH",
