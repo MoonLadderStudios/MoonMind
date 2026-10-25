@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -11,7 +12,7 @@ from urllib.parse import quote
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from api_service.api.routers import agent_runs as agent_runs_router
@@ -19,6 +20,7 @@ from api_service.api.routers.agent_runs import router
 from api_service.api.routers.temporal_artifacts import _get_temporal_artifact_service
 from api_service.auth_providers import get_instance_access
 from api_service.db import models as db_models
+from moonmind.observability.transport import SpoolLogPublisher
 from moonmind.schemas.agent_runtime_models import (
     ObservabilityEventKind,
     RunObservabilityEvent,
@@ -2478,6 +2480,108 @@ def test_stream_agent_run_live_logs_returns_gone_for_terminal_run(
 
     assert response.status_code == 410
     assert response.json()["detail"] == "Run is no longer active. Use artifact retrieval APIs."
+
+
+def test_stream_agent_run_live_logs_disconnect_stops_spool_reader(
+    client: tuple[TestClient, AsyncMock],
+    monkeypatch,
+    tmp_path,
+) -> None:
+    test_client, _ = client
+    run_id = str(uuid4())
+    record = SimpleNamespace(
+        workflow_id="mm:logs",
+        status="running",
+        live_stream_capable=True,
+        workspace_path=str(tmp_path),
+    )
+    publisher = SpoolLogPublisher(str(tmp_path))
+    for sequence in (1, 2):
+        publisher.publish(
+            RunObservabilityEvent(
+                runId=run_id,
+                sequence=sequence,
+                stream="stdout",
+                text=f"line {sequence}",
+                timestamp="2026-04-08T00:00:01Z",
+                kind="stdout_chunk",
+            )
+        )
+    stopped = []
+    original_stop = agent_runs_router.SpoolLogReader.stop
+
+    def stop(reader):
+        stopped.append(reader)
+        original_stop(reader)
+
+    monkeypatch.setattr(agent_runs_router.SpoolLogReader, "stop", stop)
+    monkeypatch.setattr(Request, "is_disconnected", AsyncMock(side_effect=[False, True]))
+    monkeypatch.setattr(
+        agent_runs_router, "_get_agent_runtime_store_root", lambda: tmp_path
+    )
+    monkeypatch.setattr(
+        agent_runs_router, "_load_managed_run_record", AsyncMock(return_value=record)
+    )
+
+    response = test_client.get(f"/api/agent-runs/{run_id}/logs/stream?since=0")
+
+    assert response.status_code == 200
+    assert '"text":"line 1"' in response.text
+    assert '"text":"line 2"' not in response.text
+    assert len(stopped) == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_agent_run_live_logs_cancellation_stops_idle_spool_reader(
+    test_user, monkeypatch, tmp_path,
+) -> None:
+    record = SimpleNamespace(
+        workflow_id="mm:logs",
+        status="running",
+        live_stream_capable=True,
+        workspace_path=str(tmp_path),
+    )
+    following = asyncio.Event()
+    stopped = []
+    original_follow = agent_runs_router.SpoolLogReader.follow
+    original_stop = agent_runs_router.SpoolLogReader.stop
+
+    async def follow(reader, **kwargs):
+        following.set()
+        async for chunk in original_follow(reader, **kwargs):
+            yield chunk
+
+    def stop(reader):
+        stopped.append(reader)
+        original_stop(reader)
+
+    monkeypatch.setattr(agent_runs_router.SpoolLogReader, "follow", follow)
+    monkeypatch.setattr(agent_runs_router.SpoolLogReader, "stop", stop)
+    monkeypatch.setattr(
+        agent_runs_router, "_get_agent_runtime_store_root", lambda: tmp_path
+    )
+    monkeypatch.setattr(
+        agent_runs_router, "_load_managed_run_record", AsyncMock(return_value=record)
+    )
+    response = await agent_runs_router.stream_agent_run_live_logs(
+        id=str(uuid4()),
+        request=Request({"type": "http"}),
+        since=0,
+        _user=test_user,
+    )
+    consuming = asyncio.create_task(response.body_iterator.__anext__())
+    try:
+        await asyncio.wait_for(following.wait(), timeout=1)
+        consuming.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await consuming
+    finally:
+        consuming.cancel()
+        await asyncio.gather(consuming, return_exceptions=True)
+        await response.body_iterator.aclose()
+
+    assert len(stopped) == 1
+
 
 def test_stream_agent_run_live_logs_ignores_metrics_emitter_failures(
     client: tuple[TestClient, AsyncMock],
