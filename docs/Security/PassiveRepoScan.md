@@ -13,6 +13,9 @@
 > not a security platform, scanner runtime, or replacement for core
 > reliability work.
 
+The broader proposed assessment program and tool recommendations are described
+in [Security Tools and Assessment Workflows](SecurityTools.md).
+
 ## Scanner selection
 
 One maintained scanner for one declared input class with a useful
@@ -46,7 +49,7 @@ findings model, no feed service, and no assessment-target network access.
   operator never hand-authors a JSON workload. The command waits durably and
   prints the terminal job state plus the collected logs and artifacts
   references for the retained native report and summary.
-- **Input:** an immutable authorized snapshot directory (declared input class:
+- **Input:** an authorized snapshot directory (declared input class:
   UTF-8 text files). The default snapshot is the mounted workspace root
   (`.` with `workdir: /workspace`): the container-job path mounts the
   authorized repository directly at `/workspace`. A snapshot path that is
@@ -61,9 +64,11 @@ findings model, no feed service, and no assessment-target network access.
   bounded CPU/memory/PIDs/timeout, and two declared outputs
   (`artifacts/passive-scan-report.json`,
   `artifacts/passive-scan-summary.md`). The workspace mount stays writable
-  so the declared outputs are collectable; the snapshot itself is read-only
-  by construction (the scan performs no writes to snapshot paths -- only the
-  two declared outputs are written). Workspace and correlation identity are
+  so the declared outputs are collectable. The scanner avoids source writes
+  and writes only the two declared outputs; this is implementation discipline,
+  not an operating-system-enforced read-only source mount. The broader
+  security-tools design separates protected inputs from writable outputs.
+  Workspace and correlation identity are
   stamped by the existing `container_job_submission` path; the entrypoint is
   `python -m moonmind.security.passive_repo_scan`. File enumeration is
   incremental and stops as soon as the `max_files` bound is exceeded.
@@ -100,7 +105,8 @@ findings model, no feed service, and no assessment-target network access.
 
 ## Limitations
 
-Deterministic regex shapes only; no dependency/inventory analysis, no
-network-active assessment, no live-target qualification, no production scans
-or external uploads under this issue. Missing dependencies produce a clear
+Deterministic regex shapes only; this job does not provide dependency/inventory,
+live-cloud, or network-active application assessment. It performs no external
+uploads. Missing dependencies produce a clear
 `incomplete`/unsupported result rather than widened authority.
+
