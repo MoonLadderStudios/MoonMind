@@ -3855,6 +3855,7 @@ class MoonMindAgentRun:
                     "retry_recommendation": None,
                     "failure_id": None,
                     "provider_failure": None,
+                    "execution_state": result.execution_state,
                     "objective_outcome": "unknown",
                     "retry_disposition": "wait",
                     "metadata": metadata,

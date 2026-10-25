@@ -173,8 +173,9 @@ availability, original failure, retry disposition, and diagnostic references.
 Secondary reporting errors stay separate. Publication failures refresh objective,
 failure identity, and retry facts while preserving completed execution and outputs;
 these facts survive decoding, child cooldown, and parent retry selection. Display
-text never decides policy. Unavailable observations without a state stay
-unknown, including in terminal memos when the workflow fails. The agent's task
+text never decides policy. Accepted durable handoffs retain the runtime's execution
+state with an unknown objective and a wait disposition. Unavailable observations
+without a state stay unknown, including in terminal memos when the workflow fails. The agent's task
 outcome stays separate from explicit workflow goal settlement. Legacy snake/camel
 results decode once. Temporal patches preserve older decisions; finish summaries
 retain facts using run/Step execution order rather than observation time. Recovery manifests
