@@ -29,6 +29,7 @@ def _write_workflow(root: Path, filename: str, display_name: str) -> Path:
 def test_current_workflows_have_stable_names() -> None:
     expected_names = {
         "alembic-migration-gate.yml": "CI / Alembic Migration Gate",
+        "app-image-qualification.yml": "CI / Supplied App Image Qualification",
         "codex-conformance-canary.yml": "Provider / Codex Conformance Canary",
         "docker-publish.yml": "Release / Build App Image",
         "docker-publish-moonmind-host.yml": "Release / Build omnigent-host-moonmind Image",
