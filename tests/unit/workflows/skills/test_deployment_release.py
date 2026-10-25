@@ -1,5 +1,6 @@
 import hashlib
 import json
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -1164,3 +1165,79 @@ async def test_controller_without_routing_cutover_is_refused_before_selection(
     with pytest.raises(RuntimeError, match="unversioned-routing-cutover") as failure:
         await release.run_controller_omnigent_step("select", request)
     assert "active-journal-transition" not in str(failure.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["handed-off", "unavailable", "current"])
+async def test_storage_copy_upgrades_an_owner_with_the_old_command_budget(
+    monkeypatch, status
+):
+    handoffs = []
+
+    def handoff(payload):
+        handoffs.append(payload["operationId"])
+        return {"status": status, "reason": "test handoff outcome"}
+
+    def no_copy(payload):
+        pytest.fail("An old controller reached the storage copy")
+
+    monkeypatch.setattr(release, "hand_off_controller", handoff)
+    monkeypatch.setattr(release, "controller_release_runner", no_copy)
+    with pytest.raises(RuntimeError, match="controller"):
+        await release.controller_storage_cli(
+            "storage-prepare",
+            {
+                "operationId": "old-storage-owner",
+                "moonmindImage": "candidate",
+                "controllerCapabilities": ["controller-handoff"],
+            },
+        )
+    assert handoffs == ["old-storage-owner"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["storage-prepare", "storage-observe"])
+async def test_storage_cli_uses_the_capable_owner_and_resolved_image(
+    tmp_path, monkeypatch, capsys, phase
+):
+    from moonmind.workflows.skills import omnigent_release, storage_migration
+
+    @asynccontextmanager
+    async def lock():
+        yield
+
+    def no_handoff(payload):
+        pytest.fail("A capable storage owner tried to hand off again")
+
+    runner = object()
+
+    def make_runner(payload):
+        assert payload["moonmindImage"] == "resolved-release"
+        return runner
+
+    async def prepare(actual_runner, docker, payload, directory, *, observe_only):
+        assert actual_runner is runner and docker is release.docker
+        assert directory == tmp_path / "storage-transfers"
+        assert observe_only == (phase == "storage-observe")
+        return {"status": "prepared", "verifiedObjects": 3}
+
+    monkeypatch.setattr(omnigent_release, "_deployment_lock", lock)
+    monkeypatch.setattr(storage_migration, "prepare_compose_storage", prepare)
+    monkeypatch.setattr(release, "state_root", lambda: tmp_path / "release-jobs")
+    monkeypatch.setattr(release, "controller_release_runner", make_runner)
+    monkeypatch.setattr(release, "hand_off_controller", no_handoff)
+    assert (
+        await release.controller_storage_cli(
+            phase,
+            {
+                "operationId": "capable-storage-owner",
+                "moonmindImage": "submitted-latest",
+                "resolvedMoonmindImage": "resolved-release",
+                "controllerCapabilities": (
+                    ["storage-transfer-budget"] if phase == "storage-prepare" else []
+                ),
+            },
+        )
+        == 0
+    )
+    assert '"verifiedObjects": 3' in capsys.readouterr().err

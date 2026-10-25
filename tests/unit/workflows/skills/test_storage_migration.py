@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
+import sqlite3
+import threading
 from copy import deepcopy
+from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 from botocore.exceptions import ClientError
@@ -14,6 +19,7 @@ class Store:
         self.objects = objects or {}
         self.uploads = []
         self.puts = []
+        self.reads = []
         self.interrupt = False
 
     def list_buckets(self):
@@ -51,9 +57,15 @@ class Store:
         if Key not in self.objects:
             raise ClientError({"Error": {"Code": "NoSuchKey"}}, "HeadObject")
         obj = self.objects[Key]
-        return {**deepcopy(obj), "ContentLength": len(obj["Body"]), "ETag": '"opaque"'}
+        return {
+            **deepcopy(obj),
+            "ContentLength": len(obj["Body"]),
+            "ETag": hashlib.sha256(obj["Body"]).hexdigest(),
+            "LastModified": obj.get("LastModified", datetime(2026, 10, 25, tzinfo=UTC)),
+        }
 
     def get_object(self, *, Key, **kwargs):
+        self.reads.append(Key)
         return {**self.head_object(Key=Key), "Body": io.BytesIO(self.objects[Key]["Body"])}
 
     def get_object_tagging(self, *, Key, **kwargs):
@@ -117,6 +129,197 @@ def test_completed_copy_is_reverified_on_retry(tmp_path):
         transfer(source, destination, state)
 
 
+def test_retry_reuses_verified_bytes_after_checking_both_object_identities(tmp_path):
+    source = Store({"saved": {"Body": b"confirmed saved work"}})
+    destination = Store()
+    state = tmp_path / "copy.sqlite"
+    transfer(source, destination, state)
+    source.reads.clear()
+    destination.reads.clear()
+    source.objects["next"] = {"Body": b"next object"}
+    receipt = transfer(source, destination, state)
+    assert receipt["verifiedObjects"] == 2
+    assert receipt["reusedObjects"] == 1
+    assert source.reads == destination.reads == ["next"]
+    assert destination.puts == ["saved", "next"]
+
+
+def test_bounded_attempts_advance_instead_of_rehashing_the_same_prefix(
+    tmp_path, monkeypatch
+):
+    from moonmind.workflows.skills import storage_migration as migration
+
+    clock = SimpleNamespace(value=0)
+    lock = threading.Lock()
+    monkeypatch.setattr(
+        migration, "time", SimpleNamespace(monotonic=lambda: clock.value)
+    )
+    source = Store({f"key-{i:03}": {"Body": b"saved"} for i in range(64)})
+    destination = Store()
+    for store in (source, destination):
+        get = store.get_object
+
+        def metered_get(*, get=get, **kwargs):
+            with lock:
+                clock.value += 1
+            return get(**kwargs)
+
+        monkeypatch.setattr(store, "get_object", metered_get)
+    state = tmp_path / "copy.sqlite"
+    previous = 0
+    for attempt in range(8):
+        clock.value = 0
+        try:
+            receipt = transfer(source, destination, state, timeout_seconds=96)
+        except TimeoutError as error:
+            assert "resume the retained receipt" in str(error)
+            with sqlite3.connect(state) as db:
+                verified = db.execute("SELECT count(*) FROM objects").fetchone()[0]
+            assert verified > previous, "retry spent its budget repeating verified work"
+            previous = verified
+        else:
+            assert attempt > 0
+            assert receipt["verifiedObjects"] == 64
+            assert receipt["reusedObjects"] > 0
+            break
+    else:
+        pytest.fail("bounded retries did not finish the transfer")
+    assert {key: obj["Body"] for key, obj in destination.objects.items()} == {
+        key: obj["Body"] for key, obj in source.objects.items()
+    }
+    assert sorted(destination.puts) == sorted(source.objects)
+
+
+def test_object_copy_overlaps_network_waits_with_bounded_concurrency(
+    tmp_path, monkeypatch
+):
+    source = Store({str(i): {"Body": b"saved"} for i in range(8)})
+    destination = Store()
+    get = source.get_object
+    barrier = threading.Barrier(4)
+    lock = threading.Lock()
+    active = peak = 0
+
+    def concurrent_get(**kwargs):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            barrier.wait(timeout=3)
+            return get(**kwargs)
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(source, "get_object", concurrent_get)
+    assert (
+        transfer(source, destination, tmp_path / "copy.sqlite")["verifiedObjects"] == 8
+    )
+    assert 4 <= peak <= 8
+
+
+@pytest.mark.parametrize("side", ["source", "destination"])
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"Body": b"changed bytes"},
+        {"Metadata": {"owner": "changed"}},
+        {"TagSet": [{"Key": "use", "Value": "changed"}]},
+        {"ContentType": "application/json"},
+    ],
+)
+def test_retry_does_not_trust_receipt_after_content_or_metadata_changes(
+    tmp_path, side, change
+):
+    source = Store({"saved": {"Body": b"confirmed saved work"}})
+    destination = Store()
+    state = tmp_path / "copy.sqlite"
+    transfer(source, destination, state)
+    (source if side == "source" else destination).objects["saved"].update(change)
+    puts = list(destination.puts)
+    with pytest.raises(ValueError, match="mismatch"):
+        transfer(source, destination, state)
+    assert destination.puts == puts
+
+
+@pytest.mark.parametrize("field", ["ETag", "LastModified", "ContentLength"])
+def test_retry_without_stable_object_identity_reverifies_bytes(
+    tmp_path, monkeypatch, field
+):
+    source = Store({"saved": {"Body": b"confirmed saved work"}})
+    destination = Store()
+    head = source.head_object
+
+    def incomplete_head(**kwargs):
+        value = head(**kwargs)
+        value.pop(field)
+        return value
+
+    monkeypatch.setattr(source, "head_object", incomplete_head)
+    state = tmp_path / "copy.sqlite"
+    transfer(source, destination, state)
+    source.reads.clear()
+    destination.reads.clear()
+    assert transfer(source, destination, state)["reusedObjects"] == 0
+    assert source.reads == destination.reads == ["saved"]
+
+
+def test_retry_upgrades_existing_receipt_without_trusting_unrecorded_identities(
+    tmp_path,
+):
+    source = Store({"saved": {"Body": b"confirmed saved work"}})
+    destination = Store(deepcopy(source.objects))
+    state = tmp_path / "copy.sqlite"
+    with sqlite3.connect(state) as db:
+        db.execute("CREATE TABLE identity (binding TEXT NOT NULL)")
+        db.execute("INSERT INTO identity VALUES ('{}')")
+        db.execute(
+            "CREATE TABLE objects (bucket TEXT, key TEXT, sha256 TEXT, size INTEGER, verified_run TEXT, PRIMARY KEY(bucket,key))"
+        )
+        db.execute(
+            "INSERT INTO objects VALUES (?,?,?,?,?)",
+            (
+                "artifacts",
+                "saved",
+                hashlib.sha256(b"confirmed saved work").hexdigest(),
+                19,
+                "old-run",
+            ),
+        )
+    assert transfer(source, destination, state)["reusedObjects"] == 0
+    assert source.reads == destination.reads == ["saved"]
+    source.reads.clear()
+    destination.reads.clear()
+    assert transfer(source, destination, state)["reusedObjects"] == 1
+    assert source.reads == destination.reads == []
+
+
+def test_older_helper_can_refresh_a_receipt_without_reusing_stale_observations(
+    tmp_path,
+):
+    source = Store({"saved": {"Body": b"confirmed saved work"}})
+    destination = Store()
+    state = tmp_path / "copy.sqlite"
+    transfer(source, destination, state)
+    with sqlite3.connect(state) as db:
+        # Retained release helpers write the original five-column receipt.
+        db.execute(
+            "INSERT OR REPLACE INTO objects VALUES (?,?,?,?,?)",
+            (
+                "artifacts",
+                "saved",
+                hashlib.sha256(b"confirmed saved work").hexdigest(),
+                19,
+                "older-helper",
+            ),
+        )
+    source.reads.clear()
+    destination.reads.clear()
+    assert transfer(source, destination, state)["reusedObjects"] == 0
+    assert source.reads == destination.reads == ["saved"]
+
+
 def test_pending_multipart_blocks_transfer_without_aborting_upload(tmp_path):
     source = Store({"key": {"Body": b"saved"}})
     source.uploads = [{"Key": "new", "UploadId": "in-flight"}]
@@ -170,6 +373,7 @@ def test_rollback_copies_new_writes_back_without_deleting_retained_bytes(tmp_pat
 @pytest.mark.asyncio
 async def test_quiescence_covers_api_workers_sweepers_and_oneoffs():
     import json
+
     from moonmind.workflows.skills.storage_migration import quiesce_clients
 
     rows = [{
@@ -218,11 +422,32 @@ async def test_cutover_does_not_activate_if_transfer_cannot_verify(tmp_path, mon
     assert events == ["isolated"]
 
 
+@pytest.mark.asyncio
+async def test_cutover_copy_budget_supports_large_stores_without_changing_explicit_transfer_budgets(
+    tmp_path, monkeypatch
+):
+    from moonmind.workflows.skills import storage_migration as migration
+
+    async def isolate():
+        return Store(), Store()
+
+    async def activate():
+        pass
+
+    def copy(*args, timeout_seconds, **kwargs):
+        assert timeout_seconds == 4 * 60 * 60
+        return {"verifiedObjects": 0}
+
+    monkeypatch.setattr(migration, "transfer_buckets", copy)
+    await migration.verified_cutover(isolate, activate, tmp_path / "copy.sqlite")
+
+
 class Deployment:
     """A Docker observation boundary, with independent source/destination data."""
 
     def __init__(self, monkeypatch, *, corrupt=False, oneoff=False, activation_error=False):
         from types import SimpleNamespace
+
         from moonmind.workflows.skills import storage_migration as migration
 
         self.events = []
@@ -537,6 +762,7 @@ async def test_new_install_accepts_only_a_verified_empty_retained_volume(tmp_pat
 
 def test_failed_qualification_keeps_the_original_error_when_cleanup_fails():
     from types import SimpleNamespace
+
     from moonmind.workflows.skills.storage_migration import qualify_store
 
     def put(**kwargs):
@@ -551,6 +777,7 @@ def test_failed_qualification_keeps_the_original_error_when_cleanup_fails():
 
 def test_incorrect_head_fails_destination_qualification():
     from types import SimpleNamespace
+
     from moonmind.workflows.skills.storage_migration import qualify_store
 
     client = SimpleNamespace(put_object=lambda **k: {}, head_object=lambda **k: {"ContentLength": 0}, delete_object=lambda **k: {})

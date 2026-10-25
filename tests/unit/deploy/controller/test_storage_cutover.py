@@ -1,5 +1,7 @@
 """Storage migration remains inside the controller's existing apply ownership."""
 
+import json
+
 import pytest
 from conftest import load
 
@@ -50,8 +52,46 @@ def test_rollback_uses_retained_capable_helper(controller_path, tmp_path, monkey
 
     def helper(*args, **kwargs):
         seen.append(kwargs["helper_image"])
-        return {"status": "unsupported" if kwargs["helper_image"] == "old-app" else "prepared"}
+        return {"status": "prepared"}
 
     monkeypatch.setattr(server, "run_omnigent_step", helper)
     assert server.prepare_controller_storage(store, operation, runner=object(), overlay="image.env")["status"] == "prepared"
-    assert seen == ["old-app", "new-capable-helper"]
+    assert seen == ["new-capable-helper"]
+
+
+@pytest.mark.parametrize(
+    "phase", ["storage-prepare", "storage-observe", "journal-prepare"]
+)
+def test_storage_copy_has_a_separate_bounded_command_budget(
+    controller_path, tmp_path, phase
+):
+    server, record = load("server"), load("record")
+    store = record.OperationStore(tmp_path)
+    operation = store.begin(
+        stack="moonmind-test",
+        desired_image="candidate",
+        source_revision="",
+        target={
+            "project": "moonmind-test",
+            "projectDir": str(tmp_path),
+            "services": ["minio"],
+        },
+    )
+
+    class Runner:
+        def run(self, args, timeout_seconds):
+            if args[:2] == ("docker", "ps"):
+                return {"exit": 0, "output": ""}
+            request = json.loads(args[-1])
+            assert "storage-transfer-budget" in request["controllerCapabilities"]
+            assert timeout_seconds == (
+                4 * 60 * 60 + 900 if phase == "storage-prepare" else 900
+            )
+            return {
+                "exit": 0,
+                "output": 'MOONMIND_OMNIGENT_RESULT={"status":"prepared"}',
+            }
+
+    server.run_omnigent_step(
+        store, operation, runner=Runner(), overlay="overlay", phase=phase
+    )
