@@ -1989,8 +1989,11 @@ def test_production_apply_delegates_omnigent_selection_and_migration(
                 assert payload["target"] == target
                 assert payload["moonmindImage"] == op["desired"]["image"]
                 assert payload["controllerCapabilities"] == [
-                    "active-journal-transition", "request-identity",
-                    "unversioned-routing-cutover", "controller-handoff",
+                    "active-journal-transition",
+                    "request-identity",
+                    "unversioned-routing-cutover",
+                    "controller-handoff",
+                    "storage-transfer-budget",
                 ]
                 if args[-2] == "--omnigent-select":
                     assert "up" not in phase
