@@ -370,9 +370,17 @@ def run_recovery_cutover(*, api_base, **kwargs):
                     raise controller.engine.CommandError(
                         "pull", 75, "controlled registry unavailable before mutation"
                     )
-                if "up" in args:
-                    recovery["apply_count"] += 1
-            return runner.run(args, timeout_seconds)
+            result = runner.run(args, timeout_seconds)
+            # Journal readiness uses up --no-recreate before application
+            # recreation. Count only successful recreations as confirmed applies.
+            if (
+                tuple(args[:2]) == ("docker", "compose")
+                and "up" in args
+                and "--no-recreate" not in args
+                and int(result.get("exit", 0)) == 0
+            ):
+                recovery["apply_count"] += 1
+            return result
 
     fault_runner = FaultRunner()
 
