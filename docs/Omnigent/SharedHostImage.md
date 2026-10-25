@@ -115,7 +115,7 @@ missing.
 
 ### Publication
 
-`.github/workflows/docker-publish-moonmind-host.yml` is the sole MoonMind host-image publisher. It builds `linux/amd64` and `linux/arm64` images daily at 06:37 UTC, on relevant changes to `main`, or by manual dispatch. Scheduled builds bypass the layer cache even when the upstream Omnigent host base is unchanged. Builds resolve the upstream `latest` base unless `OMNIGENT_BASE_IMAGE_REF` explicitly selects a digest; the build label records the actual base.
+`.github/workflows/docker-publish-moonmind-host.yml` is the sole MoonMind host-image publisher. It checks the upstream Omnigent host base every six hours and rebuilds `linux/amd64` and `linux/arm64` images when that base changes, on relevant changes to `main`, or by manual dispatch. An unchanged scheduled check skips the build. Builds use the normal layer cache and resolve the upstream `latest` base unless `OMNIGENT_BASE_IMAGE_REF` explicitly selects a digest; the build label records the actual base.
 
 Vendor CLI versions come from the Dockerfile and `gh` from `services/omnigent/tools/manifest.lock.json`. Scheduled builds retain those tested pins; upgrading vendor runtimes requires updating their pins and supported runtime-pack declarations. Manual inputs may override vendor versions within the supported ranges. Every build verifies the vendor runtimes, offline OpenCode plugin startup, and image-owned helper tools before publishing the combined manifest, provenance, and SBOM. The dedicated `omnigent-host-opencode` Dockerfile and publisher are discontinued; OpenCode uses the shared image.
 

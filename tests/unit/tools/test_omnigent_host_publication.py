@@ -1,4 +1,4 @@
-"""The shared host publishes fresh, verified images on a recurring schedule."""
+"""The shared host publishes verified images when its build inputs change."""
 
 import json
 import os
@@ -10,21 +10,32 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = ROOT / ".github/workflows/docker-publish-moonmind-host.yml"
+SCRIPT = ROOT / "tools/omnigent_host_release_drift.sh"
 COMPOSE = ROOT / "docker-compose.yaml"
 ENV_TEMPLATE = ROOT / ".env-template"
+BASE_DIGEST = "sha256:" + "a" * 64
+OLD_DIGEST = "sha256:" + "b" * 64
 
 
-def test_scheduled_host_publication_rebuilds_without_an_upstream_change():
+def test_scheduled_host_publication_only_rebuilds_on_upstream_changes():
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     triggers = workflow.get("on") or workflow.get(True)
     jobs = workflow["jobs"]
     build = next(step for step in jobs["build"]["steps"] if step.get("id") == "build")
-    assert triggers["schedule"] == [{"cron": "37 6 * * *"}]
-    assert not jobs["build"].get("if")
-    assert not jobs["merge"].get("if")
-    assert "rebuild_required" not in jobs["metadata"]["outputs"]
+    assert triggers["schedule"] == [{"cron": "37 */6 * * *"}]
+    assert jobs["build"]["if"] == "needs.metadata.outputs.rebuild_required == 'true'"
+    assert jobs["merge"]["if"] == "needs.metadata.outputs.rebuild_required == 'true'"
+    assert (
+        jobs["metadata"]["outputs"]["rebuild_required"]
+        == "${{ steps.drift.outputs.rebuild_required }}"
+    )
+    drift = next(
+        step for step in jobs["metadata"]["steps"] if step.get("id") == "drift"
+    )
+    assert "tools/omnigent_host_release_drift.sh" in drift["run"]
+    assert '"$EVENT_NAME" != "schedule"' in drift["run"]
     assert build["with"]["pull"] is True
-    assert build["with"]["no-cache"] == "${{ github.event_name == 'schedule' }}"
+    assert not build["with"].get("no-cache")
     assert (
         "OMNIGENT_BUILD_DIGEST=${{ steps.base.outputs.base_digest }}"
         in build["with"]["build-args"]
@@ -44,6 +55,51 @@ def test_shared_host_is_the_only_host_image_publisher():
         in path.read_text()
     ]
     assert publishers == [WORKFLOW.name]
+
+
+@pytest.mark.parametrize(
+    ("published_digest", "expected"),
+    [(BASE_DIGEST, "false"), (OLD_DIGEST, "true"), (None, "true")],
+)
+def test_host_drift_uses_base_digest_not_server_version(
+    tmp_path, published_digest, expected
+):
+    docker = tmp_path / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        'case "$1 $2" in\n'
+        "  'pull ghcr.io/omnigent-ai/omnigent-host:latest') exit 0 ;;\n"
+        "  'pull moonmind-host:current') "
+        + ("exit 0" if published_digest else "exit 1")
+        + " ;;\n"
+        f"  'inspect --format={{{{index .RepoDigests 0}}}}') echo 'ghcr.io/omnigent-ai/omnigent-host@{BASE_DIGEST}'; exit 0 ;;\n"
+        "  'inspect --format={{index .Config.Labels \"moonmind.omnigent.build_digest\"}}') "
+        f"echo '{published_digest or ''}'; exit 0 ;;\n"
+        "esac\n"
+        "exit 2\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    output = tmp_path / "output"
+    result = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "moonmind-host:current",
+            "ghcr.io/omnigent-ai/omnigent-host:latest",
+        ],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "GITHUB_OUTPUT": str(output),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert output.read_text(encoding="utf-8") == f"rebuild_required={expected}\n"
 
 
 @pytest.fixture

@@ -1,12 +1,12 @@
 name: Release / Build omnigent-host-moonmind Image
 
-# One shared image carries Codex, Claude Code, and OpenCode. Scheduled builds
-# refresh it even when the upstream base is unchanged; manual and source-change
-# builds can reuse the build cache.
+# One shared image carries Codex, Claude Code, and OpenCode. Scheduled checks
+# rebuild it when the upstream base changes; source changes and manual dispatch
+# also rebuild it using the normal layer cache.
 
 on:
   schedule:
-    - cron: "37 6 * * *"
+    - cron: "37 */6 * * *"
   push:
     branches: [ main ]
     paths:
@@ -14,6 +14,7 @@ on:
       - "services/omnigent/tools/manifest.lock.json"
       - "services/omnigent/scripts/moonmind-container-cli.py"
       - "services/omnigent/scripts/moonmind-tools.sh"
+      - "tools/omnigent_host_release_drift.sh"
       - "moonmind/omnigent/harness_platform/host_classes.py"
       - "moonmind/omnigent/harness_platform/runtime_packs.py"
       - ".github/workflows/docker-publish-moonmind-host.yml"
@@ -58,6 +59,7 @@ jobs:
       claude_version: ${{ steps.meta.outputs.claude_version }}
       opencode_version: ${{ steps.meta.outputs.opencode_version }}
       gh_version: ${{ steps.meta.outputs.gh_version }}
+      rebuild_required: ${{ steps.drift.outputs.rebuild_required }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -102,8 +104,25 @@ jobs:
                   print(f"{key}={value}", file=output)
           PY
 
+      - name: Detect upstream Omnigent drift
+        id: drift
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          IMAGE_NAME: ${{ steps.meta.outputs.image_name }}
+          BASE_REF: ${{ vars.OMNIGENT_BASE_IMAGE_REF || 'ghcr.io/omnigent-ai/omnigent-host:latest' }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "schedule" ]; then
+            echo "rebuild_required=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          HOST_TAG="${IMAGE_NAME}:latest"
+          bash tools/omnigent_host_release_drift.sh "$HOST_TAG" "$BASE_REF"
+
   build:
     needs: metadata
+    if: needs.metadata.outputs.rebuild_required == 'true'
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -181,7 +200,6 @@ jobs:
           file: ./services/omnigent/moonmind-host/Dockerfile
           platforms: ${{ matrix.platform }}
           pull: true
-          no-cache: ${{ github.event_name == 'schedule' }}
           build-args: |
             OMNIGENT_HOST_BASE_IMAGE=${{ steps.base.outputs.base_image }}
             OMNIGENT_BUILD_DIGEST=${{ steps.base.outputs.base_digest }}
@@ -252,6 +270,7 @@ jobs:
 
   merge:
     runs-on: ubuntu-latest
+    if: needs.metadata.outputs.rebuild_required == 'true'
     needs:
       - metadata
       - build
