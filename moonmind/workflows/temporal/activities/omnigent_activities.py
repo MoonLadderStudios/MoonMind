@@ -112,11 +112,12 @@ def _parent_repository_binding_set(parent_plan: Any) -> Any:
     )
 
 
-@activity.defn(name="omnigent.prepare_child_execution_plan")
 async def omnigent_prepare_child_execution_plan_activity(
     payload: Mapping[str, Any],
+    *,
+    admitted_principal: str | None = None,
 ) -> dict[str, Any]:
-    """Compile immutable Omnigent authority for a Temporal-started child run."""
+    """Compile a child plan using the registered Activity's verified read scope."""
 
     from api_service.db.base import async_session_maker
     from api_service.db.models import (
@@ -170,7 +171,7 @@ async def omnigent_prepare_child_execution_plan_activity(
         parent_binding_value = parent_parameters.get("omnigentExecutionPlan")
     parent_binding = OmnigentExecutionPlanBinding.model_validate(parent_binding_value)
     parent_plan = await _load_verified_execution_plan(
-        parent_binding, admitted_principal=principal
+        parent_binding, admitted_principal=admitted_principal or principal
     )
     # Issue #4009: the compiler re-admits repository roles against the parent
     # selections. The real child producer supplies intent, not fabricated
@@ -184,7 +185,8 @@ async def omnigent_prepare_child_execution_plan_activity(
     if not profile_snapshot_ref.startswith("artifact:"):
         raise ValueError("parent execution plan lacks Agent Profile authority")
     agent_profile_snapshot = await _read_json_artifact(
-        profile_snapshot_ref.removeprefix("artifact:"), admitted_principal=principal
+        profile_snapshot_ref.removeprefix("artifact:"),
+        admitted_principal=admitted_principal or principal,
     )
     # Model authority only (MoonLadderStudios/MoonMind#4009): repository
     # slots use issuance and never enter Provider Profile derivation.
@@ -269,6 +271,7 @@ async def omnigent_prepare_child_execution_plan_activity(
             task_input_snapshot_digest=input_snapshot_digest,
             db_session=db_session,
             parent_repository_plan=parent_plan,
+            parent_read_principal=admitted_principal,
         )
     initial_parameters["omnigentExecutionPlan"] = child_plan.binding.model_dump(
         mode="json", by_alias=True, exclude_none=True
