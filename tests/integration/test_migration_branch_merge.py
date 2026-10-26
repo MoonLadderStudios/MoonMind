@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 COMMON = "401_artifact_recovery_indexes"
 PENDING = "402_pending_execution_intents"
 CONVERSION = "403_conversion_completion_lookup"
-MERGED = "404_pending_lookup_merge"
+MERGED = "404_merge_index_heads"
 INDEXES = {
     "ix_temporal_execution_pending_intents",
     "ix_single_user_conversion_published_schema",

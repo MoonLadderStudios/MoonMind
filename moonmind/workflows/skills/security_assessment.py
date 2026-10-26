@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import html
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping
 
@@ -19,6 +21,7 @@ from moonmind.security.assessments import (
     Finding,
     Inventory,
     Observation,
+    SecurityReview,
     TriageDecision,
     compare_observations,
     content_key,
@@ -27,6 +30,7 @@ from moonmind.security.passive_repo_scan import (
     PASSIVE_SCAN_TOOL_REF,
     parse_scan_report_json,
 )
+from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.skills.tool_plan_contracts import ToolFailure, ToolResult
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
@@ -409,6 +413,39 @@ class AssessmentExecution:
                 key=report_key,
             )
         )
+        # Interpretation is a separate, optional artifact phase. It cannot
+        # change native finding identity, coverage, authority, or the scan key.
+        review = None
+        review_status = "not_requested"
+        review_readable = False
+        if request.review_ref:
+            try:
+                _, raw = await self.read(request.review_ref)
+                review_readable = True
+                review = SecurityReview.model_validate_json(raw)
+                if not request.scope.equivalent(review.scope):
+                    raise ValueError("review scope differs from admitted scope")
+                native_ids = {row["findingId"] for row in comparison["findings"]}
+                if any(
+                    item.native_finding_id and item.native_finding_id not in native_ids
+                    for item in review.interpretations
+                ):
+                    raise ValueError(
+                        "interpretation references an unknown native finding"
+                    )
+                total = 0
+                for ref in review.evidence_refs():
+                    _, body = await self.read(ref)
+                    total += len(body)
+                    if total > _MAX_INPUT_BYTES:
+                        raise ValueError("review evidence exceeds the input bound")
+                review_status = "completed"
+            except Exception as exc:
+                review = None
+                review_status = "unavailable"
+                diagnostics.append(
+                    {"boundary": "agent-review", "error": type(exc).__name__}
+                )
         outputs = {
             "scanOutcome": work["scanOutcome"],
             "originalOutcomes": work["originalOutcomes"],
@@ -421,10 +458,16 @@ class AssessmentExecution:
             "diagnostics": [*work["diagnostics"], *diagnostics],
             "budget": request.budget.model_dump(mode="json", by_alias=True),
             "publicationOutcome": "published",
+            "reviewRef": request.review_ref,
+            "reviewStatus": review_status,
         }
         try:
-            summary = _summary(comparison).encode()
-            summary_key = content_key([report_key, "summary"])
+            summary = (
+                _summary(comparison) + _review_summary(review, review_status)
+            ).encode()
+            summary_key = content_key(
+                [report_key, "summary", request.review_ref, review_status]
+            )
             saved_summary = await self.service.list_for_execution(
                 **self.execution,
                 principal=self.principal,
@@ -454,10 +497,17 @@ class AssessmentExecution:
                     principal=self.principal,
                     execution_ref={**self.execution, "link_type": link_type},
                 )
+            if review_readable:
+                await self.service.link_artifact(
+                    artifact_id=request.review_ref,
+                    principal=self.principal,
+                    execution_ref={**self.execution, "link_type": "report.evidence"},
+                )
             outputs["reportBundle"] = build_report_bundle_result(
                 primary_report_ref={"artifact_id": summary_ref},
                 structured_ref={"artifact_id": comparison_ref},
-                evidence_refs=[{"artifact_id": scan_ref}],
+                evidence_refs=[{"artifact_id": scan_ref}]
+                + ([{"artifact_id": request.review_ref}] if review_readable else []),
                 report_type="security_assessment",
                 report_scope=comparison["coverageStatus"],
                 sensitivity="restricted",
@@ -492,6 +542,59 @@ def _summary(comparison: dict) -> str:
             "",
         ]
     )
+
+
+def _review_summary(review: SecurityReview | None, status: str) -> str:
+    if status == "not_requested":
+        return ""
+    if review is None:
+        return "\nAgent interpretation unavailable. Native findings and coverage are retained.\n"
+
+    def text(value: str) -> str:
+        value = html.escape(
+            redact_sensitive_text(value).replace("\n", " ").replace("\r", " ")
+        )
+        return re.sub(r"([\\`*_[\]{}()#!|>])", r"\\\1", value)
+
+    lines = [
+        "",
+        "## Agent interpretation",
+        "",
+        f"Examined candidate: {text(review.candidate_ref)}.",
+        "These are agent interpretations, not scanner facts, test outcomes or confinement attestations.",
+        "",
+        "### Threat model",
+        "",
+        *[f"- Entry point: {text(item)}" for item in review.threat_model.entry_points],
+        *[
+            f"- Trust boundary: {text(item)}"
+            for item in review.threat_model.trust_boundaries
+        ],
+        *[f"- Invariant: {text(item)}" for item in review.threat_model.invariants],
+    ]
+    for item in review.interpretations:
+        subject = item.subject
+        lines += [
+            "",
+            f"- {text(item.id)}: {item.disposition} ({item.evidence_status}). {text(item.hypothesis)}",
+            f"  Examined {text(subject.asset)} at {text(subject.locator)}; identity {text(subject.identity)}; resource {text(subject.resource)}.",
+            "  Evidence: " + ", ".join(text(ref) for ref in item.evidence_refs),
+            *[f"  Limit: {text(limit)}" for limit in item.limitations],
+        ]
+    for retest in review.retests:
+        lines += [
+            "",
+            f"- Retest {text(retest.hypothesis_id)}: agent-described coverage {retest.coverage}.",
+            "  Changed: " + ", ".join(text(asset) for asset in retest.changed_assets),
+            "  Covered: " + ", ".join(text(asset) for asset in retest.covered_assets),
+            "  Original evidence: "
+            + ", ".join(text(ref) for ref in retest.original_evidence_refs),
+            "  Current evidence: "
+            + ", ".join(text(ref) for ref in retest.current_evidence_refs),
+            *[f"  Limit: {text(limit)}" for limit in retest.limitations],
+        ]
+    lines += ["", *[f"- Limit: {text(limit)}" for limit in review.limitations], ""]
+    return "\n".join(lines)
 
 
 async def security_assessment_handler(
