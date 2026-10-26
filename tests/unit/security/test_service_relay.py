@@ -248,7 +248,7 @@ async def test_tcp_half_close_preserves_upstream_final_response(tmp_path, monkey
         writer.close()
         await writer.wait_closed()
     finally:
-        await relay.close()
+        await asyncio.wait_for(relay.close(), 1)
         server.close()
         await server.wait_closed()
 
@@ -277,7 +277,7 @@ async def test_cancellation_closes_active_streams_and_reused_udp_peer_survives(
     await writer.drain()
     await asyncio.sleep(0.02)
     try:
-        await relay.close()
+        await asyncio.wait_for(relay.close(), 0.5)
         assert await asyncio.wait_for(reader.read(), 1) == b""
         await asyncio.wait_for(upstream_closed.wait(), 1)
         assert relay.active_connections == 0
@@ -320,3 +320,57 @@ def test_cli_failure_never_echoes_configuration(tmp_path, capsys):
     assert (
         capsys.readouterr().out == "service relay configuration or readiness failed\n"
     )
+
+
+@pytest.mark.asyncio
+async def test_shutdown_closes_sessions_before_waiting_for_server_transports(tmp_path):
+    """Server.wait_closed may wait for accepted transports on supported Python."""
+    relay = FixedTargetRelay(config(), health_socket=tmp_path / "health.sock")
+    session_started = asyncio.Event()
+    transport_closed = asyncio.Event()
+    order = []
+
+    async def active_session():
+        session_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            order.append("transport closed")
+            transport_closed.set()
+
+    class ServerWithAcceptedTransport:
+        def close(self):
+            order.append("listener closed")
+
+        async def wait_closed(self):
+            order.append("wait for transports")
+            await transport_closed.wait()
+
+    session = asyncio.create_task(active_session())
+    relay._tcp_tasks.add(session)
+    relay._tcp = ServerWithAcceptedTransport()
+    await session_started.wait()
+    try:
+        await asyncio.wait_for(relay.close(), 0.5)
+        assert order == ["listener closed", "transport closed", "wait for transports"]
+        assert session.done()
+        assert relay.active_connections == 0
+    finally:
+        session.cancel()
+        await asyncio.gather(session, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_closes_accepted_writer_before_session_first_runs(tmp_path):
+    relay = FixedTargetRelay(config(), health_socket=tmp_path / "health.sock")
+    closed = asyncio.Event()
+
+    class AcceptedWriter:
+        def close(self):
+            closed.set()
+
+    relay._accept_tcp(object(), AcceptedWriter())
+    # No yield: cancellation precedes the session coroutine's try/finally.
+    await relay.close()
+    assert closed.is_set()
+    assert relay.active_connections == 0

@@ -6714,7 +6714,9 @@ export interface components {
              * @default none
              * @enum {string}
              */
-            networkMode: "none" | "bridge";
+            networkMode: "none" | "bridge" | "service";
+            /** Serviceref */
+            serviceRef?: string | null;
             resources: components["schemas"]["ResourceLimits"];
             /**
              * Timeoutseconds

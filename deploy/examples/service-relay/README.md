@@ -29,8 +29,9 @@ ordinary bridge or a broad private-network allowance.
 1. Build/pull a MoonMind image containing `moonmind.security.service_relay`. The
    ordinary MoonMind image already packages the module and Python; there is no
    additional agent-host image dependency. Set the same relay image reference in
-   the example Compose file and `gatewayImage`. The trusted worker compares the
-   process-loaded relay implementation with its bundled implementation.
+   the example Compose file and `gatewayImage`. The trusted worker verifies the declared relay image and canonical read-only
+   launch, checks the running configuration, and records its implementation
+   digest as evidence without requiring worker/relay source equality.
 2. Replace documentation-only addresses and names in `relay.json`, `connections.json`
    and `compose.yaml`. Pick an unused internal subnet. `targetHost` is the exact
    upstream IPv4 address; the relay alone can reach it. `serverName` is the

@@ -184,6 +184,9 @@ class FixedTargetRelay:
             return
         task = asyncio.create_task(self._tcp_session(reader, writer))
         self._tcp_tasks.add(task)
+        # A task cancelled before its first instruction never enters its
+        # try/finally. The accepted transport still belongs to this relay.
+        task.add_done_callback(lambda _task: writer.close())
         task.add_done_callback(self._tcp_tasks.discard)
 
     async def _tcp_session(self, reader, writer) -> None:
@@ -236,14 +239,18 @@ class FixedTargetRelay:
         finally:
             for task in tasks:
                 task.cancel()
+            # Close synchronously before cleanup's first suspension: shutdown
+            # may cancel a session already unwinding after EOF. Cancelling its
+            # cleanup must not leave an accepted transport open forever.
+            streams = [stream for stream in (writer, upstream) if stream is not None]
+            for stream in streams:
+                stream.close()
             await asyncio.gather(*tasks, return_exceptions=True)
-            for stream in (writer, upstream):
-                if stream is not None:
-                    stream.close()
-                    try:
-                        await asyncio.wait_for(stream.wait_closed(), 1)
-                    except (OSError, asyncio.TimeoutError):
-                        pass
+            for stream in streams:
+                try:
+                    await asyncio.wait_for(stream.wait_closed(), 1)
+                except (OSError, asyncio.TimeoutError):
+                    pass
 
     def _read_udp(self) -> None:
         # Bound callback work and use nonbuffering socket sends: congestion
@@ -343,10 +350,9 @@ class FixedTargetRelay:
 
     async def close(self) -> None:
         self._closed = True
-        for server in (self._tcp, self._health):
-            if server:
-                server.close()
-                await server.wait_closed()
+        servers = [server for server in (self._tcp, self._health) if server]
+        for server in servers:
+            server.close()
         if self._udp:
             asyncio.get_running_loop().remove_reader(self._udp.fileno())
             self._udp.close()
@@ -358,6 +364,11 @@ class FixedTargetRelay:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self._tcp_tasks.clear()
+        # Server.wait_closed can wait for accepted transports, not merely the
+        # listener. Stop forwarding and close those transports first, rather
+        # than waiting for active clients to disconnect or reach idle timeout.
+        for server in servers:
+            await server.wait_closed()
         if self._health_inode is not None:
             try:
                 if self.health_socket.lstat().st_ino == self._health_inode:
