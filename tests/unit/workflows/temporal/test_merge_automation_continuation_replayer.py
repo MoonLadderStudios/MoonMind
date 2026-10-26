@@ -1115,7 +1115,7 @@ async def test_conflict_without_ci_repairs_on_fresh_poll_and_replays(
             "checksReported": merged,
             "checksComplete": merged,
             "checksPassing": merged,
-            "automatedReviewComplete": True if merged else None,
+            "automatedReviewComplete": True,
             "actionableCiFailuresVersion": "v1",
             "readinessObservationId": activity.info().activity_id,
             "blockers": (
@@ -1246,6 +1246,7 @@ async def test_conflict_without_ci_repairs_on_fresh_poll_and_replays(
     assert len(observations) == (3 if upgrade else 2)
     assert observations[0]["checksReported"] is False
     assert observations[0]["checksComplete"] is False
+    assert observations[0]["automatedReviewComplete"] is True
     assert observations[-1]["pullRequestMerged"] is True
     assert sum(
         e.HasField("timer_started_event_attributes") for e in history.events

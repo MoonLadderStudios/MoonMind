@@ -2024,6 +2024,87 @@ async def test_merge_conflicts_preserve_required_readiness_gates(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("review_state", ["pending", "unavailable", "complete"])
+async def test_conflict_without_ci_observes_required_review_before_admission(
+    monkeypatch, review_state
+):
+    from moonmind.workflows.temporal.workflows.merge_gate import classify_readiness
+
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    requested_paths = []
+
+    def respond(request):
+        path = request.url.path
+        requested_paths.append(path)
+        if path.endswith("/pulls/341"):
+            body = {
+                "state": "open",
+                "merged": False,
+                "mergeable": False,
+                "mergeable_state": "dirty",
+                "head": {"sha": "abc123"},
+                "base": {"ref": "main", "sha": "base123"},
+            }
+        elif path.endswith("/status"):
+            body = {"state": "pending", "statuses": []}
+        elif path.endswith("/check-runs"):
+            body = {"check_runs": []}
+        elif path.endswith("/branches/main"):
+            body = {"protected": False}
+        elif path.endswith("/reviews"):
+            if review_state == "unavailable":
+                return httpx.Response(
+                    503, json={"message": "Review service unavailable"}
+                )
+            body = (
+                [{"state": "APPROVED", "user": {"login": "reviewer"}}]
+                if review_state == "complete"
+                else []
+            )
+        elif path.endswith("/reactions"):
+            body = []
+        else:
+            raise AssertionError(f"Unexpected GitHub request: {path}")
+        return httpx.Response(200, json=body)
+
+    client_type = httpx.AsyncClient
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        side_effect=lambda **kwargs: client_type(
+            transport=httpx.MockTransport(respond), **kwargs
+        ),
+    ):
+        result = await GitHubService().evaluate_pull_request_readiness(
+            repo="owner/repo",
+            pr_number=341,
+            head_sha="abc123",
+            policy={"checks": "required", "automatedReview": "required"},
+        )
+
+    assert "/repos/owner/repo/pulls/341/reviews" in requested_paths
+    assert result.checks_reported is False
+    assert result.checks_complete is False
+    assert result.checks_passing is False
+    assert {blocker["kind"] for blocker in result.blockers} >= {
+        "merge_conflict",
+        "checks_running",
+    }
+    evidence = classify_readiness(
+        result.model_dump(by_alias=True), tracked_head_sha="abc123"
+    )
+    assert evidence.ready is (review_state == "complete")
+    assert (
+        result.automated_review_complete
+        is {"pending": False, "unavailable": None, "complete": True}[review_state]
+    )
+    assert {blocker.kind for blocker in evidence.blockers} == {
+        "pending": {"automated_review_pending"},
+        "unavailable": {"external_state_unavailable"},
+        "complete": set(),
+    }[review_state]
+
+
+@pytest.mark.asyncio
 async def test_evaluate_pull_request_readiness_respects_failed_combined_status_without_check_runs(
     monkeypatch,
 ):

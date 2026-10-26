@@ -1233,12 +1233,20 @@ class MoonMindMergeAutomationWorkflow:
             MERGE_AUTOMATION_ACTIONABLE_CI_FAILURE_PATCH_PREFIX + observation_key
         )
 
-    @staticmethod
-    def _conflict_repair_without_ci_enabled(evaluation: Any) -> bool:
+    def _conflict_repair_without_ci_enabled(self, evaluation: Any) -> bool:
         if (
             not isinstance(evaluation, Mapping)
             or evaluation.get("checksReported") is not False
         ):
+            return False
+        if (
+            self._input is not None
+            and self._input.config.gate.github.automated_review == "required"
+            and not self._review_loop_active()
+            and not isinstance(evaluation.get("automatedReviewComplete"), bool)
+        ):
+            # An older integrations worker can omit the required legacy review
+            # read. Keep waiting until a producer actually observes its result.
             return False
         observation_id = evaluation.get("readinessObservationId")
         if not isinstance(observation_id, str) or not observation_id.strip():
