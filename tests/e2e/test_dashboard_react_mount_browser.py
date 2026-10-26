@@ -5,6 +5,7 @@ Requires RUN_E2E_TESTS=1 and Playwright. Complements manifest/HMTL checks in uni
 
 from __future__ import annotations
 
+import asyncio
 import os
 import threading
 import time
@@ -20,14 +21,16 @@ if not os.getenv("RUN_E2E_TESTS"):
 from playwright.sync_api import expect, sync_playwright
 
 from api_service.auth_providers import get_instance_access
+from api_service.db import base as db_base
 from api_service.db.base import get_async_session
+from api_service.db.models import Base
 from api_service.main import app as main_app
 from tests.helpers.account_source import User
 
 
 @contextmanager
 def _playwright_page(playwright_obj):
-    browser = playwright_obj.chromium.launch()
+    browser = playwright_obj.chromium.launch(channel=os.getenv("PLAYWRIGHT_CHROMIUM_CHANNEL") or None)
     try:
         page = browser.new_page()
         try:
@@ -39,23 +42,40 @@ def _playwright_page(playwright_obj):
 
 @pytest.fixture(scope="module")
 def server():
+    original_overrides = dict(main_app.dependency_overrides)
+    original_session_maker = db_base.async_session_maker
     test_user = User(id=uuid4(), email="mc-smoke@example.com")
     main_app.dependency_overrides[get_instance_access] = lambda: test_user
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async def create_tables() -> None:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+    asyncio.run(create_tables())
+
     async_session_maker = async_sessionmaker(bind=engine, expire_on_commit=False)
     main_app.dependency_overrides[get_async_session] = lambda: async_session_maker()
+    db_base.async_session_maker = async_session_maker
 
     config = uvicorn.Config(main_app, host="127.0.0.1", port=8012, log_level="warning")
     server_inst = uvicorn.Server(config)
     thread = threading.Thread(target=server_inst.run, daemon=True)
-    thread.start()
-    time.sleep(1.5)
-    yield
-    server_inst.should_exit = True
-    thread.join(timeout=5)
-    main_app.dependency_overrides.clear()
+    try:
+        thread.start()
+        deadline = time.monotonic() + 5
+        while not server_inst.started and thread.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert server_inst.started, "Browser fixture HTTP server failed to start"
+        yield
+    finally:
+        server_inst.should_exit = True
+        thread.join(timeout=5)
+        assert not thread.is_alive(), "Browser fixture HTTP server failed to stop"
+        db_base.async_session_maker = original_session_maker
+        main_app.dependency_overrides = original_overrides
+        asyncio.run(engine.dispose())
 
 @pytest.mark.parametrize(
     "path,expected_text",

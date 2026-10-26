@@ -167,6 +167,55 @@ export function formatWorkflowSummary(
   return explanation.trim() ? explanation : fallback;
 }
 
+export const WORKFLOW_OUTCOME_OVERRIDES = [
+  'handed_off',
+  'outcome_unknown',
+  'idle',
+  'objective_failed',
+  'verification_blocked',
+  'objective_cancelled',
+] as const;
+
+export type WorkflowOutcomeOverride = (typeof WORKFLOW_OUTCOME_OVERRIDES)[number];
+
+const WORKFLOW_OUTCOME_OVERRIDE_PRESENTATION: Record<WorkflowOutcomeOverride, Readonly<{ label: string; className: string }>> = {
+  handed_off: { label: 'Handed off', className: 'status status-neutral' },
+  outcome_unknown: { label: 'Outcome unknown', className: 'status status-neutral' },
+  idle: { label: 'Idle', className: 'status status-neutral' },
+  objective_failed: { label: 'Failed', className: 'status status-failed' },
+  verification_blocked: { label: 'Verification blocked', className: 'status status-failed' },
+  objective_cancelled: { label: 'Cancelled', className: 'status status-canceled' },
+};
+
+const OBJECTIVE_OUTCOME_OVERRIDES: Readonly<Partial<Record<string, WorkflowOutcomeOverride>>> = {
+  unknown: 'outcome_unknown',
+  idle: 'idle',
+  failed: 'objective_failed',
+  verification_blocked: 'verification_blocked',
+  cancelled: 'objective_cancelled',
+};
+
+/**
+ * A completed lifecycle only means the run ended; its objective outcome or a
+ * continuation handoff decides what operators see. Every workflow status
+ * surface (pills and icons) resolves through this so they cannot disagree.
+ */
+export function workflowOutcomeOverride(
+  status: string | null | undefined,
+  completionDisposition?: string | null | undefined,
+  objectiveOutcome?: string | null | undefined,
+): WorkflowOutcomeOverride | null {
+  if (resolveWorkflowDisplayStatus(status) !== 'completed') return null;
+  if (completionDisposition === 'gated_continuation') return 'handed_off';
+  return OBJECTIVE_OUTCOME_OVERRIDES[objectiveOutcome ?? ''] ?? null;
+}
+
+export function workflowOutcomeOverridePresentation(
+  override: WorkflowOutcomeOverride,
+): Readonly<{ label: string; className: string }> {
+  return WORKFLOW_OUTCOME_OVERRIDE_PRESENTATION[override];
+}
+
 const SHIMMER_SWEEP_STATUS_KEYS = new Set<string>(SHIMMER_SWEEP_KEYS);
 
 function isShimmerSweepStatusKey(key: string): key is ShimmerSweepStatusKey {
