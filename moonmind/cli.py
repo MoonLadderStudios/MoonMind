@@ -6,6 +6,7 @@ import json
 import os
 from dataclasses import asdict
 from pathlib import Path
+from typing import Annotated
 
 import typer
 
@@ -185,6 +186,44 @@ def container_passive_scan(
         )
     except ContainerJobCliError as exc:
         typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    _print_container_job_result(result)
+
+
+@container_app.command(
+    "repository-scan",
+    help="Run one admitted repository scanner and retain sanitized evidence.",
+)
+def container_repository_scan(
+    admission: Annotated[
+        Path, typer.Option("--admission", exists=True, dir_okay=False, readable=True)
+    ],
+    image_source: str | None = typer.Option(None, "--image-source"),
+    image: str | None = typer.Option(None, "--image"),
+) -> None:
+    from moonmind.security.repository_scanners import RepositoryScan, build_scanner_job
+
+    try:
+        if image is not None and image_source is not None:
+            raise ValueError("choose image or image-source")
+        if admission.stat().st_size > 32 * 1024:
+            raise ValueError("scanner admission exceeds the input bound")
+        scan = RepositoryScan.model_validate_json(admission.read_bytes())
+        workload = build_scanner_job(
+            scan, image_source_ref=image_source or "repository-security"
+        )
+        if image is not None:
+            workload.pop("imageSourceRef")
+            workload["image"] = image
+        result = run_container_job(workload)
+    except (ContainerJobCliError, ValueError, OSError) as exc:
+        # Admission validation can include arbitrary supplied strings. The
+        # safe message directs the caller to the typed request, without echoing.
+        typer.secho(
+            "Invalid scanner admission or container job unavailable.",
+            fg=typer.colors.RED,
+            err=True,
+        )
         raise typer.Exit(code=1) from exc
     _print_container_job_result(result)
 
