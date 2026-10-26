@@ -8,6 +8,8 @@ import {
 import {
   formatWorkflowStatusLabel,
   isWorkflowLifecycleStatus,
+  workflowOutcomeOverride,
+  workflowOutcomeOverridePresentation,
   workflowStatusPillProps,
 } from '../status/workflowStatus';
 import {
@@ -95,22 +97,10 @@ export function WorkflowLifecycleStatusPill({
   completionDisposition?: string | null | undefined;
   objectiveOutcome?: string | null | undefined;
 }) {
-  if (status === 'completed' && completionDisposition === 'gated_continuation') {
-    return <StatusPill label="Handed off" pillProps={{ className: 'status status-neutral' }} />;
-  }
-  if (status === 'completed') {
-    switch (objectiveOutcome) {
-      case 'unknown':
-        return <StatusPill label="Outcome unknown" pillProps={{ className: 'status status-neutral' }} />;
-      case 'idle':
-        return <StatusPill label="Idle" pillProps={{ className: 'status status-neutral' }} />;
-      case 'failed':
-        return <StatusPill label="Failed" pillProps={{ className: 'status status-failed' }} />;
-      case 'verification_blocked':
-        return <StatusPill label="Verification blocked" pillProps={{ className: 'status status-failed' }} />;
-      case 'cancelled':
-        return <StatusPill label="Cancelled" pillProps={{ className: 'status status-canceled' }} />;
-    }
+  const override = workflowOutcomeOverride(status, completionDisposition, objectiveOutcome);
+  if (override) {
+    const { label, className } = workflowOutcomeOverridePresentation(override);
+    return <StatusPill label={label} pillProps={{ className }} />;
   }
   return (
     <StatusPill
