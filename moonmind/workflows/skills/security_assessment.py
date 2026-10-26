@@ -173,17 +173,20 @@ def _scanner_observation(
     request, summary: ScannerSummary, ref: str, created_at: datetime
 ):
     """Retained native facts compose with inventory/passive reports without an LLM."""
-    if summary.scanner != summary.admission.scanner:
-        raise ValueError("scanner identity differs from admission")
-    if set(summary.results) != set(summary.admission.modes):
+    admission = summary.admission
+    modes = {"history", "worktree"} if summary.scanner == "gitleaks" else {"scan"}
+    if set(summary.results) != modes:
         raise ValueError("scanner operation coverage is missing")
-    if set(summary.admission.exclusions) != set(request.scope.exclusions):
-        raise ValueError("scanner exclusions differ from admitted assessment")
-    if (
-        summary.admission.allow_inline_suppressions
-        and "inline-suppressions" not in request.scope.repository_exceptions
-    ):
-        raise ValueError("scanner suppressions differ from admitted assessment")
+    if admission is not None:
+        if summary.scanner != admission.scanner:
+            raise ValueError("scanner identity differs from admission")
+        if set(admission.exclusions) != set(request.scope.exclusions):
+            raise ValueError("scanner exclusions differ from admitted assessment")
+        if (
+            admission.allow_inline_suppressions
+            and "inline-suppressions" not in request.scope.repository_exceptions
+        ):
+            raise ValueError("scanner suppressions differ from admitted assessment")
     findings = [finding for row in summary.results.values() for finding in row.findings]
     if any(
         not set(f.evidence_refs) <= set(summary.native_refs.values()) for f in findings
@@ -192,11 +195,12 @@ def _scanner_observation(
     if any(f.asset not in request.scope.assets for f in findings):
         raise ValueError("scanner finding outside admitted assessment scope")
     complete = (
-        summary.coverage == "complete"
+        admission is not None
+        and summary.coverage == "complete"
         and not summary.limitations
         and summary.execution is not None
         and not summary.execution.limitations
-        and set(summary.native_refs) == set(summary.admission.modes)
+        and set(summary.native_refs) == modes
         and all(
             r.coverage == "complete"
             and r.execution == "succeeded"
@@ -230,12 +234,16 @@ def _scanner_observation(
                 tool=summary.scanner,
                 assets=[a for a in assets if a in request.scope.assets],
                 rule_ids=sorted(
-                    {r.id for r in summary.admission.rules}
+                    (
+                        {r.id for r in admission.rules}
+                        if admission is not None
+                        else set()
+                    )
                     | {f.rule_id for f in findings}
                 ),
                 config_ref=content_key(
                     [
-                        summary.admission.model_dump(mode="json"),
+                        admission.model_dump(mode="json") if admission else None,
                         (
                             summary.execution.version
                             if summary.execution

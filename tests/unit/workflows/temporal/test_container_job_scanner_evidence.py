@@ -219,3 +219,98 @@ async def test_native_secret_is_removed_from_metadata_before_any_publish(tmp_pat
     assert summary["results"]["worktree"]["findings"][0]["asset"] == "tracked.txt"
     assert summary["execution"]["untrackedFiles"]
     assert summary["results"]["history"]["findings"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    ["truncated", "wrong-schema", "missing", "sanitizer", "metadata-sanitizer"],
+)
+@pytest.mark.parametrize("valid_sibling", [False, True])
+async def test_unreadable_native_evidence_withholds_unknown_sensitive_metadata(
+    tmp_path, monkeypatch, failure, valid_sibling
+):
+    request, root = scanner_request(tmp_path, output=f"artifacts/{MARKER}")
+    metadata = json.loads((root / "execution.json").read_bytes())
+    metadata["assets"].append(f"{MARKER}.txt")
+    metadata["untrackedFiles"] = [f"{MARKER}.txt"]
+    (root / "execution.json").write_text(json.dumps(metadata))
+    # Full scanner redaction leaves ingestion unable to discover the original
+    # value in admission metadata, even when the sibling mode remains useful.
+    for mode in request.request.spec.repository_scan.modes:
+        path = root / f"{mode}.json"
+        if valid_sibling and mode == "worktree":
+            path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "RuleID": "credential",
+                            "File": "tracked.txt",
+                            "StartLine": 1,
+                            "Secret": "[REDACTED]",
+                        }
+                    ]
+                )
+            )
+        elif failure == "missing":
+            path.unlink()
+        else:
+            path.write_text("[" if failure == "truncated" else "{}")
+    if failure == "sanitizer":
+        from moonmind.workflows.temporal import container_job_backend as backend_module
+
+        original = backend_module.sanitize_native
+
+        # Parsing can succeed while subsequent sanitization fails.
+        for mode in request.request.spec.repository_scan.modes:
+            if not (valid_sibling and mode == "worktree"):
+                (root / f"{mode}.json").write_text("[]")
+
+        def broken(scanner, body, *args, **kwargs):
+            if body == b"[]":
+                raise ValueError(MARKER)
+            return original(scanner, body, *args, **kwargs)
+
+        monkeypatch.setattr(backend_module, "sanitize_native", broken)
+    elif failure == "metadata-sanitizer":
+        from moonmind.security.repository_scanners import ScannerOutputSanitizer
+
+        for mode in request.request.spec.repository_scan.modes:
+            if not (valid_sibling and mode == "worktree"):
+                (root / f"{mode}.json").write_text("[]")
+
+        def broken(*args, **kwargs):
+            raise ValueError(MARKER)
+
+        monkeypatch.setattr(ScannerOutputSanitizer, "metadata", broken)
+    publisher = _Publisher()
+
+    async def publish(request, name, payload):
+        assert MARKER not in name
+        assert MARKER.encode() not in payload
+        return await publisher(request, name, payload)
+
+    async def runner(argv):
+        return 0, MARKER.encode(), MARKER.encode()
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=runner,
+        evidence_publisher=publish,
+        log_spool_root=tmp_path / "live",
+    )
+    await backend._collect_live_logs(request, request.container_ref)
+    await backend.publish_evidence(request)
+    assert all(
+        MARKER not in path.read_text() for path in (tmp_path / "live").rglob("*.jsonl")
+    )
+    summary = json.loads(publisher.artifacts[f"{request.job_id}-output-summary.json"])
+    assert summary["coverage"] == "partial"
+    assert summary["limitations"]
+    assert summary["admission"] is None
+    if summary["execution"] is not None:
+        assert not summary["execution"]["assets"]
+        assert not summary["execution"]["untrackedFiles"]
+    if valid_sibling:
+        assert summary["results"]["worktree"]["findings"]
+        assert summary["nativeRefs"]["worktree"]

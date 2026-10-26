@@ -167,13 +167,14 @@ else:
  assert "secret" not in args[args.index("--scanners")+1].split(",")
  assert "trivy:ignore" not in pathlib.Path("main.tf").read_text()
  mode="scan"; output=pathlib.Path(args[args.index("--output")+1])
-output.write_text(json.dumps(reports[mode]))
+body=reports[mode]
+output.write_bytes(body if isinstance(body, bytes) else json.dumps(body).encode())
 print({MARKER!r}); print({MARKER!r}, file=sys.stderr)
 if {failure!r} == "timeout": time.sleep(30)
 if {failure!r} == "cancel":
  import os, signal
  os.kill(os.getppid(), signal.SIGTERM); time.sleep(30)
-raise SystemExit(2 if {failure!r} == "failure" else (1 if scanner=="gitleaks" else 0))
+raise SystemExit(2 if {failure!r} == "failure" else (1 if scanner=="gitleaks" and reports[mode] else 0))
 """
     )
     fixture.chmod(0o755)
@@ -410,7 +411,14 @@ async def test_scanner_process_failure_retains_partial_native_findings(
 
 
 async def retain_native_fixture(
-    environment, tmp_path, monkeypatch, scanner, reports, key
+    environment,
+    tmp_path,
+    monkeypatch,
+    scanner,
+    reports,
+    key,
+    *,
+    output_directory="artifacts/scan",
 ):
     """Replace the detector process only; retain production admission and storage."""
     case = tmp_path / key
@@ -433,7 +441,7 @@ async def retain_native_fixture(
                 "license": "MIT",
             }
         ]
-    scan = RepositoryScan(scanner=scanner, outputDirectory="artifacts/scan", **options)
+    scan = RepositoryScan(scanner=scanner, outputDirectory=output_directory, **options)
     install_fixture_process(case, scanner, monkeypatch, reports=reports)
     code = run_scanner(
         scan,
@@ -457,6 +465,7 @@ async def retain_native_fixture(
     published = {}
 
     async def publish(_request, name, payload):
+        assert MARKER not in name
         assert MARKER.encode() not in payload
         ref = await put(environment.service, payload)
         published[name] = ref
@@ -483,6 +492,10 @@ async def retain_native_fixture(
     )
     await backend._collect_live_logs(request, request.container_ref)
     evidence = await backend.publish_evidence(request)
+    assert all(
+        MARKER.encode() not in path.read_bytes()
+        for path in (case / "live").rglob("*.jsonl")
+    )
     record = await jobs.repository.get_for_owner(owner=owner, job_id=accepted.job_id)
     record.logs_ref, record.artifacts_ref = evidence.logs_ref, evidence.artifacts_ref
     await environment.session.flush()
@@ -512,6 +525,103 @@ def retained_assessment(ref, assets):
         "networkRefs": [],
         "budget": {"baseSeconds": 60, "maxSeconds": 120, "progressStallSeconds": 60},
     }
+
+
+@pytest.mark.parametrize("kind", ["truncated", "malformed"])
+@pytest.mark.parametrize("valid_sibling", [False, True])
+async def test_unreadable_native_reports_withhold_admission_metadata_through_report(
+    environment, tmp_path, monkeypatch, kind, valid_sibling
+):
+    invalid = b'[{"Secret":"' if kind == "truncated" else {}
+    valid = [
+        {
+            "RuleID": "credential",
+            "File": "tracked.txt",
+            "StartLine": 1,
+            "Secret": "[REDACTED]",
+        }
+    ]
+    reports = {"history": invalid, "worktree": valid if valid_sibling else invalid}
+    ref, summary = await retain_native_fixture(
+        environment,
+        tmp_path,
+        monkeypatch,
+        "gitleaks",
+        reports,
+        "unsafe-metadata",
+        output_directory=f"artifacts/scan-{MARKER}",
+    )
+    outputs = await invoke(
+        environment.service, retained_assessment(ref, ["tracked.txt"])
+    )
+    assert not outputs["diagnostics"]
+    assert MARKER not in json.dumps(summary)
+    assert MARKER not in json.dumps(outputs)
+    assert summary["coverage"] == "partial"
+    assert outputs["coverageStatus"] == "stale_or_partial"
+    assert outputs["counts"]["new"] == int(valid_sibling)
+    assert bool(summary["nativeRefs"]) == valid_sibling
+    for artifact_ref in {
+        outputs["scanRef"],
+        outputs["comparisonRef"],
+        outputs["reportBundle"]["primary_report_ref"]["artifact_id"],
+    }:
+        _, body = await environment.service.read(
+            artifact_id=artifact_ref,
+            principal="workflow:assessment",
+            allow_restricted_raw=True,
+        )
+        assert MARKER.encode() not in body
+
+
+@pytest.mark.parametrize(
+    "position", ["first", "middle", "last", "invalid-only", "clean"]
+)
+async def test_gitleaks_malformed_neighbors_survive_ingestion_and_report(
+    environment, tmp_path, monkeypatch, position
+):
+    valid = [
+        {"RuleID": "credential", "File": path, "StartLine": 1}
+        for path in ("tracked.txt", "untracked.txt")
+    ]
+    records = {
+        "first": [{}, *valid],
+        "middle": [valid[0], {}, valid[1]],
+        "last": [*valid, {}],
+        "invalid-only": [{}],
+        "clean": [],
+    }[position]
+    ref, summary = await retain_native_fixture(
+        environment,
+        tmp_path,
+        monkeypatch,
+        "gitleaks",
+        {"history": records, "worktree": []},
+        position,
+    )
+    findings = position in {"first", "middle", "last"}
+    assert len(summary["results"]["history"]["findings"]) == (2 if findings else 0)
+    assert summary["coverage"] == ("complete" if position == "clean" else "partial")
+    outputs = await invoke(
+        environment.service,
+        retained_assessment(ref, ["tracked.txt", "untracked.txt"]),
+        key=position,
+    )
+    assert not outputs["diagnostics"]
+    assert outputs["counts"]["new"] == (2 if findings else 0)
+    assert outputs["coverageStatus"] == (
+        "complete" if position == "clean" else "stale_or_partial"
+    )
+    comparison = await read(environment.service, outputs["comparisonRef"])
+    assert comparison["observation"]["coverage"][0]["status"] == (
+        "complete" if position == "clean" else "partial"
+    )
+    if findings:
+        retained = await read(environment.service, summary["nativeRefs"]["history"])
+        assert len([row for row in retained if row.get("RuleID")]) == 2
+        assert {row["finding"]["nativeId"] for row in comparison["findings"]} == {
+            row["nativeId"] for row in summary["results"]["history"]["findings"]
+        }
 
 
 @pytest.mark.parametrize("kind", ["malformed", "mixed", "clean"])

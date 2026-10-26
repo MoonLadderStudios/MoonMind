@@ -146,6 +146,44 @@ def test_missing_or_malformed_report_is_never_clean(scanner, body):
     assert result.limitations
 
 
+@pytest.mark.parametrize(
+    "position", ["first", "middle", "last", "invalid-only", "clean"]
+)
+@pytest.mark.parametrize("malformed", [{}, None, {"RuleID": "credential"}])
+def test_gitleaks_malformed_neighbors_preserve_valid_finding_identities(
+    position, malformed
+):
+    api = scanner_api()
+    valid = [
+        {"RuleID": "credential", "File": path, "StartLine": 1}
+        for path in ("tracked.txt", "untracked.txt")
+    ]
+    records = {
+        "first": [malformed, *valid],
+        "middle": [valid[0], malformed, valid[1]],
+        "last": [*valid, malformed],
+        "invalid-only": [malformed],
+        "clean": [],
+    }[position]
+
+    def normalize(records):
+        return api.normalize_native(
+            "gitleaks",
+            json.dumps(records).encode(),
+            exit_code=0,
+            terminal_state="succeeded",
+            native_ref="art_sanitized",
+        )
+
+    expected = normalize(valid if position in {"first", "middle", "last"} else [])
+    observed = normalize(records)
+    assert [f.finding_id for f in observed.findings] == [
+        f.finding_id for f in expected.findings
+    ]
+    assert observed.coverage == ("complete" if position == "clean" else "partial")
+    assert bool(observed.limitations) == (position != "clean")
+
+
 def test_normalized_identity_does_not_depend_on_timestamp_or_native_bytes():
     api = scanner_api()
     base = [

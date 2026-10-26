@@ -80,7 +80,7 @@ def _document(scanner: str, body: bytes, limit: int):
         raise ValueError("scanner report exceeds bound")
     result = json.loads(body)
     if scanner == "gitleaks":
-        valid = isinstance(result, list) and all(isinstance(v, dict) for v in result)
+        valid = isinstance(result, list)
     elif scanner == "opengrep":
         valid = (
             isinstance(result, dict)
@@ -293,17 +293,22 @@ def normalize_native(
 
         if scanner == "gitleaks":
             for item in native:
-                finding(
-                    item["RuleID"],
-                    item["File"],
-                    [
+                try:
+                    finding(
                         item["RuleID"],
                         item["File"],
-                        item["StartLine"],
-                        item.get("StartColumn"),
-                        item.get("Commit"),
-                    ],
-                )
+                        [
+                            item["RuleID"],
+                            item["File"],
+                            item["StartLine"],
+                            item.get("StartColumn"),
+                            item.get("Commit"),
+                        ],
+                    )
+                except (ValueError, KeyError, TypeError, AttributeError):
+                    limitations.append("missing_malformed_or_truncated_report")
+                if len(findings) > 4096:
+                    break
             if exit_code == 1 and not native:
                 limitations.append("findings_exit_without_findings")
         elif scanner == "opengrep":
@@ -449,7 +454,7 @@ class ScannerExecution(Contract):
 class ScannerSummary(Contract):
     schema_version: Literal["repository-scanner/v1"] = "repository-scanner/v1"
     scanner: Scanner
-    admission: RepositoryScan
+    admission: RepositoryScan | None
     execution: ScannerExecution | None
     results: dict[str, NativeResult]
     native_refs: dict[str, Text]
