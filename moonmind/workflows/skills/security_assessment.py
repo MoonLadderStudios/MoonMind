@@ -194,8 +194,11 @@ def _scanner_observation(
         raise ValueError("finding evidence differs from retained native records")
     if any(f.asset not in request.scope.assets for f in findings):
         raise ValueError("scanner finding outside admitted assessment scope")
+    findings = list({f.finding_id: f for f in findings}.values())
+    truncated = len(findings) > 4096
     complete = (
         admission is not None
+        and not truncated
         and summary.coverage == "complete"
         and not summary.limitations
         and summary.execution is not None
@@ -227,23 +230,23 @@ def _scanner_observation(
         scope=request.scope,
         observed_at=created_at,
         expires_at=created_at + timedelta(days=1),
-        findings=list({f.finding_id: f for f in findings}.values()),
+        findings=findings[:4096],
         coverage=[
             Coverage(
                 source="repository",
                 tool=summary.scanner,
                 assets=[a for a in assets if a in request.scope.assets],
-                rule_ids=sorted(
-                    (
-                        {r.id for r in admission.rules}
-                        if admission is not None
-                        else set()
-                    )
-                    | {f.rule_id for f in findings}
-                ),
+                rule_ids=[],
+                all_rules=admission is not None,
                 config_ref=content_key(
                     [
-                        admission.model_dump(mode="json") if admission else None,
+                        (
+                            admission.model_dump(
+                                mode="json", exclude={"output_directory"}
+                            )
+                            if admission
+                            else None
+                        ),
                         (
                             summary.execution.version
                             if summary.execution
@@ -255,6 +258,9 @@ def _scanner_observation(
             )
         ],
         provenance={
+            **(
+                {"findingLimit": "combined_finding_bound_exceeded"} if truncated else {}
+            ),
             "scannerSummary": ref,
             "nativeReports": content_key(summary.native_refs),
             "scannerVersion": (
@@ -430,7 +436,7 @@ class AssessmentExecution:
                                     "scanner": native_summary.scanner,
                                     "summaryRef": ref,
                                     "nativeRefs": native_summary.native_refs,
-                                    "coverage": native_summary.coverage,
+                                    "coverage": observation.coverage[0].status,
                                     "execution": {
                                         mode: row.execution
                                         for mode, row in native_summary.results.items()
@@ -442,6 +448,11 @@ class AssessmentExecution:
                                             for row in native_summary.results.values()
                                             for limit in row.limitations
                                         }
+                                        | (
+                                            {observation.provenance["findingLimit"]}
+                                            if "findingLimit" in observation.provenance
+                                            else set()
+                                        )
                                     ),
                                     "verification": native_summary.verification,
                                 }

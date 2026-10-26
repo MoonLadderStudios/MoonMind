@@ -91,6 +91,28 @@ async def test_scanner_ingestion_preserves_partial_findings_and_safe_logs(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("history_state", ["failed", "timed_out", "canceled"])
+async def test_failed_scanner_job_preserves_recorded_operation_outcomes(
+    tmp_path, history_state
+):
+    request, root = scanner_request(tmp_path, terminal="failed")
+    metadata = json.loads((root / "execution.json").read_bytes())
+    metadata["states"]["history"] = history_state
+    metadata["exits"]["history"] = None
+    (root / "execution.json").write_text(json.dumps(metadata))
+    publisher = _Publisher()
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, evidence_publisher=publisher
+    )
+    await backend._collect_declared_outputs(request)
+    summary = json.loads(publisher.artifacts[f"{request.job_id}-output-summary.json"])
+    assert summary["results"]["history"]["execution"] == history_state
+    assert summary["results"]["worktree"]["execution"] == "succeeded"
+    assert summary["coverage"] == "partial"
+    assert "container_job_failed" in summary["limitations"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "body",
     ["{", "null", '{"Secret":"' + MARKER + '"}', " " * 200000],

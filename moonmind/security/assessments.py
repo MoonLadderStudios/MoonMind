@@ -196,6 +196,9 @@ class Coverage(Contract):
     tool: Text
     assets: Items
     rule_ids: Items
+    # All rules in config_ref, including rules with no positive findings. The
+    # configuration identity still has to match before absence is comparable.
+    all_rules: bool = False
     config_ref: Text
     status: CoverageStatus
 
@@ -204,7 +207,7 @@ class Coverage(Contract):
             self.source == finding.source
             and self.tool == finding.tool
             and finding.asset in self.assets
-            and finding.rule_id in self.rule_ids
+            and (self.all_rules or finding.rule_id in self.rule_ids)
         )
 
 
