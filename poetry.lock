@@ -2637,15 +2637,15 @@ test = ["black (>=22.1.0)", "flake8 (>=4.0.1)", "pre-commit (>=2.17.0)", "pytest
 
 [[package]]
 name = "pytest-mock"
-version = "3.16.0"
+version = "3.17.0"
 description = "Thin-wrapper around the mock package for easier use with pytest"
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
 markers = "extra == \"tests\""
 files = [
-    {file = "pytest_mock-3.16.0-py3-none-any.whl", hash = "sha256:007cfeb257801d88d9c0b2a7b5a15a15e73b71968dfd72e7bf8c4a2f8393aec8"},
-    {file = "pytest_mock-3.16.0.tar.gz", hash = "sha256:5a8395528b8f498205f3718f575228d0edaed7425fff638f87d1a6c3e0383636"},
+    {file = "pytest_mock-3.17.0-py3-none-any.whl", hash = "sha256:1b82aa4b37137248bd687055e109723debeb07b489de1565297dc9589c5f2d6b"},
+    {file = "pytest_mock-3.17.0.tar.gz", hash = "sha256:e36576e0985e01027e999891e7a966c67822d40c89ef1b4c8b6e22737e3590b4"},
 ]
 
 [package.dependencies]
@@ -3857,4 +3857,4 @@ tests = ["aiosqlite", "jsonschema", "pytest", "pytest-asyncio", "pytest-mock", "
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.16"
-content-hash = "467d95a0c050fa4bd1304f6e1737441fea955fb25b1f676c441b78ff8a2be57d"
+content-hash = "e8d33f596d9bd8c800fde5a1c1e3485037e569048a32d8ead1f777f5157c9d55"
