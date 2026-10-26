@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from moonmind.omnigent.workspace_publication import OmnigentWorkspacePublicationService
+from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
@@ -187,8 +188,9 @@ async def test_checkpoint_distinguishes_no_work_from_preserved_or_unknown_work(
 
 @pytest.mark.asyncio
 async def test_generic_save_refuses_omitted_gitlink_contents(tmp_path, monkeypatch):
-    with pytest.raises(ValueError, match="submodule"):
+    with pytest.raises(HarnessPlatformError, match="submodule") as raised:
         await capture_saved_workspace(tmp_path, monkeypatch, "submodule")
+    assert raised.value.code == "OMNIGENT_WORKSPACE_SAVE_FAILED"
     retained = list(tmp_path.glob("temporal_sandbox/*/repo/module/valuable.txt"))
     assert len(retained) == 1
     assert retained[0].read_text() == "submodule output\n"

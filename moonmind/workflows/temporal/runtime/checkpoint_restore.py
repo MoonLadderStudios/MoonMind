@@ -7,6 +7,7 @@ import hashlib
 import fcntl
 import json
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -152,7 +153,7 @@ class ManagedCheckpointRestoreService:
             raise CheckpointRestoreError(
                 "CHECKPOINT_PATH_ESCAPE", "archive path is not normalized and relative"
             )
-        if path.parts[0] == ".git":
+        if ".git" in path.parts:
             raise CheckpointRestoreError(
                 "CHECKPOINT_PATH_ESCAPE", ".git content cannot be restored"
             )
@@ -293,9 +294,13 @@ class ManagedCheckpointRestoreService:
         expected = {entry["path"]: entry for entry in manifest.get("entries", [])}
         selected = None
         if selected_only:
-            selected = set(self._git_bytes(
-                ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], staging,
-            ).decode().split("\0"))
+            from .checkpoint_submodules import checkpoint_worktrees
+
+            selected, _repositories, _exclusions = checkpoint_worktrees(
+                staging,
+                include_untracked=True,
+                include_ignored=False,
+            )
         # A symlink is a leaf entry even when it points at a directory, so exclude
         # only real directories; ``is_dir()`` alone would follow directory symlinks
         # and drop them from the set, spuriously failing valid restores.
@@ -344,7 +349,82 @@ class ManagedCheckpointRestoreService:
         expected = manifest.get("gitStatusDigest") or manifest.get("git", {}).get("statusDigest")
         if expected and _digest(status) != expected:
             raise CheckpointRestoreError("CHECKPOINT_ENTRY_DIGEST_MISMATCH", "Git status digest mismatch")
+        for module in manifest.get("git", {}).get("submodules", []):
+            name = self._safe_name(module["path"])
+            target = workspace.joinpath(*name.parts)
+            if target.resolve() != target or not (target / ".git").exists():
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_ENTRY_DIGEST_MISMATCH",
+                    "saved submodule is missing or replaced",
+                )
+            self._verify_git_candidate(target, module, module["baseCommit"])
         return _digest(status)
+
+    async def _restore_submodules(self, workspace, manifest, *, admitted_principal):
+        parents = {"": workspace}
+        modules = manifest.get("git", {}).get("submodules", [])
+        for module in sorted(
+            modules,
+            key=lambda item: (len(PurePosixPath(item["path"]).parts), item["path"]),
+        ):
+            name = self._safe_name(module["path"])
+            target = workspace.joinpath(*name.parts)
+            if target.resolve() != target:
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_PATH_ESCAPE", "submodule directory is replaced"
+                )
+            parent_name = max(
+                (p for p in parents if not p or str(name).startswith(p + "/")), key=len
+            )
+            relative = (
+                str(name).removeprefix(parent_name + "/") if parent_name else str(name)
+            )
+            if not self._git(
+                ["ls-files", "--stage", "--", relative], parents[parent_name]
+            ).startswith("160000 "):
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_MANIFEST_CORRUPTED",
+                    "submodule is not a selected gitlink",
+                )
+            history = module["gitHistory"]
+            if (
+                history.get("contentType") != "application/x-git-pack"
+                or history.get("headCommit") != module["baseCommit"]
+            ):
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_MANIFEST_CORRUPTED",
+                    "submodule history identity mismatch",
+                )
+            payload = await self._read(
+                history["ref"],
+                content_types={"application/x-git-pack"},
+                admitted_principal=admitted_principal,
+            )
+            if _digest(payload) != history.get("digest"):
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_ARCHIVE_CORRUPTED", "submodule history digest mismatch"
+                )
+            self._git(["init", str(target)])
+            shallow = history.get("shallowCommits", [])
+            if any(
+                not isinstance(sha, str)
+                or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha)
+                for sha in shallow
+            ):
+                raise CheckpointRestoreError(
+                    "CHECKPOINT_MANIFEST_CORRUPTED",
+                    "invalid submodule history boundary",
+                )
+            if shallow:
+                (target / ".git" / "shallow").write_text("\n".join(shallow) + "\n")
+            self._git_bytes(
+                ["index-pack", "--stdin", "--strict"], target, input_bytes=payload
+            )
+            self._git(["checkout", "--detach", module["baseCommit"]], target)
+            await self._restore_index(
+                target, module, admitted_principal=admitted_principal
+            )
+            parents[str(name)] = target
 
     async def _restore_index(self, workspace, manifest, *, admitted_principal):
         index = manifest.get("git", {}).get("indexPatch")
@@ -426,9 +506,16 @@ class ManagedCheckpointRestoreService:
             )
         return result.stdout.strip()
 
-    def _git_bytes(self, args: list[str], cwd: Path) -> bytes:
+    def _git_bytes(
+        self, args: list[str], cwd: Path, *, input_bytes: bytes | None = None
+    ) -> bytes:
         result = subprocess.run(
-            ["git", *args], cwd=cwd, capture_output=True, check=False
+            ["git", *args],
+            cwd=cwd,
+            capture_output=True,
+            check=False,
+            input=input_bytes,
+            timeout=120,
         )
         if result.returncode:
             raise CheckpointRestoreError(
@@ -698,6 +785,12 @@ class ManagedCheckpointRestoreService:
                     ["cat-file", "-e", f"{req.checkpoint.base_commit}^{{commit}}"], staging
                 )
                 self._git(["checkout", "--detach", req.checkpoint.base_commit], staging)
+                await self._restore_index(
+                    staging, manifest, admitted_principal=admitted_principal
+                )
+                await self._restore_submodules(
+                    staging, manifest, admitted_principal=admitted_principal
+                )
                 count, size = self._extract(
                     archive, staging, manifest,
                     max_entries=req.max_entry_count, max_bytes=req.max_restored_bytes,
@@ -706,7 +799,6 @@ class ManagedCheckpointRestoreService:
                 # those deletions so the tree matches the manifest before verifying.
                 self._replay_deletions(staging, manifest)
                 self._verify_materialized(staging, manifest)
-                await self._restore_index(staging, manifest, admitted_principal=admitted_principal)
                 actual = self._git(
                     ["rev-parse", "HEAD"], staging, "CHECKPOINT_BASE_COMMIT_MISMATCH"
                 )

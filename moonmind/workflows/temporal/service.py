@@ -5237,6 +5237,16 @@ class TemporalExecutionService:
         )
         if normalized_summary is None:
             return
+        from moonmind.statuses.workflow import merge_terminal_result_summary
+
+        previous_summary = record.finish_summary_json
+        normalized_summary, replace_terminal = merge_terminal_result_summary(
+            previous_summary,
+            normalized_summary,
+            run_id=getattr(record, "run_id", None),
+        )
+        if not replace_terminal:
+            finish_outcome_code = record.finish_outcome_code
         finish_outcome = normalized_summary.get(
             "finishOutcome"
         ) or normalized_summary.get("finish_outcome")
@@ -5254,10 +5264,15 @@ class TemporalExecutionService:
         )
         record.finish_outcome_code = str(outcome_code).strip() if outcome_code else None
         record.finish_summary_json = normalized_summary
-        if record.state is MoonMindWorkflowState.COMPLETED:
+        if record.state in TERMINAL_STATES:
+            memo = record.memo or {}
+            if replace_terminal and isinstance(previous_summary, dict) and isinstance(previous_summary.get("agentResult"), dict):
+                # A newly admitted attempt (or a confirmed observation replacing
+                # an unavailable one) settles its own goal, not the earlier memo.
+                memo = {**memo, "objectiveOutcome": "active"}
             outcome = workflow_objective_outcome(
                 state=record.state,
-                memo=record.memo or {},
+                memo=memo,
                 finish_summary=normalized_summary,
             )
             if outcome not in {None, "active"}:

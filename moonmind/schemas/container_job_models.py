@@ -360,7 +360,8 @@ class ContainerJobSpec(ContractModel):
     workdir: str = Field("/workspace", pattern=r"^/workspace(?:/[^/]+)*$", max_length=512)
     environment: list[EnvironmentOverride] = Field(default_factory=list, max_length=128)
     caches: list[CacheMount] = Field(default_factory=list, max_length=32)
-    network_mode: Literal["none", "bridge"] = Field("none", alias="networkMode")
+    network_mode: Literal["none", "bridge", "service"] = Field("none", alias="networkMode")
+    service_ref: str | None = Field(None, alias="serviceRef", pattern=r"^[a-z0-9](?:[a-z0-9.-]{0,126}[a-z0-9])?$", max_length=128)
     resources: ResourceLimits
     timeout_seconds: int = Field(1800, alias="timeoutSeconds", ge=1, le=86400)
     pull_policy: Literal["if-missing", "always", "never"] = Field("if-missing", alias="pullPolicy")
@@ -381,6 +382,12 @@ class ContainerJobSpec(ContractModel):
             raise ValueError(
                 "pullPolicy cannot override a deployment-owned image source"
             )
+        if (self.network_mode == "service") != (self.service_ref is not None):
+            raise ValueError("service network mode requires exactly one serviceRef")
+        if self.service_ref is not None and self.image_source_ref is None:
+            raise ValueError("service access requires a deployment-owned image source")
+        if self.service_ref is not None and any(item.name.startswith("MOONMIND_SERVICE_") for item in self.environment):
+            raise ValueError("service connection environment is deployment-owned")
         return self
 
     @field_validator("workdir")

@@ -5410,6 +5410,64 @@ async def test_coordinator_rejects_missing_repository_publication() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure_stage", ["inspection", "publication", "output"])
+async def test_publication_failure_refreshes_canonical_outcomes(
+    monkeypatch, failure_stage
+) -> None:
+    from moonmind.workflows.temporal.workflows import run as run_module
+
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _: True)
+
+    async def execute(request, **_kwargs):
+        return AgentRunResult(
+            executionState="completed",
+            objectiveOutcome="succeeded",
+            retryDisposition="unknown",
+            outputRefs=["artifact://saved-work"],
+            diagnosticsRef="artifact://provider-diagnostics",
+            secondaryErrors=[{"code": "reporting_failed"}],
+            metadata={"omnigentSessionId": "session-1"},
+        )
+
+    publication = None
+    inspector = None
+    if failure_stage == "inspection":
+        inspector = SimpleNamespace(
+            inspect_session_completion=AsyncMock(side_effect=ConnectionError())
+        )
+        expected_code = "OMNIGENT_SESSION_COMPLETION_EVIDENCE_MISSING"
+    elif failure_stage == "publication":
+        publication = HarnessPlatformError(
+            "Remote publication could not be verified",
+            code="OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED",
+        )
+        expected_code = "OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED"
+    else:
+        publication = {"push_status": "not_attempted"}
+        expected_code = "OMNIGENT_REPOSITORY_OUTPUT_MISSING"
+
+    _, _, _, produced = await _drive_authority_chain_coordinator(
+        execute, publication=publication, session_inspector=inspector
+    )
+    result = AgentRunResult.model_validate_json(
+        produced.model_dump_json(by_alias=True)
+    )
+    assert result.provider_error_code == result.failure_id == expected_code
+    assert result.execution_state == "completed"
+    assert result.objective_outcome == "failed"
+    assert result.retry_disposition == "retry"
+    assert result.publication_state == "unknown"
+    assert result.output_refs == ["artifact://saved-work"]
+    assert result.diagnostics_ref == "artifact://provider-diagnostics"
+    assert result.secondary_errors[0].code == "reporting_failed"
+    parent = run_module.MoonMindRunWorkflow()
+    mapped = parent._map_agent_run_result(result)
+    assert parent._activity_result_retryable(
+        mapped, failure_message="execution_error", tool_type="agent_runtime"
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("remote_verified", [True, False])
 async def test_coordinator_returns_no_commit_transport_outcome_without_repeating_work(
     remote_verified,

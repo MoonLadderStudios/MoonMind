@@ -154,7 +154,8 @@ function sidebarStatusLabel(status: string | null | undefined): string {
   return label.length > 0 ? `${label.charAt(0).toUpperCase()}${label.slice(1)}` : label;
 }
 
-function WorkflowSidebarStatusIcon({ status }: { status: string | null | undefined }) {
+function WorkflowSidebarStatusIcon({ row }: { row: WorkflowWorkspaceRow }) {
+  const status = row.rawState || row.state || row.status || 'unknown';
   const normalizedStatus = resolveWorkflowDisplayStatus(status) ?? '';
   if (isSidebarAnimatedWorkflowStatus(normalizedStatus)) {
     const label = sidebarStatusLabel(status);
@@ -171,6 +172,8 @@ function WorkflowSidebarStatusIcon({ status }: { status: string | null | undefin
     <StatusIcon
       status={status}
       domain="workflow"
+      completionDisposition={row.completionDisposition}
+      objectiveOutcome={row.objectiveOutcome}
       className="workflow-workspace-sidebar-status-icon"
       data-testid="workflow-workspace-sidebar-status-icon"
     />
@@ -214,7 +217,7 @@ function WorkflowSidebar({
       id,
       href: workflowDetailHref(id, search),
       primaryText: row.title?.trim() || id || 'Untitled workflow',
-      metadata: <WorkflowSidebarStatusIcon status={row.rawState || row.state || row.status || 'unknown'} />,
+      metadata: <WorkflowSidebarStatusIcon row={row} />,
     };
   };
   const rows = filteredRows.map(adaptRow);

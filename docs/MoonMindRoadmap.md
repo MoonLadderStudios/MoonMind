@@ -78,19 +78,17 @@ Worker/host restart, unavailable capacity, lost acknowledgments, credential rota
 
 # Milestone 2: Build a Guided Cybersecurity Workbench
 
-The longer-term outcome is authorized software-security analysis that explains its scope, evidence, findings, and verified remediation to a non-specialist. It is not an unrestricted collection of offensive tools or a special-purpose PentestGPT runtime.
+The outcome is authorized security assessment of code, dependencies, build systems, images, cloud infrastructure, and running applications. The operator can understand scope, evidence, limitations, findings, and verified remediation. Direct agent review and threat modeling complement deterministic scanners, including authorization and business-logic problems that default rules may miss.
 
-Begin with one passive repository/artifact analysis through the existing Container Job or executable-tool substrate. The first slice uses one concrete tool, immutable authorized input, read-only bounded execution, no assessment-target network access, and existing result artifacts. Dependency/inventory and secret-exposure analysis are suitable bounded starting outcomes. No scanner collection, new tool-pack database, universal findings schema, or new feed service is required.
+The [security-tools design](Security/SecurityTools.md) combines a small repository-security image with maintained upstream cloud and application scanner images. Portable Skills compose independent jobs and use the selected Omnigent harness and Provider Profile for reasoning. Scanner dependencies stay outside the core agent host. Temporal, Container Jobs, Secrets, restricted egress, and artifacts retain their existing responsibilities.
 
-Preserve native structured output and a readable summary, with interoperable exports where useful. Separate job success, declared coverage, findings, and incomplete analysis. Redact sensitive matches and treat scanner output as untrusted. Missing feeds, unsupported inputs, timeout, or truncated output cannot become a clean finding. Feed acquisition, if needed, is separately bounded and recorded rather than an excuse to upload source or open target egress.
+The [implemented passive repository scan](Security/PassiveRepoScan.md) remains a bounded starting capability. Broader assessments use protected input snapshots, separate writable outputs, scoped workload credentials, and enforced target authority. Offline source analysis, feed refresh, cloud inspection, and passive or active application tests have distinct permissions and limits. A prompt or Docker bridge alone does not establish confinement.
 
-Broader goals include dependency/SBOM, static code, infrastructure/configuration, image and supply-chain analysis, threat modeling, and remediation verification. Reuse maintained tool images and portable Skills. Fix generation or publication is separate admitted work with before/after evidence. Existing image SBOM/provenance is useful release metadata, not proof of a repository-security product journey.
+Reports preserve sanitized native evidence and distinguish execution, coverage, findings, and verification. Missing feeds, denied permissions, unsupported inputs, timeout, or malformed output cannot imply a clean assessment. Reusable rules and vulnerability data use existing caches and artifacts with explicit freshness; no permanent feed service or universal findings database is required.
 
-Network-active internal/lab assessment remains a later capability with explicit targets, exclusions, permitted actions, resource/traffic limits, and enforced egress. External or impact-capable assessment additionally retains its required approvals and evidence. A prompt, tool installation, or container configuration alone does not prove target confinement.
+Source fixes, cloud changes, and publication follow the admitted request. An authorized investigation-and-remediation workflow can compose them with before/after evidence and regression checks. Recurring assessments reuse existing schedules and compare compatible coverage; a missing finding alone does not prove a fix.
 
-**Completion:** an authorized operator can run the supported guided analysis, understand its limitations, produce remediation, and verify the outcome without a scanner-specific MoonMind architecture. The main application does not become a security-tool distribution.
-
-Passive work may proceed during runtime convergence when its actual job/source/artifact dependencies suffice. It does not displace concrete reliability repairs or depend on all App/CLI work.
+**Completion:** the supported repository, supply-chain, cloud, and web/API journeys work through existing MoonMind interfaces, with composable Skills, useful diagnostics, retained evidence, and honest verification. Cloud and application capabilities depend on their actual credential/network requirements, not installation of every optional scanner or completion of unrelated platform work.
 
 # Milestone 3: Make MoonMind Feel Smaller
 
@@ -153,3 +151,4 @@ These references retain unresolved product obligations from the earlier roadmap.
 | **7.1 Initial context injection for Omnigent** | Durable evidence identifies the authorized ContextPack actually delivered with the first message and its verification. Native RAG is not restored to satisfy this claim. | Existing context delivery/evidence owners. |
 
 Documentation is reviewed, not unit-tested for wording, headings, counts, or checkbox state. Preserve actual executable schema, parser, security, replay, and generated-catalog tests with their code owners. No new semantic-prose validator is required.
+

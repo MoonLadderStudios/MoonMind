@@ -82,6 +82,7 @@ The host updater requires Python 3.10+ and Compose V2. See the [update guide](do
 - [Workflow Console](docs/UI/WorkflowConsoleArchitecture.md)
 - [Skills](docs/Steps/SkillSystem.md)
 - [Execution and recovery](docs/Temporal/ManagedAndExternalAgentExecutionModel.md)
+- [Security tools design](docs/Security/SecurityTools.md)
 - [Roadmap](docs/MoonMindRoadmap.md)
 
 ## Contributing
@@ -93,3 +94,4 @@ Contributions are welcome, including AI-assisted pull requests. Read [CONTRIBUTI
 MoonMind is licensed under [Apache 2.0](LICENSE). See [NOTICE](NOTICE) for attribution.
 
 The Omnigent submodule has its own Apache 2.0 license and notices in `omnigent/LICENSE` and `omnigent/NOTICE`. Other submodules retain their upstream licenses.
+

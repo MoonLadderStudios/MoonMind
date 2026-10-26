@@ -42,7 +42,7 @@ async def test_image_admission_checks_bootstrap_contents_not_only_version(monkey
     async def run(argv, timeout=30):
         if argv[0] == "sh":
             probes.append(argv)
-            assert argv[1].endswith("services/omnigent/opencode-host/verify-warm-plugin-cache.sh")
+            assert argv[1].endswith("services/omnigent/moonmind-host/verify-warm-plugin-cache.sh")
             assert argv[3] == "60" and timeout == 90
             assert HOST_REF in argv
             return probe_exit, "", ""
@@ -150,7 +150,7 @@ async def test_compatibility_uses_the_running_compose_server_image(
     async def run(cmd, timeout=30):
         del timeout
         if cmd[0] == "sh":
-            assert cmd[1].endswith("services/omnigent/opencode-host/verify-warm-plugin-cache.sh")
+            assert cmd[1].endswith("services/omnigent/moonmind-host/verify-warm-plugin-cache.sh")
             return 0, '', ''
         if cmd[:4] == ["docker", "image", "inspect", HOST_REF]:
             return 0, "amd64", ""
@@ -207,7 +207,7 @@ async def test_mutable_server_fails_closed_without_live_compose_evidence(
     async def run(cmd, timeout=30):
         del timeout
         if cmd[0] == "sh":
-            assert cmd[1].endswith("services/omnigent/opencode-host/verify-warm-plugin-cache.sh")
+            assert cmd[1].endswith("services/omnigent/moonmind-host/verify-warm-plugin-cache.sh")
             return 0, '', ''
         if cmd[:4] == ["docker", "image", "inspect", HOST_REF]:
             return 0, "amd64", ""
@@ -321,7 +321,7 @@ async def test_running_server_resolution_selects_the_compose_repository_digest(
     async def run(cmd, timeout=30):
         del timeout
         if cmd[0] == "sh":
-            assert cmd[1].endswith("services/omnigent/opencode-host/verify-warm-plugin-cache.sh")
+            assert cmd[1].endswith("services/omnigent/moonmind-host/verify-warm-plugin-cache.sh")
             return 0, '', ''
         calls.append(cmd)
         if cmd[1] == "ps":
@@ -406,7 +406,7 @@ async def test_default_resolution_records_independent_build_provenance(
     async def run(cmd, timeout=30):
         del timeout
         if cmd[0] == "sh":
-            assert cmd[1].endswith("services/omnigent/opencode-host/verify-warm-plugin-cache.sh")
+            assert cmd[1].endswith("services/omnigent/moonmind-host/verify-warm-plugin-cache.sh")
             return 0, '', ''
         if cmd[:4] == ["docker", "image", "inspect", HOST_REF]:
             if cmd[-1] == "{{json .Config.Labels}}":
@@ -474,7 +474,7 @@ async def test_resolution_quarantines_operator_and_host_build_identity_mismatch(
     async def run(cmd, timeout=30):
         del timeout
         if cmd[0] == "sh":
-            assert cmd[1].endswith("services/omnigent/opencode-host/verify-warm-plugin-cache.sh")
+            assert cmd[1].endswith("services/omnigent/moonmind-host/verify-warm-plugin-cache.sh")
             return 0, '', ''
         if cmd[:4] == ["docker", "image", "inspect", HOST_REF]:
             if cmd[-1] == "{{json .Config.Labels}}":
@@ -543,7 +543,7 @@ async def test_resolution_accepts_an_explicit_independently_paired_build(
     async def run(cmd, timeout=30):
         del timeout
         if cmd[0] == "sh":
-            assert cmd[1].endswith("services/omnigent/opencode-host/verify-warm-plugin-cache.sh")
+            assert cmd[1].endswith("services/omnigent/moonmind-host/verify-warm-plugin-cache.sh")
             return 0, '', ''
         if cmd[:4] == ["docker", "image", "inspect", HOST_REF]:
             return 0, "amd64", ""
@@ -586,7 +586,7 @@ async def test_resolution_records_server_and_host_build_drift_without_quarantine
     async def run(cmd, timeout=30):
         del timeout
         if cmd[0] == "sh":
-            assert cmd[1].endswith("services/omnigent/opencode-host/verify-warm-plugin-cache.sh")
+            assert cmd[1].endswith("services/omnigent/moonmind-host/verify-warm-plugin-cache.sh")
             return 0, '', ''
         if cmd[:4] == ["docker", "image", "inspect", HOST_REF]:
             if cmd[-1] == "{{json .Config.Labels}}":
@@ -647,7 +647,7 @@ async def test_resolution_records_mislabeled_host_version_drift(
     async def run(cmd, timeout=30):
         del timeout
         if cmd[0] == "sh":
-            assert cmd[1].endswith("services/omnigent/opencode-host/verify-warm-plugin-cache.sh")
+            assert cmd[1].endswith("services/omnigent/moonmind-host/verify-warm-plugin-cache.sh")
             return 0, '', ''
         if cmd[:4] == ["docker", "image", "inspect", HOST_REF]:
             if cmd[-1] == "{{json .Config.Labels}}":

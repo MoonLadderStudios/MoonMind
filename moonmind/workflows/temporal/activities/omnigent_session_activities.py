@@ -5444,6 +5444,21 @@ async def omnigent_publish_workspace_activity(
     )
     result = AgentRunResult(
         outputRefs=[harvested_ref, publication_ref],
+        executionState=(
+            session.terminal_state
+            if session.terminal_state
+            in {"completed", "failed", "canceled", "timed_out", "delivery_unknown"}
+            else "unknown"
+        ),
+        objectiveOutcome=(
+            "succeeded"
+            if session.terminal_state == "completed"
+            else (
+                "failed"
+                if session.terminal_state in {"failed", "timed_out"}
+                else "cancelled" if session.terminal_state == "canceled" else "unknown"
+            )
+        ),
         summary=f"Omnigent session {session.terminal_state}",
         failureClass=(
             None

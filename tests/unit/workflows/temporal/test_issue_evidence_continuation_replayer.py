@@ -21,6 +21,7 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 from moonmind.workflows.temporal.workflows.run import (
     RUN_ISSUE_EVIDENCE_CONTINUATION_PATCH,
+    RUN_ISSUE_EVIDENCE_ELIGIBILITY_PATCH,
     INTEGRATIONS_TASK_QUEUE,
     MoonMindRunWorkflow,
 )
@@ -68,7 +69,7 @@ def _activity_options():
     }
 
 
-async def _run_owner(*, current: bool):
+async def _run_owner(*, current: bool, implementation_gap: bool = False):
     published = await workflow.execute_activity(
         "issue-evidence.fixture.publish", {}, **_activity_options()
     )
@@ -107,6 +108,19 @@ async def _run_owner(*, current: bool):
 
     owner._write_json_artifact = persist
     owner._resolve_agent_node_skillset_ref = skillset
+    if implementation_gap:
+        owner._publish_context["moonSpecGate"].update(
+            verdict="ADDITIONAL_WORK_NEEDED", evidenceContinuationEligible=False,
+        )
+        owner._remediation_loop_spec = owner._remediation_loop_spec.model_copy(
+            update={
+                "budgets": owner._remediation_loop_spec.budgets.model_copy(
+                    update={"max_wall_clock_seconds": 1}
+                )
+            }
+        )
+        # Implementation has already consumed the admitted wall-clock budget.
+        await workflow.sleep(2)
     if current:
         # This is the production patch boundary and owner, not a test replica.
         await owner._resume_published_issue_evidence(
@@ -134,6 +148,13 @@ class _CurrentOwner:
     @workflow.run
     async def run(self) -> dict:
         return await _run_owner(current=True)
+
+
+@workflow.defn(name="IneligibleIssueEvidenceReplayFixture")
+class _IneligibleOwner:
+    @workflow.run
+    async def run(self) -> dict:
+        return await _run_owner(current=True, implementation_gap=True)
 
 
 @workflow.defn(name="MoonMind.AgentRun")
@@ -285,6 +306,64 @@ def _scheduled(history):
         for event in history.events
         if event.HasField("activity_task_scheduled_event_attributes")
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("eligibility_guard", [False, True])
+async def test_ineligible_gate_keeps_legacy_timeout_history_replayable(
+    monkeypatch, eligibility_guard
+):
+    real_patched = workflow.patched
+    if not eligibility_guard:
+        # Record the parent behavior without emitting the new patch marker.
+        monkeypatch.setattr(
+            workflow, "patched",
+            lambda patch: False if patch == RUN_ISSUE_EVIDENCE_ELIGIBILITY_PATCH
+            else real_patched(patch),
+        )
+    activities, calls, saved, verified = _activities()
+    queue = f"issue-evidence-ineligible-{eligibility_guard}"
+    async with (
+        await WorkflowEnvironment.start_time_skipping(
+            data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER
+        ) as env,
+        Worker(
+            env.client, task_queue=queue, workflows=[_IneligibleOwner],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ),
+        Worker(env.client, task_queue=queue + "-activities", activities=activities),
+    ):
+        handle = await env.client.start_workflow(
+            _IneligibleOwner.run, id=queue, task_queue=queue
+        )
+        result = await handle.result()
+        history = await handle.fetch_history()
+    assert result["draftPreserved"] and result["headSha"] == _HEAD
+    assert result["implementationAttempts"] == result["evidenceRetries"] == 0
+    assert not calls and not verified
+    patch_ids = {
+        json.loads(event.marker_recorded_event_attributes.details["patch-data"].payloads[0].data)["id"]
+        for event in history.events
+        if event.HasField("marker_recorded_event_attributes")
+        and event.marker_recorded_event_attributes.marker_name == "core_patch"
+    }
+    if eligibility_guard:
+        assert result["continuation"] is None and not saved
+        assert _scheduled(history) == ["issue-evidence.fixture.publish"]
+        assert RUN_ISSUE_EVIDENCE_ELIGIBILITY_PATCH in patch_ids
+    else:
+        assert result["continuation"]["nextAction"] == "collect-evidence"
+        assert "budget expired" in result["continuation"]["summary"]
+        assert _scheduled(history) == [
+            "issue-evidence.fixture.publish", "issue-evidence.fixture.persist",
+        ]
+        assert RUN_ISSUE_EVIDENCE_ELIGIBILITY_PATCH not in patch_ids
+    monkeypatch.setattr(workflow, "patched", real_patched)
+    await Replayer(
+        workflows=[_IneligibleOwner],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+        data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
+    ).replay_workflow(history)
 
 
 @pytest.mark.asyncio

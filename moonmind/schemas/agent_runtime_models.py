@@ -1411,6 +1411,14 @@ class AgentAdmissionRecovery(BaseModel):
         return require_non_blank(value, field_name="admissionRecovery reference")
 
 
+class AgentResultError(BaseModel):
+    """A secondary observation/reporting error; never replaces the primary cause."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    code: str = Field(min_length=1, max_length=128)
+    diagnostics_ref: str | None = Field(None, alias="diagnosticsRef")
+
+
 class AgentRunResult(BaseModel):
     """Canonical result envelope for completed agent execution."""
 
@@ -1424,6 +1432,166 @@ class AgentRunResult(BaseModel):
     provider_error_code: str | None = Field(None, alias="providerErrorCode")
     retry_recommendation: str | None = Field(None, alias="retryRecommendation")
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+    execution_state: Literal[
+        "completed", "failed", "canceled", "timed_out", "delivery_unknown", "unknown"
+    ] = Field("unknown", alias="executionState")
+    objective_outcome: Literal[
+        "succeeded", "failed", "cancelled", "idle", "verification_blocked", "unknown"
+    ] = Field("unknown", alias="objectiveOutcome")
+    publication_state: Literal["published", "not_published", "unknown"] = Field(
+        "unknown", alias="publicationState"
+    )
+    output_availability: Literal["available", "unavailable", "unknown"] = Field(
+        "unknown", alias="outputAvailability"
+    )
+    observation: Literal["confirmed", "unavailable", "unknown"] = "unknown"
+    failure_id: str | None = Field(None, alias="failureId", max_length=255)
+    failure_cause: str | None = Field(None, alias="failureCause", max_length=128)
+    retry_action: str | None = Field(None, alias="retryAction", max_length=128)
+    retry_disposition: Literal["retry", "no_retry", "wait", "unknown"] = Field(
+        "unknown", alias="retryDisposition"
+    )
+    provider_failure: dict[str, Any] | None = Field(None, alias="providerFailure")
+    secondary_errors: list[AgentResultError] = Field(
+        default_factory=list, alias="secondaryErrors", max_length=16
+    )
+    diagnostic_refs: list[str] = Field(
+        default_factory=list, alias="diagnosticRefs", max_length=32
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _decode_legacy_result(cls, value: Any) -> Any:
+        """Decode retained snake/camel and metadata contracts at one boundary.
+
+        No display text participates. An old successful *execution* alone says
+        nothing about objective completion, publication, or missing outputs.
+        """
+        if not isinstance(value, Mapping):
+            return value
+        from moonmind.workflows.provider_failures import (
+            build_provider_failure_event,
+            provider_failure_event_from_metadata,
+            provider_failure_event_requires_cooldown,
+        )
+
+        data = dict(value)
+        metadata = data.get("metadata") or {}
+        if not isinstance(metadata, Mapping):
+            return value  # Let normal validation reject the malformed payload.
+        for name, field in cls.model_fields.items():
+            alias = field.alias or name
+            if name in data and alias not in data:
+                data[alias] = data.pop(name)
+        for name, alias in (
+            ("failure_class", "failureClass"),
+            ("provider_error_code", "providerErrorCode"),
+            ("retry_recommendation", "retryRecommendation"),
+        ):
+            if data.get(alias) is None:
+                data[alias] = metadata.get(alias, metadata.get(name))
+        failure = data.get("failureClass")
+        raw_event = data.get("providerFailure") or metadata.get(
+            "providerFailure", metadata.get("provider_failure")
+        )
+        event = provider_failure_event_from_metadata(raw_event) or (
+            build_provider_failure_event(
+                provider_error_code=data.get("providerErrorCode"),
+                retry_recommendation=data.get("retryRecommendation"),
+            )
+        )
+        if event is not None and event.observation != "confirmed":
+            data.setdefault("observation", event.observation)
+        terminal = metadata.get("terminalState", metadata.get("normalizedStatus"))
+        if "executionState" not in data:
+            data["executionState"] = (
+                terminal
+                if terminal
+                in {"completed", "failed", "canceled", "timed_out", "delivery_unknown"}
+                else (
+                    "unknown"
+                    if data.get("observation") in {"unavailable", "unknown"}
+                    else "failed" if failure else "completed"
+                )
+            )
+        if "observation" not in data:
+            data["observation"] = (
+                "unavailable"
+                if data["executionState"] in {"unknown", "delivery_unknown"}
+                else "confirmed"
+            )
+        if data.get("outputRefs") and "outputAvailability" not in data:
+            data["outputAvailability"] = "available"
+        if event:
+            data["providerFailure"] = event.to_metadata()
+            if data.get("providerErrorCode") is None:
+                data["providerErrorCode"] = event.provider_error_code
+            if data.get("retryRecommendation") is None:
+                data["retryRecommendation"] = event.retry_recommendation
+        data["diagnosticRefs"] = list(
+            dict.fromkeys(
+                [
+                    *(data.get("diagnosticRefs") or []),
+                    *([data["diagnosticsRef"]] if data.get("diagnosticsRef") else []),
+                    *([event.raw_error_ref] if event and event.raw_error_ref else []),
+                ]
+            )
+        )
+        data.setdefault(
+            "failureId",
+            (event.failure_id if event else None)
+            or data.get("providerErrorCode")
+            or failure,
+        )
+        turn = metadata.get("turnMetadata") or {}
+        if isinstance(turn, Mapping):
+            data.setdefault(
+                "failureCause", turn.get("failureCause", turn.get("failure_cause"))
+            )
+            data.setdefault(
+                "retryAction",
+                turn.get(
+                    "retryRecommendedAction", turn.get("retry_recommended_action")
+                ),
+            )
+        if "retryDisposition" not in data:
+            recommendation = data.get("retryRecommendation")
+            explicit_event_disposition = isinstance(raw_event, Mapping) and (
+                "retryDisposition" in raw_event or "retry_disposition" in raw_event
+            )
+            if event is not None and event.observation != "confirmed":
+                disposition = "unknown"
+            elif event is not None and explicit_event_disposition:
+                disposition = event.retry_disposition
+            elif (
+                failure in {"user_error", "permanent", "canceled"}
+                or isinstance(turn, Mapping)
+                and turn.get("failureClass", turn.get("failure_class")) == "permanent"
+                or data.get("providerErrorCode") in {"401", "403"}
+                or recommendation
+                in {"do_not_retry", "reauthenticate", "expand_credential_scope"}
+            ):
+                disposition = "no_retry"
+            elif provider_failure_event_requires_cooldown(event):
+                disposition = "wait"
+            elif failure in {"system_error", "execution_error"} or recommendation in {
+                "retry_step_execution",
+                "retry_transient_upstream",
+            }:
+                disposition = "retry"
+            else:
+                disposition = "unknown"
+            data["retryDisposition"] = disposition
+        return data
+
+    def outcome_projection(self) -> dict[str, Any]:
+        """Compact control facts; runtime/Skill metadata stays at its own boundary."""
+        return self.model_dump(
+            by_alias=True,
+            mode="json",
+            exclude={"metadata", "metrics", "summary", "worker_code_revision"},
+        )
+
     # Code revision of the worker process that produced the result
     # (MoonLadderStudios/MoonMind#4224). Optional for retained histories.
     worker_code_revision: str | None = Field(

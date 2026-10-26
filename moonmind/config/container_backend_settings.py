@@ -24,6 +24,11 @@ from typing import Any, Final, Mapping
 from pydantic import ValidationError
 
 from moonmind.schemas.container_job_models import CacheMount, ContainerJobSpec
+from moonmind.security.container_services import (
+    SERVICE_CONNECTIONS_ENV_KEY,
+    ServiceConnection,
+    parse_service_connections,
+)
 
 #: The only backend kind this deployment supports. A second backend kind
 #: (Podman, containerd, Kubernetes, endpoint pools) is explicitly out of scope.
@@ -185,6 +190,17 @@ class ContainerBackendSettings:
     max_output_total_bytes: int
     image_sources: tuple[ImageSource, ...]
     cache_sources: tuple[CacheSource, ...]
+    service_connections: tuple[ServiceConnection, ...] = ()
+
+    def authorize_service(self, spec: ContainerJobSpec) -> ServiceConnection | None:
+        if spec.service_ref is None:
+            return None
+        for connection in self.service_connections:
+            if connection.service_ref == spec.service_ref:
+                if spec.image_source_ref not in connection.allowed_image_source_refs:
+                    raise ValueError("container service access is not authorized for this image source")
+                return connection
+        raise ValueError("container service access is not deployment-authorized")
 
     def require_endpoint(self) -> str:
         """Return the configured endpoint or fail readiness with a bounded error."""
@@ -583,4 +599,5 @@ def resolve_container_backend_settings(
         ),
         image_sources=tuple(image_sources),
         cache_sources=cache_sources,
+        service_connections=parse_service_connections(source.get(SERVICE_CONNECTIONS_ENV_KEY)),
     )

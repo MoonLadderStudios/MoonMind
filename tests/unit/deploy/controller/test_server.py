@@ -8,7 +8,18 @@ from pathlib import Path
 from wsgiref.simple_server import make_server
 
 import pytest
-from conftest import load
+from conftest import load as load_controller_module
+
+
+def load(name):
+    module = load_controller_module(name)
+    if name == "server":
+        # These HTTP/recovery tests start after release configuration staging.
+        # test_release_configuration exercises that boundary through apply.
+        module.prepare_release_configuration = (
+            lambda store, operation, **kwargs: operation
+        )
+    return module
 
 
 class _Harness:
@@ -798,6 +809,9 @@ def test_partial_recreation_requiesces_and_recompacts_before_retry(
             return {"exit": 0, "output": ""}
 
     def helper(store, operation, **kwargs):
+        if kwargs["phase"] in ("storage-prepare", "storage-observe"):
+            phases.append(kwargs["phase"])
+            return {"status": "skipped"}
         assert storage_running
         assert kwargs["helper_image"] == "sha256:source"
         phases.append(kwargs["phase"])
@@ -808,8 +822,8 @@ def test_partial_recreation_requiesces_and_recompacts_before_retry(
     result = server._apply_with_bounded_retries(store, op["operationId"],
         lambda operation: server.production_apply(store, operation))
     assert result["status"] == "succeeded"
-    assert phases == ["pull", "storage", "journal-prepare", "up", "journal-quiesce",
-                      "pull", "storage", "journal-prepare", "up"]
+    assert phases == ["pull", "storage-prepare", "storage", "journal-prepare", "up", "journal-quiesce",
+                      "pull", "storage-prepare", "storage", "journal-prepare", "up", "storage-observe"]
     assert "only writer recreated" in result["attempts"][0]["error"]
 
 
@@ -833,7 +847,7 @@ def _exhausted_apply(server, record, store, tmp_path, monkeypatch, *, recovery_e
 
     def helper(store, operation, **kwargs):
         events.append((kwargs["phase"], None))
-        return {"status": "prepared" if kwargs["phase"] == "journal-prepare" else "quiesced"}
+        return {"status": "prepared" if kwargs["phase"] in ("journal-prepare", "storage-prepare") else "quiesced"}
 
     monkeypatch.setattr(server.engine, "subprocess_runner", Runner)
     monkeypatch.setattr(server, "run_omnigent_step", helper)
@@ -1975,8 +1989,11 @@ def test_production_apply_delegates_omnigent_selection_and_migration(
                 assert payload["target"] == target
                 assert payload["moonmindImage"] == op["desired"]["image"]
                 assert payload["controllerCapabilities"] == [
-                    "active-journal-transition", "request-identity",
-                    "unversioned-routing-cutover", "controller-handoff",
+                    "active-journal-transition",
+                    "request-identity",
+                    "unversioned-routing-cutover",
+                    "controller-handoff",
+                    "storage-transfer-budget",
                 ]
                 if args[-2] == "--omnigent-select":
                     assert "up" not in phase
@@ -2379,6 +2396,7 @@ def test_default_target_is_derived_from_the_mounted_checkout(
         "projectDir": str(repo),
         "composeFiles": ["docker-compose.yaml", "site.yaml"],
         "services": ["api", "postgres"],
+        "serviceSelection": "all",
         "envFile": str(repo / ".env"),
     }
     assert commands[0][-2:] == ("config", "--services")

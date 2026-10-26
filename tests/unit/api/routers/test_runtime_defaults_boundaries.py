@@ -12,9 +12,7 @@ from fastapi import FastAPI
 from api_service.api.routers.recurring_workflows import (
     _get_service as get_recurring_service,
 )
-from api_service.api.routers.recurring_workflows import (
-    router as recurring_router,
-)
+from api_service.api.routers.recurring_workflows import router as recurring_router
 from api_service.db.base import get_async_session
 from api_service.services.recurring_workflows_service import RecurringWorkflowsService
 from api_service.services.settings_catalog import SettingsCatalogService
@@ -22,10 +20,12 @@ from moonmind.config.settings import settings
 from tests.unit.api.routers.test_execution_saved_profile_boundaries import (
     agent_requests,
     raw_request,
-    stored_parameters,
 )
 from tests.unit.api.routers.test_execution_saved_profile_boundaries import (
     saved_profile_submission as _saved_profile_submission,
+)
+from tests.unit.api.routers.test_execution_saved_profile_boundaries import (
+    stored_parameters,
 )
 from tests.unit.api.routers.test_executions import _override_user_dependencies
 from tests.unit.services.test_recurring_workflows_service import recurring_db
@@ -219,6 +219,7 @@ async def test_tool_only_saved_runtime_matches_explicit_without_account_consumpt
         expected = (
             201
             if saved_runtime == "claude_code"
+            or entrypoint in {"recurring", "dedicated"}
             else 422 if entrypoint == "raw" else 409
         )
         assert response.status_code == expected, response.text
@@ -235,6 +236,8 @@ async def test_tool_only_saved_runtime_matches_explicit_without_account_consumpt
             assert recorded["targetRuntime"] == saved_runtime
             assert not agent_requests(recorded)
             assert "saved-codex_cli" not in str(recorded)
+            assert "agentProfileSnapshot" not in recorded
+            assert "omnigentExecutionPlan" not in recorded
         elif entrypoint == "raw":
             assert (
                 response.json()["detail"]["code"]
@@ -837,6 +840,7 @@ async def test_dedicated_saved_unavailable_pin_matches_explicit_without_substitu
     dedicated_context, state
 ):
     from unittest.mock import patch
+
     from api_service.db.models import (
         ManagedAgentProviderProfile,
         ProviderCredentialSource,
@@ -1101,6 +1105,7 @@ async def test_raw_saved_unavailable_pin_matches_explicit_without_substitution(
     saved_profile_submission, state
 ):
     from unittest.mock import patch
+
     from api_service.db.models import (
         ManagedAgentProviderProfile,
         ProviderCredentialSource,
@@ -1241,6 +1246,7 @@ async def test_ready_configuration_reaches_same_existing_admission_owner(
     dedicated_context, monkeypatch, intent, model_intent
 ):
     from fastapi import HTTPException
+
     from api_service.db.models import (
         ManagedAgentProviderProfile,
         OmnigentAgentProfile,
@@ -1446,7 +1452,7 @@ async def test_dedicated_implicit_resolver_keeps_saved_account(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("explicit_runtime", [False, True])
 @pytest.mark.parametrize("finish_mode", [None, "review_only"])
-async def test_dedicated_agent_free_omnigent_keeps_plan_admission(
+async def test_dedicated_agent_free_omnigent_preserves_finishing_admission(
     dedicated_context, monkeypatch, explicit_runtime, finish_mode
 ):
     from api_service.db.models import ManagedAgentProviderProfile
@@ -1476,8 +1482,24 @@ async def test_dedicated_agent_free_omnigent_keeps_plan_admission(
     body["target"]["initialParameters"]["task"] = task
     ctx.context.settings_reads.clear()
     response = await ctx.client.post("/api/recurring-workflows", json=body)
-    assert response.status_code == 409, response.text
-    assert "default Omnigent Agent Profile is unavailable" in response.text
+    if finish_mode == "review_only":
+        assert response.status_code == 409, response.text
+        assert "default Omnigent Agent Profile is unavailable" in response.text
+        assert len(ctx.context.settings_reads) == 1
+        ctx.adapter.create_schedule.assert_not_awaited()
+        return
+    assert response.status_code == 201, response.text
     assert "saved-codex_cli" not in response.text
     assert len(ctx.context.settings_reads) == 1
-    ctx.adapter.create_schedule.assert_not_awaited()
+    ctx.adapter.create_schedule.assert_awaited_once()
+    recorded = response.json()["target"]["initialParameters"]
+    dispatched = ctx.adapter.create_schedule.await_args.kwargs["workflow_input"][
+        "initial_parameters"
+    ]
+    assert dispatched["task"] == recorded["task"]
+    for parameters in (recorded, dispatched):
+        assert parameters["targetRuntime"] == "omnigent"
+        assert not agent_requests(parameters)
+        assert "saved-codex_cli" not in str(parameters)
+        assert "agentProfileSnapshot" not in parameters
+        assert "omnigentExecutionPlan" not in parameters

@@ -35,6 +35,7 @@ _DEFAULT_CONTROLLER_URL = os.environ.get(
 _CONTROLLER_EXCLUDED_SERVICES = frozenset({"docker-proxy", "sandbox-egress-proxy"})
 _CONTROLLER_POLL_INTERVAL_SECONDS = 10
 _CONTROLLER_POLL_TIMEOUT_SECONDS = 1800
+_CONTROLLER_STORAGE_COPY_SECONDS = 4 * 60 * 60 + 900
 # The controller applies inside the submission request; after this bounded
 # wait the entrypoint observes its own operation identity instead.
 _CONTROLLER_SUBMIT_TIMEOUT_SECONDS = 30
@@ -1217,6 +1218,7 @@ def _submit_via_controller(
         "projectDir": str(repo),
         "composeFiles": compose_files,
         "services": services,
+        "serviceSelection": "all",
         "idempotencyKey": context.get("idempotency_key", ""),
     }
     if deployment_env.is_file():
@@ -1250,6 +1252,7 @@ def _submit_via_controller(
     last_status = None
     submission_id = str(context.get("idempotency_key", "")).removeprefix("host-update:")
     requested_controller_tried = False
+    storage_attempts = set()
     while True:
         try:
             _, operation = _controller_call(
@@ -1261,6 +1264,21 @@ def _submit_via_controller(
             operation = {"status": last_status}
             print(f"Controller status unavailable; retrying: {exc}", flush=True)
         status = operation.get("status")
+        if operation.get("omnigentStep") == "storage-prepare":
+            attempt = (
+                operation.get("attemptGroup", 1),
+                len(operation.get("attempts") or []),
+            )
+            if attempt not in storage_attempts:
+                storage_attempts.add(attempt)
+                # Observe each bounded copy attempt plus ordinary apply and
+                # readiness. Repeated reads of one attempt never renew the wait.
+                deadline = max(
+                    deadline,
+                    time.time()
+                    + _CONTROLLER_STORAGE_COPY_SECONDS
+                    + _CONTROLLER_POLL_TIMEOUT_SECONDS,
+                )
         if status != last_status:
             print(f"Controller operation {operation_id}: {status}", flush=True)
             last_status = status
@@ -1315,8 +1333,8 @@ def _submit_via_controller(
             )
         if time.time() > deadline:
             raise RuntimeError(
-                f"Controller operation {operation_id} did not finish within "
-                f"{_CONTROLLER_POLL_TIMEOUT_SECONDS}s; reattach with "
+                f"Controller operation {operation_id} did not finish before "
+                "its observation deadline; reattach with "
                 f"--resume {submission_id} or inspect the "
                 "controller operation directly."
             )

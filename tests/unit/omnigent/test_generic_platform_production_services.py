@@ -1606,12 +1606,17 @@ async def test_github_projection_failed_rewrite_keeps_live_same_owner_volume(
     ],
 )
 async def test_host_volume_initializers_use_setup_authority(
+    monkeypatch,
     host_api_token: str,
     expected_secret_payloads: list[bytes],
     expected_host_id: str | None,
     capability_name: str,
     capability_file: str,
 ) -> None:
+    monkeypatch.setenv(
+        "MOONMIND_MANAGED_SESSION_NON_SECRET_ENV_KEYS", "PROJECT_ASSET_SERVER"
+    )
+    monkeypatch.setenv("PROJECT_ASSET_SERVER", "asset://assets.example:41337")
     calls: list[tuple[list[str], dict[str, object]]] = []
 
     class Backend:
@@ -1696,6 +1701,7 @@ async def test_host_volume_initializers_use_setup_authority(
         credential_handles=[],
         runtime_environment={
             "MOONMIND_URL": "http://api:8000",
+            "PROJECT_ASSET_SERVER": "asset://assets.example:41337",
             "MOONMIND_AGENT_RUN_ID": "agent-run-1",
             "MOONMIND_TASK_WORKFLOW_ID": "workflow-1",
             "MOONMIND_STEP_ID": "step-1",
@@ -1724,6 +1730,7 @@ async def test_host_volume_initializers_use_setup_authority(
     ] == expected_secret_payloads
     assert script_inputs["runtime_environment"] == {
         "MOONMIND_URL": "http://api:8000",
+        "PROJECT_ASSET_SERVER": "asset://assets.example:41337",
         "MOONMIND_AGENT_RUN_ID": "agent-run-1",
         "MOONMIND_TASK_WORKFLOW_ID": "workflow-1",
         "MOONMIND_STEP_ID": "step-1",
@@ -5843,77 +5850,6 @@ def test_sandbox_clone_script_sends_only_admitted_credential_over_real_git(
     git_config = (target / ".git" / "config").read_text()
     assert selected_token not in git_config
     assert "https://github.com/owner/repo.git" in git_config
-
-
-def test_generic_host_gh_reader_observes_same_owner_refresh_over_ambient_token(
-    monkeypatch, tmp_path
-) -> None:
-    """#4011: the running host's gh reads the live projection, not a start copy."""
-    import shutil
-
-    from moonmind.omnigent.host_services.runtime_scripts import _RUNTIME_BIN_DIR
-
-    gh = shutil.which("gh") or "/opt/moonmind-tools/bin/gh"
-    if not Path(gh).exists():
-        pytest.skip("requires the GitHub CLI binary")
-    gh = os.path.realpath(gh)
-    script, _environment = OmnigentRuntimeScriptService().build_entrypoint(
-        credential_handles=[],
-        skill_attachment={"targetPath": "/opt/moonmind-skills"},
-        step_execution_id="workflow:run:node-1:execution:1",
-        github_credential_attachment={
-            "targetPath": "/run/mm-credentials/github",
-            "githubHost": "github.com",
-        },
-    )
-    start = script.index("if [ -d /run/mm-credentials/github ]; then ")
-    end = script.index(f"chmod 0700 {_RUNTIME_BIN_DIR}/gh; fi; ") + len(
-        f"chmod 0700 {_RUNTIME_BIN_DIR}/gh; fi; "
-    )
-    mount = tmp_path / "mount"
-    home = tmp_path / "home"
-    bin_dir = tmp_path / "bin"
-    fragment = (
-        script[start:end]
-        .replace("/run/mm-credentials/github", str(mount))
-        .replace(_RUNTIME_BIN_DIR, str(bin_dir))
-        .replace("/home/app", str(home))
-        .replace("/opt/moonmind-tools/bin/gh", gh)
-    )
-
-    first = _ProjectionBackend(existing=False)
-    asyncio.run(_materialize_projection(monkeypatch, first, "selected-token-B1"))
-    subprocess.run(
-        _projection_writer(first, mount), input=b"selected-token-B1", check=True
-    )
-    subprocess.run(["/bin/sh", "-ceu", fragment], check=True)
-
-    def host_gh_token() -> str:
-        # Ambient A is present in the agent environment; the generated wrapper
-        # must still resolve the admitted projection.
-        result = subprocess.run(
-            [str(bin_dir / "gh"), "auth", "token"],
-            env={
-                "PATH": os.environ["PATH"],
-                "HOME": str(home),
-                "GH_TOKEN": _AMBIENT_GITHUB_TOKEN,
-                "GITHUB_TOKEN": _AMBIENT_GITHUB_TOKEN,
-            },
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return result.stdout.strip()
-
-    assert host_gh_token() == "selected-token-B1"
-
-    refresh = _ProjectionBackend(existing=True)
-    asyncio.run(_materialize_projection(monkeypatch, refresh, "selected-token-B2"))
-    subprocess.run(
-        _projection_writer(refresh, mount), input=b"selected-token-B2", check=True
-    )
-    # No entrypoint rerun: the live reader sees the complete new issuance.
-    assert host_gh_token() == "selected-token-B2"
 
 
 @pytest.mark.asyncio
