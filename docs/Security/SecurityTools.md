@@ -1,6 +1,6 @@
 # Security Tools and Assessment Workflows
 
-This is a **proposed design** for MoonMind's security program. It describes intended behavior, not a claim that every capability is available. Tool recommendations reflect upstream documentation reviewed on 2026-10-25. The [passive repository scan](PassiveRepoScan.md) documents the narrower implemented journey.
+This describes MoonMind's security program, including capabilities that still need qualification. The [passive repository scan](PassiveRepoScan.md) and the repository scanner adapters below have implemented job/report paths; curated scanner images and offline database provisioning have their own delivery paths.
 
 ## Purpose and ownership
 
@@ -17,6 +17,24 @@ The existing Omnigent agent remains responsible for reasoning. Its selected harn
 | Evidence retention and operator presentation | Existing [report artifacts](../Artifacts/ReportArtifacts.md) and [artifact presentation](../Artifacts/ArtifactPresentationContract.md) |
 
 Adapters translate a tool's invocation and results into those interfaces. Scanner-specific interpretation belongs in adapters and Skills, rather than branches in generic Temporal orchestration. Deterministic scanner jobs do not acquire model capacity. Completed work survives a retry of an interrupted step; a new attempt consumes the existing logical step's budget.
+
+### Repository scanner jobs
+
+`moonmind container repository-scan --admission scan.json` submits exactly one Gitleaks, Opengrep, or Trivy job through the existing Container Job transport. For example, an explicit Gitleaks admission is:
+
+```json
+{"scanner":"gitleaks","inputPath":".","outputDirectory":"artifacts/gitleaks-run","maxFiles":4096,"maxInputBytes":134217728,"maxReportBytes":8388608,"timeoutSeconds":300}
+```
+
+Use a fresh output directory for each job. The worker refuses nonempty output directories so the writable mount cannot expose existing source files; retained output survives a refused launch. `--image-source` selects a deployment-owned image alias (default `repository-security`); `--image` selects an explicit image instead. The selected image must contain the scanner, Git, Python, and the installed MoonMind scanner runner. The adapter does not provision an image or fetch rules/databases. An unconfigured alias remains a visible image-acquisition failure.
+
+The typed `repositoryScan` request travels with the existing job spec. Admission and the worker enforce its invocation, read-only source mount, separate writable output mount, no network, output declarations, cache access, and timeout. The runner uses a bounded private copy, omits output storage and admitted `exclusions`, ignores repository configuration and ignore files, and disables inline suppressions unless `allowInlineSuppressions` was explicitly admitted. It never edits source inputs. Gitleaks performs separate available-history and directory scans with full redaction; its evidence records refs, shallow/missing history, and available untracked files. Exclusions also apply to Git history pathspecs.
+
+Opengrep requires `rules` entries containing `id`, an image-owned `path` under `/opt/moonmind-scanner-rules/`, `sha256`, and `license`. Gitleaks may select one such trusted configuration; otherwise it uses built-in rules through a private configuration. Rule bytes must match their admitted identities. Remote and repository-local rule paths are rejected. Trivy explicitly selects `trivyScanners` (default `vuln,misconfig`); adding `secret` requires `gitleaksOwnsSecrets: false`. Vulnerability scanning requires a read-only `databaseCacheRef` and `databaseDigest`. That digest is SHA-256 of sorted compact JSON pairs `[relative_path, file_sha256]` for the bounded database tree. The runner verifies and privately copies the admitted cache before offline scanning.
+
+The existing artifact manifest retains sanitized native JSON and a `repository-scanner/v1` summary. Console content is withheld at live and terminal log ingestion because arbitrary scanner diagnostics can contain source or secret metadata. Native sanitization also runs at artifact ingestion; invalid or oversized output is rejected with safe diagnostics. Findings, execution, coverage, and verification remain separate. Parser errors, unsupported inputs, missing reports, timeouts, cancellation, and sanitization failures remain incomplete even when useful findings survive.
+
+Pass summary artifact refs to `security.assess` using its existing `retained-report` tool and explicit file scope. The consumer authorizes native refs and publishes through the existing report bundle without an LLM. Admitted exclusions must match the assessment scope; admitted inline suppressions require its `inline-suppressions` repository exception. A clean comparison describes the covered scope only, and scanner execution does not verify a fix.
 
 ## Packaging and recommended tools
 
