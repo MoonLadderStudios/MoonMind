@@ -13,7 +13,6 @@ import json
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from moonmind.security.service_relay import RelayConfig
@@ -178,7 +177,10 @@ async def _json(runner: CommandRunner, args: Sequence[str], failure: str) -> dic
 
 
 async def attest_service_connection(
-    runner: CommandRunner, connection: ServiceConnection
+    runner: CommandRunner,
+    connection: ServiceConnection,
+    *,
+    _remaining_reconciliations: int = 1,
 ) -> dict:
     network = await _json(
         runner,
@@ -261,19 +263,16 @@ async def attest_service_connection(
         ),
         "service relay live configuration is unavailable",
     )
-    implementation = (
-        "sha256:"
-        + hashlib.sha256(
-            Path(__file__).with_name("service_relay.py").read_bytes()
-        ).hexdigest()
-    )
-    if observed != {
-        "configDigest": connection.relay.digest,
-        "implementationDigest": implementation,
-    }:
-        raise RuntimeError(
-            "service relay live configuration or implementation is mismatched"
-        )
+    # The deployment-authorized image, canonical startup and read-only code
+    # establish executable integrity. Record the running implementation, but do
+    # not couple independently updated worker and relay source revisions.
+    implementation = observed.get("implementationDigest")
+    if (
+        observed.get("configDigest") != connection.relay.digest
+        or not isinstance(implementation, str)
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", implementation)
+    ):
+        raise RuntimeError("service relay live configuration or evidence is mismatched")
     peers = network.get("Containers") or {}
     if not isinstance(peers, dict) or gateway.get("id") not in peers:
         raise RuntimeError("service relay network membership is unavailable")
@@ -281,11 +280,37 @@ async def attest_service_connection(
         if peer_id == gateway["id"]:
             continue
         fmt = '{"labels":{{json .Config.Labels}},"networks":{{json .NetworkSettings.Networks}}}'
-        peer = await _json(
-            runner,
-            ("inspect", "--format", fmt, peer_id),
-            "service network peer is unavailable",
-        )
+        try:
+            peer = await _json(
+                runner,
+                ("inspect", "--format", fmt, peer_id),
+                "service network peer is unavailable",
+            )
+        except RuntimeError:
+            if not _remaining_reconciliations:
+                raise
+            current = await _json(
+                runner,
+                (
+                    "network",
+                    "inspect",
+                    "--format",
+                    "{{json .}}",
+                    connection.network_ref,
+                ),
+                "service network reconciliation is unavailable",
+            )
+            membership = current.get("Containers")
+            if not isinstance(membership, dict) or peer_id in membership:
+                raise
+            # Confirmed concurrent removal is not an isolation violation. Start
+            # a bounded fresh attestation so new peers and network drift are
+            # checked too; an inspect error alone never authorizes a peer.
+            return await attest_service_connection(
+                runner,
+                connection,
+                _remaining_reconciliations=_remaining_reconciliations - 1,
+            )
         labels = peer.get("labels") or {}
         if (
             labels.get(SERVICE_LABEL) != connection.service_ref

@@ -249,7 +249,7 @@ async def test_service_attestation_rejects_drift_and_forgery(fault):
     if fault == "config":
         state["health"]["configDigest"] = "sha256:" + "c" * 64
     if fault == "implementation":
-        state["health"]["implementationDigest"] = "sha256:" + "c" * 64
+        state["health"]["implementationDigest"] = "invalid evidence"
     if fault == "unknown_peer":
         state["network"]["Containers"]["unknown"] = {}
     if fault == "gateway_command":
@@ -479,3 +479,68 @@ def test_service_dns_exception_never_weakens_normal_launch_policy():
             ],
             expected_service_host="service:172.30.7.2",
         )
+
+
+@pytest.mark.asyncio
+async def test_service_relay_independent_source_update_preserves_interface():
+    connection = settings().authorize_service(spec())
+    state = observed(connection)
+    state["health"]["implementationDigest"] = "sha256:" + "c" * 64
+    evidence = await attest_service_connection(
+        runner_for(connection, state, []), connection
+    )
+    assert evidence["implementationDigest"] == state["health"]["implementationDigest"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("removed", [True, False])
+async def test_disappearing_peer_requires_confirmed_network_removal(removed):
+    connection = settings().authorize_service(spec())
+    state = observed(connection)
+    state["network"]["Containers"]["finishing-peer"] = {}
+    original = runner_for(connection, state, [])
+    inspections = 0
+
+    async def runner(args):
+        nonlocal inspections
+        if args[0] == "inspect" and args[-1] == "finishing-peer":
+            inspections += 1
+            if removed:
+                state["network"]["Containers"].pop("finishing-peer", None)
+            return 1, b"", b"container unavailable"
+        return await original(args)
+
+    if removed:
+        await attest_service_connection(runner, connection)
+    else:
+        with pytest.raises(RuntimeError, match="peer"):
+            await attest_service_connection(runner, connection)
+    assert inspections == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drift", ["new-peer", "network", "second-removal"])
+async def test_peer_reconciliation_rechecks_boundary_and_is_bounded(drift):
+    connection = settings().authorize_service(spec())
+    state = observed(connection)
+    state["network"]["Containers"]["first"] = {}
+    original = runner_for(connection, state, [])
+    failures = 0
+
+    async def runner(args):
+        nonlocal failures
+        if args[0] == "inspect" and args[-1] in {"first", "second"}:
+            failures += 1
+            state["network"]["Containers"].pop(args[-1], None)
+            if drift == "new-peer":
+                state["network"]["Containers"]["unauthorized"] = {}
+            elif drift == "network":
+                state["network"]["Internal"] = False
+            elif args[-1] == "first":
+                state["network"]["Containers"]["second"] = {}
+            return 1, b"", b"not found"
+        return await original(args)
+
+    with pytest.raises(RuntimeError, match="service"):
+        await attest_service_connection(runner, connection)
+    assert failures == (2 if drift == "second-removal" else 1)
