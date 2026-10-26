@@ -204,10 +204,21 @@ def _scanner_observation(
             for r in summary.results.values()
         )
     )
+    # Snapshot inventory is not evidence that Opengrep or Trivy examined a file.
+    # Gitleaks' explicit directory invocation covers the bounded staged inputs;
+    # its native finding list has no separate scanned-file inventory.
     assets = sorted(
-        set(summary.execution.assets if summary.execution else [])
-        | {f.asset for f in findings}
+        (
+            set(summary.execution.assets if summary.execution else [])
+            | {f.asset for f in findings}
+        )
+        if summary.scanner == "gitleaks"
+        else {
+            asset for row in summary.results.values() for asset in row.examined_assets
+        }
     )
+    if not assets:
+        complete = False
     return Observation(
         scope=request.scope,
         observed_at=created_at,

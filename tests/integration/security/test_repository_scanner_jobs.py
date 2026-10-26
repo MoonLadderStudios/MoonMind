@@ -69,6 +69,7 @@ def repository(root):
     git("add", "-A")
     git("commit", "-m", "Current fixture")
     (root / "untracked.txt").write_text(MARKER + "-untracked")
+    (root / (MARKER + ".txt")).write_text(MARKER)
     return git
 
 
@@ -88,7 +89,11 @@ def native(scanner):
 
         return {
             "history": [row("removed.txt")],
-            "worktree": [row("tracked.txt"), row("untracked.txt")],
+            "worktree": [
+                row("tracked.txt"),
+                row("untracked.txt"),
+                row(MARKER + ".txt"),
+            ],
         }
     if scanner == "opengrep":
         return {
@@ -136,15 +141,18 @@ def native(scanner):
     }
 
 
-def install_fixture_process(tmp_path, scanner, monkeypatch, *, failure=None):
+def install_fixture_process(
+    tmp_path, scanner, monkeypatch, *, failure=None, reports=None
+):
     fixture = tmp_path / (scanner + "-fixture")
-    fixture.write_text(f"""#!{sys.executable}
+    fixture.write_text(
+        f"""#!{sys.executable}
 import json, pathlib, sys, time
 args=sys.argv[1:]
 if args in (["--version"], ["version"]):
  print("1.2.3"); raise SystemExit(0)
 scanner={scanner!r}
-reports={native(scanner)!r}
+reports={native(scanner) if reports is None else reports!r}
 if scanner == "gitleaks":
  assert "--redact=100" in args and "--ignore-gitleaks-allow" in args
  assert pathlib.Path("untracked.txt").exists()
@@ -166,7 +174,8 @@ if {failure!r} == "cancel":
  import os, signal
  os.kill(os.getppid(), signal.SIGTERM); time.sleep(30)
 raise SystemExit(2 if {failure!r} == "failure" else (1 if scanner=="gitleaks" else 0))
-""")
+"""
+    )
     fixture.chmod(0o755)
     original = subprocess.Popen
 
@@ -228,7 +237,9 @@ async def test_repository_job_retains_sanitized_evidence_and_report(
                 ]
             ),
         )
-    scan = RepositoryScan(scanner=scanner, outputDirectory="artifacts/scan", **options)
+    scan = RepositoryScan(
+        scanner=scanner, outputDirectory=f"artifacts/scan-{MARKER}", **options
+    )
     install_fixture_process(tmp_path, scanner, monkeypatch)
     code = run_scanner(
         scan,
@@ -329,9 +340,26 @@ async def test_repository_job_retains_sanitized_evidence_and_report(
     assert outputs["counts"]["new"] == len(
         {f["nativeId"] for row in summary["results"].values() for f in row["findings"]}
     )
-    assert outputs["coverageStatus"] == ("stale_or_partial" if partial else "complete")
+    # Source and IaC/dependency tools examine selected native targets within the
+    # larger snapshot. The report must disclose that broader requested scope.
+    report_partial = partial or scanner in {"opengrep", "trivy"}
+    assert outputs["coverageStatus"] == (
+        "stale_or_partial" if report_partial else "complete"
+    )
     assert not outputs["diagnostics"]
     assert outputs["scannerSummaries"][0]["nativeRefs"]
+    assert MARKER not in json.dumps(outputs)
+    # Read the actual retained Markdown and structured report bytes, including
+    # their evidence, through the artifact owner's authorized read boundary.
+    for ref in {
+        outputs["scanRef"],
+        outputs["comparisonRef"],
+        outputs["reportBundle"]["primary_report_ref"]["artifact_id"],
+    }:
+        _, body = await environment.service.read(
+            artifact_id=ref, principal="workflow:assessment", allow_restricted_raw=True
+        )
+        assert MARKER.encode() not in body
     record = await jobs.repository.get_for_owner(owner=owner, job_id=accepted.job_id)
     record.logs_ref = result.logs_ref
     record.artifacts_ref = result.artifacts_ref
@@ -379,3 +407,214 @@ async def test_scanner_process_failure_retains_partial_native_findings(
         assert "canceled" in execution["states"].values()
     assert (root / scan.output_directory / "history.json").exists()
     assert MARKER not in (root / scan.output_directory / "history.json").read_text()
+
+
+async def retain_native_fixture(
+    environment, tmp_path, monkeypatch, scanner, reports, key
+):
+    """Replace the detector process only; retain production admission and storage."""
+    case = tmp_path / key
+    case.mkdir()
+    root = case / "repository"
+    repository(root)
+    (root / (MARKER + ".txt")).unlink()
+    (root / "clean.py").write_text("print('clean')\n")
+    (root / "unexamined.py").write_text("eval(user_input)\n")
+    options = {"trivyScanners": ["misconfig"]} if scanner == "trivy" else {}
+    if scanner == "opengrep":
+        rules = case / "rules" / "source.yaml"
+        rules.parent.mkdir()
+        rules.write_text("rules: []\n")
+        options["rules"] = [
+            {
+                "id": "source",
+                "path": "/opt/moonmind-scanner-rules/source.yaml",
+                "sha256": hashlib.sha256(rules.read_bytes()).hexdigest(),
+                "license": "MIT",
+            }
+        ]
+    scan = RepositoryScan(scanner=scanner, outputDirectory="artifacts/scan", **options)
+    install_fixture_process(case, scanner, monkeypatch, reports=reports)
+    code = run_scanner(
+        scan,
+        source=root,
+        output=root / scan.output_directory,
+        rules_root=case / "rules",
+    )
+    workload = build_scanner_job(scan)
+    workload.pop("imageSourceRef")
+    workload.update(
+        image="python:3.13", workspaceRef={"kind": "sandbox", "workspaceId": key}
+    )
+    submission = ContainerJobSubmitRequest(
+        idempotencyKey=key,
+        source={"source": "workflow", "workflowId": "assessment"},
+        spec=workload,
+    )
+    owner = OwnerIdentity(principalType="user", principalId="operator")
+    jobs = ContainerJobService(environment.session, temporal=AsyncMock())
+    accepted = await jobs.submit(owner=owner, request=submission)
+    published = {}
+
+    async def publish(_request, name, payload):
+        assert MARKER.encode() not in payload
+        ref = await put(environment.service, payload)
+        published[name] = ref
+        return ref
+
+    async def runner(argv):
+        timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        return 0, f"{timestamp} {MARKER}\n".encode(), b""
+
+    request = ContainerJobActivityRequest(
+        jobId=accepted.job_id,
+        ownershipToken=f"{accepted.job_id}:v1",
+        request=submission,
+        resolvedWorkspaceRef=str(root),
+        containerRef="fixture-container",
+        terminalState="succeeded" if code == 0 else "failed",
+        exitCode=code,
+    )
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=runner,
+        evidence_publisher=publish,
+        log_spool_root=case / "live",
+    )
+    await backend._collect_live_logs(request, request.container_ref)
+    evidence = await backend.publish_evidence(request)
+    record = await jobs.repository.get_for_owner(owner=owner, job_id=accepted.job_id)
+    record.logs_ref, record.artifacts_ref = evidence.logs_ref, evidence.artifacts_ref
+    await environment.session.flush()
+    jobs._read_evidence_text = lambda **kw: _evidence_text(
+        environment.service, kw["artifact_ref"]
+    )
+    assert (
+        MARKER
+        not in (await jobs.logs(owner=owner, job_id=accepted.job_id)).model_dump_json()
+    )
+    assert (
+        MARKER
+        not in (
+            await jobs.artifacts(owner=owner, job_id=accepted.job_id)
+        ).model_dump_json()
+    )
+    ref = published[f"{accepted.job_id}-output-summary.json"]
+    return ref, await read(environment.service, ref)
+
+
+def retained_assessment(ref, assets):
+    return {
+        "scope": {"assets": assets},
+        "tools": ["retained-report"],
+        "reportRefs": [ref],
+        "credentialRefs": [],
+        "networkRefs": [],
+        "budget": {"baseSeconds": 60, "maxSeconds": 120, "progressStallSeconds": 60},
+    }
+
+
+@pytest.mark.parametrize("kind", ["malformed", "mixed", "clean"])
+async def test_trivy_result_structure_remains_honest_through_retained_report(
+    environment, tmp_path, monkeypatch, kind
+):
+    valid = {
+        "Target": "main.tf",
+        "Misconfigurations": [{"ID": "AVD-EXAMPLE", "Status": "FAIL"}],
+    }
+    results = (
+        [valid, {}]
+        if kind == "mixed"
+        else (
+            [{}]
+            if kind == "malformed"
+            else [{"Target": "main.tf", "Misconfigurations": []}]
+        )
+    )
+    ref, summary = await retain_native_fixture(
+        environment,
+        tmp_path,
+        monkeypatch,
+        "trivy",
+        {"scan": {"SchemaVersion": 2, "Results": results}},
+        kind,
+    )
+    outputs = await invoke(
+        environment.service, retained_assessment(ref, ["main.tf"]), key=kind
+    )
+    assert not outputs["diagnostics"]
+    assert summary["coverage"] == ("complete" if kind == "clean" else "partial")
+    assert outputs["coverageStatus"] == (
+        "complete" if kind == "clean" else "stale_or_partial"
+    )
+    assert outputs["counts"]["new"] == (1 if kind == "mixed" else 0)
+    comparison = await read(environment.service, outputs["comparisonRef"])
+    assert comparison["observation"]["coverage"][0]["status"] == (
+        "complete" if kind == "clean" else "partial"
+    )
+
+
+@pytest.mark.parametrize(
+    "case", ["unexamined", "skipped", "parser-failed", "missing-inventory", "clean"]
+)
+async def test_opengrep_baseline_comparison_uses_native_examined_scope(
+    environment, tmp_path, monkeypatch, case
+):
+    assets = ["clean.py", "unexamined.py"]
+    findings = [
+        {"check_id": "source", "path": path, "start": {"line": 1}} for path in assets
+    ]
+    baseline_ref, _ = await retain_native_fixture(
+        environment,
+        tmp_path,
+        monkeypatch,
+        "opengrep",
+        {"scan": {"results": findings, "errors": [], "paths": {"scanned": assets}}},
+        "baseline",
+    )
+    baseline = await invoke(
+        environment.service, retained_assessment(baseline_ref, assets), key="baseline"
+    )
+    current = {
+        "results": [] if case == "clean" else findings[:1],
+        "errors": [],
+        "paths": {
+            "scanned": assets if case in {"clean", "parser-failed"} else assets[:1]
+        },
+    }
+    if case == "skipped":
+        current["paths"]["skipped"] = [
+            {"path": "unexamined.py", "reason": "unsupported"}
+        ]
+    elif case == "parser-failed":
+        current["errors"] = [
+            {"type": "ParseError", "spans": [{"file": "unexamined.py"}]}
+        ]
+    elif case == "missing-inventory":
+        current["paths"] = {}
+    ref, summary = await retain_native_fixture(
+        environment, tmp_path, monkeypatch, "opengrep", {"scan": current}, "current"
+    )
+    request = {
+        **retained_assessment(ref, assets),
+        "baselineRef": baseline["comparisonRef"],
+    }
+    outputs = await invoke(environment.service, request, key="current")
+    assert not outputs["diagnostics"]
+    comparison = await read(environment.service, outputs["comparisonRef"])
+    states = {row["finding"]["asset"]: row["state"] for row in comparison["findings"]}
+    assert states["unexamined.py"] == (
+        "absent_comparable" if case == "clean" else "not_reassessed"
+    )
+    coverage = comparison["observation"]["coverage"][0]
+    assert coverage["assets"] == (
+        assets
+        if case == "clean"
+        else ([] if case == "missing-inventory" else assets[:1])
+    )
+    assert outputs["coverageStatus"] == (
+        "complete" if case == "clean" else "stale_or_partial"
+    )
+    if case not in {"clean", "missing-inventory"}:
+        assert states["clean.py"] == "still_observed"
+        assert summary["results"]["scan"]["findings"]
