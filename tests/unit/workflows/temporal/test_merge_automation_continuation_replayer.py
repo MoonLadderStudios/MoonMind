@@ -119,6 +119,17 @@ class _PreMissingCIWaitGate(MoonMindMergeAutomationWorkflow):
         return await super().run(payload)
 
 
+@workflow.defn(name="MoonMind.MergeAutomation")
+class _PreConflictRepairWithoutCIGate(MoonMindMergeAutomationWorkflow):
+    @staticmethod
+    def _conflict_repair_without_ci_enabled(evaluation: Any) -> bool:
+        return False
+
+    @workflow.run
+    async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await super().run(payload)
+
+
 @workflow.defn(name="MoonMind.UserWorkflow")
 class _ReadinessFixtureResolver:
     @workflow.run
@@ -1078,6 +1089,172 @@ async def test_open_legacy_ci_wait_recovers_on_fresh_readiness_after_worker_upgr
     )
     assert any(path.endswith("/reviews") for path in http_requests)
     assert sum(path.endswith("/pulls/1209") for path in http_requests) == len(readiness_requests)
+    await Replayer(
+        workflows=[MoonMindMergeAutomationWorkflow],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(history)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upgrade", [False, True])
+async def test_conflict_without_ci_repairs_on_fresh_poll_and_replays(
+    monkeypatch: pytest.MonkeyPatch,
+    upgrade: bool,
+) -> None:
+    merged = False
+    observations: list[dict[str, Any]] = []
+
+    @activity.defn(name="merge_automation.evaluate_readiness")
+    async def evaluate_readiness(_payload: dict[str, Any]) -> dict[str, Any]:
+        result = {
+            "headSha": "fedcba2" if merged else "abcdef1",
+            "ready": False,
+            "pullRequestOpen": not merged,
+            "pullRequestMerged": merged,
+            "policyAllowed": True,
+            "checksReported": merged,
+            "checksComplete": merged,
+            "checksPassing": merged,
+            "automatedReviewComplete": True,
+            "actionableCiFailuresVersion": "v1",
+            "readinessObservationId": activity.info().activity_id,
+            "blockers": (
+                []
+                if merged
+                else [
+                    {
+                        "kind": "merge_conflict",
+                        "summary": "Pull request has merge conflicts.",
+                    },
+                    {
+                        "kind": "checks_running",
+                        "summary": "No checks have reported for this head yet.",
+                    },
+                ]
+            ),
+        }
+        observations.append(result)
+        return result
+
+    @activity.defn(name="qualification.merge_fixture")
+    async def repair_and_merge(_payload: dict[str, Any]) -> dict[str, Any]:
+        nonlocal merged
+        assert observations[-1]["checksReported"] is False
+        assert any(b["kind"] == "merge_conflict" for b in observations[-1]["blockers"])
+        merged = True
+        return {
+            "status": "success",
+            "mergeAutomationDisposition": "merged",
+            "headSha": "fedcba2",
+        }
+
+    async def skip_artifact(self, *, name, payload):
+        return None
+
+    monkeypatch.setattr(
+        MoonMindMergeAutomationWorkflow, "_write_json_artifact", skip_artifact
+    )
+    monkeypatch.setattr(
+        MoonMindMergeAutomationWorkflow, "_publish_visibility", lambda self: None
+    )
+    parent_queue = "mm-conflict-without-ci-replay"
+    child_queue = module.settings.temporal.user_workflow_v2_task_queue
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        await env.client.operator_service.add_search_attributes(
+            AddSearchAttributesRequest(
+                namespace=env.client.namespace,
+                search_attributes={
+                    name: IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD
+                    for name in (
+                        "mm_owner_id",
+                        "mm_owner_type",
+                        "mm_entry",
+                        "mm_repo",
+                        "mm_state",
+                    )
+                },
+            )
+        )
+        async with (
+            Worker(
+                env.client,
+                task_queue=INTEGRATIONS_TASK_QUEUE,
+                activities=[evaluate_readiness],
+            ),
+            Worker(
+                env.client,
+                task_queue=child_queue,
+                workflows=[_ReadinessFixtureResolver],
+                activities=[repair_and_merge],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+        ):
+            if upgrade:
+                async with Worker(
+                    env.client,
+                    task_queue=parent_queue,
+                    workflows=[_PreConflictRepairWithoutCIGate],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                    max_cached_workflows=0,
+                ):
+                    handle = await env.client.start_workflow(
+                        _PreConflictRepairWithoutCIGate.run,
+                        _payload("missing_ci_conflict"),
+                        id=f"mm-conflict-without-ci-{upgrade}",
+                        task_queue=parent_queue,
+                        execution_timeout=timedelta(minutes=2),
+                    )
+                    async with asyncio.timeout(10):
+                        while True:
+                            old_history = await handle.fetch_history()
+                            if any(
+                                e.HasField("timer_started_event_attributes")
+                                for e in old_history.events
+                            ):
+                                break
+                            await asyncio.sleep(0.01)
+                assert not merged
+                assert len(observations) == 1
+                await Replayer(
+                    workflows=[MoonMindMergeAutomationWorkflow],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ).replay_workflow(old_history)
+
+            async with Worker(
+                env.client,
+                task_queue=parent_queue,
+                workflows=[MoonMindMergeAutomationWorkflow],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+                max_cached_workflows=0,
+            ):
+                if upgrade:
+                    await env.sleep(timedelta(seconds=2))
+                else:
+                    handle = await env.client.start_workflow(
+                        MoonMindMergeAutomationWorkflow.run,
+                        _payload("missing_ci_conflict"),
+                        id=f"mm-conflict-without-ci-{upgrade}",
+                        task_queue=parent_queue,
+                        execution_timeout=timedelta(minutes=2),
+                    )
+                result = await asyncio.wait_for(handle.result(), timeout=30)
+                history = await handle.fetch_history()
+
+    assert result["status"] == "merged"
+    assert result["latestHeadSha"] == "fedcba2"
+    assert len(result["resolverChildWorkflowIds"]) == 1
+    assert len(observations) == (3 if upgrade else 2)
+    assert observations[0]["checksReported"] is False
+    assert observations[0]["checksComplete"] is False
+    assert observations[0]["automatedReviewComplete"] is True
+    assert observations[-1]["pullRequestMerged"] is True
+    assert sum(
+        e.HasField("timer_started_event_attributes") for e in history.events
+    ) == int(upgrade)
+    assert not any(
+        e.HasField("workflow_execution_signaled_event_attributes")
+        for e in history.events
+    )
     await Replayer(
         workflows=[MoonMindMergeAutomationWorkflow],
         workflow_runner=UnsandboxedWorkflowRunner(),
