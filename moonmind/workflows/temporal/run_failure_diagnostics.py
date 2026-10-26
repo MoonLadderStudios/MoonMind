@@ -409,6 +409,7 @@ class RunFailureDiagnostics:
         compact = {key: value for key, value in diagnostic.items() if value is not None}
         if isinstance(terminal_evidence, Mapping):
             for key in (
+                "agentResult",
                 "failureCode",
                 "terminalContractId",
                 "terminalContractMissingEvidence",

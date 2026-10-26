@@ -262,19 +262,30 @@ def hand_off_controller(payload) -> dict:
     try:
         completed = subprocess.run(
             [
-                sys.executable, str(CONTROLLER_BOOTSTRAP), "handoff",
-                "--state-dir", state_dir,
-                "--operation", str(payload["operationId"]),
-                "--image", str(payload["moonmindImage"]),
+                sys.executable,
+                str(CONTROLLER_BOOTSTRAP),
+                "handoff",
+                "--state-dir",
+                state_dir,
+                "--operation",
+                str(payload["operationId"]),
+                "--image",
+                str(payload.get("resolvedMoonmindImage") or payload["moonmindImage"]),
             ],
-            capture_output=True, text=True, check=False, timeout=300,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=300,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        return {"status": "unavailable", "reason": f"controller handoff did not run: {exc}"}
+        return {
+            "status": "unavailable",
+            "reason": f"controller handoff did not run: {exc}",
+        }
     for line in reversed((completed.stdout or "").splitlines()):
         if line.startswith(CONTROLLER_HANDOFF_PREFIX):
             try:
-                receipt = json.loads(line[len(CONTROLLER_HANDOFF_PREFIX):])
+                receipt = json.loads(line[len(CONTROLLER_HANDOFF_PREFIX) :])
             except ValueError:
                 break
             if isinstance(receipt, dict):
@@ -313,6 +324,51 @@ async def controller_journal_cli(phase, payload):
         )
     print("MOONMIND_OMNIGENT_RESULT=" + json.dumps(receipt, sort_keys=True),
           file=sys.stderr, flush=True)
+    return 0
+
+
+async def controller_storage_cli(phase, payload):
+    """The controller holds stack ownership while this bounded one-off copies."""
+    import sys
+
+    from moonmind.workflows.skills.omnigent_release import _deployment_lock
+    from moonmind.workflows.skills.storage_migration import prepare_compose_storage
+
+    if phase not in ("storage-prepare", "storage-observe"):
+        raise ValueError("Unknown storage transition phase")
+    if phase == "storage-prepare" and "storage-transfer-budget" not in (
+        payload.get("controllerCapabilities") or ()
+    ):
+        # The installed controller may still kill one-offs after 15 minutes.
+        # Upgrade its existing owner before fencing clients, not after copying.
+        handoff = await asyncio.to_thread(hand_off_controller, payload)
+        if handoff.get("status") == "handed-off":
+            raise RuntimeError(
+                "Handed storage preparation to the requested release's controller, which resumes it"
+            )
+        raise RuntimeError(
+            "The controller cannot provide the storage transfer budget; "
+            f"controller handoff did not complete: {handoff.get('reason') or handoff.get('status')}"
+        )
+    payload = {
+        **payload,
+        "moonmindImage": payload.get("resolvedMoonmindImage")
+        or payload["moonmindImage"],
+    }
+    runner = controller_release_runner(payload)
+    async with _deployment_lock():
+        receipt = await prepare_compose_storage(
+            runner,
+            docker,
+            payload,
+            state_root().parent / "storage-transfers",
+            observe_only=phase == "storage-observe",
+        )
+    print(
+        "MOONMIND_OMNIGENT_RESULT=" + json.dumps(receipt, sort_keys=True),
+        file=sys.stderr,
+        flush=True,
+    )
     return 0
 
 
@@ -854,6 +910,45 @@ async def migrate_omnigent(runner, owner, image, *, selected_revision=None):
     )
 
 
+def controller_release_runner(payload):
+    """Render the deployment's same files and env through its existing runner."""
+    from moonmind.workflows.skills.deployment_execution import HostDockerComposeRunner
+
+    target = payload["target"]
+    store = _omnigent_release_store()
+    if store is None:
+        raise ValueError("Controller release steps require durable deployment state")
+    project_dir = str(target["projectDir"])
+    local_dir = Path(
+        os.environ.get("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR")
+        or "/workspace/host_project"
+    )
+    files = list(target.get("composeFiles") or ["docker-compose.yaml"])
+
+    def local_file(name):
+        if Path(name).name == target.get("releaseComposeFile"):
+            controller_state = Path(
+                os.environ.get("MOONMIND_CONTROLLER_STATE_DIR")
+                or "/workspace/deployment_state/controller"
+            )
+            return str(controller_state / "image-overlays" / Path(name).name)
+        path = Path(name)
+        if path.is_absolute():
+            path = path.relative_to(project_dir)
+        if ".." in path.parts:
+            raise ValueError("Compose file escapes the deployment checkout")
+        return str(local_dir / path)
+
+    return HostDockerComposeRunner(
+        project_dir=project_dir,
+        project_name=str(target["project"]),
+        local_project_dir=str(local_dir),
+        compose_file=local_file(files[0]),
+        override_files=tuple(local_file(name) for name in files[1:]),
+        env_file=store.env_file_path,
+    )
+
+
 async def run_controller_omnigent_step(phase, payload):
     """Run the existing Omnigent helper under the standalone controller.
 
@@ -899,7 +994,6 @@ async def run_controller_omnigent_step(phase, payload):
             "this release."
         )
 
-    from moonmind.workflows.skills.deployment_execution import HostDockerComposeRunner
     from moonmind.workflows.skills.omnigent_release import (
         _deployment_lock,
         read_omnigent_release,
@@ -907,37 +1001,20 @@ async def run_controller_omnigent_step(phase, payload):
 
     operation_id = str(payload["operationId"])
     target = dict(payload["target"])
-    image = str(payload["moonmindImage"])
+    requested_image = str(payload["moonmindImage"])
+    image = str(payload.get("resolvedMoonmindImage") or requested_image)
     store = _omnigent_release_store()
     if store is None:
         raise ValueError("Controller Omnigent steps require durable deployment state")
-    project_dir = str(target["projectDir"])
-    local_dir = Path(
-        os.environ.get("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR")
-        or "/workspace/host_project"
-    )
-    files = list(target.get("composeFiles") or ["docker-compose.yaml"])
-
-    def local_file(name):
-        path = Path(name)
-        if path.is_absolute():
-            path = path.relative_to(project_dir)
-        if ".." in path.parts:
-            raise ValueError("Compose file escapes the deployment checkout")
-        return str(local_dir / path)
-
-    runner = HostDockerComposeRunner(
-        project_dir=project_dir,
-        project_name=str(target["project"]),
-        local_project_dir=str(local_dir),
-        compose_file=local_file(files[0]),
-        override_files=tuple(local_file(name) for name in files[1:]),
-        env_file=store.env_file_path,
-    )
+    runner = controller_release_runner(payload)
     key = hashlib.sha256(operation_id.encode()).hexdigest()[:32]
     directory = Path(store.env_file_path).parent / "controller-omnigent-jobs" / key
     directory.mkdir(parents=True, exist_ok=True)
-    identity = {"operationId": operation_id, "moonmindImage": image, "target": target}
+    identity = {
+        "operationId": operation_id,
+        "moonmindImage": requested_image,
+        "target": target,
+    }
     if reserve_record(directory / "request.json", identity) != identity:
         raise ValueError(
             "Controller operation was reused with different release inputs"
@@ -1434,6 +1511,8 @@ async def submit(payload):
 if __name__ == "__main__":
     import sys
 
+    if sys.argv[1] in ("--omnigent-storage-prepare", "--omnigent-storage-observe"):
+        raise SystemExit(asyncio.run(controller_storage_cli(sys.argv[1].removeprefix("--omnigent-"), json.loads(sys.argv[2]))))
     if sys.argv[1] in ("--omnigent-journal-prepare", "--omnigent-journal-quiesce"):
         raise SystemExit(asyncio.run(controller_journal_cli(
             sys.argv[1].removeprefix("--omnigent-"), json.loads(sys.argv[2])

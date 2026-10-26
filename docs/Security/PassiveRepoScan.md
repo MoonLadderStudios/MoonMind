@@ -13,6 +13,9 @@
 > not a security platform, scanner runtime, or replacement for core
 > reliability work.
 
+The broader proposed assessment program and tool recommendations are described
+in [Security Tools and Assessment Workflows](SecurityTools.md).
+
 ## Scanner selection
 
 One maintained scanner for one declared input class with a useful
@@ -46,7 +49,7 @@ findings model, no feed service, and no assessment-target network access.
   operator never hand-authors a JSON workload. The command waits durably and
   prints the terminal job state plus the collected logs and artifacts
   references for the retained native report and summary.
-- **Input:** an immutable authorized snapshot directory (declared input class:
+- **Input:** an authorized snapshot directory (declared input class:
   UTF-8 text files). The default snapshot is the mounted workspace root
   (`.` with `workdir: /workspace`): the container-job path mounts the
   authorized repository directly at `/workspace`. A snapshot path that is
@@ -61,9 +64,11 @@ findings model, no feed service, and no assessment-target network access.
   bounded CPU/memory/PIDs/timeout, and two declared outputs
   (`artifacts/passive-scan-report.json`,
   `artifacts/passive-scan-summary.md`). The workspace mount stays writable
-  so the declared outputs are collectable; the snapshot itself is read-only
-  by construction (the scan performs no writes to snapshot paths -- only the
-  two declared outputs are written). Workspace and correlation identity are
+  so the declared outputs are collectable. The scanner avoids source writes
+  and writes only the two declared outputs; this is implementation discipline,
+  not an operating-system-enforced read-only source mount. The broader
+  security-tools design separates protected inputs from writable outputs.
+  Workspace and correlation identity are
   stamped by the existing `container_job_submission` path; the entrypoint is
   `python -m moonmind.security.passive_repo_scan`. File enumeration is
   incremental and stops as soon as the `max_files` bound is exceeded.
@@ -100,7 +105,114 @@ findings model, no feed service, and no assessment-target network access.
 
 ## Limitations
 
-Deterministic regex shapes only; no dependency/inventory analysis, no
-network-active assessment, no live-target qualification, no production scans
-or external uploads under this issue. Missing dependencies produce a clear
+Deterministic regex shapes only; this job does not provide dependency/inventory,
+live-cloud, or network-active application assessment. It performs no external
+uploads. Missing dependencies produce a clear
 `incomplete`/unsupported result rather than widened authority.
+
+## Recurring assessments and retained comparisons
+
+`security.assess` is a native tool for existing manual and recurring workflows.
+It compares retained passive reports, or reassesses an inventory against an
+explicit advisory feed without a source-code change. Temporal still owns
+cadence, overlap, catch-up and cancellation. The tool does not launch an agent
+or require model triage.
+
+Create a schedule with `POST /api/recurring-workflows`, using the normal
+`MoonMind.UserWorkflow` target and a step with `type: "tool"`:
+
+```json
+{
+  "id": "assess",
+  "type": "tool",
+  "tool": {
+    "name": "security.assess",
+    "inputs": {
+      "scope": {
+        "assets": ["app"],
+        "exclusions": [],
+        "repositoryExceptions": []
+      },
+      "tools": ["inventory-feed"],
+      "budget": {
+        "baseSeconds": 60,
+        "maxSeconds": 120,
+        "progressStallSeconds": 60
+      },
+      "credentialRefs": [],
+      "networkRefs": [],
+      "inventoryRef": "art_inventory",
+      "feedRef": "art_feed",
+      "baselineRef": "art_previous_comparison"
+    }
+  }
+}
+```
+
+The example refs stand for completed, authorized artifacts. Declare inputs in
+the workflow's `inputAttachments` as `{"artifactId": "art_..."}` so the existing
+occurrence admission links them to that execution. Each invocation checks
+current artifact read authority before reusing scanner work. A saved schedule
+confers no credential or target-network authority. These offline adapters
+require empty credential/network reference lists; active adapters must use
+their existing admission owners. Agent-backed steps and PR finishing, including
+`review_only`, retain execution-plan admission; an assessment adds no image or
+source-revision pin.
+
+Use the existing schedule policy (`overlap.mode`, `catchup.mode`) and manual
+`POST /api/recurring-workflows/{id}/run` with an `Idempotency-Key`. Supply a newer
+`feedRef` through normal workflow/schedule authoring when intelligence changes,
+and the last `comparisonRef` as the next `baselineRef`. There is no feed poller
+or second scheduler. Identical admitted inputs reuse a confirmed scanner save;
+a later occurrence can also reuse the supplied baseline's scanner observation.
+Scanner results are saved before report publication, so publication retries
+do not repeat completed work. Cancellation propagates without a successor.
+
+### Evidence contracts
+
+The versioned JSON contracts live in `moonmind/security/assessments.py`:
+
+- `security-inventory/v1`: scope, observation/expiry timestamps, configuration
+  reference, coverage status and components (`asset`, unversioned `purl`,
+  `version`). Producer-asserted completeness covers the declared scope,
+  including assets with no components.
+- `security-feed/v1`: source, revision, observation/expiry timestamps and native
+  rules (`id`, `purl`, explicit `affectedVersions`). The bounded adapter matches
+  exact versions; it does not guess version ranges or fetch intelligence.
+- `security-observation/v1`: native source/tool/rule/asset/instance identity,
+  evidence refs, coverage and configuration/feed provenance. The
+  `retained-report` tool consumes these observations through `reportRefs`; it
+  also accepts this document's passive scanner JSON, using snapshot-relative
+  file paths as scope assets. Native passive evidence expires for comparison
+  after one day; its original artifact retention is unchanged.
+- `security-comparison/v1`: the observation, retained findings, scoped triage,
+  counts and baseline/scan artifact references. Identity never depends on a
+  presentation title or severity.
+
+Comparisons distinguish `new`, `still_observed`, `absent_comparable` and
+`not_reassessed`. Absence requires fresh, completed coverage of the original
+asset/rule under comparable scope, exclusions and configuration. Partial scans,
+failed authentication, unsupported assets, expired evidence and changed scope
+retain prior findings and evidence. Large evidence unions remain reachable
+through retained input reports. An unavailable or malformed baseline, including
+missing stored bytes, is explicitly unavailable; findings then use
+`observed_without_baseline` and cannot claim to be new or resolved. Malformed
+current reports yield incomplete coverage while preserving earlier evidence.
+
+An optional `decisionsRef` contains a JSON array of triage decisions. Each
+decision names `findingId`, `disposition`, `reason`, `evidenceRefs`, `author`,
+`source`, `scope`, `reviewAt` and `reviewConditions`, with optional `expiresAt`.
+Dispositions are `accepted_risk`, `false_positive`, `confirmed_vulnerability`
+and `fix_retest`; only the latter requires `retestOutcome` (`passed`, `failed`
+or `inconclusive`). Due or expired decisions re-enter review. Scope/provenance
+changes require review too; that status persists until a renewed decision for
+the finding replaces it. Replaying the same decision cannot clear review.
+Earlier decisions remain in baseline artifacts. Decisions annotate observations
+and cannot assert a scanner fix. Repository exceptions remain explicit scope
+configuration.
+
+The existing report links expose a readable delta/coverage/review summary,
+structured comparison and saved scanner evidence. `scanOutcome` and
+`publicationOutcome` remain separate: a publication failure returns the
+durable refs and diagnostics without changing the scanner outcome. Live
+cloud/model qualification is separate from these controlled artifact journeys.

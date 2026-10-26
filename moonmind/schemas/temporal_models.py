@@ -729,6 +729,7 @@ class FailedRunRecoveryManifestModel(BaseModel):
     run_id: str = Field(..., alias="runId", min_length=1)
     failure_stage: str | None = Field(None, alias="failureStage", max_length=120)
     failure_category: str | None = Field(None, alias="failureCategory", max_length=120)
+    agent_result: dict[str, Any] | None = Field(None, alias="agentResult")
     failed_logical_step_id: str | None = Field(
         None, alias="failedLogicalStepId", max_length=200
     )
@@ -3401,7 +3402,9 @@ class StepExecutionOutcomeModel(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    status: Literal["succeeded", "failed"]
+    status: Literal["succeeded", "failed", "unknown"]
+    agent_result: dict[str, Any] | None = Field(None, alias="agentResult")
+    result_order: dict[str, Any] | None = Field(None, alias="resultOrder")
     result_ref: str | None = Field(None, alias="resultRef")
     output_refs: list[str] = Field(default_factory=list, alias="outputRefs")
     diagnostics_ref: str | None = Field(None, alias="diagnosticsRef")
@@ -3837,6 +3840,7 @@ class ExecutionModel(BaseModel):
     """Materialized execution view returned by lifecycle APIs."""
 
     model_config = ConfigDict(populate_by_name=True)
+    agent_result: dict[str, Any] | None = Field(None, alias="agentResult")
 
     source: Literal["temporal"] = Field("temporal", alias="source")
     task_id: SkipJsonSchema[str | None] = Field(None, alias="taskId", exclude=True)
@@ -4067,6 +4071,7 @@ class ExecutionListItemModel(BaseModel):
     """
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    agent_result: dict[str, Any] | None = Field(None, alias="agentResult")
 
     source: Literal["temporal"] = Field("temporal", alias="source")
     workflow_id: str = Field(..., alias="workflowId")

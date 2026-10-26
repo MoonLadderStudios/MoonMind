@@ -367,6 +367,24 @@ class OperationStore:
         }
         return self._write(operation)
 
+    def record_storage_transition(self, operation_id: str, values: Mapping[str, Any]) -> dict:
+        """Keep verified copy provenance separate from application readiness."""
+        operation = self.load(operation_id)
+        operation["storageTransition"] = {
+            **(operation.get("storageTransition") or {}), **dict(values)
+        }
+        return self._write(operation)
+
+    def bind_release_configuration(
+        self, operation_id: str, *, target: Mapping[str, Any], image: str
+    ) -> dict:
+        """Keep submitted intent alongside the selected image's effective files."""
+        operation = self.load(operation_id)
+        operation["releaseConfiguration"] = {"submittedTarget": operation["target"]}
+        operation["resolvedImage"] = image
+        operation["target"] = dict(target)
+        return self._write(operation)
+
     def record_routing_cutover(
         self, operation_id: str, values: Mapping[str, Any]
     ) -> dict:

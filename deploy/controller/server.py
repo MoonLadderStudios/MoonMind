@@ -50,6 +50,7 @@ STACK_LOCK_WAIT_SECONDS = 180
 SERVICE_READINESS_TIMEOUT_SECONDS = 900
 OMNIGENT_OPERATION_LABEL = "moonmind.controller.omnigent.operation"
 OMNIGENT_RESULT_PREFIX = "MOONMIND_OMNIGENT_RESULT="
+OMNIGENT_STEP_TIMEOUT_SECONDS = 900
 # Behavior submitters require before trusting an answer. ``request-identity``:
 # a completed operation answers only its own identity, so a new request for a
 # mutable tag such as ``latest`` applies again instead of returning an earlier
@@ -63,6 +64,7 @@ CONTROLLER_CAPABILITIES = (
     "request-identity",
     "unversioned-routing-cutover",
     "controller-handoff",
+    "storage-transfer-budget",
 )
 # Full Docker inspection includes mounts, network state, and environment
 # secrets. Project only journal ownership; rows are parsed from the runner's
@@ -98,6 +100,8 @@ CAPABILITY_STEPS = {
     "controller-handoff": ("controller_handoff_cli", "handoff"),
     "journal-prepare": ("controller_journal_cli", "journal-prepare"),
     "journal-quiesce": ("controller_journal_cli", "journal-quiesce"),
+    "storage-prepare": ("controller_storage_cli", "storage-prepare"),
+    "storage-observe": ("controller_storage_cli", "storage-observe"),
     "routing-cutover-probe": ("controller_routing_cutover_cli", "probe"),
     "routing-cutover-apply": ("controller_routing_cutover_cli", "apply"),
 }
@@ -243,7 +247,7 @@ def default_legacy_writer_probe() -> bool:
         )
         for operation in (*store.list_open(), *store.list_terminal())
         if operation.get("omnigentStep") in (
-            "controller-handoff", "select", "migrate", "journal-prepare", "journal-quiesce",
+            "controller-handoff", "select", "migrate", "journal-prepare", "journal-quiesce", "storage-prepare", "storage-observe",
         )
         and operation.get("status") in (*record_mod.OPEN_STATUSES, "succeeded")
         and lock_mod.StackLock(store.state_dir, operation["stack"]).probe()
@@ -693,6 +697,7 @@ def default_target(
         "projectDir": repo,
         "composeFiles": files,
         "services": services,
+        "serviceSelection": "all",
     }
     if env_files:
         target["envFile"] = env_path
@@ -1050,6 +1055,131 @@ def write_image_overlay(state_dir: str, operation_id: str, image: str) -> str:
     return path
 
 
+def selected_image(operation: dict) -> str:
+    return operation.get("resolvedImage") or operation["desired"]["image"]
+
+
+def prepare_release_configuration(store, operation, *, runner, overlay):
+    """Use the chosen image's base, retaining operator overrides and settings.
+
+    The checkout can advance before latest publishes. Its base must never
+    introduce a storage transition that the chosen release cannot perform.
+    The saved configuration also survives controller handoff and retries.
+    """
+    if operation.get("releaseConfiguration"):
+        retained = Path(operation["target"]["composeFiles"][0])
+        if not retained.is_absolute():
+            retained = Path(operation["target"]["projectDir"]) / retained
+        if not retained.is_file():
+            raise engine.StageError(
+                "release-configuration", 1, "Saved release configuration is missing"
+            )
+        return operation
+    target = operation.get("target") or {}
+    files = target.get("composeFiles") or []
+    if not files or files[0] != "docker-compose.yaml":
+        return operation
+
+    def checked(args, timeout=60):
+        result = engine.run_command(runner, args, timeout_seconds=timeout)
+        if int(result.get("exit", 0)):
+            raise engine.StageError(
+                "release-configuration",
+                int(result["exit"]),
+                str(result.get("output") or "Release configuration unavailable"),
+            )
+        return engine.command_stdout(result)
+
+    try:
+        image = operation["desired"]["image"]
+        checked(("docker", "pull", image), engine.PULL_TIMEOUT_SECONDS)
+        (observed,) = json.loads(checked(("docker", "image", "inspect", image)))
+
+        def repository(reference):
+            name = reference.partition("@")[0]
+            if ":" in name.rsplit("/", 1)[-1]:
+                name = name.rsplit(":", 1)[0]
+            name = name.removeprefix("docker.io/").removeprefix("index.docker.io/")
+            return "library/" + name if "/" not in name else name
+
+        resolved = next((ref for ref in observed.get("RepoDigests", ()) if repository(ref) == repository(image)), None)
+        if not resolved:
+            raise ValueError(
+                "Selected release has no pullable immutable image reference"
+            )
+        exported = json.loads(
+            checked(
+                (
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--pull",
+                    "never",
+                    "--network",
+                    "none",
+                    "--entrypoint",
+                    "python",
+                    observed["Id"],
+                    "-c",
+                    "import json,pathlib,yaml; print(json.dumps(yaml.safe_load(pathlib.Path('/app/release/docker-compose.yaml').read_text())))",
+                )
+            )
+        )
+        if not isinstance(exported, dict) or not isinstance(
+            exported.get("services"), dict
+        ):
+            raise ValueError("Selected release has no valid base Compose configuration")
+        path = (
+            store.state_dir
+            / "image-overlays"
+            / (
+                record_mod.check_operation_id(operation["operationId"])
+                + "-compose.json"
+            )
+        )
+        record_mod._atomic_write_json(path, exported)
+        # The default state bind is also visible through the checkout mount.
+        # Its relative spelling lets retained release helpers read this same
+        # file without needing the new controller-state path adapter.
+        relative = Path("deploy/state/controller/image-overlays") / path.name
+        checkout_copy = Path(target["projectDir"]) / relative
+        compose_file = str(path)
+        if checkout_copy.is_file() and checkout_copy.read_bytes() == path.read_bytes():
+            compose_file = str(relative)
+        effective = {
+            **target,
+            "composeFiles": [compose_file, *files[1:]],
+            "releaseComposeFile": path.name,
+        }
+        write_image_overlay(str(store.state_dir), operation["operationId"], resolved)
+        base = engine.compose_base(
+            project=target.get("project", operation["stack"]),
+            project_dir=target["projectDir"],
+            compose_files=effective["composeFiles"],
+            env_files=_env_files_for_apply(target, overlay),
+        )
+        effective["services"] = [
+            name
+            for name in checked((*base, "config", "--services")).split()
+            if name not in DEFAULT_EXCLUDED_SERVICES
+            and (
+                target.get("serviceSelection") == "all"
+                or name in target.get("services", ())
+            )
+        ]
+        if not effective["services"]:
+            raise ValueError("Selected release configuration renders no services")
+        return store.bind_release_configuration(
+            operation["operationId"], target=effective, image=resolved
+        )
+    except engine.StageError:
+        raise
+    except (engine.CommandError, OSError, ValueError, KeyError, TypeError) as exc:
+        raise engine.StageError(
+            "release-configuration", 1, redact_text(str(exc))
+        ) from exc
+
+
 OPERATOR_URL_TIMEOUT_SECONDS = 30
 
 # Deployment env keys whose non-empty presence means the installation
@@ -1304,6 +1434,42 @@ def _omnigent_step_error(phase: str, exit_status: int, output: str) -> engine.Co
     )
 
 
+def _controller_state_bind(store, runner) -> dict:
+    """Use the daemon's observed state bind when launching release helpers."""
+    source = str(store.state_dir.resolve())
+    if os.environ.get("MOONMIND_CONTROLLER_MANAGED") == "1":
+        observed = engine.run_command(
+            runner,
+            (
+                "docker",
+                "inspect",
+                "--format",
+                "{{json .Mounts}}",
+                os.environ["HOSTNAME"],
+            ),
+            timeout_seconds=LEGACY_PROBE_TIMEOUT_SECONDS,
+        )
+        if int(observed.get("exit", 0)):
+            raise ValueError("Controller state mount could not be observed")
+        candidates = []
+        for mount in json.loads(engine.command_stdout(observed)):
+            destination = Path(mount["Destination"])
+            if mount.get("Type") == "bind" and store.state_dir.is_relative_to(
+                destination
+            ):
+                candidates.append((destination, mount["Source"]))
+        if not candidates:
+            raise ValueError("Controller state has no observed host bind")
+        destination, host_source = max(candidates, key=lambda pair: len(pair[0].parts))
+        source = str(Path(host_source) / store.state_dir.relative_to(destination))
+    return {
+        "type": "bind",
+        "source": source,
+        "target": "/workspace/deployment_state/controller",
+        "bind": {"create_host_path": False},
+    }
+
+
 def run_omnigent_step(
     store: record_mod.OperationStore,
     operation: dict,
@@ -1346,18 +1512,23 @@ def run_omnigent_step(
     helper_config = os.path.join(
         str(store.state_dir), "image-overlays", f"{operation_id}-omnigent.json"
     )
+    volumes = ["/var/run/docker.sock:/var/run/docker.sock:ro"]
+    helper_environment = {
+        "DOCKER_HOST": "unix:///var/run/docker.sock",
+        "SYSTEM_DOCKER_HOST": "unix:///var/run/docker.sock",
+    }
+    if target.get("releaseComposeFile"):
+        volumes.append(_controller_state_bind(store, runner))
+        helper_environment["MOONMIND_CONTROLLER_STATE_DIR"] = volumes[-1]["target"]
     record_mod._atomic_write_json(
         Path(helper_config),
         {
             "services": {
                 LEGACY_CONTROL_SERVICE: {
-                    "image": helper_image or operation["desired"]["image"],
+                    "image": helper_image or selected_image(operation),
                     "user": "0:0",
-                    "environment": {
-                        "DOCKER_HOST": "unix:///var/run/docker.sock",
-                        "SYSTEM_DOCKER_HOST": "unix:///var/run/docker.sock",
-                    },
-                    "volumes": ["/var/run/docker.sock:/var/run/docker.sock:ro"],
+                    "environment": helper_environment,
+                    "volumes": volumes,
                 }
             }
         },
@@ -1373,7 +1544,9 @@ def run_omnigent_step(
     )
     request = {
         "operationId": operation_id,
+        # Retained controllers use this submitted identity for the same job.
         "moonmindImage": operation["desired"]["image"],
+        "resolvedMoonmindImage": selected_image(operation),
         "target": target,
         "controllerCapabilities": list(CONTROLLER_CAPABILITIES),
     }
@@ -1434,7 +1607,11 @@ def run_omnigent_step(
                 LEGACY_CONTROL_SERVICE,
                 *command,
             ),
-            timeout_seconds=engine.MAX_COMMAND_TIMEOUT_SECONDS,
+            timeout_seconds=(
+                engine.MAX_COMMAND_TIMEOUT_SECONDS
+                if phase == "storage-prepare"
+                else OMNIGENT_STEP_TIMEOUT_SECONDS
+            ),
         )
     except engine.CommandError as exc:
         raise _omnigent_step_error(phase, exc.exit_status, exc.output) from exc
@@ -1449,6 +1626,53 @@ def run_omnigent_step(
             if isinstance(receipt, dict):
                 return receipt
     raise ValueError(f"Omnigent {phase} returned no release receipt")
+
+
+def prepare_controller_storage(store, operation, *, runner, overlay, observe=False):
+    """Use the existing release owner for a verified storage-volume transition."""
+    if "minio" not in (operation.get("target") or {}).get("services", ()):
+        return {"status": "skipped"}
+    current = store.load(operation["operationId"])
+    journals = current.get("journalTransition") or {}
+    previous = current.get("storageTransition") or {}
+    try:
+        installed_controller = json.loads((store.state_dir / "controller-image.json").read_text())
+    except (OSError, ValueError, AttributeError):
+        installed_controller = {}
+    # The installed controller's data owner also handles rollback: an older
+    # target helper must not restore serial copying and discard resumability.
+    candidates = list(
+        dict.fromkeys(
+            filter(
+                None,
+                [
+                    (
+                        installed_controller.get("pinned")
+                        if installed_controller.get("verified")
+                        else None
+                    ),
+                    selected_image(operation),
+                    previous.get("helperImage"),
+                    journals.get("helperImage"),
+                    *journals.get("sourceImages", ()),
+                ],
+            )
+        )
+    )
+    for helper_image in candidates:
+        receipt = run_omnigent_step(
+            store, operation, runner=runner, overlay=overlay,
+            phase="storage-observe" if observe else "storage-prepare", helper_image=helper_image,
+        )
+        if receipt.get("status") == "unsupported":
+            continue
+        if receipt.get("status") not in ("skipped", "prepared"):
+            raise ValueError("storage cutover returned no verified receipt")
+        store.record_storage_transition(operation["operationId"], {
+            "helperImage": helper_image, "observation" if observe else "receipt": receipt,
+        })
+        return receipt
+    raise ValueError("No available release helper can verify storage cutover")
 
 
 def prepare_controller_journals(store, operation, *, runner, overlay, compact=True):
@@ -1516,7 +1740,7 @@ def prepare_controller_journals(store, operation, *, runner, overlay, compact=Tr
     except (OSError, ValueError):
         controller_image = {}
     candidates = list(dict.fromkeys(filter(None, [
-        state.get("helperImage"), *state["sourceImages"], operation["desired"]["image"],
+        state.get("helperImage"), *state["sourceImages"], selected_image(operation),
         controller_image.get("pinned") if controller_image.get("verified") else None,
     ])))
     for helper_image in candidates:
@@ -1666,7 +1890,7 @@ def _attempt_routing_cutover(store, operation, *, runner, overlay) -> dict | Non
     try:
         current, other = _temporal_worker_images(
             runner, target.get("project", operation.get("stack")),
-            operation["desired"]["image"],
+            selected_image(operation),
         )
     except Exception as exc:  # noqa: BLE001 - recorded as an unverified outcome
         return {"status": "pending", "outcome": "writers_unobserved",
@@ -1726,9 +1950,10 @@ def hand_off_to_requested_controller(store, operation, *, runner, overlay) -> No
     """Let the controller the requested release ships apply it.
 
     A release can need controller behavior the installed controller predates,
-    as the unversioned routing cutover did. Before this operation changes
-    anything, the requested image's one-off replaces a controller running
-    other code; this process ends and the replacement resumes the operation.
+    as the unversioned routing cutover did. The requested image's one-off
+    replaces a controller running other code; the replacement resumes the
+    operation. A selected storage transition completes first so rollback
+    cannot hand unverified volume selection to an older controller.
     Any other answer leaves this controller applying: ``current``,
     ``unsupported`` from a target predating handoff (a rollback), or
     ``unavailable`` with the reason kept on the operation.
@@ -1812,9 +2037,22 @@ def production_apply(
     require_previous_oneoffs_exited(store, operation, runner=runner)
     store.mark_stage(operation["operationId"], stage="staged")
     overlay = write_image_overlay(
-        str(store.state_dir), operation["operationId"], operation["desired"]["image"]
+        str(store.state_dir), operation["operationId"], selected_image(operation)
     )
-    if os.environ.get("MOONMIND_CONTROLLER_MANAGED") == "1":
+    if operation.get("installed") is None:
+        try:
+            operation = prepare_release_configuration(
+                store, operation, runner=runner, overlay=overlay
+            )
+        except engine.StageError as exc:
+            store.record_attempt_error(
+                operation["operationId"], error=f"release configuration staging failed: {exc} {exc.output}"
+            )
+            raise
+        target = operation["target"]
+        project = target.get("project", operation.get("stack"))
+    storage_selected = "minio" in target.get("services", ())
+    if os.environ.get("MOONMIND_CONTROLLER_MANAGED") == "1" and not storage_selected:
         hand_off_to_requested_controller(store, operation, runner=runner, overlay=overlay)
     channels = omnigent_channels_for_target(target)
     selection = store.load(operation["operationId"]).get("omnigentSelection") or {}
@@ -1864,6 +2102,20 @@ def production_apply(
     def before_compose():
         require_routing_floor(store, operation, runner=runner, overlay=overlay)
         try:
+            # Fence and copy before journal preparation can start a newly
+            # declared store. Compaction then reads the verified destination.
+            prepare_controller_storage(store, operation, runner=runner, overlay=overlay)
+        except Exception as exc:
+            raise engine.ApplyError(
+                "storage-prepare", 1,
+                redact_text(f"{exc} {getattr(exc, 'output', '')}"),
+            ) from exc
+        # Complete a reverse copy before handing rollback to a controller
+        # predating storage cutover. Its first apply then sees the verified
+        # source-format volume, including writes made after forward cutover.
+        if os.environ.get("MOONMIND_CONTROLLER_MANAGED") == "1" and storage_selected:
+            hand_off_to_requested_controller(store, operation, runner=runner, overlay=overlay)
+        try:
             return prepare_controller_journals(
                 store, operation, runner=runner, overlay=overlay
             )
@@ -1880,7 +2132,7 @@ def production_apply(
             project_dir=target.get("projectDir", ""),
             compose_files=tuple(target.get("composeFiles", ("docker-compose.yaml",))),
             services=tuple(target.get("services", ())),
-            images=(operation["desired"]["image"],),
+            images=(selected_image(operation),),
             env_files=env_files,
             before_compose=before_compose,
         )
@@ -1918,7 +2170,7 @@ def production_apply(
                     )
         raise
     store.confirm_installed(
-        operation["operationId"], image=operation["desired"]["image"],
+        operation["operationId"], image=selected_image(operation),
         verification_pending=True,
     )
     return _finish_installed_verification(
@@ -2019,6 +2271,14 @@ def _verify_applied_release(
     # Readiness precedes routing and dispatch verification. A slow or failed
     # startup leaves routing untouched and retains the installed checkpoint.
     if services_running and all(services_running.values()):
+        if "minio" in services:
+            try:
+                prepare_controller_storage(store, operation, runner=runner, overlay=overlay, observe=True)
+                recorded.append({"name": "storage-owner-observation", "status": "passed",
+                                 "detail": "Recorded the installed storage process and volume for recovery"})
+            except Exception as exc:
+                recorded.append({"name": "storage-owner-observation", "status": "unavailable",
+                                 "detail": redact_text(f"Storage recovery ownership could not be observed: {exc}")})
         routing_cutover = converge_routing_cutover(
             store, operation, runner=runner, overlay=overlay
         )
@@ -2058,7 +2318,7 @@ def _verify_applied_release(
     for url in urls:
         try:
             operator_access[str(url)] = _check_operator_origin(
-                str(url), runner=runner, image=operation["desired"]["image"]
+                str(url), runner=runner, image=selected_image(operation)
             )
         except Exception as exc:
             operator_access[str(url)] = str(exc)

@@ -392,20 +392,44 @@ def test_workflow_controller_update_converges_the_selected_omnigent_release(
 
     class ComposeBoundary:
         def run(self, args, timeout_seconds):
+            if args[:3] == ("docker", "image", "inspect"):
+                return {
+                    "exit": 0,
+                    "stdout": json.dumps([{"Id": "selected-image", "RepoDigests": [IMAGE]}]),
+                }
+            if args[:2] == ("docker", "run"):
+                assert "--network" in args and args[args.index("--network") + 1] == "none"
+                return {
+                    "exit": 0,
+                    "stdout": json.dumps(
+                        {"services": {name: {"image": IMAGE} for name in target["services"]}}
+                    ),
+                }
+            if args[-2:] == ("config", "--services"):
+                return {"exit": 0, "stdout": "\n".join(target["services"])}
             if args[:2] == ("docker", "ps"):
                 return {"exit": 0, "output": ""}
             if args[-3:] == ("config", "--format", "json"):
-                return {"exit": 0, "output": json.dumps({"services": {"api": {
-                    "environment": {"MOONMIND_PUBLIC_BASE_URL": "https://operator.example"}
-                }}})}
+                return {
+                    "exit": 0,
+                    "output": json.dumps(
+                        {
+                            "services": {
+                                "api": {
+                                    "environment": {
+                                        "MOONMIND_PUBLIC_BASE_URL": "https://operator.example"
+                                    }
+                                }
+                            }
+                        }
+                    ),
+                }
             if "--omnigent-select" in args or "--omnigent-migrate" in args:
                 phase = args[-2].removeprefix("--omnigent-")
                 if phase == "select":
                     phases.append("select")
                 result = asyncio.run(
-                    deployment_release.run_controller_omnigent_step(
-                        phase, json.loads(args[-1])
-                    )
+                    deployment_release.run_controller_omnigent_step(phase, json.loads(args[-1]))
                 )
                 return {
                     "exit": 0,
@@ -413,18 +437,13 @@ def test_workflow_controller_update_converges_the_selected_omnigent_release(
                 }
             if "up" in args:
                 phases.append("up")
-                desired_env = controller.server.read_env_file(
-                    str(state / ".env.deploy")
-                )
+                desired_env = controller.server.read_env_file(str(state / ".env.deploy"))
                 assert desired_env["OMNIGENT_IMAGE_REF"] == candidate["server"]
             if "ps" in args:
                 return {
                     "exit": 0,
                     "output": json.dumps(
-                        [
-                            {"Service": name, "State": "running"}
-                            for name in target["services"]
-                        ]
+                        [{"Service": name, "State": "running"} for name in target["services"]]
                     ),
                 }
             if "exec" in args:
@@ -432,9 +451,7 @@ def test_workflow_controller_update_converges_the_selected_omnigent_release(
                 return {
                     "exit": 0,
                     "output": "MOONMIND_SINGLE_USER_CONVERSION="
-                    + json.dumps(
-                        {"published": True, "disposition": "eligible_conversion"}
-                    ),
+                    + json.dumps({"published": True, "disposition": "eligible_conversion"}),
                 }
             return {"exit": 0, "output": "ok"}
 

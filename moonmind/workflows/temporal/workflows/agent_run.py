@@ -2611,11 +2611,15 @@ class MoonMindAgentRun:
 
     @staticmethod
     def _result_requires_provider_cooldown(result: AgentRunResult | None) -> bool:
-        if result is None:
+        if (
+            result is None
+            or result.retry_disposition != "wait"
+            or result.execution_state == "delivery_unknown"
+        ):
             return False
         metadata = result.metadata if isinstance(result.metadata, Mapping) else {}
         provider_failure_event = provider_failure_event_from_metadata(
-            metadata.get("providerFailure")
+            result.provider_failure or metadata.get("providerFailure")
         )
         if provider_failure_event is not None:
             return provider_failure_event_requires_cooldown(provider_failure_event)
@@ -3849,6 +3853,11 @@ class MoonMindAgentRun:
                     "failure_class": None,
                     "provider_error_code": None,
                     "retry_recommendation": None,
+                    "failure_id": None,
+                    "provider_failure": None,
+                    "execution_state": result.execution_state,
+                    "objective_outcome": "unknown",
+                    "retry_disposition": "wait",
                     "metadata": metadata,
                     "metrics": metrics,
                 }
@@ -6071,16 +6080,26 @@ class MoonMindAgentRun:
         runtime_id = self._omnigent_capacity_runtime_id
         if not reported_profile_id or not runtime_id:
             return False
+        payload = {
+            "profile_id": reported_profile_id,
+            "cooldown_seconds": max(1, int(cooldown_seconds)),
+        }
+        if (
+            self.final_result is not None
+            and workflow.patched("agent-run-provider-disposition-precedence-v1")
+        ):
+            event = provider_failure_event_from_metadata(
+                self.final_result.provider_failure
+            )
+            if event is not None and event.provider_error_class:
+                payload["failure_class"] = event.provider_error_class
         try:
             manager_handle = workflow.get_external_workflow_handle(
                 self._manager_workflow_id(runtime_id)
             )
             await manager_handle.signal(
                 "report_cooldown",
-                {
-                    "profile_id": reported_profile_id,
-                    "cooldown_seconds": max(1, int(cooldown_seconds)),
-                },
+                payload,
             )
             return True
         except Exception:
@@ -9020,15 +9039,21 @@ class MoonMindAgentRun:
                 )
                 provider_failure_event = (
                     provider_failure_event_from_metadata(
-                        self.final_result.metadata.get("providerFailure")
+                        self.final_result.provider_failure
+                        or self.final_result.metadata.get("providerFailure")
                     )
                     if self.final_result is not None
                     else None
                 )
-                if prefer_structured_failure and provider_failure_event is not None:
+                if workflow.patched("agent-run-provider-disposition-precedence-v1"):
+                    requires_provider_cooldown = (
+                        self._result_requires_provider_cooldown(self.final_result)
+                    )
+                elif prefer_structured_failure and provider_failure_event is not None:
                     requires_provider_cooldown = (
                         provider_failure_event_requires_cooldown(
-                            provider_failure_event
+                            # Retained histories predate disposition authority.
+                            replace(provider_failure_event, retry_disposition=None)
                         )
                     )
                 elif self.final_result is not None:
@@ -9135,6 +9160,16 @@ class MoonMindAgentRun:
                             {
                                 "profile_id": profile_id or request.execution_profile_ref,
                                 "cooldown_seconds": cooldown_seconds,
+                                **(
+                                    {
+                                        "failure_class": provider_failure_event.provider_error_class
+                                    }
+                                    if provider_failure_event is not None
+                                    and workflow.patched(
+                                        "agent-run-provider-disposition-precedence-v1"
+                                    )
+                                    else {}
+                                ),
                             },
                         )
                         await manager_handle.signal(

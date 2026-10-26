@@ -33,7 +33,13 @@ class Runner:
                 }
             return {"exit": 0, "output": ""}  # No earlier one-off still running.
         if args[:3] == ("docker", "image", "inspect"):
+            if "--format" not in args:
+                return {"exit": 0, "stdout": json.dumps([{"Id": NEW_ID, "RepoDigests": [args[-1]]}])}
             return {"exit": 0, "output": NEW_ID}
+        if args[:2] == ("docker", "run"):
+            return {"exit": 0, "stdout": json.dumps({"services": {name: {"image": "${MOONMIND_IMAGE}"} for name in SERVICES}})}
+        if args[-2:] == ("config", "--services"):
+            return {"exit": 0, "stdout": "\n".join(SERVICES)}
         if args[:2] == ("docker", "inspect"):
             return {
                 "exit": 0,

@@ -793,3 +793,12 @@ credential resolution and cleanup, resource and GPU limits, container start,
 workload failure or timeout, artifact publication, and cleanup. A cold image
 never produces `backend_unavailable` by itself; the first job that needs it
 moves through acquisition or build and receives the authoritative result.
+
+### Fixed service access
+
+An optional deployment-owned `serviceRef` selects a fixed TCP/UDP relay for
+`networkMode: service`, restricted to approved image sources. The caller never
+chooses a destination or Docker network. No service is enabled by default.
+This grants endpoint access, not application read-only permission. See the
+[deployment example](../../deploy/examples/service-relay/README.md) for isolation,
+explicit operator approval, preparation-image ownership and qualification.

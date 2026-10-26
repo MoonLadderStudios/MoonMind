@@ -161,6 +161,7 @@ interface ProviderReadinessCheck {
 interface ProviderProfileReadiness {
   status: 'ready' | 'warning' | 'blocked';
   launch_ready: boolean;
+  reason_code?: string;
   summary: string;
   checks: ProviderReadinessCheck[];
 }
@@ -1043,6 +1044,21 @@ export function computeAdvancedPolicySummary(input: {  presetState: 'loading' | 
 
 function readinessLabel(status: ProviderProfileReadiness['status']): string {
   return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+function readinessReasonLabel(reason: string): string {
+  return ({
+    ready: 'Ready',
+    auth_expired: 'Credentials expired',
+    auth_revoked: 'Credentials revoked',
+    auth_invalid: 'Credentials rejected',
+    observation_unavailable: 'Provider check unavailable',
+    quota_wait: 'Waiting for provider quota',
+    capacity_wait: 'Waiting for provider capacity',
+    unsupported_selection: 'Unsupported selection',
+    configuration_required: 'Setup required',
+    disabled: 'Disabled',
+  } as Record<string, string>)[reason] ?? 'Unknown';
 }
 
 function readinessClass(status: ProviderProfileReadiness['status']): string {
@@ -4593,6 +4609,11 @@ export function ProviderProfilesManager({
                             className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${readinessClass(profile.readiness.status)}`}
                           >
                             Readiness: {readinessLabel(profile.readiness.status)}
+                          </span>
+                        ) : null}
+                        {profile.readiness?.reason_code ? (
+                          <span className="text-xs text-slate-500">
+                            Provider status: {readinessReasonLabel(profile.readiness.reason_code)}
                           </span>
                         ) : null}
                       </div>

@@ -14,12 +14,42 @@ from api_service.db.models import (
     ProviderProfileDisabledReason,
 )
 from api_service.services.provider_profile_readiness import (
+    provider_profile_readiness_reason,
     provider_profile_launch_ready,
 )
 from moonmind.provider_profiles.model_tiers import coerce_model_effort_tier_policy
 from moonmind.utils.logging import redact_profile_file_templates, redact_sensitive_payload
+from moonmind.workflows.provider_failures import (
+    ProviderFailureEvent,
+    build_provider_failure_event,
+    provider_failure_event_from_metadata,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def record_provider_probe_observation(
+    profile: ManagedAgentProviderProfile,
+    *,
+    event: ProviderFailureEvent,
+    observed_at: datetime,
+) -> None:
+    """Record probe evidence without changing credential or launch authority."""
+    behavior = dict(profile.command_behavior or {})
+    readiness = dict(behavior.get("auth_readiness") or {})
+    previous = provider_failure_event_from_metadata(readiness.get("providerFailure"))
+    readiness["observation"] = event.observation
+    readiness["last_observed_at"] = observed_at.isoformat()
+    # Failure to observe a previously rejected credential is not recovery.
+    if not (
+        previous is not None
+        and previous.observation == "confirmed"
+        and previous.provider_error_class in {"auth", "credential_scope"}
+        and event.provider_error_class not in {"auth", "credential_scope"}
+    ):
+        readiness["providerFailure"] = event.to_metadata()
+    behavior["auth_readiness"] = readiness
+    profile.command_behavior = behavior
 
 async def normalize_runtime_default_profile(
     *,
@@ -148,6 +178,9 @@ def _manager_profile_payload(
     *,
     managed_secret_statuses: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    launch_ready = provider_profile_launch_ready(
+        row, managed_secret_statuses=managed_secret_statuses
+    )
     model_tiers, default_model_tier = coerce_model_effort_tier_policy(
         model_tiers=row.model_tiers,
         default_model_tier=row.default_model_tier,
@@ -191,9 +224,10 @@ def _manager_profile_payload(
         "disabled_reason": (
             row.disabled_reason.value if row.disabled_reason else None
         ),
-        "launch_ready": provider_profile_launch_ready(
+        "launch_ready": launch_ready,
+        "readiness_reason": provider_profile_readiness_reason(
             row,
-            managed_secret_statuses=managed_secret_statuses,
+            launch_ready=launch_ready,
         ),
         "first_authenticated_at": (
             row.first_authenticated_at.isoformat()
@@ -465,6 +499,7 @@ def apply_oauth_connected_state(
         ),
         readiness={
             "connected": True,
+            "observation": "confirmed",
             "last_validated_at": validated_at.isoformat(),
             "backing_secret_exists": True,
             "launch_ready": True,
@@ -595,6 +630,10 @@ def apply_oauth_validation_failure(
         ),
         readiness={
             "connected": False,
+            "observation": "confirmed",
+            "providerFailure": build_provider_failure_event(
+                provider_error_class="auth", provider_error_code="credential_rejected"
+            ).to_metadata(),
             "last_validated_at": failed_at.isoformat(),
             "backing_secret_exists": False,
             "launch_ready": False,

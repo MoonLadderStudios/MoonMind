@@ -50,6 +50,111 @@ from tests.unit.workflows.temporal.workflows.test_run_signals_updates import (
 )
 
 
+@workflow.defn(name="TypedOutcomeReplayFixture")
+class _LegacyTypedOutcomeReplayFixture:
+    @workflow.run
+    async def run(self, result: dict[str, Any]) -> str:
+        parent = MoonMindRunWorkflow()
+        if result.get("gate"):
+            parent._publish_context = _typed_gate_replay_context()
+            parent._workflow_patch_enabled = lambda _: False
+            mapped = {"status": parent._moonspec_gate_failure_summary()["recommendedNextAction"]}
+        else:
+            mapped = parent._map_legacy_agent_run_result({k: v for k, v in result.items() if k != "retryDecision"})
+            if result.get("retryDecision"):
+                mapped["status"] = "RETRY" if parent._activity_result_retryable(mapped, failure_message="execution_error", tool_type="agent_runtime") else "NO_RETRY"
+        await workflow.sleep(1 if mapped["status"] in {"COMPLETED", "restore_validation_environment", "RETRY"} else 2)
+        return mapped["status"]
+
+
+@workflow.defn(name="TypedOutcomeReplayFixture")
+class _CurrentTypedOutcomeReplayFixture:
+    @workflow.run
+    async def run(self, result: dict[str, Any]) -> str:
+        parent = MoonMindRunWorkflow()
+        if result.get("gate"):
+            parent._publish_context = _typed_gate_replay_context()
+            mapped = {"status": parent._moonspec_gate_failure_summary()["recommendedNextAction"]}
+        else:
+            mapped = parent._map_agent_run_result({k: v for k, v in result.items() if k != "retryDecision"})
+            if result.get("retryDecision"):
+                mapped["status"] = "RETRY" if parent._activity_result_retryable(mapped, failure_message="execution_error", tool_type="agent_runtime") else "NO_RETRY"
+        await workflow.sleep(1 if mapped["status"] in {"COMPLETED", "restore_validation_environment", "RETRY"} else 2)
+        return mapped["status"]
+
+
+def _typed_gate_replay_context():
+    return {"publicationBlockedBy": "moonspec_verify", "moonSpecGate": {"verdict": "ADDITIONAL_WORK_NEEDED", "classification": "native toolchain missing", "recommendedNextAction": "reattempt_current_step"}}
+
+
+@pytest.mark.asyncio
+async def test_typed_outcome_parent_mapping_replays_old_and_current_decisions():
+    histories = []
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        cases = [
+            (_LegacyTypedOutcomeReplayFixture, {"gate": True}, "restore_validation_environment"),
+            (_CurrentTypedOutcomeReplayFixture, {"gate": True}, "reattempt_current_step"),
+            (_LegacyTypedOutcomeReplayFixture, {}, "COMPLETED"),
+            (_LegacyTypedOutcomeReplayFixture, {"observation": "unavailable"}, "COMPLETED"),
+            (_CurrentTypedOutcomeReplayFixture, {"observation": "unavailable"}, "UNKNOWN"),
+            (_LegacyTypedOutcomeReplayFixture, {"providerFailure": {"observation": "unavailable"}}, "COMPLETED"),
+            (_CurrentTypedOutcomeReplayFixture, {"providerFailure": {"observation": "unavailable"}}, "UNKNOWN"),
+            (
+                _LegacyTypedOutcomeReplayFixture,
+                {"retryDecision": True, "failureClass": "execution_error", "providerFailure": {"providerErrorClass": "capacity", "retryDisposition": "no_retry", "failureId": "original"}},
+                "RETRY",
+            ),
+            (
+                _CurrentTypedOutcomeReplayFixture,
+                {"retryDecision": True, "failureClass": "execution_error", "providerFailure": {"providerErrorClass": "capacity", "retryDisposition": "no_retry", "failureId": "original"}},
+                "NO_RETRY",
+            ),
+            (
+                _LegacyTypedOutcomeReplayFixture,
+                {"failure_class": "user_error", "provider_error_code": "401"},
+                "FAILED",
+            ),
+            (
+                _LegacyTypedOutcomeReplayFixture,
+                {"failureClass": "execution_error", "providerErrorCode": "429"},
+                "FAILED",
+            ),
+            (
+                _CurrentTypedOutcomeReplayFixture,
+                {
+                    "executionState": "completed",
+                    "objectiveOutcome": "succeeded",
+                    "secondaryErrors": [{"code": "reporting_failed"}],
+                },
+                "COMPLETED",
+            ),
+            (
+                _CurrentTypedOutcomeReplayFixture,
+                {"executionState": "delivery_unknown"},
+                "UNKNOWN",
+            ),
+        ]
+        for index, (implementation, result, expected) in enumerate(cases):
+            queue = f"typed-outcome-replay-{index}"
+            async with Worker(
+                env.client,
+                task_queue=queue,
+                workflows=[implementation],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ):
+                handle = await env.client.start_workflow(
+                    implementation.run, result, id=queue, task_queue=queue
+                )
+                assert await handle.result() == expected
+                histories.append(await handle.fetch_history())
+    replayer = Replayer(
+        workflows=[_CurrentTypedOutcomeReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    for history in histories:
+        await replayer.replay_workflow(history)
+
+
 @workflow.defn(name="AcceptedPublishedBranchReplayFixture")
 class _LegacyPublishedBranchReplayFixture:
     @workflow.run

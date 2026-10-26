@@ -1,10 +1,51 @@
 import hashlib
 import json
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
 
 from moonmind.workflows.skills import deployment_release as release
+
+
+def test_controller_helper_reads_staged_release_base_and_deployment_overrides(
+    tmp_path, monkeypatch
+):
+    controller = tmp_path / "controller"
+    exported = controller / "image-overlays" / "update-compose.json"
+    exported.parent.mkdir(parents=True)
+    exported.write_text('{"services":{"api":{"image":"selected-release"}}}')
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+    (repo / "docker-compose.override.yaml").write_text(
+        "services: {api: {ports: ['7000:8000']}}"
+    )
+    monkeypatch.setenv("MOONMIND_CONTROLLER_STATE_DIR", str(controller))
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR", str(repo))
+    monkeypatch.setattr(
+        release,
+        "_omnigent_release_store",
+        lambda: SimpleNamespace(env_file_path=str(tmp_path / ".env.deploy")),
+    )
+    runner = release.controller_release_runner(
+        {
+            "target": {
+                "project": "moonmind-test",
+                "projectDir": "/host/checkout",
+                "composeFiles": [
+                    "/var/lib/moonmind-controller/image-overlays/update-compose.json",
+                    "docker-compose.override.yaml",
+                ],
+                "releaseComposeFile": "update-compose.json",
+            }
+        }
+    )
+    command = runner._compose_base_command()
+    assert [command[i + 1] for i, arg in enumerate(command) if arg == "-f"] == [
+        str(exported),
+        str(repo / "docker-compose.override.yaml"),
+    ]
+    assert command[command.index("--project-directory") + 1] == "/host/checkout"
 
 
 @pytest.mark.parametrize(
@@ -779,8 +820,9 @@ def _wedged_manager_disposition(blocked: bool = True) -> dict:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_handoff", [False, True])
 async def test_controller_omnigent_steps_reuse_selection_after_restart(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, legacy_handoff
 ):
     repo = tmp_path / "mounted-project"
     repo.mkdir()
@@ -799,6 +841,7 @@ async def test_controller_omnigent_steps_reuse_selection_after_restart(
 
     async def select(runner, owner, image):
         calls.append(("select", owner, image))
+        assert image == "example/moonmind@sha256:selected"
         assert runner.project_name == "moonmind-test-custom"
         assert runner.project_dir == "/host/installed-project"
         assert runner.local_project_dir == str(repo)
@@ -825,15 +868,21 @@ async def test_controller_omnigent_steps_reuse_selection_after_restart(
             "composeFiles": ["docker-compose.yaml", "docker-compose.override.yaml"],
         },
     }
+    if legacy_handoff:
+        payload["resolvedMoonmindImage"] = payload["moonmindImage"]
+        payload["moonmindImage"] = "example/moonmind:rollback"
     selected = await release.run_controller_omnigent_step("select", payload)
     assert selected == {"status": "advanced", "revision": 7}
     # Lost acknowledgment/restart reattaches to the durable selection; it
     # must not resolve a moved channel into another desired-state revision.
     again = await release.run_controller_omnigent_step("select", payload)
     assert again == selected
-    migrated = await release.run_controller_omnigent_step(
-        "migrate", {**payload, "selectedRevision": 7}
-    )
+    migration_payload = {**payload, "selectedRevision": 7}
+    if legacy_handoff:
+        # The receiving controller predates resolvedMoonmindImage and sends
+        # its original request identity, including after a failed handoff.
+        migration_payload.pop("resolvedMoonmindImage")
+    migrated = await release.run_controller_omnigent_step("migrate", migration_payload)
     assert migrated == {"status": "converged", "revision": 7}
     assert [call[0] for call in calls] == ["select", "migrate"]
     assert calls[-1][-1] == 7
@@ -1116,3 +1165,79 @@ async def test_controller_without_routing_cutover_is_refused_before_selection(
     with pytest.raises(RuntimeError, match="unversioned-routing-cutover") as failure:
         await release.run_controller_omnigent_step("select", request)
     assert "active-journal-transition" not in str(failure.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["handed-off", "unavailable", "current"])
+async def test_storage_copy_upgrades_an_owner_with_the_old_command_budget(
+    monkeypatch, status
+):
+    handoffs = []
+
+    def handoff(payload):
+        handoffs.append(payload["operationId"])
+        return {"status": status, "reason": "test handoff outcome"}
+
+    def no_copy(payload):
+        pytest.fail("An old controller reached the storage copy")
+
+    monkeypatch.setattr(release, "hand_off_controller", handoff)
+    monkeypatch.setattr(release, "controller_release_runner", no_copy)
+    with pytest.raises(RuntimeError, match="controller"):
+        await release.controller_storage_cli(
+            "storage-prepare",
+            {
+                "operationId": "old-storage-owner",
+                "moonmindImage": "candidate",
+                "controllerCapabilities": ["controller-handoff"],
+            },
+        )
+    assert handoffs == ["old-storage-owner"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["storage-prepare", "storage-observe"])
+async def test_storage_cli_uses_the_capable_owner_and_resolved_image(
+    tmp_path, monkeypatch, capsys, phase
+):
+    from moonmind.workflows.skills import omnigent_release, storage_migration
+
+    @asynccontextmanager
+    async def lock():
+        yield
+
+    def no_handoff(payload):
+        pytest.fail("A capable storage owner tried to hand off again")
+
+    runner = object()
+
+    def make_runner(payload):
+        assert payload["moonmindImage"] == "resolved-release"
+        return runner
+
+    async def prepare(actual_runner, docker, payload, directory, *, observe_only):
+        assert actual_runner is runner and docker is release.docker
+        assert directory == tmp_path / "storage-transfers"
+        assert observe_only == (phase == "storage-observe")
+        return {"status": "prepared", "verifiedObjects": 3}
+
+    monkeypatch.setattr(omnigent_release, "_deployment_lock", lock)
+    monkeypatch.setattr(storage_migration, "prepare_compose_storage", prepare)
+    monkeypatch.setattr(release, "state_root", lambda: tmp_path / "release-jobs")
+    monkeypatch.setattr(release, "controller_release_runner", make_runner)
+    monkeypatch.setattr(release, "hand_off_controller", no_handoff)
+    assert (
+        await release.controller_storage_cli(
+            phase,
+            {
+                "operationId": "capable-storage-owner",
+                "moonmindImage": "submitted-latest",
+                "resolvedMoonmindImage": "resolved-release",
+                "controllerCapabilities": (
+                    ["storage-transfer-budget"] if phase == "storage-prepare" else []
+                ),
+            },
+        )
+        == 0
+    )
+    assert '"verifiedObjects": 3' in capsys.readouterr().err

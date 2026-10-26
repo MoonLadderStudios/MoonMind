@@ -8,6 +8,8 @@ export const WorkflowWorkspaceRowSchema = z
     status: z.string().optional(),
     state: z.string().optional(),
     rawState: z.string().optional(),
+    completionDisposition: z.string().nullable().optional(),
+    objectiveOutcome: z.string().nullable().optional(),
     createdAt: z.string().nullable().optional(),
     updatedAt: z.string().nullable().optional(),
     scheduledFor: z.string().nullable().optional(),
@@ -30,6 +32,8 @@ type WorkflowWorkspaceDetailSource = {
   status?: string | undefined;
   state?: string | undefined;
   rawState?: string | undefined;
+  completionDisposition?: string | null | undefined;
+  objectiveOutcome?: string | null | undefined;
   createdAt?: string | null | undefined;
   updatedAt?: string | null | undefined;
   scheduledFor?: string | null | undefined;
@@ -52,6 +56,8 @@ export function workflowWorkspaceRowFromDetail(
     status: detail.status,
     state: detail.state,
     rawState: detail.rawState,
+    completionDisposition: detail.completionDisposition,
+    objectiveOutcome: detail.objectiveOutcome,
     createdAt: detail.createdAt,
     updatedAt: detail.updatedAt,
     scheduledFor: detail.scheduledFor,

@@ -28,8 +28,13 @@ if args == ["compose", "version"] or args[:2] == ["image", "inspect"]:
     raise SystemExit(0)
 directory = Path(args[args.index("--project-directory") + 1])
 command = args[args.index("--project-directory") + 2:]
+if command[:1] == ["port"]:
+    time.sleep(config.get("public_port_sleep", 0))
+    print(config.get("public_binding", "0.0.0.0:43127"))
+    raise SystemExit(0)
 if command[:1] == ["run"]:
     junit = re.search(r"--junitxml=(\S+)", command[-1])
+    phase = "seed" if "storage-restart-seed.xml" in command[-1] else "verify" if "storage-restart-verify.xml" in command[-1] else "main"
 
     def report(status):
         if junit and config.get("write_junit", True):
@@ -40,10 +45,13 @@ if command[:1] == ["run"]:
 
     signal.signal(signal.SIGINT, lambda *_: report(2))
     print("collected 3 items", flush=True)
+    print("public storage endpoint: " + os.environ.get("MOONMIND_TEST_S3_PUBLIC_ENDPOINT", ""), flush=True)
     print("tests/integration/test_example.py::test_case FAILED", flush=True)
     Path(os.environ["WRAPPER_TEST_STARTED"]).write_text("started")
     time.sleep(config.get("run_sleep", 0))
-    report(config.get("run_status", 0))
+    report(config.get(phase + "_status", config.get("run_status", 0)))
+if command[:1] == ["restart"]:
+    raise SystemExit(config.get("restart_status", 0))
 if command[:1] in (["down"], ["logs"], ["ps"]):
     print(f"{command[0]} sk-live-wrapper_test_secret observation", flush=True)
     time.sleep(config.get(command[0] + "_sleep", 0))
@@ -86,7 +94,7 @@ class Wrapper:
         ]
 
     def pytest_command(self) -> str:
-        runs = [command for command in self.compose_commands() if command[0] == "run"]
+        runs = [command for command in self.compose_commands() if command[0] == "run" and "pytest-integration-ci.xml" in command[-1]]
         assert len(runs) == 1
         return runs[0][-1]
 
@@ -147,7 +155,7 @@ def test_ordinary_ci_stops_early_and_keeps_report_log_and_failure(
     assert "test_case FAILED" in log
     # Row-owned diagnostics come from this wrapper's own project before teardown.
     commands = wrapper.compose_commands()
-    assert [command[0] for command in commands] == ["run", "ps", "logs", "down"]
+    assert [command[0] for command in commands] == ["up", "port", "run", "ps", "logs", "down"]
     assert all(
         call[call.index("--project-name") + 1] == "moonmind-test-wrapper-unit"
         for call in wrapper.calls()
@@ -171,6 +179,46 @@ def test_interactive_and_scheduled_runs_keep_collecting_without_maxfail(
     assert (wrapper.repo / REPORT / "pytest-integration-ci.xml").is_file()
     assert not (wrapper.repo / REPORT / "compose-logs.txt").exists()
     assert wrapper.downs() == 1
+    commands = wrapper.compose_commands()
+    assert [command[0] for command in commands] == ["up", "port", "run", "images", "run", "restart", "up", "run", "down"]
+    assert "storage-restart-seed.xml" in commands[4][-1]
+    assert "storage-restart-verify.xml" in commands[7][-1]
+    assert "--volumes" in commands[-1]
+
+
+@pytest.mark.parametrize(
+    "inherited_test_endpoint", [None, "", "http://installed-storage.invalid:9000"]
+)
+def test_public_downloads_use_the_disposable_published_port(
+    wrapper: Wrapper, inherited_test_endpoint: str | None
+) -> None:
+    wrapper.env.update(
+        {
+            "TEMPORAL_ARTIFACT_S3_ENDPOINT": "http://installed-storage.invalid:9000",
+            "TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT": "http://installed-storage.invalid:9000",
+        }
+    )
+    if inherited_test_endpoint is not None:
+        wrapper.env["MOONMIND_TEST_S3_PUBLIC_ENDPOINT"] = inherited_test_endpoint
+
+    status, output, _ = wrapper.run()
+
+    assert status == 0
+    assert "public storage endpoint: http://host.docker.internal:43127" in output
+    assert "installed-storage.invalid" not in output
+    commands = wrapper.compose_commands()
+    assert commands[0] == ["up", "-d", "--wait", "--wait-timeout", "90", "minio", "artifact-source"]
+    assert commands[1] == ["port", "minio", "9000"]
+
+
+@pytest.mark.parametrize("binding", ["", "0.0.0.0:0", "0.0.0.0:65536", "invalid"])
+def test_missing_public_port_prevents_tests_from_using_an_unrelated_store(wrapper: Wrapper, binding: str) -> None:
+    status, output, _ = wrapper.run(public_binding=binding)
+
+    assert status == 2
+    assert "disposable storage public port" in output
+    assert not any(command[0] == "run" for command in wrapper.compose_commands())
+    assert wrapper.downs() == 1
 
 
 def test_stale_report_never_stands_in_for_a_missing_one(wrapper: Wrapper) -> None:
@@ -182,6 +230,18 @@ def test_stale_report_never_stands_in_for_a_missing_one(wrapper: Wrapper) -> Non
 
     assert status == 3
     assert not report.exists()
+
+
+def test_failed_storage_restart_keeps_reports_and_stops_without_repeating_main(wrapper: Wrapper) -> None:
+    status, _, _ = wrapper.run(restart_status=5)
+    assert status == 5
+    report = wrapper.repo / REPORT
+    assert (report / "pytest-integration-ci.xml").exists()
+    assert (report / "storage-restart-seed.xml").exists()
+    assert not (report / "storage-restart-verify.xml").exists()
+    assert (report / "compose-logs.txt").exists()
+    assert len([command for command in wrapper.compose_commands() if command[0] == "run"]) == 2
+    assert wrapper.downs() == 1
 
 
 def test_temporary_checkout_exports_report_before_removal(tmp_path: Path) -> None:
@@ -220,7 +280,9 @@ def test_stuck_teardown_is_bounded_and_keeps_primary_status(wrapper: Wrapper) ->
 
 
 def test_execution_budget_interrupts_pytest_cooperatively(wrapper: Wrapper) -> None:
-    wrapper.env["MOONMIND_INTEGRATION_TIMEOUT"] = "1"
+    # Leave time for dependency startup and public-port discovery, then
+    # interrupt a running pytest process and preserve its terminal report.
+    wrapper.env["MOONMIND_INTEGRATION_TIMEOUT"] = "3"
 
     status, _, elapsed = wrapper.run(run_sleep=120)
 
@@ -230,6 +292,18 @@ def test_execution_budget_interrupts_pytest_cooperatively(wrapper: Wrapper) -> N
         "failures='1'"
         in (wrapper.repo / REPORT / "pytest-integration-ci.xml").read_text()
     )
+    assert wrapper.downs() == 1
+
+
+def test_public_port_discovery_shares_the_pipeline_deadline(wrapper: Wrapper) -> None:
+    wrapper.env["MOONMIND_INTEGRATION_TIMEOUT"] = "2"
+
+    status, _, elapsed = wrapper.run(public_port_sleep=120)
+
+    assert status == 124
+    assert elapsed < 30
+    assert not any(command[0] == "run" for command in wrapper.compose_commands())
+    assert (wrapper.repo / REPORT / "compose-logs.txt").exists()
     assert wrapper.downs() == 1
 
 

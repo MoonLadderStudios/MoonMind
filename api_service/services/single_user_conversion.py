@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 from uuid import UUID, uuid4
 
-from sqlalchemy import String, UniqueConstraint, and_, cast, func, or_, select, text
+from sqlalchemy import Index, String, UniqueConstraint, and_, cast, func, literal_column, or_, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
@@ -65,6 +65,16 @@ from api_service.db.models import Base, Uuid, mutable_json_dict
 logger = logging.getLogger(__name__)
 
 SCHEMA_REVISION = "400_job_operator_access"
+
+# Stable JSON paths let a generic prepared plan select current production
+# evidence without scanning generic/custom or older conversion history.
+# This is candidate selection; _is_production_completion still validates it.
+_COMPLETION_SCHEMA_SQL = "(result_json ->> 'schema_revision')"
+_PRODUCTION_COMPLETION_LOOKUP_SQL = (
+    "status = 'complete' "
+    "AND CAST(result_json -> 'published' AS TEXT) = 'true' "
+    "AND CAST(result_json -> 'production_transforms_completed' AS TEXT) = 'true'"
+)
 
 
 class ConversionAuthorizationError(PermissionError):
@@ -95,6 +105,12 @@ class SingleUserConversionRun(Base):
 
     __tablename__ = "single_user_conversion_runs"
     __table_args__ = (
+        Index(
+            "ix_single_user_conversion_published_schema",
+            text(_COMPLETION_SCHEMA_SQL),
+            postgresql_where=text(_PRODUCTION_COMPLETION_LOOKUP_SQL),
+            sqlite_where=text(_PRODUCTION_COMPLETION_LOOKUP_SQL),
+        ),
         UniqueConstraint(
             "preflight_digest", name="uq_single_user_conversion_runs_digest"
         ),
@@ -1333,15 +1349,12 @@ async def completed_guarded_upgrade(session: AsyncSession) -> ApplyResult | None
                 await session.execute(
                     select(ledger_cls)
                     .where(
-                        ledger_cls.status == "complete",
-                        stored["schema_revision"].as_string() == SCHEMA_REVISION,
-                        stored["published"].as_boolean().is_(True),
+                        text(_PRODUCTION_COMPLETION_LOOKUP_SQL),
+                        literal_column(_COMPLETION_SCHEMA_SQL, String()) == SCHEMA_REVISION,
                         stored["decision"]["eligible"].as_boolean().is_(True),
                         stored["decision"]["disposition"].as_string().in_(
                             ("fresh_init", "eligible_conversion")
                         ),
-                        stored["production_transforms_completed"]
-                        .as_boolean().is_(True),
                         stored["transforms"]["artifacts"]["recovery_grants"]
                         .as_integer() >= 0,
                         stored["transforms"]["artifacts"]["preserved"]
