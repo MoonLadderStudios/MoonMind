@@ -45,6 +45,17 @@ The page contains the following major regions:
 
 Desktop Workflow detail renders inside the shared `EntityDetailFrame`: breadcrumb; title/subtitle/status; primary and overflow actions; summary/facts strip; tabs/sections; main evidence slab; and optional right facts rail. The frame is the primary pane sibling of the far-left Workflow sidebar; it never owns that sidebar and the pair is never centered inside a max-width wrapper. Recurring schedule detail uses the same structural, spacing, status, action, tab, facts-rail, loading, error, and responsive primitives with a schedule adapter. Mobile stacks these regions and removes the desktop collection sidebar.
 
+### Tabs
+
+Apart from page-level notices, only the title, status badge, workflow ID, and **Workflow actions** menu sit above the tabs; everything else belongs to exactly one tab.
+
+- **Chat**, the default (`/workflows/{workflowId}`), hosts the native session described in [Workflow Chat Panel](./WorkflowChatPanel.md).
+- **Execution** holds steps, runs, retries, interventions, the audit trail, and a collapsed **Session diagnostics** disclosure with the read-only bridge event history and live logs. The `#session-diagnostics` fragment opens it. Without a usable step ledger, the Observation section shows that evidence directly instead.
+- **Evidence** holds reports, saved results, artifacts, and remediation evidence.
+- **Details** holds the summary, workflow inputs, and the agent, Git & Publish, and lifecycle facts. Raw identifiers, Temporal state, and the action capability map sit under a collapsed **Technical details**.
+
+Retired URLs keep working: `/overview` opens Details, `/debug` opens Execution, and `/steps`, `/runs`, and `/artifacts` open Execution or Evidence.
+
 ## Header
 
 The header is always present.
@@ -68,19 +79,7 @@ Untitled workflow
 
 ### Source context (Repository + Starting Branch)
 
-The shared detail hero renders a compact, read-only source-context strip
-(`td-source-context`) directly under the title row, outside tab-specific
-content. It shows **Repository** and **Starting Branch** together where
-available and stays visible on the default Chat route (`/workflows/{workflowId}`)
-as well as Overview, Execution, Evidence, and Debug, on desktop and mobile.
-The default tab is unchanged; the strip is not gated by `overviewTabActive`.
-
-Both the shared strip and Overview → Git & Publish read the same normalized
-value from the selected execution's recorded `repository` / `startingBranch`
-via `resolveWorkflowSourceContext()` in
-`frontend/src/entrypoints/workflow-detail.tsx`. The full branch name keeps a
-`title` tooltip with sensible wrapping/truncation (`break-all`,
-`overflow-wrap: anywhere`).
+**Details → Git & Publish** shows **Repository** and **Starting Branch** alongside Publish Mode, Target Branch, the published or saved work branch, and the PR link. They are not repeated above the tabs. Both come from the selected execution's recorded `repository` / `startingBranch` through `resolveWorkflowSourceContext()` in `frontend/src/entrypoints/workflow-detail.tsx`; a long branch wraps and keeps its full value in a `title` tooltip.
 
 Branch semantics:
 
@@ -96,16 +95,7 @@ Branch semantics:
   detail query key includes the workflow id, so navigation, polling, rerun, or
   resume replaces the record instead of retaining stale branch values.
 
-Unavailable-data behavior (no new persistence):
-
-- Repository-backed execution with a recorded branch: shows the branch in both
-  the shared strip and Overview.
-- Repository-backed execution with missing branch metadata: shows explicit
-  **Not recorded** in both places.
-- Workflow without a repository source: the shared strip is intentionally
-  omitted and Overview shows **Not applicable**.
-- Loading: the detail loading placeholder covers the hero; no source-context
-  row renders until the execution record resolves.
+Unavailable data reads **Not recorded** for a repository-backed execution without branch metadata. A workflow without a repository source shows no Repository fact, and its Starting Branch reads **Not applicable**.
 
 ### Status badge
 
@@ -226,7 +216,7 @@ Only one of **Pause** or lifecycle **Resume** is visible at a time. This lifecyc
 
 ### More menu
 
-The toolbar **Workflow actions** menu holds the debug-details toggle and the capability-gated Workflow actions, built by the same code as the Workflows list row menu. Safe actions come first and take initial focus; destructive ones follow a divider. **Force cancel** stays under Troubleshooting even on terminal Workflows, whose projected state may be stale, and ineligible actions collapse under **Unavailable (n)** with plain-language reasons.
+The toolbar **Workflow actions** menu holds the capability-gated Workflow actions, built by the same code as the Workflows list row menu. Safe actions come first and take initial focus; destructive ones follow a divider. **Force cancel** stays under Troubleshooting even on terminal Workflows, whose projected state may be stale, and ineligible actions collapse under **Unavailable (n)** with plain-language reasons.
 
 ## Status summary section
 
@@ -511,7 +501,7 @@ Distinguish original, rerun, edited rerun, and remediation relationships. Newly 
 
 ## Metadata section
 
-The metadata section is present for users with permission to view technical details.
+The metadata section is the collapsed **Technical details** disclosure on the Details tab. Server-enabled debug fields appear there too.
 
 It contains:
 

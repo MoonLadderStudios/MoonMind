@@ -1,17 +1,20 @@
 export const WORKFLOW_DETAIL_SUBROUTES = [
   'chat',
-  'overview',
   'execution',
   'evidence',
-  'debug',
+  'details',
 ] as const;
 
 export type WorkflowDetailSubroute = (typeof WORKFLOW_DETAIL_SUBROUTES)[number];
 
+// Retired tab URLs keep working: Overview was renamed Details, and the Debug
+// tab's session diagnostics moved to Execution.
 export const WORKFLOW_DETAIL_SUBROUTE_ALIASES = {
   steps: 'execution',
   runs: 'execution',
+  debug: 'execution',
   artifacts: 'evidence',
+  overview: 'details',
 } as const satisfies Record<string, WorkflowDetailSubroute>;
 
 export const WORKFLOW_DETAIL_SUPPORTED_SUBROUTES = [
@@ -58,6 +61,9 @@ export function workflowDetailSubrouteHref(
   const query = search.toString();
   return `/workflows/${encodeURIComponent(workflowId)}${suffix}${query ? `?${query}` : ''}`;
 }
+
+/** Fragment that opens the Execution tab's Session diagnostics disclosure. */
+export const SESSION_DIAGNOSTICS_ANCHOR = 'session-diagnostics';
 
 export function isWorkflowDetailPath(pathname: string): boolean {
   return decodeWorkflowIdFromPath(pathname) !== null;

@@ -137,10 +137,8 @@ The SPA shell should be served for recognized dashboard UI paths and deep links,
 - `/workflows`
 - `/workflows/new`
 - `/workflows/{workflowId}`
-- `/workflows/{workflowId}/steps`
-- `/workflows/{workflowId}/artifacts`
-- `/workflows/{workflowId}/runs`
-- `/workflows/{workflowId}/debug` when enabled
+- `/workflows/{workflowId}/chat`, `/execution`, `/evidence`, and `/details`
+- the retired `/workflows/{workflowId}/overview`, `/debug`, `/steps`, `/runs`, and `/artifacts` tab aliases
 - `/schedules`
 - `/schedules/{definitionId}`
 - `/skills`
@@ -174,10 +172,7 @@ const router = createBrowserRouter([
       { path: 'workflows', lazy: () => import('./pages/WorkflowsPage') },
       { path: 'workflows/new', lazy: () => import('./pages/WorkflowStartPage') },
       { path: 'workflows/:workflowId', lazy: () => import('./pages/WorkflowDetailPage') },
-      { path: 'workflows/:workflowId/steps', lazy: () => import('./pages/WorkflowDetailPage') },
-      { path: 'workflows/:workflowId/artifacts', lazy: () => import('./pages/WorkflowDetailPage') },
-      { path: 'workflows/:workflowId/runs', lazy: () => import('./pages/WorkflowDetailPage') },
-      { path: 'workflows/:workflowId/debug', lazy: () => import('./pages/WorkflowDetailPage') },
+      { path: 'workflows/:workflowId/:tab', lazy: () => import('./pages/WorkflowDetailPage') },
       { path: 'schedules', lazy: () => import('./pages/SchedulesPage') },
       { path: 'schedules/:definitionId', lazy: () => import('./pages/SchedulesPage') },
       { path: 'skills/*', lazy: () => import('./pages/SkillsPage') },

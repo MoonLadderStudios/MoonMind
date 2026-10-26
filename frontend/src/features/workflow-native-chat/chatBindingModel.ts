@@ -289,6 +289,38 @@ export function nativeChatStateCopy(
   }
 }
 
+/** A step ledger row, reduced to what the context bar needs to name a step. */
+export interface NativeChatStepRef {
+  logicalStepId: string;
+  order?: number | null;
+  title?: string | null;
+}
+
+/**
+ * Context-bar label for the bound step, such as "Step 6 · Implement the issue".
+ * Before the step ledger loads there is no label; when the loaded ledger does
+ * not list the step yet (steps added at runtime), the raw id stands in and
+ * `known` is false so the caller can refresh the ledger.
+ */
+export function nativeChatStepLabel(
+  logicalStepId: string | null | undefined,
+  steps: readonly NativeChatStepRef[] | null | undefined,
+): { label: string | null; known: boolean } {
+  if (!logicalStepId || !steps) {
+    return { label: null, known: false };
+  }
+  const step = steps.find((candidate) => candidate.logicalStepId === logicalStepId);
+  if (!step) {
+    return { label: `Step ${logicalStepId}`, known: false };
+  }
+  const ordinal = typeof step.order === 'number' ? `Step ${step.order}` : '';
+  const title = step.title?.trim() ?? '';
+  return {
+    label: [ordinal, title].filter(Boolean).join(' · ') || `Step ${logicalStepId}`,
+    known: true,
+  };
+}
+
 /** Bounded read-only/unavailable label for the context bar, or null when writable. */
 export function nativeChatContextStatusLabel(
   status: NativeChatStatus,

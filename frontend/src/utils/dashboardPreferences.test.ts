@@ -43,7 +43,6 @@ describe('dashboardPreferences', () => {
         workflowListPageSize: 100,
         liveUpdatesEnabled: false,
         createExpertMode: true,
-        debugFieldsVisible: false,
         workflowListDisplayMode: 'hidden',
         preferredDetailTab: 'steps',
         lastSelectedWorkflowId: 'workflow-123',
@@ -56,7 +55,6 @@ describe('dashboardPreferences', () => {
       expect(reloaded.workflowListDensity).toBe('compact');
       expect(reloaded.workflowListColumnVisibility.progress).toBe(false);
       expect(reloaded.createExpertMode).toBe(true);
-      expect(reloaded.debugFieldsVisible).toBe(false);
       expect(reloaded.workflowListDisplayMode).toBe('hidden');
       expect(reloaded.lastSelectedWorkflowId).toBe('workflow-123');
       expect(reloaded.preferredDetailTab).toBe('steps');

@@ -17,6 +17,7 @@ export {
   isMountableNativeChatStatus,
   nativeChatStateCopy,
   nativeChatContextStatusLabel,
+  nativeChatStepLabel,
   NATIVE_CHAT_MOUNTED_STATUSES,
 } from './chatBindingModel';
 export type {
@@ -24,5 +25,6 @@ export type {
   WorkflowChatBindingServerState,
   NativeChatStatus,
   NativeChatStateCopy,
+  NativeChatStepRef,
 } from './chatBindingModel';
 export type { NativeChatFrameSignal } from './NativeChatFrame';

@@ -21,7 +21,7 @@ interface NativeChatUnavailableStateProps {
   fullPageHref?: string | null;
   /** MoonMind-scoped evidence subroute href. */
   evidenceHref?: string | null;
-  /** MoonMind-scoped diagnostics (Debug) subroute href. */
+  /** MoonMind-scoped href to the Execution tab's session diagnostics. */
   diagnosticsHref?: string | null;
   /** SPA navigation for internal (evidence/diagnostics) links. */
   onNavigate?: ((href: string) => void) | null;
