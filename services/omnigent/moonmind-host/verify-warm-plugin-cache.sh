@@ -1,5 +1,5 @@
 #!/bin/sh
-# Prove that an omnigent-host-opencode image starts `opencode serve` for a
+# Prove that the shared Omnigent host image starts `opencode serve` for a
 # plugin-enabled session with the network disabled, using only the image-owned
 # npm cache the Dockerfile warms for `@opencode-ai/plugin`.
 #

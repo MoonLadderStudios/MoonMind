@@ -13,6 +13,7 @@ export const WORKFLOW_STATUS_TRACEABILITY = Object.freeze({
 });
 
 export const WORKFLOW_OBJECTIVE_OUTCOMES = [
+  'unknown',
   'active',
   'succeeded',
   'failed',
@@ -24,6 +25,7 @@ export const WORKFLOW_OBJECTIVE_OUTCOMES = [
 export type WorkflowObjectiveOutcome = (typeof WORKFLOW_OBJECTIVE_OUTCOMES)[number];
 
 const OBJECTIVE_SUMMARY_FALLBACKS: Readonly<Partial<Record<WorkflowObjectiveOutcome, string>>> = {
+  unknown: 'The requested objective has not been confirmed.',
   idle: 'Execution ended with an idle outcome.',
   failed: 'The requested objective failed.',
   verification_blocked: 'Verification remains blocked.',

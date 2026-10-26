@@ -7896,6 +7896,20 @@ describe('Workflow Detail Entrypoint', () => {
     });
   }
 
+  it('preserves an unknown execution observation and confirmed publication in the outcome facts', async () => {
+    const summary = { agentResult: {
+      executionState: 'delivery_unknown', objectiveOutcome: 'unknown',
+      publicationState: 'published', outputAvailability: 'available', retryDisposition: 'no_retry',
+      secondaryErrors: [{ code: 'completion_notification_unavailable' }],
+    } };
+    mockFailedRunWithSummaryArtifact(summary, summary);
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Agent result' })).toBeTruthy());
+    expect(screen.getByText('Delivery unknown')).toBeTruthy();
+    expect(screen.getByText('Published')).toBeTruthy();
+    expect(screen.getByText('1 reporting error')).toBeTruthy();
+  });
+
   it('answers what happened, what failed, where output is, and what to do next for a failed run', async () => {
     const summaryArtifact = {
       finishOutcome: { code: 'FAILED', stage: 'executing', reason: 'Unit tests failed in the verify step.' },

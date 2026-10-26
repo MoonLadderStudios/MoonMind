@@ -8021,6 +8021,10 @@ export interface components {
          *     parameters, summaries, debug fields, or other detail-only payloads.
          */
         ExecutionListItemModel: {
+            /** Agentresult */
+            agentResult?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Source
              * @default temporal
@@ -8055,7 +8059,7 @@ export interface components {
             /** Completiondisposition */
             completionDisposition?: "gated_continuation" | null;
             /** Objectiveoutcome */
-            objectiveOutcome?: ("active" | "succeeded" | "failed" | "cancelled" | "idle" | "verification_blocked") | null;
+            objectiveOutcome?: ("active" | "succeeded" | "failed" | "cancelled" | "idle" | "verification_blocked" | "unknown") | null;
             /**
              * Dashboardstatus
              * @enum {string}
@@ -8407,6 +8411,10 @@ export interface components {
          * @description Materialized execution view returned by lifecycle APIs.
          */
         ExecutionModel: {
+            /** Agentresult */
+            agentResult?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Source
              * @default temporal
@@ -8455,7 +8463,7 @@ export interface components {
             /** Completiondisposition */
             completionDisposition?: "gated_continuation" | null;
             /** Objectiveoutcome */
-            objectiveOutcome?: ("active" | "succeeded" | "failed" | "cancelled" | "idle" | "verification_blocked") | null;
+            objectiveOutcome?: ("active" | "succeeded" | "failed" | "cancelled" | "idle" | "verification_blocked" | "unknown") | null;
             /**
              * Dashboardstatus
              * @enum {string}
@@ -10960,6 +10968,11 @@ export interface components {
             status: string;
             /** Launch Ready */
             launch_ready: boolean;
+            /**
+             * Reason Code
+             * @default configuration_required
+             */
+            reason_code: string;
             /** Summary */
             summary: string;
             /** Checks */
@@ -11524,7 +11537,7 @@ export interface components {
             /** State */
             state: string;
             /** Objectiveoutcome */
-            objectiveOutcome?: ("active" | "succeeded" | "failed" | "cancelled" | "idle" | "verification_blocked") | null;
+            objectiveOutcome?: ("active" | "succeeded" | "failed" | "cancelled" | "idle" | "verification_blocked" | "unknown") | null;
             /** Completiondisposition */
             completionDisposition?: "gated_continuation" | null;
         };
@@ -13109,7 +13122,15 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "succeeded" | "failed";
+            status: "succeeded" | "failed" | "unknown";
+            /** Agentresult */
+            agentResult?: {
+                [key: string]: unknown;
+            } | null;
+            /** Resultorder */
+            resultOrder?: {
+                [key: string]: unknown;
+            } | null;
             /** Resultref */
             resultRef?: string | null;
             /** Outputrefs */

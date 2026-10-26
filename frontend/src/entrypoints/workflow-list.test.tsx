@@ -804,14 +804,15 @@ describe('Workflows Entrypoint', () => {
     expect(within(row).queryByText('Completed')).toBeNull();
   });
 
-  it('shows a completed idle objective without hiding no-commit and live outcomes', async () => {
+  it('preserves idle, unknown, legacy, no-commit and live outcomes', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,
       json: async () => ({ items: [
         { workflowId: 'idle-scan', title: 'Idle issue scan', rawState: 'completed', objectiveOutcome: 'idle' },
         { workflowId: 'no-commit', title: 'Verified no-commit work', rawState: 'no_commit', objectiveOutcome: 'succeeded' },
         { workflowId: 'live', title: 'Live workflow', rawState: 'running', objectiveOutcome: 'idle' },
-        { workflowId: 'unknown', title: 'Older objective contract', rawState: 'completed', objectiveOutcome: 'unknown' },
+        { workflowId: 'unknown', title: 'Unknown objective', rawState: 'completed', objectiveOutcome: 'unknown' },
+        { workflowId: 'legacy', title: 'Older objective contract', rawState: 'completed' },
       ].map((row) => ({ source: 'temporal', status: 'completed', state: 'completed', createdAt: '2026-10-03T22:00:00Z', ...row })) }),
     } as Response);
 
@@ -822,6 +823,9 @@ describe('Workflows Entrypoint', () => {
     expect(within(idleRow).queryByText('Completed')).toBeNull();
     expect(within(screen.getByRole('row', { name: /Verified no-commit work/ })).getByText('No commit')).toBeTruthy();
     expect(within(screen.getByRole('row', { name: /Live workflow/ })).getByText('Executing')).toBeTruthy();
+    const unknownRow = screen.getByRole('row', { name: /Unknown objective/ });
+    expect(within(unknownRow).getByText('Outcome unknown').className).toContain('status-neutral');
+    expect(within(unknownRow).queryByText('Completed')).toBeNull();
     expect(within(screen.getByRole('row', { name: /Older objective contract/ })).getByText('Completed')).toBeTruthy();
   });
 

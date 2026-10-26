@@ -1395,6 +1395,42 @@ def build_omnigent_result(
             metadata[metadata_key] = str(value)
 
     return AgentRunResult(
+        executionState=(
+            terminal_status
+            if terminal_status
+            in {"completed", "failed", "canceled", "timed_out", "delivery_unknown"}
+            else "unknown"
+        ),
+        objectiveOutcome=final_snapshot.get("objectiveOutcome")
+        or (
+            "succeeded"
+            if terminal_status == "completed" and failure_class is None
+            else (
+                "failed"
+                if terminal_status in {"completed", "failed", "timed_out"}
+                else "cancelled" if terminal_status == "canceled" else "unknown"
+            )
+        ),
+        publicationState=final_snapshot.get("publicationState", "unknown"),
+        providerFailure=final_snapshot.get("providerFailure"),
+        observation=(
+            "unavailable"
+            if terminal_status in {"delivery_unknown", "unknown"}
+            else "confirmed"
+        ),
+        secondaryErrors=[
+            *(final_snapshot.get("secondaryErrors") or []),
+            *(
+                [
+                    {
+                        "code": "optional_resource_harvest_failed",
+                        "diagnosticsRef": str(diagnostics_ref),
+                    }
+                ]
+                if capture_bundle.optional_harvest_failed
+                else []
+            ),
+        ],
         outputRefs=output_refs,
         summary=_compact_summary(
             summary,

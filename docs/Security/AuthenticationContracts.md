@@ -103,7 +103,12 @@ Explicit keys must contain at least 32 bytes of non-placeholder material.
 The existing guarded converter and `single_user_conversion_runs` ledger own
 eligibility, subsystem transforms, and publication. Multiple people, unresolved
 attribution, ambiguous data, stale evidence, and concurrent conversion refuse
-before publication. No preferred-account heuristic merges identities.
+before publication. Protected requests find current published production evidence
+through a partial schema index, validate its full certificate, and probe live
+artifact recovery, preset, and settings work. Historical or custom completion
+rows cannot establish readiness. There is no process-local readiness cache:
+restored ownership, revoked recovery grants, and deployment scope changes remain
+visible on subsequent requests. No preferred-account heuristic merges identities.
 
 Schema migration detaches person foreign keys from retained resource attribution
 without changing IDs or values. After credential, artifact, preset, and settings

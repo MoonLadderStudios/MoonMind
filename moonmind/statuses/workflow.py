@@ -8,6 +8,7 @@ from typing import Any, Literal, cast, get_args
 
 from moonmind.statuses.close_status import TemporalExecutionCloseStatus
 
+
 class MoonMindWorkflowState(str, enum.Enum):
     """Domain lifecycle states exposed through Temporal Visibility mm_state."""
 
@@ -49,7 +50,13 @@ TemporalCloseStatus = Literal[
 ]
 SimplifiedTemporalStatus = Literal["running", "completed", "failed", "canceled"]
 ObjectiveOutcomeValue = Literal[
-    "active", "succeeded", "failed", "cancelled", "idle", "verification_blocked"
+    "active",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "idle",
+    "verification_blocked",
+    "unknown",
 ]
 
 
@@ -66,18 +73,165 @@ def workflow_objective_outcome(
         if isinstance(value, str) and value in get_args(ObjectiveOutcomeValue)
         else None
     )
-    if state == "completed" and outcome in {None, "active"}:
+    if outcome not in {None, "active"}:
+        return outcome
+    canonical = finish_summary.get("agentResult") if finish_summary else None
+    terminal_agent = state in {
+        "completed",
+        "failed",
+        "canceled",
+        "no_commit",
+    } and isinstance(canonical, Mapping)
+    if state == "completed" or terminal_agent:
         context = finish_summary.get("publishContext") if finish_summary else None
         final = (
             context.get("objectiveOutcome") if isinstance(context, Mapping) else None
         )
         if (
             isinstance(final, str)
-            and final != "active"
+            and final not in {"active", "unknown"}
             and final in get_args(ObjectiveOutcomeValue)
         ):
             return cast(ObjectiveOutcomeValue, final)
+    if terminal_agent:
+        final = canonical.get("objectiveOutcome")
+        if final in get_args(ObjectiveOutcomeValue) and final != "active":
+            return cast(ObjectiveOutcomeValue, final)
     return outcome
+
+
+def merge_terminal_result_summary(
+    previous: Mapping[str, Any] | None,
+    incoming: dict[str, Any],
+    *,
+    run_id: str | None,
+) -> tuple[dict[str, Any], bool]:
+    """Keep terminal facts within the existing finish-summary projection.
+
+    Only the admitted run/Step execution order can supersede a terminal result.
+    A newer observation in that same execution can add evidence, never retract
+    confirmed work or replace the original failure with a reporting error.
+    The second value says whether this observation may replace the primary
+    terminal disposition, including its separately indexed outcome code.
+    """
+    old = previous or {}
+    before, after = old.get("agentResult"), incoming.get("agentResult")
+    prior_order, order = old.get("resultOrder"), incoming.get("resultOrder")
+    if (
+        isinstance(order, Mapping)
+        and run_id
+        and order.get("observerRunId", order.get("runId")) != run_id
+    ):
+        return dict(old), False
+    if not isinstance(before, Mapping):
+        return incoming, True
+    if not isinstance(after, Mapping):
+        return (
+            {
+                **incoming,
+                **{
+                    key: old[key]
+                    for key in (
+                        "finishOutcome",
+                        "failureSummary",
+                        "failure",
+                        "publish",
+                        "publishContext",
+                    )
+                    if key in old
+                },
+                "agentResult": dict(before),
+                "resultOrder": old.get("resultOrder"),
+            },
+            False,
+        )
+    if isinstance(prior_order, Mapping):
+        if not isinstance(order, Mapping):
+            return dict(old), False
+        if order.get("runId") != prior_order.get("runId"):
+            return (
+                (incoming, True) if order.get("runId") == run_id else (dict(old), False)
+            )
+
+        def position(value: Mapping[str, Any]) -> tuple[int, int, int]:
+            return tuple(
+                int(value.get(key) or 0)
+                for key in ("stepIndex", "executionOrdinal", "revision")
+            )
+
+        try:
+            prior_position, next_position = position(prior_order), position(order)
+        except (TypeError, ValueError):
+            return dict(old), False
+        if next_position < prior_position:
+            return dict(old), False
+        if next_position[:2] > prior_position[:2]:
+            return incoming, True  # A genuinely newer admitted Step execution.
+        if order.get("logicalStepId") != prior_order.get("logicalStepId"):
+            return dict(old), False
+    merged = {**after}
+    for key in (
+        "executionState",
+        "objectiveOutcome",
+        "publicationState",
+        "outputAvailability",
+        "failureId",
+        "failureClass",
+        "providerErrorCode",
+        "retryDisposition",
+        "retryRecommendation",
+        "providerFailure",
+        "diagnosticsRef",
+        "failureCause",
+        "retryAction",
+    ):
+        value = before.get(key)
+        if value not in (None, "unknown", "delivery_unknown") and (
+            before.get("observation") == "confirmed"
+            or key in {"objectiveOutcome", "publicationState", "outputAvailability"}
+        ):
+            merged[key] = value
+    if before.get("observation") == "confirmed":
+        merged["observation"] = "confirmed"
+        if before.get("objectiveOutcome") in {"succeeded", "idle"}:
+            # A reporting error after confirmed success is secondary, including
+            # when a legacy observer incorrectly labels it as the primary error.
+            for key in (
+                "failureId",
+                "failureClass",
+                "providerErrorCode",
+                "providerFailure",
+                "retryDisposition",
+                "retryRecommendation",
+                "failureCause",
+                "retryAction",
+            ):
+                merged[key] = before.get(key)
+    merged["outputRefs"] = list(
+        dict.fromkeys([*before.get("outputRefs", []), *after.get("outputRefs", [])])
+    )
+    merged["diagnosticRefs"] = list(
+        dict.fromkeys(
+            [*before.get("diagnosticRefs", []), *after.get("diagnosticRefs", [])]
+        )
+    )
+    merged["secondaryErrors"] = list(before.get("secondaryErrors") or [])
+    for error in after.get("secondaryErrors") or []:
+        if error not in merged["secondaryErrors"]:
+            merged["secondaryErrors"].append(error)
+    summary = {**incoming, "agentResult": merged}
+    replace_terminal = before.get("observation") != "confirmed"
+    if not replace_terminal:
+        for key in (
+            "finishOutcome",
+            "failureSummary",
+            "failure",
+            "publish",
+            "publishContext",
+        ):
+            if key in old:
+                summary[key] = old[key]
+    return summary, replace_terminal
 
 
 WORKFLOW_STATE_VALUES: frozenset[str] = frozenset(

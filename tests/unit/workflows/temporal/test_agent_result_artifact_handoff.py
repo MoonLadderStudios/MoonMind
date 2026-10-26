@@ -40,6 +40,42 @@ from tests.unit.workflows.temporal.test_source_brief_artifact_authority import (
 pytestmark = pytest.mark.asyncio
 
 
+async def test_reporting_failure_preserves_confirmed_result_and_original_diagnostics(
+    tmp_path, monkeypatch
+):
+    execution_context(monkeypatch)
+    async with temporal_db(tmp_path) as session:
+        service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "blobs"),
+        )
+        publisher = TemporalAgentRuntimeActivities(artifact_service=service)
+        monkeypatch.setattr(
+            publisher,
+            "execution_notify_completion",
+            AsyncMock(side_effect=RuntimeError("report transport unavailable")),
+        )
+        produced = AgentRunResult(
+            executionState="completed",
+            objectiveOutcome="succeeded",
+            publicationState="published",
+            diagnosticsRef="art_original",
+        )
+        published = await publisher.agent_runtime_publish_artifacts(produced)
+        assert published.failure_class is None
+        assert published.objective_outcome == "succeeded"
+        assert published.publication_state == "published"
+        assert "art_original" in published.diagnostic_refs
+        assert [error.code for error in published.secondary_errors] == [
+            "completion_notification_unavailable"
+        ]
+        mapped = run_module.MoonMindRunWorkflow()._map_agent_run_result(published)
+        assert (
+            mapped["outputs"]["agentResult"]["secondaryErrors"][0]["code"]
+            == "completion_notification_unavailable"
+        )
+
+
 def execution_context(monkeypatch):
     monkeypatch.setattr(
         activity,

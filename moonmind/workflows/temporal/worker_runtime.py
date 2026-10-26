@@ -93,6 +93,9 @@ from moonmind.workflows.skills.deployment_overview import (
     register_deployment_overview_tool_handler,
 )
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
+from moonmind.workflows.skills.security_assessment import (
+    register_security_assessment_tool_handler,
+)
 from moonmind.workflows.skills.tool_definitions import (
     STORY_OUTPUT_TASK_TOOLS as _STORY_OUTPUT_TASK_TOOLS,
 )
@@ -2809,6 +2812,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
         planner = _build_runtime_planner()
 
         dispatcher = SkillActivityDispatcher()
+        register_security_assessment_tool_handler(dispatcher)
 
         async def _read_story_output_artifact(artifact_ref: str) -> bytes:
             _artifact, payload = await artifact_service.read(
