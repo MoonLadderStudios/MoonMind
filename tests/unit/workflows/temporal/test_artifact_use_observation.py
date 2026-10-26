@@ -423,10 +423,10 @@ async def test_claim_trigger_aborting_caller_transaction_is_never_best_effort(
 
 
 @pytest.mark.parametrize("failure_kind", ("non_database", "cancelled", "invalidated"))
-async def test_unrecoverable_claim_execution_error_propagates_without_losing_work(
+async def test_unrecoverable_claim_admission_error_propagates_without_losing_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog, failure_kind: str
 ) -> None:
-    """Real SQL-execution events must not convert cancellation/control loss to success."""
+    """Failures before driver I/O propagate without damaging caller work."""
     monkeypatch.setenv("AUTH_PROVIDER", "accounts")
     caplog.set_level(logging.DEBUG, logger=_LOGGER)
     async with temporal_db(tmp_path) as sessions, sessions() as session:
@@ -437,8 +437,8 @@ async def test_unrecoverable_claim_execution_error_propagates_without_losing_wor
         if failure_kind == "cancelled":
             failure = asyncio.CancelledError("claim execution cancelled")
         elif failure_kind == "invalidated":
-            # Inject the SQLAlchemy driver's invalidation signal at the real
-            # execution boundary; this does not claim to simulate a network loss.
+            # Inject an invalidation signal before driver I/O; this does not
+            # claim to simulate a physical connection loss.
             failure = DBAPIError(
                 "INSERT INTO temporal_artifact_use_claims",
                 {},
@@ -448,28 +448,70 @@ async def test_unrecoverable_claim_execution_error_propagates_without_losing_wor
         else:
             failure = RuntimeError("claim execution programming error")
 
-        def fail_claim_execution(
-            connection, cursor, statement, parameters, context, many
-        ):
+        def fail_claim_admission(state):
             if (
-                statement.lstrip()
-                .upper()
-                .startswith("INSERT INTO TEMPORAL_ARTIFACT_USE_CLAIMS")
+                state.is_insert
+                and state.statement.table.name == "temporal_artifact_use_claims"
             ):
                 raise failure
 
-        engine = sessions.kw["bind"].sync_engine
-        event.listen(engine, "before_cursor_execute", fail_claim_execution)
+        # Cursor hooks run inside SQLAlchemy's connection-error handling.
+        # A cancellation there invalidates the connection, so inject this
+        # pre-I/O failure at the Session boundary instead.
+        event.listen(session.sync_session, "do_orm_execute", fail_claim_admission)
         try:
             with pytest.raises(type(failure)) as caught:
                 await _serve(service, "read", artifact_id)
         finally:
-            event.remove(engine, "before_cursor_execute", fail_claim_execution)
+            event.remove(session.sync_session, "do_orm_execute", fail_claim_admission)
 
         assert caught.value is failure
         assert "observation skipped" not in caplog.text
         await _assert_caller_work_preserved(session, sessions, rows)
         assert await _claims(sessions, artifact_id) == []
+
+
+async def test_claim_driver_cancellation_propagates_without_committing_caller_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog
+) -> None:
+    """A driver cancellation cannot be recovered by rolling back a savepoint."""
+    monkeypatch.setenv("AUTH_PROVIDER", "accounts")
+    caplog.set_level(logging.DEBUG, logger=_LOGGER)
+    async with temporal_db(tmp_path) as sessions, sessions() as session:
+        service = _service(session, tmp_path)
+        artifact = await _complete_artifact(service, principal=_OWNER, payload=_PAYLOAD)
+        artifact_id = artifact.artifact_id
+        rows = await _add_uncommitted_caller_work(session, artifact_id)
+        row_ids = {row.id for row in rows}
+        connection = await session.connection()
+        failure = asyncio.CancelledError("claim driver cancelled")
+
+        def cancel_claim_execution(cursor, statement, parameters, context):
+            if statement.lstrip().upper().startswith(
+                "INSERT INTO TEMPORAL_ARTIFACT_USE_CLAIMS"
+            ):
+                raise failure
+
+        engine = sessions.kw["bind"].sync_engine
+        event.listen(engine, "do_execute", cancel_claim_execution)
+        try:
+            with pytest.raises(asyncio.CancelledError) as caught:
+                await _serve(service, "read", artifact_id)
+        finally:
+            event.remove(engine, "do_execute", cancel_claim_execution)
+
+        assert caught.value is failure
+        assert connection.invalidated
+        assert "observation skipped" not in caplog.text
+        assert await _claims(sessions, artifact_id) == []
+        async with sessions() as observer:
+            assert (
+                await observer.scalars(
+                    select(TemporalArtifactLink.id).where(
+                        TemporalArtifactLink.id.in_(row_ids)
+                    )
+                )
+            ).all() == []
 
 
 @pytest.mark.parametrize(
