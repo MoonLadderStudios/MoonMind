@@ -6,9 +6,11 @@ import asyncio
 import copy
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 import httpx
@@ -44,6 +46,15 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integrat
 environment = _artifact_environment
 ROOT = Path(__file__).resolve().parents[3]
 SCOPE = {"assets": ["app/routes.py"]}
+
+
+@pytest.fixture
+def job_workspace():
+    # A root runner's private pytest parents cannot be traversed after dropping UID.
+    with TemporaryDirectory(prefix="moonmind-security-job-") as directory:
+        workspace = Path(directory)
+        workspace.chmod(0o755)
+        yield workspace
 
 
 async def review_inputs(service, *, native_ref=None, payload=None):
@@ -381,7 +392,7 @@ async def test_composed_review_retry_cannot_reset_original_budget(
 @pytest.mark.parametrize("harness", ["codex", "claude", "opencode"])
 @pytest.mark.parametrize("authorized_fix", [False, True])
 async def test_scoped_job_journey_reproduces_logic_and_retests_authorized_fix(
-    environment, tmp_path, monkeypatch, authorized_fix, harness
+    environment, job_workspace, monkeypatch, authorized_fix, harness
 ):
     """Real MCP admission/registry/storage; controlled job and harness transports."""
     from unittest.mock import AsyncMock
@@ -406,7 +417,7 @@ async def test_scoped_job_journey_reproduces_logic_and_retests_authorized_fix(
     )
 
     service = environment.service
-    workspace = tmp_path / "target"
+    workspace = job_workspace / "target"
     selected = "security-remediate" if authorized_fix else "security-investigate"
     snapshot, _ = await materialize(service, workspace, selected, runtime_id=harness)
     assert {s.skill_name for s in snapshot.skills} == {selected, "security-review"}
@@ -466,6 +477,10 @@ async def test_scoped_job_journey_reproduces_logic_and_retests_authorized_fix(
             exit_code = 0
         else:
             target.chmod(0o444 if spec.workspace_read_only else 0o644)
+            process_identity = {}
+            if os.name == "posix" and os.geteuid() == 0 and spec.workspace_read_only:
+                # Root bypasses chmod; the controlled read-only job must not.
+                process_identity = {"user": 65534, "group": 65534, "extra_groups": []}
             try:
                 process = subprocess.run(
                     spec.command,
@@ -473,6 +488,7 @@ async def test_scoped_job_journey_reproduces_logic_and_retests_authorized_fix(
                     capture_output=True,
                     text=True,
                     timeout=10,
+                    **process_identity,
                 )
             finally:
                 target.chmod(0o644)
@@ -556,7 +572,9 @@ async def test_scoped_job_journey_reproduces_logic_and_retests_authorized_fix(
             "resources": {"cpuMillis": 1000, "memoryMiB": 128},
         }
         before_id, _ = await submit(test_spec, "original-hypothesis")
-        assert (await read(service, evidence[before_id]))["exitCode"] != 0
+        before = await read(service, evidence[before_id])
+        assert before["exitCode"] != 0
+        assert "AssertionError" in before["stderr"]
         fix_spec = {
             **test_spec,
             "command": [
