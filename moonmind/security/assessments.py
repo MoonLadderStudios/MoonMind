@@ -60,6 +60,121 @@ class AssessmentScope(Contract):
         )
 
 
+class ExaminedSubject(Contract):
+    asset: Text
+    locator: Text
+    identity: Text
+    resource: Text
+
+
+class ThreatModel(Contract):
+    entry_points: Annotated[Items, Field(min_length=1)]
+    trust_boundaries: Annotated[Items, Field(min_length=1)]
+    invariants: Annotated[Items, Field(min_length=1)]
+
+
+class SecurityInterpretation(Contract):
+    id: Text
+    subject: ExaminedSubject
+    hypothesis: Text
+    disposition: Literal["confirmed", "likely", "unresolved"]
+    evidence_status: Literal["supported", "contradicted", "unsupported"]
+    evidence_refs: Evidence
+    native_finding_id: Text | None = None
+    limitations: Annotated[Items, Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def validate_disposition(self):
+        if self.evidence_status != "supported" and self.disposition != "unresolved":
+            raise ValueError(
+                "contradicted or unsupported interpretations remain unresolved"
+            )
+        return self
+
+
+class SecurityRetest(Contract):
+    hypothesis_id: Text
+    original_evidence_refs: Evidence
+    current_evidence_refs: Evidence
+    changed_assets: Annotated[Items, Field(min_length=1)]
+    covered_assets: Items
+    coverage: Literal["complete", "partial", "unavailable"]
+    limitations: Annotated[Items, Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def validate_coverage(self):
+        if self.coverage == "complete" and not set(self.changed_assets) <= set(
+            self.covered_assets
+        ):
+            raise ValueError("complete retest coverage must include the changed assets")
+        return self
+
+
+class SecurityReview(Contract):
+    """Agent interpretations, never native scanner facts or control attestation.
+
+    Test outcomes and confinement assertions deliberately have no fields here.
+    Their authoritative evidence stays with the job and runtime owners.
+    """
+
+    schema_version: Literal["security-review/v1"] = "security-review/v1"
+    scope: AssessmentScope
+    candidate_ref: Text
+    threat_model: ThreatModel
+    interpretations: Annotated[list[SecurityInterpretation], Field(max_length=128)]
+    limitations: Annotated[Items, Field(min_length=1)]
+    retests: Annotated[list[SecurityRetest], Field(max_length=128)] = Field(
+        default_factory=list
+    )
+
+    @model_validator(mode="after")
+    def validate_subjects(self):
+        ids = [item.id for item in self.interpretations]
+        if len(ids) != len(set(ids)):
+            raise ValueError("duplicate interpretation identity")
+        if any(
+            item.subject.asset not in self.scope.assets for item in self.interpretations
+        ):
+            raise ValueError("examined subject outside admitted scope")
+        for retest in self.retests:
+            if retest.hypothesis_id not in ids:
+                raise ValueError("retest requires its original hypothesis")
+            original = next(
+                item for item in self.interpretations if item.id == retest.hypothesis_id
+            )
+            if not set(original.evidence_refs) <= set(retest.original_evidence_refs):
+                raise ValueError("retest must retain the original hypothesis evidence")
+            if (
+                retest.coverage == "complete"
+                and original.subject.asset not in retest.covered_assets
+            ):
+                raise ValueError(
+                    "complete retest must cover the original hypothesis subject"
+                )
+            if (set(retest.changed_assets) | set(retest.covered_assets)) - set(
+                self.scope.assets
+            ):
+                raise ValueError("retest outside admitted scope")
+        if len(self.evidence_refs()) > 64:
+            raise ValueError("review requires at most 64 distinct evidence refs")
+        return self
+
+    def evidence_refs(self) -> list[str]:
+        return list(
+            dict.fromkeys(
+                [ref for item in self.interpretations for ref in item.evidence_refs]
+                + [
+                    ref
+                    for retest in self.retests
+                    for ref in (
+                        *retest.original_evidence_refs,
+                        *retest.current_evidence_refs,
+                    )
+                ]
+            )
+        )
+
+
 class Finding(Contract):
     source: Text
     tool: Text
@@ -223,7 +338,7 @@ class AssessmentRequest(Contract):
     scope: AssessmentScope
     tools: Annotated[
         list[Literal["inventory-feed", "retained-report"]],
-        Field(min_length=1, max_length=2),
+        Field(max_length=2),
     ]
     budget: ExecutionBudget
     credential_refs: Items
@@ -233,9 +348,14 @@ class AssessmentRequest(Contract):
     report_refs: Annotated[Items, Field(max_length=32)] = Field(default_factory=list)
     baseline_ref: Text | None = None
     decisions_ref: Text | None = None
+    review_ref: Text | None = None
 
     @model_validator(mode="after")
     def validate_admission(self):
+        if not self.tools and not self.review_ref:
+            raise ValueError(
+                "assessment requires native evidence or an explicit reviewRef"
+            )
         if len(set(self.tools)) != len(self.tools):
             raise ValueError("duplicate selected tool")
         if not 0 < self.budget.base_seconds <= self.budget.max_seconds <= 300:

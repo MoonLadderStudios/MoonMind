@@ -1,0 +1,28 @@
+{
+  "upstream": "https://github.com/trailofbits/skills",
+  "author": "Trail of Bits and contributors",
+  "revision": "196a9073ab10d35bacf111f945e02c00b2c6883a",
+  "license": "CC-BY-SA-4.0",
+  "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0/",
+  "adaptedFile": "procedures.md",
+  "sources": [
+    {
+      "url": "https://raw.githubusercontent.com/trailofbits/skills/196a9073ab10d35bacf111f945e02c00b2c6883a/LICENSE",
+      "sha256": "7abe19ec9bb73b36141b999b861d24ad855e808bafe0f81e84cce28556f6c297"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/trailofbits/skills/196a9073ab10d35bacf111f945e02c00b2c6883a/plugins/audit-context-building/skills/audit-context-building/SKILL.md",
+      "sha256": "33fa693dc6e166cfa4919e4373cb6578c009d296234c2ae7cb3cd4e79b443765"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/trailofbits/skills/196a9073ab10d35bacf111f945e02c00b2c6883a/plugins/variant-analysis/skills/variant-analysis/SKILL.md",
+      "sha256": "7b6b78e499bcb88d05c68254ffc91ebc28edabf4e9808adcc40e2628ebb9407e"
+    }
+  ],
+  "adaptations": [
+    "Condensed audit context and incremental variant-search methods for bounded repository review.",
+    "Replaced plugin commands and mandatory subagents with ordinary harness file reads and rg.",
+    "Used existing MoonMind scoped ContainerJobs, immutable evidence artifacts and admitted authority; no plugin installation or provider fallback."
+  ],
+  "scope": "Only procedures.md is adapted under CC-BY-SA-4.0; integration code and original Skill instructions use the repository license."
+}

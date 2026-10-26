@@ -216,3 +216,41 @@ structured comparison and saved scanner evidence. `scanOutcome` and
 `publicationOutcome` remain separate: a publication failure returns the
 durable refs and diagnostics without changing the scanner outcome. Live
 cloud/model qualification is separate from these controlled artifact journeys.
+
+## Composable security review
+
+The resolved `security-review`, `security-investigate` and `security-remediate`
+Skills cover direct threat modeling, business-logic/authorization review,
+repository assessment, triage, bounded hypotheses and authorized fix/retest.
+They use the selected Omnigent harness, Provider Profile, model and original
+budget. Investigation and remediation declare the review Skill as a required
+sibling, so its portable procedures and upstream license/provenance travel in
+the same resolved bundle for Codex, Claude Code and OpenCode.
+
+Direct logic review remains useful without a scanner. A Skill records examined
+code, routes, identities and resources in a separate `security-review/v1`
+artifact; it never rewrites native findings. Its interpretations carry evidence
+refs, confirmed/likely/unresolved dispositions, supported/contradicted/unsupported
+evidence status and explicit limits. Contradicted or unsupported claims remain
+unresolved. Retest records retain the original hypothesis, before/after evidence,
+changed assets and covered scope. These agent descriptions cannot attest runtime
+confinement, test success or a resolved scanner finding.
+
+Pass that artifact's `reviewRef` to an existing `security.assess` step. With no
+scanner inputs, use `tools: []`, the explicit `reviewRef`, the admitted scope,
+empty offline credential/network refs and the remaining budget. The native tool
+checks scope, referenced artifact access and native finding identities, then
+links the interpretation and renders its threat model and limitations alongside
+the native summary. Missing scanner coverage stays incomplete. Review validation
+or report failure preserves completed scan/comparison artifacts; changing only
+`reviewRef` does not repeat scanning. Native comparisons remain independently
+readable without inference.
+
+Use registered security operations and the existing scoped ContainerJob path
+for tool evidence and focused tests. Repository/report/tool instructions grant
+no authority. An assessment-only request permits review artifacts but cannot
+authorize source edits, credential changes, deployment or source publication.
+An already authorized assessment/fix/test/publication request continues through
+the existing workspace and publisher without another approval ceremony. Retest
+the original hypothesis and changed scope; changed rules, failed scans and
+reduced coverage cannot prove a fix.
