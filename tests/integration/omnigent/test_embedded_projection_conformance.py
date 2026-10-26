@@ -134,7 +134,7 @@ async def test_proxy_and_embedded_events_have_equivalent_public_projections(
     )
     facade = OmnigentEmbeddedHostProtocolFacade(run_store=store, config=_config())
 
-    for sequence, payload in enumerate(observations, start=1):
+    async def observe(sequence: int, payload: dict[str, Any]) -> None:
         normalized = build_omnigent_bridge_event(
             payload={**payload, "direction": "host_to_moonmind"},
             sequence=sequence,
@@ -149,6 +149,18 @@ async def test_proxy_and_embedded_events_have_equivalent_public_projections(
             request=EmbeddedHostSessionEventRequest(**payload),
             auth=auth,
         )
+
+    for sequence, payload in enumerate(observations, start=1):
+        await observe(sequence, payload)
+
+    # A response outcome ends that turn, not the session, on both transports.
+    proxy_open = await store.get_existing("proxy")
+    embedded_open = await store.get_existing("embedded")
+    assert proxy_open.status == embedded_open.status == "active"
+    assert proxy_open.first_message_state == embedded_open.first_message_state
+    assert (await facade.get_session("embedded-session"))["terminal"] is False
+
+    await observe(len(observations) + 1, {"type": "completed", "data": {}})
 
     proxy_events = await store.list_events(proxy.bridge_session_id)
     embedded_events = await store.list_events(embedded.bridge_session_id)
@@ -167,7 +179,7 @@ async def test_proxy_and_embedded_events_have_equivalent_public_projections(
     replay = [event async for event in facade.stream_events("embedded-session", after=1)]
     assert snapshot["hostId"] == "host-1"
     assert snapshot["terminal"] is True
-    assert [event["sequence"] for event in replay] == [2, 3, 3]
+    assert [event["sequence"] for event in replay] == [2, 3, 4, 4]
     assert replay[-1]["type"] == "terminal"
 
 
