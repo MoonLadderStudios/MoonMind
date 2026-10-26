@@ -51,4 +51,35 @@ describe('statusIcons', () => {
     expect(warn).toHaveBeenCalledWith('Unknown step ledger status: succeeded');
     warn.mockRestore();
   });
+
+  it.each([
+    [{ objectiveOutcome: 'failed' }, 'Failed', 'status-failed', 'lucide-x'],
+    [{ objectiveOutcome: 'verification_blocked' }, 'Verification blocked', 'status-failed', 'lucide-x'],
+    [{ objectiveOutcome: 'cancelled' }, 'Cancelled', 'status-canceled', 'lucide-ban'],
+    [{ objectiveOutcome: 'idle' }, 'Idle', 'status-neutral', 'lucide-minus'],
+    [{ objectiveOutcome: 'unknown' }, 'Outcome unknown', 'status-neutral', 'lucide-circle-question-mark'],
+    [{ objectiveOutcome: 'failed', completionDisposition: 'gated_continuation' }, 'Handed off', 'status-neutral', 'lucide-forward'],
+  ] as const)('shows the completed workflow outcome %j instead of a success check', (outcome, label, statusClass, iconClass) => {
+    render(<StatusIcon status="completed" domain="workflow" {...outcome} data-testid="outcome-icon" />);
+
+    const icon = screen.getByTestId('outcome-icon');
+    expect(icon.getAttribute('aria-label')).toBe(`Status: ${label}`);
+    expect(icon.className).toContain(statusClass);
+    expect(icon.querySelector('svg')?.getAttribute('class')).toContain(iconClass);
+    expect(icon.querySelector('svg')?.getAttribute('class')).not.toContain('lucide-check');
+  });
+
+  it('keeps the success check for a succeeded objective and the lifecycle icon for non-completed workflows', () => {
+    render(
+      <>
+        <StatusIcon status="completed" domain="workflow" objectiveOutcome="succeeded" data-testid="succeeded" />
+        <StatusIcon status="failed" domain="workflow" objectiveOutcome="idle" data-testid="lifecycle-failed" />
+      </>,
+    );
+
+    expect(screen.getByTestId('succeeded').querySelector('svg')?.getAttribute('class')).toContain('lucide-check');
+    expect(screen.getByTestId('succeeded').className).toContain('status-completed');
+    expect(screen.getByTestId('lifecycle-failed').querySelector('svg')?.getAttribute('class')).toContain('lucide-x');
+    expect(screen.getByTestId('lifecycle-failed').getAttribute('aria-label')).toBe('Status: Failed');
+  });
 });
