@@ -12627,6 +12627,36 @@ class TemporalAgentRuntimeActivities:
         payload: Mapping[str, Any] | None = None,
         /,
     ) -> dict[str, Any]:
+        action_payload = dict(payload or {})
+        execution_intents = None
+        if (
+            self._artifact_service is not None
+            and not action_payload.get("actionKind")
+            and not isinstance(action_payload.get("omnigentReconcileRequest"), Mapping)
+        ):
+            from api_service.db.base import async_session_maker
+            from moonmind.workflows.temporal.service import (
+                reconcile_pending_execution_intents,
+            )
+
+            try:
+                execution_intents = await _await_with_activity_heartbeats(
+                    reconcile_pending_execution_intents(
+                        session_factory=async_session_maker,
+                        client_adapter=self._client_adapter,
+                        namespace=settings.temporal.namespace,
+                    ),
+                    heartbeat_payload={
+                        "activityType": "agent_runtime.reconcile_managed_sessions",
+                        "phase": "execution_intents",
+                    },
+                )
+            except Exception:
+                logger.warning(
+                    "Execution intent observation unavailable during reconcile",
+                    exc_info=True,
+                )
+                execution_intents = {"state": "observation_unavailable"}
         controller = self._require_session_controller(
             activity_type="agent_runtime.reconcile_managed_sessions"
         )
@@ -12795,6 +12825,8 @@ class TemporalAgentRuntimeActivities:
             "orphanVolumeReapSkippedActive": orphan_volume_reap_skipped_active,
             "orphanVolumeReapSkippedRecent": orphan_volume_reap_skipped_recent,
         }
+        if execution_intents is not None:
+            summary["executionIntents"] = execution_intents
         # The existing durable operational schedule is the single bounded
         # sweeper owner for both managed-runtime reattachment and canonical
         # Omnigent stuck-state inspection.  Reusing it adds no idle container or
