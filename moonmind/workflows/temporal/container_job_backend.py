@@ -93,18 +93,18 @@ from moonmind.security.egress import (
     denied_connection_count,
     restricted_proxy_env,
 )
-from moonmind.security.egress_conformance_evidence import (
-    serialize_conformance_evidence,
-)
-from moonmind.utils.logging import redact_sensitive_text
+from moonmind.security.egress_conformance_evidence import serialize_conformance_evidence
 from moonmind.security.repository_scanners import (
     WITHHELD_LOG,
+    RepositoryScan,
     ScannerExecution,
+    ScannerOutputSanitizer,
     ScannerSummary,
     normalize_native,
     sanitize_native,
     validate_scanner_job,
 )
+from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.temporal.container_image_acquisition import (
     FilesystemImageAcquisitionLock,
     ImageAcquisitionError,
@@ -3203,13 +3203,53 @@ class DockerContainerJobBackend:
         except (ValueError, TypeError):
             execution = None
             limitations.append("missing_or_invalid_execution_evidence")
+        sanitizer = ScannerOutputSanitizer(
+            execution.redacted_metadata_hashes if execution else ()
+        )
+        unsafe_metadata = False
+        for mode in scan.modes:
+            payload = by_name[mode]["payload"]
+            if payload is not None:
+                try:
+                    sanitizer.observe_native(
+                        scan.scanner, payload, scan.max_report_bytes
+                    )
+                except (ValueError, TypeError, RecursionError):
+                    unsafe_metadata = True
+        if execution is not None:
+            if unsafe_metadata:
+                execution.assets, execution.untracked_files = [], []
+                limitations.append("unsafe_metadata_withheld")
+            try:
+                execution = ScannerExecution.model_validate(
+                    sanitizer.metadata(execution.model_dump())
+                )
+            except (ValueError, TypeError, RecursionError):
+                execution = None
+                limitations.append("metadata_sanitization_failed")
+        try:
+            display_scan = RepositoryScan.model_validate(
+                sanitizer.metadata(scan.model_dump())
+            )
+        except (ValueError, TypeError, RecursionError):
+            # No unredacted admission or execution metadata may escape on error.
+            return [
+                ContainerJobArtifact(
+                    name=entry.name,
+                    collectionStatus="rejected",
+                    detail="Scanner metadata sanitization failed; evidence incomplete.",
+                )
+                for entry in spec.outputs
+            ]
         for mode in scan.modes:
             entry = by_name[mode]
             payload, ref = entry["payload"], None
             try:
                 if payload is None:
                     raise ValueError("native evidence unavailable")
-                payload = sanitize_native(scan.scanner, payload, scan.max_report_bytes)
+                payload = sanitize_native(
+                    scan.scanner, payload, scan.max_report_bytes, sanitizer=sanitizer
+                )
                 if len(payload) > bytes_remaining or files_remaining < 1:
                     raise ValueError("sanitized output exceeds the collection ceiling")
                 ref = await self._publish(
@@ -3225,7 +3265,7 @@ class DockerContainerJobBackend:
                         sizeBytes=len(payload),
                         sha256=hashlib.sha256(payload).hexdigest(),
                         mediaType="application/json",
-                        relativePath=entry["relative_path"],
+                        relativePath=f"{display_scan.output_directory}/{mode}.json",
                         collectionStatus="collected",
                     )
                 )
@@ -3235,7 +3275,7 @@ class DockerContainerJobBackend:
                 manifest.append(
                     ContainerJobArtifact(
                         name=mode,
-                        relativePath=entry["relative_path"],
+                        relativePath=f"{display_scan.output_directory}/{mode}.json",
                         collectionStatus="rejected",
                         detail="Native evidence unavailable or sanitization failed.",
                     )
@@ -3253,6 +3293,10 @@ class DockerContainerJobBackend:
             )
         # Keep the declared execution record independently readable if summary
         # generation/publication later fails. It shares the same output budget.
+        if execution is not None:
+            execution.redacted_metadata_hashes = sorted(
+                sanitizer.redacted_metadata_hashes
+            )
         execution_payload = (
             redact_sensitive_text(execution.model_dump_json(by_alias=True)).encode()
             if execution is not None
@@ -3273,7 +3317,7 @@ class DockerContainerJobBackend:
                     sizeBytes=len(execution_payload),
                     sha256=hashlib.sha256(execution_payload).hexdigest(),
                     mediaType="application/json",
-                    relativePath=f"{scan.output_directory}/execution.json",
+                    relativePath=f"{display_scan.output_directory}/execution.json",
                     collectionStatus="collected",
                 )
             )
@@ -3284,7 +3328,7 @@ class DockerContainerJobBackend:
             manifest.append(
                 ContainerJobArtifact(
                     name="execution",
-                    relativePath=f"{scan.output_directory}/execution.json",
+                    relativePath=f"{display_scan.output_directory}/execution.json",
                     collectionStatus="rejected",
                     detail="Execution evidence unavailable or exceeds the output bound.",
                 )
@@ -3293,14 +3337,16 @@ class DockerContainerJobBackend:
             limitations.append("scanner_coverage_incomplete")
         summary = ScannerSummary(
             scanner=scan.scanner,
-            admission=scan,
+            admission=display_scan,
             execution=execution,
             results=results,
             nativeRefs=refs,
             coverage="partial" if limitations else "complete",
             limitations=sorted(set(limitations)),
         )
-        payload = redact_sensitive_text(summary.model_dump_json(by_alias=True)).encode()
+        payload = json.dumps(
+            sanitizer.metadata(summary.model_dump(mode="json", by_alias=True))
+        ).encode()
         # A summary that cannot fit is incomplete evidence, never silently cut
         # JSON or an unbounded model-visible object.
         if (
@@ -3325,7 +3371,7 @@ class DockerContainerJobBackend:
                 sizeBytes=len(payload),
                 sha256=hashlib.sha256(payload).hexdigest(),
                 mediaType="application/json",
-                relativePath=f"{scan.output_directory}/summary.json",
+                relativePath=f"{display_scan.output_directory}/summary.json",
                 collectionStatus="collected",
             )
         )

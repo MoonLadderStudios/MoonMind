@@ -18,6 +18,7 @@ from moonmind.security.assessments import content_key
 from moonmind.security.repository_scanners import (
     RepositoryScan,
     ScannerExecution,
+    ScannerOutputSanitizer,
     sanitize_native,
 )
 
@@ -386,22 +387,60 @@ def run_scanner(
                     continue
                 code, state = execute(argv)
                 metadata.exits[mode], metadata.states[mode] = code, state
-                path = raw / f"{mode}.json"
-                if path.exists():
-                    try:
-                        safe = sanitize_native(
-                            scan.scanner, path.read_bytes(), scan.max_report_bytes
-                        )
-                        (output / path.name).write_bytes(safe)
-                    # Sanitizer failure must withhold native bytes.
-                    except Exception:  # noqa: BLE001
-                        metadata.limitations.append("native_sanitization_failed")
         # Retain safe diagnostics for scanner/setup failures.
         except Exception:  # noqa: BLE001
             metadata.limitations.append("scanner_prerequisite_failed")
         finally:
             signal.signal(signal.SIGTERM, previous)
+            sanitizer = ScannerOutputSanitizer()
+            native_inputs = {}
+            unsafe_metadata = False
+            # Observe every mode before releasing any output: a later report
+            # can identify a secret repeated in an earlier report's filename.
+            for mode in scan.modes:
+                path = raw / f"{mode}.json"
+                if path.exists():
+                    try:
+                        body = path.read_bytes()
+                        sanitizer.observe_native(
+                            scan.scanner, body, scan.max_report_bytes
+                        )
+                        native_inputs[mode] = body
+                    except Exception:  # noqa: BLE001
+                        unsafe_metadata = True
+                        metadata.limitations.append("native_sanitization_failed")
+            for mode, body in native_inputs.items():
+                try:
+                    safe = sanitize_native(
+                        scan.scanner, body, scan.max_report_bytes, sanitizer=sanitizer
+                    )
+                    (output / f"{mode}.json").write_bytes(safe)
+                except Exception:  # noqa: BLE001
+                    unsafe_metadata = True
+                    metadata.limitations.append("native_sanitization_failed")
+            if unsafe_metadata:
+                metadata.assets, metadata.untracked_files = [], []
+                metadata.limitations.append("unsafe_metadata_withheld")
             metadata.limitations = sorted(set(metadata.limitations))
+            try:
+                # Admission itself is held by the worker. Retain only hashes
+                # identifying its unsafe strings, never the secret corpus.
+                sanitizer.metadata(scan.model_dump(mode="json", by_alias=True))
+                metadata = ScannerExecution.model_validate(
+                    sanitizer.metadata(metadata.model_dump())
+                )
+                metadata.redacted_metadata_hashes = sorted(
+                    sanitizer.redacted_metadata_hashes
+                )
+            except Exception:  # noqa: BLE001
+                metadata = ScannerExecution(
+                    inputDigest=content_key([]),
+                    assets=[],
+                    version="unavailable",
+                    exits={mode: None for mode in scan.modes},
+                    states={mode: "failed" for mode in scan.modes},
+                    limitations=["metadata_sanitization_failed"],
+                )
             (output / "execution.json").write_text(
                 metadata.model_dump_json(by_alias=True)
             )

@@ -20,9 +20,11 @@ from tests.unit.workflows.temporal.test_container_job_evidence import (
 MARKER = "synthetic-marker-never-publish-5040"
 
 
-def scanner_request(tmp_path, *, terminal="succeeded", limit=100000):
+def scanner_request(
+    tmp_path, *, terminal="succeeded", limit=100000, output="artifacts/gitleaks"
+):
     scan = RepositoryScan(
-        scanner="gitleaks", outputDirectory="artifacts/gitleaks", maxReportBytes=limit
+        scanner="gitleaks", outputDirectory=output, maxReportBytes=limit
     )
     request = _request(tmp_path, image=None, **build_scanner_job(scan))
     request.terminal_state = terminal
@@ -113,7 +115,7 @@ async def test_sanitizer_failure_publishes_no_native_bytes(tmp_path, monkeypatch
     request, _ = scanner_request(tmp_path)
     publisher = _Publisher()
 
-    def broken(*args):
+    def broken(*args, **kwargs):
         raise ValueError(MARKER)
 
     monkeypatch.setattr(
@@ -183,3 +185,37 @@ async def test_every_declared_scanner_output_has_a_retained_manifest_entry(tmp_p
     execution = next(entry for entry in manifest if entry.name == "execution")
     assert execution.collection_status == "collected"
     assert execution.artifact_ref
+
+
+@pytest.mark.asyncio
+async def test_native_secret_is_removed_from_metadata_before_any_publish(tmp_path):
+    request, root = scanner_request(
+        tmp_path, terminal="timed_out", output=f"artifacts/{MARKER}"
+    )
+    metadata = json.loads((root / "execution.json").read_bytes())
+    metadata["assets"].append(f"{MARKER}.txt")
+    metadata["untrackedFiles"] = [f"{MARKER}.txt"]
+    (root / "execution.json").write_text(json.dumps(metadata))
+    # Only the later mode identifies the secret. The earlier artifact's path
+    # must be sanitized before its first publication too.
+    history = [{"RuleID": "credential", "File": f"{MARKER}.txt", "StartLine": 1}]
+    (root / "history.json").write_text(json.dumps(history))
+    publisher = _Publisher()
+
+    async def publish(request, name, payload):
+        assert MARKER not in name
+        assert MARKER.encode() not in payload
+        return await publisher(request, name, payload)
+
+    async def runner(argv):
+        return 0, MARKER.encode(), MARKER.encode()
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=runner, evidence_publisher=publish
+    )
+    await backend.publish_evidence(request)
+    summary = json.loads(publisher.artifacts[f"{request.job_id}-output-summary.json"])
+    assert summary["coverage"] == "partial"
+    assert summary["results"]["worktree"]["findings"][0]["asset"] == "tracked.txt"
+    assert summary["execution"]["untrackedFiles"]
+    assert summary["results"]["history"]["findings"]

@@ -234,3 +234,83 @@ def test_bounded_snapshot_does_not_follow_links_or_modify_source(tmp_path):
     assert not (stage / "link").exists()
     assert (source / "a.txt").read_text() == "first"
     assert len(digest) == 64
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {},
+        {"Target": "requirements.txt"},
+        {"Vulnerabilities": []},
+        {"Target": "requirements.txt", "Vulnerabilities": {}},
+        {"Target": "requirements.txt", "Vulnerabilities": [None]},
+        None,
+    ],
+)
+@pytest.mark.parametrize("mixed", [False, True])
+def test_invalid_trivy_results_keep_valid_findings_and_incomplete_coverage(
+    invalid, mixed
+):
+    api = scanner_api()
+    valid = {
+        "Target": "requirements.txt",
+        "Vulnerabilities": [{"VulnerabilityID": "CVE-EXAMPLE", "PkgName": "example"}],
+    }
+    native = {"SchemaVersion": 2, "Results": [invalid, valid] if mixed else [invalid]}
+    safe = api.sanitize_native("trivy", json.dumps(native).encode())
+    result = api.normalize_native(
+        "trivy", safe, exit_code=0, terminal_state="succeeded", native_ref="art_native"
+    )
+    assert result.coverage == "partial"
+    assert "missing_malformed_or_truncated_report" in result.limitations
+    assert [f.rule_id for f in result.findings] == (["CVE-EXAMPLE"] if mixed else [])
+
+
+@pytest.mark.parametrize(
+    "analysis",
+    [
+        {"Vulnerabilities": []},
+        {"Class": "lang-pkgs", "Type": "pip", "Packages": [{"Name": "example"}]},
+        {
+            "Class": "config",
+            "Type": "terraform",
+            "MisconfSummary": {"Successes": 1, "Failures": 0},
+        },
+    ],
+)
+def test_valid_trivy_clean_analysis_retains_examined_target(analysis):
+    api = scanner_api()
+    native = {"SchemaVersion": 2, "Results": [{"Target": "clean.txt", **analysis}]}
+    safe = api.sanitize_native("trivy", json.dumps(native).encode())
+    result = api.normalize_native(
+        "trivy", safe, exit_code=0, terminal_state="succeeded", native_ref="art_native"
+    )
+    assert result.coverage == "complete"
+    assert result.findings == []
+    assert result.examined_assets == ["clean.txt"]
+
+
+@pytest.mark.parametrize("incomplete", [False, True])
+def test_opengrep_examined_assets_come_from_native_paths(incomplete):
+    api = scanner_api()
+    native = {
+        "results": [],
+        "errors": [{"type": "ParseError", "path": "broken.py"}] if incomplete else [],
+        "paths": {
+            "scanned": ["/scan-input/clean.py"],
+            "skipped": [{"path": "unsupported.bin", "reason": "unsupported"}],
+        },
+    }
+    result = api.normalize_native(
+        "opengrep",
+        api.sanitize_native("opengrep", json.dumps(native).encode()),
+        exit_code=0,
+        terminal_state="succeeded",
+        native_ref="art_native",
+    )
+    assert result.examined_assets == ["clean.py"]
+    assert result.unexamined_assets == (
+        ["broken.py", "unsupported.bin"] if incomplete else ["unsupported.bin"]
+    )
+    assert result.coverage == "partial"
+    assert "unsupported_or_parser_failed_inputs" in result.limitations

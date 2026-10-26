@@ -140,21 +140,33 @@ _IDENTIFIERS = {
     "status",
     "category",
     "scanned",
+    "skipped",
+    "class",
     "rule_id",
 }
 
 
-def sanitize_native(scanner: str, body: bytes, limit: int = MAX_REPORT_BYTES) -> bytes:
-    native = _document(scanner, body, limit)
-    secrets: set[str] = set()
+class ScannerOutputSanitizer:
+    """One job's native evidence and metadata share the same redaction owner."""
 
-    def collect(value, key=""):
+    def __init__(self, redacted_metadata_hashes=()):
+        self.secrets: set[str] = set()
+        # The runner cannot send secret values to ingestion. Hashes of metadata
+        # strings it redacted let ingestion also protect the original admission.
+        self.redacted_metadata_hashes = set(redacted_metadata_hashes)
+
+    def observe_native(self, scanner: str, body: bytes, limit=MAX_REPORT_BYTES):
+        native = _document(scanner, body, limit)
+        self._collect(native)
+        return native
+
+    def _collect(self, value, key=""):
         if isinstance(value, dict):
             for k, v in value.items():
-                collect(v, k.lower())
+                self._collect(v, k.lower())
         elif isinstance(value, list):
             for v in value:
-                collect(v, key)
+                self._collect(v, key)
         elif (
             isinstance(value, str)
             and value
@@ -169,30 +181,52 @@ def sanitize_native(scanner: str, body: bytes, limit: int = MAX_REPORT_BYTES) ->
                 "snippet",
             }
         ):
-            secrets.add(value)
+            self.secrets.add(value)
 
-    collect(native)
+    def _identifier(self, value: str) -> str:
+        digest = content_key(value)
+        if (
+            digest in self.redacted_metadata_hashes
+            or any(secret in value for secret in self.secrets)
+            or redact_sensitive_text(value) != value
+        ):
+            self.redacted_metadata_hashes.add(digest)
+            return "redacted-" + digest
+        return value
 
-    def clean(value, key=""):
+    def _clean(self, value, key="", *, native=False):
         if isinstance(value, dict):
             # JSON keys are untrusted too; native schema keys remain stable.
-            return {safe_text(k): clean(v, k.lower()) for k, v in value.items()}
+            return {
+                self._identifier(k): self._clean(v, k.lower(), native=native)
+                for k, v in value.items()
+            }
         if isinstance(value, list):
-            return [clean(v, key) for v in value]
+            return [self._clean(v, key, native=native) for v in value]
         if isinstance(value, str):
             return (
-                safe_text(value)
-                if key in _IDENTIFIERS and key not in _UNSAFE
+                self._identifier(value)
+                if not native or (key in _IDENTIFIERS and key not in _UNSAFE)
                 else "[REDACTED]"
             )
         return value
 
-    def safe_text(value):
-        for secret in sorted(secrets, key=len, reverse=True):
-            value = value.replace(secret, "[REDACTED]")
-        return redact_sensitive_text(value)
+    def metadata(self, value):
+        return self._clean(value)
 
-    safe = json.dumps(clean(native), sort_keys=True, separators=(",", ":")).encode()
+
+def sanitize_native(
+    scanner: str,
+    body: bytes,
+    limit: int = MAX_REPORT_BYTES,
+    *,
+    sanitizer: ScannerOutputSanitizer | None = None,
+) -> bytes:
+    sanitizer = sanitizer or ScannerOutputSanitizer()
+    native = sanitizer.observe_native(scanner, body, limit)
+    safe = json.dumps(
+        sanitizer._clean(native, native=True), sort_keys=True, separators=(",", ":")
+    ).encode()
     if len(safe) > limit:
         raise ValueError("sanitized scanner report exceeds bound")
     return safe
@@ -202,6 +236,8 @@ class NativeResult(Contract):
     execution: Literal["succeeded", "failed", "timed_out", "canceled"]
     coverage: Literal["complete", "partial"]
     findings: list[Finding] = Field(default_factory=list, max_length=4096)
+    examined_assets: Items = Field(default_factory=list)
+    unexamined_assets: Items = Field(default_factory=list)
     limitations: Items = Field(default_factory=list)
     verification: Literal["not_performed"] = "not_performed"
 
@@ -235,7 +271,7 @@ def normalize_native(
         limitations.append("scanner_exit_failure")
     if execution != "succeeded":
         limitations.append("execution_incomplete")
-    findings = []
+    findings, examined, unexamined = [], set(), set()
     try:
         native = _document(scanner, body, MAX_REPORT_BYTES)
 
@@ -273,51 +309,116 @@ def normalize_native(
         elif scanner == "opengrep":
             if native["errors"] or native["paths"].get("skipped"):
                 limitations.append("unsupported_or_parser_failed_inputs")
-            if not native["paths"]["scanned"]:
+            for path in native["paths"]["scanned"]:
+                try:
+                    examined.add(_asset(path))
+                except (ValueError, TypeError, AttributeError):
+                    limitations.append("missing_malformed_or_truncated_report")
+            for skipped in native["paths"].get("skipped") or []:
+                try:
+                    unexamined.add(
+                        _asset(
+                            skipped["path"] if isinstance(skipped, dict) else skipped
+                        )
+                    )
+                except (ValueError, KeyError, TypeError, AttributeError):
+                    limitations.append("missing_malformed_or_truncated_report")
+            for error in native["errors"]:
+                try:
+                    paths = ([error["path"]] if "path" in error else []) + [
+                        span["file"] for span in error.get("spans", [])
+                    ]
+                    unexamined.update(_asset(path) for path in paths)
+                except (ValueError, KeyError, TypeError, AttributeError):
+                    limitations.append("missing_malformed_or_truncated_report")
+            examined -= unexamined
+            if not examined:
                 limitations.append("no_inputs_examined")
             for item in native["results"]:
-                finding(
-                    item["check_id"],
-                    item["path"],
-                    [item["check_id"], item["path"], item["start"], item.get("end")],
-                )
+                try:
+                    finding(
+                        item["check_id"],
+                        item["path"],
+                        [
+                            item["check_id"],
+                            item["path"],
+                            item["start"],
+                            item.get("end"),
+                        ],
+                    )
+                except (ValueError, KeyError, TypeError, AttributeError):
+                    limitations.append("missing_malformed_or_truncated_report")
         else:
             for result in native["Results"]:
-                if result.get("Error"):
-                    limitations.append("scanner_analysis_error")
+                try:
+                    target = _asset(result["Target"])
+                    families = ("Vulnerabilities", "Misconfigurations", "Secrets")
+                    # Empty finding arrays are valid. Trivy may also omit them
+                    # for clean targets while retaining analysis class/type.
+                    if not any(f in result for f in families) and not (
+                        result.get("Class")
+                        in {"os-pkgs", "lang-pkgs", "config", "secret"}
+                        and isinstance(result.get("Type"), str)
+                        and result["Type"]
+                    ):
+                        raise ValueError("missing native analysis")
+                    if result.get("Error"):
+                        limitations.append("scanner_analysis_error")
+                        unexamined.add(target)
+                    else:
+                        examined.add(target)
+                except (ValueError, KeyError, TypeError, AttributeError):
+                    limitations.append("missing_malformed_or_truncated_report")
+                    continue
                 for family, rule_key in (
                     ("Vulnerabilities", "VulnerabilityID"),
                     ("Misconfigurations", "ID"),
                     ("Secrets", "RuleID"),
                 ):
-                    for item in result.get(family) or []:
-                        if (
-                            family == "Misconfigurations"
-                            and item.get("Status") == "PASS"
-                        ):
-                            continue
-                        finding(
-                            item[rule_key],
-                            result["Target"],
-                            [
-                                family,
-                                item[rule_key],
-                                result["Target"],
-                                item.get("PkgName"),
-                                item.get("InstalledVersion"),
-                                item.get("StartLine"),
-                                item.get("CauseMetadata", {}).get("StartLine"),
-                            ],
-                        )
-            if not native["Results"]:
+                    items = result.get(family, [])
+                    if not isinstance(items, list):
+                        limitations.append("missing_malformed_or_truncated_report")
+                        unexamined.add(target)
+                        continue
+                    for item in items:
+                        try:
+                            rule = item[rule_key]
+                            if not isinstance(rule, str) or not rule:
+                                raise ValueError("missing native rule")
+                            if (
+                                family == "Misconfigurations"
+                                and item.get("Status") == "PASS"
+                            ):
+                                continue
+                            finding(
+                                rule,
+                                target,
+                                [
+                                    family,
+                                    rule,
+                                    target,
+                                    item.get("PkgName"),
+                                    item.get("InstalledVersion"),
+                                    item.get("StartLine"),
+                                    item.get("CauseMetadata", {}).get("StartLine"),
+                                ],
+                            )
+                        except (ValueError, KeyError, TypeError, AttributeError):
+                            limitations.append("missing_malformed_or_truncated_report")
+                            unexamined.add(target)
+            if not examined:
                 limitations.append("no_inputs_examined")
     except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
         limitations.append("missing_malformed_or_truncated_report")
     findings = list({f.finding_id: f for f in findings[:4096]}.values())
+    if len(examined) > 4096 or len(unexamined) > 4096:
+        limitations.append("examined_input_bound_exceeded")
     return NativeResult(
         execution=execution,
         coverage="partial" if limitations else "complete",
         findings=findings,
+        examined_assets=sorted(examined - unexamined)[:4096],
+        unexamined_assets=sorted(unexamined)[:4096],
         limitations=sorted(set(limitations)),
     )
 
@@ -339,6 +440,9 @@ class ScannerExecution(Contract):
     shallow: bool | None = None
     git_metadata: bool = False
     untracked_files: Items = Field(default_factory=list)
+    redacted_metadata_hashes: list[Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]] = (
+        Field(default_factory=list, max_length=16384)
+    )
     database_digest: str | None = Field(None, pattern=r"^[0-9a-f]{64}$")
 
 
