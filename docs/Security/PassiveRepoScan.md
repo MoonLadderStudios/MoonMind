@@ -168,7 +168,8 @@ The versioned JSON contracts live in `moonmind/security/assessments.py`:
 
 - `security-inventory/v1`: scope, observation/expiry timestamps, configuration
   reference, coverage status and components (`asset`, unversioned `purl`,
-  `version`). Inventory completeness is asserted by its producer.
+  `version`). Producer-asserted completeness covers the declared scope,
+  including assets with no components.
 - `security-feed/v1`: source, revision, observation/expiry timestamps and native
   rules (`id`, `purl`, explicit `affectedVersions`). The bounded adapter matches
   exact versions; it does not guess version ranges or fetch intelligence.
@@ -186,10 +187,11 @@ Comparisons distinguish `new`, `still_observed`, `absent_comparable` and
 `not_reassessed`. Absence requires fresh, completed coverage of the original
 asset/rule under comparable scope, exclusions and configuration. Partial scans,
 failed authentication, unsupported assets, expired evidence and changed scope
-retain prior findings and evidence. An unavailable or malformed baseline is
-explicitly unavailable; observed findings then use `observed_without_baseline`
-and cannot claim to be new or resolved. Malformed current reports yield
-incomplete coverage while preserving readable earlier evidence.
+retain prior findings and evidence. Large evidence unions remain reachable
+through retained input reports. An unavailable or malformed baseline, including
+missing stored bytes, is explicitly unavailable; findings then use
+`observed_without_baseline` and cannot claim to be new or resolved. Malformed
+current reports yield incomplete coverage while preserving earlier evidence.
 
 An optional `decisionsRef` contains a JSON array of triage decisions. Each
 decision names `findingId`, `disposition`, `reason`, `evidenceRefs`, `author`,
@@ -197,8 +199,11 @@ decision names `findingId`, `disposition`, `reason`, `evidenceRefs`, `author`,
 Dispositions are `accepted_risk`, `false_positive`, `confirmed_vulnerability`
 and `fix_retest`; only the latter requires `retestOutcome` (`passed`, `failed`
 or `inconclusive`). Due or expired decisions re-enter review. Scope/provenance
-changes require review too. Decisions annotate observations and cannot assert
-a scanner fix. Repository exceptions remain explicit scope configuration.
+changes require review too; that status persists until a renewed decision for
+the finding replaces it. Replaying the same decision cannot clear review.
+Earlier decisions remain in baseline artifacts. Decisions annotate observations
+and cannot assert a scanner fix. Repository exceptions remain explicit scope
+configuration.
 
 The existing report links expose a readable delta/coverage/review summary,
 structured comparison and saved scanner evidence. `scanOutcome` and

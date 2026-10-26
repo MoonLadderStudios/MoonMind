@@ -256,6 +256,8 @@ async def test_authorized_baseline_preserves_finding_rule_asset_and_provenance(
         "exclusions",
         "expired",
         "unsupported",
+        "removed_components",
+        "removed_components_partial",
     ],
 )
 async def test_complete_partial_changed_scope_and_auth_failure_matrix(
@@ -276,13 +278,19 @@ async def test_complete_partial_changed_scope_and_auth_failure_matrix(
         inventory["scope"] = request["scope"]
     elif change == "expired":
         inventory["expiresAt"] = datetime.now(UTC).isoformat()
+    elif change in {"removed_components", "removed_components_partial"}:
+        inventory["components"] = []
+        if change == "removed_components_partial":
+            inventory["status"] = "partial"
     request.update(
         inventoryRef=await put(service, inventory), baselineRef=first["comparisonRef"]
     )
     result = await invoke(service, request)
     comparison = await read(service, result["comparisonRef"])
     assert comparison["findings"][0]["state"] == (
-        "absent_comparable" if change == "complete" else "not_reassessed"
+        "absent_comparable"
+        if change in {"complete", "removed_components"}
+        else "not_reassessed"
     )
     assert comparison["findings"][0]["finding"]["evidenceRefs"] == [
         (await read(service, first["comparisonRef"]))["findings"][0]["finding"][
@@ -290,6 +298,20 @@ async def test_complete_partial_changed_scope_and_auth_failure_matrix(
         ][0],
         request["feedRef"],
     ]
+
+
+async def test_complete_empty_inventory_covers_declared_scope(environment):
+    service = environment.service
+    request, inventory, _ = await inputs(service)
+    request["scope"] = {"assets": ["app", "empty"]}
+    inventory.update(scope=request["scope"], components=[])
+    request["inventoryRef"] = await put(service, inventory)
+    result = await invoke(service, request)
+    assert result["scanOutcome"] == "completed"
+    assert result["coverageStatus"] == "complete"
+    comparison = await read(service, result["comparisonRef"])
+    assert comparison["observation"]["coverage"][0]["assets"] == ["app", "empty"]
+    assert comparison["findings"] == []
 
 
 async def test_publication_failure_preserves_scan_and_retry_reuses_confirmed_work(
@@ -431,6 +453,33 @@ async def test_missing_baseline_never_claims_new_or_resolved(environment):
     assert result["counts"]["observed_without_baseline"] == 1
 
 
+async def test_missing_baseline_bytes_publish_current_assessment(environment):
+    from moonmind.workflows.temporal.artifacts import (
+        TemporalArtifactBytesMissingError,
+    )
+
+    service = environment.service
+    request, _, _ = await inputs(service)
+    first = await invoke(service, request)
+    baseline, _ = await service.read(
+        artifact_id=first["comparisonRef"], principal="workflow:assessment"
+    )
+    LocalTemporalArtifactStore(environment.storage_root).delete(baseline.storage_key)
+    with pytest.raises(TemporalArtifactBytesMissingError):
+        await read(service, first["comparisonRef"])
+
+    request["baselineRef"] = first["comparisonRef"]
+    result = await invoke(service, request)
+    assert result["scanOutcome"] == "completed"
+    assert result["baselineStatus"] == "unavailable"
+    assert result["counts"]["new"] == result["counts"]["absent_comparable"] == 0
+    assert result["counts"]["observed_without_baseline"] == 1
+    assert result["publicationOutcome"] == "published"
+    assert {"boundary": "baseline", "error": "TemporalArtifactBytesMissingError"} in result[
+        "diagnostics"
+    ]
+
+
 async def test_triage_dispositions_expire_into_review(environment, monkeypatch):
     from moonmind.workflows.skills import security_assessment as module
 
@@ -515,6 +564,41 @@ async def test_multiple_reports_preserve_evidence_for_one_native_finding(environ
         request["inventoryRef"],
         request["feedRef"],
         first["scanRef"],
+    }
+
+
+async def test_many_report_evidence_refs_remain_bounded_and_reachable(environment):
+    service = environment.service
+    request, _, _ = await inputs(service)
+    first = await invoke(service, request)
+    observation = (await read(service, first["scanRef"]))["observation"]
+    reports = []
+    for index in range(3):
+        report = copy.deepcopy(observation)
+        report["findings"][0]["evidenceRefs"] = [
+            f"art_evidence_{index}_{item}" for item in range(33)
+        ]
+        reports.append(await put(service, report))
+    request = {
+        **{
+            key: request[key]
+            for key in ("scope", "budget", "credentialRefs", "networkRefs")
+        },
+        "tools": ["retained-report"],
+        "reportRefs": reports,
+    }
+    result = await invoke(service, request)
+    assert result["scanOutcome"] == "completed"
+    assert result["publicationOutcome"] == "published"
+    comparison = await read(service, result["comparisonRef"])
+    evidence = comparison["findings"][0]["finding"]["evidenceRefs"]
+    assert 1 <= len(evidence) <= 64
+    reachable = set(evidence)
+    for ref in set(reports) & reachable:
+        retained = await read(service, ref)
+        reachable.update(retained["findings"][0]["evidenceRefs"])
+    assert reachable >= {
+        f"art_evidence_{index}_{item}" for index in range(3) for item in range(33)
     }
 
 

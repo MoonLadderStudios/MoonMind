@@ -362,23 +362,30 @@ def compare_observations(
                 update={"state": "absent_comparable" if absent else "not_reassessed"}
             )
         )
-    previous_decisions = [row.decision for row in prior.decisions] if prior else []
+    previous_decisions = (
+        {row.decision.finding_id: row for row in prior.decisions} if prior else {}
+    )
     all_decisions = {
-        content_key(decision.model_dump(mode="json")): decision
-        for decision in [
-            *previous_decisions,
-            *[TriageDecision.model_validate(d) for d in decisions],
-        ]
+        finding_id: row.decision for finding_id, row in previous_decisions.items()
     }
+    for payload in decisions:
+        decision = TriageDecision.model_validate(payload)
+        all_decisions[decision.finding_id] = decision
     triage = []
-    for decision in all_decisions.values():
+    for finding_id, decision in all_decisions.items():
+        retained = previous_decisions.get(finding_id)
         if not current.scope.equivalent(decision.scope):
             status = "out_of_scope"
         elif (
             now >= decision.review_at
             or (decision.expires_at is not None and now >= decision.expires_at)
             or (
-                prior is not None and prior.observation.provenance != current.provenance
+                retained is not None
+                and retained.decision == decision
+                and (
+                    retained.status != "active"
+                    or prior.observation.provenance != current.provenance
+                )
             )
         ):
             status = "review_required"

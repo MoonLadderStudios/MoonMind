@@ -175,6 +175,8 @@ def test_later_complete_run_cannot_resolve_findings_carried_from_another_scope()
     ],
 )
 def test_triage_is_attributable_and_never_rewrites_scan_facts(disposition):
+    from moonmind.security.assessments import TriageDecision
+
     first = compare(report())
     decision = {
         "findingId": first["findings"][0]["findingId"],
@@ -196,6 +198,28 @@ def test_triage_is_attributable_and_never_rewrites_scan_facts(disposition):
     expired = compare(report(), result, now=NOW + timedelta(hours=3))
     assert expired["decisions"][0]["status"] == "review_required"
     assert expired["counts"]["review_required"] == 1
+
+    changed = report()
+    changed["provenance"]["feed"] = "art_feed2"
+    pending = compare(changed, result, decisions=[decision])
+    assert pending["decisions"][0]["status"] == "review_required"
+    repeated = compare(changed, pending, decisions=[decision])
+    assert repeated["decisions"][0]["status"] == "review_required"
+    assert repeated["counts"]["review_required"] == 1
+
+    renewed = {
+        **decision,
+        "reason": "Reviewed the updated feed",
+        "evidenceRefs": ["art_renewed_decision_evidence"],
+    }
+    reviewed = compare(changed, repeated, decisions=[renewed])
+    assert len(reviewed["decisions"]) == 1
+    assert TriageDecision.model_validate(
+        reviewed["decisions"][0]["decision"]
+    ) == TriageDecision.model_validate(renewed)
+    assert reviewed["decisions"][0]["status"] == "active"
+    assert reviewed["counts"]["review_required"] == 0
+    assert reviewed["findings"][0]["state"] == "still_observed"
 
 
 def test_malformed_current_and_baseline_fail_closed():
