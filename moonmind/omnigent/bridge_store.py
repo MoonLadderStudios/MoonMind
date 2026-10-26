@@ -34,6 +34,7 @@ from sqlalchemy.orm import load_only
 
 from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEvent
 from moonmind.omnigent.bridge_events import (
+    TURN_TERMINAL_EVENT_TYPES,
     _first_artifact_ref,
     bounded_deduplication_key,
 )
@@ -3999,6 +4000,16 @@ class OmnigentBridgeSessionStore:
                 if normalized is None:
                     continue
                 coalesced = coalesce_bridge_status(normalized)
+                if (
+                    coalesced in _TERMINAL_STATUSES
+                    and str(event.get("type") or event.get("eventType") or "")
+                    in TURN_TERMINAL_EVENT_TYPES
+                ):
+                    # A turn's outcome does not end the session: the agent may
+                    # run more turns, and treating the session as ended makes
+                    # Workflow Chat read-only while it works. The session's
+                    # owner records its terminal state through mark_terminal.
+                    continue
                 if (
                     next_status in _TERMINAL_STATUSES
                     and coalesced not in _TERMINAL_STATUSES
