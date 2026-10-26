@@ -30,6 +30,7 @@ from moonmind.security.passive_repo_scan import (
 from moonmind.workflows.skills.tool_plan_contracts import ToolFailure, ToolResult
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
+    TemporalArtifactBytesMissingError,
     TemporalArtifactNotFoundError,
 )
 from moonmind.workflows.temporal.report_artifacts import build_report_bundle_result
@@ -77,7 +78,11 @@ def observe_inventory(
             )
     # Duplicate inventory entries refer to the same native fact.
     findings = list({row.finding_id: row for row in findings}.values())
-    assets = sorted({component.asset for component in inventory.components})
+    assets = sorted(
+        set(inventory.scope.assets)
+        if inventory.status == "complete"
+        else {component.asset for component in inventory.components}
+    )
     return Observation(
         scope=request.scope,
         observed_at=max(inventory.observed_at, feed.observed_at),
@@ -238,6 +243,7 @@ class AssessmentExecution:
             except (
                 TemporalArtifactNotFoundError,
                 TemporalArtifactAuthorizationError,
+                TemporalArtifactBytesMissingError,
                 ValidationError,
                 ValueError,
             ) as exc:
@@ -326,17 +332,19 @@ class AssessmentExecution:
                 for finding in item.findings:
                     previous = findings_by_id.get(finding.finding_id)
                     if previous is not None:
+                        evidence_refs = list(
+                            dict.fromkeys(
+                                [*previous.evidence_refs, *finding.evidence_refs]
+                            )
+                        )
+                        if len(evidence_refs) > 64:
+                            # The bounded input refs retain every original
+                            # report's evidence without copying an unbounded union.
+                            evidence_refs = list(dict.fromkeys(refs))
                         finding = Finding.model_validate(
                             {
                                 **finding.model_dump(),
-                                "evidence_refs": list(
-                                    dict.fromkeys(
-                                        [
-                                            *previous.evidence_refs,
-                                            *finding.evidence_refs,
-                                        ]
-                                    )
-                                ),
+                                "evidence_refs": evidence_refs,
                             }
                         )
                     findings_by_id[finding.finding_id] = finding
