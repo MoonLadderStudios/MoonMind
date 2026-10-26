@@ -235,6 +235,7 @@ class FixedTargetRelay:
                 pumps.cancel()
                 await asyncio.gather(pumps, return_exceptions=True)
         except (OSError, asyncio.TimeoutError):
+            # Failed or idle sessions close both transports in finally.
             pass
         finally:
             for task in tasks:
@@ -250,6 +251,7 @@ class FixedTargetRelay:
                 try:
                     await asyncio.wait_for(stream.wait_closed(), 1)
                 except (OSError, asyncio.TimeoutError):
+                    # Streams are already closed; cleanup must stay bounded.
                     pass
 
     def _read_udp(self) -> None:
@@ -285,6 +287,7 @@ class FixedTargetRelay:
                 session[0].send(data)
                 self._touch_udp(peer)
             except BlockingIOError:
+                # Drop this datagram when the nonblocking socket is congested.
                 pass
             except OSError:
                 self._drop_udp(peer)
@@ -322,6 +325,7 @@ class FixedTargetRelay:
                         self._udp.sendto(data, peer)
                         self._touch_udp(peer)
                     except BlockingIOError:
+                        # Drop this response rather than buffering under load.
                         pass
         except OSError:
             pass
@@ -344,6 +348,7 @@ class FixedTargetRelay:
             )
             await asyncio.wait_for(writer.drain(), 1)
         except (OSError, asyncio.TimeoutError):
+            # Disconnected or slow health clients still close in finally.
             pass
         finally:
             writer.close()
@@ -374,6 +379,7 @@ class FixedTargetRelay:
                 if self.health_socket.lstat().st_ino == self._health_inode:
                     self.health_socket.unlink()
             except FileNotFoundError:
+                # Another cleanup may already have removed the owned socket.
                 pass
 
 

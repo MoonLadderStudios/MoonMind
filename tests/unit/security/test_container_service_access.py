@@ -334,7 +334,6 @@ async def test_backend_service_launch_scoped_workspace_and_receipt(tmp_path):
 
 @pytest.mark.asyncio
 async def test_backend_rejects_missing_grant_before_any_docker_operation(tmp_path):
-    commands = []
     backend = DockerContainerJobBackend(
         workspace_root=tmp_path,
         command_runner=AsyncMock(),
