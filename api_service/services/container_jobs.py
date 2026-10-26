@@ -313,6 +313,7 @@ class ContainerJobService:
         # Authorize private-image execution and credential use before creating
         # durable identity. Fails closed: a denied request never starts a
         # workflow and never persists a queued record.
+        self._backend_settings.authorize_service(request.spec)
         authorization = None
         if request.spec.image is not None:
             authorization = self._authorizer.authorize(
