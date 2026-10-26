@@ -2137,6 +2137,67 @@ async def test_missing_ci_conflict_repairs_then_waits_for_new_head_ci_and_review
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("review_policy", ["required", "optional", "disabled"])
+@pytest.mark.parametrize("configured_loop", [False, True])
+async def test_conflict_without_ci_uses_admitted_review_policy_during_upgrade(
+    monkeypatch, review_policy, configured_loop
+):
+    missing = _ready(
+        HEAD_1,
+        ready=False,
+        checksReported=False,
+        checksComplete=False,
+        checksPassing=False,
+        automatedReviewComplete=None,
+        blockers=[
+            {"kind": "merge_conflict", "summary": "Pull request has merge conflicts."},
+            {"kind": "checks_running", "summary": "No head CI signal."},
+        ],
+    )
+    readiness = [
+        dict(missing, readinessObservationId="old-producer-poll"),
+        dict(
+            missing,
+            readinessObservationId="new-producer-pending",
+            automatedReviewComplete=False,
+        ),
+        dict(
+            missing,
+            readinessObservationId="new-producer-complete",
+            automatedReviewComplete=True,
+        ),
+    ]
+
+    def finish(child_id, attempt):
+        assert len(harness.readiness_payloads) == (
+            3 if review_policy == "required" else 1
+        )
+        assert harness.wait_calls == (2 if review_policy == "required" else 0)
+        return {"status": "success", "mergeAutomationDisposition": "merged"}
+
+    harness = _Harness(monkeypatch, readiness=readiness, child_results=finish)
+    if configured_loop:
+        # A configured loop is still legacy when its retained feature patch is off.
+        patched = merge_automation_module.workflow.patched
+        monkeypatch.setattr(
+            merge_automation_module.workflow,
+            "patched",
+            lambda name: False
+            if name == merge_automation_module.MERGE_AUTOMATION_REVIEW_LOOP_PATCH
+            else patched(name),
+        )
+    payload = _payload(enabled=configured_loop)
+    payload["mergeAutomationConfig"]["gate"]["github"][
+        "automatedReview"
+    ] = review_policy
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    assert result["status"] == "merged"
+    assert len(harness.child_payloads) == 1
+    assert not harness.request_payloads
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "scenario",
     ["running", "unknown", "old_producer", "head_change", "signal_returns", "expiry"],
