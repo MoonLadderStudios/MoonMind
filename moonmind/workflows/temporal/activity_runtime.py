@@ -2790,11 +2790,18 @@ class TemporalSandboxActivities:
         from moonmind.schemas.saved_work_models import saved_work_path_exclusion
         return saved_work_path_exclusion(relative.as_posix()) is not None
 
-    def _workspace_has_traversal(self, workspace: Path, members: set[str] | None = None) -> bool:
+    def _workspace_has_traversal(
+        self,
+        workspace: Path,
+        members: set[str] | None = None,
+        excluded_paths: set[str] | None = None,
+    ) -> bool:
         paths = workspace.rglob("*") if members is None else (workspace / name for name in members)
         for path in paths:
             relative = path.relative_to(workspace)
-            if self._workspace_archive_excludes(relative):
+            if self._workspace_archive_excludes(relative) or relative.as_posix() in (
+                excluded_paths or ()
+            ):
                 continue
             try:
                 if path.is_symlink():
@@ -2805,54 +2812,17 @@ class TemporalSandboxActivities:
                 return True
         return False
 
-    async def _workspace_archive_members(self, model, workspace: Path) -> set[str] | None:
+    async def _workspace_archive_selection(self, model, workspace: Path):
         if not (workspace / ".git").exists():
             return None
-        # Checkout recreates empty gitlink directories already present in HEAD;
-        # replaying an index patch cannot recreate newly staged directories.
-        # Other worktree states need their own capture, including deletion state
-        # hidden behind a symlinked ancestor, so refuse to omit that local work.
-        staged = await _run_command(_sandbox_workspace_git_command(
-            workspace, "ls-files", "--stage", "-z"
-        ))
-        gitlinks = {
-            entry.partition("\t")[2]
-            for entry in staged.stdout.split("\x00")
-            if entry.startswith("160000 ")
-        }
-        if gitlinks:
-            tree = await _run_command(
-                _sandbox_workspace_git_command(
-                    workspace, "ls-tree", "--full-tree", "-r", "-z", "HEAD"
-                )
-            )
-            head_gitlinks = {
-                entry.partition("\t")[2]
-                for entry in tree.stdout.split("\x00")
-                if entry.startswith("160000 ")
-            }
-            for name in gitlinks:
-                submodule = workspace / name
-                if (
-                    name not in head_gitlinks
-                    or submodule.resolve() != submodule
-                    or not submodule.is_dir()
-                    or any(submodule.iterdir())
-                ):
-                    raise ValueError(
-                        "Workspace snapshot cannot preserve submodule worktree state"
-                    )
-        args = ["ls-files", "--cached", "--exclude-standard", "-z"]
-        if model.include_untracked:
-            args.append("--others")
-        listed = await _run_command(_sandbox_workspace_git_command(workspace, *args))
-        members = set(listed.stdout.split("\x00")) - {""}
-        if model.include_ignored_files:
-            ignored = await _run_command(_sandbox_workspace_git_command(
-                workspace, "ls-files", "--others", "--ignored", "--exclude-standard", "-z"
-            ))
-            members.update(set(ignored.stdout.split("\x00")) - {""})
-        return members
+        from .runtime.checkpoint_submodules import checkpoint_worktrees
+
+        return await asyncio.to_thread(
+            checkpoint_worktrees,
+            workspace,
+            include_untracked=model.include_untracked,
+            include_ignored=model.include_ignored_files,
+        )
 
     async def workspace_capture_checkpoint(
         self,
@@ -2931,8 +2901,17 @@ class TemporalSandboxActivities:
         # Validate the same members that the archive builder includes. Skill
         # projections are excluded runtime state; their links and ownership
         # cannot make an otherwise safe repository checkpoint unsafe.
-        members = await self._workspace_archive_members(model, workspace) if model.kind == "worktree_archive" else None
-        if model.kind == "worktree_archive" and await asyncio.to_thread(self._workspace_has_traversal, workspace, members):
+        selection = (
+            await self._workspace_archive_selection(model, workspace)
+            if model.kind == "worktree_archive"
+            else None
+        )
+        members, repositories, exclusions = (
+            selection if selection is not None else (None, {}, set())
+        )
+        if model.kind == "worktree_archive" and await asyncio.to_thread(
+            self._workspace_has_traversal, workspace, members, exclusions
+        ):
             diagnostic_ref = await self._put_checkpoint_bytes(
                 b"unsafe workspace materialization",
                 content_type="text/plain",
@@ -2955,7 +2934,13 @@ class TemporalSandboxActivities:
             return result.model_dump(by_alias=True, mode="json")
 
         try:
-            workspace_evidence = await self._capture_workspace_evidence(model, workspace, members=members)
+            workspace_evidence = await self._capture_workspace_evidence(
+                model,
+                workspace,
+                members=members,
+                repositories=repositories,
+                exclusions=exclusions,
+            )
         except TemporalActivityRuntimeError:
             raise
         except Exception as exc:
@@ -2984,7 +2969,10 @@ class TemporalSandboxActivities:
         self,
         model: WorkspaceCheckpointCaptureInput,
         workspace: Path,
-        *, members: set[str] | None = None,
+        *,
+        members: set[str] | None = None,
+        repositories: dict[str, Path] | None = None,
+        exclusions: set[str] | None = None,
     ) -> WorkspaceCheckpointEvidenceModel:
         workspace_identity_digest = _workspace_identity_digest(workspace)
         if model.kind == "git_patch":
@@ -3072,17 +3060,81 @@ class TemporalSandboxActivities:
             pre_status = None
             index_payload = b""
             index_paths = []
+            submodules = []
+            submodule_states = {}
+            repositories = repositories or {}
+            exclusions = exclusions or set()
             if (workspace / ".git").exists():
+                from .runtime.checkpoint_submodules import submodule_capture_states
+
+                submodule_states = await asyncio.to_thread(
+                    submodule_capture_states,
+                    repositories,
+                    members,
+                    high_security_mode=high_security_mode,
+                    exclusions=exclusions,
+                )
                 pre_status = (await _run_command(_sandbox_workspace_git_command(
                     workspace, "status", "--porcelain=v1", "-z", "--untracked-files=all",
                 ))).stdout
                 from moonmind.workflows.temporal.runtime.checkpoint_history import capture_git_index_patch
                 index_payload, index_paths = await asyncio.to_thread(capture_git_index_patch, workspace, head, high_security_mode=high_security_mode)
             archive_payload, entries = await asyncio.to_thread(
-                self._build_worktree_archive, workspace, members=members, high_security_mode=high_security_mode
+                self._build_worktree_archive,
+                workspace,
+                members=members,
+                high_security_mode=high_security_mode,
+                excluded_paths=exclusions,
             )
             if pre_status is not None:
                 from moonmind.workflows.temporal.runtime.checkpoint_history import capture_git_history
+                for name, repo in repositories.items():
+                    state = submodule_states[name]
+                    payload, selected_history = await asyncio.to_thread(
+                        capture_git_history,
+                        repo,
+                        state["headCommit"],
+                        high_security_mode=high_security_mode,
+                        self_contained=True,
+                    )
+                    selected_history["ref"] = await self._put_checkpoint_bytes(
+                        payload,
+                        content_type="application/x-git-pack",
+                        metadata={"artifact_kind": "checkpoint_history"},
+                    )
+                    patch = state["indexPatch"]
+                    patch_ref = (
+                        await self._put_checkpoint_bytes(
+                            patch,
+                            content_type="application/vnd.moonmind.git-index-patch",
+                            metadata={"artifact_kind": "checkpoint_index"},
+                        )
+                        if patch
+                        else None
+                    )
+                    submodules.append(
+                        {
+                            "path": name,
+                            "baseCommit": state["headCommit"],
+                            "gitHistory": selected_history,
+                            "git": {
+                                **(
+                                    {"statusDigest": state["statusDigest"]}
+                                    if model.include_untracked
+                                    and not any(
+                                        p.startswith(name + "/") for p in exclusions
+                                    )
+                                    else {}
+                                ),
+                                "indexPatch": {
+                                    "ref": patch_ref,
+                                    "digest": "sha256:"
+                                    + hashlib.sha256(patch).hexdigest(),
+                                    "paths": state["indexPaths"],
+                                },
+                            },
+                        }
+                    )
                 history_payload, history = await asyncio.to_thread(capture_git_history, workspace, head, high_security_mode=high_security_mode)
                 if history_payload is not None:
                     history["ref"] = await self._put_checkpoint_bytes(
@@ -3096,10 +3148,24 @@ class TemporalSandboxActivities:
                     workspace, "status", "--porcelain=v1", "-z", "--untracked-files=all",
                 ))).stdout
                 post_index, post_index_paths = await asyncio.to_thread(capture_git_index_patch, workspace, head, high_security_mode=high_security_mode)
-                if (head != post_head or pre_status != post_status
-                        or (index_payload, index_paths) != (post_index, post_index_paths)
-                        or members != await self._workspace_archive_members(model, workspace)):
+                if (
+                    head != post_head
+                    or pre_status != post_status
+                    or (index_payload, index_paths) != (post_index, post_index_paths)
+                    or (members, repositories, exclusions)
+                    != await self._workspace_archive_selection(model, workspace)
+                ):
                     raise TemporalActivityRuntimeError("workspace changed during archive capture")
+                if submodule_states != await asyncio.to_thread(
+                    submodule_capture_states,
+                    repositories,
+                    members,
+                    high_security_mode=high_security_mode,
+                    exclusions=exclusions,
+                ):
+                    raise TemporalActivityRuntimeError(
+                        "submodule changed during archive capture"
+                    )
             workspace_digest = _workspace_content_digest(entries)
             archive_ref = await self._put_checkpoint_bytes(
                 archive_payload,
@@ -3111,11 +3177,12 @@ class TemporalSandboxActivities:
                 "kind": "worktree_archive",
                 "baseCommit": head,
                 "archiveRef": archive_ref,
-                "archiveDigest": "sha256:" + hashlib.sha256(archive_payload).hexdigest(),
+                "archiveDigest": "sha256:"
+                + hashlib.sha256(archive_payload).hexdigest(),
                 "workspaceDigest": workspace_digest,
                 "entries": entries,
                 "pathCount": len(entries),
-                "excludedPaths": sorted(name for name in (members or ()) if self._workspace_archive_excludes(Path(name))),
+                "excludedPaths": sorted(exclusions),
             }
             if history:
                 manifest_body["gitHistory"] = history
@@ -3127,10 +3194,11 @@ class TemporalSandboxActivities:
                     "ref": index_ref, "digest": "sha256:" + hashlib.sha256(index_payload).hexdigest(),
                     "paths": index_paths,
                 }}
+                if submodules:
+                    manifest_body["git"]["submodules"] = submodules
             # Full Git-status equality is truthful only for a complete
             # selected worktree. Excluded paths never become deletion claims.
-            if (pre_status is not None and model.include_untracked
-                    and not any(self._workspace_archive_excludes(Path(name)) for name in (members or ()))):
+            if pre_status is not None and model.include_untracked and not exclusions:
                 manifest_body["gitStatusDigest"] = (
                     "sha256:" + hashlib.sha256(pre_status.encode("utf-8")).hexdigest()
                 )
@@ -3160,10 +3228,22 @@ class TemporalSandboxActivities:
             )
         raise TemporalActivityRuntimeError(f"unsupported checkpoint kind: {model.kind}")
 
-    def _build_worktree_archive(self, workspace: Path, *, members: set[str] | None = None, high_security_mode: bool = True) -> tuple[bytes, list[dict[str, Any]]]:
+    def _build_worktree_archive(
+        self,
+        workspace: Path,
+        *,
+        members: set[str] | None = None,
+        high_security_mode: bool = True,
+        excluded_paths: set[str] | None = None,
+    ) -> tuple[bytes, list[dict[str, Any]]]:
         from moonmind.workflows.temporal.runtime.workspace_archive import build_workspace_archive
         try:
-            return build_workspace_archive(workspace, members=members, high_security_mode=high_security_mode)
+            return build_workspace_archive(
+                workspace,
+                members=members,
+                high_security_mode=high_security_mode,
+                excluded_paths=excluded_paths,
+            )
         except ValueError as exc:
             raise TemporalActivityRuntimeError(str(exc)) from exc
 
