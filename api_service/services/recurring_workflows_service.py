@@ -52,6 +52,7 @@ from moonmind.workflows.executions.execution_contract import (
     WorkflowContractError,
     reject_retired_vector_fields,
     strip_absent_vector_fields,
+    workflow_requires_agent,
 )
 from moonmind.workflows.executions.provider_profile_projection import (
     PROVIDER_PROFILE_MEMO_KEY,
@@ -1602,6 +1603,19 @@ class RecurringWorkflowsService:
 
         initial_parameters = dict(target.get("initialParameters") or {})
         authored_profile = resolve_launch_target_profile_selection(target)
+        task = initial_parameters.get("workflow") or initial_parameters.get("task")
+        if (
+            isinstance(task, Mapping)
+            and not workflow_requires_agent(task, initial_parameters)
+            and agent_profile_selection is None
+            and initial_parameters.get("agentProfile") is None
+            and initial_parameters.get("agentProfileSnapshot") is None
+            and initial_parameters.get("omnigentExecutionPlan") is None
+        ):
+            # Native tool-only schedules use the installed worker. The runtime
+            # default does not create a need for an agent account or a frozen
+            # agent execution plan when no step launches an agent.
+            return None
         # An omitted runtime that defaults to Omnigent is admitted like an
         # explicit one. Otherwise the schedule would launch plan-less work
         # into the retained session supervisor.
