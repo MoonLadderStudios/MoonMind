@@ -524,6 +524,11 @@ def build_failed_run_recovery_manifest(
         runId=run_id,
         failureStage=failure_stage,
         failureCategory=failure_category,
+        agentResult=(
+            failure_diagnostic.get("agentResult")
+            if isinstance(failure_diagnostic, Mapping)
+            else None
+        ),
         failedLogicalStepId=failed_step_id,
         failedExecutionOrdinal=failed_execution_ordinal,
         lastAcceptedStep=last_accepted_step,
