@@ -171,7 +171,7 @@ Provider session, bridge session, host, runner, endpoint, credential, and immuta
 Binding rules:
 
 1. The backend resolves the binding from durable Workflow, Step Execution, AgentRun, and Omnigent Bridge state.
-2. The active chat-capable session is preferred while work is running.
+2. The active chat-capable session is preferred while work is running. A response or turn finishing does not end the session, so chat stays live while the agent starts more turns.
 3. For terminal workflows, the last authoritative chat-capable session may be returned read-only.
 4. The browser does not infer a session by scanning logs, events, URLs, or provider metadata.
 5. A stale, missing, or unauthorized binding fails closed and never falls back to an arbitrary provider session.
