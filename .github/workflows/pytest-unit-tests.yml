@@ -912,7 +912,7 @@ jobs:
         # them across runs; only the layers behind changed inputs rebuild.
         if: matrix.suite == 'hermetic'
         timeout-minutes: 6
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: api_service/Dockerfile
@@ -956,7 +956,7 @@ jobs:
         # cache; the exact-artifact build remains its sole writer.
         if: matrix.suite != 'hermetic' && inputs.candidate_image == ''
         timeout-minutes: 15
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: api_service/Dockerfile
@@ -1288,7 +1288,7 @@ jobs:
       - name: Build the exact deployable image
         id: build
         if: inputs.candidate_image == ''
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: api_service/Dockerfile
@@ -1449,7 +1449,7 @@ jobs:
           test "$actual" = "$expected"
           echo "commit=$actual" >> "$GITHUB_OUTPUT"
       - name: Build the pinned recovery server
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: omnigent
           file: omnigent/deploy/docker/Dockerfile
@@ -1459,7 +1459,7 @@ jobs:
           cache-from: type=gha,scope=credential-free-recovery-server
           cache-to: type=gha,scope=credential-free-recovery-server,mode=max
       - name: Build the pinned recovery host base
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: omnigent
           file: omnigent/deploy/docker/Dockerfile
