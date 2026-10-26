@@ -65,6 +65,7 @@ import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import { IssueLifecyclePanel, issueLifecycleEvidenceFromExecution } from '../components/IssueLifecyclePanel';
 import {
   buildWorkflowActionMenuItems,
+  selectPrimaryWorkflowActions,
   DEFAULT_REMEDIATION_ACTION_POLICY,
   DEFAULT_REMEDIATION_AUTHORITY,
   DEFAULT_REMEDIATION_MODE,
@@ -10038,6 +10039,21 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       },
     },
   });
+  const primaryActionItems = selectPrimaryWorkflowActions(workflowActionMenuItems);
+  const runPrimaryAction = (item: WorkflowActionMenuItem) => {
+    if (item.disabledReason) return;
+    if (item.confirmation) {
+      requestConfirmation({
+        ...item.confirmation,
+        subject: workflowSubject,
+        compactId: taskId || workflowId || '',
+        danger: item.danger ?? false,
+        onConfirm: () => item.onSelect?.(),
+      });
+      return;
+    }
+    item.onSelect?.();
+  };
   const toggleStep = (logicalStepId: string) => {
     setExpandedSteps((prev) => ({
       ...prev,
@@ -10155,12 +10171,30 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         title={pageTitle}
         actions={
           taskId ? (
-            <IconMenuButton
-              items={workflowActionMenuItems}
-              ariaLabel="Workflow actions"
-              subject={workflowDialogSubject}
-              subjectId={workflowDialogId}
-            />
+            <>
+              {primaryActionItems.length > 0 ? (
+                <div className="td-primary-actions" role="group" aria-label="Primary workflow actions">
+                  {primaryActionItems.map((item) => (
+                    <Button
+                      key={item.id}
+                      variant="secondary"
+                      size="sm"
+                      disabled={Boolean(item.disabledReason)}
+                      title={item.disabledReason ?? undefined}
+                      onClick={() => runPrimaryAction(item)}
+                    >
+                      {item.label}
+                    </Button>
+                  ))}
+                </div>
+              ) : null}
+              <IconMenuButton
+                items={workflowActionMenuItems}
+                ariaLabel="Workflow actions"
+                subject={workflowDialogSubject}
+                subjectId={workflowDialogId}
+              />
+            </>
           ) : null
         }
       >
