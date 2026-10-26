@@ -135,6 +135,9 @@ MERGE_AUTOMATION_ACTIONABLE_CI_FAILURE_PATCH_PREFIX = (
 MERGE_AUTOMATION_MISSING_CI_WAIT_PATCH_PREFIX = (
     "merge-automation-missing-ci-wait-v1:"
 )
+MERGE_AUTOMATION_CONFLICT_REPAIR_WITHOUT_CI_PATCH_PREFIX = (
+    "merge-automation-conflict-repair-without-ci-v1:"
+)
 MERGE_AUTOMATION_SELECTED_REVIEW_REQUEST_CYCLE_BUDGET_PATCH_PREFIX = (
     "merge-automation-selected-review-request-cycle-budget-v1:"
 )
@@ -1184,6 +1187,9 @@ class MoonMindMergeAutomationWorkflow:
             tracked_head_sha=self._input.pull_request.head_sha,
             actionable_merge_conflicts=self._actionable_merge_conflicts_enabled(),
             actionable_ci_failures=self._actionable_ci_failures_enabled(evaluation),
+            allow_conflict_repair_without_ci=self._conflict_repair_without_ci_enabled(
+                evaluation
+            ),
         )
 
     def _should_refresh_pre_resolver_head(
@@ -1225,6 +1231,23 @@ class MoonMindMergeAutomationWorkflow:
         observation_key = hashlib.sha256(observation_id.encode("utf-8")).hexdigest()
         return workflow.patched(
             MERGE_AUTOMATION_ACTIONABLE_CI_FAILURE_PATCH_PREFIX + observation_key
+        )
+
+    @staticmethod
+    def _conflict_repair_without_ci_enabled(evaluation: Any) -> bool:
+        if (
+            not isinstance(evaluation, Mapping)
+            or evaluation.get("checksReported") is not False
+        ):
+            return False
+        observation_id = evaluation.get("readinessObservationId")
+        if not isinstance(observation_id, str) or not observation_id.strip():
+            return False
+        # Preserve waits already recorded by an older consumer, then adopt
+        # conflict repair on the next ordinary readiness observation.
+        observation_key = hashlib.sha256(observation_id.encode("utf-8")).hexdigest()
+        return workflow.patched(
+            MERGE_AUTOMATION_CONFLICT_REPAIR_WITHOUT_CI_PATCH_PREFIX + observation_key
         )
 
     @staticmethod
@@ -2188,7 +2211,12 @@ class MoonMindMergeAutomationWorkflow:
                     evaluation,
                     tracked_head_sha="",
                     actionable_merge_conflicts=self._actionable_merge_conflicts_enabled(),
-                    actionable_ci_failures=self._actionable_ci_failures_enabled(evaluation),
+                    actionable_ci_failures=self._actionable_ci_failures_enabled(
+                        evaluation
+                    ),
+                    allow_conflict_repair_without_ci=self._conflict_repair_without_ci_enabled(
+                        evaluation
+                    ),
                 ),
                 None,
             )
@@ -2290,6 +2318,9 @@ class MoonMindMergeAutomationWorkflow:
             tracked_head_sha=self._input.pull_request.head_sha,
             actionable_merge_conflicts=self._actionable_merge_conflicts_enabled(),
             actionable_ci_failures=self._actionable_ci_failures_enabled(evaluation),
+            allow_conflict_repair_without_ci=self._conflict_repair_without_ci_enabled(
+                evaluation
+            ),
         )
         terminal = None
         if budget_blocker is not None:
@@ -2468,6 +2499,9 @@ class MoonMindMergeAutomationWorkflow:
                 tracked_head_sha=self._input.pull_request.head_sha,
                 actionable_merge_conflicts=self._actionable_merge_conflicts_enabled(),
                 actionable_ci_failures=self._actionable_ci_failures_enabled(evaluation),
+                allow_conflict_repair_without_ci=self._conflict_repair_without_ci_enabled(
+                    evaluation
+                ),
             )
         self._blockers = list(evidence.blockers)
         await self._write_gate_snapshot(evidence_ready=evidence.ready)
@@ -2556,7 +2590,12 @@ class MoonMindMergeAutomationWorkflow:
                         actionable_merge_conflicts=(
                             self._actionable_merge_conflicts_enabled()
                         ),
-                        actionable_ci_failures=self._actionable_ci_failures_enabled(evaluation),
+                        actionable_ci_failures=self._actionable_ci_failures_enabled(
+                            evaluation
+                        ),
+                        allow_conflict_repair_without_ci=self._conflict_repair_without_ci_enabled(
+                            evaluation
+                        ),
                     )
             if workflow.patched("merge-automation-refresh-stale-current-head"):
                 evidence = self._refresh_current_head_for_stale_wait(
@@ -2574,7 +2613,12 @@ class MoonMindMergeAutomationWorkflow:
                     evaluation if isinstance(evaluation, Mapping) else {},
                     tracked_head_sha=self._input.pull_request.head_sha,
                     actionable_merge_conflicts=self._actionable_merge_conflicts_enabled(),
-                    actionable_ci_failures=self._actionable_ci_failures_enabled(evaluation),
+                    actionable_ci_failures=self._actionable_ci_failures_enabled(
+                        evaluation
+                    ),
+                    allow_conflict_repair_without_ci=self._conflict_repair_without_ci_enabled(
+                        evaluation
+                    ),
                 )
             self._blockers = list(evidence.blockers)
             await self._write_gate_snapshot(evidence_ready=evidence.ready)
