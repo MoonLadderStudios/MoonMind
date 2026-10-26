@@ -1,0 +1,355 @@
+{
+  "$defs": {
+    "AssessmentScope": {
+      "additionalProperties": false,
+      "properties": {
+        "assets": {
+          "items": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "minItems": 1,
+          "title": "Assets",
+          "type": "array"
+        },
+        "exclusions": {
+          "items": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Exclusions",
+          "type": "array"
+        },
+        "repositoryExceptions": {
+          "items": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Repositoryexceptions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "assets"
+      ],
+      "title": "AssessmentScope",
+      "type": "object"
+    },
+    "ExaminedSubject": {
+      "additionalProperties": false,
+      "properties": {
+        "asset": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Asset",
+          "type": "string"
+        },
+        "locator": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Locator",
+          "type": "string"
+        },
+        "identity": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Identity",
+          "type": "string"
+        },
+        "resource": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Resource",
+          "type": "string"
+        }
+      },
+      "required": [
+        "asset",
+        "locator",
+        "identity",
+        "resource"
+      ],
+      "title": "ExaminedSubject",
+      "type": "object"
+    },
+    "SecurityInterpretation": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "subject": {
+          "$ref": "#/$defs/ExaminedSubject"
+        },
+        "hypothesis": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Hypothesis",
+          "type": "string"
+        },
+        "disposition": {
+          "enum": [
+            "confirmed",
+            "likely",
+            "unresolved"
+          ],
+          "title": "Disposition",
+          "type": "string"
+        },
+        "evidenceStatus": {
+          "enum": [
+            "supported",
+            "contradicted",
+            "unsupported"
+          ],
+          "title": "Evidencestatus",
+          "type": "string"
+        },
+        "evidenceRefs": {
+          "items": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Evidencerefs",
+          "type": "array"
+        },
+        "nativeFindingId": {
+          "anyOf": [
+            {
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nativefindingid"
+        },
+        "limitations": {
+          "items": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "minItems": 1,
+          "title": "Limitations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "subject",
+        "hypothesis",
+        "disposition",
+        "evidenceStatus",
+        "evidenceRefs",
+        "limitations"
+      ],
+      "title": "SecurityInterpretation",
+      "type": "object"
+    },
+    "SecurityRetest": {
+      "additionalProperties": false,
+      "properties": {
+        "hypothesisId": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Hypothesisid",
+          "type": "string"
+        },
+        "originalEvidenceRefs": {
+          "items": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Originalevidencerefs",
+          "type": "array"
+        },
+        "currentEvidenceRefs": {
+          "items": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Currentevidencerefs",
+          "type": "array"
+        },
+        "changedAssets": {
+          "items": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "minItems": 1,
+          "title": "Changedassets",
+          "type": "array"
+        },
+        "coveredAssets": {
+          "items": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Coveredassets",
+          "type": "array"
+        },
+        "coverage": {
+          "enum": [
+            "complete",
+            "partial",
+            "unavailable"
+          ],
+          "title": "Coverage",
+          "type": "string"
+        },
+        "limitations": {
+          "items": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "minItems": 1,
+          "title": "Limitations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "hypothesisId",
+        "originalEvidenceRefs",
+        "currentEvidenceRefs",
+        "changedAssets",
+        "coveredAssets",
+        "coverage",
+        "limitations"
+      ],
+      "title": "SecurityRetest",
+      "type": "object"
+    },
+    "ThreatModel": {
+      "additionalProperties": false,
+      "properties": {
+        "entryPoints": {
+          "items": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "minItems": 1,
+          "title": "Entrypoints",
+          "type": "array"
+        },
+        "trustBoundaries": {
+          "items": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "minItems": 1,
+          "title": "Trustboundaries",
+          "type": "array"
+        },
+        "invariants": {
+          "items": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "minItems": 1,
+          "title": "Invariants",
+          "type": "array"
+        }
+      },
+      "required": [
+        "entryPoints",
+        "trustBoundaries",
+        "invariants"
+      ],
+      "title": "ThreatModel",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Agent interpretations, never native scanner facts or control attestation.\n\nTest outcomes and confinement assertions deliberately have no fields here.\nTheir authoritative evidence stays with the job and runtime owners.",
+  "properties": {
+    "schemaVersion": {
+      "const": "security-review/v1",
+      "default": "security-review/v1",
+      "title": "Schemaversion",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/$defs/AssessmentScope"
+    },
+    "candidateRef": {
+      "maxLength": 1024,
+      "minLength": 1,
+      "title": "Candidateref",
+      "type": "string"
+    },
+    "threatModel": {
+      "$ref": "#/$defs/ThreatModel"
+    },
+    "interpretations": {
+      "items": {
+        "$ref": "#/$defs/SecurityInterpretation"
+      },
+      "maxItems": 128,
+      "title": "Interpretations",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 4096,
+      "minItems": 1,
+      "title": "Limitations",
+      "type": "array"
+    },
+    "retests": {
+      "items": {
+        "$ref": "#/$defs/SecurityRetest"
+      },
+      "maxItems": 128,
+      "title": "Retests",
+      "type": "array"
+    }
+  },
+  "required": [
+    "scope",
+    "candidateRef",
+    "threatModel",
+    "interpretations",
+    "limitations"
+  ],
+  "title": "SecurityReview",
+  "type": "object"
+}
