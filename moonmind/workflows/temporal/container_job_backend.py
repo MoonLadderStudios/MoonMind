@@ -78,6 +78,12 @@ from moonmind.schemas.workspace_locator_models import (
     ManagedWorkspaceLocator,
     SandboxWorkspaceLocator,
 )
+from moonmind.security.container_services import (
+    SERVICE_DIGEST_LABEL,
+    SERVICE_LABEL,
+    attest_service_connection,
+    attest_service_workload,
+)
 from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
     DOCKER_FINISHED_STATES,
@@ -984,8 +990,21 @@ class DockerContainerJobBackend:
 
     @staticmethod
     def _reject_forbidden_launch_args(
-        args: Sequence[str], *, expected_network: str | None = None
+        args: Sequence[str], *, expected_network: str | None = None,
+        expected_service_host: str | None = None,
     ) -> None:
+        service_flags = set()
+        if expected_service_host is not None:
+            for flag, expected in (("--dns", "127.0.0.1"), ("--add-host", expected_service_host)):
+                values = []
+                for index, token in enumerate(args):
+                    if token == flag:
+                        values.append(args[index + 1] if index + 1 < len(args) else None)
+                    elif token.startswith(flag + "="):
+                        values.append(token.split("=", 1)[1])
+                if values != [expected]:
+                    raise RuntimeError("service name resolution is not deployment-authorized")
+                service_flags.add(flag)
         network_values: list[str] = []
         for index, token in enumerate(args):
             if token == "--network":
@@ -1000,7 +1019,7 @@ class DockerContainerJobBackend:
             )
         for token in args:
             flag = token.split("=", 1)[0]
-            if flag in _FORBIDDEN_LAUNCH_FLAGS:
+            if flag in _FORBIDDEN_LAUNCH_FLAGS and flag not in service_flags:
                 raise RuntimeError(
                     f"refusing to launch owned container with forbidden flag: {flag}"
                 )
@@ -2118,6 +2137,31 @@ class DockerContainerJobBackend:
             ),
         )
 
+    async def _service_evidence(self, request, *, workload=False):
+        connection = self._settings.authorize_service(request.request.spec)
+        if connection is None:
+            raise RuntimeError("service connection authority is absent")
+        if self._publish is None:
+            raise RuntimeError("service access evidence publisher is unavailable")
+        evidence = await attest_service_connection(self._runner, connection)
+        if workload:
+            evidence["workload"] = await attest_service_workload(
+                self._runner, connection, request.container_ref or self._name(request),
+                str(request.resolved_image_ref or ""),
+            )
+        return connection, evidence
+
+    async def _publish_service_evidence(self, request, evidence):
+        if self._publish is None:
+            raise RuntimeError("service access evidence publisher is unavailable")
+        ref = await self._publish(
+            request, f"{request.job_id}-service-access.json",
+            json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode(),
+        )
+        if not ref:
+            raise RuntimeError("service access evidence could not be persisted")
+        return ref
+
     async def _recover_launch_attestation(
         self,
         request: ContainerJobActivityRequest,
@@ -2127,6 +2171,9 @@ class DockerContainerJobBackend:
     ) -> str | None:
         """Re-attest and republish launch evidence for a reconciled bridge job."""
 
+        if request.request.spec.network_mode == "service":
+            _, evidence = await self._service_evidence(request, workload=True)
+            return await self._publish_service_evidence(request, evidence)
         if request.request.spec.network_mode != "bridge" or self._publish is None:
             return None
         egress_attestation = await attest_docker_egress(
@@ -2279,12 +2326,16 @@ class DockerContainerJobBackend:
             else None
         )
         name = self._name(request)
-        if spec.network_mode not in {"none", "bridge"}:
-            raise RuntimeError("network mode must be 'none' or policy-approved 'bridge'")
+        if spec.network_mode not in {"none", "bridge", "service"}:
+            raise RuntimeError("container network mode is unsupported")
         # Prove network-layer egress enforcement before probing container state
         # or reserving a name; an unattested launch must fail closed first.
         egress_attestation = None
         network_mode = spec.network_mode
+        service_connection = service_evidence = None
+        if spec.network_mode == "service":
+            service_connection, service_evidence = await self._service_evidence(request)
+            network_mode = service_connection.network_ref
         if spec.network_mode == "bridge":
             egress_attestation = await attest_docker_egress(
                 runner=self._runner,
@@ -2413,6 +2464,15 @@ class DockerContainerJobBackend:
             args.extend(("--mount", mount))
             resolved_cache_refs.append(cache.cache_ref)
         args.extend(await self._materialized_env(request))
+        if service_connection is not None:
+            args.extend((
+                "--dns", "127.0.0.1",
+                "--add-host", f"{service_connection.server_name}:{service_connection.relay.listen_host}",
+                "--label", f"{SERVICE_LABEL}={service_connection.service_ref}",
+                "--label", f"{SERVICE_DIGEST_LABEL}={service_connection.digest}",
+                "--env", f"MOONMIND_SERVICE_HOST={service_connection.server_name}",
+                "--env", f"MOONMIND_SERVICE_PORT={service_connection.relay.listen_port}",
+            ))
         if egress_attestation is not None:
             args.extend(
                 (
@@ -2430,7 +2490,10 @@ class DockerContainerJobBackend:
                 args.extend(("--env", proxy_env))
         if spec.entrypoint:
             args.extend(("--entrypoint", spec.entrypoint[0]))
-        self._reject_forbidden_launch_args(args, expected_network=network_mode)
+        self._reject_forbidden_launch_args(
+            args, expected_network=network_mode,
+            expected_service_host=(f"{service_connection.server_name}:{service_connection.relay.listen_host}" if service_connection else None),
+        )
         args.append(request.resolved_image_ref)
         args.extend(spec.entrypoint[1:])
         args.extend(spec.command)
@@ -2446,6 +2509,12 @@ class DockerContainerJobBackend:
             # workflow history and caller-visible terminal diagnostics.
             raise RuntimeError("docker create failed for the resolved workspace")
         egress_evidence_ref = None
+        if service_evidence is not None:
+            try:
+                egress_evidence_ref = await self._publish_service_evidence(request, service_evidence)
+            except Exception:
+                await self._runner(("rm", "--force", name))
+                raise
         if egress_attestation is not None and self._publish is not None:
             try:
                 egress_evidence_ref = await self._publish_container_job_egress_launch(
@@ -2477,6 +2546,9 @@ class DockerContainerJobBackend:
         container_name = request.container_ref or self._name(request)
         requested_gpu = request.request.spec.resources.gpu
         started_at = datetime.now(timezone.utc)
+        if request.request.spec.network_mode == "service":
+            # Revalidate after capacity waits/restarts, before any command runs.
+            await self._service_evidence(request, workload=True)
         capacity_lease = await self._acquire_capacity_lock()
         try:
             states = await self._container_states()
@@ -2516,6 +2588,13 @@ class DockerContainerJobBackend:
                     exc_info=True,
                 )
         diagnostics_ref = request.egress_attestation_ref
+        if request.request.spec.network_mode == "service":
+            try:
+                _, evidence = await self._service_evidence(request, workload=True)
+                diagnostics_ref = await self._publish_service_evidence(request, evidence)
+            except Exception:
+                await self.stop_container(request)
+                raise
         if request.request.spec.network_mode == "bridge":
             try:
                 attestation = await attest_docker_egress(
@@ -2576,6 +2655,12 @@ class DockerContainerJobBackend:
         )
 
     async def observe_container(self, request: ContainerJobActivityRequest):
+        if request.request.spec.network_mode == "service":
+            try:
+                await self._service_evidence(request, workload=True)
+            except Exception:
+                await self.stop_container(request)
+                raise
         ref = request.container_ref or self._name(request)
         raw = await self._checked("inspect", "--format", "{{json .State}}", ref)
         state = json.loads(raw)
@@ -3157,6 +3242,9 @@ class DockerContainerJobBackend:
         # Only an actual container reference proves a container exists to
         # inspect; a deterministic name would make ``docker inspect`` report a
         # missing container as drifted network evidence.
+        if request.request.spec.network_mode == "service" and request.container_ref is not None:
+            _, evidence = await self._service_evidence(request, workload=True)
+            return evidence
         if (
             request.request.spec.network_mode != "bridge"
             or request.container_ref is None
@@ -3302,7 +3390,7 @@ class DockerContainerJobBackend:
                     await asyncio.sleep(_CREDENTIAL_CLEANUP_BACKOFF_SECONDS)
 
         diagnostics_ref = None
-        if request.request.spec.network_mode == "bridge":
+        if request.request.spec.network_mode in {"bridge", "service"}:
             # remove_container runs immediately before cleanup. Observe that no
             # job-owned attachment remains rather than turning an attempted
             # delete into terminal evidence. Filters are ownership scoped, so
@@ -3326,8 +3414,8 @@ class DockerContainerJobBackend:
                 )
             lifecycle = {
                 "schemaVersion": 1,
-                "profileRef": DEFAULT_EGRESS_PROFILE.ref,
-                "profileDigest": DEFAULT_EGRESS_PROFILE.digest,
+                "profileRef": (request.request.spec.service_ref if request.request.spec.network_mode == "service" else DEFAULT_EGRESS_PROFILE.ref),
+                **({} if request.request.spec.network_mode == "service" else {"profileDigest": DEFAULT_EGRESS_PROFILE.digest}),
                 "workloadAttachmentIdentity": request.container_ref
                 or self._name(request),
                 "runtimeDiagnosticsRef": (

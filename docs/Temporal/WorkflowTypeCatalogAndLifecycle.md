@@ -400,6 +400,13 @@ These are internal orchestration signals and should stay compact and policy-boun
 
 User/API cancel maps to Temporal workflow cancellation.
 
+The canonical owner saves the target run and cancellation request before remote
+dispatch. The normal maintenance pass retries interrupted delivery without
+starting replacement work. A requested cancellation stays pending until Temporal
+confirms its outcome; an unavailable or never-dispatched run is not a confirmed
+Temporal close. A changed target run blocks the old request, and completion of an
+older request cannot overwrite a newer control request.
+
 Workflow behavior:
 
 - transition `mm_state` to `canceled`
@@ -691,6 +698,7 @@ This workflow is a bounded support workflow for managed-session supervision.
 Representative lifecycle concerns:
 
 * invoke `agent_runtime.reconcile_managed_sessions`
+* resume bounded batches of admitted start and cancellation intents through the canonical execution owner, independently of the initiating API request
 * classify stale or orphaned managed-session supervision records
 * trigger bounded cleanup or status repair through activity-owned side effects
 * finish quickly and rely on schedule/API triggering for future reconciliation passes

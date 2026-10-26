@@ -1,6 +1,8 @@
 import {
   Ban,
   Check,
+  CircleQuestionMark,
+  Forward,
   Hand,
   Hourglass,
   Link,
@@ -16,6 +18,11 @@ import {
 import { executionStatusPillProps } from './executionStatusPillClasses';
 import { formatStatusLabel } from './formatters';
 import { stepStatusPillProps } from '../status/stepStatus';
+import {
+  type WorkflowOutcomeOverride,
+  workflowOutcomeOverride,
+  workflowOutcomeOverridePresentation,
+} from '../status/workflowStatus';
 
 export const WORKFLOW_STATUS_ICONS = {
   scheduled: Moon,
@@ -33,6 +40,15 @@ export const WORKFLOW_STATUS_ICONS = {
 } as const satisfies Record<string, LucideIcon>;
 
 export type WorkflowStatusIconKey = keyof typeof WORKFLOW_STATUS_ICONS;
+
+const WORKFLOW_OUTCOME_ICONS = {
+  handed_off: Forward,
+  outcome_unknown: CircleQuestionMark,
+  idle: Minus,
+  objective_failed: X,
+  verification_blocked: X,
+  objective_cancelled: Ban,
+} as const satisfies Record<WorkflowOutcomeOverride, LucideIcon>;
 export type StatusIconDomain = 'workflow' | 'step';
 
 export const CANONICAL_STEP_STATUSES = [
@@ -124,21 +140,31 @@ export function statusIconKey(
 export function StatusIcon({
   status,
   domain,
+  completionDisposition,
+  objectiveOutcome,
   className,
   title,
   'data-testid': testId,
 }: {
   status: string | null | undefined;
   domain: StatusIconDomain;
+  completionDisposition?: string | null | undefined;
+  objectiveOutcome?: string | null | undefined;
   className?: string;
   title?: string;
   'data-testid'?: string;
 }) {
-  const label = title ?? defaultStatusIconLabel(status);
-  const Icon = WORKFLOW_STATUS_ICONS[statusIconKey(status, domain)];
-  const pillProps = domain === 'step'
-    ? stepStatusPillProps(status)
-    : executionStatusPillProps(status, { enableMotion: false });
+  const override = domain === 'workflow'
+    ? workflowOutcomeOverride(status, completionDisposition, objectiveOutcome)
+    : null;
+  const overridePresentation = override ? workflowOutcomeOverridePresentation(override) : null;
+  const label = title ?? overridePresentation?.label ?? defaultStatusIconLabel(status);
+  const Icon = override ? WORKFLOW_OUTCOME_ICONS[override] : WORKFLOW_STATUS_ICONS[statusIconKey(status, domain)];
+  const pillProps = overridePresentation
+    ? { className: overridePresentation.className }
+    : domain === 'step'
+      ? stepStatusPillProps(status)
+      : executionStatusPillProps(status, { enableMotion: false });
 
   return (
     <span

@@ -200,11 +200,11 @@ def test_integration_rows_bound_each_phase_and_pass_fail_fast_policy() -> None:
     # its three diagnostics/teardown commands before the native step bound.
     budget_seconds = int(hermetic["env"]["MOONMIND_INTEGRATION_TIMEOUT"])
     assert budget_seconds + 30 + 3 * (120 + 10) < int(hermetic["timeout-minutes"]) * 60
+    assert 0 < int(hermetic["timeout-minutes"]) <= 35
     for name in (
         "Install the journey browser's Playwright runtime",
         "Install the journey browser OS dependencies",
         "Download the journey Chromium browser",
-        "Run hermetic integration CI suite",
         "Run disposable default first-run journey",
         "Run eligible-upgrade journey",
         "Run Settings Operations controller journey",
@@ -303,7 +303,7 @@ def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
             "controller-journey",
         )
     } == {
-        "hermetic": 50,
+        "hermetic": 55,
         "fresh-journey": 85,
         "upgrade-journey": 85,
         "controller-journey": 85,

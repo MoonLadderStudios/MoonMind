@@ -214,6 +214,9 @@ def merged_parameters_for_projection(
             merged[key] = {**saved, **observed}
     return merged
 
+_DELIVERY_INTENT_MEMO_FIELDS = frozenset({"temporalStart", "temporalCancel"})
+
+
 def merged_memo_for_projection(
     payload: dict[str, Any],
     canonical: TemporalExecutionCanonicalRecord | None,
@@ -226,16 +229,21 @@ def merged_memo_for_projection(
     Temporal's memo overwrite the projection memo on every sync would silently
     discard these DB-side additions.
 
-    Strategy: Temporal wins for any key it provides (it is authoritative for
-    lifecycle fields).  The canonical DB memo only fills in keys that Temporal
-    does not supply.
+    Temporal owns observed lifecycle fields. Canonical delivery intents retain
+    their current DB values; the immutable start-time memo cannot roll back
+    their confirmation or cancellation. Other DB-only keys fill absent values.
     """
     temporal_memo = dict(payload.get("memo") or {})
     if canonical is None:
         return temporal_memo
     canonical_memo = dict(canonical.memo or {})
-    # DB-only keys supplement; Temporal keys take precedence.
-    return {**canonical_memo, **temporal_memo}
+    merged = {**canonical_memo, **temporal_memo}
+    for key in _DELIVERY_INTENT_MEMO_FIELDS:
+        if key in canonical_memo:
+            merged[key] = canonical_memo[key]
+        else:
+            merged.pop(key, None)
+    return merged
 
 def preserve_local_only_fields(payload: dict[str, Any], *records: Any) -> None:
     """Keep DB-managed helpers when Temporal payloads omit them."""
@@ -468,6 +476,20 @@ def _merge_owned_memo(incoming: dict[str, Any], records: list[Any], *, owner: st
         for item in reversed(stored):
             memo.update(item)
     memo.update(incoming)
+    if owner != "canonical":
+        # A start-time Temporal memo is a snapshot, never delivery authority.
+        # Importing its old pending marker would undo confirmation on a fresh
+        # lifecycle poll, or resurrect an unadmitted historical start.
+        authority = next(
+            (record for record in records
+             if isinstance(record, TemporalExecutionCanonicalRecord)), None,
+        )
+        delivery = dict(authority.memo or {}) if authority is not None else {}
+        for key in _DELIVERY_INTENT_MEMO_FIELDS:
+            if key in delivery:
+                memo[key] = delivery[key]
+            else:
+                memo.pop(key, None)
     if owner == "snapshot":
         for key in _SNAPSHOT_MEMO_FIELDS:
             for item in stored:

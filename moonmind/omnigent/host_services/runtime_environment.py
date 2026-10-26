@@ -13,6 +13,9 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformFailure,
 )
 from moonmind.omnigent.harness_platform.host_classes import LaunchPolicy
+from moonmind.omnigent.host_services.project_environment import (
+    deployment_project_environment,
+)
 from moonmind.omnigent.workspace_intent import (
     authored_connection_ref,
     authored_required_capabilities,
@@ -94,7 +97,7 @@ class OmnigentRuntimeEnvironmentService:
         needs_containers = "docker" in required_capabilities
         needs_jira_tools = requires_jira_tools(required_capabilities)
         if not needs_fanout and not needs_containers and not needs_jira_tools:
-            return {}
+            return deployment_project_environment()
         try:
             require_execution_fanout_authorization(
                 required_capabilities,
@@ -125,6 +128,7 @@ class OmnigentRuntimeEnvironmentService:
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
         environment = {
+            **deployment_project_environment(),
             "MOONMIND_URL": self._moonmind_url,
             "MOONMIND_AGENT_RUN_ID": step_execution_id,
             "MOONMIND_TASK_WORKFLOW_ID": workflow_id,

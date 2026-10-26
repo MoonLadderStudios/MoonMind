@@ -1,0 +1,47 @@
+# Example only. This file is not included by MoonMind's normal deployment.
+# Provision only after approving the exact upstream service access described in README.md.
+name: moonmind-service-example
+services:
+  relay:
+    image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
+    container_name: moonmind-example-service-relay
+    user: "1000:1000"
+    working_dir: /app
+    entrypoint: ["python", "-m", "moonmind.security.service_relay"]
+    command: ["--config", "/run/moonmind-service/config.json"]
+    read_only: true
+    cpus: 1
+    mem_limit: 256m
+    pids_limit: 64
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    sysctls:
+      net.ipv4.ip_forward: "0"
+    volumes:
+      - ./relay.json:/run/moonmind-service/config.json:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=1m,uid=1000,gid=1000,mode=0700
+    networks:
+      internal:
+        ipv4_address: 172.30.77.2
+      upstream: {}
+    healthcheck:
+      test: [CMD, python, -m, moonmind.security.service_relay, --check, --config, /run/moonmind-service/config.json]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+networks:
+  internal:
+    name: moonmind-example-service-internal
+    driver: bridge
+    internal: true
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+    ipam:
+      config:
+        - subnet: 172.30.77.0/24
+  upstream:
+    name: moonmind-example-service-upstream
+    driver: bridge

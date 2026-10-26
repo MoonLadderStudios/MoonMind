@@ -92,6 +92,9 @@ async def test_cancel_preserves_live_state_until_a_replacement_worker_serves_it(
         owner_type=TemporalExecutionOwnerType.USER,
     )
     session = MagicMock()
+    loaded = MagicMock()
+    loaded.scalar_one.return_value = record
+    session.execute = AsyncMock(return_value=loaded)
     session.commit = AsyncMock()
     session.refresh = AsyncMock()
     service = TemporalExecutionService(session)
