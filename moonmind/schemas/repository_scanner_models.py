@@ -1,0 +1,127 @@
+"""Admitted repository-scanner inputs, independent of runtime and workflow models."""
+
+from __future__ import annotations
+
+import re
+from typing import Annotated, Literal
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
+from pydantic.alias_generators import to_camel
+
+Text = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1024)
+]
+Items = Annotated[list[Text], Field(max_length=4096)]
+Scanner = Literal["gitleaks", "opengrep", "trivy"]
+MAX_REPORT_BYTES = 8 * 1024 * 1024
+
+
+class Contract(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, alias_generator=to_camel
+    )
+
+
+def relative_path(value: str, *, root: bool = False) -> str:
+    if root and value == ".":
+        return value
+    if not re.fullmatch(r"[A-Za-z0-9_.@+-]+(?:/[A-Za-z0-9_.@+-]+)*", value):
+        raise ValueError("scanner paths must be normalized relative paths")
+    if any(part in {".", "..", ".git"} for part in value.split("/")):
+        raise ValueError("scanner paths must stay outside Git metadata")
+    return value
+
+
+class ScannerRule(Contract):
+    id: Text
+    path: str = Field(pattern=r"^/opt/moonmind-scanner-rules/[A-Za-z0-9_./-]+$")
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    license: Text
+
+    @field_validator("path")
+    @classmethod
+    def trusted_path(cls, value):
+        if any(p in {".", "..", ""} for p in value.split("/")[1:]):
+            raise ValueError("rules must be admitted image files")
+        return value
+
+
+class RepositoryScan(Contract):
+    scanner: Scanner
+    input_path: str = "."
+    output_directory: str
+    rules: list[ScannerRule] = Field(default_factory=list, max_length=32)
+    exclusions: Items = Field(default_factory=list)
+    allow_inline_suppressions: bool = False
+    trivy_scanners: list[Literal["vuln", "misconfig", "secret"]] = Field(
+        default_factory=lambda: ["vuln", "misconfig"], min_length=1, max_length=3
+    )
+    gitleaks_owns_secrets: bool = True
+    database_cache_ref: str | None = Field(None, pattern=r"^[a-z0-9][a-z0-9.-]*$")
+    database_digest: str | None = Field(None, pattern=r"^[0-9a-f]{64}$")
+    max_files: int = Field(4096, ge=1, le=4096)
+    max_input_bytes: int = Field(128 * 1024 * 1024, ge=1, le=2 * 1024**3)
+    max_report_bytes: int = Field(MAX_REPORT_BYTES, ge=128, le=MAX_REPORT_BYTES)
+    timeout_seconds: int = Field(300, ge=1, le=3600)
+
+    @field_validator("input_path")
+    @classmethod
+    def input_relative(cls, value):
+        return relative_path(value, root=True)
+
+    @field_validator("output_directory")
+    @classmethod
+    def output_relative(cls, value):
+        return relative_path(value)
+
+    @field_validator("exclusions")
+    @classmethod
+    def excluded_paths(cls, values):
+        return [relative_path(v) for v in values]
+
+    @model_validator(mode="after")
+    def admitted_choices(self):
+        if self.scanner == "opengrep" and not self.rules:
+            raise ValueError("Opengrep requires selected licensed image rules")
+        if self.scanner == "gitleaks" and len(self.rules) > 1:
+            raise ValueError("Gitleaks accepts one trusted configuration")
+        if len({r.id for r in self.rules}) != len(self.rules):
+            raise ValueError("duplicate selected rule identity")
+        if len(set(self.trivy_scanners)) != len(self.trivy_scanners):
+            raise ValueError("duplicate Trivy capability")
+        if self.scanner == "trivy":
+            if self.gitleaks_owns_secrets and "secret" in self.trivy_scanners:
+                raise ValueError("Gitleaks already owns secret scanning")
+            if "vuln" in self.trivy_scanners and not (
+                self.database_cache_ref and self.database_digest
+            ):
+                raise ValueError(
+                    "Trivy vulnerabilities require an admitted offline database"
+                )
+        if bool(self.database_cache_ref) != bool(self.database_digest):
+            raise ValueError(
+                "database cache and content identity are required together"
+            )
+        if self.input_path != "." and (
+            self.input_path == self.output_directory
+            or self.input_path.startswith(self.output_directory + "/")
+        ):
+            raise ValueError("output directory cannot contain the admitted input")
+        return self
+
+    @property
+    def modes(self) -> list[str]:
+        return ["history", "worktree"] if self.scanner == "gitleaks" else ["scan"]
+
+    def outputs(self) -> list[dict]:
+        return [
+            {"name": name, "relativePath": f"{self.output_directory}/{name}.json"}
+            for name in [*self.modes, "execution", "summary"]
+        ]

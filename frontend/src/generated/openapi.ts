@@ -6688,6 +6688,7 @@ export interface components {
         };
         /** ContainerJobSpec */
         ContainerJobSpec: {
+            repositoryScan?: components["schemas"]["RepositoryScan"] | null;
             /** Image */
             image?: string | null;
             /** Imagesourceref */
@@ -12241,6 +12242,61 @@ export interface components {
             /** Assignments */
             assignments?: components["schemas"]["RepositoryAssignmentView"][];
         };
+        /** RepositoryScan */
+        RepositoryScan: {
+            /**
+             * Scanner
+             * @enum {string}
+             */
+            scanner: "gitleaks" | "opengrep" | "trivy";
+            /**
+             * Inputpath
+             * @default .
+             */
+            inputPath: string;
+            /** Outputdirectory */
+            outputDirectory: string;
+            /** Rules */
+            rules?: components["schemas"]["ScannerRule"][];
+            /** Exclusions */
+            exclusions?: string[];
+            /**
+             * Allowinlinesuppressions
+             * @default false
+             */
+            allowInlineSuppressions: boolean;
+            /** Trivyscanners */
+            trivyScanners?: ("vuln" | "misconfig" | "secret")[];
+            /**
+             * Gitleaksownssecrets
+             * @default true
+             */
+            gitleaksOwnsSecrets: boolean;
+            /** Databasecacheref */
+            databaseCacheRef?: string | null;
+            /** Databasedigest */
+            databaseDigest?: string | null;
+            /**
+             * Maxfiles
+             * @default 4096
+             */
+            maxFiles: number;
+            /**
+             * Maxinputbytes
+             * @default 134217728
+             */
+            maxInputBytes: number;
+            /**
+             * Maxreportbytes
+             * @default 8388608
+             */
+            maxReportBytes: number;
+            /**
+             * Timeoutseconds
+             * @default 300
+             */
+            timeoutSeconds: number;
+        };
         /**
          * RescheduleExecutionRequest
          * @description Request payload for rescheduling a deferred execution.
@@ -12568,6 +12624,17 @@ export interface components {
             commitMessage?: string | null;
             /** Admissiongeneration */
             admissionGeneration?: string | null;
+        };
+        /** ScannerRule */
+        ScannerRule: {
+            /** Id */
+            id: string;
+            /** Path */
+            path: string;
+            /** Sha256 */
+            sha256: string;
+            /** License */
+            license: string;
         };
         /**
          * ScheduleCreatedResponse

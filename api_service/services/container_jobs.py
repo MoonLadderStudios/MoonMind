@@ -310,6 +310,9 @@ class ContainerJobService:
         )
 
     async def submit(self, *, owner: OwnerIdentity, request: ContainerJobSubmitRequest) -> ContainerJobAccepted:
+        from moonmind.security.repository_scanners import validate_scanner_job
+
+        validate_scanner_job(request.spec)
         # Authorize private-image execution and credential use before creating
         # durable identity. Fails closed: a denied request never starts a
         # workflow and never persists a queued record.

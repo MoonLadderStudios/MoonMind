@@ -30,6 +30,7 @@ from moonmind.security.passive_repo_scan import (
     PASSIVE_SCAN_TOOL_REF,
     parse_scan_report_json,
 )
+from moonmind.security.repository_scanners import ScannerSummary
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.skills.tool_plan_contracts import ToolFailure, ToolResult
 from moonmind.workflows.temporal.artifacts import (
@@ -168,6 +169,110 @@ def _passive_observation(
     )
 
 
+def _scanner_observation(
+    request, summary: ScannerSummary, ref: str, created_at: datetime
+):
+    """Retained native facts compose with inventory/passive reports without an LLM."""
+    admission = summary.admission
+    modes = {"history", "worktree"} if summary.scanner == "gitleaks" else {"scan"}
+    if set(summary.results) != modes:
+        raise ValueError("scanner operation coverage is missing")
+    if admission is not None:
+        if summary.scanner != admission.scanner:
+            raise ValueError("scanner identity differs from admission")
+        if set(admission.exclusions) != set(request.scope.exclusions):
+            raise ValueError("scanner exclusions differ from admitted assessment")
+        if (
+            admission.allow_inline_suppressions
+            and "inline-suppressions" not in request.scope.repository_exceptions
+        ):
+            raise ValueError("scanner suppressions differ from admitted assessment")
+    findings = [finding for row in summary.results.values() for finding in row.findings]
+    if any(
+        not set(f.evidence_refs) <= set(summary.native_refs.values()) for f in findings
+    ):
+        raise ValueError("finding evidence differs from retained native records")
+    if any(f.asset not in request.scope.assets for f in findings):
+        raise ValueError("scanner finding outside admitted assessment scope")
+    findings = list({f.finding_id: f for f in findings}.values())
+    truncated = len(findings) > 4096
+    complete = (
+        admission is not None
+        and not truncated
+        and summary.coverage == "complete"
+        and not summary.limitations
+        and summary.execution is not None
+        and not summary.execution.limitations
+        and set(summary.native_refs) == modes
+        and all(
+            r.coverage == "complete"
+            and r.execution == "succeeded"
+            and not r.limitations
+            for r in summary.results.values()
+        )
+    )
+    # Snapshot inventory is not evidence that Opengrep or Trivy examined a file.
+    # Gitleaks' explicit directory invocation covers the bounded staged inputs;
+    # its native finding list has no separate scanned-file inventory.
+    assets = sorted(
+        (
+            set(summary.execution.assets if summary.execution else [])
+            | {f.asset for f in findings}
+        )
+        if summary.scanner == "gitleaks"
+        else {
+            asset for row in summary.results.values() for asset in row.examined_assets
+        }
+    )
+    if not assets:
+        complete = False
+    return Observation(
+        scope=request.scope,
+        observed_at=created_at,
+        expires_at=created_at + timedelta(days=1),
+        findings=findings[:4096],
+        coverage=[
+            Coverage(
+                source="repository",
+                tool=summary.scanner,
+                assets=[a for a in assets if a in request.scope.assets],
+                rule_ids=[],
+                all_rules=admission is not None,
+                config_ref=content_key(
+                    [
+                        (
+                            admission.model_dump(
+                                mode="json", exclude={"output_directory"}
+                            )
+                            if admission
+                            else None
+                        ),
+                        (
+                            summary.execution.version
+                            if summary.execution
+                            else "unavailable"
+                        ),
+                    ]
+                ),
+                status="complete" if complete else "partial",
+            )
+        ],
+        provenance={
+            **(
+                {"findingLimit": "combined_finding_bound_exceeded"} if truncated else {}
+            ),
+            "scannerSummary": ref,
+            "nativeReports": content_key(summary.native_refs),
+            "scannerVersion": (
+                summary.execution.version if summary.execution else "unavailable"
+            ),
+            "inputDigest": (
+                summary.execution.input_digest if summary.execution else "unavailable"
+            ),
+        },
+    )
+
+
 class AssessmentExecution:
     def __init__(self, service: Any, *, principal: str, context: Mapping[str, Any]):
         self.service = service
@@ -279,6 +384,7 @@ class AssessmentExecution:
         else:
             observations = []
             outcomes = []
+            scanner_summaries = []
             if (
                 baseline
                 and baseline["observation"]["provenance"].get("assessmentWork")
@@ -307,7 +413,51 @@ class AssessmentExecution:
                     metadata, raw = inputs[ref]
                     try:
                         payload = json.loads(raw)
-                        if payload.get("toolRef") == PASSIVE_SCAN_TOOL_REF:
+                        if payload.get("schemaVersion") == "repository-scanner/v1":
+                            native_summary = ScannerSummary.model_validate(payload)
+                            # References are authorized through the existing
+                            # artifact owner before they reach a report/model.
+                            total = 0
+                            for native_ref in native_summary.native_refs.values():
+                                _, body = await self.read(native_ref)
+                                total += len(body)
+                                if total > _MAX_INPUT_BYTES * 2:
+                                    raise ValueError(
+                                        "scanner evidence exceeds input bound"
+                                    )
+                            observed_at = metadata.created_at
+                            if observed_at.tzinfo is None:
+                                observed_at = observed_at.replace(tzinfo=UTC)
+                            observation = _scanner_observation(
+                                request, native_summary, ref, observed_at
+                            )
+                            scanner_summaries.append(
+                                {
+                                    "scanner": native_summary.scanner,
+                                    "summaryRef": ref,
+                                    "nativeRefs": native_summary.native_refs,
+                                    "coverage": observation.coverage[0].status,
+                                    "execution": {
+                                        mode: row.execution
+                                        for mode, row in native_summary.results.items()
+                                    },
+                                    "limitations": sorted(
+                                        set(native_summary.limitations)
+                                        | {
+                                            limit
+                                            for row in native_summary.results.values()
+                                            for limit in row.limitations
+                                        }
+                                        | (
+                                            {observation.provenance["findingLimit"]}
+                                            if "findingLimit" in observation.provenance
+                                            else set()
+                                        )
+                                    ),
+                                    "verification": native_summary.verification,
+                                }
+                            )
+                        elif payload.get("toolRef") == PASSIVE_SCAN_TOOL_REF:
                             observed_at = metadata.created_at
                             if observed_at.tzinfo is None:
                                 observed_at = observed_at.replace(tzinfo=UTC)
@@ -388,6 +538,7 @@ class AssessmentExecution:
                 ),
                 "originalOutcomes": outcomes,
                 "diagnostics": scan_diagnostics,
+                "scannerSummaries": scanner_summaries,
             }
             scan_ref = await self.write(_json(work), kind="security.scan", key=scan_key)
         comparison = compare_observations(
@@ -460,10 +611,13 @@ class AssessmentExecution:
             "publicationOutcome": "published",
             "reviewRef": request.review_ref,
             "reviewStatus": review_status,
+            "scannerSummaries": work.get("scannerSummaries", []),
         }
         try:
             summary = (
-                _summary(comparison) + _review_summary(review, review_status)
+                _summary(comparison)
+                + _scanner_summary(work.get("scannerSummaries", []))
+                + _review_summary(review, review_status)
             ).encode()
             summary_key = content_key(
                 [report_key, "summary", request.review_ref, review_status]
@@ -542,6 +696,21 @@ def _summary(comparison: dict) -> str:
             "",
         ]
     )
+
+
+def _scanner_summary(summaries: list[dict]) -> str:
+    lines = []
+    for summary in summaries:
+        lines += [
+            "",
+            f"Scanner: {summary['scanner']}. Coverage: {summary['coverage']}.",
+            f"Execution: {json.dumps(summary['execution'], sort_keys=True)}.",
+            "Verification: not performed.",
+            "Native evidence: " + ", ".join(summary["nativeRefs"].values()) + ".",
+        ]
+        if summary["limitations"]:
+            lines.append("Limitations: " + ", ".join(summary["limitations"]) + ".")
+    return "\n".join(lines) + ("\n" if lines else "")
 
 
 def _review_summary(review: SecurityReview | None, status: str) -> str:
