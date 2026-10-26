@@ -55,6 +55,7 @@ async def test_controller_active_write_cutover_and_reverse_copy(tmp_path, monkey
     class Runner:
         async def _run_compose_command(self, args, **kwargs):
             result = await asyncio.to_thread(command, [*base, *args[2:]])
+            assert result.returncode == 0, result.stderr[-4000:]
             return {"exitCode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
 
     compose_file.write_text(json.dumps(config))
