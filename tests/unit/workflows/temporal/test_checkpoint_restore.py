@@ -278,6 +278,21 @@ async def test_sandbox_capture_trusts_only_the_resolved_workspace_for_git(
         resolved_source,
     ]
     commands: list[list[str]] = []
+    checkpoint_commands: list[list[str]] = []
+    from moonmind.workflows.temporal.runtime import checkpoint_history
+
+    original_popen = checkpoint_history.subprocess.Popen
+
+    def enforce_history_directory(command, *args, **kwargs):
+        normalized = [str(part) for part in command]
+        if normalized[0] == "git":
+            assert normalized[:6] == [
+                "git",
+                "--literal-pathspecs",
+                *expected_prefix[1:],
+            ]
+            checkpoint_commands.append(normalized)
+        return original_popen(command, *args, **kwargs)
 
     async def enforce_safe_directory(command, **_kwargs):
         normalized = [str(part) for part in command]
@@ -296,6 +311,9 @@ async def test_sandbox_capture_trusts_only_the_resolved_workspace_for_git(
         raise AssertionError(f"unexpected git command: {operation}")
 
     monkeypatch.setattr(activity_runtime_module, "_run_command", enforce_safe_directory)
+    monkeypatch.setattr(
+        checkpoint_history.subprocess, "Popen", enforce_history_directory
+    )
     sandbox = TemporalSandboxActivities(
         workspace_root=tmp_path,
         artifact_store=InMemoryArtifactStore(),
@@ -319,7 +337,9 @@ async def test_sandbox_capture_trusts_only_the_resolved_workspace_for_git(
     )
 
     assert capture["status"] == "captured"
-    assert {command[len(expected_prefix)] for command in commands} == {"rev-parse", "status", "ls-files"}
+    operations = {command[len(expected_prefix)] for command in commands}
+    operations.update(command[6] for command in checkpoint_commands)
+    assert {"rev-parse", "status", "ls-files"} <= operations
     assert all(command[: len(expected_prefix)] == expected_prefix for command in commands)
 
 

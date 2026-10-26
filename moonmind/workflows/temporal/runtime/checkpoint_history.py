@@ -136,7 +136,13 @@ def _git(
             process.stdout.close()
 
 
-def capture_git_history(workspace: Path, head: str, *, high_security_mode: bool = True):
+def capture_git_history(
+    workspace: Path,
+    head: str,
+    *,
+    high_security_mode: bool = True,
+    self_contained: bool = False,
+):
     """Export only HEAD's ancestry beyond a declared origin baseline.
 
     Existing origin objects remain an explicit restore dependency. No unrelated
@@ -175,6 +181,10 @@ def capture_git_history(workspace: Path, head: str, *, high_security_mode: bool 
         "baselineCommit": baseline,
         "requiresSourceObjects": baseline is not None,
     }
+    if self_contained:
+        return _capture_self_contained_history(
+            git, workspace, head, baseline, high_security_mode
+        )
     if baseline == head:
         return None, evidence
     revisions = ["HEAD", *([f"^{baseline}"] if baseline else [])]
@@ -231,4 +241,76 @@ def capture_git_history(workspace: Path, head: str, *, high_security_mode: bool 
     return bundle, {
         **evidence,
         "digest": "sha256:" + hashlib.sha256(bundle).hexdigest(),
+    }
+
+
+def _capture_self_contained_history(git, workspace, head, baseline, high_security_mode):
+    """Keep unpublished ancestry plus a complete, shallow origin boundary.
+
+    Submodule remotes are not restore authority. Export their selected objects
+    instead of copying .git or requiring a later fetch from a copied URL. A
+    clean dependency needs only its current commit/tree, not its entire past.
+    """
+    revisions = [head, *([f"^{baseline}"] if baseline else [])]
+    selected = (
+        git(["rev-list", "--boundary", *revisions], limit=4 * 1024 * 1024)
+        .decode()
+        .splitlines()
+    )
+    commits = {line.removeprefix("-") for line in selected} | {head}
+    if len(commits) > SAVED_WORK_FORMAT_SIZE_LIMITS["max_file_count"]:
+        raise ValueError("checkpoint submodule history exceeds commit-count bounds")
+    shallow = {line[1:] for line in selected if line.startswith("-")}
+    if baseline == head:
+        shallow.add(head)
+    shallow_path = Path(git(["rev-parse", "--git-path", "shallow"]).decode().strip())
+    if not shallow_path.is_absolute():
+        shallow_path = workspace / shallow_path
+    if shallow_path.exists():
+        shallow.update(set(shallow_path.read_text().splitlines()) & commits)
+    objects = set(commits)
+    for commit in sorted(commits):
+        for path in git(
+            ["ls-tree", "-r", "--name-only", "-z", commit], limit=4 * 1024 * 1024
+        ).split(b"\0"):
+            reason = saved_work_path_exclusion(path.decode()) if path else None
+            if reason and reason.startswith("sensitive-"):
+                raise ValueError(
+                    "checkpoint submodule history contains a credential-sensitive path"
+                )
+    trees = "".join(f"{commit}^{{tree}}\n" for commit in sorted(commits)).encode()
+    objects.update(
+        git(
+            ["rev-list", "--objects", "--no-object-names", "--stdin"],
+            input_bytes=trees,
+            limit=4 * 1024 * 1024,
+        )
+        .decode()
+        .splitlines()
+    )
+    if len(objects) > SAVED_WORK_FORMAT_SIZE_LIMITS["max_file_count"]:
+        raise ValueError("checkpoint submodule history exceeds object-count bounds")
+    object_ids = ("\n".join(sorted(objects)) + "\n").encode()
+    raw = git(["cat-file", "--batch"], input_bytes=object_ids)
+    scan = scan_saved_work_export_stream(
+        iter(
+            raw[offset : offset + 1024 * 1024]
+            for offset in range(0, len(raw), 1024 * 1024)
+        ),
+        export_digest="pending",
+        location="checkpoint.submodule-history",
+        high_security_mode=high_security_mode,
+    )
+    if scan["disposition"] == "blocked":
+        raise ValueError("checkpoint submodule history failed export secret scanning")
+    payload = git(["pack-objects", "--stdout"], input_bytes=object_ids)
+    if git(["rev-parse", "HEAD"]).decode().strip() != head:
+        raise ValueError("checkpoint submodule HEAD changed during history capture")
+    return payload, {
+        "headCommit": head,
+        "baselineCommit": baseline,
+        "requiresSourceObjects": False,
+        "shallowCommits": sorted(shallow),
+        "contentType": "application/x-git-pack",
+        "digest": "sha256:" + hashlib.sha256(payload).hexdigest(),
     }
