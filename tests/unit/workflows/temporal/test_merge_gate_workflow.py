@@ -262,6 +262,105 @@ def test_classify_readiness_allows_resolver_launch_for_merge_conflicts() -> None
     assert evidence.ready is True
     assert evidence.blockers == []
 
+
+def _conflicted_head_without_ci() -> dict[str, object]:
+    # The failed Tactics run observed this combination on every poll: GitHub
+    # cannot start pull_request CI until the existing resolver repairs conflicts.
+    return {
+        "headSha": "abc123",
+        "ready": False,
+        "pullRequestOpen": True,
+        "pullRequestMerged": False,
+        "checksReported": False,
+        "checksComplete": False,
+        "checksPassing": False,
+        "automatedReviewComplete": None,
+        "jiraStatusAllowed": True,
+        "policyAllowed": True,
+        "blockers": [
+            {"kind": "merge_conflict", "summary": "Pull request has merge conflicts."},
+            {
+                "kind": "checks_running",
+                "summary": "No checks have reported for this head yet.",
+            },
+        ],
+    }
+
+
+@pytest.mark.parametrize("conflict_kind", ["merge_conflict", "merge_conflicts"])
+def test_classify_readiness_admits_conflict_repair_without_head_ci(conflict_kind) -> None:
+    payload = _conflicted_head_without_ci()
+    payload["blockers"][0]["kind"] = conflict_kind
+    evidence = classify_readiness(payload, tracked_head_sha="abc123")
+
+    assert evidence.ready is True
+    assert evidence.blockers == []
+    # Admission authorizes repair, without inventing successful CI evidence.
+    assert evidence.checks_reported is False
+    assert evidence.checks_complete is False
+    assert evidence.checks_passing is False
+
+
+def test_conflict_repair_without_ci_preserves_pre_patch_wait() -> None:
+    evidence = classify_readiness(
+        _conflicted_head_without_ci(),
+        tracked_head_sha="abc123",
+        allow_conflict_repair_without_ci=False,
+    )
+
+    assert evidence.ready is False
+    assert {blocker.kind for blocker in evidence.blockers} == {"checks_running"}
+
+
+@pytest.mark.parametrize(
+    "overrides,expected_blocker",
+    [
+        ({"checksReported": True}, "checks_running"),
+        ({"checksReported": None}, "checks_running"),
+        ({"headSha": "def456"}, "stale_revision"),
+        ({"pullRequestOpen": False}, "pull_request_closed"),
+        ({"policyAllowed": False}, "policy_denied"),
+        ({"jiraStatusAllowed": False}, "jira_status_pending"),
+        ({"automatedReviewComplete": False}, "automated_review_pending"),
+    ],
+)
+def test_conflict_repair_without_ci_preserves_other_gates(
+    overrides, expected_blocker
+) -> None:
+    evidence = classify_readiness(
+        {**_conflicted_head_without_ci(), **overrides}, tracked_head_sha="abc123"
+    )
+
+    assert evidence.ready is False
+    assert expected_blocker in {blocker.kind for blocker in evidence.blockers}
+
+
+def test_conflict_repair_without_ci_keeps_unavailable_evidence_blocking() -> None:
+    payload = _conflicted_head_without_ci()
+    payload["blockers"].append(
+        {
+            "kind": "external_state_unavailable",
+            "summary": "GitHub evidence unavailable.",
+        }
+    )
+    evidence = classify_readiness(payload, tracked_head_sha="abc123")
+
+    assert evidence.ready is False
+    assert {blocker.kind for blocker in evidence.blockers} == {
+        "external_state_unavailable"
+    }
+
+
+def test_repaired_head_must_report_its_own_ci() -> None:
+    payload = _conflicted_head_without_ci()
+    payload["headSha"] = "def456"
+    payload["blockers"] = [payload["blockers"][1]]
+    evidence = classify_readiness(payload, tracked_head_sha="def456")
+
+    assert evidence.ready is False
+    assert {blocker.kind for blocker in evidence.blockers} == {"checks_running"}
+
+
 def test_classify_readiness_normalizes_plural_merge_conflict_blocker() -> None:
     evidence = classify_readiness(
         {
