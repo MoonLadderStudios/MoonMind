@@ -3184,6 +3184,9 @@ class DockerContainerJobBackend:
         )
         by_name = {e["name"]: e for e in entries}
         manifest, refs, results, limitations = [], {}, {}, []
+        terminal = str(request.terminal_state or "failed")
+        if terminal != "succeeded":
+            limitations.append(f"container_job_{terminal}")
         bytes_remaining = self._settings.max_output_total_bytes
         files_remaining = self._settings.max_output_files
         execution = None
@@ -3296,10 +3299,7 @@ class DockerContainerJobBackend:
                         detail="Native evidence unavailable or sanitization failed.",
                     )
                 )
-            terminal = str(request.terminal_state or "failed")
-            state = execution.states[mode] if execution else "failed"
-            if terminal != "succeeded":
-                state = terminal
+            state = execution.states[mode] if execution else terminal
             results[mode] = normalize_native(
                 scan.scanner,
                 payload,

@@ -349,6 +349,12 @@ async def test_repository_job_retains_sanitized_evidence_and_report(
     )
     assert not outputs["diagnostics"]
     assert outputs["scannerSummaries"][0]["nativeRefs"]
+    if scanner == "gitleaks" and history == "missing":
+        assert outputs["scannerSummaries"][0]["execution"] == {
+            "history": "failed",
+            "worktree": "succeeded",
+        }
+        assert "container_job_failed" in outputs["scannerSummaries"][0]["limitations"]
     assert MARKER not in json.dumps(outputs)
     # Read the actual retained Markdown and structured report bytes, including
     # their evidence, through the artifact owner's authorized read boundary.
@@ -672,7 +678,8 @@ async def test_opengrep_baseline_comparison_uses_native_examined_scope(
 ):
     assets = ["clean.py", "unexamined.py"]
     findings = [
-        {"check_id": "source", "path": path, "start": {"line": 1}} for path in assets
+        {"check_id": "native-rule", "path": path, "start": {"line": 1}}
+        for path in assets
     ]
     baseline_ref, _ = await retain_native_fixture(
         environment,
@@ -703,7 +710,13 @@ async def test_opengrep_baseline_comparison_uses_native_examined_scope(
     elif case == "missing-inventory":
         current["paths"] = {}
     ref, summary = await retain_native_fixture(
-        environment, tmp_path, monkeypatch, "opengrep", {"scan": current}, "current"
+        environment,
+        tmp_path,
+        monkeypatch,
+        "opengrep",
+        {"scan": current},
+        "current",
+        output_directory="artifacts/current",
     )
     request = {
         **retained_assessment(ref, assets),
@@ -728,3 +741,42 @@ async def test_opengrep_baseline_comparison_uses_native_examined_scope(
     if case not in {"clean", "missing-inventory"}:
         assert states["clean.py"] == "still_observed"
         assert summary["results"]["scan"]["findings"]
+
+
+async def test_combined_gitleaks_findings_reach_report_with_partial_coverage(
+    environment, tmp_path, monkeypatch
+):
+    reports = {
+        mode: [
+            {
+                "RuleID": "credential",
+                "File": "tracked.txt",
+                "StartLine": index + 1,
+                "Commit": commit * 40,
+            }
+            for index in range(2050)
+        ]
+        for mode, commit in (("history", "a"), ("worktree", "b"))
+    }
+    ref, summary = await retain_native_fixture(
+        environment, tmp_path, monkeypatch, "gitleaks", reports, "combined"
+    )
+    assert sum(len(row["findings"]) for row in summary["results"].values()) == 4100
+    outputs = await invoke(
+        environment.service, retained_assessment(ref, ["tracked.txt"])
+    )
+    assert not outputs["diagnostics"]
+    assert outputs["counts"]["new"] == 4096
+    assert outputs["coverageStatus"] == "stale_or_partial"
+    retained_summary = outputs["scannerSummaries"][0]
+    assert retained_summary["nativeRefs"] == summary["nativeRefs"]
+    assert retained_summary["coverage"] == "partial"
+    assert "combined_finding_bound_exceeded" in retained_summary["limitations"]
+    comparison = await read(environment.service, outputs["comparisonRef"])
+    assert len(comparison["observation"]["findings"]) == 4096
+    _, markdown = await environment.service.read(
+        artifact_id=outputs["reportBundle"]["primary_report_ref"]["artifact_id"],
+        principal="workflow:assessment",
+        allow_restricted_raw=True,
+    )
+    assert b"combined_finding_bound_exceeded" in markdown
