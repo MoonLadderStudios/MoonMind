@@ -1,9 +1,8 @@
 name: Release / Build omnigent-host-moonmind Image
 
-# Neutral shared host image (#3826): one digest-pinned image carries every
-# approved vendor runtime (Codex, Claude Code, OpenCode) on the immutable
-# Omnigent host base. Separate Codex, Claude, and OpenCode Host Classes
-# reference this same digest without conflating harness support (#3828).
+# One shared image carries Codex, Claude Code, and OpenCode. Scheduled checks
+# rebuild it when the upstream base changes; source changes and manual dispatch
+# also rebuild it using the normal layer cache.
 
 on:
   schedule:
@@ -15,7 +14,6 @@ on:
       - "services/omnigent/tools/manifest.lock.json"
       - "services/omnigent/scripts/moonmind-container-cli.py"
       - "services/omnigent/scripts/moonmind-tools.sh"
-      - "services/omnigent/opencode-host/verify-warm-plugin-cache.sh"
       - "tools/omnigent_host_release_drift.sh"
       - "moonmind/omnigent/harness_platform/host_classes.py"
       - "moonmind/omnigent/harness_platform/runtime_packs.py"
@@ -23,29 +21,25 @@ on:
   workflow_dispatch:
     inputs:
       codex_cli_version:
-        description: "Codex CLI version to pin (must be within >=0.100.0,<0.200.0)"
+        description: "Override the Dockerfile Codex pin (>=0.100.0,<0.200.0)"
         required: false
-        default: "0.159.0"
         type: string
       claude_cli_version:
-        description: "Claude Code CLI version to pin (must be within >=2.0.0,<3.0.0)"
+        description: "Override the Dockerfile Claude Code pin (>=2.0.0,<3.0.0)"
         required: false
-        default: "2.1.281"
         type: string
       opencode_version:
-        description: "OpenCode version to pin (must be within >=1.17.7,<1.19.0)"
+        description: "Override the Dockerfile OpenCode pin (>=1.17.7,<1.19.0)"
         required: false
-        default: "1.18.11"
         type: string
       gh_version:
         description: "gh CLI version to bake in (must match services/omnigent/tools/manifest.lock.json)"
         required: false
-        default: "2.76.2"
         type: string
 
 concurrency:
   group: release-omnigent-host-moonmind
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -61,37 +55,54 @@ jobs:
     outputs:
       image_name: ${{ steps.meta.outputs.image_name }}
       version_tag: ${{ steps.meta.outputs.version_tag }}
-      codex_version: ${{ steps.out.outputs.codex_version }}
-      claude_version: ${{ steps.out.outputs.claude_version }}
-      opencode_version: ${{ steps.out.outputs.opencode_version }}
-      gh_version: ${{ steps.out.outputs.gh_version }}
+      codex_version: ${{ steps.meta.outputs.codex_version }}
+      claude_version: ${{ steps.meta.outputs.claude_version }}
+      opencode_version: ${{ steps.meta.outputs.opencode_version }}
+      gh_version: ${{ steps.meta.outputs.gh_version }}
       rebuild_required: ${{ steps.drift.outputs.rebuild_required }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Generate image metadata
+      - name: Resolve build pins and image metadata
         id: meta
+        env:
+          CODEX_CLI_VERSION_INPUT: ${{ inputs.codex_cli_version }}
+          CLAUDE_CLI_VERSION_INPUT: ${{ inputs.claude_cli_version }}
+          OPENCODE_VERSION_INPUT: ${{ inputs.opencode_version }}
+          GH_VERSION_INPUT: ${{ inputs.gh_version }}
         run: |
-          VERSION_TAG="${{ inputs.opencode_version || '1.18.11' }}-codex${{ inputs.codex_cli_version || '0.159.0' }}-claude${{ inputs.claude_cli_version || '2.1.281' }}"
-          echo "version_tag=${VERSION_TAG}" >> "$GITHUB_OUTPUT"
-          IMAGE_NAME="${{ env.REGISTRY_IMAGE }}"
-          IMAGE_NAME="$(printf '%s' "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')"
-          echo "image_name=${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
-      - name: Resolve vendor versions
-        id: out
-        run: |
-          echo "codex_version=${{ inputs.codex_cli_version || '0.159.0' }}" >> "$GITHUB_OUTPUT"
-          echo "claude_version=${{ inputs.claude_cli_version || '2.1.281' }}" >> "$GITHUB_OUTPUT"
-          echo "opencode_version=${{ inputs.opencode_version || '1.18.11' }}" >> "$GITHUB_OUTPUT"
-          # gh remains pinned by the manifest single source; the explicit
-          # input only selects the build and the build fails on drift.
-          GH_PINNED="$(python3 -c "import json; print(next(t['version'] for t in json.load(open('services/omnigent/tools/manifest.lock.json'))['tools'] if t['name'] == 'gh'))")"
-          GH_REQUESTED="${{ inputs.gh_version || '2.76.2' }}"
-          if [ "${GH_REQUESTED}" != "${GH_PINNED}" ]; then
-            echo "::error::gh_version input ${GH_REQUESTED} does not match manifest.lock.json pin ${GH_PINNED}" >&2
-            exit 1
-          fi
-          echo "gh_version=${GH_REQUESTED}" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          dockerfile = Path("services/omnigent/moonmind-host/Dockerfile").read_text()
+          pins = dict(re.findall(r"^ARG ([A-Z_]+)=(.+)$", dockerfile, re.MULTILINE))
+          versions = {}
+          for output, argument in (
+              ("codex_version", "CODEX_CLI_VERSION"),
+              ("claude_version", "CLAUDE_CLI_VERSION"),
+              ("opencode_version", "OPENCODE_VERSION"),
+          ):
+              version = os.environ.get(f"{argument}_INPUT") or pins[argument]
+              if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+                  raise SystemExit(f"{argument} must be an exact release version")
+              versions[output] = version
+          manifest = json.loads(Path("services/omnigent/tools/manifest.lock.json").read_text())
+          gh_pin = next(tool["version"] for tool in manifest["tools"] if tool["name"] == "gh")
+          if os.environ.get("GH_VERSION_INPUT") not in (None, "", gh_pin):
+              raise SystemExit("gh_version must match manifest.lock.json")
+          versions["gh_version"] = gh_pin
+          versions["image_name"] = os.environ["REGISTRY_IMAGE"].lower()
+          versions["version_tag"] = (
+              f"{versions['opencode_version']}-codex{versions['codex_version']}"
+              f"-claude{versions['claude_version']}"
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              for key, value in versions.items():
+                  print(f"{key}={value}", file=output)
+          PY
 
       - name: Detect upstream Omnigent drift
         id: drift
@@ -188,6 +199,7 @@ jobs:
           context: .
           file: ./services/omnigent/moonmind-host/Dockerfile
           platforms: ${{ matrix.platform }}
+          pull: true
           build-args: |
             OMNIGENT_HOST_BASE_IMAGE=${{ steps.base.outputs.base_image }}
             OMNIGENT_BUILD_DIGEST=${{ steps.base.outputs.base_digest }}
@@ -220,7 +232,7 @@ jobs:
       - name: Verify offline OpenCode plugin startup
         run: |
           image="${{ steps.meta.outputs.image_name }}@${{ steps.build.outputs.digest }}"
-          sh ./services/omnigent/opencode-host/verify-warm-plugin-cache.sh "${image}"
+          sh ./services/omnigent/moonmind-host/verify-warm-plugin-cache.sh "${image}"
 
       - name: Verify image-owned helper tools without network or volumes
         run: |
@@ -317,5 +329,5 @@ jobs:
             echo "MoonMind resolves this tag to a digest during deployment image reconciliation."
             echo ""
             echo "#### Host Classes"
-            echo "\`omnigent-codex@1\` and \`omnigent-claude@1\` bootstrap from this digest via \`get_shared_host_image_ref()\`."
+            echo "Codex, Claude Code, and OpenCode share this image through their separate Host Classes."
           } >> "${GITHUB_STEP_SUMMARY}"

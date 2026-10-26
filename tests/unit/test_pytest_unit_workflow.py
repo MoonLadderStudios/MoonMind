@@ -200,11 +200,11 @@ def test_integration_rows_bound_each_phase_and_pass_fail_fast_policy() -> None:
     # its three diagnostics/teardown commands before the native step bound.
     budget_seconds = int(hermetic["env"]["MOONMIND_INTEGRATION_TIMEOUT"])
     assert budget_seconds + 30 + 3 * (120 + 10) < int(hermetic["timeout-minutes"]) * 60
+    assert 0 < int(hermetic["timeout-minutes"]) <= 35
     for name in (
         "Install the journey browser's Playwright runtime",
         "Install the journey browser OS dependencies",
         "Download the journey Chromium browser",
-        "Run hermetic integration CI suite",
         "Run disposable default first-run journey",
         "Run eligible-upgrade journey",
         "Run Settings Operations controller journey",
@@ -231,8 +231,18 @@ def test_hermetic_job_reserves_bounded_setup_execution_and_reporting() -> None:
         for index, step in enumerate(job["steps"])
         if step["name"] == "Run hermetic integration CI suite"
     )
+    proxy_step = next(
+        step
+        for step in job["steps"][:run_index]
+        if step["name"] == "Verify isolated Docker socket proxy"
+    )
+    assert proxy_step["if"] == "matrix.suite == 'hermetic'"
+    proxy_minutes = int(proxy_step["timeout-minutes"])
+    assert 0 < proxy_minutes <= 5
     setup_minutes = 0
     for step in job["steps"][:run_index]:
+        if step is proxy_step:
+            continue
         # Every setup phase must finish or time out before it can consume
         # the wrapper's cleanup and evidence-upload reserve.
         minutes = _integration_row_timeout_minutes(step["timeout-minutes"], "hermetic")
@@ -262,8 +272,9 @@ def test_hermetic_job_reserves_bounded_setup_execution_and_reporting() -> None:
     assert reporting_minutes == 4
     # Include one minute for runner dispatch and post-action housekeeping;
     # the wrapper's complete cleanup budget is already inside its native step.
-    assert setup_minutes + execution_minutes + reporting_minutes + 1 <= (
-        _integration_row_timeout_minutes(job["timeout-minutes"], "hermetic")
+    assert (
+        setup_minutes + proxy_minutes + execution_minutes + reporting_minutes + 1
+        <= _integration_row_timeout_minutes(job["timeout-minutes"], "hermetic")
     )
 
 
@@ -292,7 +303,7 @@ def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
             "controller-journey",
         )
     } == {
-        "hermetic": 40,
+        "hermetic": 55,
         "fresh-journey": 85,
         "upgrade-journey": 85,
         "controller-journey": 85,
@@ -1108,15 +1119,15 @@ def test_backend_matrix_keeps_setup_isolated_per_row() -> None:
     assert "moonmind-python-tests:ci" not in scripts
     # Reliability rows keep isolated Compose with per-shard project names.
     start = steps["Start isolated reliability dependencies"]["run"]
-    assert "moonmind-reliability-${{ matrix.suite }}" in start
+    assert "moonmind-test-reliability-${{ matrix.suite }}" in start
     assert "tests/integration/reliability/compose.yaml up -d --wait" in start
-    assert "MOONMIND_TEST_DOCKER_NETWORK=moonmind-reliability-${{ matrix.suite }}_default" in start
+    assert "MOONMIND_TEST_DOCKER_NETWORK=moonmind-test-reliability-${{ matrix.suite }}_default" in start
     assert steps["Start isolated reliability dependencies"].get("if", "").startswith(
         "startsWith(matrix.suite, 'reliability-')"
     )
     cleanup = steps["Remove isolated reliability dependencies"]
     assert cleanup["if"].startswith("always()")
-    assert "moonmind-reliability-${{ matrix.suite }}" in cleanup["run"]
+    assert "moonmind-test-reliability-${{ matrix.suite }}" in cleanup["run"]
     # Only reliability rows touch Docker Compose; fast test commands do not.
     for name in (
         "Run selected unit suite",
@@ -1340,9 +1351,9 @@ def test_reliability_fixtures_reuse_registry_layers_without_shared_state() -> No
             assert ":ro" in str(volume), f"{name} must not share mutable state: {volume}"
     workflow = _load_workflow()
     steps = {step["name"]: step for step in workflow["jobs"]["backend-matrix"]["steps"]}
-    assert "moonmind-reliability-${{ matrix.suite }}" in steps["Start isolated reliability dependencies"]["run"]
-    assert "moonmind-reliability-${{ matrix.suite }}" in steps["Remove isolated reliability dependencies"]["run"]
-    assert "MOONMIND_TEST_DOCKER_NETWORK=moonmind-reliability-${{ matrix.suite }}_default" in steps[
+    assert "moonmind-test-reliability-${{ matrix.suite }}" in steps["Start isolated reliability dependencies"]["run"]
+    assert "moonmind-test-reliability-${{ matrix.suite }}" in steps["Remove isolated reliability dependencies"]["run"]
+    assert "MOONMIND_TEST_DOCKER_NETWORK=moonmind-test-reliability-${{ matrix.suite }}_default" in steps[
         "Start isolated reliability dependencies"
     ]["run"]
 

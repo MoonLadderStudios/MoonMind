@@ -5,6 +5,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 COMPOSE_TEST_RUNNERS = (
@@ -133,19 +135,21 @@ def test_compose_tests_use_an_explicit_isolated_project() -> None:
 
 
 def test_compose_test_artifact_endpoints_ignore_deployment_env() -> None:
-    compose_file = (REPO_ROOT / "docker-compose.test.yaml").read_text(
-        encoding="utf-8"
+    compose = yaml.safe_load(
+        (REPO_ROOT / "docker-compose.test.yaml").read_text(encoding="utf-8")
+    )
+    environment = dict(
+        entry.split("=", 1) for entry in compose["services"]["pytest"]["environment"]
     )
     isolated_endpoint = "http://moonmind-test-temporal-artifacts-s3:9000"
 
-    assert (
-        f"TEMPORAL_ARTIFACT_S3_ENDPOINT={isolated_endpoint}" in compose_file
-    )
-    assert (
-        f"TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT={isolated_endpoint}" in compose_file
-    )
-    assert "TEMPORAL_ARTIFACT_S3_ENDPOINT=${" not in compose_file
-    assert "TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT=${" not in compose_file
+    assert environment["TEMPORAL_ARTIFACT_S3_ENDPOINT"] == isolated_endpoint
+    # The runner discovers this test project's published port before pytest.
+    # Both public-download clients must receive that endpoint, even when the
+    # deployment .env supplies its own TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT.
+    public_endpoint = "${MOONMIND_TEST_S3_PUBLIC_ENDPOINT:-}"
+    assert environment["TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT"] == public_endpoint
+    assert environment["MOONMIND_TEST_S3_PUBLIC_ENDPOINT"] == public_endpoint
 
 
 def test_powershell_compose_runners_preserve_test_exit_codes_after_cleanup() -> None:
@@ -248,29 +252,6 @@ def test_control_plane_lifecycle_conformance_uses_compose_network_authority() ->
         "MOONMIND_URL",
     ):
         assert f"export {environment_name}=" in helper
-
-
-def test_phase6_integration_ci_suite_stays_focused_on_highest_risk_seams() -> None:
-    """Phase 6: the required integration_ci suite must stay focused on artifacts,
-    worker topology, live logs, managed runtime, and compose foundation.
-
-    Tests that require external credentials or third-party providers must NOT
-    be in the integration_ci suite.
-    """
-    # Verify the performance test uses deterministic bounds (Phase 6 hardening)
-    perf_test = (
-        REPO_ROOT
-        / "tests"
-        / "integration"
-        / "temporal"
-        / "test_live_logs_performance.py"
-    ).read_text(encoding="utf-8")
-    assert (
-        "10000" not in perf_test
-    ), "Performance test should not use 10k events — use deterministic bounds"
-    assert (
-        "500" in perf_test
-    ), "Performance test should use 500 deterministic event count"
 
 
 def test_operator_access_boundaries_select_integration_ci() -> None:

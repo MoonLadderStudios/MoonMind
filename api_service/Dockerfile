@@ -1,4 +1,14 @@
 # syntax=docker/dockerfile:1.4
+FROM ghcr.io/wollomatic/socket-proxy:1.13.2 AS docker-proxy-upstream
+
+# A small host-test target shares the exact proxy payload with release images.
+FROM python:3.15-slim-bookworm AS docker-proxy-runtime
+WORKDIR /app
+COPY --from=docker-proxy-upstream /socket-proxy /usr/local/bin/moonmind-socket-proxy
+COPY docker/docker-proxy/start.py /app/docker/docker-proxy/start.py
+COPY docker/docker-proxy/LICENSE.socket-proxy /usr/share/licenses/moonmind-socket-proxy/LICENSE
+ENTRYPOINT ["python", "/app/docker/docker-proxy/start.py"]
+
 # ---------------------------------------------------------------------------
 # Frontend builder – compiles Tailwind CSS and Vite assets in a Node environment
 # so the slim Python runtime image does not need npm.
@@ -127,6 +137,9 @@ COPY package.json package-lock.json /app/
 COPY README.md /app/README.md
 COPY LICENSE /app/LICENSE
 COPY NOTICE /app/NOTICE
+COPY --from=docker-proxy-runtime /usr/local/bin/moonmind-socket-proxy /usr/local/bin/moonmind-socket-proxy
+COPY --from=docker-proxy-runtime /app/docker/docker-proxy/start.py /app/docker/docker-proxy/start.py
+COPY --from=docker-proxy-runtime /usr/share/licenses/moonmind-socket-proxy /usr/share/licenses/moonmind-socket-proxy
 
 # Keep the test image buildable from the shallow, submodule-free checkout used
 # by required backend CI and managed workflow workspaces. Tests execute the
@@ -195,7 +208,7 @@ COPY omnigent/omnigent /app/omnigent/omnigent/
 COPY pr_resolver_core /app/pr_resolver_core/
 COPY services/omnigent/tools/manifest.lock.json /app/services/omnigent/tools/manifest.lock.json
 COPY services/omnigent/profile/moonmind-tools.sh /app/services/omnigent/profile/moonmind-tools.sh
-COPY services/omnigent/opencode-host/verify-warm-plugin-cache.sh /app/services/omnigent/opencode-host/verify-warm-plugin-cache.sh
+COPY services/omnigent/moonmind-host/verify-warm-plugin-cache.sh /app/services/omnigent/moonmind-host/verify-warm-plugin-cache.sh
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --disable-pip-version-check --no-deps .
 COPY api_service /app/api_service/

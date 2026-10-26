@@ -86,6 +86,18 @@ def controller_journey_paths(workflow_path: Path) -> frozenset[str]:
 CONTROLLER_JOURNEY_PATHS = controller_journey_paths(
     REPO_ROOT / ".github/workflows/pytest-unit-tests.yml"
 )
+
+
+def hermetic_phase_nodes(script_path: Path) -> frozenset[str]:
+    """Include exact pytest phases run on either side of a storage restart."""
+    nodes: set[str] = set()
+    for line in script_path.read_text().splitlines():
+        if line.lstrip().startswith('"pytest '):
+            nodes.update(re.findall(r"tests/integration/[^\s\"']+\.py::[^\s\"']+", line))
+    return frozenset(nodes)
+
+
+HERMETIC_PHASE_NODES = hermetic_phase_nodes(REPO_ROOT / "tools/test_integration.sh")
 EXACT_RECOVERY_NODE = f"tests/integration/omnigent/{TEST_FILE}::{TEST_NAME}"
 
 # Logical owner for every reliability journey node: the backend-matrix
@@ -197,7 +209,7 @@ def owners(node: CollectedNode) -> set[str]:
         result.add("temporal-boundary")
     if node.path.startswith(RELIABILITY_PREFIX) and "reliability_journey" in markers:
         result.add(RELIABILITY_MATRIX_OWNER)
-    if "integration_ci" in markers:
+    if "integration_ci" in markers or node.nodeid in HERMETIC_PHASE_NODES:
         result.add("integration-ci")
     return result
 

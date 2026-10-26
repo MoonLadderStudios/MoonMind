@@ -116,7 +116,7 @@ An artifact containing large operational details that must not be placed in work
 
 1. **Artifact Store (blob storage)**
  - primary storage for bytes
- - default backend is MinIO (S3-compatible) for local/dev and default Compose environments
+ - default backend is Silo (S3-compatible) for local/dev and default Compose environments
 
 2. **Artifact Index**
  - stores artifact metadata and execution relationships
@@ -205,41 +205,40 @@ Queue selection for artifact operations should come from the activity catalog, n
 
 | Option | Pros | Cons | Recommended use |
 |---|---|---|---|
-| S3-compatible storage (S3 / GCS-compatible / MinIO) | scalable, durable, multipart-friendly, cheap for blobs | requires object storage infra | **primary blob store** |
+| S3-compatible storage (S3 / Silo) | scalable, durable, multipart-friendly, cheap for blobs | requires object storage infra | **primary blob store** |
 | Database blobs | fewer moving parts | poor for large objects, expensive, hurts OLTP characteristics | discouraged |
 | Local filesystem | simple for dev | poor durability, poor scale, bad multi-node story | dev-only fallback |
 
 ## 6.2 Decision
 
-**MoonMind’s default artifact store is S3-compatible object storage.**
+**MoonMind’s default artifact store is S3-compatible object storage.** Postgres
+owns the Artifact Index; the existing S3 adapter owns blob access. Explicit
+external endpoints, buckets and credentials remain operator settings.
 
-- local/dev default: **Silo**, a MinIO-compatible server
-- default Docker Compose backend: **Silo**, using the existing artifact volume and MinIO-compatible environment variables
-- production override: AWS S3 or another compatible provider only by explicit configuration
+| Candidate | Fit for the existing adapter |
+|---|---|
+| [Silo](https://github.com/pgsty/silo/releases) | Maintained MinIO fork with independent server fixes; retains credential configuration, multipart, checksums and presigning. Selected for the smallest operational change. |
+| [SeaweedFS](https://github.com/seaweedfs/seaweedfs/wiki/Quick-Start-with-weed-mini) | Maintained single-process S3 option; introduces filer/master configuration and different credential administration. |
+| [Garage](https://garagehq.deuxfleurs.fr/documentation/reference-manual/s3-compatibility/) | Supports core/multipart operations; different authorization and no signature-v2 support require more adapter/configuration changes. |
 
-The pinned [Silo release](https://github.com/pgsty/silo/releases/tag/RELEASE.2026-09-16T00-00-00Z) preserves the MinIO-compatible S3 API, `MINIO_*` settings, and `.minio.sys` data layout. Compose updates retain `minio-data` and must verify saved artifacts remain readable before reporting success.
+Compatibility is qualified through actual bucket, PUT/GET/HEAD/range, checksum,
+multipart completion/abort and presigned HTTP operations, rather than inferred
+from the S3 label.
 
-Postgres is used as the **Artifact Index**, not the primary blob store.
+## 6.3 Docker Compose default
 
-## 6.3 Docker Compose default requirement
+Production, integration and reliability stacks use `pgsty/silo:latest`, with
+`TEMPORAL_ARTIFACT_S3_IMAGE` honoring an explicit image selection. The `minio`
+service name, internal/public endpoints, ports and `MINIO_*` credential settings
+remain stable. Internal clients use `moonmind-temporal-artifacts-s3`; public
+presigned URLs use `TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT`.
 
-The default Compose path must provide the same S3 artifact interface:
-
-- Silo is provisioned by default
-- API and workers use the existing S3 endpoints and buckets by default
-- external S3 is an explicit override
-- the object store stays on the internal Docker network by default
-
-The deployment and disposable test Compose files pin the same multi-platform
-`ghcr.io/coollabsio/minio` community image by release and digest. This build uses
-[upstream MinIO source](https://github.com/coollabsio/minio) because the original
-Quay community image is no longer publicly pullable. The S3 endpoints, root
-credential variables, and `minio-data:/data` mount retain their existing contract.
-The replacement was qualified with ordinary and multipart artifact recovery and
-an isolated upgrade from `RELEASE.2025-02-03T21-03-04Z`, verifying existing bytes,
-presigned downloads, new writes, and restart persistence. Applying the release
-uses the ordinary deployment update path; merging a code change does not update
-an installed MinIO container.
+Silo uses **`artifact-data`**, never the predecessor’s `minio-data` volume.
+Existing installations use the deployment controller’s bounded S3 transfer,
+verification and rollback path before application recreation; see
+[Compose updates](../Steps/DockerComposeUpdateSystem.md#106-recreate-services).
+The source remains recoverable. Artifact IDs, keys, database references,
+immutable inputs, pins and independent use claims are unchanged by copying.
 
 ---
 
@@ -444,7 +443,7 @@ A worker's service identity names the caller; machine reads require artifact own
 Execution inputs gain that linkage at trusted boundaries, never from agent-supplied owner strings:
 
 * Admission verifies the persisted plan and frozen inputs before reading the Skill manifest under its original scope. Canonical JSON digests preserve retained formatting. API admission commits input links before start; schedules admit before planning; step successors link refreshed inputs before returning their new binding. Temporal-started children admit during `plan.validate`, before workflow Skill reads or AgentRun launch. These boundaries use the Activity's actual namespace/workflow/run identity. Grants include Skill bodies and required strict evidence, in artifact-ID order to avoid reversed retention locks. Optional certificates receive no grants; owners and bytes stay unchanged.
-* Session-supervisor resolve, continuation reads, retries and cleanup reuse that execution's existing grant. Continuations bind the sealed intent and plan to the canonical session; mutating commands validate ownership, revision and fence before reading plan inputs.
+* Session supervision and resolver preparation reuse existing execution grants. Resolver preparation verifies its exact Activity run's Temporal parent and namespace before reading the source plan, Agent Profile and inherited repository snapshots; new artifacts keep the caller's provenance. Session continuations bind the sealed intent and plan to the canonical session; commands check ownership, revision and fence before reading inputs.
 * `TemporalOmnigentArtifactGateway.read_admitted_input` re-verifies the plan on each call, rejects any ref outside that plan's input closure, and reads with the Step Execution's delegation. The gateway keeps no per-run state, so concurrent runs cannot borrow each other's delegation. Typed, retained-reference, and freshly planned dispatch all admit step-bound inputs before host resolution. Host launch resolution, native-chat bridge authorization, and generic-host/Codex Skill delivery read through it; `read_requested_skill_snapshot` serves the planner's pre-plan read of the request's own Skill set, linking that exact manifest to the Step Execution first because planning precedes admission and the plan admits it anyway, and `read_repository_access_snapshot` is limited to repository snapshots.
 * Workspace, checkpoint, attachment, Skill, and remediation readers carry the Step Execution's `workflow:<id>` from its workflow-built launch envelope. Parent handoffs verify the exact Activity execution's parent and namespace against Temporal, never provider-supplied identities or artifact creators. AgentRun publication links selected terminal evidence and publish receipts from that child's output artifacts to its verified parent. Parent Temporal UUIDs stay separate from semantic Step Execution run IDs; retained branch-turn identities must match that exact child run’s recorded launch and server parent. Missing or conflicting history grants no authority.
 * Writers keep least privilege: managed runtime workers write stdout/stderr/diagnostics for runs they handle, and integration workers write provider snapshots linked to their execution.

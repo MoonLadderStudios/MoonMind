@@ -643,9 +643,16 @@ async def test_gate_owned_pr_resolver_continuation_bypasses_runtime_capability(
     result = await run._evaluate_terminal_contract(
         request=request, result=AgentRunResult(summary="initial")
     )
+    result = AgentRunResult.model_validate_json(result.model_dump_json(by_alias=True))
 
     assert result.failure_class is None
     assert result.provider_error_code is None
+    assert result.execution_state == "completed"
+    assert result.objective_outcome == "unknown"
+    assert result.retry_disposition == "wait"
+    from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
+    assert MoonMindRunWorkflow()._map_agent_run_result(result)["status"] == "COMPLETED"
     assert (
         result.metadata["terminalContractRecoveryOutcome"]
         == "durable_parent_handoff"
@@ -2517,6 +2524,8 @@ async def _run_default_profile_cooldown_retry_case(
     capacity_failure_count: int = 1,
     cooldown_seconds: int = 0,
     retry_budget_patch_enabled: bool = True,
+    disposition_patch_enabled: bool = True,
+    failure_result: AgentRunResult | None = None,
 ) -> tuple[
     AgentRunResult,
     list[str | None],
@@ -2528,7 +2537,7 @@ async def _run_default_profile_cooldown_retry_case(
     ensure_profile_selectors: list[dict[str, Any]] = []
     manager_signals: list[tuple[str, dict[str, Any]]] = []
     fetch_results = [
-        AgentRunResult(
+        failure_result or AgentRunResult(
             outputRefs=["artifact:capacity-attempt"],
             diagnosticsRef="artifact:capacity-diagnostics",
             failureClass="integration_error",
@@ -2549,7 +2558,7 @@ async def _run_default_profile_cooldown_retry_case(
     ]
 
     _configure_workflow_runtime(monkeypatch)
-    if not sticky_patch_enabled or not retry_budget_patch_enabled:
+    if not sticky_patch_enabled or not retry_budget_patch_enabled or not disposition_patch_enabled:
         sticky_patch_id = (
             agent_run_module.STICKY_PINNED_PROFILE_COOLDOWN_RETRY_PATCH_ID
         )
@@ -2558,6 +2567,8 @@ async def _run_default_profile_cooldown_retry_case(
         )
 
         def patched(patch_id: str) -> bool:
+            if patch_id == "agent-run-provider-disposition-precedence-v1":
+                return disposition_patch_enabled
             if patch_id == sticky_patch_id:
                 return sticky_patch_enabled
             if patch_id == retry_budget_patch_id:
@@ -2663,6 +2674,45 @@ async def _run_default_profile_cooldown_retry_case(
     return result, ensure_profile_refs, ensure_profile_selectors, manager_signals
 
 
+@pytest.mark.parametrize("disposition,patch_enabled", [
+    ("no_retry", True), ("retry", True), ("unknown", True), ("wait", True),
+    ("no_retry", False),
+])
+async def test_real_agent_run_preserves_provider_disposition(
+    monkeypatch: pytest.MonkeyPatch, disposition: str, patch_enabled: bool,
+) -> None:
+    from moonmind.omnigent.bridge_artifacts import build_omnigent_result
+    from tests.unit.omnigent.test_execute import _bundle, _request
+
+    produced = build_omnigent_result(
+        request=_request(), terminal_status="failed", session_id="session", agent_id="agent",
+        final_snapshot={"providerFailure": {
+            "providerErrorClass": "capacity", "retryDisposition": disposition,
+            "failureId": "original-operation-error", "rawErrorRef": "art_original",
+        }},
+        event_count=1, capture_bundle=_bundle(diagnostics_ref="art_original"),
+    )
+    result, requests, _selectors, signals = await _run_default_profile_cooldown_retry_case(
+        monkeypatch, sticky_patch_enabled=True, failure_result=produced,
+        disposition_patch_enabled=patch_enabled,
+    )
+    reports = [payload for signal, payload in signals if signal == "report_cooldown"]
+    if patch_enabled and disposition != "wait":
+        assert reports == []
+        assert len(requests) == 1
+        assert result.failure_id == "original-operation-error"
+        assert result.retry_disposition == disposition
+        assert result.diagnostics_ref == "art_original"
+    else:
+        assert len(requests) == 2
+        assert len(reports) == 1
+        if patch_enabled:
+            assert reports[0]["failure_class"] == "capacity"
+        else:
+            assert "failure_class" not in reports[0]
+        assert result.summary == "Recovered on pinned profile."
+
+
 async def test_agent_run_pins_default_profile_after_provider_cooldown_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2688,6 +2738,7 @@ async def test_agent_run_pins_default_profile_after_provider_cooldown_retry(
             {
                 "profile_id": "codex-default",
                 "cooldown_seconds": 0,
+                "failure_class": "capacity",
             },
         ),
         (
@@ -2805,6 +2856,7 @@ async def test_agent_run_replays_legacy_default_fallback_retry_when_patch_unset(
             {
                 "profile_id": "codex-default",
                 "cooldown_seconds": 0,
+                "failure_class": "capacity",
             },
         ),
         (

@@ -12,7 +12,7 @@ _RUNTIME_CONTEXT_DIR = "/home/app/.omnigent/moonmind/runtime-context"
 # with ``npm install`` inside each fresh per-session config directory the first
 # time ``opencode serve`` starts. The pinned host image warms exactly that
 # dependency closure into an image-owned npm cache at build time (see
-# services/omnigent/opencode-host/Dockerfile). The entrypoint copies the seed
+# services/omnigent/moonmind-host/Dockerfile). The entrypoint copies the seed
 # into the run-owned state volume and points npm at it through the runtime
 # home's ``.npmrc``: npm reads ``$HOME/.npmrc`` and ``HOME`` is one of the few
 # variables Omnigent forwards to the OpenCode server, so no ``npm_config_*``
@@ -135,8 +135,20 @@ class OmnigentRuntimeScriptService:
             "MOONMIND_STEP_EXECUTION_ID": step_execution_id,
         }
         supplied_runtime_environment = dict(runtime_environment or {})
+        project_environment = {}
         if set(supplied_runtime_environment) - set(_MOONMIND_RUNTIME_ENV_FILES):
-            raise ValueError("unsupported MoonMind runtime environment")
+            # Keep the existing standalone verifier's stdlib-only builder path.
+            from moonmind.omnigent.host_services.project_environment import (
+                approved_project_environment,
+            )
+
+            project_environment = approved_project_environment(
+                supplied_runtime_environment, reserved=set(_MOONMIND_RUNTIME_ENV_FILES)
+            )
+        runtime_env_files = {
+            **_MOONMIND_RUNTIME_ENV_FILES,
+            **{key: f"project-{key}" for key in project_environment},
+        }
         for key, value in supplied_runtime_environment.items():
             normalized = str(value or "").strip()
             if not normalized or any(
@@ -231,12 +243,12 @@ class OmnigentRuntimeScriptService:
             )
         runtime_context_writes = "".join(
             f"printf '%s\\n' \"${key}\" > {runtime_context_dir}/{filename}; "
-            for key, filename in _MOONMIND_RUNTIME_ENV_FILES.items()
+            for key, filename in runtime_env_files.items()
             if key in supplied_runtime_environment
         )
         runtime_context_exports = "".join(
             f"'export {key}=$(cat {runtime_context_dir}/{filename})' "
-            for key, filename in _MOONMIND_RUNTIME_ENV_FILES.items()
+            for key, filename in runtime_env_files.items()
             if key in supplied_runtime_environment
         )
         # Native harnesses filter their child environment after the runner

@@ -12,6 +12,8 @@ Coding agents use the root [AGENTS.md](AGENTS.md). Claude Code reads it directly
 
 ## Development and testing
 
+Application source installs and host-side Python tests require Python 3.12+.
+
 Clone the repository and initialize its submodules at their recorded commits:
 
 ```bash

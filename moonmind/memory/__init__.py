@@ -1,4 +1,4 @@
-"""Memory contracts, services, and procedural primitives for MoonMind."""
+"""Memory context packaging and procedural primitives for MoonMind."""
 
 from moonmind.memory.context_pack import (
     MemoryContextBudgetExceeded,
@@ -7,24 +7,6 @@ from moonmind.memory.context_pack import (
     MemoryContextPack,
     MemoryPlane,
     build_memory_context_pack,
-)
-from moonmind.memory.models import (
-    ContextPack,
-    ContextPackBudget,
-    ErrorSignature as MemoryErrorSignature,
-    FixPattern as MemoryFixPattern,
-    LongTermMemory,
-    MemoryCandidate,
-    MemoryProvenance,
-    RunDigest,
-    RunRef,
-)
-from moonmind.memory.services import (
-    InMemoryLongTermMemoryService,
-    InMemoryPlanningAdapter,
-    InMemoryTaskHistoryStore,
-    RetrievalGateway,
-    TaskHistoryService,
 )
 from moonmind.memory.procedural import (
     EvidenceRun,
@@ -46,20 +28,6 @@ __all__ = [
     "MemoryContextPack",
     "MemoryPlane",
     "build_memory_context_pack",
-    "ContextPack",
-    "ContextPackBudget",
     "extract_error_signature",
     "fix_patterns_to_memory_proposals",
-    "InMemoryLongTermMemoryService",
-    "InMemoryPlanningAdapter",
-    "InMemoryTaskHistoryStore",
-    "LongTermMemory",
-    "MemoryCandidate",
-    "MemoryErrorSignature",
-    "MemoryFixPattern",
-    "MemoryProvenance",
-    "RetrievalGateway",
-    "RunDigest",
-    "RunRef",
-    "TaskHistoryService",
 ]
