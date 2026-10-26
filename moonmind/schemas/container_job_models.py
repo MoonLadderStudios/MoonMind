@@ -24,6 +24,7 @@ from moonmind.schemas.workspace_locator_models import (
     WorkspaceLocator,
 )
 from moonmind.utils.logging import redact_sensitive_text
+from moonmind.schemas.repository_scanner_models import RepositoryScan
 
 CONTAINER_JOB_CONTRACT_VERSION = "v1"
 MAX_TEMPORAL_PAYLOAD_BYTES = 64 * 1024
@@ -342,6 +343,7 @@ class OutputDeclaration(ContractModel):
 
 
 class ContainerJobSpec(ContractModel):
+    repository_scan: RepositoryScan | None = Field(None, alias="repositoryScan")
     image: str | None = Field(None, min_length=1, max_length=512)
     image_source_ref: str | None = Field(
         None,
@@ -388,6 +390,9 @@ class ContainerJobSpec(ContractModel):
             raise ValueError("service access requires a deployment-owned image source")
         if self.service_ref is not None and any(item.name.startswith("MOONMIND_SERVICE_") for item in self.environment):
             raise ValueError("service connection environment is deployment-owned")
+        from moonmind.security.repository_scanners import validate_scanner_job
+
+        validate_scanner_job(self)
         return self
 
     @field_validator("workdir")
