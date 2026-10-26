@@ -1,0 +1,21 @@
+[
+  {
+    "serviceRef": "asset-store",
+    "networkRef": "moonmind-example-service-internal",
+    "gatewayRef": "moonmind-example-service-relay",
+    "gatewayImage": "ghcr.io/moonladderstudios/moonmind:latest",
+    "egressNetworkRef": "moonmind-example-service-upstream",
+    "serverName": "assets.example.test",
+    "allowedImageSourceRefs": ["asset-client"],
+    "relay": {
+      "targetHost": "192.0.2.25",
+      "targetPort": 41300,
+      "listenHost": "172.30.77.2",
+      "listenPort": 41300,
+      "protocols": ["tcp", "udp"],
+      "maxConnections": 64,
+      "idleSeconds": 60,
+      "maxDatagramBytes": 65507
+    }
+  }
+]
