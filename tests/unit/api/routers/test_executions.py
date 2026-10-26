@@ -8196,7 +8196,8 @@ def test_serialize_execution_omits_success_rate_sample_for_active_run() -> None:
         ("idle", "idle"),
         ("verification_blocked", "verification_blocked"),
         (None, None),
-        ("unknown", None),
+        ("unknown", "unknown"),
+        ("unrecognized_outcome", None),
         ({"outcome": "idle"}, None),
     ],
 )

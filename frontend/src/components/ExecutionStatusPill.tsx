@@ -100,6 +100,8 @@ export function WorkflowLifecycleStatusPill({
   }
   if (status === 'completed') {
     switch (objectiveOutcome) {
+      case 'unknown':
+        return <StatusPill label="Outcome unknown" pillProps={{ className: 'status status-neutral' }} />;
       case 'idle':
         return <StatusPill label="Idle" pillProps={{ className: 'status status-neutral' }} />;
       case 'failed':

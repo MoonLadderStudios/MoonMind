@@ -102,6 +102,7 @@ it.each([
   ['failed', 'Failed', 'status-failed'],
   ['verification_blocked', 'Verification blocked', 'status-failed'],
   ['cancelled', 'Cancelled', 'status-canceled'],
+  ['unknown', 'Outcome unknown', 'status-neutral'],
 ])('shows terminal objective %s instead of a completed-success pill', (objectiveOutcome, label, statusClass) => {
   const { rerender } = render(<WorkflowLifecycleStatusPill status="completed" objectiveOutcome={objectiveOutcome} />);
   expect(screen.getByText(label).className).toContain(statusClass);

@@ -134,7 +134,6 @@ from moonmind.workflows.temporal.agent_result_payloads import (
     compact_moonspec_verify_metadata,
     compact_published_agent_run_result_payload,
 )
-from moonmind.workflows.provider_failures import classify_provider_failure
 from moonmind.workflows.temporal.completion_summary import (
     is_generic_completion_summary,
 )
@@ -167,6 +166,7 @@ from moonmind.workflows.temporal.jira_agent_skills import JIRA_AGENT_SKILLS
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
+    AgentResultError,
     AgentRunStatus,
     AgentRunResult,
     MANAGED_RUNTIME_PROFILE_TIER_POLICY_VERSION,
@@ -8637,7 +8637,7 @@ class TemporalAgentRuntimeActivities:
                 else {}
             )
             try:
-                await self.execution_notify_completion(
+                notification = await self.execution_notify_completion(
                     {
                         "workflowId": (
                             info.workflow_id
@@ -8662,7 +8662,21 @@ class TemporalAgentRuntimeActivities:
                         "result": result_payload,
                     }
                 )
+                if isinstance(published_result, AgentRunResult) and isinstance(
+                    notification, Mapping
+                ):
+                    if notification.get("status") in {
+                        "failed",
+                        "blocked",
+                    } or notification.get("errors"):
+                        published_result.secondary_errors.append(
+                            AgentResultError(code="completion_notification_failed")
+                        )
             except Exception:
+                if isinstance(published_result, AgentRunResult):
+                    published_result.secondary_errors.append(
+                        AgentResultError(code="completion_notification_unavailable")
+                    )
                 logger.warning(
                     "agent_runtime.publish_artifacts completion notification failed",
                     exc_info=True,
@@ -9934,6 +9948,8 @@ class TemporalAgentRuntimeActivities:
             "provider_error_code": result_dict.get("provider_error_code") or result_dict.get("providerErrorCode"),
             "metrics": result_dict.get("metrics") or {},
         }
+        if isinstance(result, AgentRunResult):
+            summary_payload["agentResult"] = result.outcome_projection()
         report_output = (
             moonmind_metadata.get("reportOutput")
             if isinstance(moonmind_metadata.get("reportOutput"), Mapping)
@@ -13735,6 +13751,15 @@ class TemporalAgentRuntimeActivities:
                     meta["acceptedRepositoryEvidence"] = (
                         accepted_repository_evidence
                     )
+                    result = result.model_copy(
+                        update={
+                            "publication_state": (
+                                "published"
+                                if push_info.get("push_status") == "pushed"
+                                else "not_published"
+                            )
+                        }
+                    )
                 elif push_info.get("push_status") in {"pushed", "no_commits"}:
                     push_info = {
                         **push_info,
@@ -13994,7 +14019,21 @@ class TemporalAgentRuntimeActivities:
                 metadata["publishEvidence"] = publish_evidence_ref
 
         def _validated_result(update: Mapping[str, Any]) -> AgentRunResult:
-            updated = result.model_copy(update=dict(update))
+            canonical_update = dict(update)
+            if result.failure_class is None and update.get("failure_class"):
+                failure = AgentRunResult(
+                    failure_class=update["failure_class"],
+                    provider_error_code=update.get("provider_error_code"),
+                )
+                canonical_update.update(
+                    objective_outcome="failed",
+                    failure_id=result.failure_id or failure.failure_id,
+                    retry_disposition=(result.retry_disposition if result.retry_disposition != "unknown" else failure.retry_disposition),
+                    provider_failure=result.provider_failure or failure.provider_failure,
+                )
+            elif evaluation.satisfied and result.failure_class is None:
+                canonical_update["objective_outcome"] = "succeeded"
+            updated = result.model_copy(update=canonical_update)
             payload = updated.model_dump(mode="json", by_alias=True)
             try:
                 return AgentRunResult.model_validate(payload)
@@ -14128,13 +14167,8 @@ class TemporalAgentRuntimeActivities:
                 "Batch fan-out failed; see terminal evidence errors."
             )
             failure_class = "execution_error"
-            try:
-                classification = classify_provider_failure(terminal_failure_message)
-            except Exception:
-                classification = None
-            if classification is not None and classification.failure_class == "user_error":
-                # Auth/scope failures (401/403) are operator action, not a
-                # transient to retry behind the same unreachable path.
+            provider_failure = result.provider_failure or {}
+            if provider_failure.get("observation") == "confirmed" and provider_failure.get("providerErrorClass") in {"auth", "credential_scope"}:
                 failure_class = "user_error"
             return _validated_result(
                 {
@@ -16636,6 +16670,13 @@ class TemporalAgentRuntimeActivities:
                 "summary": new_summary,
                 "failure_class": None,
                 "provider_error_code": None,
+                "retry_recommendation": None,
+                "failure_id": None,
+                "provider_failure": None,
+                "execution_state": "completed",
+                "objective_outcome": "succeeded",
+                "publication_state": "published",
+                "retry_disposition": "no_retry",
                 "metadata": override_meta,
             }
         )
