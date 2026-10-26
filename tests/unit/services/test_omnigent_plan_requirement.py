@@ -71,8 +71,11 @@ def test_raw_tool_finishing_requires_product_plan_boundary(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("finish_mode", ["review_only", "fix_only", "merge"])
 @pytest.mark.parametrize("compiler_rejects", [False, True])
+@pytest.mark.parametrize(
+    "location", ["parameters", "workflow", "publish", "workflow_publish"]
+)
 async def test_recurring_tool_finishing_reaches_plan_owner(
-    monkeypatch, finish_mode, compiler_rejects
+    monkeypatch, finish_mode, compiler_rejects, location
 ):
     admission = _mm3935_plan_admission(monkeypatch)
     if compiler_rejects:
@@ -88,7 +91,7 @@ async def test_recurring_tool_finishing_reaches_plan_owner(
     recurring = RecurringWorkflowsService(
         session, temporal_client_adapter=AsyncMock(), artifact_service=SimpleNamespace()
     )
-    parameters = _tool_parameters(finish_mode=finish_mode)
+    parameters = _tool_parameters(finish_mode=finish_mode, location=location)
     definition_id = uuid4()
     kwargs = {
         "definition_id": definition_id,
@@ -118,6 +121,45 @@ async def test_recurring_tool_finishing_reaches_plan_owner(
     compiled = admission.compile_plan.await_args.kwargs["initial_parameters"]
     assert compiled["workflow"] == parameters["workflow"]
     assert compiled["agentProfileSnapshot"] == admission.snapshot
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [None, False, "false", 0])
+@pytest.mark.parametrize(
+    "location", ["parameters", "workflow", "publish", "workflow_publish"]
+)
+async def test_recurring_tool_without_finishing_needs_no_agent_plan(
+    monkeypatch, enabled, location
+):
+    admission = _mm3935_plan_admission(monkeypatch)
+    session = SimpleNamespace(get=AsyncMock())
+    recurring = RecurringWorkflowsService(
+        session, temporal_client_adapter=AsyncMock(), artifact_service=SimpleNamespace()
+    )
+    parameters = _tool_parameters(finish_mode="review_only", location=location)
+    containers = {
+        "parameters": parameters,
+        "workflow": parameters["workflow"],
+        "publish": parameters["publish"],
+        "workflow_publish": parameters["workflow"]["publish"],
+    }
+    if enabled is None:
+        containers[location].pop("mergeAutomation")
+    else:
+        containers[location]["mergeAutomation"]["enabled"] = enabled
+    admitted = await recurring._admit_omnigent_schedule_target(
+        definition_id=uuid4(),
+        target={
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": parameters,
+        },
+        agent_profile_selection=None,
+        actor=None,
+    )
+    assert admitted is None
+    admission.default_resolver.assert_not_awaited()
+    admission.compile_plan.assert_not_awaited()
+    session.get.assert_not_awaited()
 
 
 @pytest.mark.parametrize("enabled", ["not-a-bool", {"unexpected": True}])

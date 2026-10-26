@@ -57,6 +57,31 @@ STORY_OUTPUT_TASK_TOOLS = (
 
 
 def default_registry_tool_payload(*, name: str) -> dict[str, Any]:
+    if name == "security.assess":
+        from moonmind.security.assessments import AssessmentRequest
+
+        return {
+            "name": name,
+            "description": (
+                "Compare retained security evidence or reassess an inventory "
+                "against an admitted advisory feed."
+            ),
+            "inputs": {"schema": AssessmentRequest.model_json_schema(by_alias=True)},
+            "outputs": {"schema": {"type": "object", "additionalProperties": True}},
+            "executor": {
+                "activity_type": "mm.tool.execute",
+                "selector": {"mode": "by_capability"},
+            },
+            "requirements": {"capabilities": ["sandbox"]},
+            "policies": {
+                "timeouts": {
+                    "start_to_close_seconds": 300,
+                    "schedule_to_close_seconds": 600,
+                },
+                "retries": {"max_attempts": 2},
+            },
+        }
+
     if is_container_job_tool(name):
         return build_container_job_tool_definition_payload(name=name)
 
