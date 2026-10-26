@@ -1136,6 +1136,7 @@ def test_single_user_integration_never_selects_reliability_journey() -> None:
     ("path", "lanes"),
     [
         ("tests/integration/api/test_routes.py", {"hermetic"}),
+        ("tests/integration/test_artifact_recovery_lookup_indexes.py", {"hermetic"}),
         (
             "tests/integration/host_update/test_journal_transition.py",
             {"controller-journey"},
@@ -1155,6 +1156,7 @@ def test_single_user_integration_never_selects_reliability_journey() -> None:
         ("tools/single_user_journey_provider.py", {"fresh-journey", "upgrade-journey"}),
         ("tools/single_user_journey_cutover.py", {"upgrade-journey"}),
         ("tests/integration/reliability/test_checkpoint_cold_resume.py", set()),
+        ("tests/integration/reliability/test_omnigent_gh_projection_refresh.py", set()),
     ],
 )
 def test_integration_matrix_selects_only_owned_lanes(path, lanes):

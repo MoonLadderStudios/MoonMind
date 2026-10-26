@@ -1,41 +1,13 @@
-"""Portable per-attempt GitHub issue handoffs and cross-deployment retry history.
+"""Retained-format GitHub issue handoffs and cross-deployment retry history.
 
-Single policy entrypoint for MoonLadderStudios/MoonMind#4177 (design:
-docs/Workflows/GitHubIssueStatusStateMachineDesign.md, sections 4 and 5.3).
-Deterministic and side-effect-free except for the explicit trusted-boundary
-``publish_attempt_handoff`` orchestration, which performs GitHub reads/writes
-only through an injected service object (``GitHubService`` in production,
-fakes in tests).
+Reconciliation, admission and finalization still use this format's parser and
+retry evidence. Current handoffs are owned by ``github_issue_attempts``;
+production publication uses ``issue_claim_store`` and its verified claim receipt.
 
-Contract summary:
-
-* Every issue-work attempt owns exactly one identifiable GitHub issue comment.
-  The comment carries a stable machine marker (the attempt ID) plus a readable
-  summary and one versioned, bounded JSON metadata block. GitHub is the shared
-  handoff surface: another independent deployment reconstructs remaining work
-  and retry restrictions from GitHub-visible comments alone.
-* A GitHub account name never substitutes for deployment identity. The stable
-  installation ID comes from one canonical source (explicit input or
-  ``MOONMIND_INSTALLATION_ID``); there are no competing aliases or silent
-  hostname/username fallbacks, so the value persists unchanged through
-  restart/retry. A copied machine marker never authenticates itself: provenance
-  is validated against a caller-supplied trusted-poster set at read time.
-* Issue prose and arbitrary comments are untrusted reference content. Only the
-  versioned metadata block of a provenance-validated comment drives admission
-  and retry decisions. Unsupported formats and inconsistent/missing referenced
-  history are rejected explicitly rather than inferred as a fresh start.
-* Production consumption (no parallel reimplementation): admission consumes
-  the portable retry budget through ``attempt_evidence_blocks_admission`` in
-  ``github_issue_lifecycle`` (which honors ``linkedAttempts``/``retryPolicy``
-  context via :func:`derive_retry_state`); progress and release publication
-  run through ``attempt_handoff_activities.publish_attempt_progress`` /
-  ``publish_attempt_release``, which supply the production ``GitHubService``,
-  the canonical installation identity, and the caller-owned trusted-poster
-  allow-list. Workflows never call the GitHub comment endpoints for attempt
-  state directly.
-* Operators provision one stable value per deployment as
-  ``MOONMIND_INSTALLATION_ID`` (see ``.env-template``); there are no
-  competing aliases or silent fallbacks.
+This module is deterministic except for ``publish_attempt_handoff``, which
+accesses GitHub only through an injected service. Account names and copied
+markers do not establish ownership: readers validate the trusted poster and
+referenced history before admitting work.
 """
 
 from __future__ import annotations

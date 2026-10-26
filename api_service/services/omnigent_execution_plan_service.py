@@ -963,6 +963,7 @@ async def _admit_repository_plan_inputs(
     initial_parameters: Mapping[str, Any],
     requires_github: bool,
     parent_plan: OmnigentExecutionPlanEnvelope | None,
+    parent_read_principal: str | None = None,
     typed_authority: bool = True,
     native_review: bool = False,
     resolved_skills: AgentResolvedSkillSet | None = None,
@@ -1269,7 +1270,7 @@ async def _admit_repository_plan_inputs(
                     )
                 _artifact, parent_bytes = await artifact_service.read(
                     artifact_id=parent_access["artifactRef"].removeprefix("artifact:"),
-                    principal=principal,
+                    principal=parent_read_principal or principal,
                     allow_restricted_raw=True,
                 )
                 if (
@@ -1366,6 +1367,7 @@ async def compile_and_persist_execution_plan(
     # without a declaration are rejected by the planner.
     repository_bindings: Mapping[str, Mapping[str, Any]] | None = None,
     parent_repository_plan: OmnigentExecutionPlanEnvelope | None = None,
+    parent_read_principal: str | None = None,
 ) -> PersistedOmnigentExecutionPlan:
     """Compile and persist one plan before Temporal or provider side effects."""
 
@@ -1766,6 +1768,7 @@ async def compile_and_persist_execution_plan(
             initial_parameters=initial_parameters,
             requires_github="gh" in resolved_profile.tools,
             parent_plan=parent_repository_plan,
+            parent_read_principal=parent_read_principal,
             native_review=native_review,
             resolved_skills=agent_resolved_skills,
             # A model-only realizer keeps its existing credential path; typed

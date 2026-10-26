@@ -201,10 +201,12 @@ escape a failed gate or exhausted budget. Title and describe it from the trusted
 source issue and actual change, never from search instructions.
 
 The existing continuation owner consumes new post-publication check and artifact
-results, distinguishes code failures from reporting or infrastructure failures,
-and re-enters only the necessary implementation or verification phase. CI success
-alone cannot satisfy unexecuted rendered, packaged, or other source requirements.
-The selected verifier decides coverage from actual evidence.
+results only when the verifier marks the remaining work eligible for evidence
+continuation. Missing implementation and invalid reports stay with the existing
+remediation owner and retain their prerequisites; they do not enter a CI wait or
+acquire an evidence-timeout diagnosis. CI success alone cannot satisfy unexecuted
+rendered, packaged, or other source requirements. The selected verifier decides
+coverage from actual evidence.
 
 Bind evidence to the candidate content, original scope, required tests and target,
 plus relevant locked content, package, topology, or render surface when the source

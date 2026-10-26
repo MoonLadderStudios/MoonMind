@@ -1304,13 +1304,16 @@ class GenericOmnigentHostRealizer:
         )
         return result.model_copy(
             update={
+                "publication_state": (
+                    "published" if push_status == "pushed" else "not_published"
+                ),
                 "metadata": {
                     **dict(result.metadata or {}),
                     **dict(publication),
                     "acceptedRepositoryEvidence": evidence.model_dump(
                         mode="json", by_alias=True, exclude_none=True
                     ),
-                }
+                },
             }
         )
 
@@ -1453,7 +1456,10 @@ class GenericOmnigentHostRealizer:
                     update={
                         "failure_class": "integration_error",
                         "provider_error_code": last_failure["code"],
+                        "failure_id": last_failure["code"],
                         "retry_recommendation": "do_not_retry",
+                        "retry_disposition": "no_retry",
+                        "objective_outcome": "failed",
                         "summary": (
                             f"{summary}: {last_failure['message']}"
                             if last_failure.get("message")
@@ -1466,6 +1472,9 @@ class GenericOmnigentHostRealizer:
                         },
                     }
                 )
+        # Persist the same canonical envelope returned live, including failures
+        # added during finalization, so a resumed read cannot reinterpret it.
+        result = AgentRunResult.model_validate(result.model_dump(mode="json", by_alias=True))
         await sink.record_phase("publication", result.model_dump(mode="json", by_alias=True, exclude_none=True))
         return result
 

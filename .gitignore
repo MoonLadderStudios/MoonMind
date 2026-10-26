@@ -62,6 +62,7 @@ artifacts*/
 /deploy/state/release-submissions/
 /deploy/state/controller/*
 /deploy/state/controller-omnigent-jobs/
+/deploy/state/storage-transfers/
 !/deploy/state/controller/.gitkeep
 live_streams.spool
 .specify/feature.json

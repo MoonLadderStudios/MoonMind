@@ -1,237 +1,109 @@
-# MoonMind Memory Architecture (Desired State)
+# MoonMind Memory Architecture
 
-Status: Proposed
-Last Updated: 2026-09-09
-Scope: Chat, Dashboard (workflow and execution surfaces), Spec workflow, system
+MoonMind prepares bounded memory context, evaluates memory proposals, and records
+structured run digests through the existing workflow and artifact owners. These
+paths use explicit evidence references and procedural signatures without a
+managed vector index.
 
-This desired-state document assumes MoonMind's current Temporal-first bridge architecture. Older queue/Celery terminology should be treated as historical only, not as the current execution substrate.
+## Implementation owners
 
-MoonMind is vector-free: there is no MoonMind-managed vector database,
-embedding service, collection, or retrieval index. Ordinary chat and ordinary
-workflows need no vector configuration, and explicit vector requirements
-(managed semantic retrieval, embedding-backed memory, collection/overlay
-administration) are rejected before execution. Retained exact-context,
-artifact, and history reads are not equivalent to semantic recall.
+| Surface | Owner | Result |
+| --- | --- | --- |
+| Prepared runtime context | `moonmind/workflows/executions/prepared_context.py` | A context bundle assembled from supplied snapshots and scoped procedural evidence. |
+| Memory context packaging | `moonmind/memory/context_pack.py` | Validated, token-budgeted items with provenance, stable item references and a content digest. |
+| Procedural memory | `moonmind/memory/procedural.py` | Evidence-backed error signatures, fix patterns and memory proposals; `FileFixPatternStore` owns file-backed pattern persistence. |
+| Proposal and application policy | `moonmind/memory/services.py` | Compact policy-decision and application-result manifests used by the memory Activity handlers. |
+| Structured run digest | `moonmind/memory/run_digest.py` | The run-digest model, pure construction helpers and artifact envelope. |
+| Durable digest publication | `TemporalArtifactActivities` in `moonmind/workflows/temporal/artifacts.py` | A bounded `run_digest.json` artifact linked as `output.summary` through `TemporalArtifactService`. |
 
-## 1) Goals
+```mermaid
+flowchart TD
+    Inputs[Supplied memory snapshots and procedural evidence] --> Prepared[Prepared context]
+    Prepared --> Pack[Validated memory context pack]
+    Pack --> Runtime[Runtime context injection]
+    Proposals[Memory proposal references and execution evidence] --> Policy[Memory policy Activities]
+    Policy --> Manifests[Decision and application manifests]
+    Terminal[Authoritative terminal execution state] --> Digest[Structured run digest]
+    Digest --> Artifacts[Existing artifact authority and output.summary link]
+```
 
-MoonMind memory exists to make agent runs faster, more secure, and more repeatable:
+## Preparing context
 
-- Assemble **more usable context than fits in a single context window** by composing planning + history + curated project knowledge into a scoped context bundle.
-- **Reduce repeat failures** by surfacing “what happened last time” (similar runs, error signatures, fix patterns) *before* a worker executes.
-- Preserve **decisions, conventions, and preferences** as reusable curated knowledge with provenance.
-- Keep **planning state reviewable and repo-local**, so humans and agents share the same work graph.
-- Maintain strict **isolation** (namespace/repo scoped): no cross-repo contamination.
-- **Fail-open**: memory accelerates; it is never a hard dependency for chat or workflow execution.
-- Keep **auditability first-class**: every memory contribution is traceable back to evidence (run/job IDs, commits, artifacts).
+The prepared-context owner accepts explicit memory snapshots and procedural
+inputs. `build_memory_context_pack` normalizes each candidate's text, source,
+plane, trust class, provenance and token cost. Candidates must carry a usable
+evidence pointer; secret-like values are rejected during validation.
 
-Non-goals:
+Items are considered in supplied order. An item that exceeds the remaining token
+budget is recorded in `skippedRefs`. The pack includes accepted items, budget and
+usage metadata, a builder version and a digest that excludes the creation time.
+These identities support replaying the same prepared evidence without
+reinterpreting it as a fresh lookup.
 
-- Storing raw logs or entire repos as “memory” (raw data stays in artifacts and source control).
-- Auto-promoting unreviewed “truth” into canonical project knowledge.
-- Semantic similarity recall over a managed vector index (retired; not equivalent to the exact reads below).
+The `planning`, `history`, `long_term` and `document` plane labels describe
+supplied context. They do not select retrieval providers. Callers own source
+selection, namespace/repository admission and authorization of referenced
+artifacts before supplying candidates. The context builder requires provenance
+and applies the packaging budget.
 
-## 2) Current State (Baseline)
+## Procedural evidence
 
-MoonMind already has the core primitives we extend:
+`ErrorSignature` and `FixPattern` in `procedural.py` describe evidence-backed
+procedural memory. `FileFixPatternStore` persists patterns in its configured
+file-backed store. Prepared-context assembly scopes procedural evidence to the
+requested namespace and repository and can turn matching patterns into memory
+proposals.
 
-- **Durable execution state**: Temporal-backed workflow executions plus Postgres-backed execution/projection records used by the dashboard and execution APIs.
-- **Durable artifacts and run evidence**: S3-compatible workflow artifacts plus managed-run observability artifacts and workspace-backed log spools.
-- **Background orchestration**: Temporal workflows and activities running across specialized worker fleets.
-- **Curated project knowledge (Plane C)**: not provided; there is no hosted long-term memory service (see Plane C below).
-- **Exact context assembly**: workflow intent, attachments, artifact refs, and run history composed into a bounded context bundle with budgets and provenance.
+Source references and provenance remain attached to the resulting context.
+Model/provider selection belongs to execution configuration; reusable memory
+provenance stays focused on durable execution and evidence identities.
 
-This architecture does not replace these primitives. It adds a thin “memory layer” that:
-1) reads from them, and
-2) writes compact, high-signal summaries back into Postgres-backed projections and artifacts.
+## Memory policy
 
-## 3) Chosen Model: Three Memory Planes
+The registered memory Activity handlers in `activity_runtime.py` call
+`evaluate_memory_proposals` and `apply_memory_policy` from `services.py`.
 
-MoonMind uses three orthogonal memory planes. Each plane has a clear purpose and source of truth.
+Proposal evaluation validates the execution source identity and records a
+decision for each proposal reference. Repository application requires an accepted
+terminal disposition and a passed publication gate. Run-context decisions and
+repository decisions retain their separate target requirements.
 
-### Plane A — Planning Memory (Beads)
+Application policy checks the decision reference and applicable gates, then
+returns a compact result manifest with its outcome, result reference and failure
+reason. Persistence and mutation remain responsibilities of the calling
+workflow's existing owners. These helpers create no planning/history store or
+retrieval service.
 
-**Question:** “What should we do next, and what blocks it?”
+## Run digests and retained artifacts
 
-- Beads is the repo-scoped planning substrate (issues + dependencies + claims).
-- Git-native and reviewable.
-- Best-effort: Beads failures never block workflow execution.
+The structured `RunDigest` model lives in `run_digest.py`. It preserves the
+workflow/run identity, namespace, repository, outcome and evidence references
+used by terminal finalization. It is separate from procedural context packaging.
 
-**Objects:**
-- Work items, dependency edges, readiness state, discovered follow-ups, claim/close metadata.
+Terminal finalization records authoritative execution state before its
+best-effort digest write. The existing artifact service owns durable content,
+metadata, authorization and links. Digest publication retains its run-scoped
+idempotency and resumes an existing pending artifact when needed. A completed
+artifact is reused on retry; unrelated ownership is not adopted as a successful
+write.
 
-### Plane B — Run History Memory (Run Ledger → Digests → Fix Patterns)
+Digest failures and timeouts follow the existing best-effort finalization path.
+They do not authorize repeating completed agent or publication work. Retained
+artifact identities, contents, source references and access checks continue to
+belong to the artifact authority.
 
-**Question:** “What happened last time we tried something like this?”
+## Configuration
 
-**Source of truth:**
-- Temporal-backed execution state plus Postgres execution/projection rows, timestamps, and related metadata.
-- Artifact storage and managed-run observability artifacts for logs, patches, diagnostics, and test results.
+`WorkflowSettings.memory_context_budget_tokens` controls prepared memory context:
 
-**Derived records (not sources of truth):**
-- **Run Digests**: short structured summaries of intent/result/changes/decisions/gotchas/next steps.
-- **Error Signatures → Fix Patterns**: procedural memory keyed by signature, backed by evidence runs.
+- `MOONMIND_MEMORY_CONTEXT_BUDGET_TOKENS` is the primary environment name.
+- `MEMORY_CONTEXT_BUDGET_TOKENS` remains a compatibility alias.
+- The primary name takes precedence when both are supplied.
+- The default is 4096 tokens, and the value must be positive.
 
-**Storage:**
-- Digests and fix patterns live in Postgres-backed projections and artifacts (never raw logs).
-- Every digest links back to evidence: `workflowId`, `agentRunId` when applicable, commits/PRs, and artifact refs.
+`MEMORY_LONG_TERM` accepts only `off`. Selecting a retired long-term provider
+fails configuration validation. This setting does not enable a hosted Mem0
+client or a long-term-memory lookup.
 
-### Plane C — Long-Term Memory (retired)
-
-**Question:** “What do we know / how do we do this here?”
-
-**Status:**
-- Hosted Mem0 long-term memory is retired and has no adapter, settings, or
-  package requirement in the shipped application. The resolved Mem0 SDK
-  mandatorily depends on a managed vector-database client, so no Mem0
-  configuration could satisfy the vector-free requirement; it was retired
-  rather than kept as a dormant adapter or hidden in an optional extra.
-- A stale `MEMORY_LONG_TERM=mem0` (or `MEM0_API_KEY`/`MEM0_USER_ID`) value
-  fails fast with an actionable error instead of being silently ignored.
-- Curated, reusable knowledge (decisions, conventions, playbooks,
-  preferences) lives in reviewable repo surfaces (docs, Beads follow-ups) and
-  durable artifacts, not in a memory service.
-- Plane C does **not** replace Plane B. Plane B remains the audit trail and
-  evidence base.
-
-## 4) Read Path: Building the Context Bundle
-
-Every chat request and every workflow run may request a context bundle. It is assembled in this order:
-
-1) **Planning (Beads) — optional**
-- If the request references a Beads work item, load:
-  - the issue, its dependencies, currently-ready siblings,
-  - acceptance criteria / plan notes.
-
-2) **History (Run Digests + Fix Patterns)**
-- Look up related run digests scoped to the same namespace/repo by exact metadata (repo, workflow, error signature, recency).
-- If an error signature is known (or predicted), pull the most successful fix patterns first.
-
-3) **Curated project knowledge (retired Plane C)**
-- Curated conventions, pitfalls, and playbooks live in reviewable repo
-  surfaces and durable artifacts. There is no memory-service lookup step.
-
-4) **Attachments and artifacts**
-- Resolve explicitly referenced design docs, specs, guides, files, and artifact refs.
-
-5) **Packaging + budgets**
-- Normalize all candidates into one bundle:
-  - `text`, `source`, `trust_class`, `provenance`, `recency`, `token_cost`
-- Enforce a token budget and include provenance for every included item.
-
-Fail-open behavior:
-- If any subsystem is unavailable, that component contributes nothing; the request still runs.
-
-## 5) Write Path: Turning Runs Into Memory
-
-Writeback is automatic, async-first, and idempotent by execution identity (`workflowId`, and `agentRunId` for managed-run observability when applicable).
-
-### 5.1 On run start
-- If linked to Beads: claim the work item with `run_ref`.
-- Record minimal start metadata in the Temporal-backed execution row/projection and related run metadata.
-
-### 5.2 During execution
-- Persist lifecycle state through Temporal history, execution projections, and managed-run observability records as appropriate.
-- Store large outputs to artifacts (logs, patches, test output).
-
-### 5.3 On run finish
-1) **Generate a Run Digest (Plane B record)**
-- Structured summary:
-  - intent, outcome, key changes, key decisions, gotchas, next steps
-- Link to evidence (`workflowId`, `agentRunId` when present, commit/PR, artifact refs).
-- Persist to the Postgres-backed projection and publish as an artifact.
-
-2) **Update Fix Patterns (Plane B procedural memory)**
-- Extract/normalize error signatures (from logs, structured errors, and/or LLM extraction).
-- When a run succeeds after a fix, attach that run as evidence for the signature and update the playbook.
-
-3) **Curated learnings stay in reviewable surfaces (Plane C retired)**
-- Stable learnings (conventions, environment pitfalls, decisions, playbooks)
-  are recorded in docs/Beads follow-ups and durable artifacts, defaulting to
-  `draft` unless explicitly marked `approved` (human- or policy-gated). There
-  is no Mem0 promotion step.
-
-4) **Planning writeback to Beads (Plane A)**
-- Close/update the work item and create discovered follow-ups as new nodes.
-
-## 6) Storage Contracts
-
-### 6.1 Sources of truth
-- **Postgres**: Temporal-backed execution records/projections, workflow support tables, system runs, run digests, fix patterns, and related event metadata.
-- **Artifact store**:
-  - workflow artifacts default under `var/artifacts/workflows/<workflow_id>/` and may be relocated via `WORKFLOW_ARTIFACT_ROOT`
-  - local-dev Temporal artifact files default under `var/artifacts/temporal_artifacts/`
-  - managed-run workspace and observability files may exist under `/work/agent_jobs/<job_id>/...` in worker containers; treat that as runtime-local workspace layout rather than the primary durable artifact root
-- **Git**: code + Beads planning state.
-
-### 6.2 Derived records (not truth)
-Digest and fix-pattern projections are small, high-value derived records:
-
-Minimum fields:
-- `record_kind`: `run_digest | fix_pattern | curated_note`
-- `namespace_id`, `repo`, `security_scope`
-- `run_ref.kind`, `run_ref.id` (when applicable)
-- `created_at`, `expires_at` (optional)
-- `trust_class` (e.g., `raw`, `derived`, `approved`)
-
-### 6.3 Long-term memories (retired integration)
-MoonMind has no hosted Mem0 integration and no long-term memory service: curated entries live in reviewable repo surfaces
-and durable artifacts with namespace/repo scoping and provenance pointers
-(`workflowId`, `agentRunId` when applicable, commits, doc refs).
-
-Memory provenance must stay model-agnostic. It records durable evidence pointers, not the model or provider that happened to produce the memory contribution.
-
-## 7) Integration Surfaces
-
-MoonMind implements this architecture with small adapters/services:
-
-- `PlanningAdapter` (Beads)
-  - `prefetch(planning_ref) -> planning_context`
-  - `claim/close/create_followups(...)` (best-effort)
-
-- `TaskHistoryService`
-  - `build_run_digest(run_ref) -> digest`
-  - `extract_error_signature(artifacts) -> signature`
-  - `upsert_digest_and_fix_patterns(...)`
-
-- `RetrievalGateway` (`moonmind/memory/services.py`)
-  - `retrieve_context_pack(query, *, namespace_id, repo, planning_ref?, budget?) -> ContextPack`
-  - used by chat and workflow workers to assemble planning, history, and
-    explicitly referenced attachments into a budgeted pack.
-
-## 8) Runtime Controls (Feature Flags)
-
-Minimal flags (fail-open by default):
-
-- `MEMORY_ENABLED=true|false`
-- `MEMORY_PLANNING=off|beads`
-- `MEMORY_HISTORY=off|digest`
-- `MEMORY_FAIL_OPEN=true|false` (default `true`)
-- `MEMORY_CONTEXT_BUDGET_TOKENS=<int>`
-
-`MEMORY_LONG_TERM`/`MEM0_API_KEY`/`MEM0_USER_ID` are not
-supported: stale values fail fast instead of enabling
-a removed integration.
-
-## 9) Operational Expectations
-
-- Memory must never make chat/workflow endpoints unavailable.
-- Indexing jobs are async and backlog-tolerant (alerting, not paging).
-- Knowledge/history outages degrade context richness, not correctness.
-- Retention:
-  - artifacts follow deployment policy (dev local, prod S3 lifecycle)
-  - digests/fix patterns are retained long (small, high-value)
-  - curated memories are versioned; deprecated entries remain discoverable but not injected
-
-## Context selection rationale
-
-Longer context windows do not make every retained detail useful. Exact references,
-compact summaries, and a task-specific budget keep relevant evidence visible
-without turning raw logs or whole repositories into default prompt content.
-Summaries remain derived evidence: keep their source references so a reader can
-check a claim against the original artifact. Retrieved material supplies context,
-not permission to expand a task or access another repository's data.
-
-## 10) References
-
-- Beads: https://github.com/steveyegge/beads
+Optional-context handling stays with the prepared-context caller, and summary
+write failures stay with the terminal artifact owner.

@@ -138,17 +138,67 @@ docker compose pull --policy always
 docker compose up -d --pull never --no-build --remove-orphans
 ```
 
-under bounded timeouts, after staging every image the update needs and before any recreation. Services built from the MoonMind image pull with `--policy always`; other reconciled infrastructure services pull with `--policy missing`, so an infrastructure image the release newly pins (for example a MinIO digest change) is staged while present images are not refreshed, and `up --pull never` cannot fail on a missing image. The deployment-owned Compose file set (including `COMPOSE_FILE`) passes through unchanged, and the deployment-owned `.env` layers under the controller-generated image overlay, so operator authentication, bindings, and infrastructure versions are preserved. Privileged-endpoint submissions validate project, paths, services, and image references before persistence. Routine updates do not use `docker compose down`, fleet-wide force-recreate, or pruning.
+The controller saves the selected image's base Compose configuration before
+staging dependencies or changing storage. Helpers and retries reuse that image
+and configuration, preventing checkouts from bypassing release
+migrations. New updates resolve `latest` afresh. Deployment settings, overrides
+and custom bases retain authority. Routine updates avoid teardown, forced
+recreation and pruning; proxy services remain outside the main pass.
 
-After detached apply succeeds, the controller records installation and observes service readiness for up to fifteen minutes from that checkpoint. Compose's first `unhealthy` observation does not trigger another pull, journal transition, or recreation. Restart recovery uses the checkpoint's remaining budget. Exhaustion records failed or unavailable checks as `partially_verified`, retaining installation; readiness precedes routing cutover and operator-access verification.
+**Artifact storage cutover.** Silo defaults to `latest`, honoring
+`TEMPORAL_ARTIFACT_S3_IMAGE`. On a changed `/data` volume, storage preparation
+stops API/worker writers, sweepers, project one-offs and the public source.
+The source image opens its retained volume privately, fencing application and
+presigned writes. Incomplete multipart uploads refuse cutover and remain resumable.
 
-The main pass excludes `docker-proxy` and `sandbox-egress-proxy`. The standalone controller uses its own Docker socket and does not depend on a healthy API or worker.
+Copying to `artifact-data` preserves keys, metadata, tags and bucket
+policies/CORS/lifecycle settings. Sixteen concurrent object transfers share a
+four-hour budget; the controller allows fifteen additional minutes for
+isolation, qualification and recovery. Host observation follows each copy
+attempt. Other helpers keep their budgets. An older controller hands off
+before fencing clients.
 
-Dependency order and `init-db`/schema migration gating apply before dependent services start. A failed migration preserves the original error and data. Startup's legacy conversion scan reads distinct principal identities and skips artifact hashing once unreadable evidence requires refusal; it preserves source data and access guards without making retained history size a Python row-processing cost. Old Manifest releases use the [retirement upgrade procedure](../Temporal/WorkflowTypeCatalogAndLifecycle.md#112-moonmindmanifestingest-lifecycle-retired).
+Private `deploy/state/storage-transfers/` receipts retain provenance, stop
+intent, private server identities and SHA-256 verifications. Successful peers
+checkpoint even when a transfer fails; diagnostics include verified counts and
+bytes. Retry reuses bytes only after both stores' ETag, last-modified time,
+size, metadata and tags match their recorded observations. Older receipts or
+incomplete identities require fresh hashing. Inventories and
+read/write/multipart/presigned probes precede activation. Mismatches refuse
+activation; source objects and `minio-data` remain recoverable.
 
-**Active Omnigent journal transition.** Supported rollback targets can read only complete JSONL journals, so active journals are compacted after image staging and before service recreation, under the same owner and lock (the controller's `before_compose` step). The owner observes the project's actual `agent_runtime` writers and `artifacts` lifecycle sweepers, including overrides and one-offs, stops them with a bounded Docker stop, and inspects them again, because pausing API submissions or enumerating workflows does not prove quiescence. Durable Activities recover from saved progress, so workflows need not finish first and keep their intent.
+The installed controller's helper also copies new objects back before handing
+rollback to an older controller. Neither direction prunes retained bytes.
+Intent precedes Docker calls; recovery reconciles lost acknowledgements and
+resumes consumers, leaving one-offs stopped. Preserve volumes and receipts
+until installed-inventory completeness, operator-path reads/writes and rollback
+are verified. Use this transition instead of unchecked image/mount replacement.
+Versioned/locked buckets and nonstandard mounts need separate qualification.
+Restore custom IAM before retrying denied credentials; qualification never
+escalates privilege.
 
-Through `deployment_release --omnigent-journal-prepare`, the bridge store replaces committed active chunks with complete, old-reader-compatible journals and atomically updates references and event locators; original chunks stay recoverable until that commit. The controller records observed consumer image identities first, so a rollback to a target that predates the helper can use the source image's helper. Preparation starts only the `postgres`/`minio` services it needs and does not require a healthy API or worker. A failed storage connection, unavailable artifact, or unknown consumer state prevents recreation and keeps saved work and the original error. After a failed Compose apply, the owner stops every consumer, because a partially recreated writer may sit beside an old reader. A retry repeats observation and compaction, since that writer may have committed more chunks. When the controller's automatic attempts are exhausted and no retry follows, it recreates the consumer services on the release that apply selected, so agent launches keep a worker; stopped one-offs stay stopped, and a recovery failure is recorded beside the original apply error.
+Dependency and `init-db`/schema gates precede dependent services. Failed migration preserves errors and data. Legacy conversion scans distinct principals and skips artifact hashing once unreadable evidence requires refusal, preserving access guards without Python row processing over retained history. Old Manifest releases use the [retirement upgrade procedure](../Temporal/WorkflowTypeCatalogAndLifecycle.md#112-moonmindmanifestingest-lifecycle-retired).
+
+**Active journals and recovery.** After storage qualification, the journal
+helper stops actual `agent_runtime` writers and `artifacts` sweepers, verifies
+quiescence and compacts committed chunks into complete JSONL journals for old
+readers. References/event locators commit atomically; original chunks remain
+recoverable until that commit. Recorded source helper images support rollback.
+Unavailable storage, artifacts or consumer observations prevent recreation.
+Interrupted Activities recover under their existing logical steps and budgets;
+completed workflow effects are not repeated.
+
+After a partial apply, every journal consumer is stopped again. Retry recompacts
+before recreation because a partial writer may have committed more chunks.
+After the final automatic attempt, consumer services are recreated on the
+selected release; stopped one-offs remain stopped. Recovery/reporting failures
+are recorded beside the original apply error.
+
+Once detached apply confirms installation, readiness has a fifteen-minute
+budget measured from that checkpoint, including controller restarts. An early
+`unhealthy` observation does not trigger another apply. Exhaustion records
+`partially_verified` while retaining installation. Readiness precedes routing
+cutover and operator-access checks.
 
 ### 10.7 Verify desired state
 
@@ -194,13 +244,13 @@ The deployment-control worker is a submission/observation adapter where availabl
 
 The controller's restart policy, durable state, and Docker access preserve ownership, target, progress, deadline, and budget across target-project shutdown. Restart resumes unfinished work under the stack lock after earlier one-offs exit. Capability one-offs await async cleanup, flush receipts or original errors, then exit without interpreter finalization.
 
-The host derives its endpoint and default project from the installed controller identity; a changed inferred Compose name cannot create another stack. A recorded target must belong to this deployment; `--compose-project` overrides it. Unrecorded targets use Compose's rendered name. Target-less controller submissions derive the project and files from bootstrap/`.env`, including overrides, and omit Docker transport services. `MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK` overrides the project-scoped private network.
+Host endpoint and project follow installed controller identity; `--compose-project` overrides the project. Unrecorded targets use Compose's name. Target-less submissions use bootstrap/`.env` files and overrides, omitting Docker transport services. MoonMind bundles Wollomatic socket-proxy and a capability-switch launcher, replacing mounted templates. BuildKit upgrades and stdin half-close pass through; operation budgets own timeouts. Independent controller socket access survives proxy recreation. `MOONMIND_DEPLOYMENT_CONTROLLER_NETWORK` overrides its private network.
 
 **Installation.** When no controller secret exists, or bootstrap left a secret but no reachable endpoint, operation record, or container, the host entrypoint installs the controller with `deploy/controller/bootstrap.py` from the selected release image, running it from that same application image (no separate controller image is published), and submits through it. A still-active legacy writer defers the controller; a controller from the retired shell installer is frozen while its state is checked and, only when idle, killed before it can accept more work, keeping its volume and secret. `--dry-run` installs nothing.
 
 **Refresh.** The default host command refreshes an idle controller from the selected release before submission. It extracts the stdlib bootstrap from the staged target, falling back to an observed installed application image when a rollback target lacks that lifecycle. Bootstrap runs in a temporary trusted image container with the Docker socket and writable controller state on the private controller network, so root-owned records and locks stay readable without host privilege changes; it needs no healthy API or worker and leaves the host checkout, Compose project, mounts, network, and credentials in place. If the identity file is lost, bootstrap first recovers it from the Compose installation without replacing the controller. Replacement holds the stack lock; a capable controller with open work keeps ownership, and an explicitly selected controller, endpoint, or secret keeps its release choice.
 
-**Handoff.** Before applying a release, a managed controller runs its `controller-handoff` one-off to replace a controller running other code. The old process and kernel lock end; the replacement resumes once the one-off exits. Only that operation may be open, and each attempt group hands off once. This lets Settings Operations install new controller behavior without a host step. Older controllers enter through the requested image's `--omnigent-select` callback; otherwise an owner lacking `active-journal-transition` or `unversioned-routing-cutover` is refused before mutation and directed to `./tools/update-moonmind.sh`.
+**Handoff.** A selected storage-volume transition finishes before handoff so an older rollback controller sees verified data. Before applying application services, a managed controller runs its `controller-handoff` one-off to replace a controller running other code. The old process and kernel lock end; the replacement resumes once the one-off exits. Only that operation may be open, and each attempt group hands off once. This lets Settings Operations install new controller behavior without a host step. Older controllers enter through the requested image's `--omnigent-select` callback; otherwise an owner lacking `active-journal-transition` or `unversioned-routing-cutover` is refused before mutation and directed to `./tools/update-moonmind.sh`.
 
 Handoff shares one monotonic deadline within the caller's 300-second allowance, reserving recovery time. Subprocesses consume the remaining budget. Linux process groups are terminated, killed if necessary, and reaped before recovery reconciles known running or stopped candidates, including created replacements, and attempts saved-configuration restoration. New replacements require zero restarts; recovery permits history only with stable identity, restart count, start time and healthy state. Receipts retain the original failure and distinguish verified restoration from failed or unverified recovery. An available controller can continue applying, including targets predating handoff.
 

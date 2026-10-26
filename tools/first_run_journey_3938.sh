@@ -34,7 +34,10 @@
 # work is saved and canceled there. The worktree is then checked out at the
 # candidate revision in place, as an operator's update would, and the stack
 # is updated by the production controller against the same volumes and state
-# directories. The API startup log must show the guarded
+# directories. Controller admission crosses a controlled pull refusal, lost
+# acknowledgment after apply, observer restart and delayed API startup. The
+# same operation resumes verification once without another apply. The API
+# startup log must show the guarded
 # conversion classifying the retained data as one eligible operator, and the
 # deployment controller's own conversion check, run against the live stack,
 # must record it as published (a fresh install must record fresh_init). The
@@ -600,7 +603,14 @@ compose_candidate_config() {
 # untracked state (var/, deploy/state) and the named volumes stay.
 upgrade_source_to_candidate() {
   git -C "$DEPLOY_DIR" checkout --detach --quiet "$CANDIDATE_REVISION"
-  COMPOSE_OVERRIDES=()
+  # Hold the real API process until the installed checkpoint survives observer
+  # loss. Its ordinary entrypoint and healthcheck then establish readiness.
+  local gate="$DEPLOY_DIR/var/first-run-journey/delayed-api.json"
+  mkdir -p "$(dirname "$gate")"
+  cat > "$gate" <<'EOF'
+{"services":{"api":{"command":["sh","-c","while [ ! -f /tmp/moonmind-journey-start ]; do sleep 1; done; exec sh /app/api_service/entrypoint.sh"]}}}
+EOF
+  COMPOSE_OVERRIDES=(-f "$gate")
 }
 
 # A local registry supplies the CI-built image to the ordinary pull/apply path,
@@ -628,6 +638,7 @@ converge_upgrade_routing() {
   python3 "$SCRIPT_DIR/single_user_journey_cutover.py" \
     --repo "$DEPLOY_DIR" --project "$PROJECT_NAME" \
     --image "$UPGRADE_CONTROLLER_IMAGE" --revision "$CANDIDATE_REVISION" \
+    --api-base "$API_BASE" \
     --receipt-file "$STATE_DIR/routing-cutover.json" \
     -f "$DEPLOY_DIR/docker-compose.yaml" -f "$ISOLATION_OVERRIDE" \
     ${COMPOSE_OVERRIDES[@]+"${COMPOSE_OVERRIDES[@]}"} 2>&1 | redact
@@ -757,6 +768,10 @@ else
   checks verify before-upgrade
   browser before-upgrade
   checks release before-upgrade
+  # Keep the installed configuration through conversion verification. Later
+  # journeys may recreate the API with its normal command; retain the fault
+  # override file for the completed operation's diagnostics.
+  COMPOSE_OVERRIDES=()
   fresh_journey after-upgrade
 fi
 

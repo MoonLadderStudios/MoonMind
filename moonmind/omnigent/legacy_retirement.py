@@ -279,8 +279,8 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         pathId="omnigent.legacy.opencode_host_image_alias",
         owner="omnigent-deployment",
         description=(
-            "OpenCode-specific shared-image variable and the "
-            "``omnigent-host-opencode`` image alias it names."
+            "OpenCode-specific image variable retained for existing deployment "
+            "configuration and legacy Host Classes; defaults to the shared image."
         ),
         retirementClass=RetirementClass.ACTIVE_PRODUCT_PATH,
         surfaces=(

@@ -103,7 +103,7 @@ CALLER_INVENTORY: tuple[dict[str, str], ...] = (
     {"area": "terminal finalization", "path": "moonmind/workflows/temporal/github_issue_finalization.py", "role": "writer", "survivingPolicy": SURVIVING_POLICY_OWNER},
     {"area": "interrupted-handoff reconciliation", "path": "moonmind/workflows/temporal/github_issue_reconciliation.py", "role": "writer", "survivingPolicy": SURVIVING_POLICY_OWNER},
     {"area": "recovery/operator surface", "path": "moonmind/workflows/temporal/github_issue_recovery_surface.py", "role": "reader", "survivingPolicy": SURVIVING_POLICY_OWNER},
-    {"area": "attempt handoff publication", "path": "moonmind/workflows/temporal/activities/attempt_handoff_activities.py", "role": "writer", "survivingPolicy": SURVIVING_POLICY_OWNER},
+    {"area": "claim handoff publication", "path": "moonmind/workflows/temporal/issue_claim_store.py", "role": "writer", "survivingPolicy": SURVIVING_POLICY_OWNER},
     {"area": "finalization activities", "path": "moonmind/workflows/temporal/activities/github_issue_finalization_activities.py", "role": "writer", "survivingPolicy": SURVIVING_POLICY_OWNER},
     {"area": "reconciliation activities", "path": "moonmind/workflows/temporal/activities/github_issue_reconciliation_activities.py", "role": "writer", "survivingPolicy": SURVIVING_POLICY_OWNER},
     {"area": "legacy cutover assessment activities", "path": "moonmind/workflows/temporal/activities/github_issue_legacy_cutover_activities.py", "role": "reader", "survivingPolicy": SURVIVING_POLICY_OWNER},

@@ -134,7 +134,6 @@ from moonmind.workflows.temporal.agent_result_payloads import (
     compact_moonspec_verify_metadata,
     compact_published_agent_run_result_payload,
 )
-from moonmind.workflows.provider_failures import classify_provider_failure
 from moonmind.workflows.temporal.completion_summary import (
     is_generic_completion_summary,
 )
@@ -167,6 +166,7 @@ from moonmind.workflows.temporal.jira_agent_skills import JIRA_AGENT_SKILLS
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
+    AgentResultError,
     AgentRunStatus,
     AgentRunResult,
     MANAGED_RUNTIME_PROFILE_TIER_POLICY_VERSION,
@@ -1434,15 +1434,16 @@ def _temporal_snapshot_from_payload(
     )
 
 async def _verified_artifact_parent_scope(
-    *, info: Any, parent_workflow_id: str, parent_run_id: str,
+    *, info: Any, parent_workflow_id: str, parent_run_id: str | None,
     parent_temporal_run_id: str | None = None,
 ) -> str | None:
     """Delegate only to this exact Activity run's server-recorded parent.
 
     Retained AgentRun histories may carry provider-authored parent metadata.
     It cannot grant artifact access without independent Temporal ancestry.
+    Pass ``None`` when the server alone supplies the parent run identity.
     """
-    if info is None or not parent_workflow_id or not parent_run_id:
+    if info is None or not parent_workflow_id or parent_run_id == "":
         return None
     from temporalio.api.common.v1 import WorkflowExecution
     from temporalio.api.workflowservice.v1 import (
@@ -1487,7 +1488,10 @@ async def _verified_artifact_parent_scope(
                 return None
             if parent_temporal_run_id and record.parent_execution.run_id != parent_temporal_run_id:
                 return None
-            if record.parent_execution.run_id != parent_run_id:
+            if (
+                parent_run_id is not None
+                and record.parent_execution.run_id != parent_run_id
+            ):
                 # Branch turns retain a semantic Step Execution run ID. Even
                 # with the server UUID, prove the semantic link from this exact
                 # launch: retained inputs may contain provider-authored fields.
@@ -2786,11 +2790,18 @@ class TemporalSandboxActivities:
         from moonmind.schemas.saved_work_models import saved_work_path_exclusion
         return saved_work_path_exclusion(relative.as_posix()) is not None
 
-    def _workspace_has_traversal(self, workspace: Path, members: set[str] | None = None) -> bool:
+    def _workspace_has_traversal(
+        self,
+        workspace: Path,
+        members: set[str] | None = None,
+        excluded_paths: set[str] | None = None,
+    ) -> bool:
         paths = workspace.rglob("*") if members is None else (workspace / name for name in members)
         for path in paths:
             relative = path.relative_to(workspace)
-            if self._workspace_archive_excludes(relative):
+            if self._workspace_archive_excludes(relative) or relative.as_posix() in (
+                excluded_paths or ()
+            ):
                 continue
             try:
                 if path.is_symlink():
@@ -2801,54 +2812,17 @@ class TemporalSandboxActivities:
                 return True
         return False
 
-    async def _workspace_archive_members(self, model, workspace: Path) -> set[str] | None:
+    async def _workspace_archive_selection(self, model, workspace: Path):
         if not (workspace / ".git").exists():
             return None
-        # Checkout recreates empty gitlink directories already present in HEAD;
-        # replaying an index patch cannot recreate newly staged directories.
-        # Other worktree states need their own capture, including deletion state
-        # hidden behind a symlinked ancestor, so refuse to omit that local work.
-        staged = await _run_command(_sandbox_workspace_git_command(
-            workspace, "ls-files", "--stage", "-z"
-        ))
-        gitlinks = {
-            entry.partition("\t")[2]
-            for entry in staged.stdout.split("\x00")
-            if entry.startswith("160000 ")
-        }
-        if gitlinks:
-            tree = await _run_command(
-                _sandbox_workspace_git_command(
-                    workspace, "ls-tree", "--full-tree", "-r", "-z", "HEAD"
-                )
-            )
-            head_gitlinks = {
-                entry.partition("\t")[2]
-                for entry in tree.stdout.split("\x00")
-                if entry.startswith("160000 ")
-            }
-            for name in gitlinks:
-                submodule = workspace / name
-                if (
-                    name not in head_gitlinks
-                    or submodule.resolve() != submodule
-                    or not submodule.is_dir()
-                    or any(submodule.iterdir())
-                ):
-                    raise ValueError(
-                        "Workspace snapshot cannot preserve submodule worktree state"
-                    )
-        args = ["ls-files", "--cached", "--exclude-standard", "-z"]
-        if model.include_untracked:
-            args.append("--others")
-        listed = await _run_command(_sandbox_workspace_git_command(workspace, *args))
-        members = set(listed.stdout.split("\x00")) - {""}
-        if model.include_ignored_files:
-            ignored = await _run_command(_sandbox_workspace_git_command(
-                workspace, "ls-files", "--others", "--ignored", "--exclude-standard", "-z"
-            ))
-            members.update(set(ignored.stdout.split("\x00")) - {""})
-        return members
+        from .runtime.checkpoint_submodules import checkpoint_worktrees
+
+        return await asyncio.to_thread(
+            checkpoint_worktrees,
+            workspace,
+            include_untracked=model.include_untracked,
+            include_ignored=model.include_ignored_files,
+        )
 
     async def workspace_capture_checkpoint(
         self,
@@ -2927,8 +2901,17 @@ class TemporalSandboxActivities:
         # Validate the same members that the archive builder includes. Skill
         # projections are excluded runtime state; their links and ownership
         # cannot make an otherwise safe repository checkpoint unsafe.
-        members = await self._workspace_archive_members(model, workspace) if model.kind == "worktree_archive" else None
-        if model.kind == "worktree_archive" and await asyncio.to_thread(self._workspace_has_traversal, workspace, members):
+        selection = (
+            await self._workspace_archive_selection(model, workspace)
+            if model.kind == "worktree_archive"
+            else None
+        )
+        members, repositories, exclusions = (
+            selection if selection is not None else (None, {}, set())
+        )
+        if model.kind == "worktree_archive" and await asyncio.to_thread(
+            self._workspace_has_traversal, workspace, members, exclusions
+        ):
             diagnostic_ref = await self._put_checkpoint_bytes(
                 b"unsafe workspace materialization",
                 content_type="text/plain",
@@ -2951,7 +2934,13 @@ class TemporalSandboxActivities:
             return result.model_dump(by_alias=True, mode="json")
 
         try:
-            workspace_evidence = await self._capture_workspace_evidence(model, workspace, members=members)
+            workspace_evidence = await self._capture_workspace_evidence(
+                model,
+                workspace,
+                members=members,
+                repositories=repositories,
+                exclusions=exclusions,
+            )
         except TemporalActivityRuntimeError:
             raise
         except Exception as exc:
@@ -2980,7 +2969,10 @@ class TemporalSandboxActivities:
         self,
         model: WorkspaceCheckpointCaptureInput,
         workspace: Path,
-        *, members: set[str] | None = None,
+        *,
+        members: set[str] | None = None,
+        repositories: dict[str, Path] | None = None,
+        exclusions: set[str] | None = None,
     ) -> WorkspaceCheckpointEvidenceModel:
         workspace_identity_digest = _workspace_identity_digest(workspace)
         if model.kind == "git_patch":
@@ -3068,17 +3060,81 @@ class TemporalSandboxActivities:
             pre_status = None
             index_payload = b""
             index_paths = []
+            submodules = []
+            submodule_states = {}
+            repositories = repositories or {}
+            exclusions = exclusions or set()
             if (workspace / ".git").exists():
+                from .runtime.checkpoint_submodules import submodule_capture_states
+
+                submodule_states = await asyncio.to_thread(
+                    submodule_capture_states,
+                    repositories,
+                    members,
+                    high_security_mode=high_security_mode,
+                    exclusions=exclusions,
+                )
                 pre_status = (await _run_command(_sandbox_workspace_git_command(
                     workspace, "status", "--porcelain=v1", "-z", "--untracked-files=all",
                 ))).stdout
                 from moonmind.workflows.temporal.runtime.checkpoint_history import capture_git_index_patch
                 index_payload, index_paths = await asyncio.to_thread(capture_git_index_patch, workspace, head, high_security_mode=high_security_mode)
             archive_payload, entries = await asyncio.to_thread(
-                self._build_worktree_archive, workspace, members=members, high_security_mode=high_security_mode
+                self._build_worktree_archive,
+                workspace,
+                members=members,
+                high_security_mode=high_security_mode,
+                excluded_paths=exclusions,
             )
             if pre_status is not None:
                 from moonmind.workflows.temporal.runtime.checkpoint_history import capture_git_history
+                for name, repo in repositories.items():
+                    state = submodule_states[name]
+                    payload, selected_history = await asyncio.to_thread(
+                        capture_git_history,
+                        repo,
+                        state["headCommit"],
+                        high_security_mode=high_security_mode,
+                        self_contained=True,
+                    )
+                    selected_history["ref"] = await self._put_checkpoint_bytes(
+                        payload,
+                        content_type="application/x-git-pack",
+                        metadata={"artifact_kind": "checkpoint_history"},
+                    )
+                    patch = state["indexPatch"]
+                    patch_ref = (
+                        await self._put_checkpoint_bytes(
+                            patch,
+                            content_type="application/vnd.moonmind.git-index-patch",
+                            metadata={"artifact_kind": "checkpoint_index"},
+                        )
+                        if patch
+                        else None
+                    )
+                    submodules.append(
+                        {
+                            "path": name,
+                            "baseCommit": state["headCommit"],
+                            "gitHistory": selected_history,
+                            "git": {
+                                **(
+                                    {"statusDigest": state["statusDigest"]}
+                                    if model.include_untracked
+                                    and not any(
+                                        p.startswith(name + "/") for p in exclusions
+                                    )
+                                    else {}
+                                ),
+                                "indexPatch": {
+                                    "ref": patch_ref,
+                                    "digest": "sha256:"
+                                    + hashlib.sha256(patch).hexdigest(),
+                                    "paths": state["indexPaths"],
+                                },
+                            },
+                        }
+                    )
                 history_payload, history = await asyncio.to_thread(capture_git_history, workspace, head, high_security_mode=high_security_mode)
                 if history_payload is not None:
                     history["ref"] = await self._put_checkpoint_bytes(
@@ -3092,10 +3148,24 @@ class TemporalSandboxActivities:
                     workspace, "status", "--porcelain=v1", "-z", "--untracked-files=all",
                 ))).stdout
                 post_index, post_index_paths = await asyncio.to_thread(capture_git_index_patch, workspace, head, high_security_mode=high_security_mode)
-                if (head != post_head or pre_status != post_status
-                        or (index_payload, index_paths) != (post_index, post_index_paths)
-                        or members != await self._workspace_archive_members(model, workspace)):
+                if (
+                    head != post_head
+                    or pre_status != post_status
+                    or (index_payload, index_paths) != (post_index, post_index_paths)
+                    or (members, repositories, exclusions)
+                    != await self._workspace_archive_selection(model, workspace)
+                ):
                     raise TemporalActivityRuntimeError("workspace changed during archive capture")
+                if submodule_states != await asyncio.to_thread(
+                    submodule_capture_states,
+                    repositories,
+                    members,
+                    high_security_mode=high_security_mode,
+                    exclusions=exclusions,
+                ):
+                    raise TemporalActivityRuntimeError(
+                        "submodule changed during archive capture"
+                    )
             workspace_digest = _workspace_content_digest(entries)
             archive_ref = await self._put_checkpoint_bytes(
                 archive_payload,
@@ -3107,11 +3177,12 @@ class TemporalSandboxActivities:
                 "kind": "worktree_archive",
                 "baseCommit": head,
                 "archiveRef": archive_ref,
-                "archiveDigest": "sha256:" + hashlib.sha256(archive_payload).hexdigest(),
+                "archiveDigest": "sha256:"
+                + hashlib.sha256(archive_payload).hexdigest(),
                 "workspaceDigest": workspace_digest,
                 "entries": entries,
                 "pathCount": len(entries),
-                "excludedPaths": sorted(name for name in (members or ()) if self._workspace_archive_excludes(Path(name))),
+                "excludedPaths": sorted(exclusions),
             }
             if history:
                 manifest_body["gitHistory"] = history
@@ -3123,10 +3194,11 @@ class TemporalSandboxActivities:
                     "ref": index_ref, "digest": "sha256:" + hashlib.sha256(index_payload).hexdigest(),
                     "paths": index_paths,
                 }}
+                if submodules:
+                    manifest_body["git"]["submodules"] = submodules
             # Full Git-status equality is truthful only for a complete
             # selected worktree. Excluded paths never become deletion claims.
-            if (pre_status is not None and model.include_untracked
-                    and not any(self._workspace_archive_excludes(Path(name)) for name in (members or ()))):
+            if pre_status is not None and model.include_untracked and not exclusions:
                 manifest_body["gitStatusDigest"] = (
                     "sha256:" + hashlib.sha256(pre_status.encode("utf-8")).hexdigest()
                 )
@@ -3156,10 +3228,22 @@ class TemporalSandboxActivities:
             )
         raise TemporalActivityRuntimeError(f"unsupported checkpoint kind: {model.kind}")
 
-    def _build_worktree_archive(self, workspace: Path, *, members: set[str] | None = None, high_security_mode: bool = True) -> tuple[bytes, list[dict[str, Any]]]:
+    def _build_worktree_archive(
+        self,
+        workspace: Path,
+        *,
+        members: set[str] | None = None,
+        high_security_mode: bool = True,
+        excluded_paths: set[str] | None = None,
+    ) -> tuple[bytes, list[dict[str, Any]]]:
         from moonmind.workflows.temporal.runtime.workspace_archive import build_workspace_archive
         try:
-            return build_workspace_archive(workspace, members=members, high_security_mode=high_security_mode)
+            return build_workspace_archive(
+                workspace,
+                members=members,
+                high_security_mode=high_security_mode,
+                excluded_paths=excluded_paths,
+            )
         except ValueError as exc:
             raise TemporalActivityRuntimeError(str(exc)) from exc
 
@@ -7736,7 +7820,18 @@ class TemporalAgentRuntimeActivities:
             activity_type="omnigent.prepare_child_execution_plan",
             kwargs=kwargs,
         )
-        return await omnigent_prepare_child_execution_plan_activity(payload)
+        parent_scope = await _verified_artifact_parent_scope(
+            info=temporal_activity.info(),
+            parent_workflow_id=str(payload.get("parentWorkflowId") or "").strip(),
+            parent_run_id=None,
+        )
+        if parent_scope is None:
+            raise TemporalArtifactAuthorizationError(
+                "Resolver parent artifact authority could not be verified"
+            )
+        return await omnigent_prepare_child_execution_plan_activity(
+            payload, admitted_principal=parent_scope
+        )
 
     async def omnigent_admit_scheduled_occurrence_plan(
         self, request: Any = None, /, **kwargs: Any
@@ -8542,7 +8637,7 @@ class TemporalAgentRuntimeActivities:
                 else {}
             )
             try:
-                await self.execution_notify_completion(
+                notification = await self.execution_notify_completion(
                     {
                         "workflowId": (
                             info.workflow_id
@@ -8567,7 +8662,21 @@ class TemporalAgentRuntimeActivities:
                         "result": result_payload,
                     }
                 )
+                if isinstance(published_result, AgentRunResult) and isinstance(
+                    notification, Mapping
+                ):
+                    if notification.get("status") in {
+                        "failed",
+                        "blocked",
+                    } or notification.get("errors"):
+                        published_result.secondary_errors.append(
+                            AgentResultError(code="completion_notification_failed")
+                        )
             except Exception:
+                if isinstance(published_result, AgentRunResult):
+                    published_result.secondary_errors.append(
+                        AgentResultError(code="completion_notification_unavailable")
+                    )
                 logger.warning(
                     "agent_runtime.publish_artifacts completion notification failed",
                     exc_info=True,
@@ -9839,6 +9948,8 @@ class TemporalAgentRuntimeActivities:
             "provider_error_code": result_dict.get("provider_error_code") or result_dict.get("providerErrorCode"),
             "metrics": result_dict.get("metrics") or {},
         }
+        if isinstance(result, AgentRunResult):
+            summary_payload["agentResult"] = result.outcome_projection()
         report_output = (
             moonmind_metadata.get("reportOutput")
             if isinstance(moonmind_metadata.get("reportOutput"), Mapping)
@@ -13640,6 +13751,15 @@ class TemporalAgentRuntimeActivities:
                     meta["acceptedRepositoryEvidence"] = (
                         accepted_repository_evidence
                     )
+                    result = result.model_copy(
+                        update={
+                            "publication_state": (
+                                "published"
+                                if push_info.get("push_status") == "pushed"
+                                else "not_published"
+                            )
+                        }
+                    )
                 elif push_info.get("push_status") in {"pushed", "no_commits"}:
                     push_info = {
                         **push_info,
@@ -13899,7 +14019,21 @@ class TemporalAgentRuntimeActivities:
                 metadata["publishEvidence"] = publish_evidence_ref
 
         def _validated_result(update: Mapping[str, Any]) -> AgentRunResult:
-            updated = result.model_copy(update=dict(update))
+            canonical_update = dict(update)
+            if result.failure_class is None and update.get("failure_class"):
+                failure = AgentRunResult(
+                    failure_class=update["failure_class"],
+                    provider_error_code=update.get("provider_error_code"),
+                )
+                canonical_update.update(
+                    objective_outcome="failed",
+                    failure_id=result.failure_id or failure.failure_id,
+                    retry_disposition=(result.retry_disposition if result.retry_disposition != "unknown" else failure.retry_disposition),
+                    provider_failure=result.provider_failure or failure.provider_failure,
+                )
+            elif evaluation.satisfied and result.failure_class is None:
+                canonical_update["objective_outcome"] = "succeeded"
+            updated = result.model_copy(update=canonical_update)
             payload = updated.model_dump(mode="json", by_alias=True)
             try:
                 return AgentRunResult.model_validate(payload)
@@ -14033,13 +14167,8 @@ class TemporalAgentRuntimeActivities:
                 "Batch fan-out failed; see terminal evidence errors."
             )
             failure_class = "execution_error"
-            try:
-                classification = classify_provider_failure(terminal_failure_message)
-            except Exception:
-                classification = None
-            if classification is not None and classification.failure_class == "user_error":
-                # Auth/scope failures (401/403) are operator action, not a
-                # transient to retry behind the same unreachable path.
+            provider_failure = result.provider_failure or {}
+            if provider_failure.get("observation") == "confirmed" and provider_failure.get("providerErrorClass") in {"auth", "credential_scope"}:
                 failure_class = "user_error"
             return _validated_result(
                 {
@@ -16541,6 +16670,13 @@ class TemporalAgentRuntimeActivities:
                 "summary": new_summary,
                 "failure_class": None,
                 "provider_error_code": None,
+                "retry_recommendation": None,
+                "failure_id": None,
+                "provider_failure": None,
+                "execution_state": "completed",
+                "objective_outcome": "succeeded",
+                "publication_state": "published",
+                "retry_disposition": "no_retry",
                 "metadata": override_meta,
             }
         )

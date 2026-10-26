@@ -565,20 +565,28 @@ async def test_generic_auth_failure_stops_step_retries_and_names_reauthenticatio
 
 
 @pytest.mark.asyncio
-async def test_generic_dispatch_recommends_step_retry_for_unavailable_external_service() -> (
-    None
-):
-    """A pre-session GitHub outage gets a fresh Step Execution, not a failure.
-
-    Regression for mm:3d760c52-56af-5a25-bfc9-771ea7d6bc68: a two-minute
-    GitHub rate limit at exact-host qualification ended the workflow 40s after
-    it waited hours for capacity. The parent honors ``retry_step_execution``
-    through its existing bounded step-retry contract.
-    """
+@pytest.mark.parametrize(
+    ("code", "recommendation", "message"),
+    [
+        (
+            "OMNIGENT_EXTERNAL_SERVICE_UNAVAILABLE",
+            "retry_step_execution",
+            "API rate limit exceeded",
+        ),
+        (
+            "OMNIGENT_WORKSPACE_SAVE_FAILED",
+            "do_not_retry",
+            "non-repository submodule contents: module",
+        ),
+    ],
+)
+async def test_generic_dispatch_preserves_typed_boundary_failure(
+    code, recommendation, message
+) -> None:
+    """Known boundary failures keep their cause and recovery recommendation."""
 
     from moonmind.omnigent.harness_platform.failures import (
         HarnessPlatformError,
-        HarnessPlatformFailure,
     )
     from tests.unit.omnigent.test_generic_platform_production_services import _plan
 
@@ -591,9 +599,8 @@ async def test_generic_dispatch_recommends_step_retry_for_unavailable_external_s
     class Realizer:
         async def execute(self, request, admitted):
             raise HarnessPlatformError(
-                "GitHub preflight failed during host repository_access after "
-                "3 attempt(s): GraphQL: API rate limit exceeded for user ID 1.",
-                code=HarnessPlatformFailure.OMNIGENT_EXTERNAL_SERVICE_UNAVAILABLE,
+                message,
+                code=code,
             )
 
     class Registry:
@@ -615,9 +622,9 @@ async def test_generic_dispatch_recommends_step_retry_for_unavailable_external_s
 
     assert result is not None
     assert result.failure_class == "integration_error"
-    assert result.provider_error_code == "OMNIGENT_EXTERNAL_SERVICE_UNAVAILABLE"
-    assert result.retry_recommendation == "retry_step_execution"
-    assert "API rate limit exceeded" in result.summary
+    assert result.provider_error_code == code
+    assert result.retry_recommendation == recommendation
+    assert message in result.summary
 
 
 @pytest.mark.asyncio

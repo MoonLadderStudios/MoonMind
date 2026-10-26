@@ -1030,7 +1030,11 @@ def _controller_poll_fixture(tmp_path, monkeypatch, statuses):
             raise urllib.error.URLError("connection refused")
         return FakeResponse(
             200,
-            {"operationId": "op-1", "status": outcome, "installed": {"image": "img"}},
+            {
+                "operationId": "op-1",
+                "installed": {"image": "img"},
+                **(outcome if isinstance(outcome, dict) else {"status": outcome}),
+            },
         )
 
     monkeypatch.setattr(update, "_open_controller", fake_urlopen)
@@ -1075,3 +1079,51 @@ def test_controller_poll_timeout_names_the_resumable_submission(tmp_path, monkey
         update._submit_via_controller(
             record, tmp_path, controller_url="http://127.0.0.1:8472", secret_file=None
         )
+
+
+def test_host_observes_storage_copy_beyond_the_ordinary_poll_budget(
+    tmp_path, monkeypatch
+):
+    copying = {
+        "status": "staged",
+        "omnigentStep": "storage-prepare",
+        "attemptGroup": 1,
+        "attempts": [],
+    }
+    record, gets = _controller_poll_fixture(
+        tmp_path, monkeypatch, [copying, copying, "succeeded"]
+    )
+    clock = SimpleNamespace(value=0)
+    monkeypatch.setattr(update, "time", SimpleNamespace(time=lambda: clock.value))
+    monkeypatch.setattr(
+        update, "_sleep", lambda _: setattr(clock, "value", clock.value + 3600)
+    )
+    assert (
+        update._submit_via_controller(
+            record, tmp_path, controller_url="http://127.0.0.1:8472", secret_file=None
+        )
+        == 0
+    )
+    assert len(gets) == 3 and clock.value == 7200
+
+
+def test_unchanged_storage_copy_observations_do_not_extend_the_wait_forever(
+    tmp_path, monkeypatch
+):
+    copying = {
+        "status": "staged",
+        "omnigentStep": "storage-prepare",
+        "attemptGroup": 1,
+        "attempts": [],
+    }
+    record, gets = _controller_poll_fixture(tmp_path, monkeypatch, [copying])
+    clock = SimpleNamespace(value=0)
+    monkeypatch.setattr(update, "time", SimpleNamespace(time=lambda: clock.value))
+    monkeypatch.setattr(
+        update, "_sleep", lambda _: setattr(clock, "value", clock.value + 3600)
+    )
+    with pytest.raises(RuntimeError, match="--resume sub-1"):
+        update._submit_via_controller(
+            record, tmp_path, controller_url="http://127.0.0.1:8472", secret_file=None
+        )
+    assert 5 <= len(gets) <= 7

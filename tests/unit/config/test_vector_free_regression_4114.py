@@ -785,11 +785,9 @@ def test_surviving_dependency_libraries_remain_supported() -> None:
     ``tests/integration/test_installed_graph_vector_free_4111.py``; this
     hermetic pin keeps declaration support explicit without an install.
     """
-    # ``toml`` rather than ``tomllib``: pyproject declares python >=3.10 and
-    # tomllib only exists from 3.11.
-    import toml
+    import tomllib
 
-    pyproject = toml.loads(
+    pyproject = tomllib.loads(
         (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     )
     declared = {

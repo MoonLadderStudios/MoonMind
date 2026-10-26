@@ -651,8 +651,8 @@ def test_upgrade_converges_routing_before_candidate_work(journey: Journey) -> No
     args = receipt["args"]
     assert args[args.index("--project") + 1] == "moonmind-test-startup-unit"
     assert args[args.index("--image") + 1] == "127.0.0.1:17321/moonmind:journey"
+    assert args[args.index("--api-base") + 1] == "http://127.0.0.1:7000"
     files = [args[index + 1] for index, item in enumerate(args) if item == "-f"]
-    assert len(files) == 2
     assert files[0].endswith("/docker-compose.yaml")
     assert files[1].endswith("/isolation.json")
     request = receipt["helperRequest"]

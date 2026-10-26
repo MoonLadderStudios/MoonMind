@@ -20,7 +20,7 @@ import json
 import os
 import tempfile
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -59,7 +59,7 @@ def _utc_now() -> str:
     # Millisecond resolution keeps rapid successive operations (restart
     # recovery, double-submit) distinctly ordered; second resolution ties
     # and makes "newest open" selection nondeterministic.
-    return datetime.now(UTC).isoformat(timespec="milliseconds")
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -365,6 +365,24 @@ class OperationStore:
         operation["journalTransition"] = {
             **(operation.get("journalTransition") or {}), **dict(values)
         }
+        return self._write(operation)
+
+    def record_storage_transition(self, operation_id: str, values: Mapping[str, Any]) -> dict:
+        """Keep verified copy provenance separate from application readiness."""
+        operation = self.load(operation_id)
+        operation["storageTransition"] = {
+            **(operation.get("storageTransition") or {}), **dict(values)
+        }
+        return self._write(operation)
+
+    def bind_release_configuration(
+        self, operation_id: str, *, target: Mapping[str, Any], image: str
+    ) -> dict:
+        """Keep submitted intent alongside the selected image's effective files."""
+        operation = self.load(operation_id)
+        operation["releaseConfiguration"] = {"submittedTarget": operation["target"]}
+        operation["resolvedImage"] = image
+        operation["target"] = dict(target)
         return self._write(operation)
 
     def record_routing_cutover(

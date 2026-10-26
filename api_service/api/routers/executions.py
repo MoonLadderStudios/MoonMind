@@ -4764,6 +4764,7 @@ def _serialize_execution_list_item(record) -> ExecutionListItemModel:
     )
 
     return ExecutionListItemModel(
+        agent_result=finish_summary.get("agentResult") if finish_summary else None,
         source=_TEMPORAL_SOURCE,
         workflow_id=workflow_id,
         run_id=str(getattr(record, "run_id", "") or ""),
@@ -5256,6 +5257,7 @@ def _serialize_execution(
         else None
     )
     return ExecutionModel(
+        agent_result=finish_summary.get("agentResult") if finish_summary else None,
         task_id=None,
         agent_run_id=agent_run_id,
         progress=progress,
@@ -5486,6 +5488,8 @@ def _run_metrics_from_summary(
         "failed", "verification_blocked", "cancelled"
     }:
         success = False
+    elif objective_outcome == "unknown":
+        success = None
     elif success and objective_outcome == "idle" and state_value != "no_commit":
         success = None
     duration_ms = _int_or_none(timestamps.get("durationMs"))

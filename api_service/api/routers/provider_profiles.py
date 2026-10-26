@@ -51,6 +51,9 @@ from api_service.services.provider_profile_creation_presets import (
     apply_provider_profile_creation_preset,
     get_provider_profile_creation_preset,
 )
+from api_service.services.provider_profile_readiness import (
+    provider_profile_readiness_reason,
+)
 from moonmind.auth.secret_refs import (
     ParsedSecretRef,
     SecretBackend,
@@ -71,6 +74,10 @@ from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_r
 from moonmind.utils.logging import (
     redact_profile_file_templates,
     redact_sensitive_payload,
+)
+from moonmind.workflows.provider_failures import (
+    ProviderFailureEvent,
+    build_provider_failure_event,
 )
 from moonmind.workflows.executions.model_resolver import (
     RequestedModelTierUnavailableError,
@@ -757,6 +764,7 @@ class ProviderReadinessCheck(BaseModel):
 class ProviderProfileReadiness(BaseModel):
     status: str = Field(..., pattern="^(ready|warning|blocked)$")
     launch_ready: bool
+    reason_code: str = "configuration_required"
     summary: str
     checks: list[ProviderReadinessCheck]
 
@@ -2440,6 +2448,13 @@ async def setup_provider_api_key(
                     session=session,
                     profile=profile,
                     reason="API key validation failed.",
+                    event=getattr(exc, "provider_failure", None),
+                )
+            elif exc.status_code >= 500:
+                await _record_provider_validation_observation(
+                    session=session,
+                    profile=profile,
+                    event=getattr(exc, "provider_failure", None),
                 )
             raise exc
 
@@ -2732,6 +2747,9 @@ async def validate_claude_oauth_profile(
                 provider_lease_id=_maintenance_guard.lease.lease_id,
             )
         except Exception as exc:
+            await _record_provider_validation_observation(
+                session=session, profile=profile
+            )
             raise HTTPException(
                 status_code=503,
                 detail="Codex OAuth host validation unavailable.",
@@ -2741,6 +2759,10 @@ async def validate_claude_oauth_profile(
             host_status != "ready"
             or host_validation.get("validation_mode") != "credential_only"
         ):
+            if host_status != "credential_invalid":
+                await _record_provider_validation_observation(
+                    session=session, profile=profile
+                )
             raise HTTPException(
                 status_code=400 if host_status == "credential_invalid" else 503,
                 detail=(
@@ -2761,6 +2783,9 @@ async def validate_claude_oauth_profile(
             volume_mount_path=profile.volume_mount_path,
         )
     except Exception as exc:
+        await _record_provider_validation_observation(
+            session=session, profile=profile
+        )
         raise HTTPException(
             status_code=503,
             detail=f"{mapping.label_prefix} OAuth validation unavailable.",
@@ -3102,6 +3127,7 @@ def _apply_api_key_setup_to_profile(
                 "last_validated_at": validated_at.isoformat(),
                 "backing_secret_exists": True,
                 "launch_ready": True,
+                "observation": "confirmed",
             },
         }
     )
@@ -3143,6 +3169,7 @@ async def _mark_api_key_validation_failed(
     session: AsyncSession,
     profile: ManagedAgentProviderProfile,
     reason: str,
+    event: ProviderFailureEvent | None = None,
 ) -> None:
     failed_at = datetime.now(UTC)
     profile.enabled = False
@@ -3160,6 +3187,13 @@ async def _mark_api_key_validation_failed(
                 "backing_secret_exists": False,
                 "launch_ready": False,
                 "failure_reason": redact_sensitive_payload(reason),
+                "observation": "confirmed",
+                "providerFailure": (
+                    event or build_provider_failure_event(
+                        provider_error_class="auth",
+                        provider_error_code="credential_rejected",
+                    )
+                ).to_metadata(),
             },
         }
     )
@@ -3170,6 +3204,32 @@ async def _mark_api_key_validation_failed(
     await session.commit()
     await session.refresh(profile)
     await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
+
+
+async def _record_provider_validation_observation(
+    *,
+    session: AsyncSession,
+    profile: ManagedAgentProviderProfile,
+    event: ProviderFailureEvent | None = None,
+) -> None:
+    """A reporting failure must not replace the original probe error."""
+    from api_service.services.provider_profile_service import (
+        record_provider_probe_observation,
+    )
+
+    try:
+        await session.refresh(profile)
+        record_provider_probe_observation(
+            profile,
+            event=event or build_provider_failure_event(observation="unavailable"),
+            observed_at=datetime.now(UTC),
+        )
+        await session.commit()
+        await sync_provider_profile_manager(
+            session=session, runtime_id=profile.runtime_id
+        )
+    except Exception:
+        logger.warning("provider_validation_observation_persistence_failed", exc_info=True)
 
 
 async def _upsert_managed_secret(
@@ -3278,6 +3338,14 @@ async def validate_provider_api_key(provider_id: str, api_key: str) -> None:
     )
 
 
+class _ProviderApiKeyValidationError(HTTPException):
+    """Provider response facts retained across the API validation boundary."""
+
+    def __init__(self, event: ProviderFailureEvent, *, status_code: int = 401):
+        super().__init__(status_code=status_code, detail="API key validation failed.")
+        self.provider_failure = event
+
+
 async def _validate_openai_api_key(api_key: str) -> None:
     try:
         response = await _get_claude_manual_validation_client().get(
@@ -3290,8 +3358,44 @@ async def _validate_openai_api_key(api_key: str) -> None:
             status_code=502, detail="API key validation failed."
         ) from exc
     if response.status_code in {401, 403}:
-        raise HTTPException(status_code=401, detail="API key validation failed.")
+        code = "401"
+        try:
+            error = response.json().get("error")
+            if (
+                isinstance(error, dict)
+                and isinstance(error.get("code"), str)
+                and error["code"] in {"token_expired", "token_revoked"}
+            ):
+                code = error["code"]
+        except (ValueError, AttributeError):
+            # Malformed error bodies still retain the HTTP authentication rejection.
+            pass
+        raise _ProviderApiKeyValidationError(
+            build_provider_failure_event(
+                provider_error_class="auth", provider_error_code=code
+            )
+        )
     if response.status_code >= 400:
+        if response.status_code == 429:
+            raise _ProviderApiKeyValidationError(
+                build_provider_failure_event(provider_error_class="rate_limit"),
+                status_code=502,
+            )
+        try:
+            error = response.json().get("error")
+            if (
+                response.status_code == 503
+                and isinstance(error, dict)
+                and isinstance(error.get("code"), str)
+                and error.get("code") in {"provider_capacity", "model_at_capacity"}
+            ):
+                raise _ProviderApiKeyValidationError(
+                    build_provider_failure_event(provider_error_class="capacity"),
+                    status_code=502,
+                )
+        except (ValueError, AttributeError):
+            # Malformed bodies use the generic upstream-error response below.
+            pass
         raise HTTPException(status_code=502, detail="API key validation failed.")
 
 
@@ -3422,6 +3526,9 @@ def _provider_profile_readiness(
     return {
         "status": status,
         "launch_ready": launch_ready,
+        "reason_code": provider_profile_readiness_reason(
+            row, launch_ready=launch_ready
+        ),
         "summary": summary,
         "checks": checks,
     }
