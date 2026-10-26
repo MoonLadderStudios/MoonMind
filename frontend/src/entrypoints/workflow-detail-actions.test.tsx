@@ -184,7 +184,8 @@ describe('Workflow actions menu', () => {
     const focused = document.activeElement as HTMLElement;
     expect(focused).not.toBe(within(menu).getByRole('menuitem', { name: 'Force cancel' }));
     expect(focused.className).not.toContain('danger');
-    expect(focused.getAttribute('aria-label') ?? focused.textContent).toMatch(/^View:/);
+    // With no enabled safe action, focus lands on the Unavailable toggle.
+    expect(focused.getAttribute('aria-label') ?? focused.textContent).toMatch(/^Unavailable \(\d+\)/);
   });
 
   it.each([

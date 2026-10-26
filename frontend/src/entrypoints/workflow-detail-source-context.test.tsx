@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { screen, waitFor, cleanup } from '@testing-library/react';
+import { screen, waitFor, within, cleanup, fireEvent } from '@testing-library/react';
 import { renderWithClient } from '../utils/test-utils';
 import type { MockInstance } from 'vitest';
 import {
@@ -9,8 +9,9 @@ import {
 } from './workflow-detail';
 import type { BootPayload } from '../boot/parseBootPayload';
 
-// MoonLadderStudios/MoonMind#4228: starting branch stays visible on the
-// default Chat view with explicit unavailable-data states.
+// MoonLadderStudios/MoonMind#4228: Repository and Starting Branch are Details →
+// Git & Publish facts with explicit unavailable-data states. They are not shared
+// chrome above the tabs.
 
 class MockEventSource {
   onopen: ((event: Event) => void) | null = null;
@@ -139,37 +140,37 @@ describe('workflow detail source context presentation (MM-4228)', () => {
     vi.restoreAllMocks();
   });
 
-  it('shows the recorded starting branch on the default Chat route without switching tabs', async () => {
-    window.history.pushState({}, 'Chat', '/workflows/test-123');
+  function gitAndPublishGroup(): HTMLElement {
+    const group = screen.getByText('Git & Publish').closest('.td-group');
+    if (!(group instanceof HTMLElement)) throw new Error('Git & Publish group is missing');
+    return group;
+  }
+
+  it.each([
+    ['chat', '/workflows/test-123'],
+    ['execution', '/workflows/test-123/execution'],
+    ['evidence', '/workflows/test-123/evidence'],
+  ])('keeps repository and starting branch off the %s tab', async (tab, path) => {
+    window.history.pushState({}, tab, path);
     mockExecutionFetch({
       ...baseExecution,
       repository: 'acme/repo',
       startingBranch: 'feature/example',
-      targetBranch: 'main',
     });
     renderWithClient(<WorkflowDetailPage payload={payload} />);
-    const strip = await screen.findByLabelText('Workflow source context');
-    expect(strip.textContent).toContain('feature/example');
-    expect(strip.textContent).toContain('acme/repo');
+    await waitFor(() =>
+      expect(
+        screen.getByRole('link', { name: new RegExp(`^${tab}`, 'i') }).getAttribute('aria-current'),
+      ).toBe('page'),
+    );
+    await screen.findByRole('heading', { level: 1, name: 'Source context workflow' });
+    expect(screen.queryByText('feature/example')).toBeNull();
+    expect(screen.queryByText('Starting Branch')).toBeNull();
+    expect(screen.queryByText('acme/repo')).toBeNull();
   });
 
-  it('keeps shared context and Overview in parity for a long slash branch', async () => {
-    const longBranch = `feature/${'long-segment-'.repeat(10)}end`;
-    window.history.pushState({}, 'Overview', '/workflows/test-123/overview');
-    mockExecutionFetch({
-      ...baseExecution,
-      repository: 'acme/repo',
-      startingBranch: longBranch,
-    });
-    renderWithClient(<WorkflowDetailPage payload={payload} />);
-    await screen.findByLabelText('Workflow source context');
-    await screen.findByText('Git & Publish');
-    // The shared strip is the single place the starting branch is shown.
-    expect(screen.getAllByText(longBranch)).toHaveLength(1);
-  });
-
-  it('never substitutes target or published branches for the source branch', async () => {
-    window.history.pushState({}, 'Chat', '/workflows/test-123');
+  it('shows repository and the recorded starting branch in Details → Git & Publish', async () => {
+    window.history.pushState({}, 'Details', '/workflows/test-123/details');
     mockExecutionFetch({
       ...baseExecution,
       repository: 'acme/repo',
@@ -186,27 +187,102 @@ describe('workflow detail source context presentation (MM-4228)', () => {
       },
     });
     renderWithClient(<WorkflowDetailPage payload={payload} />);
-    const strip = await screen.findByLabelText('Workflow source context');
-    expect(strip.textContent).toContain('feature/source');
-    expect(strip.textContent).not.toContain('agent/generated-work');
-    // The generated branch still appears in Overview as a separate fact,
-    // proving the distinction is preserved.
-    await waitFor(() => expect(document.body.textContent).not.toContain('Loading workflow'));
+    await screen.findByText('Git & Publish');
+    const group = gitAndPublishGroup();
+    expect(within(group).getByText('Repository')).toBeTruthy();
+    expect(within(group).getByText('acme/repo')).toBeTruthy();
+    expect(within(group).getByText('Starting Branch')).toBeTruthy();
+    expect(within(group).getByText('feature/source')).toBeTruthy();
+    // Target and published branches stay separate facts; neither substitutes
+    // for the recorded source branch.
+    expect(within(group).getByText('Target Branch')).toBeTruthy();
+    expect(within(group).getByText('agent/generated-work')).toBeTruthy();
+  });
+
+  it('shows a long slash branch exactly once', async () => {
+    const longBranch = `feature/${'long-segment-'.repeat(10)}end`;
+    window.history.pushState({}, 'Details', '/workflows/test-123/details');
+    mockExecutionFetch({ ...baseExecution, repository: 'acme/repo', startingBranch: longBranch });
+    renderWithClient(<WorkflowDetailPage payload={payload} />);
+    await screen.findByText('Git & Publish');
+    expect(screen.getAllByText(longBranch)).toHaveLength(1);
+    expect(screen.getByText(longBranch).getAttribute('title')).toBe(longBranch);
   });
 
   it('renders an explicit Not recorded state for missing branch metadata', async () => {
-    window.history.pushState({}, 'Chat', '/workflows/test-123');
+    window.history.pushState({}, 'Details', '/workflows/test-123/details');
     mockExecutionFetch({ ...baseExecution, repository: 'acme/repo', startingBranch: null });
     renderWithClient(<WorkflowDetailPage payload={payload} />);
-    const strip = await screen.findByLabelText('Workflow source context');
-    expect(strip.textContent).toContain('Not recorded');
-    expect(strip.textContent).not.toContain('main');
+    await screen.findByText('Git & Publish');
+    const group = gitAndPublishGroup();
+    expect(within(group).getByText('Not recorded')).toBeTruthy();
+    expect(group.textContent).not.toContain('main');
   });
 
-  it('handles non-repository workflows intentionally in Overview', async () => {
-    window.history.pushState({}, 'Overview', '/workflows/test-123/overview');
+  it('handles non-repository workflows intentionally in Details', async () => {
+    window.history.pushState({}, 'Details', '/workflows/test-123/details');
     mockExecutionFetch({ ...baseExecution, repository: null, startingBranch: null });
     renderWithClient(<WorkflowDetailPage payload={payload} />);
-    expect(await screen.findByText('Not applicable')).toBeTruthy();
+    await screen.findByText('Git & Publish');
+    expect(within(gitAndPublishGroup()).getByText('Not applicable')).toBeTruthy();
+    expect(screen.queryByText('Repository')).toBeNull();
+  });
+
+  it('keeps schedule provenance and workflow inputs off the Chat tab', async () => {
+    window.history.pushState({}, 'Chat', '/workflows/test-123');
+    mockExecutionFetch({
+      ...baseExecution,
+      recurrence: { definitionId: 'schedule-alpha', href: '/schedules/schedule-alpha' },
+      taskInstructions: 'Inspect the repository.',
+    });
+    renderWithClient(<WorkflowDetailPage payload={payload} />);
+    await screen.findByTitle('Source context workflow — Omnigent chat');
+    expect(screen.queryByRole('link', { name: 'schedule-alpha' })).toBeNull();
+    expect(screen.queryByText(/Created by/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Workflow Inputs/ })).toBeNull();
+  });
+
+  it('shows schedule provenance and workflow inputs on the Details tab', async () => {
+    window.history.pushState({}, 'Details', '/workflows/test-123/details');
+    mockExecutionFetch({
+      ...baseExecution,
+      recurrence: { definitionId: 'schedule-alpha', href: '/schedules/schedule-alpha' },
+      taskInstructions: 'Inspect the repository.',
+    });
+    renderWithClient(<WorkflowDetailPage payload={payload} />);
+    await screen.findByText('Lifecycle');
+    expect(screen.getByText('Created by').closest('div')?.textContent).toBe('Created bySchedule schedule-alpha');
+    expect(screen.getByRole('link', { name: 'schedule-alpha' }).getAttribute('href')).toBe('/schedules/schedule-alpha');
+    expect(screen.queryByText('Inspect the repository.')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Show Workflow Inputs' }));
+    expect(screen.getByText('Inspect the repository.')).toBeTruthy();
+  });
+
+  it('names the creating schedule when its definition is readable', async () => {
+    window.history.pushState({}, 'Details', '/workflows/test-123/details');
+    const execution = {
+      ...baseExecution,
+      recurrence: { definitionId: 'schedule-alpha', href: '/schedules/schedule-alpha' },
+    };
+    mockExecutionFetch(execution);
+    const fallback = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === '/api/recurring-workflows/schedule-alpha'
+        ? Promise.resolve({ ok: true, json: async () => ({ id: 'schedule-alpha', name: 'Nightly triage' }) } as Response)
+        : fallback!(input, init),
+    );
+    renderWithClient(<WorkflowDetailPage payload={payload} />);
+    const link = await screen.findByRole('link', { name: 'Nightly triage' });
+    expect(link.getAttribute('href')).toBe('/schedules/schedule-alpha');
+    expect(screen.getByText('Created by').closest('div')?.textContent).toBe('Created bySchedule Nightly triage');
+  });
+
+  it('serves the legacy /overview URL as the Details tab', async () => {
+    window.history.pushState({}, 'Overview', '/workflows/test-123/overview');
+    mockExecutionFetch({ ...baseExecution, repository: 'acme/repo', startingBranch: 'feature/example' });
+    renderWithClient(<WorkflowDetailPage payload={payload} />);
+    expect((await screen.findByRole('link', { name: 'Details' })).getAttribute('aria-current')).toBe('page');
+    await screen.findByText('Git & Publish');
+    expect(within(gitAndPublishGroup()).getByText('feature/example')).toBeTruthy();
   });
 });

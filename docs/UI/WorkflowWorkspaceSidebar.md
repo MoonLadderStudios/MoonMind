@@ -83,11 +83,8 @@ Routes remain canonical and workflow-oriented:
 | Route | Purpose | Desktop SPA presentation | Mobile SPA presentation |
 | --- | --- | --- | --- |
 | `/workflows` | Full workflow list | Full list fills the Workflows workspace. No selected detail pane is visible. | Card list. |
-| `/workflows/{workflowId}` | Selected workflow detail | Far-left compact workflow sidebar plus selected detail pane. | Standalone detail page. |
-| `/workflows/{workflowId}/steps` | Detail Steps subroute | Same desktop workspace; detail pane opens Steps. | Standalone detail page on Steps. |
-| `/workflows/{workflowId}/artifacts` | Detail Artifacts subroute | Same desktop workspace; detail pane opens Artifacts. | Standalone detail page on Artifacts. |
-| `/workflows/{workflowId}/runs` | Detail Runs subroute | Same desktop workspace; detail pane opens Runs. | Standalone detail page on Runs. |
-| `/workflows/{workflowId}/debug` | Detail Debug subroute when enabled | Same desktop workspace; detail pane opens Debug. | Standalone detail page on Debug when enabled. |
+| `/workflows/{workflowId}` | Selected workflow detail | Far-left compact workflow sidebar plus selected detail pane on Chat. | Standalone detail page. |
+| `/workflows/{workflowId}/{tab}` | Detail tab: `execution`, `evidence`, or `details`; retired tab aliases still resolve | Same desktop workspace; detail pane opens that tab. | Standalone detail page on that tab. |
 
 Rules:
 
@@ -199,11 +196,8 @@ const router = createBrowserRouter([
         children: [
           { index: true, element: <WorkflowListSurface mode="full" /> },
           { path: 'new', element: <StartWorkflowSurface /> },
-          { path: ':workflowId', element: <WorkflowDetailSurface tab="overview" /> },
-          { path: ':workflowId/steps', element: <WorkflowDetailSurface tab="steps" /> },
-          { path: ':workflowId/artifacts', element: <WorkflowDetailSurface tab="artifacts" /> },
-          { path: ':workflowId/runs', element: <WorkflowDetailSurface tab="runs" /> },
-          { path: ':workflowId/debug', element: <WorkflowDetailSurface tab="debug" /> },
+          { path: ':workflowId', element: <WorkflowDetailSurface tab="chat" /> },
+          { path: ':workflowId/:tab', element: <WorkflowDetailSurface /> },
         ],
       },
     ],

@@ -12,10 +12,9 @@ describe('workflow detail route helpers', () => {
   it.each([
     ['/workflows/mm%3A123', 'mm:123', 'chat'],
     ['/workflows/mm%3A123/chat', 'mm:123', 'chat'],
-    ['/workflows/mm%3A123/overview', 'mm:123', 'overview'],
     ['/workflows/mm%3A123/execution', 'mm:123', 'execution'],
     ['/workflows/mm%3A123/evidence', 'mm:123', 'evidence'],
-    ['/workflows/mm%3A123/debug', 'mm:123', 'debug'],
+    ['/workflows/mm%3A123/details', 'mm:123', 'details'],
   ] as const)('decodes supported route %s', (path, workflowId, subroute) => {
     expect(decodeWorkflowIdFromPath(path)).toBe(workflowId);
     expect(workflowDetailSubrouteFromPath(path)).toBe(subroute);
@@ -25,7 +24,9 @@ describe('workflow detail route helpers', () => {
   it.each([
     ['/workflows/mm%3A123/steps', 'execution'],
     ['/workflows/mm%3A123/runs', 'execution'],
+    ['/workflows/mm%3A123/debug', 'execution'],
     ['/workflows/mm%3A123/artifacts', 'evidence'],
+    ['/workflows/mm%3A123/overview', 'details'],
   ] as const)('maps legacy route %s to %s', (path, subroute) => {
     expect(decodeWorkflowIdFromPath(path)).toBe('mm:123');
     expect(workflowDetailSubrouteFromPath(path)).toBe(subroute);
@@ -41,10 +42,9 @@ describe('workflow detail route helpers', () => {
     const search = new URLSearchParams('source=temporal&stateIn=failed');
     expect(WORKFLOW_DETAIL_SUBROUTES.map((subroute) => workflowDetailSubrouteHref('mm:123', subroute, search))).toEqual([
       '/workflows/mm%3A123?source=temporal&stateIn=failed',
-      '/workflows/mm%3A123/overview?source=temporal&stateIn=failed',
       '/workflows/mm%3A123/execution?source=temporal&stateIn=failed',
       '/workflows/mm%3A123/evidence?source=temporal&stateIn=failed',
-      '/workflows/mm%3A123/debug?source=temporal&stateIn=failed',
+      '/workflows/mm%3A123/details?source=temporal&stateIn=failed',
     ]);
   });
 });

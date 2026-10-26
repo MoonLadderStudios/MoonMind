@@ -656,7 +656,7 @@ describe('Workflow Detail Entrypoint', () => {
     window.history.pushState(
       {},
       'Omnigent authority test',
-      '/workflows/test-123/overview?source=temporal',
+      '/workflows/test-123/details?source=temporal',
     );
     const planRef = `omnigent-execution-plan:sha256:${'a'.repeat(64)}`;
     const bindingRef = `omnigent-runtime-binding:sha256:${'b'.repeat(64)}`;
@@ -747,7 +747,7 @@ describe('Workflow Detail Entrypoint', () => {
     window.history.pushState(
       {},
       'Test',
-      '/workflows/test-123/overview?source=temporal',
+      '/workflows/test-123/details?source=temporal',
     );
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -819,7 +819,7 @@ describe('Workflow Detail Entrypoint', () => {
     window.history.pushState(
       {},
       'Continuation budget test',
-      '/workflows/test-123/overview?source=temporal',
+      '/workflows/test-123/details?source=temporal',
     );
     const execution = {
       taskId: 'test-123',
@@ -1938,11 +1938,11 @@ describe('Workflow Detail Entrypoint', () => {
     expect(await screen.findByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Execution' }).getAttribute('aria-current')).toBe('page');
 
-    window.history.pushState({}, 'Detail Tab Sync Test', '/workflows/test-123/overview?source=temporal');
+    window.history.pushState({}, 'Detail Tab Sync Test', '/workflows/test-123/details?source=temporal');
     rendered.rerender(<WorkflowDetailPage payload={stepsPayload} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('aria-current')).toBe('page');
+      expect(screen.getByRole('link', { name: 'Details' }).getAttribute('aria-current')).toBe('page');
     });
     expect(screen.getByRole('link', { name: 'Execution' }).getAttribute('aria-current')).not.toBe('page');
   });
@@ -2337,8 +2337,8 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByRole('link', { name: 'Chat' }).getAttribute('href')).toBe(
       '/workflows/test-123?source=temporal',
     );
-    expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('href')).toBe(
-      '/workflows/test-123/overview?source=temporal',
+    expect(screen.getByRole('link', { name: 'Details' }).getAttribute('href')).toBe(
+      '/workflows/test-123/details?source=temporal',
     );
     expect(screen.getByRole('link', { name: 'Execution' }).getAttribute('href')).toBe(
       '/workflows/test-123/execution?source=temporal',
@@ -2355,15 +2355,16 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     expect((await screen.findByRole('link', { name: 'Chat' })).getAttribute('aria-current')).toBe('page');
-    for (const label of ['Overview', 'Execution', 'Evidence', 'Debug']) {
+    for (const label of ['Execution', 'Evidence', 'Details']) {
       expect(screen.getByRole('link', { name: label })).toBeTruthy();
     }
+    expect(screen.queryByRole('link', { name: 'Debug' })).toBeNull();
     expect(screen.queryByRole('link', { name: /file browser/i })).toBeNull();
     expect(screen.queryByRole('heading', { name: /file browser/i })).toBeNull();
   });
 
-  it('MM-801 renders Overview as a concise summary with stable segmented tabs', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
+  it('MM-801 renders Details as a concise summary with stable segmented tabs', async () => {
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/details?source=temporal');
     mockWorkflowDetailSubrouteFetch();
 
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
@@ -2373,7 +2374,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.queryByText(/Live updates enabled\. Polling every/i)).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
       expect(screen.getByText('Focused route summary')).toBeTruthy();
-      expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('aria-current')).toBe('page');
+      expect(screen.getByRole('link', { name: 'Details' }).getAttribute('aria-current')).toBe('page');
       expect(screen.getByRole('link', { name: 'Execution' }).getAttribute('href')).toBe('/workflows/test-123/execution?source=temporal');
       expect(screen.getByRole('link', { name: 'Evidence' }).getAttribute('href')).toBe('/workflows/test-123/evidence?source=temporal');
       expect(screen.getByRole('link', { name: 'Execution' }).textContent).toContain('2');
@@ -2397,7 +2398,7 @@ describe('Workflow Detail Entrypoint', () => {
     ['executing', 'idle', 'Executing', 'Workflow completed successfully. Search found no eligible issue.'],
     ['no_commit', 'idle', 'No commit', 'Workflow completed successfully. Search found no eligible issue.'],
   ])('presents %s/%s without rewriting its recorded summary', async (state, objectiveOutcome, label, displayedSummary) => {
-    window.history.pushState({}, 'Objective Outcome Test', '/workflows/test-123/overview?source=temporal');
+    window.history.pushState({}, 'Objective Outcome Test', '/workflows/test-123/details?source=temporal');
     mockWorkflowDetailSubrouteFetch();
     const originalFetch = fetchSpy.getMockImplementation()!;
     const recordedSummary = 'Workflow completed successfully. Search found no eligible issue.';
@@ -2435,7 +2436,7 @@ describe('Workflow Detail Entrypoint', () => {
     ['cancelled', 'Workflow completed successfully', 'The requested objective was cancelled.'],
     ['idle', '  Recorded explanation mentions Workflow completed successfully inside the text.\n', '  Recorded explanation mentions Workflow completed successfully inside the text.\n'],
   ])('presents completed %s summary artifacts without success boilerplate: %s', async (objectiveOutcome, recordedSummary, displayedSummary) => {
-    window.history.pushState({}, 'Idle Summary Test', '/workflows/test-123/overview?source=temporal');
+    window.history.pushState({}, 'Idle Summary Test', '/workflows/test-123/details?source=temporal');
     mockWorkflowDetailSubrouteFetch();
     const originalFetch = fetchSpy.getMockImplementation()!;
     const summaryArtifact = {
@@ -2472,7 +2473,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it.each(['idle', 'failed', 'verification_blocked', 'cancelled'])('preserves gated %s handoff presentation and recorded explanation', async (objectiveOutcome) => {
-    window.history.pushState({}, 'Gated Outcome Test', '/workflows/test-123/overview?source=temporal');
+    window.history.pushState({}, 'Gated Outcome Test', '/workflows/test-123/details?source=temporal');
     mockWorkflowDetailSubrouteFetch();
     const originalFetch = fetchSpy.getMockImplementation()!;
     const recordedSummary = 'Workflow completed successfully. Durable continuation was handed off.';
@@ -2511,7 +2512,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('MM-1020 switches Workflow Detail tabs with pushState without remounting or preloading tab data', async () => {
-    window.history.pushState({}, 'Client Tab Test', '/workflows/test-123/overview?source=temporal');
+    window.history.pushState({}, 'Client Tab Test', '/workflows/test-123/details?source=temporal');
     mockWorkflowDetailSubrouteFetch();
 
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
@@ -2530,7 +2531,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('MM-1133 reuses cached detail tab evidence when returning to Steps inside the stale window', async () => {
-    window.history.pushState({}, 'Detail Tab Cache Test', '/workflows/test-123/overview?source=temporal');
+    window.history.pushState({}, 'Detail Tab Cache Test', '/workflows/test-123/details?source=temporal');
     mockWorkflowDetailSubrouteFetch();
 
     renderWithClient(
@@ -2571,7 +2572,7 @@ describe('Workflow Detail Entrypoint', () => {
     window.history.pushState(
       {},
       'Detail Context Test',
-      '/workflows/test-123/overview?source=temporal&stateIn=completed&repoContains=moon%2Frepo&limit=25&nextPageToken=cursor-2&sort=status&selectedWorkflowId=test-123&unsafe=1',
+      '/workflows/test-123/details?source=temporal&stateIn=completed&repoContains=moon%2Frepo&limit=25&nextPageToken=cursor-2&sort=status&selectedWorkflowId=test-123&unsafe=1',
     );
     mockWorkflowDetailSubrouteFetch();
 
@@ -2585,7 +2586,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('does not render standalone full-list navigation when no preserved list context exists (MM-998, MM-975)', async () => {
-    window.history.pushState({}, 'Plain Detail Test', '/workflows/test-123/overview?source=temporal');
+    window.history.pushState({}, 'Plain Detail Test', '/workflows/test-123/details?source=temporal');
     mockWorkflowDetailSubrouteFetch();
 
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
@@ -3673,47 +3674,40 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
-  it('MM-957 keeps raw Temporal facts out of the default overview while preserving summary and evidence sections', async () => {
-    window.history.pushState({}, 'Overview Debug IA Test', '/workflows/test-123/overview?source=temporal');
+  it('MM-957 keeps raw Temporal facts out of the default Details view while preserving summary and evidence sections', async () => {
+    window.history.pushState({}, 'Details IA Test', '/workflows/test-123/details?source=temporal');
     mockWorkflowDetailSubrouteFetch();
 
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     await waitFor(() => {
-      // Summary renders on the default overview without the old preview cards.
       expect(screen.getByRole('heading', { name: 'Summary' })).toBeTruthy();
       expect(screen.getByText('Focused route summary')).toBeTruthy();
       expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
-      expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('aria-current')).toBe('page');
+      expect(screen.getByRole('link', { name: 'Details' }).getAttribute('aria-current')).toBe('page');
     });
 
-    // The raw Temporal FactGroup no longer competes with outcome/evidence content.
+    // Raw Temporal facts stay inside the collapsed Technical details disclosure.
     expect(screen.queryByRole('heading', { name: 'Temporal' })).toBeNull();
-    for (const label of ['Temporal Status', 'Workflow State', 'Workflow Type', 'Entry', 'Source']) {
+    for (const label of ['Temporal Status', 'Workflow State', 'Workflow Type', 'Entry']) {
       expect(screen.queryByText(new RegExp(`^${label}:?$`))).toBeNull();
     }
-    // The hero no longer leads with Temporal metadata, but the compact workflow ID stays accessible.
     expect(screen.queryByText('MoonMind.UserWorkflow')).toBeNull();
+    // The compact workflow ID stays in the page header.
     expect(screen.getAllByText('test-123').length).toBeGreaterThan(0);
   });
 
-  it('MM-957 exposes the moved Temporal fields on the keyboard-accessible Debug subroute', async () => {
-    window.history.pushState({}, 'Debug Route Test', '/workflows/test-123/debug?source=temporal');
+  it('MM-957 exposes the Temporal facts and raw action map under Details → Technical details', async () => {
+    window.history.pushState({}, 'Technical Details Test', '/workflows/test-123/details?source=temporal');
     mockWorkflowDetailSubrouteFetch();
 
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Debug' })).toBeTruthy();
-      expect(screen.getByRole('link', { name: 'Debug' }).getAttribute('aria-current')).toBe('page');
-      expect(screen.getByRole('heading', { name: 'Temporal' })).toBeTruthy();
-    });
-
-    // All moved Temporal/runtime identifiers are exposed in the Debug view.
+    fireEvent.click(await screen.findByText('Technical details'));
+    expect(await screen.findByRole('heading', { name: 'Temporal' })).toBeTruthy();
     for (const label of [
       'Temporal Status',
       'Workflow State',
-      'Source',
       'Workflow Type',
       'Entry',
       'Current Run ID',
@@ -3722,44 +3716,20 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText(new RegExp(`^${label}:?$`))).toBeTruthy();
     }
     expect(screen.getAllByText('MoonMind.UserWorkflow').length).toBeGreaterThan(0);
-
-    // Debug is a first-class tab: reachable in one click and marked current on its route.
-    expect(screen.getByRole('link', { name: 'Debug' }).getAttribute('aria-current')).toBe('page');
-    expect(screen.getByRole('link', { name: 'Debug' }).getAttribute('href')).toBe(
-      '/workflows/test-123/debug?source=temporal',
-    );
-    // Overview is reachable from the Debug subroute (deep links round-trip).
-    expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('href')).toBe('/workflows/test-123/overview?source=temporal');
-
-    // Raw Temporal facts are scoped to Debug only — not the Overview preview cards.
-    expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Action Capability Map' })).toBeTruthy();
   });
 
-  it('MM-1020 keeps the Debug tab stable while the kebab menu toggles debug details', async () => {
-    window.history.pushState({}, 'Debug Pref Test', '/workflows/test-123/overview?source=temporal');
+  it('retires the Debug tab and its view toggle; legacy /debug links open Execution', async () => {
+    window.history.pushState({}, 'Legacy Debug Link', '/workflows/test-123/debug?source=temporal');
     mockWorkflowDetailSubrouteFetch();
 
-    const view = renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
-
-    // Debug is a first-class tab by default.
-    expect(await screen.findByRole('link', { name: 'Debug' })).toBeTruthy();
-
-    let menu = await openWorkflowActionsMenu();
-    fireEvent.click(within(menu).getByRole('menuitem', { name: 'View: Hide debug details' }));
-
-    // The Debug tab remains visible and the preference is persisted.
-    expect(screen.getByRole('link', { name: 'Debug' })).toBeTruthy();
-    expect(window.localStorage.getItem('moonmind.dashboard.preferences')).toContain(
-      '"debugFieldsVisible":false',
-    );
-
-    // Simulate a reload: a fresh mount keeps the Debug tab present.
-    view.unmount();
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
-    await screen.findByRole('link', { name: 'Overview' });
-    expect(screen.getByRole('link', { name: 'Debug' })).toBeTruthy();
-    menu = await openWorkflowActionsMenu();
-    expect(within(menu).getByRole('menuitem', { name: 'View: Show debug details' })).toBeTruthy();
+
+    expect((await screen.findByRole('link', { name: 'Execution' })).getAttribute('aria-current')).toBe('page');
+    expect(screen.queryByRole('link', { name: 'Debug' })).toBeNull();
+    expect(await screen.findByText('Session diagnostics')).toBeTruthy();
+    const menu = await openWorkflowActionsMenu();
+    expect(within(menu).queryByRole('menuitem', { name: /debug details/i })).toBeNull();
   });
 
   it('returns null for route templates with missing parameters', () => {
@@ -3862,7 +3832,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders the required workflow execution identity and section labels', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/details?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -3914,11 +3884,11 @@ describe('Workflow Detail Entrypoint', () => {
       ]) {
         expect(screen.queryByText(new RegExp(`^${label}:?$`))).toBeNull();
       }
-      // The compact workflow ID stays accessible in the hero as secondary metadata.
+      // The compact workflow ID stays accessible in the header as secondary metadata.
       expect(screen.getAllByText('test-123').length).toBeGreaterThan(0);
       expect(screen.getByRole('button', { name: 'Show Workflow Inputs' })).toBeTruthy();
       expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
-      expect(screen.getByRole('link', { name: 'Debug' })).toBeTruthy();
+      expect(screen.queryByRole('link', { name: 'Debug' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Workflow Steps' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Workflow Artifacts' })).toBeNull();
       expect(screen.queryByText(/^Task ID:?$/)).toBeNull();
@@ -4269,7 +4239,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('displays original slash instructions and missing runtime command metadata state', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/details?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -4316,7 +4286,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('displays slash command interpretation metadata from the execution snapshot', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/details?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -4377,7 +4347,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('displays legacy snake_case slash command metadata from historical execution snapshots', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/details?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -4431,7 +4401,7 @@ describe('Workflow Detail Entrypoint', () => {
 
 
   it('renders planning detail pills with setup coloring and keeps dependency pills inactive when appropriate', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/details?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -5651,7 +5621,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     fireEvent.keyDown(trigger, { key: ' ' });
     const menu = screen.getByRole('menu', { name: 'Workflow actions' });
-    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    // Initial focus is the first safe action (Pause); one step down is Resume.
     fireEvent.keyDown(menu, { key: 'ArrowDown' });
     fireEvent.keyDown(menu, { key: 'Enter' });
     await waitFor(() => {
@@ -5743,7 +5713,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(fetchSpy.mock.calls.some(([url, init]) => String(url).includes('/signal') && init?.method === 'POST')).toBe(false);
   });
 
-  it('shows only the view action when no workflow operations are available', async () => {
+  it('shows an empty actions menu message when no workflow operations are available', async () => {
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -5771,9 +5741,9 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
 
-    const menu = await openWorkflowActionsMenu('View: Hide debug details');
-    expect(within(menu).getByRole('menuitem', { name: 'View: Hide debug details' })).toBeTruthy();
-    expect(within(menu).queryByRole('menuitem', { name: 'Rename' })).toBeNull();
+    const menu = await openWorkflowActionsMenu();
+    expect(within(menu).getByText('No workflow actions are currently available.')).toBeTruthy();
+    expect(within(menu).queryByRole('menuitem')).toBeNull();
   });
 
   it('shows a one-time Temporal task editing success notice after redirect', async () => {
@@ -6199,7 +6169,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders workflow details on successful fetch', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/details?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -6324,7 +6294,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText('Provider ID').closest('div')?.textContent).toBe('Provider IDanthropic');
       expect(screen.getByText('Priority').closest('div')?.textContent).toContain('4');
       expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/123' })).toBeTruthy();
-      expect(screen.getByText(/Created by schedule/)).toBeTruthy();
+      expect(screen.getByText('Created by').closest('div')?.textContent).toBe('Created bySchedule schedule-alpha');
       expect(screen.getByRole('link', { name: 'schedule-alpha' }).getAttribute('href')).toBe('/schedules/schedule-alpha');
     });
 
@@ -6351,7 +6321,7 @@ describe('Workflow Detail Entrypoint', () => {
       payload: { model: 'gpt-5-codex', requestedModel: 'gpt-5-codex' },
     },
   ])('displays the Model fact consistently — $label', async ({ payload }) => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/details?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -6403,7 +6373,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('keeps recorded Provider metadata visible without a recorded Provider Profile', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/details?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -6448,7 +6418,7 @@ describe('Workflow Detail Entrypoint', () => {
   // MoonLadderStudios/MoonMind#3800 — historical detail must explain the
   // immutable launch-time tier resolution, not a later Provider Profile state.
   it('renders persisted model tier resolution and its concise fallback explanation', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/details?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -6561,7 +6531,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders a nullable requested tier as the profile default and surfaces unsupported effort', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/details?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -6621,7 +6591,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('hides the Model fact when no model field is populated', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/details?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -7694,7 +7664,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders empty skill provenance when task skill metadata is missing', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/details?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -7748,7 +7718,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders structured run summary details from the summary artifact', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/details?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -7880,7 +7850,7 @@ describe('Workflow Detail Entrypoint', () => {
       actions: { canRerun: true, canEditForRerun: true },
       finishSummary,
     };
-    window.history.pushState({}, 'Failed run', '/workflows/failed-3930/overview?source=temporal');
+    window.history.pushState({}, 'Failed run', '/workflows/failed-3930/details?source=temporal');
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/artifacts/art-summary-3930/download')) {
@@ -8062,7 +8032,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders remediation trends, budgets, evidence, and exact stop dimension', async () => {
-    window.history.pushState({}, 'Remediation Test', '/workflows/remediation/overview?source=temporal');
+    window.history.pushState({}, 'Remediation Test', '/workflows/remediation/details?source=temporal');
     const execution = {
       taskId: 'remediation',
       workflowId: 'remediation',
@@ -8145,7 +8115,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders auto publish mode and evidence with Auto labels', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-auto-publish/overview?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-auto-publish/details?source=temporal');
     const mockExecution = {
       taskId: 'test-auto-publish',
       workflowId: 'test-auto-publish',
@@ -8224,7 +8194,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('does not render a PR link for unsafe execution or run-summary URLs', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-123/overview?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123/details?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -8289,7 +8259,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders merge automation visibility from the run summary', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-merge-visibility/overview?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-merge-visibility/details?source=temporal');
     const mockExecution = {
       taskId: 'test-merge-visibility',
       workflowId: 'test-merge-visibility',
@@ -8374,7 +8344,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders live merge automation visibility from execution detail', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-live-merge-visibility/overview?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-live-merge-visibility/details?source=temporal');
     const mockExecution = {
       taskId: 'test-live-merge-visibility',
       workflowId: 'test-live-merge-visibility',
@@ -8461,7 +8431,7 @@ describe('Workflow Detail Entrypoint', () => {
       { status, finishMode: 'review_only', requested: true, fromSummary: false, message: 'Review-only automation does not launch a resolver.' },
     ]),
   ])('renders review-only automation $status mode=$finishMode requested=$requested from summary=$fromSummary without resolver-wait copy', async ({ status, finishMode, requested, fromSummary, message }) => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-review-only-visibility/overview?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-review-only-visibility/details?source=temporal');
     const mergeAutomation = {
       enabled: true,
       workflowId: 'merge-automation:test-review-only-visibility',
@@ -8524,7 +8494,7 @@ describe('Workflow Detail Entrypoint', () => {
     { requestId: 'unverified-id', prUrl: 'https://github.com/MoonLadderStudios/MoonMind/pull/4934', linked: false },
     { requestId: 12345, prUrl: 'https://example.com/MoonLadderStudios/MoonMind/pull/4934', linked: false },
   ])('explains a native review wait with a validated request link: $requestId $prUrl', async ({ requestId, prUrl, linked }) => {
-    window.history.pushState({}, 'Review', '/workflows/native-review/overview?source=temporal');
+    window.history.pushState({}, 'Review', '/workflows/native-review/details?source=temporal');
     const execution = {
       workflowId: 'native-review', runId: 'run-1', namespace: 'default',
       source: 'temporal', workflowType: 'MoonMind.UserWorkflow',
@@ -8562,7 +8532,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('accepts null merge automation artifact refs from execution detail', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/test-null-merge-artifact-refs/overview?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/test-null-merge-artifact-refs/details?source=temporal');
     const mockExecution = {
       taskId: 'test-null-merge-artifact-refs',
       workflowId: 'test-null-merge-artifact-refs',
@@ -8621,7 +8591,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders prerequisite and dependent panels for dependency-aware runs', async () => {
-    window.history.pushState({}, 'Overview Test', '/workflows/mm%3Adependent-1/overview?source=temporal');
+    window.history.pushState({}, 'Overview Test', '/workflows/mm%3Adependent-1/details?source=temporal');
     const mockExecution = {
       taskId: 'mm:dependent-1',
       workflowId: 'mm:dependent-1',
@@ -8755,7 +8725,7 @@ describe('Workflow Detail Entrypoint', () => {
       } as Response);
     });
 
-    window.history.pushState({}, 'Test', '/workflows/mm%3Adependent-1/overview?source=temporal');
+    window.history.pushState({}, 'Test', '/workflows/mm%3Adependent-1/details?source=temporal');
     renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
 
     const menu = await openWorkflowActionsMenu('Bypass Dependencies');
@@ -9325,7 +9295,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders bridge session events before managed-runtime missing copy', async () => {
-    window.history.pushState({}, 'Bridge Chat Test', '/workflows/test-123/debug?source=temporal');
+    window.history.pushState({}, 'Bridge Chat Test', '/workflows/test-123/execution?source=temporal#session-diagnostics');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -9429,7 +9399,7 @@ describe('Workflow Detail Entrypoint', () => {
     ['direct Codex compatibility', 'codex_direct_compat'],
     ['Omnigent', 'omnigent_bridge'],
   ])('projects an active %s journey through shared history, SSE, chat, and resources', async (_label, source) => {
-    window.history.pushState({}, 'Bridge parity journey', '/workflows/test-123/debug?source=temporal');
+    window.history.pushState({}, 'Bridge parity journey', '/workflows/test-123/execution?source=temporal#session-diagnostics');
     const priorEventSource = window.EventSource;
     window.EventSource = MockEventSource as unknown as typeof EventSource;
     const bridgeSessionId = `brs-parity-${source}`;
@@ -9489,7 +9459,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders an understandable failed-before-stream lifecycle with zero provider events', async () => {
-    window.history.pushState({}, 'Failed Launch Chat', '/workflows/test-123/debug?source=temporal');
+    window.history.pushState({}, 'Failed Launch Chat', '/workflows/test-123/execution?source=temporal#session-diagnostics');
     const mockExecution = {
       taskId: 'test-123', workflowId: 'test-123', namespace: 'default',
       temporalRunId: 'failed-launch-run', runId: 'failed-launch-run', source: 'temporal',
@@ -9572,7 +9542,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('shows an authorization error instead of resource preview or download actions', async () => {
-    window.history.pushState({}, 'Bridge Authorization Test', '/workflows/test-123/debug?source=temporal');
+    window.history.pushState({}, 'Bridge Authorization Test', '/workflows/test-123/execution?source=temporal#session-diagnostics');
     const execution = {
       taskId: 'test-123', workflowId: 'test-123', namespace: 'default',
       temporalRunId: 'auth-run', runId: 'auth-run', source: 'temporal',
@@ -9610,7 +9580,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders bridge terminal failure evidence even without provider deltas', async () => {
-    window.history.pushState({}, 'Bridge Failure Test', '/workflows/test-123/debug?source=temporal');
+    window.history.pushState({}, 'Bridge Failure Test', '/workflows/test-123/execution?source=temporal#session-diagnostics');
     const mockExecution = {
       taskId: 'test-123', workflowId: 'test-123', source: 'temporal', namespace: 'default',
       title: 'Bridge failure', summary: 'Failed before streaming',
@@ -9654,8 +9624,8 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByTestId('chat-session-blocks')).toBeTruthy();
   });
 
-  it('demotes the bridge projection to a read-only diagnostic surface with no composer or session controls on the Debug diagnostics route (MoonLadderStudios/MoonMind#3640)', async () => {
-    window.history.pushState({}, 'Bridge Read-Only Test', '/workflows/test-123/debug?source=temporal');
+  it('demotes the bridge projection to a read-only diagnostic surface with no composer or session controls in Execution → Session diagnostics (MoonLadderStudios/MoonMind#3640)', async () => {
+    window.history.pushState({}, 'Bridge Read-Only Test', '/workflows/test-123/execution?source=temporal#session-diagnostics');
     const priorEventSource = window.EventSource;
     window.EventSource = MockEventSource as unknown as typeof EventSource;
     const mockExecution = {
@@ -9714,7 +9684,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('preserves bridge runtime identity, compatibility diagnostics, and resolved-approval evidence read-only without exposing session controls (MoonLadderStudios/MoonMind#3640)', async () => {
-    window.history.pushState({}, 'Bridge Intervention Test', '/workflows/test-123/debug?source=temporal');
+    window.history.pushState({}, 'Bridge Intervention Test', '/workflows/test-123/execution?source=temporal#session-diagnostics');
     const priorEventSource = window.EventSource;
     window.EventSource = MockEventSource as unknown as typeof EventSource;
     const mockExecution = { taskId: 'test-123', workflowId: 'test-123', source: 'temporal', namespace: 'default', title: 'Bridge interventions', summary: 'Running', createdAt: '2026-07-09T00:00:00Z', updatedAt: '2026-07-09T00:00:30Z', status: 'running', state: 'executing', rawState: 'running', actions: {} };
@@ -9781,7 +9751,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('does not expose bridge elicitation, clear, or cancel actions unless advertised', async () => {
-    window.history.pushState({}, 'Bridge Denied Intervention Test', '/workflows/test-123/debug?source=temporal');
+    window.history.pushState({}, 'Bridge Denied Intervention Test', '/workflows/test-123/execution?source=temporal#session-diagnostics');
     const priorEventSource = window.EventSource;
     window.EventSource = MockEventSource as unknown as typeof EventSource;
     const mockExecution = { taskId: 'test-123', workflowId: 'test-123', source: 'temporal', namespace: 'default', title: 'Bridge interventions', summary: 'Running', createdAt: '2026-07-09T00:00:00Z', updatedAt: '2026-07-09T00:00:30Z', status: 'running', state: 'executing', rawState: 'running', actions: {} };
@@ -10213,7 +10183,7 @@ describe('Workflow Detail Entrypoint', () => {
     await waitFor(() => {
       expect(screen.getAllByRole('heading', { name: 'Execution History' })).toHaveLength(1);
       expect(screen.getByRole('link', { name: 'Execution' }).getAttribute('aria-current')).toBe('page');
-      expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('href')).toBe('/workflows/test-123/overview?source=temporal');
+      expect(screen.getByRole('link', { name: 'Details' }).getAttribute('href')).toBe('/workflows/test-123/details?source=temporal');
       expect(screen.getAllByText(/^Current Run ID:?$/).length).toBeGreaterThan(0);
       expect(screen.getAllByText('01-run').length).toBeGreaterThan(0);
       expect(screen.getAllByText('test-456').length).toBeGreaterThan(0);
@@ -13511,6 +13481,10 @@ describe('LiveLogsPanel', () => {
       }
       if (url.includes('/artifacts')) {
         return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/omnigent/bridge-sessions/resolve')) {
+        // A managed-runtime run has no bridge session.
+        return Promise.resolve({ ok: false, status: 404, json: async () => ({}) } as Response);
       }
       detailCalls += 1;
       if (detailCalls === 1) {
