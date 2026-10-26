@@ -29,6 +29,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
         AUTO_RUNTIME_SENTINEL,
         AgentExecutionRequest,
+        AgentRunResult,
         ExecutionBudget,
         OmnigentExecutionPlanBinding,
         resolve_execution_budget,
@@ -1820,6 +1821,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._logs_ref: Optional[str] = None
         self._summary_ref: Optional[str] = None
         self._finish_summary: dict[str, Any] | None = None
+        self._terminal_agent_result: dict[str, Any] | None = None
+        self._terminal_result_order: dict[str, Any] | None = None
         self._linked_recovery_retired = False
         self._recovery_source: dict[str, Any] | None = None
         self._recovery_failed_step_id: str | None = None
@@ -7367,6 +7370,33 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "workspaceLocator": workspace_locator,
             "recordedAt": recorded_at.isoformat(),
         }
+        canonical = outputs.get("agentResult")
+        if isinstance(canonical, Mapping):
+            row["executionOutcome"]["status"] = (
+                "succeeded"
+                if canonical.get("executionState") == "completed"
+                else (
+                    "unknown"
+                    if canonical.get("executionState")
+                    in {"unknown", "delivery_unknown"}
+                    else "failed"
+                )
+            )
+            row["executionOutcome"]["agentResult"] = dict(canonical)
+            self._terminal_agent_result = dict(canonical)
+            progress = self._agent_run_progress_by_child.get(
+                str(outputs.get("childWorkflowId") or ""), {}
+            )
+            self._terminal_result_order = {
+                "runId": workflow.info().run_id,
+                "logicalStepId": logical_step_id,
+                "stepIndex": self._step_ledger_rows.index(row),
+                "executionOrdinal": self._step_execution_for(logical_step_id) or 1,
+                # The terminal result follows the last accepted, fenced progress
+                # revision; wall-clock observations never establish authority.
+                "revision": int(progress.get("acceptedRevision") or 0) + 1,
+            }
+            row["executionOutcome"]["resultOrder"] = dict(self._terminal_result_order)
         row["finalizationOutcome"] = {
             "status": "not_started",
             "phase": "after_execution_checkpoint",
@@ -16415,6 +16445,63 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         tool_type: str,
         reuses_step_workspace: bool = False,
     ) -> bool:
+        outputs = self._get_from_result(result, "outputs")
+        if tool_type == "agent_runtime" and isinstance(outputs, Mapping):
+            canonical = outputs.get("agentResult")
+            if isinstance(canonical, Mapping):
+                disposition = canonical.get("retryDisposition")
+                if disposition not in {"retry", "wait"}:
+                    return False
+                # Unknown delivery must be reconciled by its runtime owner;
+                # a generic step retry could repeat a confirmed mutation.
+                if canonical.get("executionState") == "delivery_unknown":
+                    return False
+                host_repair = (
+                    canonical.get("retryRecommendation") == "retry_step_execution"
+                    and outputs.get("mergeAutomationDisposition") == "failed"
+                    and self._workflow_patch_enabled(
+                        RUN_RESOLVER_HOST_REPAIR_RETRY_PATCH
+                    )
+                )
+                if host_repair:
+                    return reuses_step_workspace
+                if canonical.get(
+                    "retryRecommendation"
+                ) == "retry_step_execution" and not self._workflow_patch_enabled(
+                    RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH
+                ):
+                    return canonical.get("failureClass") in {
+                        "system_error",
+                        "execution_error",
+                    }
+                if outputs.get("mergeAutomationDisposition") in {
+                    "manual_review",
+                    "failed",
+                } and (
+                    outputs.get("prResolverTerminalVerdictApplied") is True
+                    and self._workflow_patch_enabled(
+                        RUN_ADAPTER_RESOLVER_VERDICT_RETRY_DECISION_PATCH
+                    )
+                    or (
+                        outputs.get("terminalContractOutcome") == "terminal_failure"
+                        and outputs.get("terminalContractRecoveryOutcome")
+                        == "skill_terminal_verdict"
+                        and self._workflow_patch_enabled(
+                            RUN_TERMINAL_CONTRACT_RETRY_DECISION_PATCH
+                        )
+                        and self._workflow_patch_enabled(
+                            RUN_TERMINAL_CONTRACT_RETRY_FLATTENED_OUTPUTS_PATCH
+                        )
+                    )
+                ):
+                    return False
+                if canonical.get(
+                    "providerErrorCode"
+                ) == "PR_RESOLVER_REENTER_GATE" and self._workflow_patch_enabled(
+                    RUN_TERMINAL_CONTRACT_RETRY_DECISION_PATCH
+                ):
+                    return False
+                return True
         if failure_message == "system_error":
             return True
         if tool_type != "agent_runtime":
@@ -16560,6 +16647,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         outputs = self._get_from_result(result, "outputs")
         if not isinstance(outputs, Mapping):
             return None
+        canonical = outputs.get("agentResult")
+        if isinstance(canonical, Mapping) and canonical.get("observation") != "confirmed" and canonical.get("executionState") in {"unknown", "delivery_unknown"}:
+            return "Agent runtime observation is unavailable; the execution outcome is unknown."
 
         provider_failure = outputs.get("providerFailure")
         if not isinstance(provider_failure, Mapping):
@@ -16691,6 +16781,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 # Retain only sanitized / structured fields; never the raw
                 # provider ``reason`` text.
                 sanitized_keys = (
+                    "observation",
+                    "failureId",
+                    "retryDisposition",
                     "providerErrorClass",
                     "providerErrorCode",
                     "retryRecommendation",
@@ -24898,6 +24991,34 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         return {**result, "outputs": hydrated}
 
     def _map_agent_run_result(self, result: Any) -> dict[str, Any]:
+        if not self._workflow_patch_enabled("run-typed-agent-outcomes-v1"):
+            return self._map_legacy_agent_run_result(result)
+        canonical = (
+            result
+            if isinstance(result, AgentRunResult)
+            else AgentRunResult.model_validate(result)
+        )
+        # The flattened fields remain an external/Skill output adapter. Internal
+        # execution, retry and terminal projection consume this single envelope.
+        mapped = self._map_legacy_agent_run_result(canonical)
+        mapped["outputs"]["agentResult"] = canonical.outcome_projection()
+        mapped["status"] = (
+            "COMPLETED"
+            if canonical.execution_state == "completed"
+            and canonical.failure_class is None
+            and canonical.objective_outcome
+            not in {"failed", "verification_blocked", "cancelled"}
+            else (
+                "UNKNOWN"
+                if canonical.execution_state in {"unknown", "delivery_unknown"}
+                else "FAILED"
+            )
+        )
+        if canonical.provider_failure is not None:
+            mapped["outputs"]["providerFailure"] = canonical.provider_failure
+        return mapped
+
+    def _map_legacy_agent_run_result(self, result: Any) -> dict[str, Any]:
         """Convert ``AgentRunResult`` to the dict format the execution loop expects."""
         if isinstance(result, dict):
             failure = result.get("failure_class") or result.get("failureClass")
@@ -25032,29 +25153,26 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             gate_context.get("classification"), max_chars=200
         )
         raw_summary = self._coerce_text(gate_context.get("summary"), max_chars=1000)
-        combined_text = " ".join(
-            part
-            for part in (
-                verdict,
-                classification,
-                raw_summary,
-                self._publish_reason,
-                self._plan_blocked_message,
-            )
-            if isinstance(part, str) and part
-        )
-        blockers = self._validation_blockers_from_text(combined_text)
-        category = self._moonspec_failure_category(
-            classification=classification,
-            blockers=blockers,
-            text=combined_text,
-        )
-        if category == "validation_environment_blocked":
-            recommended_next_action = "restore_validation_environment"
-        elif category == "validation_evidence_missing":
-            recommended_next_action = "provide_current_head_validation_evidence"
+        if self._workflow_patch_enabled("run-typed-agent-outcomes-v1"):
+            # The Skill already resolved its action. Display wording cannot
+            # replace it with a different recovery protocol in the parent.
+            blockers = []
+            category = classification if classification in {"validation_environment_blocked", "validation_evidence_missing"} else "verification_gaps_remaining"
+            recommended_next_action = self._coerce_text(gate_context.get("recommendedNextAction"), max_chars=120) or "inspect_diagnostics"
         else:
-            recommended_next_action = "address_verification_gaps"
+            # Replay/read compatibility for summaries predating typed results.
+            combined_text = " ".join(
+                part for part in (verdict, classification, raw_summary, self._publish_reason, self._plan_blocked_message)
+                if isinstance(part, str) and part
+            )
+            blockers = self._validation_blockers_from_text(combined_text)
+            category = self._moonspec_failure_category(classification=classification, blockers=blockers, text=combined_text)
+            if category == "validation_environment_blocked":
+                recommended_next_action = "restore_validation_environment"
+            elif category == "validation_evidence_missing":
+                recommended_next_action = "provide_current_head_validation_evidence"
+            else:
+                recommended_next_action = "address_verification_gaps"
 
         compact: dict[str, Any] = {
             "type": "moonspec_verification_gate",
@@ -25173,11 +25291,18 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         message = self._coerce_text(diagnostic.get("message"), max_chars=1000)
         if not message:
             return None
-        lowered = message.lower()
-        failure_cause = None
-        if "app_server_protocol_empty_turn" in lowered:
-            failure_cause = "app_server_protocol_empty_turn"
-        retry_action = self._retry_action_from_failure_message(message)
+        canonical = diagnostic.get("agentResult")
+        if isinstance(canonical, Mapping):
+            failure_cause = canonical.get("failureCause")
+            retry_action = canonical.get("retryAction")
+        else:
+            # Retained histories used prose as their only diagnostic protocol.
+            failure_cause = (
+                "app_server_protocol_empty_turn"
+                if "app_server_protocol_empty_turn" in message.lower()
+                else None
+            )
+            retry_action = self._retry_action_from_failure_message(message)
         diagnostics_ref = self._coerce_text(
             diagnostic.get("diagnosticsRef"), max_chars=400
         )
@@ -25842,6 +25967,23 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     "outcomes": self._dependency_outcomes(),
                 },
             }
+            if self._terminal_agent_result is None:
+                for row in reversed(self._step_ledger_rows):
+                    primary = row.get("executionOutcome") or {}
+                    if isinstance(primary.get("agentResult"), Mapping):
+                        self._terminal_agent_result = dict(primary["agentResult"])
+                        self._terminal_result_order = dict(
+                            primary.get("resultOrder") or {}
+                        )
+                        break
+            if self._terminal_agent_result is not None:
+                finish_summary["agentResult"] = dict(self._terminal_agent_result)
+                finish_summary["resultOrder"] = {
+                    **(self._terminal_result_order or {}),
+                    # A Continue-As-New owner observes saved work from its
+                    # original Step attempt; it does not rewrite that identity.
+                    "observerRunId": workflow.info().run_id,
+                }
             if self._workflow_control_stop:
                 auxiliary = self._workflow_control_stop.get("auxiliaryOutcomes")
                 if isinstance(auxiliary, dict):
@@ -26754,6 +26896,18 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             }
             if self._issue_search_capacity_retry_enabled:
                 terminal_outcomes[STATE_NO_COMMIT] = "succeeded"
+            if (
+                self._state in {STATE_FAILED, STATE_COMPLETED, STATE_NO_COMMIT}
+                and self._terminal_agent_result is not None
+                and self._terminal_agent_result.get("executionState")
+                in {"unknown", "delivery_unknown"}
+                and self._terminal_agent_result.get("objectiveOutcome") == "unknown"
+                and workflow.patched("run-typed-terminal-objective-v1")
+            ):
+                # Closing the workflow after an unavailable observation does
+                # not confirm the operation failed. Explicit workflow-level
+                # objective evidence below still takes precedence.
+                terminal_outcomes[self._state] = "unknown"
             incomplete_objective = (
                 self._incomplete_draft_objective_outcome()
                 if self._state == STATE_COMPLETED
