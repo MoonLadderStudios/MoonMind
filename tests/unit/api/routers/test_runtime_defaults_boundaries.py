@@ -1452,7 +1452,7 @@ async def test_dedicated_implicit_resolver_keeps_saved_account(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("explicit_runtime", [False, True])
 @pytest.mark.parametrize("finish_mode", [None, "review_only"])
-async def test_dedicated_agent_free_omnigent_uses_native_schedule_admission(
+async def test_dedicated_agent_free_omnigent_preserves_finishing_admission(
     dedicated_context, monkeypatch, explicit_runtime, finish_mode
 ):
     from api_service.db.models import ManagedAgentProviderProfile
@@ -1482,6 +1482,12 @@ async def test_dedicated_agent_free_omnigent_uses_native_schedule_admission(
     body["target"]["initialParameters"]["task"] = task
     ctx.context.settings_reads.clear()
     response = await ctx.client.post("/api/recurring-workflows", json=body)
+    if finish_mode == "review_only":
+        assert response.status_code == 409, response.text
+        assert "default Omnigent Agent Profile is unavailable" in response.text
+        assert len(ctx.context.settings_reads) == 1
+        ctx.adapter.create_schedule.assert_not_awaited()
+        return
     assert response.status_code == 201, response.text
     assert "saved-codex_cli" not in response.text
     assert len(ctx.context.settings_reads) == 1

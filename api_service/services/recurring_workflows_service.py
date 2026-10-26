@@ -1612,10 +1612,14 @@ class RecurringWorkflowsService:
             and initial_parameters.get("agentProfileSnapshot") is None
             and initial_parameters.get("omnigentExecutionPlan") is None
         ):
-            # Native tool-only schedules use the installed worker. The runtime
-            # default does not create a need for an agent account or a frozen
-            # agent execution plan when no step launches an agent.
-            return None
+            from api_service.services.omnigent_execution_plan_service import (
+                _enabled_merge_automation,
+            )
+
+            # Native tools use the installed worker without an agent plan.
+            # Finishing still needs admitted authority, even for review_only.
+            if not _enabled_merge_automation(initial_parameters):
+                return None
         # An omitted runtime that defaults to Omnigent is admitted like an
         # explicit one. Otherwise the schedule would launch plan-less work
         # into the retained session supervisor.

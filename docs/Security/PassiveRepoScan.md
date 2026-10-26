@@ -150,8 +150,9 @@ occurrence admission links them to that execution. Each invocation checks
 current artifact read authority before reusing scanner work. A saved schedule
 confers no credential or target-network authority. These offline adapters
 require empty credential/network reference lists; active adapters must use
-their existing admission owners. Agent-backed steps retain the usual current
-runtime admission; an assessment does not add an image or source-revision pin.
+their existing admission owners. Agent-backed steps and PR finishing, including
+`review_only`, retain execution-plan admission; an assessment adds no image or
+source-revision pin.
 
 Use the existing schedule policy (`overlap.mode`, `catchup.mode`) and manual
 `POST /api/recurring-workflows/{id}/run` with an `Idempotency-Key`. Supply a newer
