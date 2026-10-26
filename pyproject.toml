@@ -28,7 +28,7 @@ aiohttp = ">=3.13.5,<3.15.0"
 boto3 = ">=1.42.88,<1.44.0"
 PyYAML = ">=6.0.2"
 asyncpg = ">=0.31,<0.33"
-SQLAlchemy = "~=2.0.49"
+SQLAlchemy = { version = ">=2.0.49,<2.2.0", extras = ["asyncio"] }
 docker = ">=7.1,<7.3"
 "PyJWT" = { version = ">=2.11.0,<3.0.0", extras = ["crypto"] }
 alembic = ">=1.18.4,<1.21.0"
