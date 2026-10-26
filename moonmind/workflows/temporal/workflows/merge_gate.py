@@ -123,12 +123,14 @@ def _default_blocker(kind: str, summary: str, *, retryable: bool, source: str) -
         "source": source,
     }
 
+
 def classify_readiness(
     payload: Mapping[str, Any],
     *,
     tracked_head_sha: str,
     actionable_merge_conflicts: bool = True,
     actionable_ci_failures: bool = True,
+    allow_conflict_repair_without_ci: bool = True,
 ) -> ReadinessEvidenceModel:
     """Normalize provider readiness evidence into bounded merge-gate evidence."""
 
@@ -140,6 +142,20 @@ def classify_readiness(
     known_ci_failure = actionable_ci_failures and not pull_request_merged and any(
         isinstance(raw, Mapping) and raw.get("kind") == "checks_failed"
         for raw in payload.get("blockers") or []
+    )
+    conflict_without_ci = (
+        allow_conflict_repair_without_ci
+        and actionable_merge_conflicts
+        and not pull_request_merged
+        and payload.get("checksReported", payload.get("checks_reported")) is False
+        and any(
+            isinstance(raw, Mapping)
+            and _normalize_blocker_kind(
+                raw.get("kind"), actionable_merge_conflicts=True
+            )
+            in ACTIONABLE_MERGE_CONFLICT_BLOCKER_KINDS
+            for raw in payload.get("blockers") or []
+        )
     )
     blockers: list[ReadinessBlockerModel] = []
     actionable_merge_conflict_seen = False
@@ -159,9 +175,9 @@ def classify_readiness(
                 raw.get("kind"),
                 actionable_merge_conflicts=actionable_merge_conflicts,
             )
-            if kind == "checks_running" and known_ci_failure:
+            if kind == "checks_running" and (known_ci_failure or conflict_without_ci):
                 # Admit the existing resolver to repair a completed failure;
-                # queued downstream checks do not make that failure disappear.
+                # missing CI also cannot start on a conflicted pull request.
                 continue
             if _is_non_blocking_blocker(
                 kind,
@@ -203,7 +219,7 @@ def classify_readiness(
                 )
             )
         )
-    if not known_ci_failure and (
+    if not (known_ci_failure or conflict_without_ci) and (
         payload.get("checksComplete") is False
         or payload.get("checks_complete") is False
     ):
@@ -277,6 +293,7 @@ def classify_readiness(
             "blockers": [b.model_dump(by_alias=True) for b in deduped],
         }
     )
+
 
 def deterministic_resolver_idempotency_key(
     *,
