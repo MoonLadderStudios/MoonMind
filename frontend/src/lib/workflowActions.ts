@@ -438,6 +438,34 @@ export function buildWorkflowActionMenuItems(
   return items.sort((left, right) => sectionOrder(left) - sectionOrder(right));
 }
 
+// The actions that move a workflow forward from its current state, best first:
+// answer a pending approval, resume a pause, recover a failure, then control a
+// running workflow. Rename, Edit, Remediate and troubleshooting stay in the menu.
+const PRIMARY_WORKFLOW_ACTION_PRIORITY = [
+  'approve',
+  'resume',
+  'retry-from-failed-step',
+  'continue-remediation',
+  'retry-publication',
+  'rerun',
+  'pause',
+  'cancel',
+];
+
+/**
+ * The few available actions worth showing as buttons beside the actions menu.
+ * They stay in the menu too, so promoting one never hides it. Items disabled
+ * only while another action is pending are kept so the buttons do not jump.
+ */
+export function selectPrimaryWorkflowActions(
+  items: readonly WorkflowActionMenuItem[],
+  limit = 2,
+): WorkflowActionMenuItem[] {
+  return PRIMARY_WORKFLOW_ACTION_PRIORITY.flatMap((id) =>
+    items.filter((item) => item.id === id && item.section !== 'unavailable' && !item.href),
+  ).slice(0, limit);
+}
+
 export type RetryFromStepRequest = {
   apiBase: string;
   workflowId: string;

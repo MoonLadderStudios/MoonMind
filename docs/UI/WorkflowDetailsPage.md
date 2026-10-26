@@ -47,7 +47,7 @@ Desktop Workflow detail renders inside the shared `EntityDetailFrame`: breadcrum
 
 ### Tabs
 
-Apart from page-level notices, only the title, status badge, workflow ID, and **Workflow actions** menu sit above the tabs; everything else belongs to exactly one tab.
+Apart from page-level notices, only the title, status badge, workflow ID, primary action buttons, and **Workflow actions** menu sit above the tabs; everything else belongs to exactly one tab.
 
 - **Chat**, the default (`/workflows/{workflowId}`), hosts the native session described in [Workflow Chat Panel](./WorkflowChatPanel.md).
 - **Execution** holds steps, runs, retries, interventions, the audit trail, and a collapsed **Session diagnostics** disclosure with the read-only bridge event history and live logs. The `#session-diagnostics` fragment opens it. Without a usable step ledger, the Observation section shows that evidence directly instead.
@@ -103,7 +103,7 @@ The status badge stays visible and uses the shared [workflow status vocabulary](
 
 ## Primary action bar
 
-The primary action bar appears in the header and remains available near the top of the page. On smaller screens, the same actions may collapse into a sticky bottom action bar or an overflow menu, but the actions remain discoverable.
+Up to two of the state's main actions appear as buttons beside the **Workflow actions** menu, chosen in this order: Approve, Resume, Retry from failed step, Continue remediation, Retry publication, Rerun, Pause, Cancel. They also stay in the menu, keep the menu's confirmations, and wrap with the header on small screens. Rename, Edit, Remediate, and troubleshooting actions stay in the menu.
 
 Actions are additive. Showing one action never hides another valid action. In particular, **Remediate** does not replace **Edit Workflow**, **Rerun**, or **Retry from failed step** on failed Workflows.
 
