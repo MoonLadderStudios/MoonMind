@@ -117,7 +117,7 @@ cmd_sync() {
   docker run --rm \
     -v "${VOLUME_NAME}:${CODEX_HOME}" \
     -v "${HOST_CODEX_DIR}:/host-codex-auth:ro" \
-    alpine:3.20 sh -c "
+    alpine:3.24 sh -c "
       cp -a /host-codex-auth/. '${CODEX_HOME}/' &&
       chown -R 1000:1000 '${CODEX_HOME}' &&
       chmod 0700 '${CODEX_HOME}' &&
@@ -181,7 +181,7 @@ cmd_check() {
 
   docker run --rm \
     -v "${VOLUME_NAME}:${CODEX_HOME}:ro" \
-    alpine:3.20 sh -c "
+    alpine:3.24 sh -c "
       echo 'Files in volume:'
       find '${CODEX_HOME}' -maxdepth 3 -type f -exec basename {} \;
       echo ''

@@ -1589,7 +1589,7 @@ services:
     restart: unless-stopped
 
   agent-workspaces-init:
-    image: alpine:3.20
+    image: alpine:3.24
     command: >-
       sh -lc "set -e; for dir in /work/agent_jobs /work/agent_jobs/artifacts
       /work/agent_jobs/managed_runs /work/agent_jobs/managed_sessions
@@ -1600,7 +1600,7 @@ services:
     restart: "no"
 
   codex-auth-init:
-    image: alpine:3.20
+    image: alpine:3.24
     environment:
       - CODEX_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
     command: >-
@@ -1612,7 +1612,7 @@ services:
     restart: "no"
 
   claude-auth-init:
-    image: alpine:3.20
+    image: alpine:3.24
     command: >-
       sh -lc "mkdir -p ${CLAUDE_VOLUME_PATH:-/home/app/.claude} && chown -R
       1000:1000 ${CLAUDE_VOLUME_PATH:-/home/app/.claude} && chmod 0775
