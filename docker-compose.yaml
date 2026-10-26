@@ -1432,7 +1432,9 @@ services:
   init-db:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@${POSTGRES_HOST:-moonmind-api-db}:5432/${POSTGRES_DB:-moonmind}
+      # Match the application's installed sync driver rather than relying on
+      # SQLAlchemy's implicit PostgreSQL driver selection.
+      - DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@${POSTGRES_HOST:-moonmind-api-db}:5432/${POSTGRES_DB:-moonmind}
       - PYTHONPATH=/app
       - MOONMIND_EGRESS_POLICY_DIRECTORY=${MOONMIND_EGRESS_POLICY_DIRECTORY:-}
       - MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED=${MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED:-true}

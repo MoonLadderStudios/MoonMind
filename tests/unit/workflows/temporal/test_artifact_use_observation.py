@@ -15,7 +15,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import event, select, text
-from sqlalchemy.exc import DBAPIError, IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
 
 from api_service.db.models import (
     TemporalArtifactLink,
@@ -27,6 +27,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
     TemporalArtifactRepository,
     TemporalArtifactStateError,
+    TemporalArtifactUnavailableError,
     TemporalArtifactValidationError,
 )
 from tests.unit.workflows.temporal.test_saved_work_retention_4017 import (
@@ -550,11 +551,21 @@ async def test_physical_savepoint_control_errors_never_report_read_success(
         engine = sessions.kw["bind"].sync_engine
         event.listen(engine, "before_cursor_execute", fail_control)
         try:
-            with pytest.raises(Exception, match=missing_function):
+            with pytest.raises(Exception) as caught:
                 await _serve(service, "read", artifact_id)
         finally:
             event.remove(engine, "before_cursor_execute", fail_control)
 
+        error = caught.value
+        if isinstance(error, TemporalArtifactUnavailableError):
+            # Eager savepoint setup can fail inside the authority boundary.
+            # Check its safe classification and the actual injected SQL cause,
+            # rather than requiring a driver message at the outermost layer.
+            assert error.code == "artifact_authority_unavailable"
+            assert error.retryable is True
+            assert error.__cause__ is not None
+            error = error.__cause__
+        assert missing_function in str(error)
         assert "observation skipped" not in caplog.text
         assert await _claims(sessions, artifact_id) == []
 
@@ -750,7 +761,7 @@ async def test_release_failure_preserves_primary_serving_failure(
                 TemporalArtifactValidationError if primary_kind == "invalid"
                 else TemporalArtifactStateError if primary_kind == "missing"
                 else asyncio.CancelledError if primary_kind == "cancelled"
-                else sqlite3.OperationalError if release_kind == "control"
+                else (sqlite3.OperationalError, OperationalError) if release_kind == "control"
                 else DBAPIError if release_kind == "invalidated"
                 else type(cleanup)
             )
@@ -770,6 +781,14 @@ async def test_release_failure_preserves_primary_serving_failure(
             assert caught.value is primary
         elif release_kind != "control":
             assert caught.value is cleanup
+        else:
+            # SQLAlchemy may wrap the driver's real control-statement error.
+            # Retain its exact SQLite cause instead of depending on that layer.
+            error = caught.value
+            if isinstance(error, OperationalError):
+                assert isinstance(error.orig, sqlite3.OperationalError)
+                error = error.orig
+            assert "missing_release_control" in str(error)
         if primary_kind != "none":
             assert "consumer-use release also failed" in " ".join(caught.value.__notes__)
             assert "release failed while preserving serving failure" in caplog.text
