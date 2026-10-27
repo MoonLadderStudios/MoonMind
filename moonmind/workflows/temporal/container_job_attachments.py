@@ -14,6 +14,7 @@ workspace resolution refuses it.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -108,81 +109,186 @@ def _content_identity(records: list[list[str]]) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
+_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+_DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | _CLOEXEC
+# Non-blocking so a FIFO swapped in after classification cannot stall capture.
+_FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | _CLOEXEC
+# The entry was replaced by a link, a different file type, or removed.
+_REPLACED = {errno.ELOOP, errno.ENOENT, errno.ENOTDIR, errno.ENXIO}
+
+
+def _open_at(name: str, flags: int, dir_fd: int) -> int:
+    return os.open(name, flags, dir_fd=dir_fd)
+
+
+def _is_link(name: str, dir_fd: int) -> bool:
+    try:
+        return stat.S_ISLNK(os.stat(name, dir_fd=dir_fd, follow_symlinks=False).st_mode)
+    except OSError:
+        return False
+
+
+def _open_source(workspace: Path, relative: str) -> int:
+    """Open ``relative`` inside ``workspace`` one component at a time.
+
+    No component may be a link, so a path that resolved inside the workspace
+    when checked cannot be redirected outside it before it is opened.
+    """
+
+    fd = os.open(workspace, _DIRECTORY_FLAGS)
+    try:
+        for part in [] if relative == "." else relative.split("/"):
+            try:
+                child = _open_at(part, _DIRECTORY_FLAGS, fd)
+            except OSError as exc:
+                if exc.errno in _REPLACED and _is_link(part, fd):
+                    raise AttachmentStorageError(
+                        "input attachment escapes the admitted workspace"
+                    ) from exc
+                if exc.errno in _REPLACED:
+                    raise AttachmentStorageError(
+                        "input attachment source is not a directory"
+                    ) from exc
+                raise
+            parent, fd = fd, child
+            os.close(parent)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _open_checked(
+    name: str,
+    flags: int,
+    dir_fd: int,
+    expected: os.stat_result,
+    kind: Callable[[int], bool],
+) -> int | None:
+    """Open the entry that was classified, or None when it was replaced."""
+
+    try:
+        fd = _open_at(name, flags, dir_fd)
+    except OSError as exc:
+        if exc.errno in _REPLACED:
+            return None
+        raise
+    opened = os.fstat(fd)
+    if kind(opened.st_mode) and (opened.st_dev, opened.st_ino) == (
+        expected.st_dev,
+        expected.st_ino,
+    ):
+        return fd
+    os.close(fd)
+    return None
+
+
 def capture_directory(
-    source: Path,
+    workspace: Path,
+    relative: str,
     destination: Path,
     *,
     include_git: bool,
     max_files: int,
     max_bytes: int,
 ) -> dict:
-    """Copy regular files and directories from ``source`` without following links.
+    """Copy regular files and directories under ``workspace/relative``.
 
-    Returns the captured identity and coverage. Symlinks and special files are
-    omitted and counted rather than followed, so a link cannot pull host
-    content into the snapshot.
+    Returns the captured identity and coverage. Every entry is opened through
+    its parent's descriptor without following links and must still be the
+    entry that was classified, so neither a link nor an entry swapped for one
+    during capture can pull host content into the snapshot. Links, special
+    files and entries replaced mid-capture are omitted and counted.
     """
 
-    if source.is_symlink() or not source.is_dir():
-        raise AttachmentStorageError("input attachment source is not a directory")
-    destination.mkdir(parents=True)
+    source_fd = _open_source(workspace, relative)
     records: list[list[str]] = []
     omitted_links = omitted_special = changed = 0
     used_bytes = 0
     git = "absent"
-    for directory, dirs, files in os.walk(source, followlinks=False):
-        relative = Path(directory).relative_to(source)
+
+    def copy_file(dir_fd: int, name: str, path: Path, info: os.stat_result) -> None:
+        nonlocal changed, used_bytes
+        if len(records) + 1 > max_files or used_bytes + info.st_size > max_bytes:
+            raise AttachmentStorageError("input attachment exceeds its admitted bound")
+        fd = _open_checked(name, _FILE_FLAGS, dir_fd, info, stat.S_ISREG)
+        if fd is None:
+            changed += 1
+            return
+        digest = hashlib.sha256()
+        size = 0
+        with os.fdopen(fd, "rb") as reader, (destination / path).open("xb") as writer:
+            while chunk := reader.read(1024 * 1024):
+                size += len(chunk)
+                if used_bytes + size > max_bytes:
+                    raise AttachmentStorageError(
+                        "input attachment exceeds its admitted bound"
+                    )
+                digest.update(chunk)
+                writer.write(chunk)
+            after = os.fstat(reader.fileno())
+        os.chmod(destination / path, stat.S_IMODE(info.st_mode) | 0o444)
+        if (after.st_size, after.st_mtime_ns) != (size, info.st_mtime_ns):
+            changed += 1
+        used_bytes += size
+        records.append([path.as_posix(), digest.hexdigest()])
+
+    def subdirectories(dir_fd: int, relative: Path) -> list[tuple[str, os.stat_result]]:
+        nonlocal omitted_links, omitted_special, git, changed
+        entries = []
+        with os.scandir(dir_fd) as scan:
+            for entry in scan:
+                try:
+                    entries.append((entry.name, entry.stat(follow_symlinks=False)))
+                except FileNotFoundError:
+                    changed += 1
         kept = []
-        for name in sorted(dirs):
-            if (Path(directory) / name).is_symlink():
-                omitted_links += 1
-                continue
-            if relative == Path(".") and name == ".git":
-                if not include_git:
-                    git = "excluded"
-                    continue
-                git = "directory"
-            kept.append(name)
-            (destination / relative / name).mkdir()
-        dirs[:] = kept
-        for name in sorted(files):
-            original = Path(directory) / name
-            path = relative / name
-            if relative == Path(".") and name == ".git":
+        for name, info in sorted(entries, key=lambda item: item[0]):
+            at_root_git = relative == Path(".") and name == ".git"
+            if at_root_git and not stat.S_ISDIR(info.st_mode):
                 # A worktree pointer names metadata outside the admitted source.
                 git = "external" if include_git else "excluded"
-                continue
-            info = original.lstat()
-            if stat.S_ISLNK(info.st_mode):
+            elif stat.S_ISLNK(info.st_mode):
                 omitted_links += 1
-                continue
-            if not stat.S_ISREG(info.st_mode):
+            elif stat.S_ISDIR(info.st_mode):
+                if at_root_git:
+                    if not include_git:
+                        git = "excluded"
+                        continue
+                    git = "directory"
+                kept.append((name, info))
+            elif stat.S_ISREG(info.st_mode):
+                copy_file(dir_fd, name, relative / name, info)
+            else:
                 omitted_special += 1
+        return kept
+
+    destination.mkdir(parents=True)
+    # Descend depth-first holding one descriptor per level.
+    stack: list[list] = [[source_fd, Path("."), None]]
+    try:
+        while stack:
+            level = stack[-1]
+            if level[2] is None:
+                level[2] = iter(subdirectories(level[0], level[1]))
+            child = next(level[2], None)
+            if child is None:
+                os.close(level[0])
+                stack.pop()
                 continue
-            if len(records) + 1 > max_files or used_bytes + info.st_size > max_bytes:
-                raise AttachmentStorageError(
-                    "input attachment exceeds its admitted bound"
-                )
-            digest = hashlib.sha256()
-            size = 0
-            with original.open("rb") as reader, (destination / path).open(
-                "xb"
-            ) as writer:
-                while chunk := reader.read(1024 * 1024):
-                    size += len(chunk)
-                    if used_bytes + size > max_bytes:
-                        raise AttachmentStorageError(
-                            "input attachment exceeds its admitted bound"
-                        )
-                    digest.update(chunk)
-                    writer.write(chunk)
-            os.chmod(destination / path, stat.S_IMODE(info.st_mode) | 0o444)
-            after = original.lstat()
-            if (after.st_size, after.st_mtime_ns) != (size, info.st_mtime_ns):
+            name, info = child
+            child_fd = _open_checked(
+                name, _DIRECTORY_FLAGS, level[0], info, stat.S_ISDIR
+            )
+            if child_fd is None:
                 changed += 1
-            used_bytes += size
-            records.append([path.as_posix(), digest.hexdigest()])
-    shallow = git == "directory" and (source / ".git" / "shallow").exists()
+                continue
+            stack.append([child_fd, level[1] / name, None])
+            (destination / level[1] / name).mkdir()
+    finally:
+        for level in stack:
+            os.close(level[0])
+    shallow = git == "directory" and any(path == ".git/shallow" for path, _ in records)
     limitations = sorted(
         item
         for item, present in (

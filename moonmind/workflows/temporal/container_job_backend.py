@@ -2617,14 +2617,10 @@ class DockerContainerJobBackend:
         async def capture(name: str, destination: Path) -> dict:
             item = admitted[name]
             if item.workspace_path is not None:
-                source = workspace / item.workspace_path
-                if not source.resolve().is_relative_to(workspace):
-                    raise attachments.AttachmentStorageError(
-                        "input attachment escapes the admitted workspace"
-                    )
                 return await asyncio.to_thread(
                     attachments.capture_directory,
-                    source,
+                    workspace,
+                    item.workspace_path,
                     destination,
                     include_git=item.include_git,
                     max_files=item.max_files,
