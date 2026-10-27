@@ -365,7 +365,8 @@ for host in peer_hosts:
  try: s=socket.create_connection((host,8080),timeout=.3)
  except OSError as exc: peer_checks.append({'host':host,'transport':'direct-socket','error':type(exc).__name__})
  else: s.close(); raise AssertionError('direct private-peer route escaped: '+host)
-os.environ['NO_PROXY']='*'
+# The inherited lowercase value takes precedence in HTTPX; override both forms.
+os.environ.update(NO_PROXY='*',no_proxy='*')
 with httpx.Client(trust_env=True,timeout=.5) as c:
  try: c.get('http://93.184.216.15:8080/')
  except httpx.RequestError: pass
