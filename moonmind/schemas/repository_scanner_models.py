@@ -21,6 +21,9 @@ Text = Annotated[
 Items = Annotated[list[Text], Field(max_length=4096)]
 Scanner = Literal["gitleaks", "opengrep", "trivy"]
 MAX_REPORT_BYTES = 8 * 1024 * 1024
+FeedComponent = Literal["vulnerability", "java", "checks"]
+#: Freshness policy default; independent of scanner-image maintenance.
+DEFAULT_FEED_MAX_AGE_HOURS = 72
 
 
 class Contract(BaseModel):
@@ -66,6 +69,7 @@ class RepositoryScan(Contract):
     gitleaks_owns_secrets: bool = True
     database_cache_ref: str | None = Field(None, pattern=r"^[a-z0-9][a-z0-9.-]*$")
     database_digest: str | None = Field(None, pattern=r"^[0-9a-f]{64}$")
+    feed_max_age_hours: int = Field(DEFAULT_FEED_MAX_AGE_HOURS, ge=1, le=8760)
     max_files: int = Field(4096, ge=1, le=4096)
     max_input_bytes: int = Field(128 * 1024 * 1024, ge=1, le=2 * 1024**3)
     max_report_bytes: int = Field(MAX_REPORT_BYTES, ge=128, le=MAX_REPORT_BYTES)
@@ -125,3 +129,42 @@ class RepositoryScan(Contract):
             {"name": name, "relativePath": f"{self.output_directory}/{name}.json"}
             for name in [*self.modes, "execution", "summary"]
         ]
+
+
+class FeedRefresh(Contract):
+    """Source-free acquisition of selected Trivy components into a snapshot.
+
+    Upstream locations are deployment code, not request fields. ``download``
+    reaches them through an admitted egress policy; ``import`` validates an
+    operator-supplied archive of a Trivy cache directory with no network.
+    """
+
+    acquisition: Literal["download", "import"] = "download"
+    components: list[FeedComponent] = Field(
+        default_factory=lambda: ["vulnerability"], min_length=1, max_length=3
+    )
+    feed_cache_ref: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]*$")
+    egress_policy_ref: str | None = Field(None, pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$")
+    archive_artifact_ref: str | None = Field(None, pattern=r"^art_[0-9A-Za-z]{1,64}$")
+    output_directory: str = "feed-refresh"
+    max_age_hours: int = Field(DEFAULT_FEED_MAX_AGE_HOURS, ge=1, le=8760)
+    max_bytes: int = Field(8 * 1024**3, ge=1, le=16 * 1024**3)
+    timeout_seconds: int = Field(1800, ge=60, le=3600)
+
+    @field_validator("output_directory")
+    @classmethod
+    def output_relative(cls, value):
+        return relative_path(value)
+
+    @model_validator(mode="after")
+    def admitted_choices(self):
+        if len(set(self.components)) != len(self.components):
+            raise ValueError("duplicate feed component")
+        if "vulnerability" not in self.components:
+            raise ValueError("feed snapshots require the vulnerability database")
+        download = self.acquisition == "download"
+        if download != (self.egress_policy_ref is not None):
+            raise ValueError("feed downloads, and only downloads, need egress")
+        if download == (self.archive_artifact_ref is not None):
+            raise ValueError("feed imports, and only imports, read an archive")
+        return self

@@ -3519,11 +3519,19 @@ class DockerContainerJobBackend:
                 scan.modes
             ):
                 raise ValueError("scanner execution modes differ from admission")
-            if execution.database_digest != scan.database_digest:
+            # No database means the runner recorded why; any other identity
+            # than the admitted snapshot is invalid evidence.
+            if execution.database_digest not in (None, scan.database_digest) or (
+                execution.feed is not None
+                and execution.feed.snapshot is not None
+                and execution.feed.snapshot.snapshot_id != scan.database_digest
+            ):
                 raise ValueError("scanner database differs from admission")
             if len(execution.assets) > scan.max_files:
                 raise ValueError("scanner input exceeds admission")
             limitations.extend(execution.limitations)
+            if scan.database_digest and execution.database_digest is None:
+                limitations.append("feed_snapshot_unavailable")
         except (ValueError, TypeError):
             execution = None
             limitations.append("missing_or_invalid_execution_evidence")
