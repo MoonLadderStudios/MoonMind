@@ -521,6 +521,8 @@ class AssessmentExecution:
                         request, observations, scan_key
                     )
                     outcomes.append(github_alerts["outcome"])
+                    # The live import is observed after this execution began.
+                    now = datetime.now(UTC)
             coverage = [
                 row for observation in observations for row in observation.coverage
             ]

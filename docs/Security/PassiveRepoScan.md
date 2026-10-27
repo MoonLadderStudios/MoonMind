@@ -230,7 +230,8 @@ import. `maxSeconds` must fit the base budget.
 
 Reads use the run's admitted repository connection with the read-only
 `security_read` operation (GitHub App: `security_events`,
-`vulnerability_alerts` and `secret_scanning_alerts` read). A connection without
+`vulnerability_alerts` and `secret_scanning_alerts` read, plus `contents` read to
+resolve the assessed revision). A connection without
 it sends no request and reports every category `authorization_unavailable`; no
 ambient token is substituted. The import only issues GETs on that repository's
 endpoints, follows `Link` continuations only on the same endpoint, retries

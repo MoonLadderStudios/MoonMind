@@ -271,6 +271,32 @@ async def test_item_and_request_budgets_bound_output_and_record_continuation():
 
 
 @pytest.mark.asyncio
+async def test_slowly_streamed_response_cannot_exceed_the_time_budget():
+    now = [0.0]
+
+    async def trickle():
+        for _ in range(5):
+            now[0] += 1
+            yield b" "
+
+    def slow(_request):
+        return httpx.Response(200, content=trickle())
+
+    fake = FakeGitHub({"code-scanning/alerts": [slow]})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(fake)) as client:
+        native, _ = await collect_github_alerts(
+            client,
+            api_base=API,
+            headers={"Authorization": "Bearer selected"},
+            request=import_request(categories=["code-scanning"], maxSeconds=2),
+            clock=lambda: now[0],
+        )
+    code = native["categories"]["code-scanning"]
+    assert code["outcome"] == "pagination_incomplete"
+    assert code["limit"] == "time_budget"
+
+
+@pytest.mark.asyncio
 async def test_transient_failures_retry_only_safe_reads_within_budget():
     calls = []
 
@@ -457,7 +483,10 @@ def test_github_alert_tool_requires_its_import_request():
 
 
 def test_security_read_issues_only_read_alert_permissions():
+    # Contents read resolves the assessed revision through the commits API.
     assert operations_to_permissions(["security_read"]) == {
+        "contents": "read",
+        "metadata": "read",
         "security_events": "read",
         "vulnerability_alerts": "read",
         "secret_scanning_alerts": "read",

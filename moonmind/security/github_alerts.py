@@ -9,6 +9,7 @@ module, after the scanner sanitizer has removed secret values.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -140,20 +141,27 @@ async def _get(client: httpx.AsyncClient, budget: _Budget, url: str, headers):
         budget.requests += 1
         body = bytearray()
         try:
-            async with client.stream(
-                "GET", url, headers=headers, timeout=remaining
-            ) as response:
-                if response.status_code in _RETRYABLE:
-                    failure = "upstream_unavailable"
-                    continue
-                async for chunk in response.aiter_bytes():
-                    body += chunk
-                    if budget.bytes + len(body) > budget.request.max_bytes:
-                        raise _Stop("pagination_incomplete", limit="byte_budget")
-                status, response_headers = response.status_code, response.headers
+            # HTTPX timeouts bound each wait, not a slowly streamed body, so
+            # the whole exchange runs under the import's absolute deadline.
+            async with asyncio.timeout(remaining):
+                async with client.stream(
+                    "GET", url, headers=headers, timeout=remaining
+                ) as response:
+                    if response.status_code in _RETRYABLE:
+                        failure = "upstream_unavailable"
+                        continue
+                    async for chunk in response.aiter_bytes():
+                        body += chunk
+                        if budget.bytes + len(body) > budget.request.max_bytes:
+                            raise _Stop("pagination_incomplete", limit="byte_budget")
+                        if budget.clock() > budget.deadline:
+                            raise _Stop("pagination_incomplete", limit="time_budget")
+                    status, response_headers = response.status_code, response.headers
         except httpx.TransportError:
             failure = "transport_unavailable"
             continue
+        except TimeoutError:
+            raise _Stop("pagination_incomplete", limit="time_budget") from None
         budget.bytes += len(body)
         if status != 200:
             outcome, reset = _classify(status, response_headers, bytes(body))
@@ -609,6 +617,9 @@ def alert_observation(
                 tool=tool,
                 assets=scope.assets,
                 rule_ids=[],
+                # A complete category lists every alert its filters select, so
+                # an alert missing from it is comparable absence.
+                all_rules=status == "complete",
                 config_ref=content_key(
                     [config.repository, native["subject"]["ref"], result["filters"]]
                 ),
