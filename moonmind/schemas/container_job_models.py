@@ -364,6 +364,9 @@ class ContainerJobSpec(ContractModel):
     caches: list[CacheMount] = Field(default_factory=list, max_length=32)
     network_mode: Literal["none", "bridge", "service"] = Field("none", alias="networkMode")
     service_ref: str | None = Field(None, alias="serviceRef", pattern=r"^[a-z0-9](?:[a-z0-9.-]{0,126}[a-z0-9])?$", max_length=128)
+    egress_policy_ref: str | None = Field(
+        None, alias="egressPolicyRef", pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$"
+    )
     resources: ResourceLimits
     timeout_seconds: int = Field(1800, alias="timeoutSeconds", ge=1, le=86400)
     pull_policy: Literal["if-missing", "always", "never"] = Field("if-missing", alias="pullPolicy")
@@ -390,6 +393,15 @@ class ContainerJobSpec(ContractModel):
             raise ValueError("service access requires a deployment-owned image source")
         if self.service_ref is not None and any(item.name.startswith("MOONMIND_SERVICE_") for item in self.environment):
             raise ValueError("service connection environment is deployment-owned")
+        if self.egress_policy_ref is not None:
+            if self.network_mode != "bridge" or self.image_source_ref is None:
+                raise ValueError("egress policy requires bridge and a deployment-owned image source")
+            if any(
+                item.name.lower() in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}
+                or item.name.startswith("MOONMIND_EGRESS_")
+                for item in self.environment
+            ):
+                raise ValueError("egress proxy environment is deployment-owned")
         from moonmind.security.repository_scanners import validate_scanner_job
 
         validate_scanner_job(self)
@@ -1022,6 +1034,13 @@ class ContainerJobWorkflowInput(TemporalContractModel):
         return f"{self.job_id}:{self.contract_version}"
 
 
+class EgressDenialObservation(TemporalContractModel):
+    """Compact pointer to a confirmed, durably published denial observation."""
+
+    artifact_ref: str = Field(alias="artifactRef", min_length=1, max_length=1024)
+    denied_connection_count: int = Field(alias="deniedConnectionCount", ge=1)
+
+
 class ContainerJobActivityRequest(TemporalContractModel):
     """Typed, retry-safe request crossing a container-job Activity boundary."""
 
@@ -1062,6 +1081,9 @@ class ContainerJobActivityRequest(TemporalContractModel):
     container_ref: str | None = Field(None, alias="containerRef", max_length=1024)
     egress_attestation_ref: str | None = Field(
         None, alias="egressAttestationRef", max_length=1024
+    )
+    egress_denial_observation: EgressDenialObservation | None = Field(
+        None, alias="egressDenialObservation"
     )
     terminal_state: ContainerJobState | None = Field(None, alias="terminalState")
     projection_sequence: int = Field(0, alias="projectionSequence", ge=0)
@@ -1122,6 +1144,9 @@ class ContainerJobActivityResult(TemporalContractModel):
     artifacts_ref: str | None = Field(None, alias="artifactsRef", max_length=1024)
     diagnostics_ref: str | None = Field(
         None, alias="diagnosticsRef", max_length=1024
+    )
+    egress_denial_observation: EgressDenialObservation | None = Field(
+        None, alias="egressDenialObservation"
     )
     cleanup_succeeded: bool | None = Field(None, alias="cleanupSucceeded")
     # Durable observability-event journal ref (the terminal fallback for the
