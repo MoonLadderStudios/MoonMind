@@ -1775,7 +1775,7 @@ def test_orchestrate_main_uses_extended_finalize_wait_defaults(
     assert captured["min_attempts_before_exhausted"] == 5
     assert captured["base_sleep_seconds"] == 30
     assert captured["max_sleep_seconds"] == 120
-    assert captured["max_elapsed_seconds"] == 7200
+    assert captured["max_elapsed_seconds"] == 10800
 
 def test_contract_snapshot_refresh_failed_is_finalize_only_retry(
     pr_resolve_contract_module: dict[str, Any],

@@ -193,7 +193,7 @@ def build_pr_resolver_start_input(
     )
     policy = {
         "pollIntervalSeconds": skill_inputs.get("finalizeBackoffSeconds", 60),
-        "maxElapsedSeconds": skill_inputs.get("finalizeMaxElapsedSeconds", 7200),
+        "maxElapsedSeconds": skill_inputs.get("finalizeMaxElapsedSeconds", 10800),
         "maxFinalizeAttempts": skill_inputs.get("finalizeMaxRetries", 60),
         "maxRemediationsPerType": skill_inputs.get("maxRemediationsPerType", 2),
         "maxIdenticalBlockersWithoutProgress": skill_inputs.get(
