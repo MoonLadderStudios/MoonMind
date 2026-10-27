@@ -20438,6 +20438,9 @@ async def _publication_recovery_review_body(
         publication_task_instructions,
     )
     from moonmind.workflows.temporal.artifacts import TemporalArtifactValidationError
+    from moonmind.workflows.executions.execution_contract import (
+        original_task_snapshot_parameters,
+    )
 
     source = f"workflow {source_workflow_id}, run {source_run_id}"
     if not task_input_ref:
@@ -20467,13 +20470,9 @@ async def _publication_recovery_review_body(
         ):
             raise ValueError("Original task digest mismatch")
         snapshot = json.loads(raw)
-        if (
-            not isinstance(snapshot, Mapping)
-            or snapshot.get("snapshotVersion") != _WORKFLOW_INPUT_SNAPSHOT_VERSION
-        ):
+        if not isinstance(snapshot, Mapping):
             raise ValueError("Unsupported original task input")
-        draft = snapshot.get("draft")
-        task = draft.get("workflow") if isinstance(draft, Mapping) else None
+        task = original_task_snapshot_parameters(snapshot).get("workflow")
         if not isinstance(task, Mapping):
             raise ValueError("Original task input is malformed")
     except (TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError):

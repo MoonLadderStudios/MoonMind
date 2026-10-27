@@ -59,7 +59,11 @@ def append_publication_task(body: str, *, instructions: str, source: str = "") -
     scope = redact_sensitive_text(instructions).strip()
     if not scope:
         return body
+    scope = _SECRET_LIKE_METADATA_PATTERN.sub("[REDACTED]", scope)
     scope = _CLOSING_REFERENCE.sub(r"\1\2issue ", scope).replace("<!--", "&lt;!--")
+    if not source and len(scope) <= 20_000 and body.strip() == instructions.strip():
+        # The default body already is the complete task, not an agent summary.
+        return scope
     if len(scope) > 20_000:
         scope = (
             scope[:20_000] + "\n[Task excerpt truncated; consult the original task.]"
