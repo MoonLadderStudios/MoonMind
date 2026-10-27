@@ -6690,6 +6690,7 @@ export interface components {
         ContainerJobSpec: {
             repositoryScan?: components["schemas"]["RepositoryScan"] | null;
             feedRefresh?: components["schemas"]["FeedRefresh"] | null;
+            imageAssessment?: components["schemas"]["ImageAssessment"] | null;
             workloadProfile?: components["schemas"]["WorkloadProfileSelection"] | null;
             /** Image */
             image?: string | null;
@@ -9462,6 +9463,73 @@ export interface components {
             serverImageRef: string;
             /** Hostimageref */
             hostImageRef: string;
+        };
+        /**
+         * ImageAssessment
+         * @description One Trivy operation on an image, image archive, SBOM or source snapshot.
+         *
+         *     A typed workload of its own, so target-image coverage is requested and
+         *     reported apart from source scanning. Registry targets are read from the
+         *     registry and archives or SBOMs from captured inputs, never through a
+         *     container daemon. ``targetCredentialRef`` authorizes the target registry
+         *     only; the scanner image is a deployment image source with its own pull
+         *     authority.
+         */
+        ImageAssessment: {
+            /**
+             * Operation
+             * @enum {string}
+             */
+            operation: "assess" | "sbom-generate" | "sbom-reassess";
+            /**
+             * Target
+             * @enum {string}
+             */
+            target: "registry" | "archive" | "sbom" | "source";
+            /** Imagereference */
+            imageReference?: string | null;
+            /** Platform */
+            platform?: string | null;
+            /** Inputartifactref */
+            inputArtifactRef?: string | null;
+            /** Egresspolicyref */
+            egressPolicyRef?: string | null;
+            /** Targetcredentialref */
+            targetCredentialRef?: string | null;
+            /** Databasecacheref */
+            databaseCacheRef?: string | null;
+            /** Databasedigest */
+            databaseDigest?: string | null;
+            /**
+             * Feedmaxagehours
+             * @default 72
+             */
+            feedMaxAgeHours: number;
+            /**
+             * Outputdirectory
+             * @default image-assessment
+             */
+            outputDirectory: string;
+            /**
+             * Maxinputbytes
+             * @default 2147483648
+             */
+            maxInputBytes: number;
+            /**
+             * Maxsbombytes
+             * @default 33554432
+             */
+            maxSbomBytes: number;
+            /**
+             * Maxreportbytes
+             * @default 8388608
+             */
+            maxReportBytes: number;
+            /**
+             * Timeoutseconds
+             * @default 900
+             */
+            timeoutSeconds: number;
         };
         /** ImageObservation */
         ImageObservation: {

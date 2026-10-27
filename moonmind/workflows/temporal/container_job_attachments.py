@@ -62,6 +62,10 @@ class JobAttachmentStorage:
     def staging(self) -> Path:
         return self.root / "staging"
 
+    @property
+    def credentials(self) -> Path:
+        return self.root / "credentials"
+
 
 def storage_for(workspace_root: Path, job_id: str) -> JobAttachmentStorage:
     # Job ids are validated ``container-job:<32 hex>`` identities.
@@ -407,6 +411,37 @@ async def publish_once(
     return ref
 
 
+def deliver_credential(
+    storage: JobAttachmentStorage, body: bytes, *, ownership_token: str
+) -> None:
+    """Write one worker-resolved credential file for the job's read-only mount.
+
+    It sits beside the captured inputs, never in them, and is replaced on each
+    launch and removed after the container exits and on release. The file is
+    world-readable only so an image's non-root user can read it; the store
+    itself is reachable only by the worker and the Docker daemon.
+    """
+
+    if storage.root.is_symlink() or _owner(storage) != ownership_token:
+        raise AttachmentStorageError("job attachment storage is owned by another job")
+    _remove_tree(storage.credentials)
+    storage.credentials.mkdir(mode=0o755)
+    fd = os.open(
+        storage.credentials / "config.json",
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+    )
+    try:
+        os.write(fd, body)
+        os.fchmod(fd, 0o444)
+    finally:
+        os.close(fd)
+
+
+def remove_credentials(storage: JobAttachmentStorage) -> None:
+    _remove_tree(storage.credentials)
+
+
 def retain_outputs(storage: JobAttachmentStorage, *, ownership_token: str) -> None:
     """Keep outputs through release; collection left one unpublished."""
 
@@ -426,7 +461,12 @@ def release(
         return "absent"
     if storage.root.is_symlink() or _owner(storage) != ownership_token:
         raise AttachmentStorageError("job attachment storage is owned by another job")
-    for directory in (storage.staging, storage.inputs, storage.scratch):
+    for directory in (
+        storage.staging,
+        storage.inputs,
+        storage.scratch,
+        storage.credentials,
+    ):
         _remove_tree(directory)
     if retain_outputs or (storage.root / _RETAIN).exists():
         return "outputs_retained"

@@ -106,8 +106,20 @@ class PrivateImageAuthorizationService:
             raise ValueError(
                 "registry authorization applies only to direct image references"
             )
-        reference = normalize_image_reference(spec.image)
-        credential_ref = spec.registry_credential_ref
+        return self.authorize_reference(
+            owner=owner, image=spec.image, credential_ref=spec.registry_credential_ref
+        )
+
+    def authorize_reference(
+        self, *, owner: OwnerIdentity, image: str, credential_ref: str | None
+    ) -> RegistryAuthorization:
+        """Authorize one registry reference, for a job image or an assessed target.
+
+        The same grants decide both; the decisions stay separate, so a job
+        image's pull credential never authorizes reading a target and a target
+        credential never pulls the job image.
+        """
+        reference = normalize_image_reference(image)
 
         if credential_ref is None:
             if self._policy.protects(reference):
