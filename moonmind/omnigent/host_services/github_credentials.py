@@ -304,7 +304,8 @@ class OmnigentGithubCredentialService:
         if consumer == "server" and (
             request is not None
             or role not in {"collaboration", "source_read"}
-            or operation not in {"read", "review_request", "merge_request"}
+            or operation
+            not in {"read", "review_request", "merge_request", "security_read"}
             or (role == "source_read" and operation != "read")
         ):
             raise ValueError(

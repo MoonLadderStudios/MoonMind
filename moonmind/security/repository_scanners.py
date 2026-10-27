@@ -207,6 +207,10 @@ class ScannerOutputSanitizer:
         self._collect(native)
         return native
 
+    def observe_payload(self, value) -> None:
+        """Learn secret values from an already parsed native payload."""
+        self._collect(value)
+
     def _collect(self, value, key=""):
         if isinstance(value, dict):
             for k, v in value.items():

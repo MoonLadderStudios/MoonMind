@@ -153,9 +153,10 @@ The example refs stand for completed, authorized artifacts. Declare inputs in
 the workflow's `inputAttachments` as `{"artifactId": "art_..."}` so the existing
 occurrence admission links them to that execution. Each invocation checks
 current artifact read authority before reusing scanner work. A saved schedule
-confers no credential or target-network authority. These offline adapters
-require empty credential/network reference lists; active adapters must use
-their existing admission owners. Agent-backed steps and PR finishing, including
+confers no credential or target-network authority. Assessment requests keep
+empty credential/network reference lists; GitHub alert import uses the run's
+admitted repository connection, and active adapters must use their existing
+admission owners. Agent-backed steps and PR finishing, including
 `review_only`, retain execution-plan admission; an assessment adds no image or
 source-revision pin.
 
@@ -216,6 +217,50 @@ structured comparison and saved scanner evidence. `scanOutcome` and
 `publicationOutcome` remain separate: a publication failure returns the
 durable refs and diagnostics without changing the scanner outcome. Live
 cloud/model qualification is separate from these controlled artifact journeys.
+
+### Imported GitHub alerts
+
+The `github-alerts` tool imports the repository's existing code-scanning,
+Dependabot and secret-scanning alerts. Select it with `"githubAlerts":
+{"repository": "owner/name"}`; optional fields are `ref` (`refs/heads/...`,
+default branch when omitted), `revision` (the assessed commit, else the ref's
+tip at import), `categories`, `state` (`open` or `all`), `includeAnalyses`, and
+`perPage`/`maxRequests`/`maxItems`/`maxBytes`/`maxSeconds` bounds for the whole
+import. `maxSeconds` must fit the base budget.
+
+Reads use the run's admitted repository connection with the read-only
+`security_read` operation (GitHub App: `security_events`,
+`vulnerability_alerts` and `secret_scanning_alerts` read). A connection without
+it sends no request and reports every category `authorization_unavailable`; no
+ambient token is substituted. The import only issues GETs on that repository's
+endpoints, follows `Link` continuations only on the same endpoint, retries
+transient failures within the request budget and keeps pages read before a
+later failure. It never dismisses alerts, changes settings or enables products.
+
+Each category records `complete`, `permission_denied`, `product_disabled`,
+`product_unavailable`, `rate_limited`, `repository_unavailable`,
+`pagination_incomplete` (with its continuation), `malformed_response` or an
+upstream/transport failure. Only `complete` can be complete coverage; the
+others are `authentication_failed`, `unsupported`, `partial` or `failed`, and
+the projection lists them as Unverified with a next verification step.
+
+Findings use source `github`, tool `github-<category>`, the alert number as
+native identity, and the rule, advisory or secret type. Only open alerts at the
+assessed revision and on a scoped file path (or the scoped `owner/name` asset)
+become findings. Code-scanning alerts use their latest instance commit,
+secret alerts their first detected location, and Dependabot the default-branch
+tip; an alert at another revision is listed as such. A category is complete only
+when its observed revision is the assessed one. The sanitized
+`github-security-alerts/v1` evidence keeps allowlisted identity, state,
+dismissal/resolution, location and analysis fields, never secret values. A
+retry in the same run reuses that import; a later run rereads GitHub.
+
+Imported and local findings both remain. Correlation, saved with the scan,
+matches only the same asset plus an advisory or rule identifier the local tool
+reports (Dependabot with Trivy, or a code-scanning tool of the same name) and
+records closed-upstream/observed-locally and open-upstream/absent-locally
+conflicts. Secret alerts are not matched, since no shared identity survives
+sanitization.
 
 ## Composable security review
 

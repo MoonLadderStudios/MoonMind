@@ -603,3 +603,107 @@ async def test_frozen_anonymous_read_remains_anonymous_and_cannot_merge(
     finally:
         await engine.dispose()
     assert reads == [] and requests == [] and not merged
+
+
+def _alert_transport(monkeypatch):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        if request.url.path == "/repos/acme/repo":
+            return httpx.Response(
+                200, json={"full_name": "acme/repo", "default_branch": "main"}
+            )
+        if request.url.path.startswith("/repos/acme/repo/commits/"):
+            return httpx.Response(200, json={"sha": "a" * 40})
+        if request.url.path == "/repos/acme/repo/dependabot/alerts":
+            return httpx.Response(200, json=[])
+        raise AssertionError(f"Unexpected provider request: {request.url.path}")
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(
+            transport=httpx.MockTransport(respond), **kwargs
+        ),
+    )
+    return requests
+
+
+async def _read_alerts():
+    from moonmind.security.assessments import GitHubAlertImport
+
+    native, _ = await GitHubService().read_security_alerts(
+        GitHubAlertImport(
+            repository="acme/repo", categories=["dependabot"], include_analyses=False
+        ),
+        admitted_workflow_id="mm:run-b",
+    )
+    return native["categories"]["dependabot"]["outcome"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("frozen", [True, False])
+async def test_alert_reader_acquires_the_admitted_security_read_operation(
+    monkeypatch, tmp_path, frozen
+):
+    import sys
+
+    operations = (*_OPERATIONS, "security_read")
+    monkeypatch.setattr(sys.modules[__name__], "_OPERATIONS", operations)
+    requests = _alert_transport(monkeypatch)
+    engine, reads = await _record_authority(
+        monkeypatch,
+        tmp_path,
+        active_operations=operations,
+        admitted_operations=operations if frozen else None,
+    )
+    try:
+        outcome = await _read_alerts()
+    finally:
+        await engine.dispose()
+    assert outcome == "complete"
+    assert reads == ["env://SYNTHETIC_PAT"]
+    assert {request.method for request in requests} == {"GET"}
+    assert {request.headers["Authorization"] for request in requests} == {
+        "Bearer synthetic-selected-pat"
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("frozen", [True, False])
+async def test_alert_reader_without_admitted_security_read_sends_nothing(
+    monkeypatch, tmp_path, frozen
+):
+    requests = _alert_transport(monkeypatch)
+    engine, reads = await _record_authority(
+        monkeypatch,
+        tmp_path,
+        admitted_operations=_OPERATIONS if frozen else None,
+    )
+    try:
+        outcome = await _read_alerts()
+    finally:
+        await engine.dispose()
+    assert outcome == "authorization_unavailable"
+    assert reads == [] and requests == []
+
+
+@pytest.mark.asyncio
+async def test_unrecorded_default_reads_alerts_with_its_declared_credential(
+    monkeypatch, tmp_path
+):
+    requests = _alert_transport(monkeypatch)
+    monkeypatch.setenv("GITHUB_TOKEN", "synthetic-deployment-pat")
+    engine = await record_repository_connections(
+        monkeypatch, tmp_path, admitted_runs={"mm:run-b": {"repository": "acme/repo"}}
+    )
+    try:
+        outcome = await _read_alerts()
+    finally:
+        await engine.dispose()
+    assert outcome == "complete"
+    assert {request.headers["Authorization"] for request in requests} == {
+        "Bearer synthetic-deployment-pat"
+    }
