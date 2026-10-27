@@ -238,6 +238,10 @@ class MoonMindContainerJobWorkflow:
                 # Carry the resumable live-log cursor across polls so each poll
                 # publishes only the newer log delta.
                 request.log_cursor = observed.log_cursor
+                if observed.egress_denial_observation is not None:
+                    request.egress_denial_observation = (
+                        observed.egress_denial_observation
+                    )
                 if observed.terminal_state is not None:
                     terminal_state = observed.terminal_state
                     exit_code = observed.exit_code
