@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -14,7 +15,11 @@ import httpx
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
+from temporalio import activity
+from temporalio.testing import ActivityEnvironment
 
+from moonmind.security.operator_admission import OperatorAdmission
+from moonmind.workflows.skills import security_assessment
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.skills.security_assessment import (
     register_security_assessment_tool_handler,
@@ -147,24 +152,49 @@ async def invoke(
         ),
         artifact_store=InMemoryArtifactStore(),
     )
-    result = await TemporalSkillActivities(
-        dispatcher=dispatcher, artifact_service=service
-    ).mm_skill_execute(
-        invocation_payload={
-            "id": "assess",
-            "tool": {"name": "security.assess"},
-            "inputs": request,
-        },
-        registry_snapshot=snapshot,
-        principal=f"workflow:{workflow_id}",
-        idempotency_key=key,
-        context={
-            "namespace": "default",
-            "workflow_id": workflow_id,
-            "run_id": run_id,
-            "node_id": "assess",
-        },
-    )
+    async def execute():
+        return await TemporalSkillActivities(
+            dispatcher=dispatcher, artifact_service=service
+        ).mm_skill_execute(
+            invocation_payload={
+                "id": "assess",
+                "tool": {"name": "security.assess"},
+                "inputs": request,
+            },
+            registry_snapshot=snapshot,
+            principal=f"workflow:{workflow_id}",
+            idempotency_key=key,
+            context={
+                "namespace": "default",
+                "workflow_id": workflow_id,
+                "run_id": run_id,
+                "node_id": "assess",
+            },
+        )
+
+    if activity.in_activity():
+        # Keep the real worker's original schedule/budget and execution identity.
+        result = await execute()
+    else:
+        # These fixtures invoke a workflow Activity implementation directly.
+        # Bind its real SDK context instead of treating authored context fields
+        # or the principal string as permission to read retained evidence.
+        environment = ActivityEnvironment()
+        # The SDK's default timestamps are the Unix epoch. This newly simulated
+        # Activity starts now; real worker retries above retain their originals.
+        # Follow the handler's injected clock for metadata-expiry scenarios;
+        # time travel must not age a newly created synthetic Activity.
+        started = security_assessment.datetime.now(UTC)
+        environment.info = replace(
+            environment.info,
+            namespace="default",
+            workflow_id=workflow_id,
+            workflow_run_id=run_id,
+            scheduled_time=started,
+            current_attempt_scheduled_time=started,
+            started_time=started,
+        )
+        result = await environment.run(execute)
     assert result.status == "COMPLETED"
     return result.outputs
 
@@ -692,7 +722,7 @@ async def test_product_api_security_schedule_lifecycle(
     queue = "security-schedule-" + uuid4().hex
     adapter._get_task_queue = lambda *_a, **_kw: queue
     monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
-    user = SimpleNamespace(id=uuid4(), is_superuser=True)
+    user = OperatorAdmission(via="recurring-assessment-test")
     service = environment.service
     request, _, _ = await inputs(service)
     app = FastAPI()
