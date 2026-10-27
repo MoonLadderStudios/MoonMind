@@ -39,6 +39,7 @@ from api_service.db.models import (
 )
 from moonmind.schemas import saved_work_retention as retention
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
     LocalTemporalArtifactStore,
     TemporalArtifactAuthorizationError,
     TemporalArtifactRepository,
@@ -723,7 +724,16 @@ async def test_service_principal_carries_admitted_scope_for_saved_work(
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = _service(session, tmp_path)
-            artifact = await _complete_artifact(service, principal="owner-1")
+            artifact = await _complete_artifact(
+                service,
+                principal="owner-1",
+                link={
+                    "namespace": "default",
+                    "workflow_id": "restore-consumer",
+                    "run_id": "restore-run",
+                    "link_type": "input.saved",
+                },
+            )
 
             with pytest.raises(TemporalArtifactAuthorizationError):
                 await service.acquire_saved_work_use(
@@ -733,14 +743,15 @@ async def test_service_principal_carries_admitted_scope_for_saved_work(
                     operation_kind="restore",
                     access=access_for_test("service:restore-worker"),
                 )
-            # Carrying the admitted user scope through the service call works.
+            # The known execution admission reads only its linked input;
+            # carrying the producer's historical label would grant nothing.
             claim = await service.acquire_saved_work_use(
                 artifact_id=artifact.artifact_id,
                 principal="service:restore-worker",
                 request_id="restore-svc",
                 operation_kind="restore",
-                access=access_for_test(
-                    "service:restore-worker", admitted_principal="owner-1"
+                access=ArtifactAccessContext.for_execution(
+                    "restore-consumer", principal="service:restore-worker"
                 ),
             )
             assert claim.owner_principal == "service:restore-worker"
@@ -789,8 +800,17 @@ async def test_data_plane_preserves_auth_scope_and_all_mode_quarantine(
                 payload=b"quarantined-bytes",
                 redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
                 metadata_json={"quarantine": "true"},
+                link={
+                    "namespace": "default",
+                    "workflow_id": "restore-consumer",
+                    "run_id": "restore-run",
+                    "link_type": "input.saved",
+                },
             )
             bare = "service:restore-worker"
+            admitted = ArtifactAccessContext.for_execution(
+                "restore-consumer", principal=bare
+            )
 
             if auth_mode != "disabled":
                 # Lazily build each denied call so the await itself is the
@@ -835,29 +855,29 @@ async def test_data_plane_preserves_auth_scope_and_all_mode_quarantine(
                     item.artifact_id for item, _links in listed
                 }
 
-            # Carrying the admitted user scope passes authorization, but
+            # Carrying the known execution admission passes authorization, but
             # quarantined bytes stay unavailable on every raw surface: only
             # safe diagnostics and the trusted preview path may serve them.
             for make_raw_call in (
                 lambda: service.read(
                     artifact_id=artifact.artifact_id,
-                    access=access_for_test(bare, admitted_principal="owner-1"),
+                    access=admitted,
                 ),
                 lambda: service.read(
                     artifact_id=artifact.artifact_id,
-                    access=access_for_test(bare, admitted_principal="owner-1"),
+                    access=admitted,
                 ),
                 lambda: service.read_chunks(
                     artifact_id=artifact.artifact_id,
-                    access=access_for_test(bare, admitted_principal="owner-1"),
+                    access=admitted,
                 ),
                 lambda: service.read_path(
                     artifact_id=artifact.artifact_id,
-                    access=access_for_test(bare, admitted_principal="owner-1"),
+                    access=admitted,
                 ),
                 lambda: service.presign_download(
                     artifact_id=artifact.artifact_id,
-                    access=access_for_test(bare, admitted_principal="owner-1"),
+                    access=admitted,
                 ),
             ):
                 with pytest.raises(
@@ -866,13 +886,13 @@ async def test_data_plane_preserves_auth_scope_and_all_mode_quarantine(
                     await make_raw_call()
             _meta, _links, _pinned, policy = await service.get_metadata(
                 artifact_id=artifact.artifact_id,
-                access=access_for_test(bare, admitted_principal="owner-1"),
+                access=admitted,
             )
             assert policy is not None
             assert policy.raw_access_allowed is False
             preview = await service.compute_preview(
                 artifact_id=artifact.artifact_id,
-                access=access_for_test(bare, admitted_principal="owner-1"),
+                access=admitted,
             )
             assert preview.artifact_id != artifact.artifact_id
             listed_admitted, _has_more = await service.list_authorized_collection(
@@ -880,7 +900,7 @@ async def test_data_plane_preserves_auth_scope_and_all_mode_quarantine(
                 query=None,
                 offset=0,
                 limit=50,
-                access=access_for_test(bare, admitted_principal="owner-1"),
+                access=admitted,
             )
             assert artifact.artifact_id in {
                 item.artifact_id for item, _links in listed_admitted

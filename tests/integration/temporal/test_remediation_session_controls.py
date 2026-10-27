@@ -511,7 +511,10 @@ async def test_tool_session_control_persists_and_resumes_exact_ui_verification(
             models.TemporalExecutionRemediationLink, remediation.workflow_id
         )
         await _attach_remediation_capability_projection(
-            link, session=session, principal="service:remediation-context"
+            link,
+            session=session,
+            principal="service:remediation-context",
+            access=ArtifactAccessContext.for_service("service:remediation-context"),
         )
         ui = _serialize_remediation_link_summary(link)
         assert (
