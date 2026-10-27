@@ -32,7 +32,11 @@ from moonmind.schemas.workspace_locator_models import (
     WorkspaceLocator,
 )
 from moonmind.utils.logging import redact_sensitive_text
-from moonmind.schemas.repository_scanner_models import FeedRefresh, RepositoryScan
+from moonmind.schemas.repository_scanner_models import (
+    FeedRefresh,
+    ImageAssessment,
+    RepositoryScan,
+)
 
 CONTAINER_JOB_CONTRACT_VERSION = "v1"
 MAX_TEMPORAL_PAYLOAD_BYTES = 64 * 1024
@@ -446,6 +450,7 @@ class WorkloadProfileSelection(ContractModel):
 class ContainerJobSpec(ContractModel):
     repository_scan: RepositoryScan | None = Field(None, alias="repositoryScan")
     feed_refresh: FeedRefresh | None = Field(None, alias="feedRefresh")
+    image_assessment: ImageAssessment | None = Field(None, alias="imageAssessment")
     workload_profile: WorkloadProfileSelection | None = Field(
         None, alias="workloadProfile"
     )
@@ -527,7 +532,11 @@ class ContainerJobSpec(ContractModel):
         if self.workload_profile is not None:
             # Admission resolves the profile's image source; until then the
             # request carries no image authority of its own.
-            if self.image is not None or self.repository_scan is not None:
+            if (
+                self.image is not None
+                or self.repository_scan is not None
+                or self.image_assessment is not None
+            ):
                 raise ValueError(
                     "workload profile jobs cannot select an image or scanner"
                 )
@@ -560,11 +569,13 @@ class ContainerJobSpec(ContractModel):
                 for item in self.environment
             ):
                 raise ValueError("egress proxy environment is deployment-owned")
+        from moonmind.security.image_assessments import validate_image_assessment_job
         from moonmind.security.repository_scanners import validate_scanner_job
         from moonmind.security.scanner_feeds import validate_feed_refresh_job
 
         validate_scanner_job(self)
         validate_feed_refresh_job(self)
+        validate_image_assessment_job(self)
         return self
 
     @field_validator("workdir")
@@ -1145,6 +1156,10 @@ class ContainerJobWorkflowInput(TemporalContractModel):
     registry_authorization: RegistryAuthorization | None = Field(
         None, alias="registryAuthorization"
     )
+    # Image assessment target credential; separate from the job image's pull.
+    target_authorization: RegistryAuthorization | None = Field(
+        None, alias="targetAuthorization"
+    )
     observe_interval_seconds: int = Field(
         10, alias="observeIntervalSeconds", ge=1, le=300
     )
@@ -1217,6 +1232,10 @@ class ContainerJobActivityRequest(TemporalContractModel):
     request: ContainerJobSubmitRequest
     registry_authorization: RegistryAuthorization | None = Field(
         None, alias="registryAuthorization"
+    )
+    # Image assessment target credential; separate from the job image's pull.
+    target_authorization: RegistryAuthorization | None = Field(
+        None, alias="targetAuthorization"
     )
     state: ContainerJobState | None = None
     resolved_workspace_ref: str | None = Field(

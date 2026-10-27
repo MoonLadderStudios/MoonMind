@@ -257,6 +257,36 @@ def container_feed_refresh(
     _print_container_job_result(result)
 
 
+@container_app.command(
+    "image-assessment",
+    help="Assess an image or archive, generate an SBOM, or reassess an SBOM.",
+)
+def container_image_assessment(
+    admission: Annotated[
+        Path, typer.Option("--admission", exists=True, dir_okay=False, readable=True)
+    ],
+    image_source: str = typer.Option("repository-security", "--image-source"),
+) -> None:
+    from moonmind.schemas.repository_scanner_models import ImageAssessment
+    from moonmind.security.image_assessments import build_image_assessment_job
+
+    try:
+        if admission.stat().st_size > 32 * 1024:
+            raise ValueError("image assessment admission exceeds the input bound")
+        assessment = ImageAssessment.model_validate_json(admission.read_bytes())
+        result = run_container_job(
+            build_image_assessment_job(assessment, image_source_ref=image_source)
+        )
+    except (ContainerJobCliError, ValueError, OSError) as exc:
+        typer.secho(
+            "Invalid image assessment admission or container job unavailable.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    _print_container_job_result(result)
+
+
 @worker_app.command("doctor", help="Verify worker prerequisites.")
 def worker_doctor() -> None:
     # MoonLadderStudios/MoonMind#4192: the native Manifest/RAG ingestion
