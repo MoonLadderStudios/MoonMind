@@ -6689,6 +6689,7 @@ export interface components {
         /** ContainerJobSpec */
         ContainerJobSpec: {
             repositoryScan?: components["schemas"]["RepositoryScan"] | null;
+            workloadProfile?: components["schemas"]["WorkloadProfileSelection"] | null;
             /** Image */
             image?: string | null;
             /** Imagesourceref */
@@ -14034,6 +14035,28 @@ export interface components {
             count: number | "all";
             /** Capabilities */
             capabilities?: ("compute" | "compat32" | "graphics" | "utility" | "video" | "display")[] | null;
+        };
+        /**
+         * WorkloadProfileSelection
+         * @description Caller choice within a deployment-declared workload profile.
+         *
+         *     Admission renders the profile's image, argv, environment, caches, network
+         *     and outputs into the spec; the caller never supplies them directly.
+         *     ``assessmentRef`` is stamped from a scoped session capability.
+         */
+        WorkloadProfileSelection: {
+            /** Profileref */
+            profileRef: string;
+            /** Mode */
+            mode: string;
+            /** Arguments */
+            arguments?: {
+                [key: string]: string | number;
+            };
+            /** Configurationexceptions */
+            configurationExceptions?: string[];
+            /** Assessmentref */
+            assessmentRef?: string | null;
         };
         /** WorkspaceDefaults */
         WorkspaceDefaults: {
