@@ -110,7 +110,15 @@ async def authority_context(tmp_path, monkeypatch):
         await engine.dispose()
 
 
-async def _compile(monkeypatch, context, *, workflow_id=_WORKFLOW, **parameters):
+async def _compile(
+    monkeypatch,
+    context,
+    *,
+    workflow_id=_WORKFLOW,
+    task_input_snapshot_ref="art_request_1",
+    task_input_snapshot_digest="sha256:" + "1" * 64,
+    **parameters,
+):
     sessions, artifacts, _gateway = context
     return await _compile_opencode_plan(
         monkeypatch,
@@ -120,6 +128,8 @@ async def _compile(monkeypatch, context, *, workflow_id=_WORKFLOW, **parameters)
         session_factory=sessions,
         extra_parameters=parameters,
         workflow_id=workflow_id,
+        task_input_snapshot_ref=task_input_snapshot_ref,
+        task_input_snapshot_digest=task_input_snapshot_digest,
     )
 
 
