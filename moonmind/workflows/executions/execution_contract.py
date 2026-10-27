@@ -3122,6 +3122,32 @@ def has_attachment_mutation_fields(payload: Mapping[str, Any] | None) -> bool:
     return False
 
 
+def original_task_snapshot_parameters(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize the existing manual, scheduled and child-run input layouts.
+
+    Callers retain artifact ownership/digest checks. The wire version alone
+    does not decide whether the authored parameter shape can be read.
+    """
+    draft = snapshot.get("draft")
+    if isinstance(draft, Mapping):
+        workflow = draft.get("workflow")
+        if workflow is not None and not isinstance(workflow, Mapping):
+            raise ValueError("task-input snapshot workflow must be an object")
+        return {
+            "repository": str(draft.get("repository") or "").strip(),
+            "targetRuntime": str(draft.get("targetRuntime") or "omnigent"),
+            "requiredCapabilities": list(draft.get("requiredCapabilities") or []),
+            "workflow": dict(workflow) if isinstance(workflow, Mapping) else {},
+        }
+    target = snapshot.get("target")
+    if isinstance(target, Mapping):
+        parameters = target.get("initialParameters")
+        if not isinstance(parameters, Mapping):
+            raise ValueError("scheduled task snapshot lacks authored parameters")
+        return dict(parameters)
+    raise ValueError("task-input snapshot has an unsupported authority shape")
+
+
 def _snapshot_safe(value: object) -> object:
     if isinstance(value, Mapping):
         return {str(key): _snapshot_safe(item) for key, item in value.items()}
@@ -3404,6 +3430,7 @@ __all__ = [
     "WorkflowRecoveryProvenance",
     "WorkflowStepSource",
     "build_authoritative_workflow_input_snapshot",
+    "original_task_snapshot_parameters",
     "build_runtime_command_preview_config",
     "build_workflow_stage_plan",
     "build_canonical_workflow_view",

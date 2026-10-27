@@ -39,9 +39,10 @@ from tests.unit.publish.test_saved_work_publication_journey import (
 
 
 @pytest.mark.parametrize("saved_work", [True, False])
-@pytest.mark.parametrize("failure", [None, "unreadable", "denied"])
+@pytest.mark.parametrize("failure", [None, "unreadable", "denied", "wrong-workflow"])
+@pytest.mark.parametrize("snapshot_kind", ["manual", "scheduled", "resolver-child"])
 def test_recovery_freezes_original_task_instead_of_later_remediation(
-    monkeypatch, saved_work, failure
+    monkeypatch, saved_work, failure, snapshot_kind
 ):
     from tests.unit.api.routers.test_executions import _publication_recovery_record
 
@@ -63,25 +64,32 @@ def test_recovery_freezes_original_task_instead_of_later_remediation(
         record.memo = {"task_input_snapshot_ref": "artifact://unrelated-later-input"}
     read_saved = artifacts.read
     reads = []
-    original = json.dumps(
-        {
-            "snapshotVersion": 1,
-            "draft": {
-                "workflow": {
-                    "instructions": "Use credential B and preserve unrelated release qualification.",
-                    "steps": [
-                        {"instructions": "Verify concurrent credential isolation."}
-                    ],
-                }
-            },
-        }
-    ).encode()
+    snapshot = {
+        "snapshotVersion": 1,
+        "draft": {
+            "workflow": {
+                "instructions": "Use credential B and preserve unrelated release qualification.",
+                "steps": [{"instructions": "Verify concurrent credential isolation."}],
+            }
+        },
+    }
+    if snapshot_kind != "manual":
+        task = snapshot.pop("draft")["workflow"]
+        snapshot["target"] = {"initialParameters": {"workflow": task}}
+        if snapshot_kind == "scheduled":
+            snapshot["snapshotVersion"] = "original-task-input/v1"
+    original = json.dumps(snapshot).encode()
 
     async def read(*, artifact_id, principal):
         reads.append((artifact_id, principal))
         if artifact_id == "original-input":
             if failure == "unreadable":
                 return None, b"{"
+            if failure == "wrong-workflow":
+                invalid = json.loads(original)
+                task = invalid.get("draft") or invalid["target"]["initialParameters"]
+                task["workflow"] = ["invalid-task"]
+                return None, json.dumps(invalid).encode()
             if failure == "denied":
                 from moonmind.workflows.temporal.artifacts import (
                     TemporalArtifactAuthorizationError,

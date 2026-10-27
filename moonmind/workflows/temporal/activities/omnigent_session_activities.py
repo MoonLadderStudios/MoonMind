@@ -840,33 +840,15 @@ async def _reconstruct_plan_bound_request(
     ):
         raise ValueError("task-input snapshot is not owned by the execution plan")
 
-    draft = snapshot.get("draft")
-    target = snapshot.get("target")
-    if isinstance(draft, Mapping):
-        workflow = dict(draft.get("workflow") or {})
-        repository = str(draft.get("repository") or "").strip()
-        required_capabilities = list(draft.get("requiredCapabilities") or [])
-        authored_parameters: dict[str, Any] = {
-            "repository": repository,
-            "targetRuntime": str(draft.get("targetRuntime") or "omnigent"),
-            "requiredCapabilities": required_capabilities,
-            "workflow": workflow,
-        }
-    elif isinstance(target, Mapping):
-        raw_parameters = target.get("initialParameters")
-        if not isinstance(raw_parameters, Mapping):
-            raise ValueError("scheduled task snapshot lacks authored parameters")
-        authored_parameters = dict(raw_parameters)
-        workflow_value = authored_parameters.get("workflow")
-        workflow = (
-            dict(workflow_value) if isinstance(workflow_value, Mapping) else {}
-        )
-        repository = str(authored_parameters.get("repository") or "").strip()
-        required_capabilities = list(
-            authored_parameters.get("requiredCapabilities") or []
-        )
-    else:
-        raise ValueError("task-input snapshot has an unsupported authority shape")
+    from moonmind.workflows.executions.execution_contract import (
+        original_task_snapshot_parameters,
+    )
+
+    authored_parameters = original_task_snapshot_parameters(snapshot)
+    workflow_value = authored_parameters.get("workflow")
+    workflow = dict(workflow_value) if isinstance(workflow_value, Mapping) else {}
+    repository = str(authored_parameters.get("repository") or "").strip()
+    required_capabilities = list(authored_parameters.get("requiredCapabilities") or [])
 
     selected_workflow = workflow
     steps = workflow.get("steps")
