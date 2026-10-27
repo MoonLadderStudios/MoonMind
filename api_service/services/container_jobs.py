@@ -317,6 +317,7 @@ class ContainerJobService:
         # durable identity. Fails closed: a denied request never starts a
         # workflow and never persists a queued record.
         self._backend_settings.authorize_service(request.spec)
+        self._backend_settings.authorize_egress(request)
         authorization = None
         if request.spec.image is not None:
             authorization = self._authorizer.authorize(

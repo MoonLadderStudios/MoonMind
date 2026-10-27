@@ -364,6 +364,9 @@ class ContainerJobSpec(ContractModel):
     caches: list[CacheMount] = Field(default_factory=list, max_length=32)
     network_mode: Literal["none", "bridge", "service"] = Field("none", alias="networkMode")
     service_ref: str | None = Field(None, alias="serviceRef", pattern=r"^[a-z0-9](?:[a-z0-9.-]{0,126}[a-z0-9])?$", max_length=128)
+    egress_policy_ref: str | None = Field(
+        None, alias="egressPolicyRef", pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$"
+    )
     resources: ResourceLimits
     timeout_seconds: int = Field(1800, alias="timeoutSeconds", ge=1, le=86400)
     pull_policy: Literal["if-missing", "always", "never"] = Field("if-missing", alias="pullPolicy")
@@ -390,6 +393,15 @@ class ContainerJobSpec(ContractModel):
             raise ValueError("service access requires a deployment-owned image source")
         if self.service_ref is not None and any(item.name.startswith("MOONMIND_SERVICE_") for item in self.environment):
             raise ValueError("service connection environment is deployment-owned")
+        if self.egress_policy_ref is not None:
+            if self.network_mode != "bridge" or self.image_source_ref is None:
+                raise ValueError("egress policy requires bridge and a deployment-owned image source")
+            if any(
+                item.name.lower() in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}
+                or item.name.startswith("MOONMIND_EGRESS_")
+                for item in self.environment
+            ):
+                raise ValueError("egress proxy environment is deployment-owned")
         from moonmind.security.repository_scanners import validate_scanner_job
 
         validate_scanner_job(self)

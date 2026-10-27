@@ -158,7 +158,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
     echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
     apt-get update && \
-    apt-get install -y --no-install-recommends postgresql libatomic1 && \
+    apt-get install -y --no-install-recommends postgresql libatomic1 squid chromium fonts-liberation && \
     ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
     ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx && \
     runuser -u app -- node --version && runuser -u app -- npm --version

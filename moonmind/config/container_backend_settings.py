@@ -29,6 +29,11 @@ from moonmind.security.container_services import (
     ServiceConnection,
     parse_service_connections,
 )
+from moonmind.security.egress_policy import (
+    EGRESS_POLICIES_ENV_KEY,
+    ScopedEgressPolicy,
+    parse_egress_policies,
+)
 
 #: The only backend kind this deployment supports. A second backend kind
 #: (Podman, containerd, Kubernetes, endpoint pools) is explicitly out of scope.
@@ -191,6 +196,20 @@ class ContainerBackendSettings:
     image_sources: tuple[ImageSource, ...]
     cache_sources: tuple[CacheSource, ...]
     service_connections: tuple[ServiceConnection, ...] = ()
+    egress_policies: tuple[ScopedEgressPolicy, ...] = ()
+
+    def authorize_egress(self, request) -> ScopedEgressPolicy | None:
+        if request.spec.egress_policy_ref is None:
+            return None
+        for policy in self.egress_policies:
+            if policy.policy_ref == request.spec.egress_policy_ref:
+                if (
+                    request.spec.image_source_ref not in policy.allowed_image_source_refs
+                    or request.source.workflow_id not in policy.allowed_workflow_ids
+                ):
+                    raise ValueError("egress policy is not authorized for this workflow and image")
+                return policy
+        raise ValueError("egress policy is not deployment-authorized")
 
     def authorize_service(self, spec: ContainerJobSpec) -> ServiceConnection | None:
         if spec.service_ref is None:
@@ -600,4 +619,5 @@ def resolve_container_backend_settings(
         image_sources=tuple(image_sources),
         cache_sources=cache_sources,
         service_connections=parse_service_connections(source.get(SERVICE_CONNECTIONS_ENV_KEY)),
+        egress_policies=parse_egress_policies(source.get(EGRESS_POLICIES_ENV_KEY)),
     )
