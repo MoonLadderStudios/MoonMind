@@ -1,5 +1,8 @@
 """An unchanged saved publication can be explicitly re-admitted, not rewritten."""
 
+import hashlib
+import json
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -33,6 +36,115 @@ from tests.unit.publish.test_saved_work_publication_journey import (
     REPOSITORY,
     _WorkerLost,
 )
+
+
+@pytest.mark.parametrize("saved_work", [True, False])
+@pytest.mark.parametrize("failure", [None, "unreadable", "denied"])
+def test_recovery_freezes_original_task_instead_of_later_remediation(
+    monkeypatch, saved_work, failure
+):
+    from tests.unit.api.routers.test_executions import _publication_recovery_record
+
+    artifacts = _SavedWorkArtifacts()
+    app, adapter, record, user = _saved_work_app(monkeypatch, artifacts)
+    if not saved_work:
+        source = _publication_recovery_record()
+        record.finish_summary_json = source.finish_summary_json
+        record.finish_summary_json["controlStop"]["auxiliaryOutcomes"][
+            "gitPublication"
+        ]["recoveryContract"]["pullRequestBody"] = "Implementation summary."
+    record.memo = {"task_input_snapshot_ref": "artifact://original-input"}
+    record.parameters = {
+        "workflow": {"instructions": "Later retry: only retire failed tests."}
+    }
+    source_run_id = record.run_id
+    if saved_work:
+        record.run_id = "later-run"
+        record.memo = {"task_input_snapshot_ref": "artifact://unrelated-later-input"}
+    read_saved = artifacts.read
+    reads = []
+    original = json.dumps(
+        {
+            "snapshotVersion": 1,
+            "draft": {
+                "workflow": {
+                    "instructions": "Use credential B and preserve unrelated release qualification.",
+                    "steps": [
+                        {"instructions": "Verify concurrent credential isolation."}
+                    ],
+                }
+            },
+        }
+    ).encode()
+
+    async def read(*, artifact_id, principal):
+        reads.append((artifact_id, principal))
+        if artifact_id == "original-input":
+            if failure == "unreadable":
+                return None, b"{"
+            if failure == "denied":
+                from moonmind.workflows.temporal.artifacts import (
+                    TemporalArtifactAuthorizationError,
+                )
+
+                raise TemporalArtifactAuthorizationError(
+                    "Fixture original input is restricted"
+                )
+            return None, original
+        artifact, payload = await read_saved(
+            artifact_id=artifact_id, principal=principal
+        )
+        if saved_work and artifact_id == "art_saved":
+            manifest = json.loads(payload)
+            manifest.setdefault("source", {})[
+                "taskInputSnapshotRef"
+            ] = "artifact://original-input"
+            manifest["source"]["taskInputSnapshotDigest"] = (
+                "sha256:" + hashlib.sha256(original).hexdigest()
+            )
+            manifest.pop("manifestDigest", None)
+            manifest["manifestDigest"] = (
+                "sha256:"
+                + hashlib.sha256(
+                    json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest()
+            )
+            payload = json.dumps(manifest).encode()
+            artifact.sha256 = hashlib.sha256(payload).hexdigest()
+            artifact.size_bytes = len(payload)
+        return artifact, payload
+
+    artifacts.read = read
+    adapter.start_workflow.side_effect = lambda **kwargs: WorkflowStartResult(
+        workflow_id=kwargs["workflow_id"], run_id="publication-run"
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/executions/mm:wf-1/retry-publication",
+            **(
+                {
+                    "json": {
+                        **_SAVED_WORK_BODY,
+                        "sourceRunId": source_run_id,
+                        "pullRequestBody": "Implementation summary.",
+                    }
+                }
+                if saved_work
+                else {}
+            ),
+        )
+    if failure:
+        assert response.status_code == 409, response.json()
+        assert response.json()["detail"]["code"] == "publication_task_input_unavailable"
+        adapter.start_workflow.assert_not_awaited()
+        return
+    assert response.status_code == 201, response.json()
+    body = adapter.start_workflow.await_args.kwargs["input_args"]["pullRequestBody"]
+    assert "Use credential B and preserve unrelated release qualification." in body
+    assert "Verify concurrent credential isolation." in body
+    assert "artifact://original-input" in body
+    assert "only retire failed tests" not in body
+    assert ("original-input", str(user.id)) in reads
 
 
 def test_omitted_generation_keeps_the_literal_prechange_operation_key():

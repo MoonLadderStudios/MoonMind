@@ -62,6 +62,24 @@ def fixture(tmp_path, target=b"report.md"):
 
 
 @pytest.mark.asyncio
+async def test_saved_index_retains_the_source_attempts_original_task(tmp_path):
+    _source, artifacts, saved, request = fixture(tmp_path)
+    request.step_execution.omnigent_execution_plan = SimpleNamespace(
+        task_input_snapshot_ref="artifact:original-task",
+        task_input_snapshot_digest="sha256:" + "a" * 64,
+    )
+    refs = await OmnigentWorkspacePublicationService(
+        tmp_path,
+        artifact_gateway=artifacts,
+    )._index_saved_workspace(
+        request, saved, manifest_bytes=artifacts.objects["artifact:checkpoint"]
+    )
+    manifest = json.loads(artifacts.objects[refs["savedWorkRef"]])
+    assert manifest["source"]["taskInputSnapshotRef"] == "artifact:original-task"
+    assert manifest["source"]["taskInputSnapshotDigest"] == "sha256:" + "a" * 64
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("target", [b"report.md", b"report-\xff.md"])
 async def test_generic_index_materializes_files_and_links_without_source(tmp_path, target):
     source, artifacts, saved, request = fixture(tmp_path, target)
