@@ -17,12 +17,13 @@ from moonmind.omnigent.workspace_artifacts import (
 )
 from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
+    LocalTemporalArtifactStore,
     TemporalArtifactAuthorizationError,
     TemporalArtifactRepository,
     TemporalArtifactService,
     TemporalArtifactUnavailableError,
-    LocalTemporalArtifactStore,
 )
+from tests.artifact_access import access_for_test
 
 
 @pytest.mark.asyncio
@@ -123,7 +124,7 @@ async def test_linked_report_reaches_fresh_workspace_without_service_grant(
         with pytest.raises(TemporalArtifactAuthorizationError):
             await service.read(
                 artifact_id=artifact_id,
-                principal="service:omnigent_workspace_attachment",
+                access=access_for_test("service:omnigent_workspace_attachment"),
             )
         projector = WorkspaceArtifactProjector(
             TemporalOmnigentArtifactGateway(artifacts) if use_gateway else service

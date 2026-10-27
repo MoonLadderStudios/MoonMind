@@ -11,7 +11,10 @@ import pytest
 from moonmind.omnigent.workspace_publication import OmnigentWorkspacePublicationService
 from moonmind.publish.saved_work_source import materialize_saved_work
 from moonmind.schemas.saved_work_models import workspace_content_digest
-from moonmind.workflows.temporal.runtime.workspace_archive import build_workspace_archive
+from moonmind.workflows.temporal.runtime.workspace_archive import (
+    build_workspace_archive,
+)
+from tests.artifact_access import access_for_test
 
 
 def digest(payload):
@@ -133,7 +136,8 @@ async def test_durable_saved_index_is_linked_only_after_verified_readback(monkey
     from unittest.mock import AsyncMock
 
     from moonmind.omnigent.bridge_artifacts import (
-        OmnigentArtifactError, TemporalOmnigentArtifactGateway,
+        OmnigentArtifactError,
+        TemporalOmnigentArtifactGateway,
     )
     from moonmind.workflows.temporal import artifacts as artifact_module
 
@@ -250,8 +254,10 @@ async def test_lost_saved_link_ack_reuses_one_saved_result(tmp_path, monkeypatch
             await publisher.save_request_workspace(fixture.request)
         saved = await publisher.save_request_workspace(fixture.request)
         listed = await service.list_for_execution(
-            namespace="default", workflow_id="workflow-1", run_id="run-1",
-            principal="service:omnigent-generic-host",
+            namespace="default",
+            workflow_id="workflow-1",
+            run_id="run-1",
+            access=access_for_test("service:omnigent-generic-host"),
         )
         indexes = [item for item in listed if item.content_type.startswith("application/vnd.moonmind.saved-work-manifest")]
         assert len(indexes) == 1

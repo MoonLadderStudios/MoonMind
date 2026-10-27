@@ -13,15 +13,18 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
 )
-from moonmind.omnigent.host_services.workspace import (
-    resolve_daemon_attachment_source,
-)
+from moonmind.omnigent.host_services.workspace import resolve_daemon_attachment_source
 from moonmind.omnigent.settings import OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.skills.run_projection import (
     load_resolved_skillset,
     materialize_run_skill_snapshot,
+    step_execution_artifact_access,
     verify_skill_projection,
+)
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    TemporalArtifactAuthorizationError,
 )
 
 
@@ -37,7 +40,15 @@ class _ArtifactAdapter:
         self._gateway = gateway
         self._request = request
 
-    async def read(self, *, artifact_id: str, **_kwargs: Any):
+    async def read(self, *, artifact_id: str, access: ArtifactAccessContext):
+        access = ArtifactAccessContext.require(access)
+        if (
+            access.execution_principal
+            != f"workflow:{self._request.step_execution.workflow_id}"
+        ):
+            raise TemporalArtifactAuthorizationError(
+                "Skill read context differs from its admitted execution"
+            )
         return {}, await self._gateway.read_admitted_input(
             artifact_id, request=self._request
         )
@@ -73,7 +84,11 @@ class OmnigentSkillDeliveryService:
                 "resolved Skill authority is missing",
                 code=HarnessPlatformFailure.OMNIGENT_SKILL_SNAPSHOT_UNAVAILABLE,
             )
-        resolved = await load_resolved_skillset(artifacts, manifest_ref)
+        resolved = await load_resolved_skillset(
+            artifacts,
+            manifest_ref,
+            access=(await step_execution_artifact_access(artifacts._request)),
+        )
         projection_key = hashlib.sha256(
             f"{owner_ref}\0{manifest_ref}\0{expected_digest}".encode("utf-8")
         ).hexdigest()[:24]
@@ -145,6 +160,7 @@ class OmnigentSkillDeliveryService:
                 runtime_id="omnigent",
                 resolved_skillset=resolved,
                 artifact_service=artifacts,
+                access=(await step_execution_artifact_access(request)),
                 project_adapter_aliases=False,
             )
         await verify_skill_projection(

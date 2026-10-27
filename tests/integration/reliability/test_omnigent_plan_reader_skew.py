@@ -20,11 +20,14 @@ from moonmind.workflows.temporal.activities import (
     omnigent_session_activities as admission,
 )
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
+from tests.artifact_access import access_for_test
+from tests.unit.services.test_omnigent_execution_plan_service import (  # noqa: F401 -- isolated deployment observation
+    _ready_opencode_image_pair,
+)
 from tests.unit.services.test_omnigent_execution_plan_service import (
     _ArtifactService,
     _compile_opencode_plan,
     _protected_support_evidence,
-    _ready_opencode_image_pair,  # noqa: F401 -- isolated deployment observation
 )
 
 pytestmark = [
@@ -202,7 +205,9 @@ async def test_new_plan_reaches_registered_admission_without_writer_reader_sha_m
             serialized
         ).encode()
         with pytest.raises(ValueError, match="digest mismatch|supportIdentity"):
-            await admission._load_verified_execution_plan(compiled.binding)
+            await admission._load_verified_execution_plan(
+                compiled.binding, access=access_for_test("service:omnigent-session")
+            )
     finally:
         await engine.dispose()
 
@@ -256,7 +261,9 @@ async def test_stable_upstream_agent_source_survives_admission(tmp_path, monkeyp
             return json.loads(artifacts.payloads[ref])
 
         monkeypatch.setattr(admission, "_read_json_artifact", read_artifact)
-        loaded = await admission._load_verified_execution_plan(compiled.binding)
+        loaded = await admission._load_verified_execution_plan(
+            compiled.binding, access=access_for_test("service:omnigent-session")
+        )
         assert loaded.payload.agentSource["upstreamSnapshotDigest"] == (
             stable_projection
         )
@@ -268,7 +275,9 @@ async def test_stable_upstream_agent_source_survives_admission(tmp_path, monkeyp
         )
         artifacts.payloads[profile_ref] = json.dumps(conflicting).encode()
         with pytest.raises(ValueError, match="conflicts with planned source identity"):
-            await admission._load_verified_execution_plan(compiled.binding)
+            await admission._load_verified_execution_plan(
+                compiled.binding, access=access_for_test("service:omnigent-session")
+            )
     finally:
         await engine.dispose()
 
@@ -333,7 +342,9 @@ async def test_plan_compiled_by_the_previous_writer_still_admits(tmp_path, monke
             return json.loads(artifacts.payloads[ref])
 
         monkeypatch.setattr(admission, "_read_json_artifact", read_artifact)
-        loaded = await admission._load_verified_execution_plan(compiled.binding)
+        loaded = await admission._load_verified_execution_plan(
+            compiled.binding, access=access_for_test("service:omnigent-session")
+        )
         assert loaded.planRef == compiled.envelope.planRef
 
         # A different Agent Profile artifact must still be rejected, even
@@ -345,6 +356,8 @@ async def test_plan_compiled_by_the_previous_writer_still_admits(tmp_path, monke
         )
         artifacts.payloads[profile_ref] = json.dumps(conflicting).encode()
         with pytest.raises(ValueError, match="conflicts with planned source identity"):
-            await admission._load_verified_execution_plan(compiled.binding)
+            await admission._load_verified_execution_plan(
+                compiled.binding, access=access_for_test("service:omnigent-session")
+            )
     finally:
         await engine.dispose()

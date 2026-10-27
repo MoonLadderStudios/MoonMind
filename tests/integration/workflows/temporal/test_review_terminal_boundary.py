@@ -55,6 +55,7 @@ from moonmind.workflows.temporal.workflows.agent_session import (
     MoonMindAgentSessionWorkflow,
 )
 from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
+from tests.artifact_access import access_for_test
 from tests.helpers.temporal_artifact_workers import artifact_workers
 from tests.helpers.temporal_visibility import register_deployment_search_attributes
 
@@ -150,7 +151,11 @@ async def test_review_survives_through_terminal_persistence(
                     "registry_snapshot": {
                         "digest": compute_registry_digest(
                             skills=parse_tool_registry(
-                                json.loads(await owners.read(registry, principal=owner))
+                                json.loads(
+                                    await owners.read(
+                                        registry, access=access_for_test(owner)
+                                    )
+                                )
                             )
                         ),
                         "artifact_ref": registry,
@@ -346,7 +351,8 @@ async def test_review_survives_through_terminal_persistence(
                 assert row["artifacts"]["outputSummary"] == output
                 manifest = json.loads(
                     await owners.read(
-                        row["artifacts"]["stepExecutionManifestRef"], principal=owner
+                        row["artifacts"]["stepExecutionManifestRef"],
+                        access=access_for_test(owner),
                     )
                 )
                 assert (
@@ -355,12 +361,12 @@ async def test_review_survives_through_terminal_persistence(
                 )
                 checkpoint_ref = row["refs"]["checkpointRefsByBoundary"]["after_gate"]
                 checkpoint = json.loads(
-                    await owners.read(checkpoint_ref, principal=owner)
+                    await owners.read(checkpoint_ref, access=access_for_test(owner))
                 )
                 assert checkpoint["boundary"] == "after_gate"
                 assert checkpoint["source"]["runId"] == desc.run_id
                 archive = await owners.read(
-                    checkpoint["workspace"]["archiveRef"], principal=owner
+                    checkpoint["workspace"]["archiveRef"], access=access_for_test(owner)
                 )
                 with tarfile.open(fileobj=io.BytesIO(archive)) as captured:
                     member = next(
@@ -376,7 +382,7 @@ async def test_review_survives_through_terminal_persistence(
                     workspace / "accepted.txt"
                 ).read_text() == "Accepted implementation evidence"
                 assert (
-                    await owners.read(output, principal=owner)
+                    await owners.read(output, access=access_for_test(owner))
                     == b'{"summary": "Accepted implementation evidence"}'
                 )
                 async with owners.sessions() as session:

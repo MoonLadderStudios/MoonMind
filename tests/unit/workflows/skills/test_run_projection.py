@@ -29,6 +29,8 @@ from moonmind.workflows.skills.run_projection import (
     prepend_skill_activation_summary,
     verify_skill_projection,
 )
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+from tests.artifact_access import access_for_test
 
 
 def _digest(payload: bytes) -> str:
@@ -52,10 +54,9 @@ class _StaticArtifactService:
         self,
         *,
         artifact_id: str,
-        principal: str,
-        allow_restricted_raw: bool,
+        access: ArtifactAccessContext,
     ) -> tuple[object, bytes]:
-        del principal, allow_restricted_raw
+        ArtifactAccessContext.require(access)
         return object(), self._payloads[artifact_id]
 
 
@@ -100,6 +101,7 @@ async def test_materialize_writes_canonical_layout(tmp_path: Path) -> None:
         runtime_id="claude_code",
         resolved_skillset=skillset,
         artifact_service=_StaticArtifactService(payloads),
+        access=access_for_test("system"),
     )
 
     backing_dir = run_root / "runtime" / "skills_active" / "snap-aaa"
@@ -134,6 +136,7 @@ async def test_materialize_only_includes_selected_skills(tmp_path: Path) -> None
         runtime_id="claude_code",
         resolved_skillset=skillset,
         artifact_service=_StaticArtifactService(payloads),
+        access=access_for_test("system"),
     )
 
     visible = Path(metadata["visiblePath"])
@@ -171,6 +174,7 @@ async def test_materialize_does_not_rewrite_repo_authored_skills_dir(
         runtime_id="claude_code",
         resolved_skillset=skillset,
         artifact_service=_StaticArtifactService(payloads),
+        access=access_for_test("system"),
     )
 
     repo_skills_dir = workspace / ".agents" / "skills"
@@ -199,14 +203,15 @@ async def test_materialize_raises_skill_projection_error_on_failure(
     # store. The helper must convert it into a typed SkillProjectionError so
     # the activity can surface a skill_projection_failed classification.
     class _BrokenArtifactService:
+
         async def read(
             self,
             *,
             artifact_id: str,
-            principal: str,
-            allow_restricted_raw: bool,
+            access: ArtifactAccessContext,
         ) -> tuple[object, bytes]:
-            del artifact_id, principal, allow_restricted_raw
+            ArtifactAccessContext.require(access)
+            del artifact_id
             raise OSError("artifact backing store unavailable")
 
     with pytest.raises(SkillProjectionError):
@@ -216,6 +221,7 @@ async def test_materialize_raises_skill_projection_error_on_failure(
             runtime_id="claude_code",
             resolved_skillset=skillset,
             artifact_service=_BrokenArtifactService(),
+            access=access_for_test("system"),
         )
 
 
@@ -237,6 +243,7 @@ async def test_verify_accepts_valid_projection(tmp_path: Path) -> None:
         runtime_id="claude_code",
         resolved_skillset=skillset,
         artifact_service=_StaticArtifactService(payloads),
+        access=access_for_test("system"),
     )
 
     await verify_skill_projection(
@@ -354,6 +361,7 @@ async def test_verify_rejects_manifest_content_evidence_mismatch(
         runtime_id="claude_code",
         resolved_skillset=skillset,
         artifact_service=_StaticArtifactService(payloads),
+        access=access_for_test("system"),
     )
     manifest_path = Path(metadata["visiblePath"]) / "_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -381,6 +389,7 @@ async def test_verify_rejects_damaged_markdown_content(tmp_path: Path) -> None:
         runtime_id="claude_code",
         resolved_skillset=skillset,
         artifact_service=_StaticArtifactService(payloads),
+        access=access_for_test("system"),
     )
     skill_doc = Path(metadata["visiblePath"]) / "pr-resolver" / "SKILL.md"
     skill_doc.write_text("damaged", encoding="utf-8")
@@ -504,7 +513,9 @@ async def test_load_resolved_skillset_round_trips() -> None:
         {"art-pr": _skill_payload("pr-resolver")},
     )
     payloads = {"snap-ref": skillset.model_dump_json().encode("utf-8")}
-    loaded = await load_resolved_skillset(_StaticArtifactService(payloads), "snap-ref")
+    loaded = await load_resolved_skillset(
+        _StaticArtifactService(payloads), "snap-ref", access=access_for_test("system")
+    )
     assert loaded.snapshot_id == "snap-load"
     assert [entry.skill_name for entry in loaded.skills] == ["pr-resolver"]
 
@@ -529,6 +540,7 @@ async def test_load_resolved_skillset_strips_legacy_version_metadata() -> None:
     loaded = await load_resolved_skillset(
         _StaticArtifactService({"snap-ref": json.dumps(payload).encode("utf-8")}),
         "snap-ref",
+        access=access_for_test("system"),
     )
 
     assert loaded.snapshot_id == "snap-legacy"
@@ -539,14 +551,16 @@ async def test_load_resolved_skillset_strips_legacy_version_metadata() -> None:
 @pytest.mark.asyncio
 async def test_load_resolved_skillset_raises_on_missing_service() -> None:
     with pytest.raises(SkillProjectionError, match="artifact service is required"):
-        await load_resolved_skillset(None, "any-ref")
+        await load_resolved_skillset(None, "any-ref", access=access_for_test("system"))
 
 
 @pytest.mark.asyncio
 async def test_load_resolved_skillset_raises_on_invalid_payload() -> None:
     with pytest.raises(SkillProjectionError, match="failed to read"):
         await load_resolved_skillset(
-            _StaticArtifactService({"bad": b"not-json"}), "bad"
+            _StaticArtifactService({"bad": b"not-json"}),
+            "bad",
+            access=access_for_test("system"),
         )
 
 
@@ -555,18 +569,21 @@ async def test_load_resolved_skillset_wraps_artifact_errors() -> None:
     from moonmind.workflows.temporal.artifacts import TemporalArtifactStateError
 
     class _BrokenArtifactService:
+
         async def read(
             self,
             *,
             artifact_id: str,
-            principal: str,
-            allow_restricted_raw: bool,
+            access: ArtifactAccessContext,
         ) -> tuple[object, bytes]:
-            del artifact_id, principal, allow_restricted_raw
+            ArtifactAccessContext.require(access)
+            del artifact_id
             raise TemporalArtifactStateError("artifact is not readable")
 
     with pytest.raises(SkillProjectionError, match="failed to read"):
-        await load_resolved_skillset(_BrokenArtifactService(), "bad-ref")
+        await load_resolved_skillset(
+            _BrokenArtifactService(), "bad-ref", access=access_for_test("system")
+        )
 
 
 def test_continued_prompt_replaces_old_attempt_context():

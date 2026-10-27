@@ -64,6 +64,7 @@ from moonmind.workflows import (
     get_temporal_artifact_service,
 )
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
     LocalTemporalArtifactStore,
     TemporalArtifactService,
 )
@@ -369,11 +370,13 @@ async def admit_checkpoint_branch_turn_instruction(
             "instruction_digest_mismatch", "recorded branch instructions changed"
         )
     consumer = "service:checkpoint-branch-turn"
-    scope = f"workflow:{identity.workflow_id}"
     # Admission is not raw-data authority. Apply the artifact owner's existing
     # raw/quarantine gates as the actual consumer before adding a link.
     await artifacts._assert_artifact_raw_access(
-        artifact, principal=consumer, admitted_principal=scope
+        artifact,
+        access=ArtifactAccessContext.for_execution(
+            identity.workflow_id, principal=consumer
+        ),
     )
     # The durable turn authorizes only these exact bytes. Validate the locked
     # row's storage object before link_artifact commits any delegation. The row
@@ -404,7 +407,10 @@ async def admit_checkpoint_branch_turn_instruction(
             },
         )
     _artifact, payload = await artifacts.read(
-        artifact_id=artifact_id, principal=consumer, admitted_principal=scope
+        artifact_id=artifact_id,
+        access=ArtifactAccessContext.for_execution(
+            identity.workflow_id, principal=consumer
+        ),
     )
     if _sha256(payload) != turn.instruction_digest:
         raise CheckpointBranchTurnLaunchError(
@@ -420,12 +426,14 @@ class CheckpointBranchTurnExecutionOwner:
         session: AsyncSession,
         *,
         principal: str,
+        access: ArtifactAccessContext,
         client: TemporalClientAdapter | None = None,
         artifact_service: TemporalArtifactService | None = None,
         turn_command_service: Any | None = None,
     ) -> None:
         self._session = session
         self._principal = principal
+        self._access = ArtifactAccessContext.require(access)
         self._client = client or TemporalClientAdapter()
         # Production artifact writes use their own short transaction.  The
         # owner session can therefore retain its branch-turn row lock across
@@ -476,8 +484,7 @@ class CheckpointBranchTurnExecutionOwner:
             async with self._artifact_service() as (_session, artifacts):
                 _artifact, payload = await artifacts.read(
                     artifact_id=_artifact_id(ref, field_name=field_name),
-                    principal=self._principal,
-                    allow_restricted_raw=True,
+                    access=self._access,
                 )
         except CheckpointBranchTurnLaunchError:
             raise
@@ -561,8 +568,7 @@ class CheckpointBranchTurnExecutionOwner:
                         )
                     _stored, existing_payload = await artifacts.read(
                         artifact_id=artifact.artifact_id,
-                        principal=self._principal,
-                        allow_restricted_raw=True,
+                        access=self._access,
                     )
                     if not _launch_retry_payloads_equivalent(
                         existing_payload, payload
@@ -578,8 +584,7 @@ class CheckpointBranchTurnExecutionOwner:
                 if getattr(artifact.status, "value", artifact.status) == "complete":
                     _stored, existing_payload = await artifacts.read(
                         artifact_id=artifact.artifact_id,
-                        principal=self._principal,
-                        allow_restricted_raw=True,
+                        access=self._access,
                     )
                     if existing_payload != payload:
                         raise CheckpointBranchTurnLaunchError(
@@ -1273,15 +1278,15 @@ class CheckpointBranchTurnExecutionOwner:
             source=source,
             expected_head_version=request.expected_branch_head_version,
         )
+        from moonmind.omnigent.control_plane.repositories import (
+            ControlPlaneRepositories,
+            OmnigentControlPlaneStore,
+        )
         from moonmind.omnigent.control_plane.turn_commands import (
             CanonicalSessionBootstrap,
             CanonicalTurnCommandService,
         )
         from moonmind.omnigent.control_plane.turn_sources import TurnSource
-        from moonmind.omnigent.control_plane.repositories import (
-            ControlPlaneRepositories,
-            OmnigentControlPlaneStore,
-        )
 
         source_command = self._turn_commands or CanonicalTurnCommandService(
             OmnigentControlPlaneStore(self._bound_session_factory())

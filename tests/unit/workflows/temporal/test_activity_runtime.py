@@ -20,16 +20,21 @@ from temporalio import activity as temporal_activity
 from temporalio import exceptions as temporal_exceptions
 
 from api_service.db.models import Base
-from moonmind.config.settings import (
-    settings,
-)
+from moonmind.config.settings import settings
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunResult,
     ManagedRunRecord,
 )
 from moonmind.schemas.managed_session_models import CodexManagedSessionLocator
+from moonmind.workflows.agent_skills.agent_skills_activities import (
+    AgentSkillsActivities,
+)
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
+from moonmind.workflows.skills.deployment_tools import (
+    DEPLOYMENT_UPDATE_TOOL_NAME,
+    DEPLOYMENT_UPDATE_TOOL_VERSION,
+)
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
 from moonmind.workflows.skills.skill_plan_contracts import SkillResult
 from moonmind.workflows.skills.skill_registry import (
@@ -37,13 +42,7 @@ from moonmind.workflows.skills.skill_registry import (
     parse_skill_registry,
 )
 from moonmind.workflows.skills.tool_plan_contracts import ToolFailure
-from moonmind.workflows.skills.deployment_tools import (
-    DEPLOYMENT_UPDATE_TOOL_NAME,
-    DEPLOYMENT_UPDATE_TOOL_VERSION,
-)
 from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
-from moonmind.workflows.temporal.workflows import run as run_module
-from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.activity_catalog import (
     AGENT_RUNTIME_FLEET,
     ARTIFACTS_FLEET,
@@ -76,7 +75,6 @@ from moonmind.workflows.temporal.activity_runtime import (
     build_compact_activity_result,
     build_observability_summary,
 )
-from moonmind.workflows.agent_skills.agent_skills_activities import AgentSkillsActivities
 from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
     LocalTemporalArtifactStore,
@@ -91,7 +89,9 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
 )
-from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
+from moonmind.workflows.temporal.workflows import run as run_module
+from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+from tests.artifact_access import access_for_test
 
 
 @pytest.mark.asyncio
@@ -662,7 +662,6 @@ from moonmind.workflows.temporal.report_artifacts import validate_report_bundle_
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workloads.registry import RunnerProfileRegistry
 
-
 pytestmark = [pytest.mark.asyncio]
 
 
@@ -1009,8 +1008,7 @@ async def test_artifact_activity_create_maps_legacy_name_to_metadata(
                 metadata_json={"artifact_kind": "summary"},
             )
             artifact, _links, _pinned, _policy = await service.get_metadata(
-                artifact_id=artifact_ref.artifact_id,
-                principal="user-1",
+                artifact_id=artifact_ref.artifact_id, access=access_for_test("user-1")
             )
 
             assert artifact.metadata_json["name"] == "reports/run_summary.json"
@@ -1046,8 +1044,7 @@ async def test_artifact_create_binding_accepts_legacy_name_payload(
                 }
             )
             artifact, _links, _pinned, _policy = await service.get_metadata(
-                artifact_id=artifact_ref.artifact_id,
-                principal="user-1",
+                artifact_id=artifact_ref.artifact_id, access=access_for_test("user-1")
             )
 
             assert artifact.metadata_json["name"] == "reports/run_summary.json"
@@ -1147,8 +1144,7 @@ async def test_plan_validate_accepts_temporal_registry_artifact_ids(tmp_path: Pa
                 principal="user-1",
             )
             _artifact, payload = await service.read(
-                artifact_id=validated_ref.artifact_id,
-                principal="user-1",
+                artifact_id=validated_ref.artifact_id, access=access_for_test("user-1")
             )
 
             assert b'"plan_version": "1.0"' in payload
@@ -1210,6 +1206,7 @@ async def test_plan_generate_legacy_payload_replay(tmp_path: Path):
     at the plan.generate activity, ensuring dual-read parses to PlanGenerateInput.
     """
     from unittest.mock import AsyncMock, patch
+
     from moonmind.schemas.temporal_activity_models import ArtifactRefModel
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -1235,7 +1232,7 @@ async def test_plan_generate_legacy_payload_replay(tmp_path: Path):
                     ],
                     "edges": [],
                 }
-            
+
             # Setup mock registry wrapper
             with patch("moonmind.workflows.temporal.activity_runtime._temporal_snapshot_from_payload") as mock_snapshot:
                 from moonmind.workflows.skills.tool_registry import ToolRegistrySnapshot
@@ -1249,7 +1246,7 @@ async def test_plan_generate_legacy_payload_replay(tmp_path: Path):
                     artifact_service=service,
                     planner=_dummy_planner,
                 )
-                
+
                 # The exact dict layout historically emitted by workflow.execute_activity
                 legacy_payload = {
                     "principal": "user-replay",
@@ -1257,7 +1254,7 @@ async def test_plan_generate_legacy_payload_replay(tmp_path: Path):
                     "parameters": {"strategy": "default"},
                     "idempotency_key": "replay-test"
                 }
-                
+
                 # Should deserialize correctly matching `PlanGenerateInput` fallback
                 result = await planner.plan_generate(legacy_payload) # type: ignore
                 assert result.plan_ref.artifact_ref_v == 1
@@ -1527,91 +1524,6 @@ async def test_managed_runtime_cleanup_binding_is_registered_on_agent_runtime_fl
     assert route.timeouts.start_to_close_seconds == 1800
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 async def test_plan_generate_accepts_auto_placeholder_without_registry_entries(
     tmp_path: Path,
 ):
@@ -1646,14 +1558,13 @@ async def test_plan_generate_accepts_auto_placeholder_without_registry_entries(
 
             _artifact, payload = await service.read(
                 artifact_id=result.plan_ref.artifact_id,
-                principal="user-1",
+                access=access_for_test("user-1"),
             )
             plan_payload = json.loads(payload.decode("utf-8"))
             registry_ref = plan_payload["metadata"]["registry_snapshot"]["artifact_ref"]
 
             _registry_artifact, registry_payload_raw = await service.read(
-                artifact_id=registry_ref,
-                principal="user-1",
+                artifact_id=registry_ref, access=access_for_test("user-1")
             )
             registry_payload = json.loads(registry_payload_raw.decode("utf-8"))
 
@@ -1721,13 +1632,12 @@ async def test_plan_generate_fallback_registry_includes_input_artifact_tool_step
 
             _artifact, plan_payload_raw = await service.read(
                 artifact_id=result.plan_ref.artifact_id,
-                principal="user-1",
+                access=access_for_test("user-1"),
             )
             plan_payload = json.loads(plan_payload_raw.decode("utf-8"))
             registry_ref = plan_payload["metadata"]["registry_snapshot"]["artifact_ref"]
             _registry_artifact, registry_payload_raw = await service.read(
-                artifact_id=registry_ref,
-                principal="user-1",
+                artifact_id=registry_ref, access=access_for_test("user-1")
             )
             registry_payload = json.loads(registry_payload_raw.decode("utf-8"))
 
@@ -1891,7 +1801,7 @@ async def test_sandbox_run_command_writes_diagnostics_artifact(tmp_path: Path):
 
             _artifact, payload = await service.read(
                 artifact_id=result.diagnostics_ref.artifact_id,
-                principal="user-1",
+                access=access_for_test("user-1"),
             )
             assert b"hello sandbox" in payload
 
@@ -2221,8 +2131,7 @@ async def test_sandbox_checkout_apply_patch_and_run_tests(tmp_path: Path):
                 principal="user-1",
             )
             _artifact, payload = await service.read(
-                artifact_id=report_ref.artifact_id,
-                principal="user-1",
+                artifact_id=report_ref.artifact_id, access=access_for_test("user-1")
             )
             assert b'"exit_code": 0' in payload
 
@@ -2426,7 +2335,11 @@ async def test_artifact_read_binding_carries_retry_meaning(tmp_path, monkeypatch
             assert type(cause) is type(fault)
             assert cause.args == fault.args
             from temporalio.api.failure.v1 import Failure
-            from temporalio.converter import DefaultFailureConverter, DefaultPayloadConverter
+            from temporalio.converter import (
+                DefaultFailureConverter,
+                DefaultPayloadConverter,
+            )
+
             wire = Failure()
             DefaultFailureConverter().to_failure(raised.value, DefaultPayloadConverter(), wire)
             assert "synthetic" not in str(wire)
@@ -2453,6 +2366,7 @@ async def test_build_activity_bindings_artifact_handlers_preserve_typed_request_
             }
 
             from typing import get_type_hints
+
             from moonmind.schemas.temporal_activity_models import (
                 ArtifactReadInput,
                 ArtifactWriteCompleteInput,
@@ -2566,8 +2480,7 @@ async def test_build_activity_bindings_artifact_write_complete_accepts_legacy_pa
                 }
             )
             _stored_artifact, payload = await service.read(
-                artifact_id=artifact.artifact_id,
-                principal="user-1",
+                artifact_id=artifact.artifact_id, access=access_for_test("user-1")
             )
 
             assert stored_ref.artifact_id == artifact.artifact_id
@@ -2994,9 +2907,9 @@ async def test_agent_runtime_publish_artifacts_publishes_explicit_report_bundle(
                 namespace="default",
                 workflow_id="parent-wf",
                 run_id="parent-run-1",
-                principal="system:agent_runtime",
                 link_type="report.primary",
                 latest_only=True,
+                access=access_for_test("system:agent_runtime"),
             )
             assert len(reports) == 1
             assert reports[0].metadata_json["report_type"] == "integration_test_report"
@@ -3005,7 +2918,7 @@ async def test_agent_runtime_publish_artifacts_publishes_explicit_report_bundle(
             assert reports[0].metadata_json["name"] == "final-report.md"
             _artifact, path = await service.read_path(
                 artifact_id=reports[0].artifact_id,
-                principal="system:agent_runtime",
+                access=access_for_test("system:agent_runtime"),
             )
             body = path.read_bytes()
             assert body.decode("utf-8") == "# Integration test report\n\nAll tests passed.\n"
@@ -3104,7 +3017,7 @@ async def test_agent_runtime_publish_artifacts_publishes_moonspec_verify_json(
 
             _artifact, artifact_path = await service.read_path(
                 artifact_id=result.metadata["gateResultRef"],
-                principal="system:agent_runtime",
+                access=access_for_test("system:agent_runtime"),
             )
             persisted_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
             assert persisted_payload["requirementCoverage"][0]["evidence"] == (
@@ -3171,7 +3084,9 @@ async def test_acceptance_projection_crosses_publisher_and_workflow_gate(
             monkeypatch.setattr(activities, "execution_notify_completion", AsyncMock(return_value={"status": "skipped"}))
             incoming_metadata = {**metadata, "verify_artifact_path": "artifacts/verify.json", "acceptanceContract": "acceptance/v1"}
             if near_limit:
-                from moonmind.schemas.temporal_payload_policy import MAX_TEMPORAL_METADATA_BYTES
+                from moonmind.schemas.temporal_payload_policy import (
+                    MAX_TEMPORAL_METADATA_BYTES,
+                )
 
                 incoming_metadata.update(diagnostic1="p" * 8000, diagnostic2="")
                 used_bytes = len(json.dumps(incoming_metadata, separators=(",", ":")).encode())
@@ -3196,7 +3111,8 @@ async def test_acceptance_projection_crosses_publisher_and_workflow_gate(
                 assert gate.verdict == "NO_DETERMINATION"
                 assert gate.invalid and gate.degraded
             _, stored = await service.read_path(
-                artifact_id=result.metadata["sourceMoonSpecVerifyArtifactRef"], principal="system:agent_runtime",
+                artifact_id=result.metadata["sourceMoonSpecVerifyArtifactRef"],
+                access=access_for_test("system:agent_runtime"),
             )
             assert json.loads(stored.read_text())["validatedRefs"]["acceptance"] == acceptance
 
@@ -3370,8 +3286,7 @@ async def test_agent_runtime_publish_artifacts_publishes_remediation_attempt_jso
             assert isinstance(result, AgentRunResult)
             attempt_ref = result.metadata["remediationAttemptArtifactRef"]
             artifact, artifact_path = await service.read_path(
-                artifact_id=attempt_ref,
-                principal="system:agent_runtime",
+                artifact_id=attempt_ref, access=access_for_test("system:agent_runtime")
             )
             persisted_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
             assert artifact.metadata_json["artifact_type"] == "remediation.attempt"
@@ -3546,7 +3461,7 @@ async def test_agent_runtime_publish_artifacts_links_remediation_verification_at
             assert evidence["authoritativeEvidenceDigest"] == expected_digest
             artifact, artifact_path = await service.read_path(
                 artifact_id=verification_ref,
-                principal="system:agent_runtime",
+                access=access_for_test("system:agent_runtime"),
             )
             persisted_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
             assert artifact.metadata_json["artifact_type"] == "remediation.verification"
@@ -4004,16 +3919,16 @@ async def test_agent_runtime_publish_artifacts_uses_last_assistant_text_for_repo
                 namespace="default",
                 workflow_id="parent-wf",
                 run_id="parent-run-1",
-                principal="system:agent_runtime",
                 link_type="report.primary",
                 latest_only=True,
+                access=access_for_test("system:agent_runtime"),
             )
 
             assert len(reports) == 1
             assert reports[0].metadata_json["name"] == "final-answer.txt"
             _artifact, path = await service.read_path(
                 artifact_id=reports[0].artifact_id,
-                principal="system:agent_runtime",
+                access=access_for_test("system:agent_runtime"),
             )
             rendered = path.read_text(encoding="utf-8")
             assert rendered.startswith("# Docker Compose Update System Report")
@@ -4172,6 +4087,7 @@ async def test_agent_runtime_publish_artifacts_publishes_assessment_verdict_json
             from temporalio.api.workflowservice.v1 import (
                 DescribeWorkflowExecutionResponse,
             )
+
             from tests.unit.workflows.temporal.test_source_brief_artifact_authority import (
                 _recorded_server,
             )
@@ -4222,14 +4138,14 @@ async def test_agent_runtime_publish_artifacts_publishes_assessment_verdict_json
             # readable by ref (the bridge-compatible channel) without a shared FS.
             _artifact, artifact_path = await service.read_path(
                 artifact_id=result.metadata["assessmentArtifactRef"],
-                principal="system:agent_runtime",
+                access=access_for_test("system:agent_runtime"),
             )
             persisted = json.loads(artifact_path.read_text(encoding="utf-8"))
             assert persisted["verdict"] == "NOT_IMPLEMENTED"
             assert persisted["issue_ref"] == "MM-1139"
             _artifact, links, _pinned, _policy = await service.get_metadata(
                 artifact_id=result.metadata["assessmentArtifactRef"],
-                principal="system:agent_runtime",
+                access=access_for_test("system:agent_runtime"),
             )
             assert any(
                 link.workflow_id == "parent-wf"
@@ -4239,7 +4155,7 @@ async def test_agent_runtime_publish_artifacts_publishes_assessment_verdict_json
             )
             _artifact, brief_artifact_path = await service.read_path(
                 artifact_id=result.metadata["briefArtifactRef"],
-                principal="system:agent_runtime",
+                access=access_for_test("system:agent_runtime"),
             )
             persisted_brief = json.loads(
                 brief_artifact_path.read_text(encoding="utf-8")
@@ -4247,7 +4163,7 @@ async def test_agent_runtime_publish_artifacts_publishes_assessment_verdict_json
             assert persisted_brief["issue_ref"] == "MM-1139"
             _artifact, brief_links, _pinned, _policy = await service.get_metadata(
                 artifact_id=result.metadata["briefArtifactRef"],
-                principal="system:agent_runtime",
+                access=access_for_test("system:agent_runtime"),
             )
             assert any(
                 link.workflow_id == "parent-wf"
@@ -4382,7 +4298,7 @@ async def test_agent_runtime_publish_artifacts_resolves_omnigent_sandbox_workspa
             assert result.metadata["assessmentVerdict"] == "PARTIALLY_IMPLEMENTED"
             _artifact, artifact_path = await service.read_path(
                 artifact_id=result.metadata["assessmentArtifactRef"],
-                principal="system:agent_runtime",
+                access=access_for_test("system:agent_runtime"),
             )
             persisted = json.loads(artifact_path.read_text(encoding="utf-8"))
             assert persisted["issue_ref"] == "MoonLadderStudios/MoonMind#3620"
@@ -4575,7 +4491,7 @@ async def test_agent_runtime_publish_artifacts_normalizes_missing_verdict(
             assert result.metadata["assessmentVerdict"] == "FULLY_IMPLEMENTED"
             _artifact, artifact_path = await service.read_path(
                 artifact_id=result.metadata["assessmentArtifactRef"],
-                principal="system:agent_runtime",
+                access=access_for_test("system:agent_runtime"),
             )
             persisted = json.loads(artifact_path.read_text(encoding="utf-8"))
             assert persisted["verdict"] == "FULLY_IMPLEMENTED"

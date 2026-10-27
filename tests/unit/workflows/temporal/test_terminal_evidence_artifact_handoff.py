@@ -31,6 +31,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactStateError,
 )
 from moonmind.workflows.temporal.workflows import run as run_module
+from tests.artifact_access import access_for_test
 from tests.unit.workflows.temporal.test_artifacts import temporal_db
 
 pytestmark = pytest.mark.asyncio
@@ -87,8 +88,20 @@ async def handoff(tmp_path, monkeypatch):
 
         async def read_activity(name, payload, **kwargs):
             assert name == "artifact.read"
-            assert payload.principal == "workflow:parent"
-            return await TemporalArtifactActivities(service).artifact_read(payload)
+            assert "principal" not in payload.model_dump()
+            # Temporal runs this dispatched Activity in the parent execution.
+            with monkeypatch.context() as parent_activity:
+                parent_activity.setattr(activity, "in_activity", lambda: True)
+                parent_activity.setattr(
+                    activity,
+                    "info",
+                    lambda: SimpleNamespace(
+                        workflow_id=workflow.info().workflow_id,
+                        workflow_run_id="parent-run",
+                        namespace="default",
+                    ),
+                )
+                return await TemporalArtifactActivities(service).artifact_read(payload)
 
         monkeypatch.setattr(run_module, "execute_typed_activity", read_activity)
         yield SimpleNamespace(
@@ -184,11 +197,14 @@ async def test_parent_finalizes_from_child_terminal_evidence(
     originals = {}
     for ref in refs:
         artifact, payload = await handoff.service.read(
-            artifact_id=ref, principal=f"workflow:{handoff.info.workflow_id}"
+            artifact_id=ref,
+            access=access_for_test(f"workflow:{handoff.info.workflow_id}"),
         )
         originals[ref] = (artifact.sha256, artifact.created_by_principal, payload)
         with pytest.raises(TemporalArtifactAuthorizationError):
-            await handoff.service.read(artifact_id=ref, principal="workflow:parent")
+            await handoff.service.read(
+                artifact_id=ref, access=access_for_test("workflow:parent")
+            )
 
     for _ in range(2):  # Publication retries reuse evidence and idempotent links.
         published = await handoff.publisher.agent_runtime_publish_artifacts(evaluated)
@@ -206,7 +222,7 @@ async def test_parent_finalizes_from_child_terminal_evidence(
         )
         for ref, (sha256, owner, payload) in originals.items():
             artifact, received = await handoff.service.read(
-                artifact_id=ref, principal="workflow:parent"
+                artifact_id=ref, access=access_for_test("workflow:parent")
             )
             assert received == payload
             assert artifact.created_by_principal == owner
@@ -215,7 +231,7 @@ async def test_parent_finalizes_from_child_terminal_evidence(
             assert len([link for link in links if link.workflow_id == "parent"]) == 1
             with pytest.raises(TemporalArtifactAuthorizationError):
                 await handoff.service.read(
-                    artifact_id=ref, principal="workflow:sibling"
+                    artifact_id=ref, access=access_for_test("workflow:sibling")
                 )
 
 
@@ -267,7 +283,9 @@ async def test_forged_parent_does_not_gain_terminal_evidence(handoff):
         links = await handoff.service._repository.list_links(ref)
         assert {link.workflow_id for link in links} == {handoff.info.workflow_id}
         with pytest.raises(TemporalArtifactAuthorizationError):
-            await handoff.service.read(artifact_id=ref, principal="workflow:unrelated")
+            await handoff.service.read(
+                artifact_id=ref, access=access_for_test("workflow:unrelated")
+            )
 
 
 async def test_parent_lookup_retry_preserves_completed_evidence(handoff, monkeypatch):
@@ -290,7 +308,7 @@ async def test_parent_lookup_retry_preserves_completed_evidence(handoff, monkeyp
     assert (
         await handoff.service.read(
             artifact_id=published.metadata["publishEvidence"],
-            principal="workflow:parent",
+            access=access_for_test("workflow:parent"),
         )
     )[1]
 
@@ -337,4 +355,6 @@ async def test_parent_handoff_preserves_raw_read_policy(handoff, protection):
     links = await handoff.service._repository.list_links(ref)
     assert any(link.workflow_id == "parent" for link in links)
     with pytest.raises(denied):
-        await handoff.service.read(artifact_id=ref, principal="workflow:parent")
+        await handoff.service.read(
+            artifact_id=ref, access=access_for_test("workflow:parent")
+        )

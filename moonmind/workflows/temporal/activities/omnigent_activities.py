@@ -1,6 +1,7 @@
 """Temporal activities for Omnigent streaming execution."""
 
 from __future__ import annotations
+from moonmind.workflows.skills.run_projection import step_execution_artifact_access
 
 import logging
 import os
@@ -14,6 +15,7 @@ from temporalio import activity
 from moonmind.omnigent.control_plane import metrics as control_plane_metrics
 from moonmind.omnigent.harness_platform.credential_bindings import model_bindings_of
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +117,7 @@ def _parent_repository_binding_set(parent_plan: Any) -> Any:
 async def omnigent_prepare_child_execution_plan_activity(
     payload: Mapping[str, Any],
     *,
-    admitted_principal: str | None = None,
+    access: ArtifactAccessContext,
 ) -> dict[str, Any]:
     """Compile a child plan using the registered Activity's verified read scope."""
 
@@ -147,8 +149,9 @@ async def omnigent_prepare_child_execution_plan_activity(
     initial_parameters = dict(initial_parameters_value)
     if str(initial_parameters.get("targetRuntime") or "").strip().lower() != "omnigent":
         raise ValueError("child execution-plan preparation requires Omnigent")
-    principal = str(payload.get("principal") or "").strip() or (
-        "service:merge_automation"
+    # Retain creator/quota provenance; access is the separately verified context.
+    principal = (
+        str(payload.get("principal") or "").strip() or "service:merge_automation"
     )
 
     parent_binding_value = payload.get("parentExecutionPlan")
@@ -170,9 +173,7 @@ async def omnigent_prepare_child_execution_plan_activity(
             raise ValueError("parent workflow execution parameters are unavailable")
         parent_binding_value = parent_parameters.get("omnigentExecutionPlan")
     parent_binding = OmnigentExecutionPlanBinding.model_validate(parent_binding_value)
-    parent_plan = await _load_verified_execution_plan(
-        parent_binding, admitted_principal=admitted_principal or principal
-    )
+    parent_plan = await _load_verified_execution_plan(parent_binding, access=access)
     # Issue #4009: the compiler re-admits repository roles against the parent
     # selections. The real child producer supplies intent, not fabricated
     # snapshot digests, and model admission remains owned by the child plan.
@@ -186,7 +187,7 @@ async def omnigent_prepare_child_execution_plan_activity(
         raise ValueError("parent execution plan lacks Agent Profile authority")
     agent_profile_snapshot = await _read_json_artifact(
         profile_snapshot_ref.removeprefix("artifact:"),
-        admitted_principal=admitted_principal or principal,
+        access=access,
     )
     # Model authority only (MoonLadderStudios/MoonMind#4009): repository
     # slots use issuance and never enter Provider Profile derivation.
@@ -271,7 +272,8 @@ async def omnigent_prepare_child_execution_plan_activity(
             task_input_snapshot_digest=input_snapshot_digest,
             db_session=db_session,
             parent_repository_plan=parent_plan,
-            parent_read_principal=admitted_principal,
+            parent_artifact_access=access,
+            access=access,
         )
     initial_parameters["omnigentExecutionPlan"] = child_plan.binding.model_dump(
         mode="json", by_alias=True, exclude_none=True
@@ -306,6 +308,7 @@ async def _link_execution_plan_inputs(
         run_id=execution.workflow_run_id,
         namespace=execution.namespace,
         planning_parameters=planning_parameters,
+        access=ArtifactAccessContext.for_execution(execution.workflow_id),
     )
 
 
@@ -694,9 +697,7 @@ async def _resolve_live_recovery_authority(
     )
     runtime_binding_current = True
     if checkpoint.execution_plan_ref is not None:
-        from moonmind.omnigent.harness_platform.stores import (
-            DbRuntimeBindingStore,
-        )
+        from moonmind.omnigent.harness_platform.stores import DbRuntimeBindingStore
 
         runtime_state = await DbRuntimeBindingStore(
             session_factory
@@ -786,11 +787,11 @@ async def _try_generic_realizer_dispatch(
             if request.step_execution is not None or getattr(
                 persisted.payload, "resolvedTools", {}
             ).get("repositoryAccess"):
-                from moonmind.omnigent.harness_platform.execution_plan import (
-                    verify_execution_plan_envelope,
-                )
                 from moonmind.omnigent.bridge_artifacts import (
                     TemporalOmnigentArtifactGateway,
+                )
+                from moonmind.omnigent.harness_platform.execution_plan import (
+                    verify_execution_plan_envelope,
                 )
 
                 persisted = verify_execution_plan_envelope(persisted)
@@ -1294,7 +1295,14 @@ async def _omnigent_execute_activity(
             artifact_service=artifact_service,
             workspace_owner=SandboxRemediationWorkspaceOwner(
                 workspace_root,
-                restorer=ManagedServiceRemediationRestorer(restore_service),
+                restorer=(
+                    ManagedServiceRemediationRestorer(
+                        restore_service,
+                        access=await step_execution_artifact_access(request),
+                    )
+                    if request.remediation_workspace is not None
+                    else None
+                ),
                 head_loader=ArtifactRemediationHeadLoader(
                     artifact_service,
                     workflow_id=(
@@ -1520,6 +1528,7 @@ async def omnigent_oauth_host_janitor_activity(
 ) -> dict[str, object]:
     """Run independent cleanup owners without weakening their authority fences."""
     import asyncio
+
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.settings import generic_host_enabled
 

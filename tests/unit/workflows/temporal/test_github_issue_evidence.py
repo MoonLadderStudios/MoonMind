@@ -10,6 +10,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from tests.artifact_access import access_for_test
 from tests.unit.workflows.adapters.test_github_actions_evidence import (
     HEAD,
     REPO,
@@ -47,7 +48,7 @@ async def test_failed_job_bytes_persist_without_provider_artifact_ids(
         assert result["status"] == "ready" and len(result["evidenceRefs"]) == 2
         _, raw_manifest = await service.read(
             artifact_id=result["artifactRef"].removeprefix("artifact://"),
-            principal="workflow:work-1",
+            access=access_for_test("workflow:work-1"),
         )
         files = json.loads(raw_manifest)["files"]
         for item in files:
@@ -59,7 +60,7 @@ async def test_failed_job_bytes_persist_without_provider_artifact_ids(
             assert "artifactId" not in item
             _, body = await service.read(
                 artifact_id=item["artifactRef"].removeprefix("artifact://"),
-                principal="workflow:work-1",
+                access=access_for_test("workflow:work-1"),
             )
             assert hashlib.sha256(body).hexdigest() == item["sha256"]
             if item["sourceType"] == "job-log":
@@ -103,7 +104,8 @@ async def test_collection_persists_materializable_bytes_and_compact_identity(
         assert len(result["evidenceRefs"]) == 1
         ref = result["evidenceRefs"][0]
         _, stored = await service.read(
-            artifact_id=ref.removeprefix("artifact://"), principal="workflow:work-1"
+            artifact_id=ref.removeprefix("artifact://"),
+            access=access_for_test("workflow:work-1"),
         )
         assert stored == b'{"tests":12}'
         assert (
@@ -111,7 +113,7 @@ async def test_collection_persists_materializable_bytes_and_compact_identity(
         )
         _, manifest_bytes = await service.read(
             artifact_id=result["artifactRef"].removeprefix("artifact://"),
-            principal="workflow:work-1",
+            access=access_for_test("workflow:work-1"),
         )
         manifest = json.loads(manifest_bytes)
         assert manifest["files"][0]["artifactRef"] == ref
@@ -276,7 +278,7 @@ async def test_published_pr_real_bytes_verifier_and_durable_owner_complete_same_
             report_reads.append(request.artifact_ref)
             _, body = await store.read(
                 artifact_id=str(request.artifact_ref).removeprefix("artifact://"),
-                principal=request.principal,
+                access=access_for_test(request.principal),
             )
             return body
 
@@ -412,7 +414,7 @@ async def test_published_pr_real_bytes_verifier_and_durable_owner_complete_same_
             assert manifest_ref in request.input_refs
             _, manifest_bytes = await store.read(
                 artifact_id=manifest_ref.removeprefix("artifact://"),
-                principal="workflow:issue-owner",
+                access=access_for_test("workflow:issue-owner"),
             )
             manifest = json.loads(manifest_bytes)
             assert 101 in manifest["runIds"]
@@ -422,7 +424,7 @@ async def test_published_pr_real_bytes_verifier_and_durable_owner_complete_same_
                 assert ref in request.input_refs
                 _, body = await store.read(
                     artifact_id=ref.removeprefix("artifact://"),
-                    principal="workflow:issue-owner",
+                    access=access_for_test("workflow:issue-owner"),
                 )
                 assert "sha256:" + hashlib.sha256(body).hexdigest() == digest
                 assert json.loads(body)["tests"] == 12
@@ -495,7 +497,7 @@ async def test_published_pr_real_bytes_verifier_and_durable_owner_complete_same_
         if initial_verdict == "NO_DETERMINATION":
             _, original_bytes = await store.read(
                 artifact_id=initial_projection["reportRef"].removeprefix("artifact://"),
-                principal="workflow:issue-owner",
+                access=access_for_test("workflow:issue-owner"),
             )
             assert (
                 "sha256:" + hashlib.sha256(original_bytes).hexdigest()

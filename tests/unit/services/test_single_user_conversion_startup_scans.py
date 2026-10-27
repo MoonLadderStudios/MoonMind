@@ -1,8 +1,5 @@
 """Bound startup work without weakening authoritative conversion or recovery."""
 
-from api_service.migrations.account_source import source_user_ids
-from tests.helpers.account_source import add_source_user
-
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
@@ -20,6 +17,7 @@ from api_service.db.models import (
     TemporalArtifactRedactionLevel,
     TemporalArtifactUseClaim,
 )
+from api_service.migrations.account_source import source_user_ids
 from api_service.services import single_user_conversion as conversion
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
@@ -27,7 +25,8 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
-from tests.helpers.account_source import User, create_source_schema
+from tests.artifact_access import access_for_test
+from tests.helpers.account_source import User, add_source_user, create_source_schema
 
 pytestmark = pytest.mark.asyncio
 
@@ -417,7 +416,7 @@ async def test_default_repairs_pending_recovery_atomically(
             assert not artifact.operator_recovery_granted
             with pytest.raises(TemporalArtifactAuthorizationError):
                 await artifact_service(session).read(
-                    artifact_id=artifact_id, principal="operator",
+                    artifact_id=artifact_id, access=access_for_test("operator")
                 )
             row = (
                 await session.execute(select(conversion.SingleUserConversionRun))
@@ -451,7 +450,7 @@ async def test_default_repairs_pending_recovery_atomically(
                 assert row.status == "complete"
                 with pytest.raises(TemporalArtifactAuthorizationError):
                     await artifact_service(unchanged).read(
-                        artifact_id=artifact_id, principal="operator",
+                        artifact_id=artifact_id, access=access_for_test("operator")
                     )
 
         async with maker() as repaired:
@@ -462,9 +461,11 @@ async def test_default_repairs_pending_recovery_atomically(
             assert result.digest == first.digest
             artifact = await repaired.get(TemporalArtifact, artifact_id)
             assert artifact.operator_recovery_granted is True
-            assert (await artifact_service(repaired).read(
-                artifact_id=artifact_id, principal="operator",
-            ))[1] == b"retained bytes"
+            assert (
+                await artifact_service(repaired).read(
+                    artifact_id=artifact_id, access=access_for_test("operator")
+                )
+            )[1] == b"retained bytes"
             row = (
                 await repaired.execute(select(conversion.SingleUserConversionRun))
             ).scalar_one()
@@ -551,9 +552,11 @@ async def test_startup_converts_later_eligible_artifact(
                 TemporalArtifactRepository(restarted),
                 store=LocalTemporalArtifactStore(tmp_path / "bytes"),
             )
-            assert (await artifacts.read(
-                artifact_id=new_id, principal="operator",
-            ))[1] == b"later bytes"
+            assert (
+                await artifacts.read(
+                    artifact_id=new_id, access=access_for_test("operator")
+                )
+            )[1] == b"later bytes"
         async with maker() as unchanged:
             collect.reset_mock()
             assert (await conversion.run_guarded_upgrade(
@@ -927,14 +930,12 @@ async def test_container_user_evidence_recovers_without_rewriting_ownership(
             )
             assert (
                 await service.read(
-                    artifact_id=artifact_id,
-                    principal=principal,
+                    artifact_id=artifact_id, access=access_for_test(principal)
                 )
             )[1] == b"job evidence"
             assert (
                 await service.read(
-                    artifact_id=artifact_id,
-                    principal="operator",
+                    artifact_id=artifact_id, access=access_for_test("operator")
                 )
             )[1] == b"job evidence"
 

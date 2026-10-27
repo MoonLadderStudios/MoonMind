@@ -16,6 +16,7 @@ from api_service.services import omnigent_execution_plan_service as service
 from moonmind.omnigent.host_image_drift import (
     reconcile_effective_launch_to_selected_host,
 )
+from tests.artifact_access import access_for_test
 
 
 def _launch(
@@ -57,9 +58,7 @@ def test_reconcile_same_repo_drift_pins_selected_image():
     # Original policy evidence is preserved, not rewritten.
     assert reconciled["policyAuthority"]["boundaries"]["host"]["hostImageRef"] == old
     # Recomputed snapshotRef validates.
-    from moonmind.omnigent.execution_profiles import (
-        validate_effective_launch_snapshot,
-    )
+    from moonmind.omnigent.execution_profiles import validate_effective_launch_snapshot
 
     validate_effective_launch_snapshot(reconciled)
 
@@ -315,6 +314,7 @@ async def test_planning_tolerates_same_repo_sha_drift(monkeypatch) -> None:
         task_input_snapshot_ref="art_request_1",
         task_input_snapshot_digest="sha256:" + "1" * 64,
         execution_plan_store=_PlanStore(object()),
+        access=access_for_test("user-1"),
     )
     assert result.envelope.payload.hostImageRef == new_ref
     # Persisted effective-launch artifact must agree with the plan so the
@@ -367,4 +367,5 @@ async def test_planning_still_rejects_foreign_repository(monkeypatch) -> None:
             task_input_snapshot_ref="art_request_1",
             task_input_snapshot_digest="sha256:" + "1" * 64,
             execution_plan_store=_PlanStore(object()),
+            access=access_for_test("user-1"),
         )

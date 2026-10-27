@@ -107,6 +107,21 @@ async def get_instance_access_optional(
     return await get_instance_access(request, session)
 
 
+async def get_artifact_access(
+    request: Request,
+    admission: OperatorAdmission | None = Depends(get_instance_access_optional),
+):
+    """Bind artifact reads to verified HTTP admission, retaining recovery proof."""
+    from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+
+    if not isinstance(admission, OperatorAdmission):
+        raise HTTPException(status_code=401, detail={"code": "auth_required"})
+    return ArtifactAccessContext.for_operator(
+        admission,
+        recovery=get_operator_recovery_principal(request) == "operator",
+    )
+
+
 async def get_auth_manager(
     db: AsyncSession = Depends(get_async_session),
 ) -> AuthProviderManager:

@@ -49,6 +49,7 @@ from api_service.db.models import (
 )
 from api_service.migrations.account_source import source_user_ids
 from api_service.services.single_user_conversion import SingleUserConversionRun
+from tests.artifact_access import access_for_test
 from tests.helpers.account_source import (
     User,
     UserProfile,
@@ -523,7 +524,9 @@ async def test_postgres_populated_instance_resources_publish_and_remain_usable(
         assert execution.run_id == "original-run"
         assert execution.state == MoonMindWorkflowState.EXECUTING
         artifacts = TemporalArtifactService(TemporalArtifactRepository(restarted), store=store)
-        _, payload = await artifacts.read(artifact_id=artifact_id, principal="operator")
+        _, payload = await artifacts.read(
+            artifact_id=artifact_id, access=access_for_test("operator")
+        )
         assert payload == b"retained output"
         replay = await suc.run_guarded_upgrade(restarted, operator_authorized=True)
         assert replay.published and replay.digest == result.digest
@@ -963,11 +966,15 @@ async def test_postgres_artifact_conversion_blocks_authority_writers(
         assert (await restarted.get(TemporalArtifact, preview_id)).metadata_json == {
             "preview_of": artifact_id, "policy": "auto-generated"}
         artifacts = TemporalArtifactService(TemporalArtifactRepository(restarted), store=store)
-        row, payload = await artifacts.read(artifact_id=artifact_id, principal="operator")
+        row, payload = await artifacts.read(
+            artifact_id=artifact_id, access=access_for_test("operator")
+        )
         assert payload == b"retained postgres bytes"
         assert row.created_by_principal == owner
         with pytest.raises(TemporalArtifactAuthorizationError):
-            await artifacts.read(artifact_id=artifact_id, principal=str(uuid.uuid4()))
+            await artifacts.read(
+                artifact_id=artifact_id, access=access_for_test(str(uuid.uuid4()))
+            )
         assert not await artifacts.release_saved_work_use(
             artifact_id=artifact_id, principal="operator", request_id="retained")
         assert (await restarted.execute(select(TemporalArtifactLink))).scalars().one().run_id == "old"
@@ -980,8 +987,10 @@ async def test_postgres_artifact_conversion_blocks_authority_writers(
     monkeypatch.setenv("AUTH_PROVIDER", "disabled")
     async with pg_maker() as local:
         artifacts = TemporalArtifactService(TemporalArtifactRepository(local), store=store)
-        await artifacts.presign_download(artifact_id=artifact_id, principal=zero,
-                                        recovery_principal="operator")
+        await artifacts.presign_download(
+            artifact_id=artifact_id,
+            access=access_for_test(zero, recovery_principal="operator"),
+        )
         row, _ = await artifacts.create(principal=zero,
             redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
             content_type="application/octet-stream")
@@ -1033,7 +1042,9 @@ async def test_postgres_artifact_conversion_blocks_authority_writers(
         assert await TemporalArtifactRepository(restarted).quota_usage_for_scope(zero) == zero_quota
         assert uuid.UUID(zero) not in await source_user_ids(restarted)
         artifacts = TemporalArtifactService(TemporalArtifactRepository(restarted), store=store)
-        row, payload = await artifacts.read(artifact_id=later_human_id, principal="operator")
+        row, payload = await artifacts.read(
+            artifact_id=later_human_id, access=access_for_test("operator")
+        )
         assert payload == b"post-completion postgres bytes"
         assert row.created_by_principal == owner
 

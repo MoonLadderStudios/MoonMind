@@ -21,7 +21,6 @@ from uuid import UUID
 
 import httpx
 import pytest
-from tests.support.issue_claims import issue_claim_store  # noqa: F401
 import yaml
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -58,17 +57,18 @@ from moonmind.omnigent.bridge_store import (
     FIRST_MESSAGE_ITEM_FRONTIER_KEY,
     OmnigentBridgeSessionStore,
 )
+from moonmind.omnigent.codex_execution_decisions import bind_exact_host
 from moonmind.omnigent.execute import (
     OmnigentSameSessionContinuationRequired,
     OmnigentSessionStillRunningError,
     OmnigentTurnNotStartedError,
-    _MarkedTurnStartWatchdog,
     _await_marked_turn_terminal,
     _build_omnigent_first_message,
     _durable_terminal_status_with_evidence,
     _first_message_text,
     _marked_turn_item_state,
     _marked_turn_timeout_diagnostics,
+    _MarkedTurnStartWatchdog,
     _persisted_pre_dispatch_item_ids,
     _resolved_marked_turn_timeout_seconds,
     _safe_heartbeat,
@@ -79,49 +79,27 @@ from moonmind.omnigent.execute import (
 )
 from moonmind.omnigent.execution_profiles import compile_effective_launch
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
-from moonmind.omnigent.host_services.registration import (
-    OmnigentHostRegistrationService,
-)
-from moonmind.omnigent.host_services.runtime_scripts import (
-    OmnigentRuntimeScriptService,
-)
-from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
-from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.host_image_drift import (
     reconcile_effective_launch_to_selected_host,
 )
+from moonmind.omnigent.host_services.registration import OmnigentHostRegistrationService
+from moonmind.omnigent.host_services.runtime_scripts import OmnigentRuntimeScriptService
+from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
+from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.oauth_hosts import (
     HOST_CLEANUP_CLAIMED_ERROR_CODE,
     HOST_PROFILE_BUSY_ERROR_CODE,
 )
-from moonmind.omnigent.codex_execution_decisions import bind_exact_host
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
 )
 from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
-from moonmind.omnigent.workspace_publication import (
-    OmnigentWorkspacePublicationService,
-)
 from moonmind.omnigent.stock_agents import CODEX_STOCK_AGENT_NAME
-from moonmind.security.egress import (
-    EGRESS_CONFIG_DIGEST,
-    ENFORCER_IMPLEMENTATION,
-    EgressAttestation,
-    OMNIGENT_EGRESS_PROFILE,
-    omnigent_proxy_env,
-)
-from moonmind.security.execution_fanout_capabilities import (
-    verify_execution_fanout_capability,
-)
-from moonmind.schemas.managed_session_models import (
-    CodexManagedSessionClearRequest,
-    SendCodexManagedSessionTurnRequest,
-)
-from moonmind.workflows.temporal.service import (
-    TemporalExecutionRerunPlanError,
-    TemporalExecutionRerunSkillSnapshotError,
-    TemporalExecutionService,
+from moonmind.omnigent.workspace_publication import OmnigentWorkspacePublicationService
+from moonmind.provider_profiles.lease_client import (
+    CredentialLeasePurpose,
+    ProviderProfileLeaseClient,
 )
 from moonmind.schemas.agent_runtime_models import (
     MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
@@ -132,10 +110,20 @@ from moonmind.schemas.agent_runtime_models import (
     ManagedRunRecord,
     OmnigentExecutionPlanBinding,
 )
+from moonmind.schemas.managed_session_models import (
+    CodexManagedSessionClearRequest,
+    SendCodexManagedSessionTurnRequest,
+)
 from moonmind.schemas.workspace_locator_models import WorkspaceLocatorResolutionError
-from moonmind.provider_profiles.lease_client import (
-    CredentialLeasePurpose,
-    ProviderProfileLeaseClient,
+from moonmind.security.egress import (
+    EGRESS_CONFIG_DIGEST,
+    ENFORCER_IMPLEMENTATION,
+    OMNIGENT_EGRESS_PROFILE,
+    EgressAttestation,
+    omnigent_proxy_env,
+)
+from moonmind.security.execution_fanout_capabilities import (
+    verify_execution_fanout_capability,
 )
 from moonmind.workflows.adapters.codex_session_adapter import (
     CodexSessionAdapter,
@@ -143,8 +131,8 @@ from moonmind.workflows.adapters.codex_session_adapter import (
 )
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
     OmnigentResolvedTarget,
-    build_omnigent_session_create_payload,
     build_omnigent_selection,
+    build_omnigent_session_create_payload,
     resolve_omnigent_target,
 )
 from moonmind.workflows.adapters.omnigent_client import OmnigentClientError
@@ -162,11 +150,13 @@ from moonmind.workflows.executions.runtime_inheritance import (
     apply_inherited_runtime_to_payload,
     resolve_child_runtime_inheritance,
 )
-from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.provider_failures import (
     build_provider_failure_event,
     classify_provider_failure,
 )
+from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
+from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
+from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
     TemporalSandboxActivities,
@@ -176,8 +166,6 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
-from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
-from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
 from moonmind.workflows.temporal.remediation_loop import (
     RemediationLoopSpec,
     materialize_attempt_nodes,
@@ -194,8 +182,11 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
 )
-from moonmind.workflows.temporal.schedule_mapping import (
-    make_scheduled_workflow_id_base,
+from moonmind.workflows.temporal.schedule_mapping import make_scheduled_workflow_id_base
+from moonmind.workflows.temporal.service import (
+    TemporalExecutionRerunPlanError,
+    TemporalExecutionRerunSkillSnapshotError,
+    TemporalExecutionService,
 )
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows import (
@@ -204,6 +195,8 @@ from moonmind.workflows.temporal.workflows import (
 from moonmind.workflows.temporal.workflows import (
     merge_automation as merge_automation_module,
 )
+from tests.artifact_access import access_for_test
+from tests.support.issue_claims import issue_claim_store  # noqa: F401
 
 
 def _egress_attestation() -> EgressAttestation:
@@ -229,6 +222,9 @@ from moonmind.workflows.temporal.workflows.checkpoint_branch_turn import (
     MoonMindCheckpointBranchTurnWorkflow,
     checkpoint_branch_turn_terminal_disposition,
 )
+from moonmind.workflows.temporal.workflows.merge_automation import (
+    MoonMindMergeAutomationWorkflow,
+)
 from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     MoonMindProviderProfileManagerWorkflow,
     ProfileSlotState,
@@ -241,31 +237,38 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_MERGE_AUTOMATION_OMNIGENT_RESOLVER_PLAN_PATCH,
     RUN_OMNIGENT_PUBLICATION_CHECKPOINT_RESTORE_PATCH,
     RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH,
-    RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
-    RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
     RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH,
     RUN_PROFILE_SNAPSHOT_CREDENTIAL_CAPABILITY_PATCH,
     RUN_PUBLISH_MODE_REPOSITORY_OPERATION_PATCH,
     RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,
     RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH,
     RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH,
+    RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
+    RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
     MoonMindRunWorkflow,
 )
-from moonmind.workflows.temporal.workflows.merge_automation import (
-    MoonMindMergeAutomationWorkflow,
-)
 from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
-from tests.integration.reliability.helpers import (
-    FinalizationFaultInjector,
-    NestedYieldProcess,
-    load_replay,
-)
-from tests.helpers.codex_session_runtime import launch_request, write_fake_app_server
 from tests.helpers.checkpoint_branch_turn_runtime import (
     CheckpointBranchRuntimeLedger,
     InjectedBoundaryFailure,
     checkpoint_branch_policy_snapshot,
     execute_checkpoint_branch_request,
+)
+from tests.helpers.codex_session_runtime import launch_request, write_fake_app_server
+from tests.integration.reliability.helpers import (
+    FinalizationFaultInjector,
+    NestedYieldProcess,
+    load_replay,
+)
+from tests.unit.omnigent.test_oauth_profile_lifecycle import _binding as _oauth_binding
+from tests.unit.omnigent.test_oauth_profile_lifecycle import (
+    _drive_authority_chain_coordinator,
+)
+from tests.unit.omnigent.test_oauth_profile_lifecycle import (
+    _host_lease as _oauth_host_lease,
+)
+from tests.unit.omnigent.test_oauth_profile_lifecycle import (
+    _run_coordinator_failure_case,
 )
 from tests.unit.workflows.adapters.test_codex_session_adapter import (
     _binding,
@@ -276,13 +279,6 @@ from tests.unit.workflows.adapters.test_codex_session_adapter import (
 from tests.unit.workflows.temporal.workflows.test_run_integration import (
     _finalize_and_capture_summary,
 )
-from tests.unit.omnigent.test_oauth_profile_lifecycle import (
-    _drive_authority_chain_coordinator,
-    _run_coordinator_failure_case,
-    _binding as _oauth_binding,
-    _host_lease as _oauth_host_lease,
-)
-
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -2453,9 +2449,7 @@ async def test_batch_github_fanout_preserves_checkout_authority_replay(
         _normalize_submitted_repository,
         _validate_repository_submission_compatibility,
     )
-    from moonmind.omnigent.host_services.workspace import (
-        OmnigentWorkspaceMaterializer,
-    )
+    from moonmind.omnigent.host_services.workspace import OmnigentWorkspaceMaterializer
     from moonmind.omnigent.workspace_intent import compile_workspace_intent
 
     replay_id = "batch-github-fanout-repository-authority"
@@ -2795,9 +2789,7 @@ async def test_omnigent_dynamic_remediation_restores_workspace_archive_replay(
     # The incident's OpenCode profile is admitted through
     # ``generic-omnigent-host@1``. Exercise that production materializer too;
     # validating only the legacy OAuth host left the escaped regression intact.
-    from moonmind.omnigent.host_services.workspace import (
-        OmnigentWorkspaceMaterializer,
-    )
+    from moonmind.omnigent.host_services.workspace import OmnigentWorkspaceMaterializer
 
     generic_workflow_id = "generic-workflow-1"
     generic_step_execution_id = "generic-step-1"
@@ -7300,14 +7292,14 @@ async def test_remediation_does_not_declare_initial_assessment_output(
             assert published.diagnostics_ref is not None
             _, result_bytes = await artifact_service.read(
                 artifact_id=published.diagnostics_ref,
-                principal=f"workflow:{workflow_info.workflow_id}",
+                access=access_for_test(f"workflow:{workflow_info.workflow_id}"),
             )
             assert AgentRunResult.model_validate_json(result_bytes).summary == (
                 "Remediation completed."
             )
             _, summary_bytes = await artifact_service.read(
                 artifact_id=published.metadata["outputSummaryRef"],
-                principal=f"workflow:{workflow_info.workflow_id}",
+                access=access_for_test(f"workflow:{workflow_info.workflow_id}"),
             )
             assert json.loads(summary_bytes)["summary"] == "Remediation completed."
             describe_calls = [

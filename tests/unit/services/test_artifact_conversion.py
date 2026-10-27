@@ -28,6 +28,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactService,
     TemporalArtifactStateError,
 )
+from tests.artifact_access import access_for_test
 from tests.helpers.account_source import User, add_source_user, create_source_schema
 
 pytestmark = pytest.mark.asyncio
@@ -101,7 +102,9 @@ async def test_guarded_conversion_preserves_recovery_and_restarts(
             assert preview.metadata_json == {"preview_of": artifact_id, "policy": "auto-generated"}
             artifacts = service(session, tmp_path)
             with pytest.raises(TemporalArtifactAuthorizationError):
-                await artifacts.read(artifact_id=artifact_id, principal="operator")
+                await artifacts.read(
+                    artifact_id=artifact_id, access=access_for_test("operator")
+                )
             result = await conversion.run_guarded_upgrade(session, operator_authorized=True)
             assert result.published, result.to_sanitized_dict()
             assert result.transforms["artifacts"]["recovery_grants"] == 2
@@ -117,25 +120,33 @@ async def test_guarded_conversion_preserves_recovery_and_restarts(
                                         ("service:restore", owner),
                                         ("service:restore", "operator")]:
                 row, payload = await artifacts.read(
-                    artifact_id=artifact_id, principal=principal,
-                    admitted_principal=admitted,
+                    artifact_id=artifact_id,
+                    access=access_for_test(principal, admitted_principal=admitted),
                 )
                 assert payload == b"retained bytes"
                 assert row.created_by_principal == owner
-            _row, path = await artifacts.read_path(artifact_id=artifact_id, principal="operator")
+            _row, path = await artifacts.read_path(
+                artifact_id=artifact_id, access=access_for_test("operator")
+            )
             assert path.read_bytes() == b"retained bytes"
-            _row, chunks = await artifacts.read_chunks(artifact_id=artifact_id, principal="operator")
+            _row, chunks = await artifacts.read_chunks(
+                artifact_id=artifact_id, access=access_for_test("operator")
+            )
             assert b"".join(chunks) == b"retained bytes"
             _row, expires_at, url = await artifacts.presign_download(
-                artifact_id=artifact_id, principal="operator")
+                artifact_id=artifact_id, access=access_for_test("operator")
+            )
             assert expires_at > datetime.now(UTC)
             assert url == f"/api/artifacts/{artifact_id}/download"
             _row, _links, _pin, policy = await artifacts.get_metadata(
-                artifact_id=artifact_id, principal="operator")
+                artifact_id=artifact_id, access=access_for_test("operator")
+            )
             assert policy.raw_access_allowed
             for principal in ["service:restore", "workflow:unrelated", str(uuid4())]:
                 with pytest.raises(TemporalArtifactAuthorizationError):
-                    await artifacts.read(artifact_id=artifact_id, principal=principal)
+                    await artifacts.read(
+                        artifact_id=artifact_id, access=access_for_test(principal)
+                    )
             pin = (await session.execute(select(TemporalArtifactPin))).scalar_one()
             claim = (await session.execute(select(TemporalArtifactUseClaim).where(
                 TemporalArtifactUseClaim.request_id == "ongoing-recovery"))).scalar_one()
@@ -163,7 +174,8 @@ async def test_conversion_never_releases_quarantine(tmp_path, monkeypatch):
                                         TemporalArtifactAuthorizationError)):
                         await method(artifact_id=artifact_id, principal=principal)
             _row, _links, _pin, policy = await artifacts.get_metadata(
-                artifact_id=artifact_id, principal="operator")
+                artifact_id=artifact_id, access=access_for_test("operator")
+            )
             assert policy.raw_access_allowed is False
 
 
@@ -231,7 +243,9 @@ async def test_old_published_ledger_preserves_admission_without_recovery_grant(t
             assert await completed_guarded_upgrade(session) is None
             assert not (await session.get(TemporalArtifact, artifact_id)).operator_recovery_granted
             with pytest.raises(TemporalArtifactAuthorizationError):
-                await service(session, tmp_path).read(artifact_id=artifact_id, principal="operator")
+                await service(session, tmp_path).read(
+                    artifact_id=artifact_id, access=access_for_test("operator")
+                )
             result = await conversion.run_guarded_upgrade(session, operator_authorized=True)
             assert result.published, result.to_sanitized_dict()
             assert await completed_guarded_upgrade(session) is not None
@@ -284,7 +298,11 @@ async def test_alias_recovery_preserves_claim_and_quota_scopes(tmp_path, monkeyp
             assert await repo.quota_usage_for_scope(alias) == before
             assert (await repo.quota_usage_for_scope("operator"))["logicalBytes"] == 0
             artifacts = service(session, tmp_path)
-            assert (await artifacts.read(artifact_id=artifact_id, principal="operator"))[1] == b"retained bytes"
+            assert (
+                await artifacts.read(
+                    artifact_id=artifact_id, access=access_for_test("operator")
+                )
+            )[1] == b"retained bytes"
             assert not await artifacts.release_saved_work_use(
                 artifact_id=artifact_id, principal="operator", request_id="ongoing-recovery",
             )
@@ -329,7 +347,9 @@ async def test_machine_creator_and_caller_metadata_cannot_grant_recovery(
             row = await session.get(TemporalArtifact, artifact_id)
             assert not row.operator_recovery_granted
             with pytest.raises(TemporalArtifactAuthorizationError):
-                await service(session, tmp_path).read(artifact_id=artifact_id, principal="operator")
+                await service(session, tmp_path).read(
+                    artifact_id=artifact_id, access=access_for_test("operator")
+                )
 
 
 async def test_old_fresh_admission_is_not_artifact_recovery_proof(tmp_path):
@@ -345,7 +365,9 @@ async def test_old_fresh_admission_is_not_artifact_recovery_proof(tmp_path):
             assert await completed_guarded_upgrade(session) is None
             assert not (await session.get(TemporalArtifact, artifact_id)).operator_recovery_granted
             with pytest.raises(TemporalArtifactAuthorizationError):
-                await service(session, tmp_path).read(artifact_id=artifact_id, principal="operator")
+                await service(session, tmp_path).read(
+                    artifact_id=artifact_id, access=access_for_test("operator")
+                )
             assert (await conversion.run_guarded_upgrade(session, operator_authorized=True)).published
         async with maker() as restarted:
             assert await completed_guarded_upgrade(restarted) is not None
@@ -364,7 +386,9 @@ async def test_quarantine_short_circuits_linked_execution_raw_fallback(tmp_path,
             row = await session.get(TemporalArtifact, artifact_id)
             assert not await artifacts._artifact_raw_access_allowed(row, principal=owner)
             with pytest.raises(TemporalArtifactStateError):
-                await artifacts._assert_artifact_raw_access(row, principal=owner)
+                await artifacts._assert_artifact_raw_access(
+                    row, access=access_for_test(owner)
+                )
             linked.assert_not_awaited()
 
 
@@ -453,7 +477,8 @@ async def test_null_owner_projection_does_not_grant_linked_restricted_artifact_a
                 )
                 with pytest.raises(TemporalArtifactAuthorizationError):
                     await artifacts.read(
-                        artifact_id=machine_artifact_id, principal=principal
+                        artifact_id=machine_artifact_id,
+                        access=access_for_test(principal),
                     )
 
             converted = await conversion.run_guarded_upgrade(
@@ -484,8 +509,7 @@ async def test_null_owner_projection_does_not_grant_linked_restricted_artifact_a
             artifacts = service(restarted, tmp_path)
             assert (
                 await artifacts.read(
-                    artifact_id=human_artifact_id,
-                    principal="operator",
+                    artifact_id=human_artifact_id, access=access_for_test("operator")
                 )
             )[1] == b"retained bytes"
             for principal in (owner, "operator"):
@@ -495,7 +519,8 @@ async def test_null_owner_projection_does_not_grant_linked_restricted_artifact_a
                 )
                 with pytest.raises(TemporalArtifactAuthorizationError):
                     await artifacts.read(
-                        artifact_id=machine_artifact_id, principal=principal
+                        artifact_id=machine_artifact_id,
+                        access=access_for_test(principal),
                     )
 
 
@@ -735,7 +760,7 @@ async def test_admission_observes_restored_artifacts_and_revoked_recovery(
             assert refused.value.detail == "conversion_required"
             with pytest.raises(TemporalArtifactAuthorizationError):
                 await service(restarted, tmp_path).read(
-                    artifact_id=artifact_id, principal="operator"
+                    artifact_id=artifact_id, access=access_for_test("operator")
                 )
 
 
@@ -764,5 +789,8 @@ async def test_historical_child_provenance_does_not_block_recovery(
             assert result.published, result.to_sanitized_dict()
             after = dict((await session.execute(select(model.__table__))).mappings().one())
             assert after == before
-            assert (await service(session, tmp_path).read(
-                artifact_id=artifact_id, principal="operator"))[1] == b"retained bytes"
+            assert (
+                await service(session, tmp_path).read(
+                    artifact_id=artifact_id, access=access_for_test("operator")
+                )
+            )[1] == b"retained bytes"

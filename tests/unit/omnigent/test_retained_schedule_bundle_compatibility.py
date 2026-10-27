@@ -9,6 +9,7 @@ The source verifier and artifact ACL run unchanged before the stop marker.
 """
 
 from __future__ import annotations
+
 import hashlib
 from datetime import UTC, datetime
 
@@ -56,6 +57,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from tests.artifact_access import access_for_test
 
 
 class SourceVerified(Exception):
@@ -354,8 +356,10 @@ async def test_retained_schedule_bundle_uses_selected_source_authority(
                 artifacts = TemporalArtifactService(TemporalArtifactRepository(session))
                 retained, restored = await artifacts.read(
                     artifact_id=artifact.artifact_id,
-                    principal="service:omnigent-generic-host",
-                    admitted_principal=f"workflow:{workflow_id}",
+                    access=access_for_test(
+                        "service:omnigent-generic-host",
+                        admitted_principal=f"workflow:{workflow_id}",
+                    ),
                 )
                 assert restored == body
                 assert retained.created_by_principal == "operator"

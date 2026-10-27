@@ -31,21 +31,22 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
-from moonmind.workflows.temporal.story_output_tools import (
-    register_story_output_tool_handlers,
-)
 from moonmind.workflows.temporal.remediation_loop import (
     ConsumedRemediationBudgets,
     RemediationLoopPhase,
     RemediationLoopSpec,
     RemediationLoopState,
 )
+from moonmind.workflows.temporal.story_output_tools import (
+    register_story_output_tool_handlers,
+)
 from moonmind.workflows.temporal.worker_runtime import _build_runtime_planner
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from tests.artifact_access import access_for_test
+from tests.support.issue_claims import issue_claim_store  # noqa: F401
 
 from .helpers import load_replay
-from tests.support.issue_claims import issue_claim_store  # noqa: F401
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.reliability_journey]
 
@@ -229,7 +230,7 @@ async def test_search_publication_recovers_missing_pr_before_status(
         assert selected.outputs["searchEvidence"]["authenticatedUser"] == search_user
     brief_ref = selected.outputs["briefArtifactRef"]
     _brief, brief_bytes = await artifact_service.read(
-        artifact_id=brief_ref, principal="test:search-publication"
+        artifact_id=brief_ref, access=access_for_test("test:search-publication")
     )
     brief = json.loads(brief_bytes)
     assert brief["issue"]["body"] == brief["description"] == issue["body"]

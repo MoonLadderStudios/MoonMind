@@ -15,12 +15,13 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 from urllib.parse import quote, urlsplit
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
+from api_service.auth_providers import get_artifact_access
 from moonmind.core.artifacts import canonical_artifact_ref
-
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.workflow_registry import (
     WorkflowProjectionExcluded,
     is_historical_workflow_type,
@@ -72,10 +73,7 @@ from api_service.api.execution_principal import (
     resolve_execution_principal,
 )
 from api_service.api.instance_access import is_instance_operator
-from api_service.api.routers.temporal_artifacts import (
-    _raise_temporal_artifact_http,
-    _resolve_recovery_principal,
-)
+from api_service.api.routers.temporal_artifacts import _raise_temporal_artifact_http
 from api_service.api.schemas import CreateJobRequest
 from api_service.auth_providers import (
     get_instance_access,
@@ -325,9 +323,9 @@ from moonmind.workflows.temporal import (
     TemporalExecutionRerunSkillSnapshotError,
     TemporalExecutionRetryUnavailableError,
     TemporalExecutionService,
+    TemporalExecutionStartUnconfirmedError,
     TemporalExecutionTargetRunChangedError,
     TemporalExecutionValidationError,
-    TemporalExecutionStartUnconfirmedError,
 )
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
@@ -1148,6 +1146,7 @@ async def _instruction_identity(
     return await CheckpointBranchTurnExecutionOwner(
         session,
         principal=_execution_principal(user),
+        access=ArtifactAccessContext.for_operator(user),
     ).persist_instruction_text(
         text=text,
         branch_turn_id=branch_turn_id,
@@ -6478,11 +6477,11 @@ async def _hydrate_execution_report_projection(
     *,
     session: AsyncSession | None,
     user: OperatorAdmission,
+    access: ArtifactAccessContext,
 ) -> ExecutionModel:
     if session is None or execution.entry != "user_workflow" or not execution.run_id:
         return execution
 
-    principal = _execution_principal(user)
     try:
         artifact_service = get_temporal_artifact_service(session)
         report_roles = (
@@ -6502,9 +6501,9 @@ async def _hydrate_execution_report_projection(
                     namespace=execution.namespace,
                     workflow_id=execution.workflow_id,
                     run_id=execution.run_id,
-                    principal=principal,
                     link_type=role,
                     latest_only=True,
+                    access=access,
                 )
                 for role in report_roles
             )
@@ -7554,10 +7553,7 @@ def _step_execution_detail_payload(
 
 
 async def _read_step_execution_manifest(
-    *,
-    artifact_service: Any,
-    artifact_ref: str,
-    principal: str,
+    *, artifact_service: Any, artifact_ref: str, access: ArtifactAccessContext
 ) -> tuple[StepExecutionManifestModel | None, dict[str, Any] | None]:
     artifact_id = _artifact_id_from_ref(artifact_ref)
     if not artifact_id:
@@ -7567,9 +7563,7 @@ async def _read_step_execution_manifest(
         )
     try:
         _artifact, body = await artifact_service.read(
-            artifact_id=artifact_id,
-            principal=principal,
-            allow_restricted_raw=True,
+            artifact_id=artifact_id, access=access
         )
         payload = json.loads(body.decode("utf-8"))
         return StepExecutionManifestModel.model_validate(payload), None
@@ -8275,9 +8269,7 @@ async def _profile_route_runtime(
         return None
     if routes is not None and provider_profile.profile_id in routes:
         return routes[provider_profile.profile_id]
-    from api_service.services.profile_execution_selection import (
-        profile_route_runtime,
-    )
+    from api_service.services.profile_execution_selection import profile_route_runtime
 
     route = await profile_route_runtime(session, user, provider_profile)
     if routes is not None:
@@ -9194,7 +9186,10 @@ async def _resolve_step_runtime_selections(
         if not runtime_payload:
             continue
 
-        from moonmind.runtime_intent import has_profile_selector, merge_runtime_selection
+        from moonmind.runtime_intent import (
+            has_profile_selector,
+            merge_runtime_selection,
+        )
 
         effective_runtime_payload = merge_runtime_selection(
             task_runtime, runtime_payload
@@ -10388,15 +10383,14 @@ async def _validate_model_selection_submission(
     session: AsyncSession,
     user: OperatorAdmission,
     saved_payload: Mapping[str, Any] | None = None,
+    access: ArtifactAccessContext,
 ) -> None:
     from moonmind.runtime_intent import validate_model_selection_submission
 
     async def read_input_artifact(ref: str) -> Any:
         try:
             _artifact, body = await get_temporal_artifact_service(session).read(
-                artifact_id=_artifact_id_from_ref(ref),
-                principal=_execution_principal(user),
-                allow_restricted_raw=True,
+                artifact_id=_artifact_id_from_ref(ref), access=access
             )
             return json.loads(body.decode("utf-8"))
         except Exception as exc:
@@ -10447,6 +10441,7 @@ async def _exact_rerun_parameters_from_snapshot(
     session: AsyncSession,
     user: OperatorAdmission,
     record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
+    access: ArtifactAccessContext,
 ) -> dict[str, Any] | None:
     """Restore exact task authority before a terminal execution is rerun."""
 
@@ -10467,9 +10462,7 @@ async def _exact_rerun_parameters_from_snapshot(
     try:
         artifact_service = get_temporal_artifact_service(session)
         _artifact, body = await artifact_service.read(
-            artifact_id=artifact_id,
-            principal=_execution_principal(user),
-            allow_restricted_raw=True,
+            artifact_id=artifact_id, access=access
         )
         decoded = json.loads(body.decode("utf-8"))
     except (PermissionError, TemporalArtifactAuthorizationError) as exc:
@@ -10561,6 +10554,7 @@ async def _snapshot_source_payload_from_parameters_and_artifact(
     record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
     parameters: Mapping[str, Any],
     input_artifact_ref: str | None = None,
+    access: ArtifactAccessContext,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     parameter_payload, parameter_task = _snapshot_source_payload_from_parameters(
         parameters
@@ -10576,9 +10570,7 @@ async def _snapshot_source_payload_from_parameters_and_artifact(
     try:
         artifact_service = get_temporal_artifact_service(session)
         _artifact, body = await artifact_service.read(
-            artifact_id=artifact_id,
-            principal=_execution_principal(user),
-            allow_restricted_raw=True,
+            artifact_id=artifact_id, access=access
         )
         decoded = json.loads(body.decode("utf-8"))
     except Exception as exc:
@@ -10840,6 +10832,7 @@ async def _persist_original_workflow_input_snapshot_from_parameters(
     source_workflow_id: str | None = None,
     source_run_id: str | None = None,
     input_artifact_ref: str | None = None,
+    access: ArtifactAccessContext,
 ) -> str:
     workflow_type_value = _enum_value(getattr(record, "workflow_type", None))
     if workflow_type_value != "MoonMind.UserWorkflow":
@@ -10851,6 +10844,7 @@ async def _persist_original_workflow_input_snapshot_from_parameters(
             record=record,
             parameters=parameters,
             input_artifact_ref=input_artifact_ref,
+            access=access,
         )
     )
     if not snapshot_task:
@@ -11483,6 +11477,7 @@ async def _create_execution_from_workflow_request(
     user: OperatorAdmission,
     session: Any = None,
     principal_context: dict[str, Any] | None = None,
+    access: ArtifactAccessContext,
 ) -> ExecutionModel | ScheduleCreatedResponse:
     request_type = str(request.type).strip().lower()
     if request_type not in {"task", "workflow"}:
@@ -12435,6 +12430,7 @@ async def _create_execution_from_workflow_request(
         )
         try:
             persisted_omnigent_plan = await compile_and_persist_execution_plan(
+                access=access,
                 session_factory=async_session_maker,
                 artifact_service=artifact_service,
                 principal=principal_id,
@@ -12621,6 +12617,7 @@ async def _create_execution_from_workflow_request(
             attachment_refs=attachment_index,
             source_kind="create",
             input_artifact_ref=input_artifact_ref,
+            access=access,
         )
     if snapshot_ref:
         try:
@@ -13400,6 +13397,8 @@ async def create_remediation_execution(
     user: OperatorAdmission = Depends(get_instance_access),
     _submit_enabled: None = Depends(_ensure_submit_enabled),
     principal_context: dict[str, Any] = Depends(execution_principal_dependency),
+    *,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
 ) -> ExecutionModel | ScheduleCreatedResponse:
     body = payload if isinstance(payload, dict) else {}
     from moonmind.runtime_intent import validate_model_selection_authoring
@@ -13408,7 +13407,9 @@ async def create_remediation_execution(
         validate_model_selection_authoring(body)
     except RuntimeIntentValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    await _validate_model_selection_submission(body, session=session, user=user)
+    await _validate_model_selection_submission(
+        body, session=session, user=user, access=access
+    )
     task_payload = (
         dict(body.get("workflow")) if isinstance(body.get("workflow"), Mapping) else {}
     )
@@ -13488,6 +13489,7 @@ async def create_remediation_execution(
         user=user,
         session=session,
         principal_context=principal_context,
+        access=access,
     )
 
 
@@ -13830,7 +13832,7 @@ def _context_evidence_availability_projection(
 
 
 async def _attach_remediation_artifact_projection(
-    link: Any, *, session: AsyncSession, principal: str
+    link: Any, *, session: AsyncSession, access: ArtifactAccessContext
 ) -> None:
     result = await session.execute(
         select(db_models.TemporalArtifactLink, db_models.TemporalArtifact)
@@ -13903,8 +13905,7 @@ async def _attach_remediation_artifact_projection(
             continue
         try:
             _, body = await artifact_service.read(
-                artifact_id=artifact.artifact_id,
-                principal=principal,
+                artifact_id=artifact.artifact_id, access=access
             )
             decoded = json.loads((body or b"").decode("utf-8"))
         except (
@@ -13920,7 +13921,7 @@ async def _attach_remediation_artifact_projection(
 
 
 async def _attach_remediation_capability_projection(
-    link: Any, *, session: AsyncSession, principal: str
+    link: Any, *, session: AsyncSession, principal: str, access: ArtifactAccessContext
 ) -> None:
     """Resolve exact-target inputs that are intentionally absent from the link row."""
 
@@ -13973,7 +13974,7 @@ async def _attach_remediation_capability_projection(
                 context_artifact_ref=link.context_artifact_ref,
                 target_workflow_id=link.target_workflow_id,
                 target_run_id=link.target_run_id,
-                principal=principal,
+                access=access,
             )
         except (
             HTTPException,
@@ -14045,9 +14046,7 @@ async def _attach_remediation_capability_projection(
                     "fallbackReason": live_follow.get("reason"),
                 }
 
-    await _attach_remediation_artifact_projection(
-        link, session=session, principal=principal
-    )
+    await _attach_remediation_artifact_projection(link, session=session, access=access)
 
 
 def _remediation_approval_request_id(remediation_workflow_id: str) -> str:
@@ -14090,12 +14089,11 @@ async def _read_remediation_context_payload(
     context_artifact_ref: str,
     target_workflow_id: str,
     target_run_id: str,
-    principal: str,
+    access: ArtifactAccessContext,
 ) -> dict[str, Any]:
     artifact_service = get_temporal_artifact_service(session)
     artifact, body = await artifact_service.read(
-        artifact_id=context_artifact_ref,
-        principal=principal,
+        artifact_id=context_artifact_ref, access=access
     )
     metadata = artifact.metadata_json if isinstance(artifact.metadata_json, Mapping) else {}
     if metadata.get("artifact_type") != "remediation.context":
@@ -14254,6 +14252,8 @@ async def list_execution_remediations(
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
     user: OperatorAdmission = Depends(get_instance_access),
+    *,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
 ) -> RemediationLinksResponseModel:
     if direction not in {"inbound", "outbound"}:
         raise HTTPException(
@@ -14281,6 +14281,7 @@ async def list_execution_remediations(
                 link,
                 session=session,
                 principal=_execution_principal(user) or "system",
+                access=access,
             )
             for link in links
         )
@@ -14312,6 +14313,8 @@ async def create_remediation_checkpoint_branch(
     temporal_client_adapter: TemporalClientAdapter = Depends(
         get_temporal_client_adapter
     ),
+    *,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
 ) -> CheckpointBranchModel:
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
     links = await service.list_remediation_targets(workflow_id)
@@ -14351,7 +14354,7 @@ async def create_remediation_checkpoint_branch(
         context_artifact_ref=link.context_artifact_ref,
         target_workflow_id=link.target_workflow_id,
         target_run_id=link.target_run_id,
-        principal=_execution_principal(user),
+        access=access,
     )
     selected_checkpoint = _context_selected_checkpoint(context_payload, checkpoint_ref)
     if selected_checkpoint is None:
@@ -14446,7 +14449,9 @@ async def create_remediation_checkpoint_branch(
         if existing_turn is not None:
             try:
                 await CheckpointBranchTurnExecutionOwner(
-                    session, principal=_execution_principal(user)
+                    session,
+                    principal=_execution_principal(user),
+                    access=ArtifactAccessContext.for_operator(user),
                 ).launch(
                     workflow_id=link.target_workflow_id,
                     branch_id=branch.branch_id,
@@ -14599,7 +14604,9 @@ async def create_remediation_checkpoint_branch(
     await session.commit()
     try:
         await CheckpointBranchTurnExecutionOwner(
-            session, principal=_execution_principal(user)
+            session,
+            principal=_execution_principal(user),
+            access=ArtifactAccessContext.for_operator(user),
         ).launch(
             workflow_id=link.target_workflow_id,
             branch_id=branch_id,
@@ -14902,6 +14909,26 @@ def _raw_request_selects_omnigent(
     )
 
 
+async def _execution_request_artifact_access(
+    request: Request,
+    user: OperatorAdmission | None = Depends(get_instance_access_optional),
+) -> ArtifactAccessContext:
+    """Preserve the existing signed fan-out admission as a parent-only scope.
+
+    The create handler also binds this capability to its authoritative parent
+    before any artifact use. Other artifact endpoints retain operator admission.
+    """
+    capability = resolve_execution_fanout_capability(
+        marker=request.headers.get(EXECUTION_FANOUT_HEADER),
+        authorization=request.headers.get("Authorization"),
+    )
+    if capability is not None:
+        return ArtifactAccessContext.for_execution(
+            capability.parent_workflow_id, principal="service:execution-fanout"
+        )
+    return await get_artifact_access(request, admission=user)
+
+
 @router.post(
     "",
     response_model=ExecutionModel | ScheduleCreatedResponse,
@@ -14916,6 +14943,8 @@ async def create_execution(
     principal_context: dict[str, Any] = Depends(execution_principal_dependency),
     authorization: str | None = Header(None, alias="Authorization"),
     execution_fanout: str | None = Header(None, alias=EXECUTION_FANOUT_HEADER),
+    *,
+    access: ArtifactAccessContext = Depends(_execution_request_artifact_access),
 ) -> ExecutionModel | ScheduleCreatedResponse:
     from moonmind.runtime_intent import validate_model_selection_authoring
 
@@ -14962,7 +14991,7 @@ async def create_execution(
         }
 
     await _validate_model_selection_submission(
-        payload.get("payload", payload), session=session, user=user
+        payload.get("payload", payload), session=session, user=user, access=access
     )
 
     try:
@@ -14974,6 +15003,7 @@ async def create_execution(
                 user=user,
                 session=session,
                 principal_context=principal_context,
+                access=access,
             )
 
         request = CreateExecutionRequest.model_validate(payload)
@@ -15204,6 +15234,7 @@ async def create_execution(
         parameters=dict(getattr(record, "parameters", None) or {}),
         source_kind="create",
         input_artifact_ref=getattr(record, "input_ref", None),
+        access=access,
     )
     if snapshot_ref:
         await session.commit()
@@ -16199,6 +16230,8 @@ async def describe_execution_step_executions(
     user: OperatorAdmission = Depends(get_instance_access),
     session: AsyncSession = Depends(get_async_session),
     temporal_client: Client = Depends(get_temporal_client),
+    *,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
 ) -> StepExecutionListModel:
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
     record = await _get_owned_execution(
@@ -16232,14 +16265,13 @@ async def describe_execution_step_executions(
     )
     row = _find_step_ledger_row(ledger, logical_step_id)
     artifact_service = get_temporal_artifact_service(session)
-    principal = _execution_principal(user)
     manifest_refs = _step_execution_manifest_refs(row)
     manifest_results = await asyncio.gather(
         *(
             _read_step_execution_manifest(
                 artifact_service=artifact_service,
                 artifact_ref=manifest_ref,
-                principal=principal,
+                access=access,
             )
             for manifest_ref in manifest_refs
         )
@@ -16291,6 +16323,8 @@ async def describe_execution_step_execution(
     user: OperatorAdmission = Depends(get_instance_access),
     session: AsyncSession = Depends(get_async_session),
     temporal_client: Client = Depends(get_temporal_client),
+    *,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
 ) -> StepExecutionDetailModel:
     if execution_ordinal < 1:
         raise HTTPException(
@@ -16332,14 +16366,13 @@ async def describe_execution_step_execution(
     )
     row = _find_step_ledger_row(ledger, logical_step_id)
     artifact_service = get_temporal_artifact_service(session)
-    principal = _execution_principal(user)
     manifest_refs = _step_execution_manifest_refs(row)
     manifest_results = await asyncio.gather(
         *(
             _read_step_execution_manifest(
                 artifact_service=artifact_service,
                 artifact_ref=manifest_ref,
-                principal=principal,
+                access=access,
             )
             for manifest_ref in manifest_refs
         )
@@ -16559,7 +16592,9 @@ async def create_checkpoint_branch(
         if existing_turn is not None:
             try:
                 await CheckpointBranchTurnExecutionOwner(
-                    session, principal=_execution_principal(user)
+                    session,
+                    principal=_execution_principal(user),
+                    access=ArtifactAccessContext.for_operator(user),
                 ).launch(
                     workflow_id=workflow_id,
                     branch_id=branch.branch_id,
@@ -16680,7 +16715,9 @@ async def create_checkpoint_branch(
     await session.commit()
     try:
         await CheckpointBranchTurnExecutionOwner(
-            session, principal=_execution_principal(user)
+            session,
+            principal=_execution_principal(user),
+            access=ArtifactAccessContext.for_operator(user),
         ).launch(
             workflow_id=workflow_id,
             branch_id=branch_id,
@@ -16851,6 +16888,7 @@ async def launch_checkpoint_branch_turn(
             replayed = await CheckpointBranchTurnExecutionOwner(
                 session,
                 principal=_execution_principal(user),
+                access=ArtifactAccessContext.for_operator(user),
             ).launch(
                 workflow_id=workflow_id,
                 branch_id=branch_id,
@@ -16922,6 +16960,7 @@ async def launch_checkpoint_branch_turn(
         launched = await CheckpointBranchTurnExecutionOwner(
             session,
             principal=_execution_principal(user),
+            access=ArtifactAccessContext.for_operator(user),
         ).launch(
             workflow_id=workflow_id,
             branch_id=branch_id,
@@ -16996,7 +17035,9 @@ async def _record_branch_turn_operation(
         turn = result.scalar_one()
         try:
             launched = await CheckpointBranchTurnExecutionOwner(
-                session, principal=_execution_principal(user)
+                session,
+                principal=_execution_principal(user),
+                access=ArtifactAccessContext.for_operator(user),
             ).launch(
                 workflow_id=workflow_id,
                 branch_id=branch.branch_id,
@@ -17076,7 +17117,9 @@ async def _record_branch_turn_operation(
     await session.commit()
     try:
         launched = await CheckpointBranchTurnExecutionOwner(
-            session, principal=_execution_principal(user)
+            session,
+            principal=_execution_principal(user),
+            access=ArtifactAccessContext.for_operator(user),
         ).launch(
             workflow_id=workflow_id,
             branch_id=branch.branch_id,
@@ -17281,7 +17324,9 @@ async def fork_checkpoint_branch(
         if existing_turn is not None:
             try:
                 await CheckpointBranchTurnExecutionOwner(
-                    session, principal=_execution_principal(user)
+                    session,
+                    principal=_execution_principal(user),
+                    access=ArtifactAccessContext.for_operator(user),
                 ).launch(
                     workflow_id=workflow_id,
                     branch_id=branch.branch_id,
@@ -17388,7 +17433,9 @@ async def fork_checkpoint_branch(
     await session.commit()
     try:
         await CheckpointBranchTurnExecutionOwner(
-            session, principal=_execution_principal(user)
+            session,
+            principal=_execution_principal(user),
+            access=ArtifactAccessContext.for_operator(user),
         ).launch(
             workflow_id=workflow_id,
             branch_id=forked_branch_id,
@@ -18076,6 +18123,8 @@ async def describe_execution(
     temporal_client: Client = Depends(get_temporal_client),
     authorization: str | None = Header(None, alias="Authorization"),
     execution_fanout: str | None = Header(None, alias=EXECUTION_FANOUT_HEADER),
+    *,
+    access: ArtifactAccessContext = Depends(_execution_request_artifact_access),
 ) -> ExecutionModel:
     capability = resolve_execution_fanout_capability(
         marker=execution_fanout,
@@ -18100,6 +18149,10 @@ async def describe_execution(
             service=service,
             workflow_id=workflow_id,
             authority=authority,
+        )
+        # The existing owner verified this exact child before any projection read.
+        access = ArtifactAccessContext.for_execution(
+            workflow_id, principal="service:execution-fanout"
         )
 
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
@@ -18203,9 +18256,7 @@ async def describe_execution(
             temporal_client=temporal_client,
         )
     execution = await _hydrate_execution_report_projection(
-        execution,
-        session=session,
-        user=user,
+        execution, session=session, user=user, access=access
     )
     if not execution.agent_run_id:
         agent_run_ids = await asyncio.to_thread(
@@ -18633,9 +18684,8 @@ async def download_workflow_captured_evidence(
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
     user: OperatorAdmission = Depends(get_instance_access),
-    recovery_principal: Annotated[
-        str | None, Depends(_resolve_recovery_principal)
-    ] = None,
+    *,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
 ) -> Response:
     """Stream one workflow-authorized captured-evidence artifact.
 
@@ -18695,10 +18745,7 @@ async def download_workflow_captured_evidence(
         artifact_service = get_temporal_artifact_service(session)
         try:
             _artifact, payload = await artifact_service.read(
-                artifact_id=artifact_id,
-                principal=_execution_principal(user),
-                allow_restricted_raw=True,
-                recovery_principal=recovery_principal,
+                artifact_id=artifact_id, access=access
             )
         except (PermissionError, TemporalArtifactAuthorizationError) as exc:
             # The Workflow-level authorization above already gated access; a
@@ -18741,11 +18788,7 @@ def _evidence_attachment_content_type(filename: str) -> str:
 
 
 async def _read_continuation_evidence_bytes(
-    *,
-    artifact_service: Any,
-    principal: str,
-    ref: str,
-    recovery_principal: str | None = None,
+    *, artifact_service: Any, ref: str, access: ArtifactAccessContext
 ) -> bytes | None:
     """Read one authorized source evidence ref's bytes, scheme-aware.
 
@@ -18766,10 +18809,7 @@ async def _read_continuation_evidence_bytes(
         return None
     try:
         _artifact, body = await artifact_service.read(
-            artifact_id=artifact_id,
-            principal=principal,
-            allow_restricted_raw=True,
-            recovery_principal=recovery_principal,
+            artifact_id=artifact_id, access=access
         )
         return body
     except (
@@ -18785,7 +18825,7 @@ async def _materialize_continuation_source_attachments(
     session: AsyncSession,
     user: OperatorAdmission,
     refs: list[str],
-    recovery_principal: str | None = None,
+    access: ArtifactAccessContext,
 ) -> list[dict[str, Any]]:
     """Copy authorized source evidence refs into durable input attachments.
 
@@ -18807,10 +18847,7 @@ async def _materialize_continuation_source_attachments(
     attachments: list[dict[str, Any]] = []
     for ref in refs:
         body = await _read_continuation_evidence_bytes(
-            artifact_service=artifact_service,
-            principal=principal,
-            ref=ref,
-            recovery_principal=recovery_principal,
+            artifact_service=artifact_service, ref=ref, access=access
         )
         if body is None or len(body) > _CONTINUATION_EVIDENCE_MAX_BYTES:
             raise HTTPException(
@@ -18938,9 +18975,8 @@ async def continue_in_new_workflow(
     session: AsyncSession = Depends(get_async_session),
     user: OperatorAdmission = Depends(get_instance_access),
     _submit_enabled: None = Depends(_ensure_submit_enabled),
-    recovery_principal: Annotated[
-        str | None, Depends(_resolve_recovery_principal)
-    ] = None,
+    *,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
 ) -> ContinueInNewWorkflowResponse:
     """Create a linked continuation Workflow from a terminal source (#3641 §3-§7).
 
@@ -19124,6 +19160,7 @@ async def continue_in_new_workflow(
                 user=user,
                 record=canonical,
                 parameters=canonical.parameters or {},
+                access=access,
             )
         )
         # The artifact can own instructions, steps, and top-level settings even
@@ -19211,7 +19248,7 @@ async def continue_in_new_workflow(
             session=session,
             user=user,
             refs=payload.selected_source_artifact_refs,
-            recovery_principal=recovery_principal,
+            access=access,
         )
         if source_attachments:
             workflow_payload = initial_params.get("workflow")
@@ -19341,6 +19378,7 @@ async def continue_in_new_workflow(
             source_workflow_id=source.workflow_id,
             source_run_id=source_run_id,
             input_artifact_ref=None,
+            access=access,
         )
     await session.commit()
 
@@ -19631,6 +19669,8 @@ async def update_execution(
     session: AsyncSession = Depends(get_async_session),
     user: OperatorAdmission = Depends(get_instance_access),
     _actions_enabled: None = Depends(_ensure_actions_enabled),
+    *,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
 ) -> UpdateExecutionResponse:
     record = await _get_owned_execution(
         service=service, workflow_id=workflow_id, user=user
@@ -19698,6 +19738,7 @@ async def update_execution(
         session=session,
         user=user,
         saved_payload=saved_selection,
+        access=access,
     )
 
     effective_parameters_patch = payload.parameters_patch
@@ -19716,9 +19757,7 @@ async def update_execution(
         )
     if exact_plan_rerun:
         exact_snapshot_parameters = await _exact_rerun_parameters_from_snapshot(
-            session=session,
-            user=user,
-            record=record,
+            session=session, user=user, record=record, access=access
         )
         if exact_snapshot_parameters is not None:
             effective_parameters_patch = exact_snapshot_parameters
@@ -19788,17 +19827,22 @@ async def update_execution(
                 target_record=refreshed_record,
             )
         else:
-            snapshot_ref = await _persist_original_workflow_input_snapshot_from_parameters(
-                session=session,
-                record=refreshed_record,
-                user=user,
-                parameters=dict(getattr(refreshed_record, "parameters", None) or {}),
-                source_kind=(
-                    "rerun" if payload.update_name == "RequestRerun" else "edit"
-                ),
-                source_workflow_id=record.workflow_id,
-                source_run_id=getattr(record, "run_id", None),
-                input_artifact_ref=payload.input_artifact_ref,
+            snapshot_ref = (
+                await _persist_original_workflow_input_snapshot_from_parameters(
+                    session=session,
+                    record=refreshed_record,
+                    user=user,
+                    parameters=dict(
+                        getattr(refreshed_record, "parameters", None) or {}
+                    ),
+                    source_kind=(
+                        "rerun" if payload.update_name == "RequestRerun" else "edit"
+                    ),
+                    source_workflow_id=record.workflow_id,
+                    source_run_id=getattr(record, "run_id", None),
+                    input_artifact_ref=payload.input_artifact_ref,
+                    access=access,
+                )
             )
     if is_task_editing_update:
         accepted = bool(update_result.get("accepted", True))
@@ -20146,6 +20190,8 @@ async def rerun_execution(
     session: AsyncSession = Depends(get_async_session),
     user: OperatorAdmission = Depends(get_instance_access),
     _submit_enabled: None = Depends(_ensure_submit_enabled),
+    *,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
 ) -> ExecutionModel:
     """Rerun an existing failed/completed workflow with the same parameters.
 
@@ -20282,6 +20328,7 @@ async def rerun_execution(
             source_workflow_id=canonical.workflow_id,
             source_run_id=canonical.run_id,
             input_artifact_ref=canonical.input_ref,
+            access=access,
         )
 
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
@@ -20420,12 +20467,12 @@ def _saved_work_publication_error(
 async def _publication_recovery_review_body(
     *,
     artifact_service: Any,
-    principal: str,
     source_workflow_id: str,
     source_run_id: str,
     body: str,
     task_input_ref: str | None,
     task_input_digest: str | None = None,
+    access: ArtifactAccessContext,
 ) -> str:
     """Freeze source task context in the existing publication decision.
 
@@ -20437,10 +20484,10 @@ async def _publication_recovery_review_body(
         append_publication_task,
         publication_task_instructions,
     )
-    from moonmind.workflows.temporal.artifacts import TemporalArtifactValidationError
     from moonmind.workflows.executions.execution_contract import (
         original_task_snapshot_parameters,
     )
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactValidationError
 
     source = f"workflow {source_workflow_id}, run {source_run_id}"
     if not task_input_ref:
@@ -20462,7 +20509,7 @@ async def _publication_recovery_review_body(
         )
     try:
         _artifact, raw = await artifact_service.read(
-            artifact_id=artifact_id, principal=principal
+            artifact_id=artifact_id, access=access
         )
         if (
             task_input_digest
@@ -20542,7 +20589,8 @@ async def _admit_saved_work_publication(
     request: SavedWorkPublicationRequest,
     user: OperatorAdmission,
     artifact_service: Any,
-) -> SavedWorkPublicationContract:
+    access: ArtifactAccessContext,
+) -> tuple[SavedWorkPublicationContract, tuple[str, ...]]:
     """Verify saved-work ownership and freeze one publication decision (#4018).
 
     The saved result must be a readable saved-work manifest linked to this
@@ -20564,10 +20612,10 @@ async def _admit_saved_work_publication(
     try:
         artifact_id = saved_work_artifact_id(request.savedWorkRef)
         artifact, links, _pinned, read_policy = await artifact_service.get_metadata(
-            artifact_id=artifact_id, principal=principal
+            artifact_id=artifact_id, access=access
         )
         _artifact, manifest_bytes = await artifact_service.read(
-            artifact_id=artifact_id, principal=principal
+            artifact_id=artifact_id, access=access
         )
     except (TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError) as exc:
         _raise_temporal_artifact_http(exc)
@@ -20624,7 +20672,7 @@ async def _admit_saved_work_publication(
         for publication_object in publication_objects:
             part, _links, _pinned, part_policy = await artifact_service.get_metadata(
                 artifact_id=saved_work_artifact_id(publication_object.ref),
-                principal=principal,
+                access=access,
             )
             _require_publishable_saved_work_artifact(
                 artifact=part,
@@ -20661,19 +20709,16 @@ async def _admit_saved_work_publication(
     source = source if isinstance(source, Mapping) else {}
     body = await _publication_recovery_review_body(
         artifact_service=artifact_service,
-        principal=principal,
         source_workflow_id=canonical.workflow_id,
         source_run_id=source_run_id,
         body=request.pullRequestBody
-        or (
-            f"Saved work `{saved_work_digest}` from `{canonical.workflow_id}`, "
-            "published without another model run."
-        ),
+        or f"Saved work `{saved_work_digest}` from `{canonical.workflow_id}`, published without another model run.",
         task_input_ref=source.get("taskInputSnapshotRef"),
         task_input_digest=source.get("taskInputSnapshotDigest"),
+        access=access,
     )
     try:
-        return SavedWorkPublicationContract(
+        contract = SavedWorkPublicationContract(
             sourceWorkflowId=canonical.workflow_id,
             sourceRunId=source_run_id,
             savedWorkRef=request.savedWorkRef,
@@ -20707,6 +20752,14 @@ async def _admit_saved_work_publication(
             "saved_work_publication_invalid",
             str(exc),
         ) from exc
+    return contract, tuple(
+        dict.fromkeys(
+            [
+                artifact_id,
+                *(saved_work_artifact_id(item.ref) for item in publication_objects),
+            ]
+        )
+    )
 
 
 async def _start_saved_work_publication(
@@ -20717,13 +20770,15 @@ async def _start_saved_work_publication(
     adapter: TemporalClientAdapter,
     artifact_service: Any,
     repository_connections: Any,
+    access: ArtifactAccessContext,
 ) -> PublicationRecoveryResponse:
     try:
-        contract = await _admit_saved_work_publication(
+        contract, admitted_inputs = await _admit_saved_work_publication(
             canonical=canonical,
             request=request,
             user=user,
             artifact_service=artifact_service(),
+            access=access,
         )
     except (TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError) as exc:
         _raise_temporal_artifact_http(exc)
@@ -20754,6 +20809,14 @@ async def _start_saved_work_publication(
                 "reason": reason,
             },
         )
+    # The admission owner approves exact inputs under current raw/quarantine
+    # policy. The worker later reads only its execution grants, not an owner
+    # string copied into the serialized contract.
+    await artifact_service().delegate_read_access(
+        artifact_ids=admitted_inputs,
+        workflow_id=saved_work_publication_workflow_id(contract),
+        access=access,
+    )
     started = await adapter.start_workflow(
         workflow_type="MoonMind.PublicationRecoveryV1",
         workflow_id=saved_work_publication_workflow_id(contract),
@@ -20768,6 +20831,7 @@ async def _start_saved_work_publication(
             "publication_no_implementation_rerun": True,
             "publication_no_verification_rerun": True,
             "saved_work_digest": contract.saved_work_digest,
+            "artifact_input_admission": "execution-links-v1",
         },
     )
     return PublicationRecoveryResponse(
@@ -20796,6 +20860,8 @@ async def retry_execution_publication(
     ),
     user: OperatorAdmission = Depends(get_instance_access),
     _submit_enabled: None = Depends(_ensure_submit_enabled),
+    *,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
 ) -> PublicationRecoveryResponse:
     """Start or reconcile exactly one publication-only linked workflow.
 
@@ -20815,6 +20881,7 @@ async def retry_execution_publication(
             adapter=adapter,
             artifact_service=artifact_service,
             repository_connections=repository_connections,
+            access=access,
         )
     contract = _publication_recovery_contract_from_record(canonical)
     if (
@@ -20851,12 +20918,12 @@ async def retry_execution_publication(
     try:
         body = await _publication_recovery_review_body(
             artifact_service=artifact_service() if original_input_ref else None,
-            principal=_execution_principal(user),
             source_workflow_id=contract.source_workflow_id,
             source_run_id=contract.source_run_id,
             body=contract.pull_request_body
             or f"Publication-only recovery for source workflow {contract.source_workflow_id}.\n\nNo implementation or verification work was rerun.",
             task_input_ref=original_input_ref,
+            access=access,
         )
     except (
         TemporalArtifactUnavailableError,

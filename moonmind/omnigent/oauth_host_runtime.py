@@ -32,9 +32,7 @@ from moonmind.omnigent.host_failures import (
     HOST_CREDENTIAL_RECOVERY_KEY,
     OmnigentOAuthHostError,
 )
-from moonmind.omnigent.host_services.github_credentials import (
-    github_projection_script,
-)
+from moonmind.omnigent.host_services.github_credentials import github_projection_script
 from moonmind.omnigent.host_services.launcher import docker_attachment_mount
 from moonmind.omnigent.host_services.legacy_host_containers import (
     LegacyOmnigentHostContainerService,
@@ -109,8 +107,12 @@ from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from moonmind.workflows.skills.run_projection import (
     load_resolved_skillset,
     materialize_run_skill_snapshot,
-    step_execution_read_principal,
+    step_execution_artifact_access,
     verify_skill_projection,
+)
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    TemporalArtifactAuthorizationError,
 )
 from moonmind.workflows.temporal.runtime.command_runner import run_runtime_command
 from moonmind.workflows.temporal.runtime.git_auth import build_isolated_git_environment
@@ -136,11 +138,6 @@ _FORBIDDEN_ENV = (
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
 )
-
-
-def _admitted_scope(admitted_principal: str | None) -> dict[str, str]:
-    """Service readers carry the admitted execution, never a bare grant."""
-    return {"admitted_principal": admitted_principal} if admitted_principal else {}
 
 
 @dataclass(frozen=True)
@@ -2177,26 +2174,30 @@ class OmnigentOAuthHostRuntime:
 
         # A raw artifact service reads with the Step Execution's scope; the
         # durable gateway also confines reads to the admitted plan closure.
-        admitted_principal = (
-            step_execution_read_principal(request) if request is not None else None
-        )
+        access = await step_execution_artifact_access(request)
         if hasattr(artifact_gateway, "read"):
             artifact_service = artifact_gateway
         else:
 
             class _GatewayArtifactService:
-                async def read(self, *, artifact_id: str, **_kwargs: Any):
-                    if request is None:
-                        payload = await artifact_gateway.read_bytes(artifact_id)
-                    else:
-                        payload = await artifact_gateway.read_admitted_input(
-                            artifact_id, request=request
+
+                async def read(
+                    self, *, artifact_id: str, access: ArtifactAccessContext
+                ):
+                    access = ArtifactAccessContext.require(access)
+                    expected = f"workflow:{request.step_execution.workflow_id}"
+                    if access.execution_principal != expected:
+                        raise TemporalArtifactAuthorizationError(
+                            "Skill read context differs from its admitted execution"
                         )
+                    payload = await artifact_gateway.read_admitted_input(
+                        artifact_id, request=request
+                    )
                     return {}, payload
 
             artifact_service = _GatewayArtifactService()
         resolved_skillset = await load_resolved_skillset(
-            artifact_service, skillset_ref, admitted_principal=admitted_principal
+            artifact_service, skillset_ref, access=access
         )
         digest = hashlib.sha256(workspace_key.encode("utf-8")).hexdigest()[:24]
         projection_root = (
@@ -2231,7 +2232,7 @@ class OmnigentOAuthHostRuntime:
             resolved_skillset=resolved_skillset,
             artifact_service=artifact_service,
             project_adapter_aliases=False,
-            admitted_principal=admitted_principal,
+            access=access,
         )
         await verify_skill_projection(
             materialization_metadata=metadata,
@@ -4282,7 +4283,9 @@ class OmnigentOAuthHostRuntime:
                         workspace,
                         artifact_ref=workspace_checkpoint_restore_ref,
                         artifact_gateway=artifact_gateway,
-                        workflow_id=current_workflow_id,
+                        access=ArtifactAccessContext.for_execution(
+                            current_workflow_id, principal=_RESTORE_ARTIFACT_PRINCIPAL
+                        ),
                     )
                     materialization["checkpointRestoreRef"] = (
                         workspace_checkpoint_restore_ref
@@ -4543,10 +4546,9 @@ class OmnigentOAuthHostRuntime:
             refs=restore_input_refs,
             artifact_gateway=artifact_gateway,
             subdir="restore",
-            principal=_RESTORE_ARTIFACT_PRINCIPAL,
-            # The restore service principal is not a read grant; the service
-            # still requires linkage to the admitted execution.
-            admitted_principal=f"workflow:{workflow_id}" if workflow_id else None,
+            access=ArtifactAccessContext.for_execution(
+                workflow_id, principal=_RESTORE_ARTIFACT_PRINCIPAL
+            ),
             noun="restore inputs",
         )
 
@@ -4556,7 +4558,7 @@ class OmnigentOAuthHostRuntime:
         *,
         artifact_ref: str,
         artifact_gateway: Any | None,
-        workflow_id: str | None = None,
+        access: ArtifactAccessContext,
     ) -> None:
         """Apply a typed worktree archive at the owning workspace boundary."""
 
@@ -4572,12 +4574,9 @@ class OmnigentOAuthHostRuntime:
                 code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
             )
         artifact_id = artifact_ref[len("artifact://") :]
-        admitted_principal = f"workflow:{workflow_id}" if workflow_id else None
+        access = ArtifactAccessContext.require(access)
         await self._reject_oversized_restore_metadata(
-            service,
-            artifact_id,
-            _MAX_WORKSPACE_CHECKPOINT_BYTES,
-            admitted_principal=admitted_principal,
+            service, artifact_id, _MAX_WORKSPACE_CHECKPOINT_BYTES, access=access
         )
         archive_path: Path
         remove_archive = False
@@ -4585,9 +4584,7 @@ class OmnigentOAuthHostRuntime:
         if read_path is not None:
             _metadata, resolved_path = await read_path(
                 artifact_id=artifact_id,
-                principal=_RESTORE_ARTIFACT_PRINCIPAL,
-                **_admitted_scope(admitted_principal),
-                allow_restricted_raw=True,
+                access=access,
             )
             archive_path = Path(resolved_path)
             try:
@@ -4617,7 +4614,7 @@ class OmnigentOAuthHostRuntime:
                     artifact_id=artifact_id,
                     target=archive_path,
                     budget_bytes=_MAX_WORKSPACE_CHECKPOINT_BYTES,
-                    admitted_principal=admitted_principal,
+                    access=access,
                 )
             except BaseException:
                 archive_path.unlink(missing_ok=True)
@@ -4672,9 +4669,10 @@ class OmnigentOAuthHostRuntime:
             refs=attachment_refs,
             artifact_gateway=artifact_gateway,
             subdir="attachments",
-            principal=_ATTACHMENT_ARTIFACT_PRINCIPAL,
             noun="attachments",
-            admitted_principal=f"workflow:{workflow_id}",
+            access=ArtifactAccessContext.for_execution(
+                workflow_id, principal=_ATTACHMENT_ARTIFACT_PRINCIPAL
+            ),
             required_workflow_id=workflow_id,
         )
 
@@ -4702,9 +4700,8 @@ class OmnigentOAuthHostRuntime:
         refs: tuple[str, ...],
         artifact_gateway: Any | None,
         subdir: str,
-        principal: str,
         noun: str,
-        admitted_principal: str | None = None,
+        access: ArtifactAccessContext,
         required_workflow_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Materialize a bounded bundle of durable input artifact refs.
@@ -4712,7 +4709,7 @@ class OmnigentOAuthHostRuntime:
         Shared by restore-input and attachment materialization so every declared
         input class is dereferenced through one canonical path: artifact-ref-only
         (never a local path), per-ref and cumulative byte bounds, containment under
-        the already-validated workspace, and a dedicated read principal per class.
+        the already-validated workspace, and the same admitted context for every read.
         """
 
         cleaned = [str(ref).strip() for ref in refs if str(ref).strip()]
@@ -4762,8 +4759,7 @@ class OmnigentOAuthHostRuntime:
                 artifact_service,
                 artifact_id,
                 per_ref_budget,
-                principal,
-                admitted_principal=admitted_principal,
+                access=access,
                 required_workflow_id=required_workflow_id,
             )
             digest = hashlib.sha256(ref.encode("utf-8")).hexdigest()[:24]
@@ -4778,8 +4774,7 @@ class OmnigentOAuthHostRuntime:
                 artifact_id=artifact_id,
                 target=target,
                 budget_bytes=per_ref_budget,
-                principal=principal,
-                admitted_principal=admitted_principal,
+                access=access,
             )
             total_bytes += written
             evidence.append({"ref": ref, "bytes": written})
@@ -4790,8 +4785,8 @@ class OmnigentOAuthHostRuntime:
         artifact_service: Any,
         artifact_id: str,
         budget_bytes: int,
-        principal: str = _RESTORE_ARTIFACT_PRINCIPAL,
-        admitted_principal: str | None = None,
+        *,
+        access: ArtifactAccessContext,
         required_workflow_id: str | None = None,
     ) -> None:
         """Reject an oversized restore artifact from metadata before reading bytes.
@@ -4810,8 +4805,7 @@ class OmnigentOAuthHostRuntime:
         try:
             metadata = await get_metadata(
                 artifact_id=artifact_id,
-                principal=principal,
-                **_admitted_scope(admitted_principal),
+                access=access,
             )
         except TypeError:
             if required_workflow_id is not None:
@@ -4853,8 +4847,7 @@ class OmnigentOAuthHostRuntime:
         artifact_id: str,
         target: Path,
         budget_bytes: int,
-        principal: str = _RESTORE_ARTIFACT_PRINCIPAL,
-        admitted_principal: str | None = None,
+        access: ArtifactAccessContext,
     ) -> int:
         """Stream a restore payload to disk under a hard byte budget.
 
@@ -4874,9 +4867,7 @@ class OmnigentOAuthHostRuntime:
             with os.fdopen(descriptor, "wb") as stream:
                 _artifact, chunks = await read_chunks(
                     artifact_id=artifact_id,
-                    principal=principal,
-                    **_admitted_scope(admitted_principal),
-                    allow_restricted_raw=True,
+                    access=access,
                     chunk_size=_RESTORE_STREAM_CHUNK_BYTES,
                 )
                 for chunk in chunks:
@@ -4892,9 +4883,7 @@ class OmnigentOAuthHostRuntime:
             return written
         _metadata, payload = await artifact_service.read(
             artifact_id=artifact_id,
-            principal=principal,
-            **_admitted_scope(admitted_principal),
-            allow_restricted_raw=True,
+            access=access,
         )
         if len(payload) > budget_bytes:
             raise OmnigentOAuthHostError(
@@ -4922,7 +4911,11 @@ class OmnigentOAuthHostRuntime:
             return artifact_gateway
 
         class _GatewayArtifactService:
-            async def read(self, *, artifact_id: str, **_kwargs: Any):
+
+            async def read(self, *, artifact_id: str, access: ArtifactAccessContext):
+                ArtifactAccessContext.require(access)
+                # Local byte gateways retain their own bounded reference map.
+                # Durable services use the required-context interface directly.
                 # ``read_bytes`` addresses artifacts by their canonical
                 # ``artifact://`` ref, while the durable service contract passes a
                 # scheme-stripped id; restore the scheme for the gateway.

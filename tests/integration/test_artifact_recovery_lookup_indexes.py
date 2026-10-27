@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from api_service.db.models import OmnigentBridgeSessionEvent, TemporalArtifact
 from api_service.services import single_user_conversion as conversion
+from tests.artifact_access import access_for_test
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci, pytest.mark.asyncio]
 
@@ -432,7 +433,9 @@ async def test_retained_history_startup_admission_and_retention(
             )
             assert again.soft_deleted_count == 0
             assert (
-                await service.read(artifact_id=saved.artifact_id, principal="operator")
+                await service.read(
+                    artifact_id=saved.artifact_id, access=access_for_test("operator")
+                )
             )[1] == b'{"instructions":"retained"}'
             sweep_seconds = time.monotonic() - started
             assert 1 in unlocked_checkpoints and 2 in unlocked_checkpoints

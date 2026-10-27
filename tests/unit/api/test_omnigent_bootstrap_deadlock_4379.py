@@ -14,8 +14,8 @@ import pytest
 
 from api_service.services import omnigent_policies as policies
 from moonmind.omnigent.policies import PolicyDocument, PolicyState
+from tests.artifact_access import access_for_test
 from tests.unit.api.test_omnigent_policy_service import policy_db
-
 
 OLD_SERVER = "ghcr.io/example/omnigent-server@sha256:" + "a" * 64
 OLD_HOST = "ghcr.io/example/omnigent-host@sha256:" + "a" * 64
@@ -242,6 +242,7 @@ async def test_version_then_compile_uses_fresh_default(tmp_path, monkeypatch):
             task_input_snapshot_digest="sha256:" + "1" * 64,
             execution_plan_store=_PlanStore(object()),
             db_session=session,
+            access=access_for_test("user-1"),
         )
         assert result.envelope.payload.hostImageRef == NEW_HOST
 

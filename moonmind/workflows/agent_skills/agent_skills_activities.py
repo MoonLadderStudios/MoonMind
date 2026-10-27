@@ -7,28 +7,28 @@ from typing import Any
 
 from temporalio import activity
 
-from pr_resolver_core import IMPLEMENTATION_CONTRACT
-
+from moonmind.config.settings import settings
 from moonmind.schemas.agent_skill_models import (
     AgentSkillFormat,
     ResolvedSkillSet,
+    RuntimeMaterializationMode,
+    RuntimeSkillMaterialization,
     SkillSelector,
     SkillSelectorEntry,
     SkillsOnDemandQueryRequest,
     SkillsOnDemandQueryResult,
     SkillsOnDemandRequest,
     SkillsOnDemandRequestResult,
-    RuntimeSkillMaterialization,
-    RuntimeMaterializationMode,
     validate_skill_path_component,
 )
-from moonmind.config.settings import settings
-from moonmind.services.skills_on_demand import SkillsOnDemandService
+from moonmind.services.skill_materialization import AgentSkillMaterializer
 from moonmind.services.skill_resolution import (
     AgentSkillResolver,
     SkillResolutionContext,
 )
-from moonmind.services.skill_materialization import AgentSkillMaterializer
+from moonmind.services.skills_on_demand import SkillsOnDemandService
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+from pr_resolver_core import IMPLEMENTATION_CONTRACT
 
 
 def _activity_snapshot_id(info: Any, *, derived: bool = False) -> str:
@@ -100,11 +100,11 @@ class AgentSkillsActivities:
         resolved_set: ResolvedSkillSet,
         activity_info: Any,
     ) -> ResolvedSkillSet:
-        from moonmind.workflows.temporal.artifacts import ExecutionRef
         from moonmind.core.artifacts import (
             TemporalArtifactRedactionLevel,
             TemporalArtifactRetentionClass,
         )
+        from moonmind.workflows.temporal.artifacts import ExecutionRef
 
         updated_skills = []
         for skill in resolved_set.skills:
@@ -237,11 +237,11 @@ class AgentSkillsActivities:
         snapshot_id: str,
         activity_info: Any,
     ) -> ResolvedSkillSet:
-        from moonmind.workflows.temporal.artifacts import ExecutionRef
         from moonmind.core.artifacts import (
             TemporalArtifactRedactionLevel,
             TemporalArtifactRetentionClass,
         )
+        from moonmind.workflows.temporal.artifacts import ExecutionRef
 
         link = ExecutionRef(
             namespace=activity_info.namespace,
@@ -356,6 +356,7 @@ class AgentSkillsActivities:
             materializer = AgentSkillMaterializer(
                 workspace_root=settings.workflow.repo_root,
                 artifact_service=self._artifact_service,
+                access=ArtifactAccessContext.for_activity(principal="system"),
                 backing_root=settings.workflow.skills_cache_root,
                 source_preservation_root=settings.workflow.skills_workspace_root,
             )
@@ -417,11 +418,11 @@ class AgentSkillsActivities:
         except Exception:
             return enriched_result
 
-        from moonmind.workflows.temporal.artifacts import ExecutionRef
         from moonmind.core.artifacts import (
             TemporalArtifactRedactionLevel,
             TemporalArtifactRetentionClass,
         )
+        from moonmind.workflows.temporal.artifacts import ExecutionRef
 
         events = [
             event.model_dump(mode="json") for event in enriched_result.audit_events
@@ -592,7 +593,7 @@ class AgentSkillsActivities:
             lines.append(f"## Skill: {skill.skill_name}")
             if skill.provenance.source_kind:
                 lines.append(f"Source: {skill.provenance.source_kind.value}")
-                
+
             # Usually we'd fetch the content via content_ref if we are injecting the body directly.
             # Depending on mode, it assumes the task has content mounted via workspace or we inject here.
             # In purely prompt_bundled, we would read artifacts here.
@@ -601,7 +602,7 @@ class AgentSkillsActivities:
                 lines.append(f"[Content available at canonical ref: {skill.content_ref}]")
             else:
                 lines.append("[No specific prompt bundle ref available]")
-                
+
             lines.append("")
 
         return "\n".join(lines)
@@ -618,6 +619,7 @@ class AgentSkillsActivities:
         materializer = AgentSkillMaterializer(
             workspace_root=workspace_root,
             artifact_service=self._artifact_service,
+            access=ArtifactAccessContext.for_activity(principal="system"),
         )
         return await materializer.materialize(
             resolved_skillset=resolved_skillset,

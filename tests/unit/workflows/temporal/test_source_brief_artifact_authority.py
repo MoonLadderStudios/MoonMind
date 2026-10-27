@@ -20,7 +20,11 @@ from temporalio.api.workflowservice.v1 import (
     DescribeNamespaceResponse,
     DescribeWorkflowExecutionResponse,
 )
-from temporalio.converter import DataConverter, DefaultFailureConverter, DefaultPayloadConverter
+from temporalio.converter import (
+    DataConverter,
+    DefaultFailureConverter,
+    DefaultPayloadConverter,
+)
 from temporalio.service import RPCError, RPCStatusCode, WorkflowService
 from temporalio.workflow import ParentInfo
 
@@ -54,9 +58,12 @@ from moonmind.workflows.temporal.workflows.agent_run import (
     TRUSTED_EXECUTION_ARTIFACT_HANDOFF_PATCH_ID,
     MoonMindAgentRun,
 )
-from tests.unit.omnigent.test_remediation_artifact_authority import artifacts  # noqa: F401
-from tests.unit.workflows.skills.test_acceptance_source_binding import (
-    source_bound_report,  # noqa: F401
+from tests.artifact_access import access_for_test
+from tests.unit.omnigent.test_remediation_artifact_authority import (  # noqa: F401
+    artifacts,
+)
+from tests.unit.workflows.skills.test_acceptance_source_binding import (  # noqa: F401
+    source_bound_report,
 )
 from tests.unit.workflows.temporal.test_acceptance_boundary_regressions import (
     _digest,
@@ -72,7 +79,9 @@ def _recorded_server(described, launch_request=None):
         if rpc == "describe_workflow_execution":
             return described
         if rpc == "get_workflow_execution_history" and launch_request is not None:
-            from temporalio.api.workflowservice.v1 import GetWorkflowExecutionHistoryResponse
+            from temporalio.api.workflowservice.v1 import (
+                GetWorkflowExecutionHistoryResponse,
+            )
 
             record = described.workflow_execution_info
             return GetWorkflowExecutionHistoryResponse(history={"events": [{
@@ -193,7 +202,7 @@ async def test_loader_brief_read_uses_trusted_verifier_parent(
         )
         brief_id = loaded.outputs["briefArtifactRef"]
         brief, source_bytes = await service.read(
-            artifact_id=brief_id, principal=f"workflow:{parent_id}"
+            artifact_id=brief_id, access=access_for_test(f"workflow:{parent_id}")
         )
         assert brief.created_by_principal == f"workflow:{parent_id}"
         if scope == "restricted":
@@ -400,7 +409,7 @@ async def test_ineligible_source_verifier_handoff_does_not_read_source(
         )
     )
     lookup = AsyncMock(return_value="workflow:parent")
-    monkeypatch.setattr(activity_runtime, "_verified_artifact_parent_scope", lookup)
+    monkeypatch.setattr(activity_runtime, "_verified_artifact_parent_access", lookup)
     monkeypatch.setattr(
         activity,
         "info",
@@ -435,7 +444,8 @@ async def test_ineligible_source_verifier_handoff_does_not_read_source(
         assert "moonSpecVerify" not in published.metadata
         assert (
             await service.read(
-                artifact_id=published.diagnostics_ref, principal="workflow:parent"
+                artifact_id=published.diagnostics_ref,
+                access=access_for_test("workflow:parent"),
             )
         )[1]
 
@@ -458,7 +468,7 @@ async def test_ineligible_source_verifier_handoff_does_not_read_source(
 )
 async def test_parent_read_scope_requires_exact_server_ancestry(monkeypatch, case):
     from moonmind.workflows.temporal.activity_runtime import (
-        _verified_artifact_parent_scope,
+        _verified_artifact_parent_access,
     )
 
     described = DescribeWorkflowExecutionResponse(
@@ -494,7 +504,7 @@ async def test_parent_read_scope_requires_exact_server_ancestry(monkeypatch, cas
 
     monkeypatch.setattr(activity, "client", client)
     async def lookup():
-        return await _verified_artifact_parent_scope(
+        return await _verified_artifact_parent_access(
             info=SimpleNamespace(
                 namespace="default", workflow_id="child", workflow_run_id="child-run"
             ),
@@ -521,6 +531,7 @@ async def test_parent_read_scope_requires_exact_server_ancestry(monkeypatch, cas
 @pytest.mark.asyncio
 async def test_parent_scope_lookup_bounds_the_whole_operation(monkeypatch, caplog):
     from contextlib import asynccontextmanager
+
     from moonmind.workflows.temporal import activity_runtime
 
     entered = []
@@ -536,7 +547,7 @@ async def test_parent_scope_lookup_bounds_the_whole_operation(monkeypatch, caplo
         ArtifactParentAuthorityUnavailable,
         match="Artifact parent authority is unavailable",
     ) as failure:
-        await activity_runtime._verified_artifact_parent_scope(
+        await activity_runtime._verified_artifact_parent_access(
             info=SimpleNamespace(
                 namespace="default", workflow_id="child", workflow_run_id="child-run"
             ),
@@ -554,8 +565,9 @@ async def test_parent_scope_lookup_bounds_the_whole_operation(monkeypatch, caplo
 @pytest.mark.asyncio
 async def test_parent_scope_lookup_preserves_external_cancellation(monkeypatch):
     import asyncio
+
     from moonmind.workflows.temporal.activity_runtime import (
-        _verified_artifact_parent_scope,
+        _verified_artifact_parent_access,
     )
 
     server, calls = _recorded_server(DescribeWorkflowExecutionResponse())
@@ -566,7 +578,7 @@ async def test_parent_scope_lookup_preserves_external_cancellation(monkeypatch):
         lambda: SimpleNamespace(namespace="default", workflow_service=server),
     )
     with pytest.raises(asyncio.CancelledError):
-        await _verified_artifact_parent_scope(
+        await _verified_artifact_parent_access(
             info=SimpleNamespace(
                 namespace="default", workflow_id="child", workflow_run_id="child-run"
             ),

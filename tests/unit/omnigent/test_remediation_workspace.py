@@ -2,6 +2,7 @@ import hashlib
 from pathlib import Path
 
 import pytest
+from tests.artifact_access import access_for_test
 
 from moonmind.omnigent.remediation_workspace import (
     ArtifactRemediationHeadLoader,
@@ -96,7 +97,9 @@ async def test_managed_restorer_rebinds_recovery_identity_to_attempt() -> None:
         def __init__(self):
             self.request = None
 
-        async def restore(self, request):
+        async def restore(self, request, *, access):
+            assert access.execution_principal == "workflow:workflow-1"
+            assert not access.is_operator
             self.request = request
             return {
                 "checkpointRef": "artifact://workspace/C1",
@@ -120,7 +123,9 @@ async def test_managed_restorer_rebinds_recovery_identity_to_attempt() -> None:
             },
         }
     )
-    await ManagedServiceRemediationRestorer(service).restore(
+    await ManagedServiceRemediationRestorer(
+        service, access=access_for_test("workflow:workflow-1")
+    ).restore(
         head=head,
         destination=Path("/work/agent_jobs/attempt/repo"),
         idempotency_key="restore-2",

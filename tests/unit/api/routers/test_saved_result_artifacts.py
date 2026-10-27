@@ -34,12 +34,14 @@ from api_service.api.routers.temporal_artifacts import (
 )
 from api_service.db import models as db_models
 from api_service.db.models import Base
+from api_service.auth_providers import get_artifact_access
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from tests.artifact_access import access_for_test
 from tests.support.saved_work_capture import capture_saved_work
 
 OPERATOR = str(uuid.UUID(int=4020))
@@ -82,6 +84,7 @@ async def _client(service: TemporalArtifactService):
     app.include_router(router)
     app.dependency_overrides[_get_temporal_artifact_service] = lambda: service
     app.dependency_overrides[_resolve_principal] = lambda: OPERATOR
+    app.dependency_overrides[get_artifact_access] = lambda: access_for_test(OPERATOR)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -286,7 +289,7 @@ async def test_restricted_and_expired_saved_outputs_stay_accurate(tmp_path):
         )
         saved.remove_source()
         _artifact, manifest_payload = await service.read(
-            artifact_id=saved.saved_work_ref, principal=OPERATOR
+            artifact_id=saved.saved_work_ref, access=access_for_test(OPERATOR)
         )
         manifest = json.loads(manifest_payload)
         archive_id = next(
@@ -341,7 +344,7 @@ async def test_publication_admission_requires_raw_readable_saved_closure(
             tmp_path, BASE_FILES, _mutate, artifact_service=service
         )
         _artifact, manifest_payload = await service.read(
-            artifact_id=saved.saved_work_ref, principal=OPERATOR
+            artifact_id=saved.saved_work_ref, access=access_for_test(OPERATOR)
         )
         manifest = json.loads(manifest_payload)
         part = next(o for o in manifest["outputs"] if o["format"] == part_format)
@@ -398,6 +401,7 @@ async def test_publication_admission_requires_raw_readable_saved_closure(
                 ),
                 user=SimpleNamespace(id=uuid.UUID(OPERATOR)),
                 artifact_service=service,
+                access=access_for_test(OPERATOR),
             )
 
         assert exc.value.status_code == 409
@@ -426,7 +430,7 @@ async def test_publication_admits_selected_saved_closure_without_downloading_par
             return await original_read(**kwargs)
 
         monkeypatch.setattr(service, "read", read)
-        contract = await _admit_saved_work_publication(
+        contract, admitted_inputs = await _admit_saved_work_publication(
             canonical=SimpleNamespace(
                 workflow_id="mm:source",
                 run_id="source-next",
@@ -447,8 +451,10 @@ async def test_publication_admits_selected_saved_closure_without_downloading_par
             ),
             user=SimpleNamespace(id=uuid.UUID(OPERATOR)),
             artifact_service=service,
+            access=access_for_test(OPERATOR),
         )
 
         assert contract.source_run_id == "source-run"
         assert contract.saved_work_digest == saved.saved_work_digest
+        assert saved.saved_work_ref.removeprefix("artifact://").removeprefix("artifact:") in admitted_inputs
         assert reads == [saved.saved_work_ref]

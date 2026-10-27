@@ -32,8 +32,9 @@ from moonmind.workflows.temporal.artifacts import (
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
-from tests.unit.workflows.skills.test_acceptance_source_binding import (
-    source_bound_report,  # noqa: F401
+from tests.artifact_access import access_for_test
+from tests.unit.workflows.skills.test_acceptance_source_binding import (  # noqa: F401
+    source_bound_report,
 )
 from tests.unit.workflows.temporal.test_remediation_context import temporal_db
 
@@ -78,6 +79,7 @@ def _child_info():
 @pytest.fixture
 def publisher_parent_client(monkeypatch):
     from temporalio.api.workflowservice.v1 import DescribeWorkflowExecutionResponse
+
     from tests.unit.workflows.temporal.test_source_brief_artifact_authority import (
         _recorded_server,
     )
@@ -234,10 +236,13 @@ async def test_published_full_report_is_readable_by_parent_only(
         report_ref = gate["validatedRefs"]["acceptanceProjection"]["reportRef"]
         # The producer wrote readable bytes; the parent must receive its own grant.
         await service.read(
-            artifact_id=report_ref, principal="workflow:parent:agent:verify"
+            artifact_id=report_ref,
+            access=access_for_test("workflow:parent:agent:verify"),
         )
         with pytest.raises(TemporalArtifactAuthorizationError):
-            await service.read(artifact_id=report_ref, principal="workflow:unrelated")
+            await service.read(
+                artifact_id=report_ref, access=access_for_test("workflow:unrelated")
+            )
         monkeypatch.setattr(
             run_module.workflow,
             "info",
@@ -495,7 +500,8 @@ async def test_publisher_preserves_source_bound_unverified_evidence(
         assert bool(gate.get("contractViolations")) is not valid
         assert ("acceptanceProjection" in gate.get("validatedRefs", {})) == valid
         _, report_bytes = await service.read(
-            artifact_id=gate["gateResultRef"], principal="system:agent_runtime"
+            artifact_id=gate["gateResultRef"],
+            access=access_for_test("system:agent_runtime"),
         )
         stored = json.loads(report_bytes)
         assert stored["validatedRefs"]["acceptance"]["evidence"][0] == row

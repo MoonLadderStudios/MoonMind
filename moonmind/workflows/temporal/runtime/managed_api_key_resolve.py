@@ -14,14 +14,20 @@ from urllib.request import Request, urlopen
 
 from sqlalchemy import select
 
-from moonmind.auth.secret_refs import parse_secret_ref, SecretBackend, VaultSecretResolver, load_vault_token
 from moonmind.auth.resolvers import (
-    EnvSecretResolver,
-    DbEncryptedSecretResolver,
-    ExecSecretResolver,
     AdapterVaultSecretResolver,
+    DbEncryptedSecretResolver,
+    EnvSecretResolver,
+    ExecSecretResolver,
     RootSecretResolver,
 )
+from moonmind.auth.secret_refs import (
+    SecretBackend,
+    VaultSecretResolver,
+    load_vault_token,
+    parse_secret_ref,
+)
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 #: Principal under which launches read the deployment's recorded repository
 #: connections. A single-user instance admits its own runtime at system scope.
@@ -96,9 +102,7 @@ async def load_repository_connection_for_launch(
 
     from api_service.db.base import async_session_maker
     from api_service.db.models import RepositoryConnectionRecord
-    from api_service.services.repository_connections import (
-        RepositoryConnectionService,
-    )
+    from api_service.services.repository_connections import RepositoryConnectionService
     from moonmind.workflows.executions.repository_contract import (
         DEFAULT_GIT_CONNECTION_REF,
         REPOSITORY_DENIED,
@@ -549,7 +553,10 @@ async def acquire_admitted_repository_use(
     if isinstance(raw_binding, Mapping):
         binding = OmnigentExecutionPlanBinding.model_validate(raw_binding)
         plan = await _load_verified_execution_plan(
-            binding, workflow_id=owner, run_id=run_id
+            binding,
+            workflow_id=owner,
+            run_id=run_id,
+            access=ArtifactAccessContext.for_execution(owner),
         )
         access = plan.payload.resolvedTools.get("repositoryAccess", {})
         if access:
@@ -558,7 +565,9 @@ async def acquire_admitted_repository_use(
                 None,
                 session_factory=async_session_maker,
                 artifact_gateway=TemporalOmnigentArtifactGateway(
-                    async_session_maker, principal=f"workflow:{owner}"
+                    async_session_maker,
+                    principal=f"workflow:{owner}",
+                    access=ArtifactAccessContext.for_execution(owner),
                 ),
             )
             identity = await credentials.admitted_repository_identity(

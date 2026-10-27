@@ -62,6 +62,7 @@ from moonmind.workflows.temporal.artifacts import (
 from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     workflow_id_for_runtime,
 )
+from tests.artifact_access import access_for_test
 from tests.helpers.omnigent_conformance import (
     FakeOmnigentServer,
     start_fake_omnigent_server,
@@ -909,7 +910,8 @@ async def _compile_plan(session_factory, harness, workflow_id):
     async with session_factory() as session:
         artifacts = TemporalArtifactService(TemporalArtifactRepository(session))
         _snapshot_row, skill_snapshot_bytes = await artifacts.read(
-            artifact_id=skill_snapshot_ref, principal=_SNAPSHOT_PRODUCER_PRINCIPAL
+            artifact_id=skill_snapshot_ref,
+            access=access_for_test(_SNAPSHOT_PRODUCER_PRINCIPAL),
         )
         skill = json.loads(skill_snapshot_bytes)["skills"][0]
         session.add(
@@ -961,6 +963,7 @@ async def _compile_plan(session_factory, harness, workflow_id):
             authored_request_digest=input_digest,
             task_input_snapshot_ref=input_ref,
             task_input_snapshot_digest=input_digest,
+            access=access_for_test("system"),
         )
 
 

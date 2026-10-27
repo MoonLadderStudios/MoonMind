@@ -1,20 +1,25 @@
+from __future__ import annotations
+
+import hashlib
 import io
 import json
-import hashlib
 import shutil
 import tarfile
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from moonmind.schemas.agent_skill_models import (
     AgentSkillFormat,
     ResolvedSkillSet,
-    RuntimeSkillProjectionDiagnostic,
     RuntimeMaterializationMode,
     RuntimeSkillMaterialization,
+    RuntimeSkillProjectionDiagnostic,
     validate_skill_path_component,
 )
 from moonmind.utils.workspace_paths import ensure_directory
+
+if TYPE_CHECKING:
+    from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 _CANONICAL_ALIAS = ".agents/skills"
 
@@ -30,8 +35,11 @@ class AgentSkillMaterializer:
         projection_owner_uid: int | None = None,
         projection_owner_gid: int | None = None,
         project_adapter_aliases: bool = True,
-        admitted_principal: str | None = None,
+        *,
+        access: ArtifactAccessContext,
     ) -> None:
+        from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+
         if not workspace_root:
             raise ValueError("workspace_root must be provided")
         self.workspace_root = Path(workspace_root).expanduser().absolute()
@@ -46,11 +54,7 @@ class AgentSkillMaterializer:
         self.projection_owner_uid = projection_owner_uid
         self.projection_owner_gid = projection_owner_gid
         self.project_adapter_aliases = project_adapter_aliases
-        # The admitted execution scope for Skill body reads; the service
-        # still requires each body to be owned by or linked to it.
-        self._read_scope = (
-            {"admitted_principal": admitted_principal} if admitted_principal else {}
-        )
+        self._access = ArtifactAccessContext.require(access)
 
     async def materialize(
         self,
@@ -65,12 +69,12 @@ class AgentSkillMaterializer:
         validate_skill_path_component(resolved_skillset.snapshot_id)
         for skill in resolved_skillset.skills:
             validate_skill_path_component(skill.skill_name)
-        
+
         result = RuntimeSkillMaterialization(
             runtime_id=runtime_id,
             materialization_mode=mode,
         )
-        
+
         if mode in (
             RuntimeMaterializationMode.WORKSPACE_MOUNTED,
             RuntimeMaterializationMode.HYBRID,
@@ -124,9 +128,7 @@ class AgentSkillMaterializer:
                         )
                     _artifact, payload = await self._artifact_service.read(
                         artifact_id=skill.content_ref,
-                        principal="system",
-                        **self._read_scope,
-                        allow_restricted_raw=True,
+                        access=self._access,
                     )
                     self._verify_payload_digest(skill, payload)
                     skill_dir = staging_dir / skill.skill_name
@@ -197,7 +199,9 @@ class AgentSkillMaterializer:
                         self._projection_error_message(alias_dir, cause=str(ex))
                     ) from ex
             else:
-                from moonmind.workflows.skills.workspace_links import SkillWorkspaceLinks
+                from moonmind.workflows.skills.workspace_links import (
+                    SkillWorkspaceLinks,
+                )
 
                 alias_skipped_reason = "adapter_alias_projection_disabled"
                 visible_path = active_dir
@@ -279,7 +283,7 @@ class AgentSkillMaterializer:
             # Prompt Index relies largely on string injection, handled at activity level,
             # but we can set a dummy ref or let the activity assign it later.
             result.prompt_index_ref = f"index_{resolved_skillset.snapshot_id}"
-            
+
         return result
 
     def _active_backing_dir(self, snapshot_id: str) -> Path:
@@ -371,7 +375,9 @@ class AgentSkillMaterializer:
 
     @staticmethod
     def _preflight_projection(alias_dir: Path, *, active_dir: Path) -> None:
-        from moonmind.workflows.skills.workspace_links import is_moonmind_owned_projection
+        from moonmind.workflows.skills.workspace_links import (
+            is_moonmind_owned_projection,
+        )
 
         if not alias_dir.exists() and not alias_dir.is_symlink():
             return

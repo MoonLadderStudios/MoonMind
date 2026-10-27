@@ -20,6 +20,7 @@ from moonmind.workflows.temporal.remediation_verification import (
     RemediationVerificationPhase,
 )
 from moonmind.workflows.temporal.service import TemporalExecutionService
+from tests.artifact_access import access_for_test
 from tests.unit.workflows.temporal.test_remediation_context import (
     _fast_verification_phase,
     temporal_db,
@@ -331,7 +332,7 @@ async def test_concurrent_pending_observation_cannot_suppress_terminal(
                 assert receipt.artifact_id in canonical.artifact_refs
                 _, payload = await artifacts.read(
                     artifact_id=receipt.artifact_id,
-                    principal="service:remediation-lifecycle",
+                    access=access_for_test("service:remediation-lifecycle"),
                 )
                 observations.append(json.loads(payload)["pending"])
             assert sorted(observations) == [False, True]

@@ -46,6 +46,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactStateError,
     TemporalArtifactValidationError,
 )
+from tests.artifact_access import access_for_test
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -110,29 +111,31 @@ async def test_owner_restores_after_source_removal_guesses_denied(
 
             # No source PAT, no live host: ownership alone restores.
             _meta, payload = await service.read(
-                artifact_id=artifact.artifact_id, principal="owner-1"
+                artifact_id=artifact.artifact_id, access=access_for_test("owner-1")
             )
             assert payload == b"saved-work-bytes"
             _artifact, _expires, url = await service.presign_download(
-                artifact_id=artifact.artifact_id, principal="owner-1"
+                artifact_id=artifact.artifact_id, access=access_for_test("owner-1")
             )
             assert url
 
             # Wrong owner, unknown id, and digest-shaped guesses are denied.
             with pytest.raises(TemporalArtifactAuthorizationError):
                 await service.read(
-                    artifact_id=artifact.artifact_id, principal="owner-2"
+                    artifact_id=artifact.artifact_id, access=access_for_test("owner-2")
                 )
             with pytest.raises(Exception):
                 await service.read(
-                    artifact_id="art_missing_guess", principal="owner-2"
+                    artifact_id="art_missing_guess", access=access_for_test("owner-2")
                 )
             digest_guess = hashlib.sha256(b"saved-work-bytes").hexdigest()
             with pytest.raises(Exception):
-                await service.read(artifact_id=digest_guess, principal="owner-2")
+                await service.read(
+                    artifact_id=digest_guess, access=access_for_test("owner-2")
+                )
             with pytest.raises(TemporalArtifactAuthorizationError):
                 await service.validate_saved_work_manifest_dependencies(
-                    [artifact.artifact_id], principal="owner-2"
+                    [artifact.artifact_id], access=access_for_test("owner-2")
                 )
 
 
@@ -152,7 +155,7 @@ async def test_manifest_graph_validation_auth_cycles_and_bounds(
                     {"artifactId": baseline.artifact_id, "kind": "required"},
                     {"artifactId": report.artifact_id, "kind": "optional"},
                 ],
-                principal="owner-1",
+                access=access_for_test("owner-1"),
             )
             assert evidence["required"] == [baseline.artifact_id]
             assert evidence["optional"] == [report.artifact_id]
@@ -160,7 +163,7 @@ async def test_manifest_graph_validation_auth_cycles_and_bounds(
 
             # Legacy flat form stays required.
             flat = await service.validate_saved_work_manifest_dependencies(
-                [baseline.artifact_id], principal="owner-1"
+                [baseline.artifact_id], access=access_for_test("owner-1")
             )
             assert flat["required"] == [baseline.artifact_id]
 
@@ -168,16 +171,14 @@ async def test_manifest_graph_validation_auth_cycles_and_bounds(
             with pytest.raises(ValueError, match="SAVED_WORK_DEP_UNRESOLVED"):
                 await service.validate_saved_work_manifest_dependencies(
                     [baseline.artifact_id, "art_missing_required"],
-                    principal="owner-1",
+                    access=access_for_test("owner-1"),
                 )
-            optional_missing = (
-                await service.validate_saved_work_manifest_dependencies(
-                    [
-                        {"artifactId": baseline.artifact_id, "kind": "required"},
-                        {"artifactId": "art_missing_opt", "kind": "optional"},
-                    ],
-                    principal="owner-1",
-                )
+            optional_missing = await service.validate_saved_work_manifest_dependencies(
+                [
+                    {"artifactId": baseline.artifact_id, "kind": "required"},
+                    {"artifactId": "art_missing_opt", "kind": "optional"},
+                ],
+                access=access_for_test("owner-1"),
             )
             assert optional_missing["required"] == [baseline.artifact_id]
 
@@ -197,19 +198,19 @@ async def test_manifest_graph_validation_auth_cycles_and_bounds(
             await service._repository.commit()
             with pytest.raises(ValueError, match="SAVED_WORK_DEP_CYCLE"):
                 await service.validate_saved_work_manifest_dependencies(
-                    [cyclic_a.artifact_id], principal="owner-1"
+                    [cyclic_a.artifact_id], access=access_for_test("owner-1")
                 )
 
             # Bounds and duplicates are rejected before any DB walk.
             with pytest.raises(ValueError, match="SAVED_WORK_DEP_DUPLICATE"):
                 await service.validate_saved_work_manifest_dependencies(
                     [baseline.artifact_id, baseline.artifact_id],
-                    principal="owner-1",
+                    access=access_for_test("owner-1"),
                 )
             with pytest.raises(ValueError, match="SAVED_WORK_DEP_BOUND"):
                 await service.validate_saved_work_manifest_dependencies(
                     [f"art_{index}" for index in range(200)],
-                    principal="owner-1",
+                    access=access_for_test("owner-1"),
                 )
 
 
@@ -223,7 +224,7 @@ async def test_independent_use_claims_and_operator_pin(
             service = _service(session, tmp_path)
             artifact = await _complete_artifact(service, principal="owner-1")
             await service.validate_saved_work_manifest_dependencies(
-                [artifact.artifact_id], principal="owner-1"
+                [artifact.artifact_id], access=access_for_test("owner-1")
             )
             await service.pin(
                 artifact_id=artifact.artifact_id,
@@ -235,6 +236,7 @@ async def test_independent_use_claims_and_operator_pin(
                 principal="owner-1",
                 request_id="restore-1",
                 operation_kind="restore",
+                access=access_for_test("owner-1"),
             )
             # Same request identity retries idempotently to the same claim.
             retry = await service.acquire_saved_work_use(
@@ -242,6 +244,7 @@ async def test_independent_use_claims_and_operator_pin(
                 principal="owner-1",
                 request_id="restore-1",
                 operation_kind="restore",
+                access=access_for_test("owner-1"),
             )
             assert retry.id == claim_a.id
 
@@ -252,6 +255,7 @@ async def test_independent_use_claims_and_operator_pin(
                     principal="owner-2",
                     request_id="publish-1",
                     operation_kind="publication",
+                    access=access_for_test("owner-2"),
                 )
 
             # Releasing one claim keeps the pin; sweep still skips the row.
@@ -288,6 +292,7 @@ async def test_use_admission_races_delete_without_premature_removal(
                 principal="owner-1",
                 request_id="restore-1",
                 operation_kind="restore",
+                access=access_for_test("owner-1"),
             )
 
             with pytest.raises(TemporalArtifactStateError, match="DELETE_BLOCKED"):
@@ -308,6 +313,7 @@ async def test_use_admission_races_delete_without_premature_removal(
                     principal="owner-1",
                     request_id="restore-2",
                     operation_kind="restore",
+                    access=access_for_test("owner-1"),
                 )
 
     async with temporal_db(tmp_path, name="race_sweep.db") as session_maker:
@@ -321,6 +327,7 @@ async def test_use_admission_races_delete_without_premature_removal(
                 principal="owner-1",
                 request_id="publish-1",
                 operation_kind="publication",
+                access=access_for_test("owner-1"),
             )
             row = await service._repository.get_artifact(artifact.artifact_id)
             row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
@@ -366,6 +373,7 @@ async def test_readmitted_operation_keeps_expired_content_and_refreshes_its_clai
                 request_id="publish-1",
                 operation_kind="publication",
                 ttl_seconds=60,
+                access=access_for_test("owner-1"),
             )
             first_expiry = first.expires_at.replace(tzinfo=UTC)
             for artifact_id in ids:
@@ -379,6 +387,7 @@ async def test_readmitted_operation_keeps_expired_content_and_refreshes_its_clai
                 request_id="publish-1",
                 operation_kind="publication",
                 ttl_seconds=3600,
+                access=access_for_test("owner-1"),
             )
             assert again.id == first.id
             assert again.expires_at.replace(tzinfo=UTC) > first_expiry
@@ -390,6 +399,7 @@ async def test_readmitted_operation_keeps_expired_content_and_refreshes_its_clai
                         principal="owner-1",
                         request_id=request_id,
                         operation_kind="publication",
+                        access=access_for_test("owner-1"),
                     )
 
             assert await service.release_saved_work_operation_uses(
@@ -441,7 +451,7 @@ async def test_shared_blob_keeps_logical_ownership_and_bytes(
             )
             # The surviving logical reference keeps the physical bytes.
             _meta, kept = await service.read(
-                artifact_id=second.artifact_id, principal="owner-1"
+                artifact_id=second.artifact_id, access=access_for_test("owner-1")
             )
             assert kept == payload
 
@@ -494,7 +504,7 @@ async def test_deletion_failures_converge_without_false_results(
             ) is None
             with pytest.raises(TemporalArtifactStateError):
                 await service.read(
-                    artifact_id=artifact.artifact_id, principal="owner-1"
+                    artifact_id=artifact.artifact_id, access=access_for_test("owner-1")
                 )
 
 
@@ -515,7 +525,7 @@ async def test_signed_download_bounded_with_honest_revocation(
             )
             with caplog.at_level(logging.INFO):
                 _artifact, expires_at, url = await service.presign_download(
-                    artifact_id=artifact.artifact_id, principal="owner-1"
+                    artifact_id=artifact.artifact_id, access=access_for_test("owner-1")
                 )
             bounded = (expires_at - datetime.now(UTC)).total_seconds()
             assert bounded <= retention.SAVED_WORK_MAX_DOWNLOAD_TTL_SECONDS + 5
@@ -528,17 +538,17 @@ async def test_signed_download_bounded_with_honest_revocation(
             # another principal still cannot mint or use the owner's link.
             with pytest.raises(TemporalArtifactAuthorizationError):
                 await service.presign_download(
-                    artifact_id=artifact.artifact_id, principal="owner-2"
+                    artifact_id=artifact.artifact_id, access=access_for_test("owner-2")
                 )
             preview = await service.compute_preview(
                 artifact_id=artifact.artifact_id,
-                principal="owner-1",
                 policy="manual",
+                access=access_for_test("owner-1"),
             )
             assert preview.artifact_id != artifact.artifact_id
             with pytest.raises(TemporalArtifactAuthorizationError):
                 await service.presign_download(
-                    artifact_id=artifact.artifact_id, principal="viewer-x"
+                    artifact_id=artifact.artifact_id, access=access_for_test("viewer-x")
                 )
 
 
@@ -641,6 +651,7 @@ async def test_sweep_bounded_paginated_idempotent_observable(
                 request_id="stale-claim",
                 operation_kind="download",
                 ttl_seconds=60,
+                access=access_for_test("owner-1"),
             )
             for artifact_id in ids:
                 row = await service._repository.get_artifact(artifact_id)
@@ -691,9 +702,12 @@ async def test_instance_operator_preserves_saved_work_reads(
             claim = await service.acquire_saved_work_use(
                 artifact_id=artifact.artifact_id,
                 principal="service:restore-worker",
-                admitted_principal=instance_operator_principal(),
                 request_id="restore-local",
                 operation_kind="restore",
+                access=access_for_test(
+                    "service:restore-worker",
+                    admitted_principal=instance_operator_principal(),
+                ),
             )
             assert claim.artifact_id == artifact.artifact_id
             assert claim.owner_principal == "service:restore-worker"
@@ -717,14 +731,17 @@ async def test_service_principal_carries_admitted_scope_for_saved_work(
                     principal="service:restore-worker",
                     request_id="restore-svc",
                     operation_kind="restore",
+                    access=access_for_test("service:restore-worker"),
                 )
             # Carrying the admitted user scope through the service call works.
             claim = await service.acquire_saved_work_use(
                 artifact_id=artifact.artifact_id,
                 principal="service:restore-worker",
-                admitted_principal="owner-1",
                 request_id="restore-svc",
                 operation_kind="restore",
+                access=access_for_test(
+                    "service:restore-worker", admitted_principal="owner-1"
+                ),
             )
             assert claim.owner_principal == "service:restore-worker"
 
@@ -781,27 +798,25 @@ async def test_data_plane_preserves_auth_scope_and_all_mode_quarantine(
                 # no-effect statement to static analysis).
                 denied_calls = [
                     lambda: service.read(
-                        artifact_id=artifact.artifact_id, principal=bare
+                        artifact_id=artifact.artifact_id, access=access_for_test(bare)
                     ),
                     lambda: service.read(
-                        artifact_id=artifact.artifact_id,
-                        principal=bare,
-                        allow_restricted_raw=True,
+                        artifact_id=artifact.artifact_id, access=access_for_test(bare)
                     ),
                     lambda: service.read_chunks(
-                        artifact_id=artifact.artifact_id, principal=bare
+                        artifact_id=artifact.artifact_id, access=access_for_test(bare)
                     ),
                     lambda: service.read_path(
-                        artifact_id=artifact.artifact_id, principal=bare
+                        artifact_id=artifact.artifact_id, access=access_for_test(bare)
                     ),
                     lambda: service.get_metadata(
-                        artifact_id=artifact.artifact_id, principal=bare
+                        artifact_id=artifact.artifact_id, access=access_for_test(bare)
                     ),
                     lambda: service.presign_download(
-                        artifact_id=artifact.artifact_id, principal=bare
+                        artifact_id=artifact.artifact_id, access=access_for_test(bare)
                     ),
                     lambda: service.compute_preview(
-                        artifact_id=artifact.artifact_id, principal=bare
+                        artifact_id=artifact.artifact_id, access=access_for_test(bare)
                     ),
                 ]
                 for make_call in denied_calls:
@@ -810,7 +825,11 @@ async def test_data_plane_preserves_auth_scope_and_all_mode_quarantine(
 
                 # Listing surfaces filter instead of leaking the row.
                 listed, _has_more = await service.list_authorized_collection(
-                    principal=bare, category="artifacts", query=None, offset=0, limit=50
+                    category="artifacts",
+                    query=None,
+                    offset=0,
+                    limit=50,
+                    access=access_for_test(bare),
                 )
                 assert artifact.artifact_id not in {
                     item.artifact_id for item, _links in listed
@@ -822,29 +841,23 @@ async def test_data_plane_preserves_auth_scope_and_all_mode_quarantine(
             for make_raw_call in (
                 lambda: service.read(
                     artifact_id=artifact.artifact_id,
-                    principal=bare,
-                    admitted_principal="owner-1",
+                    access=access_for_test(bare, admitted_principal="owner-1"),
                 ),
                 lambda: service.read(
                     artifact_id=artifact.artifact_id,
-                    principal=bare,
-                    admitted_principal="owner-1",
-                    allow_restricted_raw=True,
+                    access=access_for_test(bare, admitted_principal="owner-1"),
                 ),
                 lambda: service.read_chunks(
                     artifact_id=artifact.artifact_id,
-                    principal=bare,
-                    admitted_principal="owner-1",
+                    access=access_for_test(bare, admitted_principal="owner-1"),
                 ),
                 lambda: service.read_path(
                     artifact_id=artifact.artifact_id,
-                    principal=bare,
-                    admitted_principal="owner-1",
+                    access=access_for_test(bare, admitted_principal="owner-1"),
                 ),
                 lambda: service.presign_download(
                     artifact_id=artifact.artifact_id,
-                    principal=bare,
-                    admitted_principal="owner-1",
+                    access=access_for_test(bare, admitted_principal="owner-1"),
                 ),
             ):
                 with pytest.raises(
@@ -853,24 +866,21 @@ async def test_data_plane_preserves_auth_scope_and_all_mode_quarantine(
                     await make_raw_call()
             _meta, _links, _pinned, policy = await service.get_metadata(
                 artifact_id=artifact.artifact_id,
-                principal=bare,
-                admitted_principal="owner-1",
+                access=access_for_test(bare, admitted_principal="owner-1"),
             )
             assert policy is not None
             assert policy.raw_access_allowed is False
             preview = await service.compute_preview(
                 artifact_id=artifact.artifact_id,
-                principal=bare,
-                admitted_principal="owner-1",
+                access=access_for_test(bare, admitted_principal="owner-1"),
             )
             assert preview.artifact_id != artifact.artifact_id
             listed_admitted, _has_more = await service.list_authorized_collection(
-                principal=bare,
-                admitted_principal="owner-1",
                 category="artifacts",
                 query=None,
                 offset=0,
                 limit=50,
+                access=access_for_test(bare, admitted_principal="owner-1"),
             )
             assert artifact.artifact_id in {
                 item.artifact_id for item, _links in listed_admitted
@@ -976,7 +986,7 @@ async def test_phantom_insert_blocked_across_transactions_during_hard_delete(
                 content_type="application/octet-stream",
             )
             _meta, kept = await service_b2.read(
-                artifact_id=completed.artifact_id, principal="owner-1"
+                artifact_id=completed.artifact_id, access=access_for_test("owner-1")
             )
             assert kept == payload
     finally:
@@ -1115,7 +1125,7 @@ async def test_serving_boundaries_observe_consumer_use_for_sweeper(
             service = _service(session, tmp_path)
             artifact = await _complete_artifact(service, principal="owner-1")
             _artifact, _expires, url = await service.presign_download(
-                artifact_id=artifact.artifact_id, principal="owner-1"
+                artifact_id=artifact.artifact_id, access=access_for_test("owner-1")
             )
             assert url
             assert await service._repository.has_live_use_claim(

@@ -31,6 +31,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactStateError,
 )
 from moonmind.workflows.temporal.worker_runtime import _build_runtime_planner
+from tests.artifact_access import access_for_test
 from tests.integration.reliability.test_repository_access_consumers_4676 import (  # noqa: F401
     _WORKFLOW,
     _ready_opencode_image_pair,
@@ -147,8 +148,9 @@ async def test_system_resolver_preparation_reuses_verified_parent_grant(
         with pytest.raises(TemporalArtifactAuthorizationError):
             await TemporalArtifactService(repository).read(
                 artifact_id=parent_ref,
-                principal="service:omnigent_session_supervisor",
-                admitted_principal="system",
+                access=access_for_test(
+                    "service:omnigent_session_supervisor", admitted_principal="system"
+                ),
             )
 
     for _ in range(2):
@@ -190,11 +192,13 @@ async def test_system_resolver_preparation_reuses_verified_parent_grant(
         assert (
             await service.read(
                 artifact_id=parameters["resolvedSkillsetRef"],
-                principal=f"workflow:{_CHILD}",
+                access=access_for_test(f"workflow:{_CHILD}"),
             )
         )[1]
         with pytest.raises(TemporalArtifactAuthorizationError):
-            await service.read(artifact_id=parent_ref, principal=f"workflow:{_CHILD}")
+            await service.read(
+                artifact_id=parent_ref, access=access_for_test(f"workflow:{_CHILD}")
+            )
 
 
 @pytest.mark.parametrize(
@@ -258,6 +262,7 @@ async def _prepare_child(context):
     parent = await context.compile(
         "pr", profile_tools=("gh",), mergeAutomation={"enabled": True}
     )
+    await context.link_inputs(parent)
     async with context.sessions() as session:
         session.add(
             models.ManagedAgentProviderProfile(
@@ -267,7 +272,12 @@ async def _prepare_child(context):
             )
         )
         await session.commit()
-    return await children.omnigent_prepare_child_execution_plan_activity(
+    environment = ActivityEnvironment()
+    environment.info = replace(
+        environment.info, workflow_id="merge-gate", workflow_run_id="gate-run"
+    )
+    return await environment.run(
+        children.omnigent_prepare_child_execution_plan_activity,
         {
             "principal": "user-1",
             "parentWorkflowId": _WORKFLOW,
@@ -285,7 +295,8 @@ async def _prepare_child(context):
                     },
                 }
             },
-        }
+        },
+        access=access_for_test(f"workflow:{_WORKFLOW}"),
     )
 
 
@@ -303,7 +314,9 @@ async def test_compiled_child_reaches_first_skill_read_and_survives_worker_retry
     async with context.sessions() as session:
         service = TemporalArtifactService(TemporalArtifactRepository(session))
         with pytest.raises(TemporalArtifactAuthorizationError):
-            await service.read(artifact_id=manifest_ref, principal=principal)
+            await service.read(
+                artifact_id=manifest_ref, access=access_for_test(principal)
+            )
 
     environment = ActivityEnvironment()
     environment.info = replace(
@@ -332,7 +345,7 @@ async def test_compiled_child_reaches_first_skill_read_and_survives_worker_retry
     async with context.sessions() as session:
         service = TemporalArtifactService(TemporalArtifactRepository(session))
         original, body = await service.read(
-            artifact_id=manifest_ref, principal=principal
+            artifact_id=manifest_ref, access=access_for_test(principal)
         )
         manifest = json.loads(body)
         bundle_ref = next(
@@ -345,7 +358,9 @@ async def test_compiled_child_reaches_first_skill_read_and_survives_worker_retry
         assert original_owner == "user-1"
         for unrelated in ("workflow:unrelated", f"workflow:{_WORKFLOW}"):
             with pytest.raises(TemporalArtifactAuthorizationError):
-                await service.read(artifact_id=manifest_ref, principal=unrelated)
+                await service.read(
+                    artifact_id=manifest_ref, access=access_for_test(unrelated)
+                )
 
     # A replacement worker reconstructs its services and retries admission.
     for _ in range(2):
@@ -365,7 +380,7 @@ async def test_compiled_child_reaches_first_skill_read_and_survives_worker_retry
         assert len(links) == len({link.artifact_id for link in links})
         retained, _ = await TemporalArtifactService(
             TemporalArtifactRepository(session)
-        ).read(artifact_id=manifest_ref, principal=principal)
+        ).read(artifact_id=manifest_ref, access=access_for_test(principal))
         assert retained.sha256 == original_digest
         assert retained.created_by_principal == original_owner
 
@@ -495,6 +510,6 @@ async def test_child_validation_recovers_interrupted_grants_without_duplicating_
         assert (
             await TemporalArtifactService(TemporalArtifactRepository(session)).read(
                 artifact_id=parameters["resolvedSkillsetRef"],
-                principal=f"workflow:{_CHILD}",
+                access=access_for_test(f"workflow:{_CHILD}"),
             )
         )[1]

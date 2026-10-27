@@ -16,7 +16,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import delete, select
-from temporalio.testing import ActivityEnvironment
+from temporalio.api.enums.v1 import IndexedValueType
 from temporalio.client import (
     Schedule,
     ScheduleActionStartWorkflow,
@@ -29,30 +29,30 @@ from temporalio.common import (
     SearchAttributePair,
     TypedSearchAttributes,
 )
-from temporalio.api.enums.v1 import IndexedValueType
+from temporalio.testing import ActivityEnvironment
 
 from api_service.api.routers import executions as ex
 from api_service.db.models import (
     Base,
-    TemporalExecutionCanonicalRecord,
     TemporalArtifact,
     TemporalArtifactLink,
+    TemporalExecutionCanonicalRecord,
 )
 from moonmind.omnigent.host_services.workspace import OmnigentWorkspaceMaterializer
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
-from moonmind.workflows.temporal.activity_runtime import (
-    TemporalPlanActivities,
-    build_activity_bindings,
-)
 from moonmind.workflows.temporal.activity_catalog import (
     TemporalActivityCatalog,
     build_default_activity_catalog,
 )
+from moonmind.workflows.temporal.activity_runtime import (
+    TemporalPlanActivities,
+    build_activity_bindings,
+)
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
+    TemporalArtifactActivities,
     TemporalArtifactRepository,
     TemporalArtifactService,
-    TemporalArtifactActivities,
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.service import (
@@ -61,6 +61,7 @@ from moonmind.workflows.temporal.service import (
 )
 from moonmind.workflows.temporal.worker_runtime import _build_runtime_planner
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from tests.artifact_access import access_for_test
 from tests.integration.reliability.test_resolver_verification_capability_journey import (
     resolver_test_client,
 )
@@ -427,7 +428,8 @@ async def test_schedule_continuation_preserves_intent_and_materializes_evidence(
                     parameters=params,
                 )
                 _, raw_plan = await artifacts.read(
-                    artifact_id=generated.plan_ref.artifact_id, principal=owner
+                    artifact_id=generated.plan_ref.artifact_id,
+                    access=access_for_test(owner),
                 )
                 plan = json.loads(raw_plan)
                 assert len(plan["nodes"]) == (2 if authored else 1)
