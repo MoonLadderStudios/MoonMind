@@ -542,6 +542,44 @@ async def test_tampered_scope_stops_workload_without_a_fallback(lease_setup, tam
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("denied", [False, True])
+async def test_terminal_observation_retains_denials_made_during_exit(
+    lease_setup, monkeypatch, denied
+):
+    _, docker, request, backend, published = lease_setup
+    created = await backend.create_container(request)
+    request.container_ref = created.container_ref
+    await backend.start_container(request)
+    assert docker.files["/tmp/moonmind-access.log"] == b""
+
+    async def exit_during_inspection(args):
+        if tuple(args[:3]) == ("inspect", "--format", "{{json .State}}"):
+            if denied:
+                docker.files["/tmp/moonmind-access.log"] = (
+                    b"1793077200 0 10.248.0.3 TCP_DENIED/403 0 CONNECT unrelated.example:443 - HIER_NONE/- -\n"
+                )
+            docker.container(created.container_ref)["State"].update(
+                Status="exited", Running=False, ExitCode=0
+            )
+        return await docker(args)
+
+    monkeypatch.setattr(backend, "_runner", exit_during_inspection)
+    result = await backend.observe_container(request)
+
+    assert result.running is False and result.exit_code == 0
+    assert result.terminal_state == ("failed" if denied else "succeeded")
+    if denied:
+        observation = result.egress_denial_observation
+        assert observation.denied_connection_count == 1
+        evidence = published[observation.artifact_ref.removeprefix("artifacts/")]
+        assert evidence["coverage"] == "partial"
+        assert evidence["deniedConnectionCount"] == 1
+        assert evidence["denialDiagnostics"]
+    else:
+        assert result.egress_denial_observation is None
+
+
+@pytest.mark.asyncio
 async def test_denied_endpoint_cannot_produce_a_clean_exit_zero_result(lease_setup):
     _, docker, request, backend, published = lease_setup
     created = await backend.create_container(request)

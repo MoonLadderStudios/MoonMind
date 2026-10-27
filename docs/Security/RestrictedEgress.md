@@ -219,9 +219,10 @@ use `tool_proxy_options` from `moonmind.security.egress_policy` for HTTPX,
 Requests, and Chromium to configure clients
 that do not honor environment variables. Unsupported protocols produce an
 explicit error. Runtime evidence records policy identity, its pinned snapshot,
-and bounded per-job denials. Observed denials are persisted before the next
-poll; terminal diagnostics retain their artifact reference even if later
-attestation fails or cleanup removes the proxy. Retained observations do not
+and bounded per-job denials. Observed denials are persisted each poll and
+rechecked after exit before choosing the terminal result. Diagnostics retain
+their artifact reference if later attestation fails or cleanup removes the
+proxy. Retained observations do not
 certify current attestation. Any observed denial makes coverage partial and
 prevents an exit-zero command from being reported as a successful scan.
 

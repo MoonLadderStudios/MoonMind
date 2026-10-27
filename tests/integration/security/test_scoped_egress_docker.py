@@ -508,6 +508,7 @@ print(json.dumps({'crossAssessmentPeerChecks':peer_checks}))
             try:
                 await lease.cleanup()
             except RuntimeError:
+                # Best-effort teardown must continue removing the other fixtures.
                 pass
         for name in reversed(networks):
             await runner(("network", "rm", name))

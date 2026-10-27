@@ -2788,11 +2788,12 @@ class DockerContainerJobBackend:
 
     async def observe_container(self, request: ContainerJobActivityRequest):
         scoped = self._scoped_lease(request)
-        scoped_evidence = None
         denial_observation = request.egress_denial_observation
         if scoped is not None:
             try:
-                scoped_evidence = await scoped.attest(workload=True, expected_image=request.resolved_image_ref)
+                scoped_evidence = await scoped.attest(
+                    workload=True, expected_image=request.resolved_image_ref
+                )
                 denial_observation = await self._retain_scoped_denials(
                     request, scoped_evidence
                 )
@@ -2818,6 +2819,15 @@ class DockerContainerJobBackend:
                 running=True,
                 logCursor=log_cursor,
                 egressDenialObservation=denial_observation,
+            )
+        if scoped is not None:
+            # Recheck after confirming exit so the last requests cannot race
+            # the earlier denial read and produce a clean terminal result.
+            scoped_evidence = await scoped.attest(
+                workload=True, expected_image=request.resolved_image_ref
+            )
+            denial_observation = await self._retain_scoped_denials(
+                request, scoped_evidence
             )
         exit_code = int(state.get("ExitCode", 1))
         started_at, finished_at, duration_ms = _parse_container_timing(state)
