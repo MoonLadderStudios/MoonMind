@@ -84,7 +84,9 @@ async def test_worker_mounts_source_read_only_and_only_output_writable(
     assert next(m for m in mounts if "dst=/workspace" in m).endswith(",readonly")
     assert not next(m for m in mounts if "dst=/scan-output" in m).endswith(",readonly")
     assert "--read-only" in argv
-    assert argv[argv.index("--tmpfs") + 1] == "/tmp:rw,nosuid,nodev,size=1g,mode=1777"
+    assert argv[argv.index("--tmpfs") + 1] == (
+        f"/tmp:rw,nosuid,nodev,size={1152 * 1024**2},mode=1777"
+    )
     assert argv[-4:-1] == ("-I", "-m", "moonmind.security.repository_scanner_runner")
 
 

@@ -285,6 +285,69 @@ async def test_historical_activity_preserves_workspace_access_at_launch(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("input_bytes", [128 * 1024**2, 2 * 1024**3])
+@pytest.mark.parametrize("with_database", [False, True])
+async def test_scanner_private_scratch_accommodates_admitted_inputs(
+    tmp_path, input_bytes, with_database
+):
+    from moonmind.security.repository_scanners import RepositoryScan, build_scanner_job
+
+    (tmp_path / "art_workspace").mkdir()
+    scan = RepositoryScan(
+        scanner="trivy",
+        outputDirectory="artifacts/trivy",
+        maxInputBytes=input_bytes,
+        trivyScanners=["vuln"] if with_database else ["misconfig"],
+        databaseCacheRef="scanner-db" if with_database else None,
+        databaseDigest="a" * 64 if with_database else None,
+    )
+    commands = []
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=_recording_runner(commands)
+    )
+    backend._settings = resolve_container_backend_settings(
+        {
+            CACHE_SOURCES_ENV_KEY: json.dumps(
+                [
+                    {
+                        "cacheRef": "scanner-db",
+                        "volumeName": "scanner-db",
+                        "target": "/opt/moonmind-scanner-db",
+                        "readOnly": True,
+                    }
+                ]
+            )
+        }
+    )
+    await backend.create_container(
+        _request(tmp_path, image=None, **build_scanner_job(scan))
+    )
+    created = next(command for command in commands if command[0] == "create")
+    scratch = created[created.index("--tmpfs") + 1]
+    capacity = next(
+        option.split("=", 1)[1]
+        for option in scratch.split(",")
+        if option.startswith("size=")
+    )
+    units = {"k": 1024, "m": 1024**2, "g": 1024**3}
+    scratch_bytes = (
+        int(capacity[:-1]) * units[capacity[-1]]
+        if capacity[-1] in units
+        else int(capacity)
+    )
+    staged_bytes = input_bytes + (2 * 1024**3 if with_database else 0)
+    assert scratch_bytes >= staged_bytes + 1024**3
+    memory_mib = int(created[created.index("--memory") + 1].removesuffix("m"))
+    assert memory_mib * 1024**2 >= scratch_bytes + 2 * 1024**3
+    assert "--read-only" in created
+    assert scratch.startswith("/tmp:rw,nosuid,nodev,")
+    assert "mode=1777" in scratch
+    mounts = [created[i + 1] for i, arg in enumerate(created) if arg == "--mount"]
+    assert next(m for m in mounts if "dst=/workspace" in m).endswith(",readonly")
+    assert len([m for m in mounts if not m.endswith(",readonly")]) == 1
+
+
+@pytest.mark.asyncio
 async def test_bridge_launch_requires_attestation_and_uses_restricted_network(
     tmp_path,
 ) -> None:

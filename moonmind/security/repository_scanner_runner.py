@@ -14,6 +14,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from moonmind.schemas.repository_scanner_models import MAX_DATABASE_BYTES
 from moonmind.security.assessments import content_key
 from moonmind.security.repository_scanners import (
     RepositoryScan,
@@ -206,7 +207,7 @@ def _database(scan: RepositoryScan, source: Path, destination: Path) -> str | No
             total += info.st_size
             if (
                 not stat.S_ISREG(info.st_mode)
-                or total > 2 * 1024**3
+                or total > MAX_DATABASE_BYTES
                 or len(records) >= 4096
             ):
                 raise ValueError("database exceeds bounded input")

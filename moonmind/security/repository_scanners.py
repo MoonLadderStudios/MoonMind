@@ -34,7 +34,13 @@ def build_scanner_job(
         ],
         "networkMode": "none",
         "workdir": "/workspace",
-        "resources": {"cpuMillis": 2000, "memoryMiB": 2048, "pids": 256},
+        "resources": {
+            "cpuMillis": 2000,
+            # tmpfs is charged to the container's memory cgroup too. Keep the
+            # scanner's 2 GiB allowance in addition to its staged copies.
+            "memoryMiB": 2048 + (scan.scratch_bytes + 1024**2 - 1) // 1024**2,
+            "pids": 256,
+        },
         "timeoutSeconds": scan.timeout_seconds + 15,
         "outputs": scan.outputs(),
         "caches": (
