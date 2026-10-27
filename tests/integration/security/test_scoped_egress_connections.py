@@ -7,11 +7,13 @@ loopback fixtures exercise Squid and client adapters without a Docker socket.
 from __future__ import annotations
 
 import os
+import pwd
 import shutil
 import socket
 import ssl
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -108,7 +110,22 @@ def test_actual_squid_clients_preserve_exact_scope(tmp_path, adapter):
     if adapter == "chromium":
         assert chromium, "test-runtime must supply the browser fixture"
     proxy_address = "127.0.0.2" if adapter == "sdk" else "127.0.0.3"
-    with fixture_servers(tmp_path) as (http_port, https_port):
+    with (
+        fixture_servers(tmp_path) as (http_port, https_port),
+        tempfile.TemporaryDirectory(prefix="moonmind-test-scoped-proxy-") as proxy_root,
+    ):
+        proxy_path = Path(proxy_root)
+        proxy_identity = {}
+        if os.geteuid() == 0:
+            # Compose runs pytest as root. Keep Squid's files outside pytest's
+            # private root so its unprivileged process can read and write them.
+            account = pwd.getpwnam("proxy")
+            os.chown(proxy_path, account.pw_uid, account.pw_gid)
+            proxy_identity = {
+                "user": account.pw_uid,
+                "group": account.pw_gid,
+                "extra_groups": [],
+            }
         policy = ScopedEgressPolicy.model_validate(
             {
                 "policyRef": "connection-fixtures",
@@ -150,27 +167,34 @@ def test_actual_squid_clients_preserve_exact_scope(tmp_path, adapter):
             listen_address=proxy_address,
             client_address="127.0.0.1",
         )
-        host_path, log_path = tmp_path / "hosts", tmp_path / "access.log"
+        host_path, log_path = proxy_path / "hosts", proxy_path / "access.log"
         host_path.write_bytes(hosts)
+        host_path.chmod(0o444)
         config = (
             config.replace(b"/tmp/moonmind-hosts", str(host_path).encode())
             .replace(b"/tmp/moonmind-access.log", str(log_path).encode())
-            .replace(b"/tmp/moonmind-squid.pid", str(tmp_path / "squid.pid").encode())
+            .replace(b"/tmp/moonmind-squid.pid", str(proxy_path / "squid.pid").encode())
+            .replace(b"/tmp/moonmind-cache.log", str(proxy_path / "cache.log").encode())
         )
-        conf = tmp_path / "squid.conf"
+        conf = proxy_path / "squid.conf"
         conf.write_bytes(config)
+        conf.chmod(0o444)
         errors = tmp_path / "proxy.stderr"
         with errors.open("wb") as stderr:
             proxy = subprocess.Popen(
-                [squid, "-NYC", "-f", str(conf)],
+                [squid, "-NYC", "-d", "1", "-f", str(conf)],
                 stdout=subprocess.DEVNULL,
                 stderr=stderr,
+                **proxy_identity,
             )
             try:
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline:
                     if proxy.poll() is not None:
-                        pytest.fail(errors.read_text()[-4000:])
+                        pytest.fail(
+                            f"fixture proxy exited {proxy.returncode}: "
+                            + errors.read_text()[-4000:]
+                        )
                     try:
                         with socket.create_connection(
                             (proxy_address, 3128), timeout=0.1
