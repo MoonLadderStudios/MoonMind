@@ -2851,7 +2851,7 @@ def test_omnigent_container_capability_signs_or_refuses_admitted_scope(
         "evidenceIntent": "Source findings",
     }
 
-    def environment(policy):
+    def environment(policy, required_capabilities=("docker",)):
         return runtime._container_job_environment(
             binding=_binding().model_copy(
                 update={
@@ -2868,7 +2868,8 @@ def test_omnigent_container_capability_signs_or_refuses_admitted_scope(
             current_workflow_id="workflow-1",
             current_step_execution_id="agent-run-1",
             timeout_seconds=3600,
-            required_capabilities=("docker",),
+            required_capabilities=required_capabilities,
+            execution_fanout_authorization=(policy or {}).get("executionFanout"),
             step_policy=policy,
         )
 
@@ -2882,6 +2883,17 @@ def test_omnigent_container_capability_signs_or_refuses_admitted_scope(
     with pytest.raises(OmnigentOAuthHostError) as exc_info:
         environment({"assessmentScope": {"assessmentRef": "assessment-1"}})
     assert exc_info.value.code == "authorization_denied"
+    # Fan-out children would run unscoped, so a scoped step gets no fan-out
+    # bearer even beside an authorized Skill decision.
+    with pytest.raises(OmnigentOAuthHostError, match="assessment-scoped") as fanout:
+        environment(
+            {
+                "assessmentScope": scope,
+                "executionFanout": {"authorized": True, "sourceKind": "built_in"},
+            },
+            required_capabilities=("docker", "execution.fanout"),
+        )
+    assert fanout.value.code == "authorization_denied"
 
 
 def test_omnigent_runtime_authority_is_not_minted_without_required_capabilities(

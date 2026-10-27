@@ -31,6 +31,7 @@ from moonmind.security.container_job_capabilities import (
     verify_container_job_session_capability,
 )
 from moonmind.security.execution_fanout_capabilities import (
+    ExecutionFanoutCapabilityError,
     verify_execution_fanout_capability,
 )
 from moonmind.security.mcp_tool_capabilities import verify_mcp_tool_capability
@@ -545,6 +546,60 @@ async def test_controller_launches_container_and_returns_typed_handle(
         call.kwargs["kind"]
         for call in session_supervisor.emit_session_event.call_args_list
     ] == ["session_started", "runtime_status", "model_status"]
+
+
+@pytest.mark.asyncio
+async def test_controller_refuses_fanout_for_assessment_scoped_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A scoped session cannot mint fan-out that would start unscoped children."""
+
+    monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
+    workspace_root = tmp_path / "agent_jobs"
+    request = LaunchCodexManagedSessionRequest(
+        agentRunId="task-1",
+        workflowId="wf-task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        turnCompletionTimeoutSeconds=1800,
+        requiredCapabilities=["execution.fanout"],
+        executionFanoutAuthorization={"authorized": True, "sourceKind": "built_in"},
+        containerJobAssessmentScope={
+            "assessmentRef": "assessment-1",
+            "profileRefs": ["source-scan"],
+            "actionClasses": ["source-analysis"],
+            "targets": [{"workspacePath": "app"}],
+            "maxJobs": 1,
+            "maxJobSeconds": 60,
+            "evidenceIntent": "Source findings",
+        },
+    )
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(command, *, input_text=None, env=None):
+        commands.append(command)
+        return 1, "", "No such container"
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        moonmind_url="http://api:8000",
+        session_store=ManagedSessionStore(tmp_path / "session-store"),
+        session_supervisor=AsyncMock(),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    with pytest.raises(ExecutionFanoutCapabilityError, match="assessment-scoped"):
+        await controller.launch_session(request)
+    assert not any(command[:2] == ("docker", "run") for command in commands)
 
 
 @pytest.mark.asyncio
