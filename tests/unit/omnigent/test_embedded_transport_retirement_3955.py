@@ -226,7 +226,7 @@ def test_native_chat_embedded_presentation_flag_survives() -> None:
     assert headers
 
     # MoonLadderStudios/MoonMind#3956 moved the live native-chat mount out of
-    # the WorkflowChatNative entrypoint (now a diagnostics fallback shell)
+    # the since-removed WorkflowChatNative entrypoint
     # into WorkflowNativeChatRoute + chatBindingModel. The embedded
     # presentation flag survives there, distinct from the retired
     # embedded-host transport.

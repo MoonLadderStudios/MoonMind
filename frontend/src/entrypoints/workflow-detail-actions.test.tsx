@@ -145,6 +145,79 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe('Header primary actions', () => {
+  const editingPayload: BootPayload = {
+    page: 'workflow-detail',
+    apiBase: '/api',
+    initialData: {
+      dashboardConfig: {
+        features: { temporalDashboard: { actionsEnabled: true, temporalWorkflowEditing: true } },
+      },
+    },
+  };
+
+  function headerActions() {
+    return screen.getByRole('group', { name: 'Primary workflow actions' });
+  }
+
+  it('shows the main actions for the state beside the menu and keeps them in the menu', async () => {
+    mockFetch(
+      baseExecution({
+        actions: { canSetTitle: true, canPause: true, canCancel: true, canForceCancel: true },
+      }),
+    );
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+    await screen.findByText('Guarded task');
+    const group = await waitFor(headerActions);
+    expect(within(group).getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'Pause',
+      'Cancel',
+    ]);
+    const menu = await openWorkflowActionsMenu('Cancel');
+    expect(within(menu).getByRole('menuitem', { name: 'Pause' })).toBeTruthy();
+  });
+
+  it('asks before a destructive header action and sends it only after confirmation', async () => {
+    mockFetch(baseExecution({ actions: { canPause: true, canCancel: true } }));
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+    await screen.findByText('Guarded task');
+    fireEvent.click(within(await waitFor(headerActions)).getByRole('button', { name: 'Cancel' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Cancel workflow?' });
+    expect(postCalls('/cancel')).toHaveLength(0);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel workflow' }));
+    await waitFor(() => expect(postCalls('/cancel')).toHaveLength(1));
+  });
+
+  it('offers recovery first for a failed workflow', async () => {
+    mockFetch(
+      baseExecution({
+        status: 'failed',
+        state: 'failed',
+        rawState: 'failed',
+        temporalStatus: 'failed',
+        closedAt: '2026-03-28T00:10:00Z',
+        actions: { canRetryFromStep: true, canRerun: true, canSetTitle: true, canForceCancel: true },
+      }),
+    );
+    renderWithClient(<WorkflowDetailPage payload={editingPayload} />);
+    await screen.findByText('Guarded task');
+    const group = await waitFor(headerActions);
+    expect(within(group).getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'Retry from failed step',
+      'Rerun',
+    ]);
+  });
+
+  it('shows no header actions when nothing safe is available', async () => {
+    mockFetch(completedExecution);
+    renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
+    await screen.findByText('Completed task');
+    expect(screen.queryByRole('group', { name: 'Primary workflow actions' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Workflow actions' })).toBeTruthy();
+  });
+});
+
 describe('Workflow actions menu', () => {
   const runningExecution = baseExecution({
     actions: { canSetTitle: true, canPause: true, canCancel: true, canForceCancel: true },
@@ -184,7 +257,8 @@ describe('Workflow actions menu', () => {
     const focused = document.activeElement as HTMLElement;
     expect(focused).not.toBe(within(menu).getByRole('menuitem', { name: 'Force cancel' }));
     expect(focused.className).not.toContain('danger');
-    expect(focused.getAttribute('aria-label') ?? focused.textContent).toMatch(/^View:/);
+    // With no enabled safe action, focus lands on the Unavailable toggle.
+    expect(focused.getAttribute('aria-label') ?? focused.textContent).toMatch(/^Unavailable \(\d+\)/);
   });
 
   it.each([

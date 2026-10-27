@@ -50,10 +50,6 @@ import { isTransientError } from '../boot/queryClient';
 import { useLiveClock } from '../lib/liveClock';
 import { formatBytes, formatDurationMs, formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import {
-  readDashboardPreferences,
-  updateDashboardPreferences,
-} from '../utils/dashboardPreferences';
-import {
   recordTemporalTaskEditingClientEvent,
   taskCompareHref,
   taskEditForRerunHref,
@@ -67,9 +63,9 @@ import {
 } from '../components/workflows/WorkflowWorkspaceSidebar';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import { IssueLifecyclePanel, issueLifecycleEvidenceFromExecution } from '../components/IssueLifecyclePanel';
-import { WorkflowChatNative } from './WorkflowChatNative';
 import {
   buildWorkflowActionMenuItems,
+  selectPrimaryWorkflowActions,
   DEFAULT_REMEDIATION_ACTION_POLICY,
   DEFAULT_REMEDIATION_AUTHORITY,
   DEFAULT_REMEDIATION_MODE,
@@ -92,6 +88,7 @@ import {
 } from '../lib/chatSession';
 import {
   type WorkflowDetailSubroute,
+  SESSION_DIAGNOSTICS_ANCHOR,
   decodeWorkflowIdFromPath,
   workflowDetailQueryKey,
   workflowDetailSubrouteFromPath,
@@ -218,10 +215,6 @@ type SegmentedNavItem<T extends string> = {
   label: string;
   href: string;
   badge?: ReactNode;
-  /** Optional leading glyph (e.g. the diagnostic Debug tab). */
-  icon?: ReactNode;
-  /** `quiet` visually de-emphasizes the item without hiding it. */
-  tone?: 'quiet';
 };
 type WorkflowDialogKind =
   | 'rename'
@@ -2093,9 +2086,7 @@ function SegmentedNav<T extends string>({
       {items.map((item) => (
         <a
           key={item.value}
-          className={['segmented-control-item', item.tone === 'quiet' ? 'segmented-control-item-quiet' : '']
-            .filter(Boolean)
-            .join(' ')}
+          className="segmented-control-item"
           href={item.href}
           aria-current={active === item.value ? 'page' : undefined}
           onClick={(event) => {
@@ -2103,9 +2094,6 @@ function SegmentedNav<T extends string>({
             onNavigate(item.value, item.href);
           }}
         >
-          {item.icon ? (
-            <span className="segmented-control-item-icon" aria-hidden="true">{item.icon}</span>
-          ) : null}
           <span className="segmented-control-item-label">{item.label}</span>
           {item.badge !== null && item.badge !== undefined ? (
             <span className="segmented-control-badge" aria-hidden="true">{item.badge}</span>
@@ -2192,7 +2180,15 @@ function RepositoryFact({ repository }: { repository: string }) {
       <svg aria-hidden="true" className="td-repository-icon" viewBox="0 0 16 16" focusable="false">
         <path d="M4 2.5h6.5L13 5v8.5H4A1.5 1.5 0 0 1 2.5 12V4A1.5 1.5 0 0 1 4 2.5Zm6 1.2V5.5h1.8L10 3.7ZM4 4a.5.5 0 0 0-.5.5V12a.5.5 0 0 0 .5.5h8V6.5H9V4H4Zm1.25 4h4.5v1h-4.5V8Zm0 2h3.5v1h-3.5v-1Z" />
       </svg>
-      <span className="td-repository-name">{repository}</span>
+      <span className="td-repository-name">
+        {repository.includes('/') ? (
+          <>
+            {repository.slice(0, repository.indexOf('/') + 1)}
+            <wbr />
+            {repository.slice(repository.indexOf('/') + 1)}
+          </>
+        ) : repository}
+      </span>
     </>
   );
   return (
@@ -8735,31 +8731,6 @@ function AuditTrailPanel({
   );
 }
 
-const DEBUG_ICON = (
-  <svg
-    aria-hidden="true"
-    viewBox="0 0 24 24"
-    focusable="false"
-    width="14"
-    height="14"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="2"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-  >
-    <path d="M9 9v-1a3 3 0 0 1 6 0v1" />
-    <path d="M8 9h8a6 6 0 0 1 1 3v3a5 5 0 0 1 -10 0v-3a6 6 0 0 1 1 -3" />
-    <path d="M3 13h4" />
-    <path d="M17 13h4" />
-    <path d="M12 20v-6" />
-    <path d="M4 19l3.35 -2" />
-    <path d="M20 19l-3.35 -2" />
-    <path d="M4 7l3.75 2.4" />
-    <path d="M20 7l-3.75 2.4" />
-  </svg>
-);
-
 function WorkflowDetailSubrouteNav({
   workflowId,
   current,
@@ -8777,9 +8748,10 @@ function WorkflowDetailSubrouteNav({
   artifactCount?: number | null;
   runCount?: number | null;
 }) {
+  // Details (summary, configuration, and identifiers) is the reference tab, so
+  // it follows the live session, its execution, and what the run produced.
   const items: Array<SegmentedNavItem<WorkflowDetailSubroute>> = [
     { value: 'chat', label: 'Chat', href: workflowDetailSubrouteHref(workflowId, 'chat', search) },
-    { value: 'overview', label: 'Overview', href: workflowDetailSubrouteHref(workflowId, 'overview', search) },
     {
       value: 'execution',
       label: 'Execution',
@@ -8792,16 +8764,7 @@ function WorkflowDetailSubrouteNav({
       href: workflowDetailSubrouteHref(workflowId, 'evidence', search),
       badge: artifactCount ?? null,
     },
-    {
-      // MM-964: Debug is a first-class-but-quiet diagnostic tab. It rides the
-      // same segmented control (one click, scrolls with the other tabs on
-      // narrow viewports) rather than hiding behind a single-item overflow menu.
-      value: 'debug',
-      label: 'Debug',
-      href: workflowDetailSubrouteHref(workflowId, 'debug', search),
-      icon: DEBUG_ICON,
-      tone: 'quiet',
-    },
+    { value: 'details', label: 'Details', href: workflowDetailSubrouteHref(workflowId, 'details', search) },
   ];
   return (
     <SegmentedNav
@@ -8944,11 +8907,20 @@ function RunComparisonPanel({
  * the custom follow-up textarea, an optimistic message lane, approval cards, or
  * interrupt/stop/clear/cancel/harvest/remove controls: `actionsEnabled` stays
  * false and no optimistic-message setter is wired. A clearly labeled "Diagnostic
- * event history" heading distinguishes it from the native chat above
+ * event history" heading distinguishes it from the native chat
  * (docs/UI/WorkflowChatPanel.md §11).
+ *
+ * It lives on the Execution tab: in Observation when there is no usable step
+ * ledger, otherwise in the Session diagnostics disclosure, which mounts it only
+ * while open so resolving a bridge-only run's session costs nothing unseen.
  */
 function WorkflowChatDiagnostics({
   apiBase,
+  execution,
+  workflowId,
+  explicitBridgeSessionId,
+  idempotencyKey,
+  detailPoll,
   logStreamingEnabled,
   resolvedAgentRunId,
   showAgentRunAttachNotice,
@@ -8956,12 +8928,13 @@ function WorkflowChatDiagnostics({
   routes,
   sessionTimelineEnabled,
   structuredHistoryEnabled,
-  resolvedBridgeSessionId,
-  bridgeProjection,
-  bridgeResolutionLoading,
-  missingAgentRunState,
 }: {
   apiBase: string;
+  execution: z.infer<typeof ExecutionDetailSchema>;
+  workflowId: string;
+  explicitBridgeSessionId: string;
+  idempotencyKey: string;
+  detailPoll: number;
   logStreamingEnabled: boolean;
   resolvedAgentRunId: string | null;
   showAgentRunAttachNotice: boolean;
@@ -8969,11 +8942,29 @@ function WorkflowChatDiagnostics({
   routes: AgentRunRouteTemplates;
   sessionTimelineEnabled: boolean;
   structuredHistoryEnabled: boolean;
-  resolvedBridgeSessionId: string;
-  bridgeProjection: BridgeSessionProjection;
-  bridgeResolutionLoading: boolean;
-  missingAgentRunState: MissingAgentRunState | null;
 }) {
+  const bridgeResolutionQuery = useQuery({
+    queryKey: ['omnigent-bridge-session-projection', workflowId, idempotencyKey],
+    queryFn: () => resolveBridgeSessionProjection({ apiBase, workflowId, idempotencyKey }),
+    enabled: !resolvedAgentRunId && !explicitBridgeSessionId && Boolean(workflowId),
+    staleTime: isTerminal ? Infinity : detailPoll,
+    retry: false,
+  });
+  const resolvedBridgeSessionId =
+    explicitBridgeSessionId || bridgeResolutionQuery.data?.bridgeSessionId || '';
+  const bridgeProjection: BridgeSessionProjection = (
+    bridgeResolutionQuery.data?.bridgeSessionId === resolvedBridgeSessionId
+      ? bridgeResolutionQuery.data
+      : undefined
+  ) ?? {
+    bridgeSessionId: resolvedBridgeSessionId,
+    status: execution.status ?? undefined,
+    capabilities: {},
+  };
+  const missingAgentRunState =
+    !resolvedAgentRunId && !resolvedBridgeSessionId && !bridgeResolutionQuery.isLoading
+      ? inferMissingAgentRunState(execution)
+      : null;
   return (
     <section
       className="stack td-chat-diagnostics"
@@ -9012,7 +9003,7 @@ function WorkflowChatDiagnostics({
             isTerminal={isTerminal}
             projection={bridgeProjection}
           />
-        ) : bridgeResolutionLoading ? (
+        ) : bridgeResolutionQuery.isLoading ? (
           <p className="small">Checking bridge session evidence.</p>
         ) : (
           <p className="small">
@@ -9040,14 +9031,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       cfg?.features?.temporalDashboard?.temporalTaskEditing,
   );
   const debugOn = Boolean(cfg?.features?.temporalDashboard?.debugFieldsEnabled);
-  // MM-964: operators can hide the diagnostic Debug tab via a local preference.
-  // The Debug tab is available by default regardless of server config; the
-  // preference (default visible) lets an operator collapse it. The extra
-  // server-gated Debug Metadata region additionally requires `debugOn`.
-  const [debugFieldsPref, setDebugFieldsPref] = useState(
-    () => readDashboardPreferences().debugFieldsVisible,
-  );
-  const debugVisible = debugFieldsPref;
   const logStreamingEnabled = cfg?.features?.logStreamingEnabled !== false;
   const structuredHistoryEnabled = shouldUseStructuredHistory(cfg);
   const currentPathname = window.location.pathname;
@@ -9118,36 +9101,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     execution?.omnigent_bridge_session_id ||
     '';
   const executionIdempotencyKey = execution?.idempotencyKey || execution?.idempotency_key || '';
-  const shouldResolveBridgeSession = Boolean(
-    execution &&
-      detailSubroute === 'debug' &&
-      !resolvedAgentRunId &&
-      !explicitBridgeSessionId &&
-      workflowId,
-  );
-  const bridgeResolutionQuery = useQuery({
-    queryKey: ['omnigent-bridge-session-projection', workflowId, executionIdempotencyKey],
-    queryFn: () =>
-      resolveBridgeSessionProjection({
-        apiBase: payload.apiBase,
-        workflowId,
-        idempotencyKey: executionIdempotencyKey,
-      }),
-    enabled: shouldResolveBridgeSession,
-    staleTime: isTerminalExecution ? Infinity : detailPoll,
-    retry: false,
-  });
-  const resolvedBridgeSessionId =
-    explicitBridgeSessionId || bridgeResolutionQuery.data?.bridgeSessionId || '';
-  const resolvedBridgeProjection: BridgeSessionProjection = (
-    bridgeResolutionQuery.data?.bridgeSessionId === resolvedBridgeSessionId
-      ? bridgeResolutionQuery.data
-      : undefined
-  ) ?? {
-    bridgeSessionId: resolvedBridgeSessionId,
-    status: execution?.status ?? undefined,
-    capabilities: {},
-  };
   const shouldFetchRemediationLinks = Boolean(execution && workflowId);
   const sessionTimelineEnabled = shouldEnableSessionTimelineViewer({
     config: cfg,
@@ -9194,20 +9147,16 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     return undefined;
   }, [execution, resolvedAgentRunId]);
 
-  const missingAgentRunState =
-    execution && !resolvedAgentRunId && !resolvedBridgeSessionId && !bridgeResolutionQuery.isLoading
-      ? inferMissingAgentRunState(execution)
-      : null;
-
   const chatTabActive = detailSubroute === 'chat';
   const executionTabActive = detailSubroute === 'execution';
   const evidenceTabActive = detailSubroute === 'evidence';
   const stepsTabActive = executionTabActive;
   const artifactsTabActive = evidenceTabActive;
-  const overviewTabActive = detailSubroute === 'overview';
+  const detailsTabActive = detailSubroute === 'details';
   const runsTabActive = executionTabActive;
-  const debugTabActive = detailSubroute === 'debug';
-  const shouldFetchStepLedger = (stepsTabActive || artifactsTabActive) && Boolean(execution?.stepsHref);
+  // Chat reads the ledger only to name the bound step, so it does not poll it.
+  const stepLedgerPolled = stepsTabActive || artifactsTabActive;
+  const shouldFetchStepLedger = (stepLedgerPolled || chatTabActive) && Boolean(execution?.stepsHref);
 
   const modelTierObservabilityQuery = useQuery({
     queryKey: ['agent-run-observability-events', resolvedAgentRunId],
@@ -9216,7 +9165,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       resolvedAgentRunId,
       agentRunRoutes.observabilityEvents,
     ),
-    enabled: overviewTabActive && Boolean(resolvedAgentRunId),
+    enabled: detailsTabActive && Boolean(resolvedAgentRunId),
     staleTime: isTerminalExecution ? Infinity : detailPoll,
     retry: false,
   });
@@ -9225,9 +9174,14 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     queryKey: ['workflow-detail-steps', workflowId, execution?.stepsHref],
     queryFn: () => fetchStepLedger(String(execution?.stepsHref || '')),
     enabled: shouldFetchStepLedger,
-    refetchInterval: shouldFetchStepLedger && !isTerminalExecution ? detailPoll : false,
+    refetchInterval: shouldFetchStepLedger && stepLedgerPolled && !isTerminalExecution ? detailPoll : false,
     staleTime: evidenceStaleTime,
   });
+  // Chat asks again when its bound step was added after the ledger loaded,
+  // such as a remediation attempt.
+  const refetchStepLedger = () => {
+    if (shouldFetchStepLedger) void stepsQuery.refetch();
+  };
   const branchesQuery = useQuery({
     queryKey: ['workflow-detail-checkpoint-branches', workflowId],
     queryFn: () => fetchCheckpointBranches(payload.apiBase, workflowId),
@@ -9318,8 +9272,8 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const runSummaryQuery = useQuery({
     queryKey: ['workflow-detail-run-summary', summaryArtifactRef],
     queryFn: () => fetchRunSummaryArtifact(payload.apiBase, summaryArtifactRef),
-    enabled: overviewTabActive && Boolean(summaryArtifactRef),
-    refetchInterval: overviewTabActive && summaryArtifactRef && !isTerminalExecution ? detailPoll : false,
+    enabled: detailsTabActive && Boolean(summaryArtifactRef),
+    refetchInterval: detailsTabActive && summaryArtifactRef && !isTerminalExecution ? detailPoll : false,
     staleTime: evidenceStaleTime,
   });
   const inboundRemediationsQuery = useQuery({
@@ -10085,18 +10039,21 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       },
     },
   });
-  const toolbarMenuItems: WorkflowActionMenuItem[] = [
-    {
-      id: 'view-debug-details',
-      label: debugFieldsPref ? 'View: Hide debug details' : 'View: Show debug details',
-      onSelect: () => {
-        const next = !debugFieldsPref;
-        setDebugFieldsPref(next);
-        updateDashboardPreferences({ debugFieldsVisible: next });
-      },
-    },
-    ...workflowActionMenuItems,
-  ];
+  const primaryActionItems = selectPrimaryWorkflowActions(workflowActionMenuItems);
+  const runPrimaryAction = (item: WorkflowActionMenuItem) => {
+    if (item.disabledReason) return;
+    if (item.confirmation) {
+      requestConfirmation({
+        ...item.confirmation,
+        subject: workflowSubject,
+        compactId: taskId || workflowId || '',
+        danger: item.danger ?? false,
+        onConfirm: () => item.onSelect?.(),
+      });
+      return;
+    }
+    item.onSelect?.();
+  };
   const toggleStep = (logicalStepId: string) => {
     setExpandedSteps((prev) => ({
       ...prev,
@@ -10146,7 +10103,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   // list supplies the operator-facing label, falling back to the ID.
   const providerProfileLabelsQuery = useQuery({
     queryKey: ['workflow-detail', 'provider-profile-labels'],
-    enabled: overviewTabActive && Boolean(historicalProfileId?.trim()),
+    enabled: detailsTabActive && Boolean(historicalProfileId?.trim()),
     staleTime: 60_000,
     queryFn: async (): Promise<Map<string, string>> => {
       const response = await fetch(`${payload.apiBase}/v1/provider-profiles`, { credentials: 'same-origin' });
@@ -10163,8 +10120,43 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       return labels;
     },
   });
+  // The schedule's name reads better than its id; the id stands in until the
+  // definition loads or when it cannot be read.
+  const recurrenceDefinitionId = execution?.recurrence?.definitionId || '';
+  const recurrenceNameQuery = useQuery({
+    queryKey: ['workflow-detail', 'recurrence-name', recurrenceDefinitionId],
+    enabled: detailsTabActive && Boolean(recurrenceDefinitionId),
+    staleTime: 5 * 60_000,
+    retry: false,
+    queryFn: async (): Promise<string | null> => {
+      const response = await fetch(
+        `${payload.apiBase}/recurring-workflows/${encodeURIComponent(recurrenceDefinitionId)}`,
+        { credentials: 'same-origin' },
+      );
+      if (!response.ok) return null;
+      const value: unknown = await response.json();
+      const name = value && typeof value === 'object' ? (value as Record<string, unknown>).name : null;
+      return typeof name === 'string' && name.trim() ? name.trim() : null;
+    },
+  });
   const sourceContext = resolveWorkflowSourceContext(execution);
-  const showsSourceContextStrip = sourceContext.hasRepository || Boolean(sourceContext.startingBranch);
+  const sessionDiagnostics = execution ? (
+    <WorkflowChatDiagnostics
+      apiBase={payload.apiBase}
+      execution={execution}
+      workflowId={workflowId}
+      explicitBridgeSessionId={explicitBridgeSessionId}
+      idempotencyKey={executionIdempotencyKey}
+      detailPoll={detailPoll}
+      logStreamingEnabled={logStreamingEnabled}
+      resolvedAgentRunId={resolvedAgentRunId}
+      showAgentRunAttachNotice={showAgentRunAttachNotice}
+      isTerminal={isTerminalExecution}
+      routes={agentRunRoutes}
+      sessionTimelineEnabled={sessionTimelineEnabled}
+      structuredHistoryEnabled={structuredHistoryEnabled}
+    />
+  ) : null;
   const pageTitle = execution?.title?.trim() || 'Workflow';
   const skillWarning =
     execution?.skillRuntime?.diagnostics?.cause?.trim() ||
@@ -10179,12 +10171,30 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         title={pageTitle}
         actions={
           taskId ? (
-            <IconMenuButton
-              items={toolbarMenuItems}
-              ariaLabel="Workflow actions"
-              subject={workflowDialogSubject}
-              subjectId={workflowDialogId}
-            />
+            <>
+              {primaryActionItems.length > 0 ? (
+                <div className="td-primary-actions" role="group" aria-label="Primary workflow actions">
+                  {primaryActionItems.map((item) => (
+                    <Button
+                      key={item.id}
+                      variant="secondary"
+                      size="sm"
+                      disabled={Boolean(item.disabledReason)}
+                      title={item.disabledReason ?? undefined}
+                      onClick={() => runPrimaryAction(item)}
+                    >
+                      {item.label}
+                    </Button>
+                  ))}
+                </div>
+              ) : null}
+              <IconMenuButton
+                items={workflowActionMenuItems}
+                ariaLabel="Workflow actions"
+                subject={workflowDialogSubject}
+                subjectId={workflowDialogId}
+              />
+            </>
           ) : null
         }
       >
@@ -10215,20 +10225,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
             artifactCount={artifactTabCount}
             runCount={runTabCount}
           />
-        </div>
-      ) : null}
-
-      {execution?.recurrence?.definitionId ? (
-        <div className="page-meta">
-          Created by schedule{' '}
-          <a
-            href={
-              execution.recurrence?.href ||
-              `/schedules/${encodeURIComponent(execution.recurrence?.definitionId || '')}`
-            }
-          >
-            {execution.recurrence?.definitionId}
-          </a>
         </div>
       ) : null}
 
@@ -10292,53 +10288,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       ) : execution ? (
         <>
           <QueryStaleNotice query={detailQuery} />
-          <div className="td-hero">
-            <div className="td-hero-body">
-              <button
-                type="button"
-                className="td-instructions-toggle"
-                aria-expanded={instructionsExpanded}
-                aria-controls="workflow-inputs-panel"
-                onClick={() => setInstructionsExpanded((current) => !current)}
-              >
-                {instructionsExpanded ? 'Hide Workflow Inputs' : 'Show Workflow Inputs'}
-              </button>
-            </div>
-            {showsSourceContextStrip ? (
-              <dl className="td-source-context" aria-label="Workflow source context">
-                {sourceContext.repository ? (
-                  <div className="td-source-context-item">
-                    <dt>Repository</dt>
-                    <dd>
-                      <RepositoryFact repository={sourceContext.repository} />
-                    </dd>
-                  </div>
-                ) : null}
-                <div className="td-source-context-item">
-                  <dt>Starting Branch</dt>
-                  <dd>
-                    {sourceContext.startingBranch ? (
-                      <code className="text-xs break-all" title={sourceContext.startingBranch}>
-                        {sourceContext.startingBranch}
-                      </code>
-                    ) : (
-                      <span className="td-source-context-empty">Not recorded</span>
-                    )}
-                  </dd>
-                </div>
-              </dl>
-            ) : null}
-            {instructionsExpanded ? (
-              <div id="workflow-inputs-panel" className="td-instructions-panel">
-                {hasTaskInstructions ? (
-                  <pre>{taskInstructions}</pre>
-                ) : (
-                  <p className="small">Full workflow inputs are not available for this workflow.</p>
-                )}
-              </div>
-            ) : null}
-          </div>
-
           {chatTabActive ? (
             execution ? (
               <WorkflowNativeChatRoute
@@ -10347,9 +10296,8 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 routeWorkflowId={taskId ?? workflowId}
                 search={search}
                 workflowTitle={workflowSubject}
-                runtimeLabel={
-                  execution.targetRuntime ? formatRuntimeLabel(execution.targetRuntime) : null
-                }
+                steps={stepsQuery.data?.steps ?? null}
+                onUnknownStep={refetchStepLedger}
                 workflowTerminal={isTerminalExecution}
                 pollIntervalMs={detailPoll}
                 onNavigate={setDetailSubroute}
@@ -10361,47 +10309,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
             )
           ) : null}
 
-          {debugTabActive ? (
-            <section
-              className="stack td-chat-region td-evidence-region"
-              aria-label="Session diagnostics"
-            >
-              <div>
-                <h3>Session diagnostics</h3>
-                <p className="small">
-                  Read-only bridge session transcript, live runtime events, and eligible operator
-                  controls. Diagnostics only — the native chat experience is on the Chat tab.
-                  When native chat is unavailable, this read-only diagnostic and compatibility
-                  fallback preserves the session evidence below.
-                </p>
-              </div>
-              <WorkflowChatNative
-                apiBase={payload.apiBase}
-                workflowId={execution.workflowId || execution.taskId || ''}
-                terminal={isTerminalExecution}
-              >
-                <WorkflowChatDiagnostics
-                  apiBase={payload.apiBase}
-                  logStreamingEnabled={logStreamingEnabled}
-                  resolvedAgentRunId={resolvedAgentRunId}
-                  showAgentRunAttachNotice={showAgentRunAttachNotice}
-                  isTerminal={isTerminalExecution}
-                  routes={agentRunRoutes}
-                  sessionTimelineEnabled={sessionTimelineEnabled}
-                  structuredHistoryEnabled={structuredHistoryEnabled}
-                  resolvedBridgeSessionId={resolvedBridgeSessionId}
-                  bridgeProjection={resolvedBridgeProjection}
-                  bridgeResolutionLoading={bridgeResolutionQuery.isLoading}
-                  missingAgentRunState={missingAgentRunState}
-                />
-              </WorkflowChatNative>
-            </section>
-          ) : null}
-
-          {overviewTabActive && shouldShowRuntimeCommand ? (
-            <RuntimeCommandDetail command={runtimeCommand} />
-          ) : null}
-
           {runsTabActive ? (
             <>
               <ExecutionHistoryPanel execution={execution} />
@@ -10409,7 +10316,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
             </>
           ) : null}
 
-          {overviewTabActive ? (
+          {detailsTabActive ? (
             <>
           <div className="td-summary-block">
             <h4>Summary</h4>
@@ -10441,10 +10348,31 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
               },
             ]}
           />
+          <div className="td-inputs">
+            <button
+              type="button"
+              className="td-instructions-toggle"
+              aria-expanded={instructionsExpanded}
+              aria-controls="workflow-inputs-panel"
+              onClick={() => setInstructionsExpanded((current) => !current)}
+            >
+              {instructionsExpanded ? 'Hide Workflow Inputs' : 'Show Workflow Inputs'}
+            </button>
+            {instructionsExpanded ? (
+              <div id="workflow-inputs-panel" className="td-instructions-panel">
+                {hasTaskInstructions ? (
+                  <pre>{taskInstructions}</pre>
+                ) : (
+                  <p className="small">Full workflow inputs are not available for this workflow.</p>
+                )}
+              </div>
+            ) : null}
+          </div>
+          {shouldShowRuntimeCommand ? <RuntimeCommandDetail command={runtimeCommand} /> : null}
             </>
           ) : null}
 
-          {overviewTabActive ? (
+          {detailsTabActive ? (
             <div className="td-facts-region">
               {agentResult ? (
                 <FactGroup title="Agent result">
@@ -10510,17 +10438,27 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
               </FactGroup>
 
               <FactGroup title="Git & Publish">
+                {sourceContext.repository ? (
+                  <Fact label="Repository">
+                    <RepositoryFact repository={sourceContext.repository} />
+                  </Fact>
+                ) : null}
+                <Fact label="Starting Branch">
+                  {sourceContext.startingBranch ? (
+                    <code className="text-xs break-all" title={sourceContext.startingBranch}>
+                      {sourceContext.startingBranch}
+                    </code>
+                  ) : (
+                    <span className="td-fact-empty">
+                      {sourceContext.startingBranchState === 'not-recorded' ? 'Not recorded' : 'Not applicable'}
+                    </span>
+                  )}
+                </Fact>
                 {execution.publishMode ? (
                   <Fact label="Publish Mode">
                     {formatPublishModeLabel(execution.publishMode)}
                   </Fact>
                 ) : null}
-                {/* Repository and starting branch are shown once, in the shared source context. */}
-                {showsSourceContextStrip ? null : (
-                  <Fact label="Starting Branch">
-                    <span className="td-source-context-empty">Not applicable</span>
-                  </Fact>
-                )}
                 {execution.targetBranch ? (
                   <Fact label="Target Branch">
                     <code className="text-xs break-all">{execution.targetBranch}</code>
@@ -10560,6 +10498,19 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 <Fact label="Closed">{formatWhen(execution.closedAt)}</Fact>
                 {execution.scheduledFor ? <Fact label="Scheduled For">{formatWhen(execution.scheduledFor)}</Fact> : null}
                 {execution.waitingReason ? <Fact label="Waiting Reason">{execution.waitingReason}</Fact> : null}
+                {execution.recurrence?.definitionId ? (
+                  <Fact label="Created by">
+                    Schedule{' '}
+                    <a
+                      href={
+                        execution.recurrence.href ||
+                        `/schedules/${encodeURIComponent(execution.recurrence.definitionId)}`
+                      }
+                    >
+                      {recurrenceNameQuery.data || execution.recurrence.definitionId}
+                    </a>
+                  </Fact>
+                ) : null}
               </FactGroup>
 
               <TechnicalDetailsDisclosure>
@@ -10567,6 +10518,14 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                   <Fact label="Workflow ID">
                     <code className="text-xs break-all">{workflowId || taskId || '—'}</code>
                   </Fact>
+                  <Fact label="Current Run ID">
+                    <code className="text-xs break-all">{latestRunId || '—'}</code>
+                  </Fact>
+                  {resolvedAgentRunId ? (
+                    <Fact label="Workflow Run">
+                      <code className="text-xs break-all">{resolvedAgentRunId}</code>
+                    </Fact>
+                  ) : null}
                   {historicalProfileId ? (
                     <Fact label="Provider Profile ID">
                       <code className="text-xs break-all">{historicalProfileId}</code>
@@ -10580,6 +10539,13 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                   {execution.priority !== null && execution.priority !== undefined ? (
                     <Fact label="Priority">{execution.priority}</Fact>
                   ) : null}
+                </FactGroup>
+                <FactGroup title="Temporal">
+                  <Fact label="Temporal Status">{formatStatusLabel(execution.temporalStatus)}</Fact>
+                  <Fact label="Workflow State">{formatStatusLabel(execution.rawState || execution.state)}</Fact>
+                  {execution.closeStatus ? <Fact label="Close Status">{formatStatusLabel(execution.closeStatus)}</Fact> : null}
+                  <Fact label="Workflow Type">{execution.workflowType || '—'}</Fact>
+                  <Fact label="Entry">{execution.entry || '—'}</Fact>
                 </FactGroup>
                 {execution.omnigentExecutionPlan ? (
                   <FactGroup title="Omnigent authority">
@@ -10632,40 +10598,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                   targetSkill={execution.targetSkill}
                   skillRuntime={execution.skillRuntime}
                 />
-              </TechnicalDetailsDisclosure>
-            </div>
-          ) : null}
-
-          {debugTabActive ? (
-            <section className="stack td-debug-region" aria-label="Workflow debug details">
-              <div>
-                <h3>Debug</h3>
-                <p className="small">
-                  {debugVisible
-                    ? 'Raw Temporal and runtime identifiers for this workflow. These details are diagnostic only and do not affect the default overview.'
-                    : 'Debug details are hidden by the current view preference.'}
-                </p>
-              </div>
-              {debugVisible ? <div className="td-facts-region">
-                <FactGroup title="Temporal">
-                  <Fact label="Temporal Status">{formatStatusLabel(execution.temporalStatus)}</Fact>
-                  <Fact label="Workflow State">{formatStatusLabel(execution.rawState || execution.state)}</Fact>
-                  {execution.closeStatus ? <Fact label="Close Status">{formatStatusLabel(execution.closeStatus)}</Fact> : null}
-                  <Fact label="Source">Temporal</Fact>
-                  <Fact label="Workflow Type">{execution.workflowType || '—'}</Fact>
-                  <Fact label="Entry">{execution.entry || '—'}</Fact>
-                  <Fact label="Current Run ID">
-                    <code className="text-xs break-all">{latestRunId || '—'}</code>
-                  </Fact>
-                  {resolvedAgentRunId ? (
-                    <Fact label="Workflow Run">
-                      <code className="text-xs break-all">{resolvedAgentRunId}</code>
-                    </Fact>
-                  ) : null}
-                  <Fact label="Workflow ID">
-                    <code className="text-xs break-all">{workflowId}</code>
-                  </Fact>
-                </FactGroup>
                 {actions ? (
                   <FactGroup title="Action Capability Map">
                     <Fact label="Raw Actions">
@@ -10673,11 +10605,20 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                     </Fact>
                   </FactGroup>
                 ) : null}
-              </div> : null}
-            </section>
+                {debugOn && execution.debugFields ? (
+                  <FactGroup title="Debug Metadata">
+                    {buildDebugFieldEntries(execution).map(([key, value]) => (
+                      <Fact key={key} label={key}>
+                        {formatDebugValue(value)}
+                      </Fact>
+                    ))}
+                  </FactGroup>
+                ) : null}
+              </TechnicalDetailsDisclosure>
+            </div>
           ) : null}
 
-          {overviewTabActive && runSummary ? (
+          {detailsTabActive && runSummary ? (
             <section className="stack td-run-summary-region td-evidence-region">
               <h3>Run Summary</h3>
               {runSummary.controlStop?.kind === 'workflow_gate' ? (
@@ -10726,7 +10667,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                         <a
                           href={`/workflows/${encodeURIComponent(
                             continueRemediationEvidence.destinationWorkflowId,
-                          )}/overview?source=temporal`}
+                          )}/details?source=temporal`}
                         >
                           <code className="text-xs break-all">
                             {continueRemediationEvidence.destinationWorkflowId}
@@ -10947,11 +10888,11 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
-          {overviewTabActive && displayedMergeAutomation ? (
+          {detailsTabActive && displayedMergeAutomation ? (
             <MergeAutomationPanel mergeAutomation={displayedMergeAutomation} />
           ) : null}
 
-          {overviewTabActive ? (
+          {detailsTabActive ? (
             <IssueLifecyclePanel apiBase={payload.apiBase} evidence={issueLifecycleEvidenceFromExecution(execution)} />
           ) : null}
 
@@ -11054,7 +10995,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
-          {overviewTabActive && hasDependencySection ? (
+          {detailsTabActive && hasDependencySection ? (
             <section className="stack">
               <div>
                 <h3>Dependencies</h3>
@@ -11352,10 +11293,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                     />
                   </>
                 ) : (
-                  <>
-                    <h3>Live Logs</h3>
-                    <p className="small">{missingAgentRunState ? renderMissingAgentRunCopy(missingAgentRunState) : 'Waiting for workflow details...'}</p>
-                  </>
+                  sessionDiagnostics
                 )
               ) : (
                 <>
@@ -11366,17 +11304,15 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
-          {debugTabActive && debugOn && debugVisible && execution.debugFields ? (
-            <section className="stack">
-              <h3>Debug Metadata</h3>
-              <div className="grid-2">
-                {buildDebugFieldEntries(execution).map(([key, value]) => (
-                  <Card key={key} label={key}>
-                    {formatDebugValue(value)}
-                  </Card>
-                ))}
-              </div>
-            </section>
+          {/* Without a usable step ledger, Observation above is the tab's main
+              content and already carries the session evidence. */}
+          {executionTabActive && !showExecutionObservationFallback ? (
+            <TechnicalDetailsDisclosure
+              summary="Session diagnostics"
+              anchorId={SESSION_DIAGNOSTICS_ANCHOR}
+            >
+              {sessionDiagnostics}
+            </TechnicalDetailsDisclosure>
           ) : null}
         </>
       ) : (

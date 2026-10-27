@@ -1623,12 +1623,12 @@ async def test_append_events_allocates_monotonic_sequences_and_keeps_terminal_st
         row.bridge_session_id,
         [
             {"eventType": "response.delta", "normalizedStatus": "running"},
-            {"eventType": "response.completed", "normalizedStatus": "completed"},
+            {"eventType": "session.interrupted", "normalizedStatus": "canceled"},
         ],
     )
     after_terminal = await store.get_bridge_session(row.bridge_session_id)
     assert after_terminal is not None
-    assert after_terminal.status == "completed"
+    assert after_terminal.status == "canceled"
 
     await store.append_events(
         row.bridge_session_id,
@@ -1639,7 +1639,52 @@ async def test_append_events_allocates_monotonic_sequences_and_keeps_terminal_st
     assert [event.sequence for event in events] == [1, 2, 3]
     final = await store.get_bridge_session(row.bridge_session_id)
     assert final is not None
-    assert final.status == "completed"
+    assert final.status == "canceled"
+
+
+@pytest.mark.asyncio
+async def test_append_events_keeps_the_session_active_when_a_turn_ends(store):
+    # A response or turn outcome ends that turn, not the session: the agent can
+    # keep working in the same session. The session ends only through its
+    # explicit terminal record (mark_terminal) or a session-level outcome.
+    row = await store.get_or_create(
+        request=_request(),
+        endpoint_ref="default",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
+    )
+
+    await store.append_events(
+        row.bridge_session_id,
+        [
+            {"eventType": "response.created", "normalizedStatus": "running"},
+            {"eventType": "response.completed", "normalizedStatus": "completed"},
+            {"eventType": "turn.completed", "normalizedStatus": "completed"},
+            {"eventType": "response.failed", "normalizedStatus": "failed"},
+            {"eventType": "response.cancelled", "normalizedStatus": "canceled"},
+        ],
+    )
+    between_turns = await store.get_bridge_session(row.bridge_session_id)
+    assert between_turns is not None
+    assert between_turns.status == STATUS_ACTIVE
+
+    await store.append_events(
+        row.bridge_session_id,
+        [{"eventType": "response.created", "normalizedStatus": "running"}],
+    )
+    assert (await store.get_bridge_session(row.bridge_session_id)).status == STATUS_ACTIVE
+    # The turn outcomes stay in the event index with their own status.
+    events = await store.list_events(row.bridge_session_id)
+    assert [event.normalized_status for event in events][1:5] == [
+        "completed",
+        "completed",
+        "failed",
+        "canceled",
+    ]
+
+    await store.mark_terminal("idem-1", status="completed")
+    assert (await store.get_bridge_session(row.bridge_session_id)).status == "completed"
 
 
 @pytest.mark.asyncio
@@ -2024,6 +2069,31 @@ async def test_resolve_chat_binding_active_available(store):
     assert resolution.read_only is False
     assert resolution.chat_binding_id
     assert resolution.capabilities == {"viewTranscript": True, "sendMessage": True}
+
+
+@pytest.mark.asyncio
+async def test_resolve_chat_binding_stays_available_after_a_turn_completes(store):
+    await _seed_chat_session(
+        store,
+        key="idem-1",
+        workflow_id="mm:wf-1",
+        agent_run_id="ar-1",
+        session_id="sess-1",
+        capabilities={"viewTranscript": True, "sendMessage": True},
+    )
+    row = await store.get_existing("idem-1")
+    await store.append_events(
+        row.bridge_session_id,
+        [
+            {"eventType": "response.created", "normalizedStatus": "running"},
+            {"eventType": "response.completed", "normalizedStatus": "completed"},
+            {"eventType": "response.created", "normalizedStatus": "running"},
+        ],
+    )
+
+    resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
+    assert resolution.state == CHAT_BINDING_STATE_AVAILABLE
+    assert resolution.read_only is False
 
 
 @pytest.mark.asyncio
