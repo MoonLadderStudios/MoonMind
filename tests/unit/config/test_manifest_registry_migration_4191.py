@@ -379,8 +379,8 @@ def test_shared_manifest_ref_columns_survive_registry_removal() -> None:
 
 
 def test_both_historical_entry_contracts_stay_supported() -> None:
-    from moonmind.workflows.temporal.service import WORKFLOW_ENTRY_BY_TYPE
     from api_service.db.models import TemporalWorkflowType
+    from moonmind.workflows.temporal.service import WORKFLOW_ENTRY_BY_TYPE
 
     assert WORKFLOW_ENTRY_BY_TYPE[TemporalWorkflowType.MANIFEST_INGEST] == "manifest"
 
@@ -715,35 +715,88 @@ def test_retention_availability_matrix_stays_truthful() -> None:
     )
 
 
-def test_retention_raw_authorization_matrix() -> None:
+@pytest.mark.asyncio
+async def test_retention_raw_authorization_matrix(tmp_path) -> None:
     from api_service.db.models import TemporalArtifactRedactionLevel
-    from moonmind.workflows.temporal.artifacts import TemporalArtifactService
+    from moonmind.workflows.temporal.artifacts import (
+        ArtifactAccessContext,
+        LocalTemporalArtifactStore,
+        TemporalArtifactAuthorizationError,
+        TemporalArtifactRepository,
+        TemporalArtifactService,
+    )
+    from tests.unit.workflows.temporal.test_artifacts import temporal_db
 
     service = TemporalArtifactService.__new__(TemporalArtifactService)
     open_artifact = _retention_artifact(
         redaction_level=TemporalArtifactRedactionLevel.NONE
     )
-    assert service._raw_access_allowed(open_artifact, principal="anyone") is True
-    restricted = _retention_artifact(
-        redaction_level=TemporalArtifactRedactionLevel.RESTRICTED
-    )
-    # Owner reads restricted bytes; wrong-owner and bare service readers do not.
-    assert service._raw_access_allowed(restricted, principal="owner-1") is True
-    assert service._raw_access_allowed(restricted, principal="owner-2") is False
-    assert service._raw_access_allowed(restricted, principal="service:gc") is False
-    # An admitted owner scope restores service-to-service reads.
     assert (
         service._raw_access_allowed(
-            restricted, principal="service:gc", admitted_principal="owner-1"
+            open_artifact, access=ArtifactAccessContext.for_service("anyone")
         )
         is True
     )
+    restricted = _retention_artifact(
+        redaction_level=TemporalArtifactRedactionLevel.RESTRICTED
+    )
+    owner_access = ArtifactAccessContext.for_service("owner-1")
+    # Owner reads restricted bytes; wrong-owner and bare service readers do not.
+    assert service._raw_access_allowed(restricted, access=owner_access) is True
+    assert (
+        service._raw_access_allowed(
+            restricted, access=ArtifactAccessContext.for_service("owner-2")
+        )
+        is False
+    )
+    assert (
+        service._raw_access_allowed(
+            restricted, access=ArtifactAccessContext.for_service("service:gc")
+        )
+        is False
+    )
+    # Trusted input admission persists exact raw rights for the destination.
+    # A reader's owner label alone cannot stand in for that delegation.
+    async with temporal_db(tmp_path) as sessions:
+        async with sessions() as session:
+            artifacts = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "raw-grant"),
+            )
+            artifact, _ = await artifacts.create(
+                principal="owner-1",
+                redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+            )
+            await artifacts.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal="owner-1",
+                payload=b"retained raw",
+            )
+            await artifacts.delegate_read_access(
+                artifact_ids=[artifact.artifact_id],
+                workflow_id="retained-consumer",
+                access=owner_access,
+            )
+            _artifact, payload = await artifacts.read(
+                artifact_id=artifact.artifact_id,
+                access=ArtifactAccessContext.for_execution(
+                    "retained-consumer", principal="service:gc"
+                ),
+            )
+            assert payload == b"retained raw"
+            with pytest.raises(TemporalArtifactAuthorizationError):
+                await artifacts.read(
+                    artifact_id=artifact.artifact_id,
+                    access=ArtifactAccessContext.for_execution(
+                        "unrelated-consumer", principal="service:gc"
+                    ),
+                )
     # Quarantine denies even the owner: a data-safety state, not auth.
     quarantined = _retention_artifact(
         redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
         metadata_json={"quarantine": "true"},
     )
-    assert service._raw_access_allowed(quarantined, principal="owner-1") is False
+    assert service._raw_access_allowed(quarantined, access=owner_access) is False
 
 
 def test_registry_removal_owns_no_saved_work_evidence() -> None:

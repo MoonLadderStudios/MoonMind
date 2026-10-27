@@ -10,7 +10,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from api_service.db import models
 from api_service.services.checkpoint_branch_service import CheckpointBranchService
-from moonmind.workflows.temporal.artifacts import TemporalArtifactService
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    TemporalArtifactService,
+)
 from moonmind.workflows.temporal.remediation_context import (
     RemediationLifecyclePublisher,
 )
@@ -50,7 +53,7 @@ def _action_kwargs(remediation, authority, guard):
         authority_result=authority,
         guard_result=guard,
         principal="service:test",
-        admitted_principal="service:remediation-context",
+        access=ArtifactAccessContext.for_service("service:remediation-context"),
     )
 
 
@@ -179,7 +182,7 @@ async def test_resume_outage_preserves_terminal_fanout_and_projection(
         read = TemporalArtifactService.read
 
         async def outage(self, **kwargs):
-            if kwargs.get("principal") == "service:remediation-lifecycle":
+            if kwargs["access"].principal == "service:remediation-lifecycle":
                 raise OSError("controlled artifact-read outage")
             return await read(self, **kwargs)
 

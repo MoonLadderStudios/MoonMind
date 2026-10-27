@@ -9,12 +9,13 @@ from pathlib import Path
 
 import pytest
 
+from moonmind.schemas.checkpoint_restore_models import CheckpointRestoreError
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.temporal.activity_runtime import TemporalSandboxActivities
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.runtime.checkpoint_restore import (
     ManagedCheckpointRestoreService,
 )
-from moonmind.schemas.checkpoint_restore_models import CheckpointRestoreError
 from tests.unit.workflows.temporal.test_checkpoint_restore import _repo, _request
 
 
@@ -194,7 +195,10 @@ async def test_initialized_submodules_restore_without_their_source(tmp_path, cha
     )
     shutil.rmtree(source)
     shutil.rmtree(tmp_path / "module-origin")
-    result = await service.restore(request)
+    result = await service.restore(
+        request,
+        access=ArtifactAccessContext.for_execution("source"),
+    )
     restored = authority / "new-run" / "repo"
     for name, expected in states.items():
         repo = restored / name
@@ -217,9 +221,18 @@ async def test_initialized_submodules_restore_without_their_source(tmp_path, cha
             "Unpublished work",
             "Credential provider source",
         ]
-    assert await service.restore(request) == result
+    assert (
+        await service.restore(
+            request,
+            access=ArtifactAccessContext.for_execution("source"),
+        )
+        == result
+    )
     shutil.rmtree(restored)
-    repeated = await service.restore(request)
+    repeated = await service.restore(
+        request,
+        access=ArtifactAccessContext.for_execution("source"),
+    )
     assert repeated["baseCommit"] == base
     for name, expected in states.items():
         repo = restored / name
@@ -241,7 +254,10 @@ async def test_initialized_submodules_restore_without_their_source(tmp_path, cha
         "Subsequently changed candidate",
     )
     with pytest.raises(CheckpointRestoreError):
-        await service.restore(request)
+        await service.restore(
+            request,
+            access=ArtifactAccessContext.for_execution("source"),
+        )
 
 
 @pytest.mark.asyncio
@@ -379,7 +395,10 @@ async def test_uninitialized_submodule_restores_after_source_loss(
     )
     shutil.rmtree(source)
 
-    result = await service.restore(request)
+    result = await service.restore(
+        request,
+        access=ArtifactAccessContext.for_execution("source"),
+    )
 
     restored = authority / "new-run" / "repo"
     assert git(restored, "ls-files", "--stage") == index
@@ -388,7 +407,13 @@ async def test_uninitialized_submodule_restores_after_source_loss(
     assert (restored / ".gitmodules").read_bytes() == (
         remote / ".gitmodules"
     ).read_bytes()
-    assert await service.restore(request) == result
+    assert (
+        await service.restore(
+            request,
+            access=ArtifactAccessContext.for_execution("source"),
+        )
+        == result
+    )
 
 
 @pytest.mark.asyncio

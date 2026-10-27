@@ -16,6 +16,7 @@ from api_service.services.checkpoint_branch_turn_execution import (
     build_branch_turn_execution_identity,
 )
 from api_service.services.remediation_actions import TemporalRemediationControlPlane
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.remediation_actions import remediation_parameter_digest
 from moonmind.workflows.temporal.remediation_tools import (
     MoonMindControlPlaneRemediationActionExecutor,
@@ -26,9 +27,7 @@ from tests.unit.workflows.temporal.test_remediation_context import (
     _read_artifact_json,
     temporal_db,
 )
-from tests.unit.workflows.temporal.test_remediation_issue_3622 import (
-    _prepare,
-)
+from tests.unit.workflows.temporal.test_remediation_issue_3622 import _prepare
 from tests.unit.workflows.temporal.test_remediation_issue_3622 import (
     mock_client_adapter as _mock_client_adapter_fixture,
 )
@@ -68,6 +67,9 @@ async def test_lost_branch_start_ack_preserves_exact_pending_result(
         start_owner = CheckpointBranchTurnExecutionOwner(
             session,
             principal="service:remediation-context",
+            access=ArtifactAccessContext.for_execution(
+                target.workflow_id, principal="service:remediation-context"
+            ),
             client=SimpleNamespace(start_workflow=accept_then_lose_ack),
             artifact_service=artifacts,
         )
@@ -86,6 +88,15 @@ async def test_lost_branch_start_ack_preserves_exact_pending_result(
                     ordinal=1,
                 )
                 admitted_identities.append(identity)
+                # This fixture enters after production launch() loads its source
+                # authority. Preserve the same execution link on its manifest.
+                start_owner._artifact_link = {
+                    "namespace": target.namespace,
+                    "workflow_id": source_workflow_id,
+                    "run_id": source_run_id,
+                    "link_type": "checkpoint_branch.turn",
+                    "label": f"Checkpoint Branch turn {branch_turn_id}",
+                }
                 assert turn.instruction_ref == admitted_params["instructionRef"]
                 assert turn.instruction_digest == admitted_params["instructionDigest"]
                 binding = await session.get(models.WorkflowCheckpointBranchGitBinding, branch_id)
@@ -176,7 +187,7 @@ async def test_lost_branch_start_ack_preserves_exact_pending_result(
             "authority_result": authority,
             "guard_result": guard,
             "principal": "service:test",
-            "admitted_principal": "service:remediation-context",
+            "access": ArtifactAccessContext.for_service("service:remediation-context"),
         }
         first_tools = tools()
         if lost_result_ack:

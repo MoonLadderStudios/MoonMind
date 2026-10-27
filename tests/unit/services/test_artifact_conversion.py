@@ -384,7 +384,9 @@ async def test_quarantine_short_circuits_linked_execution_raw_fallback(tmp_path,
             linked = AsyncMock(return_value=True)
             monkeypatch.setattr(artifacts._repository, "principal_owns_linked_execution", linked)
             row = await session.get(TemporalArtifact, artifact_id)
-            assert not await artifacts._artifact_raw_access_allowed(row, principal=owner)
+            assert not await artifacts._artifact_raw_access_allowed(
+                row, access=access_for_test(owner)
+            )
             with pytest.raises(TemporalArtifactStateError):
                 await artifacts._assert_artifact_raw_access(
                     row, access=access_for_test(owner)

@@ -16,6 +16,7 @@ from moonmind.omnigent.bridge_proxy import OmnigentBridgeSessionProxy
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.control_plane.repositories import OmnigentControlPlaneStore
 from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.remediation_tools import (
     RemediationTargetHealthSnapshot,
 )
@@ -504,7 +505,7 @@ async def test_tool_session_control_persists_and_resumes_exact_ui_verification(
         context = await tools.get_context(
             remediation_workflow_id=remediation.workflow_id,
             principal="service:test",
-            admitted_principal="service:remediation-context",
+            access=ArtifactAccessContext.for_service("service:remediation-context"),
         )
         link = await session.get(
             models.TemporalExecutionRemediationLink, remediation.workflow_id
@@ -525,7 +526,7 @@ async def test_tool_session_control_persists_and_resumes_exact_ui_verification(
             authority_result=authority.to_dict(),
             guard_result=guard.to_dict(),
             principal="service:test",
-            admitted_principal="service:remediation-context",
+            access=ArtifactAccessContext.for_service("service:remediation-context"),
         )
         assert first["verification"]["pending"]
         result = await _read_artifact_json(

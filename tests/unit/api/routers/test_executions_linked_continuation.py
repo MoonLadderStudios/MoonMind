@@ -27,6 +27,7 @@ from api_service.db.models import (
     WorkflowLinkedContinuationRecord,
 )
 from moonmind.security.operator_admission import OperatorAdmission
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 
 async def _database():
@@ -97,9 +98,7 @@ class _FakeService:
     async def create_execution(self, **kwargs):
         self.create_calls.append(kwargs)
         if len(self.create_calls) <= self._fail_times:
-            from moonmind.workflows.temporal import (
-                TemporalExecutionValidationError,
-            )
+            from moonmind.workflows.temporal import TemporalExecutionValidationError
 
             raise TemporalExecutionValidationError("transient create failure")
         return SimpleNamespace(
@@ -147,7 +146,7 @@ def _patch_collaborators(
     async def _snapshot(**kwargs):  # noqa: ANN001
         return "art_snapshot"
 
-    async def _materialize(*, session, user, refs, recovery_principal=None):  # noqa: ANN001
+    async def _materialize(*, session, user, refs, access):  # noqa: ANN001
         return list(materialized_attachments or [])
 
     async def _attach(*, session, record, attachment_refs):  # noqa: ANN001
@@ -807,7 +806,7 @@ class _FakeArtifactService:
         self.writes: list[tuple[str, int]] = []
         self._counter = 0
 
-    async def read(self, *, artifact_id, principal, allow_restricted_raw=False, recovery_principal=None):  # noqa: ANN001
+    async def read(self, *, artifact_id, access: ArtifactAccessContext):  # noqa: ANN001
         return SimpleNamespace(artifact_id=artifact_id), b'{"k":"v"}'
 
     async def create(self, *, principal, content_type, size_bytes, retention_class, metadata_json=None, **kwargs):  # noqa: ANN001
@@ -829,6 +828,7 @@ async def test_materialize_source_attachments_copies_durable_refs(monkeypatch) -
         session=SimpleNamespace(),
         user=SimpleNamespace(id=uuid4()),
         refs=["art_final", "art_manifest"],
+        access=ArtifactAccessContext.for_service("service:continuation-fixture"),
     )
 
     assert [a["artifactId"] for a in result] == ["art_new_1", "art_new_2"]
@@ -862,6 +862,7 @@ async def test_materialize_source_attachments_rejects_undeliverable_selected_evi
             session=SimpleNamespace(),
             user=SimpleNamespace(id=uuid4()),
             refs=["artifact://omnigent/corr/final.json"],
+            access=ArtifactAccessContext.for_service("service:continuation-fixture"),
         )
     assert rejected.value.detail["code"] == "continuation_evidence_unavailable"
     assert fake.writes == []

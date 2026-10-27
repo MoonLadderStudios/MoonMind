@@ -15224,6 +15224,9 @@ def test_get_execution_step_execution_returns_bounded_detail_refs() -> None:
     app.dependency_overrides[get_instance_access] = lambda: OperatorAdmission(
         via="loopback"
     )
+    app.dependency_overrides[executions_module.get_artifact_access] = (
+        lambda: access_for_test("operator")
+    )
     payload = _step_execution_manifest_payload(
         artifact_ref="art-attempt-2",
         attempt=2,
@@ -15286,7 +15289,8 @@ def test_get_execution_step_execution_returns_bounded_detail_refs() -> None:
     }
     assert "outputs" not in body
     assert all(
-        item.kwargs["principal"] == instance_operator_principal()
+        item.kwargs["access"].principal == instance_operator_principal()
+        and item.kwargs["access"].is_operator
         for item in artifact_service.read.await_args_list
     )
 
@@ -16528,8 +16532,7 @@ def test_request_rerun_update_snapshot_hydrates_instructions_from_input_artifact
         read.kwargs
         == {
             "artifact_id": "art-full-input",
-            "principal": str(user.id),
-            "allow_restricted_raw": True,
+            "access": access_for_test(str(user.id)),
         }
         for read in artifact_service.read.await_args_list
     )

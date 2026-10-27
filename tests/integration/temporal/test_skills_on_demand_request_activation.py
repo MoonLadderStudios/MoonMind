@@ -15,7 +15,10 @@ from moonmind.schemas.agent_skill_models import (
     SkillsOnDemandRequest,
     SkillsOnDemandRequestedSkill,
 )
-from moonmind.workflows.agent_skills.agent_skills_activities import AgentSkillsActivities
+from moonmind.workflows.agent_skills.agent_skills_activities import (
+    AgentSkillsActivities,
+)
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -50,11 +53,10 @@ class _StaticArtifactService:
     async def read(
         self,
         *,
-        artifact_id: str,
-        principal: str,
-        allow_restricted_raw: bool,
+        artifact_id,
+        access: ArtifactAccessContext,
     ) -> tuple[object, bytes]:
-        del principal, allow_restricted_raw
+        ArtifactAccessContext.require(access)
         return object(), self._payloads[artifact_id]
 
     async def create(self, **kwargs):

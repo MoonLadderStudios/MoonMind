@@ -16,6 +16,7 @@ from moonmind.workflows.temporal import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.remediation_actions import (
     RemediationActionAuthorityService,
@@ -117,7 +118,7 @@ async def test_remediation_control_uses_workflow_owner_and_persists_verified_ui_
             authority_result=authority.to_dict(),
             guard_result=guard.to_dict(),
             principal="service:test",
-            admitted_principal="service:remediation-context",
+            access=ArtifactAccessContext.for_service("service:remediation-context"),
         )
         verification = await _read_artifact_json(
             artifacts, result["artifactRefs"]["verification"]
@@ -194,7 +195,7 @@ async def test_remediation_action_contract_publishes_request_result_and_verifica
             authority_result=authority.to_dict(),
             guard_result=guard.to_dict(),
             principal="service:test",
-            admitted_principal="service:remediation-context",
+            access=ArtifactAccessContext.for_service("service:remediation-context"),
         )
 
         request_payload = await _read_artifact_json(
@@ -356,7 +357,7 @@ async def test_remediation_lifecycle_repair_prevention_summary_artifacts(
             authority_result=authority.to_dict(),
             guard_result=guard.to_dict(),
             principal="service:test",
-            admitted_principal="service:remediation-context",
+            access=ArtifactAccessContext.for_service("service:remediation-context"),
         )
 
         repair = build_remediation_repair_decision(
@@ -413,11 +414,14 @@ async def test_remediation_lifecycle_repair_prevention_summary_artifacts(
                     "actor": "service:remediation",
                     "targetWorkflowId": target.workflow_id,
                     "targetRunId": target.run_id,
-                    "artifactRefs": {"findings": result["artifactRefs"]["verification"]},
+                    "artifactRefs": {
+                        "findings": result["artifactRefs"]["verification"]
+                    },
                 },
             ),
             lock_release="released",
             principal="service:test",
+            access=ArtifactAccessContext.for_service("service:remediation-context"),
         )
 
         summary_payload = await _read_artifact_json(
@@ -494,6 +498,7 @@ async def test_remediation_lifecycle_cancellation_and_continuity_summary_artifac
             ),
             lock_release="attempted",
             principal="service:test",
+            access=ArtifactAccessContext.for_service("service:remediation-context"),
         )
 
         summary_payload = await _read_artifact_json(

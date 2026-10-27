@@ -14,6 +14,7 @@ from moonmind.schemas.agent_skill_models import (
     ResolvedSkillEntry,
     ResolvedSkillSet,
 )
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -36,14 +37,14 @@ def _snapshot(*, skills: list[ResolvedSkillEntry] | None = None) -> ResolvedSkil
 
 
 class _StaticArtifactService:
+
     async def read(
         self,
         *,
-        artifact_id: str,
-        principal: str,
-        allow_restricted_raw: bool,
+        artifact_id,
+        access: ArtifactAccessContext,
     ) -> tuple[object, bytes]:
-        del principal, allow_restricted_raw
+        ArtifactAccessContext.require(access)
         assert artifact_id in {"manifest-active", "skillset-active"}
         return object(), json.dumps(_snapshot().model_dump(mode="json")).encode("utf-8")
 
@@ -57,6 +58,7 @@ async def test_skills_on_demand_commands_hidden_but_direct_call_denies_when_disa
         tool="moonmind.skills.query",
         arguments={"query": "jira"},
         context=SkillsOnDemandToolExecutionContext(
+            artifact_access=ArtifactAccessContext.for_service("system"),
             enabled=False,
             workspace_root="/tmp/repo",
         ),
@@ -82,6 +84,7 @@ async def test_enabled_query_returns_metadata_without_skill_body_refs() -> None:
                 "active_snapshot": _snapshot().model_dump(mode="json"),
             },
             context=SkillsOnDemandToolExecutionContext(
+                artifact_access=ArtifactAccessContext.for_service("system"),
                 enabled=True,
                 workspace_root="/tmp/repo",
             ),
@@ -117,6 +120,7 @@ async def test_enabled_request_already_active_returns_no_change() -> None:
             "active_snapshot": _snapshot().model_dump(mode="json"),
         },
         context=SkillsOnDemandToolExecutionContext(
+            artifact_access=ArtifactAccessContext.for_service("system"),
             enabled=True,
             workspace_root="/tmp/repo",
             artifact_service=_StaticArtifactService(),
@@ -139,6 +143,7 @@ async def test_enabled_request_loads_active_snapshot_from_manifest_ref() -> None
             "requested_skills": [{"name": "jira-issue-updater"}],
         },
         context=SkillsOnDemandToolExecutionContext(
+            artifact_access=ArtifactAccessContext.for_service("system"),
             enabled=True,
             workspace_root="/tmp/repo",
             artifact_service=_StaticArtifactService(),
@@ -166,6 +171,7 @@ async def test_enabled_request_rejects_caller_supplied_active_snapshot() -> None
                 "active_snapshot": caller_snapshot.model_dump(mode="json"),
             },
             context=SkillsOnDemandToolExecutionContext(
+                artifact_access=ArtifactAccessContext.for_service("system"),
                 enabled=True,
                 workspace_root="/tmp/repo",
                 artifact_service=_StaticArtifactService(),

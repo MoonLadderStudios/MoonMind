@@ -17,6 +17,7 @@ from moonmind.omnigent.control_plane import (
 from moonmind.schemas.agent_runtime_models import AgentRunResult
 from moonmind.schemas.omnigent_session_models import OmnigentSessionTerminalResult
 from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+    _ARTIFACT_PRINCIPAL,
     _read_json_artifact,
     _write_json_artifact,
     omnigent_load_failure_authority_activity,
@@ -290,7 +291,7 @@ async def test_post_terminal_integration_failure_preserves_primary_evidence(
     session = await _seed_session(production_store, "post-terminal-failure")
     session, primary_ref = await _attach_primary_success(production_store, session)
     primary_before = await _read_json_artifact(
-        primary_ref, access=access_for_test("workflow:" + session.moonmind_workflow_id)
+        primary_ref, access=access_for_test(_ARTIFACT_PRINCIPAL)
     )
     async with production_store.transaction() as repos:
         turns_before = await repos.turn_attempts.list_for_session(session.session_id)
@@ -328,7 +329,7 @@ async def test_post_terminal_integration_failure_preserves_primary_evidence(
     assert (
         await _read_json_artifact(
             primary_ref,
-            access=access_for_test("workflow:" + session.moonmind_workflow_id),
+            access=access_for_test(_ARTIFACT_PRINCIPAL),
         )
         == primary_before
     )

@@ -15,6 +15,7 @@ import pytest
 
 from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.workflows.temporal import story_output_tools as tools
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from tests.unit.workflows.temporal import test_issue_claim_journey as claim_journey
 
 # GitHub operations without an explicit token use the default connection.
@@ -38,7 +39,7 @@ class _AssessmentArtifacts:
     def __init__(self, payload):
         self.payload = payload
 
-    async def read(self, *, artifact_id, principal, allow_restricted_raw=False):
+    async def read(self, *, artifact_id, access: ArtifactAccessContext):
         assert artifact_id == "art_assessment"
         return object(), json.dumps(self.payload).encode("utf-8")
 
