@@ -318,6 +318,41 @@ async def test_new_execution_rereads_with_stable_upstream_identity(
     assert second["counts"]["new"] == 0
 
 
+async def test_complete_import_is_complete_and_later_absence_comparable(
+    admitted, monkeypatch
+):
+    await admitted.admit()
+    routes = {
+        "code-scanning/alerts": [[code_alert(1), code_alert(2)]],
+        "code-scanning/analyses": [analyses()],
+        "dependabot/alerts": [[dependabot_alert(5)]],
+        "secret-scanning/alerts": [[]],
+    }
+    upstream = Upstream(monkeypatch, FakeGitHub(routes))
+    first = await invoke(admitted.service, request())
+    # The first live import is complete coverage, not stale or partial.
+    assert first["scanOutcome"] == "completed"
+    assert first["coverageStatus"] == "complete"
+
+    upstream.fake = FakeGitHub({**routes, "code-scanning/alerts": [[code_alert(1)]]})
+    second = await invoke(
+        admitted.service,
+        {**request(), "baselineRef": first["comparisonRef"]},
+        run_id="run-2",
+    )
+    comparison = await read(admitted.service, second["comparisonRef"])
+    states = {
+        row["finding"]["nativeId"]: row["state"]
+        for row in comparison["findings"]
+        if row["finding"]["source"] == "github"
+    }
+    assert states == {
+        "1": "still_observed",
+        "2": "absent_comparable",
+        "5": "still_observed",
+    }
+
+
 async def test_revision_mismatch_stays_labelled_and_output_bounded(
     admitted, monkeypatch
 ):
