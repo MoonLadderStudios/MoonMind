@@ -1034,6 +1034,13 @@ class ContainerJobWorkflowInput(TemporalContractModel):
         return f"{self.job_id}:{self.contract_version}"
 
 
+class EgressDenialObservation(TemporalContractModel):
+    """Compact pointer to a confirmed, durably published denial observation."""
+
+    artifact_ref: str = Field(alias="artifactRef", min_length=1, max_length=1024)
+    denied_connection_count: int = Field(alias="deniedConnectionCount", ge=1)
+
+
 class ContainerJobActivityRequest(TemporalContractModel):
     """Typed, retry-safe request crossing a container-job Activity boundary."""
 
@@ -1074,6 +1081,9 @@ class ContainerJobActivityRequest(TemporalContractModel):
     container_ref: str | None = Field(None, alias="containerRef", max_length=1024)
     egress_attestation_ref: str | None = Field(
         None, alias="egressAttestationRef", max_length=1024
+    )
+    egress_denial_observation: EgressDenialObservation | None = Field(
+        None, alias="egressDenialObservation"
     )
     terminal_state: ContainerJobState | None = Field(None, alias="terminalState")
     projection_sequence: int = Field(0, alias="projectionSequence", ge=0)
@@ -1134,6 +1144,9 @@ class ContainerJobActivityResult(TemporalContractModel):
     artifacts_ref: str | None = Field(None, alias="artifactsRef", max_length=1024)
     diagnostics_ref: str | None = Field(
         None, alias="diagnosticsRef", max_length=1024
+    )
+    egress_denial_observation: EgressDenialObservation | None = Field(
+        None, alias="egressDenialObservation"
     )
     cleanup_succeeded: bool | None = Field(None, alias="cleanupSucceeded")
     # Durable observability-event journal ref (the terminal fallback for the

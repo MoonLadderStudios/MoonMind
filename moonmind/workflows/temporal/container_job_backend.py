@@ -59,6 +59,7 @@ from moonmind.schemas.container_job_models import (
     ContainerJobFailureClass,
     ContainerJobLogEntry,
     ContainerJobState,
+    EgressDenialObservation,
     GpuObservation,
     ImageObservation,
     RegistryAuthorization,
@@ -2179,12 +2180,14 @@ class DockerContainerJobBackend:
             workload_ref=request.container_ref or self._name(request),
         )
 
-    async def _publish_scoped_egress(self, request, evidence):
+    async def _publish_scoped_egress(
+        self, request, evidence, *, suffix="egress-attestation"
+    ):
         if self._publish is None:
             raise RuntimeError("scoped egress evidence publisher is unavailable")
         ref = await self._publish(
             request,
-            f"{request.job_id}-egress-attestation.json",
+            f"{request.job_id}-{suffix}.json",
             serialize_conformance_evidence(
                 self._safe_scoped_evidence(evidence), location="egress-attestation"
             ),
@@ -2192,6 +2195,22 @@ class DockerContainerJobBackend:
         if not ref:
             raise RuntimeError("scoped egress evidence could not be persisted")
         return ref
+
+    async def _retain_scoped_denials(self, request, evidence):
+        previous = request.egress_denial_observation
+        count = evidence["deniedConnectionCount"]
+        if not count or (previous and count <= previous.denied_connection_count):
+            return previous
+        ref = await self._publish_scoped_egress(
+            request,
+            {
+                **evidence,
+                "evidenceKind": "denial_observation",
+                "observedAt": datetime.now(timezone.utc).isoformat(),
+            },
+            suffix="egress-denials",
+        )
+        return EgressDenialObservation(artifactRef=ref, deniedConnectionCount=count)
 
     @staticmethod
     def _safe_scoped_evidence(evidence):
@@ -2770,9 +2789,13 @@ class DockerContainerJobBackend:
     async def observe_container(self, request: ContainerJobActivityRequest):
         scoped = self._scoped_lease(request)
         scoped_evidence = None
+        denial_observation = request.egress_denial_observation
         if scoped is not None:
             try:
                 scoped_evidence = await scoped.attest(workload=True, expected_image=request.resolved_image_ref)
+                denial_observation = await self._retain_scoped_denials(
+                    request, scoped_evidence
+                )
             except Exception:
                 await self.stop_container(request)
                 raise
@@ -2791,7 +2814,10 @@ class DockerContainerJobBackend:
         log_cursor = await self._collect_live_logs(request, ref)
         if state.get("Running"):
             return ContainerJobActivityResult(
-                containerRef=ref, running=True, logCursor=log_cursor
+                containerRef=ref,
+                running=True,
+                logCursor=log_cursor,
+                egressDenialObservation=denial_observation,
             )
         exit_code = int(state.get("ExitCode", 1))
         started_at, finished_at, duration_ms = _parse_container_timing(state)
@@ -2800,9 +2826,7 @@ class DockerContainerJobBackend:
             running=False,
             terminalState=(
                 "succeeded"
-                if exit_code == 0 and not (
-                    scoped_evidence and scoped_evidence["deniedConnectionCount"]
-                )
+                if exit_code == 0 and denial_observation is None
                 else "failed"
             ),
             exitCode=exit_code,
@@ -2810,6 +2834,7 @@ class DockerContainerJobBackend:
             startedAt=started_at,
             finishedAt=finished_at,
             durationMs=duration_ms,
+            egressDenialObservation=denial_observation,
         )
 
     # ------------------------------------------------------- live log producer
@@ -3604,6 +3629,21 @@ class DockerContainerJobBackend:
                 "launchAttestationRef": request.egress_attestation_ref,
                 **({"profileRef": request.request.spec.egress_policy_ref, "coverage": "partial", "limitations": ["network_evidence_unavailable"]} if request.request.spec.egress_policy_ref else {}),
             }
+        if request.egress_denial_observation is not None:
+            # This artifact records a past, attested observation. Keep it even
+            # when current attestation fails; it never certifies current scope.
+            network = diagnostics.setdefault("egressEvidence", {})
+            network["retainedDenialObservation"] = (
+                request.egress_denial_observation.model_dump(by_alias=True)
+            )
+            network["deniedConnectionCount"] = max(
+                network.get("deniedConnectionCount", 0),
+                request.egress_denial_observation.denied_connection_count,
+            )
+            network["coverage"] = "partial"
+            limitations = network.setdefault("limitations", [])
+            if "required_network_scope_denied" not in limitations:
+                limitations.append("required_network_scope_denied")
         data = redact_sensitive_text(
             json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
         ).encode("utf-8")
@@ -3822,7 +3862,8 @@ class DockerContainerJobBackend:
                 "schemaVersion": 1,
                 "profileRef": profile_ref,
                 **(
-                    {} if scoped or request.request.spec.network_mode == "service"
+                    {}
+                    if scoped or request.request.spec.network_mode == "service"
                     else {"profileDigest": DEFAULT_EGRESS_PROFILE.digest}
                 ),
                 "workloadAttachmentIdentity": request.container_ref
@@ -3833,6 +3874,15 @@ class DockerContainerJobBackend:
                     else None
                 ),
                 "launchAttestationRef": request.egress_attestation_ref,
+                **(
+                    {
+                        "retainedDenialObservation": request.egress_denial_observation.model_dump(
+                            by_alias=True
+                        )
+                    }
+                    if request.egress_denial_observation is not None
+                    else {}
+                ),
                 "reconciliationResult": (
                     "succeeded" if not (code or stdout.strip()) else "failed"
                 ),

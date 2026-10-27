@@ -574,6 +574,62 @@ async def test_denied_endpoint_cannot_produce_a_clean_exit_zero_result(lease_set
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["policy", "missing-proxy", "gateway-replacement"])
+async def test_observed_denials_survive_attestation_failure_and_cleanup(
+    lease_setup, failure
+):
+    _, docker, request, backend, published = lease_setup
+    created = await backend.create_container(request)
+    request.container_ref = created.container_ref
+    await backend.start_container(request)
+    docker.files["/tmp/moonmind-access.log"] = (
+        b"1793077200 0 10.248.0.3 TCP_DENIED/403 0 CONNECT unrelated.example:443 - HIER_NONE/- -\n"
+    )
+    observed = await backend.observe_container(request)
+    assert observed.running is True
+    assert any(p.get("deniedConnectionCount") == 1 for p in published.values())
+    request.egress_denial_observation = observed.egress_denial_observation
+    lease = backend._scoped_lease(request)
+    if failure == "policy":
+        docker.files["/tmp/moonmind-squid.conf"] += b"tampered\n"
+    elif failure == "missing-proxy":
+        await docker(("rm", "--force", lease.gateway_ref))
+    else:
+        gateway = docker.container(lease.gateway_ref)
+        previous_id = gateway["Id"]
+        gateway["Id"] = "replacement-id"
+        for network in docker.networks.values():
+            if previous_id in network["Containers"]:
+                network["Containers"][gateway["Id"]] = network["Containers"].pop(
+                    previous_id
+                )
+    with pytest.raises(RuntimeError) as error:
+        await backend.observe_container(request)
+    assert docker.container(created.container_ref)["State"]["Running"] is False
+    await backend._publish_runtime_diagnostics(
+        request, logs_ref=None, stdout_ref=None, stderr_ref=None, manifest=[]
+    )
+    diagnostics = published[f"{request.job_id}-diagnostics.json"]["egressEvidence"]
+    assert diagnostics["state"] == "unavailable"
+    assert diagnostics["error"] == str(error.value)
+    assert diagnostics["coverage"] == "partial"
+    retained = diagnostics["retainedDenialObservation"]
+    assert retained["deniedConnectionCount"] == 1
+    snapshot = published[retained["artifactRef"].removeprefix("artifacts/")]
+    assert snapshot["profileRef"] == "assessment-one"
+    assert snapshot["denialDiagnostics"]
+    await backend.remove_container(request)
+    assert (await backend.cleanup(request)).cleanup_succeeded is True
+    assert snapshot in published.values()
+    assert (
+        published[f"{request.job_id}-egress-lifecycle.json"][
+            "retainedDenialObservation"
+        ]
+        == retained
+    )
+
+
+@pytest.mark.asyncio
 async def test_cancellation_cleanup_survives_policy_revocation(lease_setup):
     _, docker, request, backend, _ = lease_setup
     created = await backend.create_container(request)

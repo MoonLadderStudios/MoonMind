@@ -221,6 +221,33 @@ async def test_real_scoped_launch_connections_and_owned_lifecycle(monkeypatch):
         target, unrelated = prefix + "-target", prefix + "-unrelated"
         await fixture(target, private_network, policy="scoped-fixtures")
         await fixture(unrelated, unrelated_network, policy="other-assessment")
+        peer = json.loads(await run("inspect", "--format", "{{json .}}", unrelated))
+        peer_address = peer["NetworkSettings"]["Networks"][unrelated_network][
+            "IPAddress"
+        ]
+        peer_hostname = peer["Name"].lstrip("/")
+        assert peer["State"]["Running"] is True
+        assert (
+            peer["Config"]["Labels"]["moonmind.security.target"] == "other-assessment"
+        )
+        assert set(peer["NetworkSettings"]["Networks"]) == {unrelated_network}
+        # Confirm the unrelated peer serves both its real address and Docker
+        # name from its own network before testing isolation from the job.
+        peer_health = json.loads(
+            await run(
+                "exec",
+                unrelated,
+                "python",
+                "-c",
+                "import httpx,json,sys; "
+                "c=httpx.Client(trust_env=False,timeout=5); "
+                "responses=[c.get('http://'+host+':8080/') for host in sys.argv[1:]]; "
+                "assert all(r.status_code==200 and 'admitted-scope-fixture' in r.text for r in responses); "
+                "print(json.dumps([{'host':h,'status':r.status_code} for h,r in zip(sys.argv[1:],responses)]))",
+                peer_address,
+                peer_hostname,
+            )
+        )
         declaration = {
             "policyRef": "scoped-fixtures",
             "allowedWorkflowIds": ["scoped-fixtures"],
@@ -314,8 +341,10 @@ async def test_real_scoped_launch_connections_and_owned_lifecycle(monkeypatch):
         await backend.start_container(request)
         # SDK, browser and child process connect from the real job namespace.
         code = """
-import os,subprocess,sys,socket,httpx
+import json,os,subprocess,sys,socket,httpx
 from moonmind.security.egress_policy import tool_proxy_options
+peer_hosts=sys.argv[1:]
+peer_checks=[]
 with httpx.Client(**tool_proxy_options('httpx',environ=os.environ),verify=False,timeout=5) as c:
  for host in ('feeds','cloud','registry'):
   assert c.get('https://'+host+'.example.test:8443/').status_code==200
@@ -323,22 +352,64 @@ with httpx.Client(**tool_proxy_options('httpx',environ=os.environ),verify=False,
  assert c.get('http://lab.example.test:8080/redirect',follow_redirects=True).status_code==403
  for url in ('http://unrelated.example.test:8080/','http://169.254.169.254/','http://api:8000/','http://lab.example.test:8443/','http://93.184.216.15:8080/'):
   assert c.get(url).status_code==403
+ for host in peer_hosts:
+  status=c.get('http://'+host+':8080/').status_code
+  assert status==403,(host,status)
+  peer_checks.append({'host':host,'transport':'admitted-proxy','status':status})
 for host,port in (('93.184.216.15',8443),('169.254.169.254',80),('172.17.0.1',80)):
  try: s=socket.create_connection((host,port),timeout=.3)
  except OSError: pass
  else: s.close(); raise AssertionError('direct route escaped')
+for host in peer_hosts:
+ try: s=socket.create_connection((host,8080),timeout=.3)
+ except OSError as exc: peer_checks.append({'host':host,'transport':'direct-socket','error':type(exc).__name__})
+ else: s.close(); raise AssertionError('direct private-peer route escaped: '+host)
 os.environ['NO_PROXY']='*'
 with httpx.Client(trust_env=True,timeout=.5) as c:
  try: c.get('http://93.184.216.15:8080/')
  except httpx.RequestError: pass
  else: raise AssertionError('proxy override escaped')
+ for host in peer_hosts:
+  try: c.get('http://'+host+':8080/')
+  except httpx.RequestError as exc: peer_checks.append({'host':host,'transport':'no-proxy-override','error':type(exc).__name__})
+  else: raise AssertionError('private-peer proxy bypass escaped: '+host)
+for host in peer_hosts:
+ env=dict(os.environ)
+ os.environ.update(HTTP_PROXY='http://'+host+':8080',http_proxy='http://'+host+':8080',NO_PROXY='',no_proxy='')
+ try:
+  with httpx.Client(trust_env=True,timeout=.5) as c:
+   try: c.get('http://lab.example.test:8080/')
+   except httpx.RequestError as exc: peer_checks.append({'host':host,'transport':'alternate-proxy','error':type(exc).__name__})
+   else: raise AssertionError('private-peer alternate proxy escaped: '+host)
+ finally:
+  os.environ.clear(); os.environ.update(env)
 child=subprocess.run([sys.executable,'-c',"import os,httpx;from moonmind.security.egress_policy import tool_proxy_options;assert httpx.get('https://feeds.example.test:8443/',verify=False,timeout=5,**tool_proxy_options('httpx',environ=os.environ)).status_code==200"],capture_output=True,timeout=10)
 assert child.returncode==0,child.stderr
 browser=subprocess.run(['chromium','--headless','--no-sandbox','--disable-dev-shm-usage','--disable-background-networking','--no-first-run','--user-data-dir=/tmp/scoped-browser',*tool_proxy_options('chromium',environ=os.environ)['args'],'--dump-dom','http://lab.example.test:8080/'],capture_output=True,timeout=30)
 assert browser.returncode==0 and b'admitted-scope-fixture' in browser.stdout,browser.stderr[-2000:]
-print('approved feeds/cloud/registry/private, redirects, ports, metadata/control, direct sockets, env, subprocess and browser verified')
+print(json.dumps({'crossAssessmentPeerChecks':peer_checks}))
 """
-        await run("exec", request.container_ref, "python", "-c", code)
+        connection_results = json.loads(
+            await run(
+                "exec",
+                request.container_ref,
+                "python",
+                "-c",
+                code,
+                peer_address,
+                peer_hostname,
+            )
+        )
+        assert {
+            (row["host"], row["transport"])
+            for row in connection_results["crossAssessmentPeerChecks"]
+        } == {
+            (host, transport)
+            for host in (peer_address, peer_hostname)
+            for transport in (
+                "admitted-proxy", "direct-socket", "no-proxy-override", "alternate-proxy"
+            )
+        }
         # A reconstructed worker reuses the exact selected lease and snapshot.
         recovered = await backend.reconcile_container(request)
         after = await lease.prepare(timeout_seconds=9999)
@@ -417,6 +488,15 @@ print('approved feeds/cloud/registry/private, redirects, ports, metadata/control
                     "offline": "passed",
                     "policyRef": "scoped-fixtures",
                     "deniedConnectionCount": after["deniedConnectionCount"],
+                    "crossAssessmentPeer": {
+                        "containerIdentity": peer["Id"],
+                        "assessment": peer["Config"]["Labels"][
+                            "moonmind.security.target"
+                        ],
+                        "network": unrelated_network,
+                        "health": peer_health,
+                        "checks": connection_results["crossAssessmentPeerChecks"],
+                    },
                 },
                 indent=2,
             )

@@ -1,8 +1,9 @@
 """Deployment-admitted policies for leases of the existing Squid egress owner.
 
 A job selects a reference, never destinations or Docker attachments. DNS is
-resolved and validated once before launch, then pinned in Squid's hosts file;
-reconciliation reads that same snapshot instead of admitting new DNS answers.
+validated before admission and pinned in Squid's hosts file. An existing proxy
+retains that snapshot; loss before a create receipt permits revalidation under
+the same policy and any surviving owned network's original deadline.
 """
 
 from __future__ import annotations
