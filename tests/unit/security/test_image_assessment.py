@@ -535,6 +535,8 @@ def test_report_findings_are_attributed_to_the_examined_subject():
     )
     assert result.coverage == "complete"
     assert {f.asset for f in result.findings} == {"sbom@sha256:" + "c" * 64}
+    # The same source as image coverage, so a clean reassessment compares.
+    assert {f.source for f in result.findings} == {"image"}
     assert len(result.findings) == 2
     assert result.examined_assets == ["sbom@sha256:" + "c" * 64]
     malformed = normalize_image_report(
@@ -756,6 +758,40 @@ def test_target_credential_reaches_trivy_only_as_docker_config(tmp_path, monkeyp
     execution = json.loads((output / "execution.json").read_bytes())
     assert execution["targetCredential"] == "delivered"
     assert "credential_material_withheld" in execution["limitations"]
+
+
+def test_registry_scan_keeps_only_the_launch_proxy_environment(tmp_path, monkeypatch):
+    digest = feed(tmp_path / "db")
+    seen = fixture_trivy(tmp_path, monkeypatch, REPORT)
+    # The scoped egress proxy is the job's only route to the registry.
+    proxy = "http://fixture-gateway:3128"
+    for key in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
+        monkeypatch.setenv(key, proxy)
+    monkeypatch.setenv("NO_PROXY", "")
+    monkeypatch.setenv("DOCKER_HOST", "unix:///var/run/docker.sock")
+    monkeypatch.setenv("TRIVY_PASSWORD", "ambient-password-5046")
+    runner.run_image_assessment(
+        registry(databaseDigest=digest),
+        inputs=tmp_path,
+        output=tmp_path / "out",
+        database=tmp_path / "db",
+    )
+    _, env = seen[-1]
+    assert env["HTTPS_PROXY"] == env["https_proxy"] == proxy
+    assert env["HTTP_PROXY"] == env["http_proxy"] == proxy
+    assert env["NO_PROXY"] == ""
+    assert "DOCKER_HOST" not in env and "TRIVY_PASSWORD" not in env
+
+
+def test_offline_targets_receive_no_proxy_environment(tmp_path, monkeypatch):
+    inputs, assessment = archive_case(tmp_path)
+    seen = fixture_trivy(tmp_path, monkeypatch, REPORT)
+    monkeypatch.setenv("HTTPS_PROXY", "http://fixture-gateway:3128")
+    runner.run_image_assessment(
+        assessment, inputs=inputs, output=tmp_path / "out", database=tmp_path / "db"
+    )
+    _, env = seen[-1]
+    assert "HTTPS_PROXY" not in env
 
 
 @pytest.mark.parametrize(

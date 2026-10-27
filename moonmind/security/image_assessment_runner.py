@@ -61,6 +61,12 @@ _REGISTRY_FAILURES = (
         re.compile(rb"manifest_unknown|name_unknown|not found", re.I),
     ),
 )
+#: Set by the job launch from its scoped egress lease, never by job input.
+_PROXY_ENV = tuple(
+    name
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")
+    for name in (key, key.lower())
+)
 _MAX_SOURCE_FILES = 200_000
 
 
@@ -260,13 +266,18 @@ def run_image_assessment(
         raw, cache, config = root / "raw", root / "cache", root / "docker"
         for directory in (raw, cache, config):
             directory.mkdir()
-        # No inherited environment: no daemon address, proxy override or
-        # ambient registry login. Only an admitted target credential is read.
+        # No inherited environment: no daemon address or ambient registry
+        # login. Only an admitted target credential is read. A registry job
+        # keeps the launch's scoped egress proxy, its only network route.
         env = {
             "PATH": "/usr/local/bin:/usr/bin:/bin",
             "HOME": str(root),
             "DOCKER_CONFIG": str(config),
         }
+        if assessment.target == "registry":
+            env.update(
+                (key, os.environ[key]) for key in _PROXY_ENV if key in os.environ
+            )
         secrets: set[bytes] = set()
         input_digest, archive_identity = None, {}
         try:
