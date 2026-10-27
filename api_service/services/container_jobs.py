@@ -296,10 +296,24 @@ class ContainerJobService:
         backend_settings: ContainerBackendSettings | None = None,
         capability: ContainerJobSessionCapability | None = None,
         operator: OperatorAdmission | None = None,
+        artifact_access: ArtifactAccessContext | None = None,
     ) -> None:
         self._session = session
         self.repository = ContainerJobRepository(
             session, capability=capability, operator=operator
+        )
+        self._artifact_access = (
+            ArtifactAccessContext.require(artifact_access)
+            if artifact_access is not None
+            else (
+                ArtifactAccessContext.for_operator(operator)
+                if operator is not None
+                else (
+                    ArtifactAccessContext.for_execution(capability.workflow_id)
+                    if capability is not None
+                    else None
+                )
+            )
         )
         self._temporal = temporal or TemporalClientAdapter()
         self._artifacts = artifacts
@@ -449,10 +463,12 @@ class ContainerJobService:
             if self._artifacts is None:
                 raise ValueError("artifact inputs require the artifact store")
             try:
-                artifact, *_ = await self._artifacts.get_metadata(
+                artifact, _links, _pinned, policy = await self._artifacts.get_metadata(
                     artifact_id=item.artifact_ref,
-                    principal=owner_artifact_principal(owner),
+                    access=ArtifactAccessContext.require(self._artifact_access),
                 )
+                if not policy.raw_access_allowed:
+                    raise ValueError("input attachment raw bytes are not readable")
             except Exception as exc:  # noqa: BLE001 - authority decides
                 raise ValueError(
                     "input attachment artifact is not readable by the job owner"
@@ -597,12 +613,13 @@ class ContainerJobService:
         try:
             _artifact, payload = await self._artifacts.read(
                 artifact_id=artifact_ref,
-                access=(
-                    ArtifactAccessContext.for_execution(owner.principal_id)
-                    if owner.principal_type == "workflow"
-                    else ArtifactAccessContext.for_service(
-                        owner_artifact_principal(owner)
-                    )
+                # The public read already selected this exact durable reference
+                # from the owner/capability-checked job record. It grants only
+                # ordinary result bytes, never raw or operator authority.
+                access=ArtifactAccessContext.require(
+                    self._artifact_access
+                )._with_verified_inputs(
+                    [artifact_ref.removeprefix("artifact://").removeprefix("artifact:")]
                 ),
             )
         except ContainerJobEvidenceUnavailableError:
@@ -622,12 +639,14 @@ class ContainerJobService:
             artifact, _links, _pinned, _read_policy = (
                 await self._artifacts.get_metadata(
                     artifact_id=artifact_ref,
-                    access=(
-                        ArtifactAccessContext.for_execution(owner.principal_id)
-                        if owner.principal_type == "workflow"
-                        else ArtifactAccessContext.for_service(
-                            owner_artifact_principal(owner)
-                        )
+                    access=ArtifactAccessContext.require(
+                        self._artifact_access
+                    )._with_verified_inputs(
+                        [
+                            artifact_ref.removeprefix("artifact://").removeprefix(
+                                "artifact:"
+                            )
+                        ]
                     ),
                 )
             )

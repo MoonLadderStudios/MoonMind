@@ -102,7 +102,7 @@ def _queues(
             ),
             fleets=catalog.fleets,
         ),
-        artifact_activities=TemporalArtifactActivities(state.service),
+        artifact_activities=TemporalArtifactActivities(state.runtime._artifact_service),
         integration_activities=TemporalIntegrationActivities(),
         agent_runtime_activities=state.runtime,
         fleets=[AGENT_RUNTIME_FLEET, INTEGRATIONS_FLEET, ARTIFACTS_FLEET],
@@ -443,8 +443,9 @@ async def test_cancellation_after_a_failed_push_attempt_starts_no_new_attempt(
         assert await state.use_claims() == []
 
 
+@pytest.mark.parametrize("production_proxy", [False, True])
 async def test_recorded_v1_admission_recovers_protected_inputs_without_operator_role(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, production_proxy
 ):
     from api_service.db.models import TemporalArtifactRedactionLevel
     from moonmind.security.operator_admission import OperatorAdmission
@@ -501,6 +502,22 @@ async def test_recorded_v1_admission_recovers_protected_inputs_without_operator_
             "publication_idempotency_key": parsed.publication_idempotency_key,
             "saved_work_digest": parsed.saved_work_digest,
         }
+        if production_proxy:
+            from sqlalchemy.ext.asyncio import async_sessionmaker
+
+            from moonmind.workflows.temporal import worker_runtime
+            from moonmind.workflows.temporal.artifacts import TemporalArtifactService
+
+            sessions = async_sessionmaker(
+                repository._session.bind, expire_on_commit=False
+            )
+            monkeypatch.setattr(worker_runtime, "get_async_session_context", sessions)
+            monkeypatch.setattr(
+                worker_runtime,
+                "TemporalArtifactService",
+                lambda repo: TemporalArtifactService(repo, store=state.service._store),
+            )
+            state.runtime._artifact_service = worker_runtime._ArtifactServiceProxy()
         async with await WorkflowEnvironment.start_time_skipping(
             data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER
         ) as env:
@@ -538,6 +555,8 @@ async def test_recorded_v1_admission_recovers_protected_inputs_without_operator_
         "missing_memo",
         "source_mismatch",
         "payload_principal",
+        "destination_workflow",
+        "destination_run",
         "quarantined",
         "revoked_grants",
     ],
@@ -574,9 +593,16 @@ async def test_recorded_v1_missing_or_conflicting_admission_stays_denied(
             memo["source_workflow_id"] = "unrelated"
         elif fault == "revoked_grants":
             memo["artifact_input_admission"] = "execution-links-v1"
-        elif fault == "payload_principal":
+        elif fault in {"payload_principal", "destination_workflow", "destination_run"}:
 
             def changed(payload):
+                if fault != "payload_principal":
+                    key = (
+                        "destinationWorkflowId"
+                        if fault == "destination_workflow"
+                        else "destinationRunId"
+                    )
+                    return {**payload, key: "unrelated"}
                 return {
                     **payload,
                     "contract": {
@@ -603,7 +629,12 @@ async def test_recorded_v1_missing_or_conflicting_admission_stays_denied(
                     state,
                     transforms=(
                         {"publication_recovery.saved_work_prepare": changed}
-                        if fault == "payload_principal"
+                        if fault
+                        in {
+                            "payload_principal",
+                            "destination_workflow",
+                            "destination_run",
+                        }
                         else None
                     ),
                 ),

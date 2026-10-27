@@ -4460,7 +4460,7 @@ def _saved_work_publication_contract(payload: Any) -> Any:
     )
 
     try:
-        return SavedWorkPublicationContract.model_validate(
+        contract = SavedWorkPublicationContract.model_validate(
             dict((payload or {}).get("contract") or {})
         )
     except ValueError as exc:
@@ -4469,6 +4469,21 @@ def _saved_work_publication_contract(payload: Any) -> Any:
             type="PUBLICATION_CONTRACT_INVALID",
             non_retryable=True,
         ) from exc
+    if temporal_activity.in_activity():
+        info = temporal_activity.info()
+        # Retained push/PR payloads omit these projection fields. The actual
+        # Activity supplies authority; an explicit field must agree with it.
+        if (
+            payload.get("destinationWorkflowId", info.workflow_id) != info.workflow_id
+            or payload.get("destinationRunId", info.workflow_run_id)
+            != info.workflow_run_id
+        ):
+            raise temporal_exceptions.ApplicationError(
+                "publication destination differs from its actual Activity admission",
+                type="PUBLICATION_CONTRACT_INVALID",
+                non_retryable=True,
+            )
+    return contract
 
 
 def _saved_publication_failure(exc: Exception) -> temporal_exceptions.ApplicationError:
@@ -6374,12 +6389,10 @@ class TemporalAgentRuntimeActivities:
             raise TemporalActivityRuntimeError(
                 "saved-work publication requires the artifact service"
             )
-        from moonmind.workflows.temporal.publication_recovery import (
-            recover_recorded_saved_work_inputs,
-        )
-
         try:
-            await recover_recorded_saved_work_inputs(self._artifact_service, contract)
+            await self._artifact_service.recover_recorded_saved_work_inputs(
+                contract=contract
+            )
         except TemporalArtifactAuthorizationError as exc:
             raise _saved_publication_failure(SavedPublicationError(
                 "PUBLICATION_SAVED_WORK_UNAUTHORIZED",
@@ -6514,11 +6527,6 @@ class TemporalAgentRuntimeActivities:
         completes the unfinished effect instead of building a second candidate
         on a moved base.
         """
-        from moonmind.workflows.temporal.artifacts import (
-            find_saved_work_publication_decisions,
-            persist_saved_work_publication_decision,
-        )
-
         contract = _saved_work_publication_contract(payload)
         workflow_id = str((payload or {}).get("destinationWorkflowId") or "").strip()
         run_id = str((payload or {}).get("destinationRunId") or "").strip()
@@ -6533,8 +6541,7 @@ class TemporalAgentRuntimeActivities:
                 "saved-work publication requires the artifact service"
             )
         operation_key = contract.publication_idempotency_key
-        priors = await find_saved_work_publication_decisions(
-            self._artifact_service,
+        priors = await self._artifact_service.find_saved_work_publication_decisions(
             workflow_id=workflow_id,
             operation_key=operation_key,
         )
@@ -6552,8 +6559,7 @@ class TemporalAgentRuntimeActivities:
                 for prior in priors
             ),
         }
-        await persist_saved_work_publication_decision(
-            self._artifact_service,
+        await self._artifact_service.persist_saved_work_publication_decision(
             workflow_id=workflow_id,
             run_id=run_id,
             operation_key=operation_key,
@@ -8596,7 +8602,9 @@ class TemporalAgentRuntimeActivities:
             # Artifact input attachments are admitted under the owner's read
             # authority, as on the HTTP and MCP submission paths.
             accepted = await ContainerJobService(
-                session, artifacts=get_temporal_artifact_service(session)
+                session,
+                artifacts=get_temporal_artifact_service(session),
+                artifact_access=ArtifactAccessContext.for_activity(),
             ).submit(owner=owner, request=request)
             await session.commit()
         return accepted.model_dump(mode="json", by_alias=True, exclude_none=True)

@@ -30,6 +30,7 @@ from moonmind.schemas.container_job_models import (
     OwnerIdentity,
     TerminalOutcome,
 )
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 
 class _FakeArtifact:
@@ -47,13 +48,15 @@ class _FakeArtifactReader:
         self._artifacts = artifacts or {}
         self.read_principals: list[str] = []
 
-    async def read(self, *, artifact_id, principal, allow_restricted_raw=False):
+    async def read(self, *, artifact_id, access):
+        (principal,) = access.candidates
         self.read_principals.append(principal)
         if artifact_id not in self._blobs:
             raise KeyError(artifact_id)
         return self._artifacts.get(artifact_id, _FakeArtifact()), self._blobs[artifact_id]
 
-    async def get_metadata(self, *, artifact_id, principal):
+    async def get_metadata(self, *, artifact_id, access):
+        (principal,) = access.candidates
         self.read_principals.append(principal)
         if artifact_id not in self._artifacts:
             raise KeyError(artifact_id)
@@ -459,7 +462,14 @@ async def test_logs_return_bounded_owner_scoped_pages(session_factory, temporal)
     payload = b"line-0\nline-1\nline-2\n[stderr]\nerr-0\n"
     reader = _FakeArtifactReader(blobs={"artifact://logs": payload})
     async with session_factory() as session:
-        service = ContainerJobService(session, temporal=temporal, artifacts=reader)
+        service = ContainerJobService(
+            session,
+            temporal=temporal,
+            artifacts=reader,
+            artifact_access=ArtifactAccessContext.for_service(
+                owner_artifact_principal(owner)
+            ),
+        )
         accepted = await service.submit(owner=owner, request=submission())
 
         empty = await service.logs(owner=owner, job_id=accepted.job_id)
@@ -530,7 +540,14 @@ async def test_artifacts_return_references_and_publication(session_factory, temp
         },
     )
     async with session_factory() as session:
-        service = ContainerJobService(session, temporal=temporal, artifacts=reader)
+        service = ContainerJobService(
+            session,
+            temporal=temporal,
+            artifacts=reader,
+            artifact_access=ArtifactAccessContext.for_service(
+                owner_artifact_principal(owner)
+            ),
+        )
         accepted = await service.submit(owner=owner, request=submission())
 
         none_yet = await service.artifacts(owner=owner, job_id=accepted.job_id)
@@ -558,7 +575,14 @@ async def test_incomplete_or_missing_evidence_raises_stable_error(session_factor
         artifacts={"artifact://outputs": _FakeArtifact(sha256=None, size_bytes=None)}
     )
     async with session_factory() as session:
-        service = ContainerJobService(session, temporal=temporal, artifacts=reader)
+        service = ContainerJobService(
+            session,
+            temporal=temporal,
+            artifacts=reader,
+            artifact_access=ArtifactAccessContext.for_service(
+                owner_artifact_principal(owner)
+            ),
+        )
         accepted = await service.submit(owner=owner, request=submission())
         await service.repository.record_observation(
             owner=owner, job_id=accepted.job_id, state=ContainerJobState.SUCCEEDED,

@@ -2463,11 +2463,50 @@ def _container_job_evidence_publisher(artifact_service: TemporalArtifactService)
 
 def _container_job_artifact_reader(artifact_service: TemporalArtifactService):
     async def read(request, artifact_id: str) -> bytes:
-        # Inputs are read with the job owner's own artifact authority, the
-        # same principal admission checked and evidence is published under.
-        principal = f"{request.owner.principal_type}:{request.owner.principal_id}"
+        from temporalio import activity
+
+        from moonmind.schemas.container_job_models import (
+            ContainerJobSubmitRequest,
+            container_job_workflow_id,
+        )
+        from moonmind.workflows.temporal.artifacts import (
+            ArtifactAccessContext,
+            TemporalArtifactAuthorizationError,
+        )
+
+        # Recover authority from the API's durable input admission, including
+        # jobs retained across updates. Payload owner strings cannot select
+        # another job, add an input, or acquire the operator's authority.
+        if (
+            not activity.in_activity()
+            or activity.info().workflow_id != container_job_workflow_id(request.job_id)
+        ):
+            raise TemporalArtifactAuthorizationError(
+                "container job input requires its actual Activity admission"
+            )
+        async with get_async_session_context() as session:
+            record = await session.get(ContainerJobRecord, request.job_id)
+            if record is None or (record.owner_id, record.owner_type) != (
+                request.owner.principal_id,
+                request.owner.principal_type,
+            ):
+                raise TemporalArtifactAuthorizationError(
+                    "container job input has no matching durable admission"
+                )
+            admitted = ContainerJobSubmitRequest.model_validate(record.request_json)
+        inputs = {
+            item.artifact_ref.removeprefix("artifact://").removeprefix("artifact:")
+            for item in admitted.spec.input_attachments or ()
+            if item.artifact_ref
+        }
+        artifact_id = artifact_id.removeprefix("artifact://").removeprefix("artifact:")
+        if artifact_id not in inputs:
+            raise TemporalArtifactAuthorizationError(
+                "artifact is outside the admitted container job inputs"
+            )
         _artifact, payload = await artifact_service.read(
-            artifact_id=artifact_id, principal=principal
+            artifact_id=artifact_id,
+            access=ArtifactAccessContext.for_activity()._with_verified_inputs(inputs),
         )
         return payload
 
@@ -2749,6 +2788,19 @@ def _build_agent_runtime_deps(
     )
 
 
+class _ArtifactServiceProxy:
+    """Bind each worker artifact operation to its own database session."""
+
+    def __getattr__(self, name):
+        async def wrapper(*args, **kwargs):
+            async with get_async_session_context() as session:
+                service = TemporalArtifactService(TemporalArtifactRepository(session))
+                func = getattr(service, name)
+                return await func(*args, **kwargs)
+
+        return wrapper
+
+
 async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[object]]:
     """Build activity handlers for the configured non-workflow fleet.
 
@@ -2813,20 +2865,8 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
     enforced_network_refs: list[str] = []
     enforced_egress_profile_refs: list[str] = []
 
-    class ArtifactServiceProxy:
-        def __getattr__(self, name):
-            async def wrapper(*args, **kwargs):
-                async with get_async_session_context() as session:
-                    service = TemporalArtifactService(
-                        TemporalArtifactRepository(session)
-                    )
-                    func = getattr(service, name)
-                    return await func(*args, **kwargs)
-
-            return wrapper
-
     try:
-        artifact_service = ArtifactServiceProxy()  # type: ignore
+        artifact_service = _ArtifactServiceProxy()  # type: ignore
         sandbox_activities = TemporalSandboxActivities(
             artifact_service=artifact_service
         )

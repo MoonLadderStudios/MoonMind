@@ -183,10 +183,14 @@ async def test_explicit_admission_delegates_only_selected_raw_input(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("production_proxy", [False, True])
 async def test_new_restricted_activity_artifact_keeps_real_producer_access(
-    artifacts, monkeypatch  # noqa: F811
+    artifacts, monkeypatch, production_proxy  # noqa: F811
 ):
     from api_service.db.models import TemporalArtifactRedactionLevel
+    from moonmind.workflows.temporal import worker_runtime
+
+    monkeypatch.setattr(worker_runtime, "get_async_session_context", artifacts)
 
     monkeypatch.setattr(activity, "in_activity", lambda: True)
     monkeypatch.setattr(
@@ -220,7 +224,11 @@ async def test_new_restricted_activity_artifact_keeps_real_producer_access(
             b.activity_type: b.handler
             for b in build_activity_bindings(
                 selected,
-                artifact_activities=TemporalArtifactActivities(service),
+                artifact_activities=TemporalArtifactActivities(
+                    worker_runtime._ArtifactServiceProxy()
+                    if production_proxy
+                    else service
+                ),
             )
         }
         ref, _upload = await handlers["artifact.create"](
@@ -302,6 +310,7 @@ def test_read_context_cannot_be_decoded_from_payload(invalid):
 async def test_signed_fanout_admission_is_parent_scoped_and_never_operator(artifacts):
     from fastapi import HTTPException
     from starlette.requests import Request
+
     from api_service.api.routers.executions import _execution_request_artifact_access
     from api_service.auth_providers import get_artifact_access
     from moonmind.config.settings import settings
@@ -448,10 +457,12 @@ async def test_step_skill_context_uses_verified_owner_ancestry(
     artifacts, monkeypatch, kind
 ):
     from unittest.mock import AsyncMock
+
     from temporalio.api.workflowservice.v1 import (
-        DescribeWorkflowExecutionResponse,
         DescribeNamespaceResponse,
+        DescribeWorkflowExecutionResponse,
     )
+
     from moonmind.workflows.skills.run_projection import (
         SkillProjectionError,
         step_execution_artifact_access,
@@ -533,8 +544,10 @@ async def test_step_skill_context_uses_verified_owner_ancestry(
 async def test_readmission_compares_fresh_compiler_snapshots_without_creator_authority(
     artifacts, monkeypatch, ref_prefix
 ):
-    import hashlib, json
+    import hashlib
+    import json
     from unittest.mock import AsyncMock
+
     from api_service.services import omnigent_execution_plan_service as plans
     from moonmind.omnigent.harness_platform import stores
     from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
@@ -618,6 +631,7 @@ async def test_readmission_compares_fresh_compiler_snapshots_without_creator_aut
         service = TemporalArtifactService(TemporalArtifactRepository(session))
         with pytest.raises(TemporalArtifactAuthorizationError):
             await service.read(artifact_id=new_id, access=access)
+
         result = await plans.readmit_frozen_execution_plan(
             db_session=db,
             artifact_service=service,
@@ -636,3 +650,99 @@ async def test_readmission_compares_fresh_compiler_snapshots_without_creator_aut
         # The temporary comparison authority never becomes the workflow's grant.
         with pytest.raises(TemporalArtifactAuthorizationError):
             await service.read(artifact_id=new_id, access=access)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case", ["valid", "foreign_job", "forged_owner", "unselected", "raw", "quarantined"]
+)
+async def test_container_job_reader_keeps_exact_durable_input_admission(
+    artifacts, monkeypatch, case
+):
+    from api_service.db.models import (
+        ContainerJobRecord,
+        TemporalArtifact,
+        TemporalArtifactRedactionLevel,
+    )
+    from moonmind.schemas.container_job_models import (
+        ContainerJobActivityRequest,
+        OwnerIdentity,
+        container_job_workflow_id,
+    )
+    from moonmind.workflows.temporal import worker_runtime
+    from moonmind.workflows.temporal.worker_runtime import (
+        _ArtifactServiceProxy,
+        _container_job_artifact_reader,
+    )
+    from tests.unit.api.test_container_job_input_attachments import _submission
+
+    selected = await _put(
+        artifacts,
+        b"selected job input",
+        owner="service:exporter",
+        workflow_id=None,
+        link_type="input.saved",
+    )
+    unrelated = await _put(
+        artifacts,
+        b"unrelated job input",
+        owner="service:exporter",
+        workflow_id=None,
+        link_type="input.saved",
+    )
+    submission = _submission({"name": "input", "artifactRef": selected})
+    job_id = "container-job:" + "1" * 32
+    owner = OwnerIdentity(principalType="service", principalId="owner")
+    request = ContainerJobActivityRequest(
+        jobId=job_id, owner=owner, ownershipToken=job_id + ":v1", request=submission
+    )
+    monkeypatch.setattr(activity, "in_activity", lambda: True)
+    monkeypatch.setattr(worker_runtime, "get_async_session_context", artifacts)
+    monkeypatch.setattr(
+        activity,
+        "info",
+        lambda: SimpleNamespace(
+            workflow_id=(
+                "unrelated"
+                if case == "foreign_job"
+                else container_job_workflow_id(job_id)
+            )
+        ),
+    )
+    async with artifacts() as session:
+        session.add(
+            ContainerJobRecord(
+                job_id=job_id,
+                owner_id=owner.principal_id,
+                owner_type=owner.principal_type,
+                idempotency_key=submission.idempotency_key,
+                source_json=submission.source.model_dump(mode="json", by_alias=True),
+                request_json=submission.model_dump(mode="json", by_alias=True),
+            )
+        )
+        if case in {"raw", "quarantined"}:
+            row = await session.get(TemporalArtifact, selected)
+            if case == "raw":
+                row.redaction_level = TemporalArtifactRedactionLevel.RESTRICTED
+            else:
+                row.metadata_json = {"quarantine": True}
+        await session.commit()
+        if case == "forged_owner":
+            request.owner = OwnerIdentity(principalType="user", principalId="operator")
+        service = TemporalArtifactService(TemporalArtifactRepository(session))
+        reader = _container_job_artifact_reader(_ArtifactServiceProxy())
+        if case != "valid":
+            with pytest.raises(
+                (TemporalArtifactAuthorizationError, TemporalArtifactStateError)
+            ):
+                await reader(request, unrelated if case == "unselected" else selected)
+        else:
+            assert await reader(request, selected) == b"selected job input"
+            assert (
+                await service._repository.get_artifact(selected)
+            ).created_by_principal == "service:exporter"
+            with pytest.raises(TemporalArtifactAuthorizationError):
+                await service.read(
+                    artifact_id=selected,
+                    access=ArtifactAccessContext.for_execution("owner"),
+                )
