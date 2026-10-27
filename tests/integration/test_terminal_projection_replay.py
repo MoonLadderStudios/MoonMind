@@ -17,6 +17,7 @@ from api_service.db.models import (
     TemporalExecutionCanonicalRecord,
     TemporalExecutionRecord,
 )
+from moonmind.security.operator_admission import OperatorAdmission
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -111,7 +112,7 @@ async def test_terminal_describe_repairs_metadata_skew(
         query=AsyncMock(side_effect=RuntimeError("no live query")),
     )
     temporal = SimpleNamespace(get_workflow_handle=Mock(return_value=handle))
-    user = SimpleNamespace(id="owner", is_superuser=True)
+    user = OperatorAdmission(via="terminal-projection-fixture")
     app = FastAPI()
     app.include_router(executions.router)
 
