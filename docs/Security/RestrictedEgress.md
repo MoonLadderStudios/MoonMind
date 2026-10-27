@@ -194,6 +194,9 @@ are unsupported; report their coverage gap instead of widening access.
 
 The existing egress owner leases the installed gateway image for each job,
 with a new internal isolated workload bridge and an owned outbound bridge.
+An empty owned reservation lets Docker choose a free subnet before the workload
+bridge declares it explicitly, as required for fixed proxy/client addresses.
+Allocation conflicts fail closed; cleanup also removes interrupted reservations.
 Only the proxy joins admitted target networks. The workload has no host
 interface or external route, and the proxy cannot forward IP packets.
 Scoped policies inherit no provider or control-plane exceptions. Exact
