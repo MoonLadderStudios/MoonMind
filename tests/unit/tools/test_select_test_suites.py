@@ -525,7 +525,6 @@ def test_omnigent_owned_change_selects_the_complete_contract_gate(
     "changed_path",
     [
         "frontend/src/features/workflow-native-chat/useWorkflowChatBinding.ts",
-        "frontend/src/entrypoints/WorkflowChatNative.tsx",
         "frontend/src/entrypoints/workflow-detail.tsx",
         "frontend/src/lib/workflowDetailRoutes.ts",
     ],

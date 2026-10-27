@@ -130,7 +130,7 @@ The list shows the minimum fields needed to compare rows quickly (title, status,
 
 Detail is where operators find exact execution state, step ledger state, workflow and run IDs, namespace, repository, integration, owner, waiting reason, attention requirement, execution-context metadata, step evidence and checks, artifact evidence, managed-run observability (artifact-backed logs and diagnostics, not terminal embeds), and actions.
 
-Advanced metadata such as exact `temporalStatus`, `closeStatus`, `rawState`, provider-specific metadata, and the latest run ID belong in a facts rail, metadata drawer, or the Debug tab rather than dominating the normal layout.
+Advanced metadata such as exact `temporalStatus`, `closeStatus`, `rawState`, provider-specific metadata, and the latest run ID belong in the collapsed Details → Technical details disclosure rather than dominating the normal layout.
 
 ### 8.3 Preset provenance
 
@@ -211,7 +211,7 @@ Ended runs skip step 3 entirely. For managed sessions, `activeTurnId` and relate
 
 ### 11.1 Layout
 
-The detail page has a summary header (title, normalized status badge, concise summary, allowed actions), a compact facts row (workflow label, runtime, model/effort when applicable, start and updated times, current run state), a secondary facts rail (workflow ID, latest run ID, namespace, repository, integration, owner, terminal timestamps, execution-context metadata), and durable evidence (steps, step-scoped logs, diagnostics and checks, artifacts, outcome summaries, timeline). These are organized into the Chat, Overview, Execution, Evidence, and Debug tabs.
+The detail page has a summary header (title, normalized status badge, concise summary, allowed actions), a compact facts row (workflow label, runtime, model/effort when applicable, start and updated times, current run state), a secondary facts rail (workflow ID, latest run ID, namespace, repository, integration, owner, terminal timestamps, execution-context metadata), and durable evidence (steps, step-scoped logs, diagnostics and checks, artifacts, outcome summaries, timeline). These are organized into the Chat, Execution, Evidence, and Details tabs.
 
 ### 11.2 Steps
 
@@ -354,7 +354,7 @@ The README dashboard images (`docs/assets/workflow-list.png`, `docs/assets/workf
 
 1. Build with `npm run ui:build`.
 2. Serve `api_service/templates/react_dashboard.html` with boot payload `{"page":"dashboard","apiBase":"/api"}` on `/workflows` and `/workflows/{workflowId}`.
-3. Use deterministic synthetic rows over the `/api/executions` list/detail/steps contracts, shaped like `frontend/src/entrypoints/workflow-list.test.tsx`, with only public repository names and no private repositories, prompts, emails, tokens, or signed URLs. Capture detail from the Overview tab (`/workflows/{workflowId}/overview?source=temporal`).
+3. Use deterministic synthetic rows over the `/api/executions` list/detail/steps contracts, shaped like `frontend/src/entrypoints/workflow-list.test.tsx`, with only public repository names and no private repositories, prompts, emails, tokens, or signed URLs. Capture detail from the Details tab (`/workflows/{workflowId}/details?source=temporal`).
 4. Use a 1600×1000 viewport and emulate a dark system color scheme before loading; confirm `data-theme="dark"` on the root and wait for rows, detail summary, and fonts. The dashboard follows system theme changes live.
 5. Capture PNGs from the browser, framed without excess empty space (list 1600×500, Overview 1600×880), and check them at README display size without restyling the UI or editing content.
 
@@ -373,7 +373,7 @@ This section walks through one supported journey using existing Workflow Detail 
 - **Test coverage.** `tests/integration/reliability/test_failure_recovery_publication_journey.py` composes the real workflow controllers, PostgreSQL and artifact owners, checkpoint capture and cold restore, the remediation verifier, and saved-work publication. The failed run keeps its saved bytes and failure diagnostic, repair resumes only unfinished phases, and verification records `verified_resolved` against the exact candidate checkpoint. A transient provider read failure during publication is retried without rerunning implementation, producing exactly one push and one pull-request create.
 - **Limitation.** Provider compute and Temporal transport are controlled fixtures, so this is not live provider qualification.
 
-**What Workflow Detail shows.** The Overview tab answers the basic questions from fields the run already records:
+**What Workflow Detail shows.** The Details tab answers the basic questions from fields the run already records:
 
 | Question | Surface |
 | --- | --- |
@@ -383,4 +383,4 @@ This section walks through one supported journey using existing Workflow Detail 
 | What can I do next? | The **Workflow actions** menu offers only server-available actions, such as Edit, Rerun, or Continue remediation, with disabled reasons otherwise. |
 | Was a governance report produced? | The **Governance report** block shows `ready`, `partial`, `pending`, or `failed`, with the recorded reason code and recoverability when no report was produced. Only its summary is kept, and a report failure never changes the run or publication outcome. Runs whose terminal state was committed outside the workflow terminal-recording path (for example operator cancellation) have no block; see [RunGovernanceReports](../Governance/RunGovernanceReports.md) §6. |
 
-Overview and Evidence do not depend on native chat; when chat is unavailable, the Debug tab keeps a read-only session transcript. `frontend/src/entrypoints/workflow-detail.test.tsx` covers the failed-run questions and the governance block.
+Details and Evidence do not depend on native chat; when chat is unavailable, Execution → Session diagnostics keeps a read-only session transcript. `frontend/src/entrypoints/workflow-detail.test.tsx` covers the failed-run questions and the governance block.

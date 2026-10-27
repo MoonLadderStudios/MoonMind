@@ -73,15 +73,14 @@ Workflow context bar
 Native Omnigent chat application
 ```
 
-The workflow context bar is intentionally small. It may show:
+The workflow context bar is intentionally small. The page header and detail tabs above it already own the workflow title, status, and navigation, so it shows only:
 
-- workflow title,
-- workflow status,
-- current or source Step,
-- runtime label,
-- **Back to Overview**,
-- **View captured evidence**,
+- the bound Step, named from the step ledger (for example `Step 6 · Implement the issue`),
+- the session state when it is not live and writable, such as **Session ended · read-only**,
+- **Open in Omnigent**,
 - **Continue in a new workflow** when terminal continuation is available.
+
+When the bound session changes state, for example when it ends while open, the native view reloads so it shows the captured final transcript instead of the last streamed state.
 
 MoonMind must not add a second composer, transcript toolbar, approval tray, file rail, or session-control panel around the native UI.
 
@@ -172,7 +171,7 @@ Provider session, bridge session, host, runner, endpoint, credential, and immuta
 Binding rules:
 
 1. The backend resolves the binding from durable Workflow, Step Execution, AgentRun, and Omnigent Bridge state.
-2. The active chat-capable session is preferred while work is running.
+2. The active chat-capable session is preferred while work is running. A response or turn finishing does not end the session, so chat stays live while the agent starts more turns.
 3. For terminal workflows, the last authoritative chat-capable session may be returned read-only.
 4. The browser does not infer a session by scanning logs, events, URLs, or provider metadata.
 5. A stale, missing, or unauthorized binding fails closed and never falls back to an arbitrary provider session.
@@ -293,7 +292,7 @@ The Omnigent Bridge continues to capture and publish authorized evidence such as
 - mutation and approval audit refs,
 - cleanup and lease-release evidence.
 
-The workflow context bar may link to **View captured evidence**. MoonMind should not duplicate all evidence inside the native transcript.
+Captured evidence stays on the Evidence tab and in the terminal actions; MoonMind should not duplicate all evidence inside the native transcript.
 
 The product distinction is:
 
@@ -313,7 +312,7 @@ The existing MoonMind `ChatSessionView`, raw timeline, bridge event projection, 
 - cases where the native UI cannot be reached,
 - raw event and artifact inspection.
 
-They belong under **Debug**, **Diagnostics**, or a clearly labeled read-only compatibility fallback. They must not present a second ordinary composer once native chat is available.
+They belong under Execution → **Session diagnostics** or a clearly labeled read-only compatibility fallback. They must not present a second ordinary composer once native chat is available.
 
 When the native UI is unavailable, the Chat route shows the stable reason, a retry action, the authorized full-page native surface when available, and a read-only compatibility transcript when available. It must not silently switch to a behaviorally different custom chat implementation.
 

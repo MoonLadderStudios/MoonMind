@@ -6,9 +6,10 @@
 // transcript, composer, queue, approvals, tools, file rail, terminals, and
 // session lifecycle. Ordinary native messages never invoke Workflow actions and
 // this route never calls /chat-instructions.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
+  SESSION_DIAGNOSTICS_ANCHOR,
   workflowDetailSubrouteFromPath,
   workflowDetailSubrouteHref,
   type WorkflowDetailSubroute,
@@ -18,7 +19,9 @@ import {
   fullPageChatHref,
   isMountableNativeChatStatus,
   nativeChatContextStatusLabel,
+  nativeChatStepLabel,
   resolveSameOriginChatUrl,
+  type NativeChatStepRef,
 } from './chatBindingModel';
 import { NativeChatFrame, type NativeChatFrameSignal } from './NativeChatFrame';
 import { NativeChatUnavailableState } from './NativeChatUnavailableState';
@@ -34,7 +37,10 @@ interface WorkflowNativeChatRouteProps {
   routeWorkflowId: string;
   search: URLSearchParams;
   workflowTitle: string;
-  runtimeLabel?: string | null;
+  /** Step ledger rows used to name the bound step; null until it loads. */
+  steps?: readonly NativeChatStepRef[] | null;
+  /** Called once when the loaded ledger does not list the bound step yet. */
+  onUnknownStep?: (logicalStepId: string) => void;
   enabled?: boolean;
   /** Whether the parent workflow has reached a terminal state. */
   workflowTerminal?: boolean;
@@ -48,7 +54,8 @@ export function WorkflowNativeChatRoute({
   routeWorkflowId,
   search,
   workflowTitle,
-  runtimeLabel = null,
+  steps = null,
+  onUnknownStep,
   enabled = true,
   workflowTerminal = false,
   pollIntervalMs,
@@ -75,10 +82,11 @@ export function WorkflowNativeChatRoute({
   const [frameSignal, setFrameSignal] = useState<NativeChatFrameSignal | null>(null);
   const [frameFailure, setFrameFailure] = useState<string | null>(null);
   const chatUrl = binding?.chatUrl ?? null;
+  const bindingState = binding?.state ?? null;
   useEffect(() => {
     setFrameSignal(null);
     setFrameFailure(null);
-  }, [chatUrl]);
+  }, [chatUrl, bindingState]);
 
   const status = useMemo(() => {
     if (
@@ -95,9 +103,8 @@ export function WorkflowNativeChatRoute({
   const iframeSrc = resolveSameOriginChatUrl(binding?.chatUrl, origin);
   const fullHref = fullPageChatHref(binding?.chatUrl, origin);
 
-  const overviewHref = workflowDetailSubrouteHref(routeWorkflowId, 'overview', search);
   const evidenceHref = workflowDetailSubrouteHref(routeWorkflowId, 'evidence', search);
-  const debugHref = workflowDetailSubrouteHref(routeWorkflowId, 'debug', search);
+  const diagnosticsHref = `${workflowDetailSubrouteHref(routeWorkflowId, 'execution', search)}#${SESSION_DIAGNOSTICS_ANCHOR}`;
 
   const navigate = (href: string) => {
     let pathname: string;
@@ -112,18 +119,24 @@ export function WorkflowNativeChatRoute({
   const mountFrame = isMountableNativeChatStatus(status) && Boolean(iframeSrc);
   const readOnly =
     Boolean(binding?.readOnly) || status === 'readOnly' || status === 'terminal';
-  const stepLabel = binding?.logicalStepId ? `Step ${binding.logicalStepId}` : null;
+  const { label: stepLabel, known: stepKnown } = nativeChatStepLabel(binding?.logicalStepId, steps);
+  const unlistedStepId = binding?.logicalStepId && steps && !stepKnown ? binding.logicalStepId : null;
+  const onUnknownStepRef = useRef(onUnknownStep);
+  useEffect(() => {
+    onUnknownStepRef.current = onUnknownStep;
+  }, [onUnknownStep]);
+  useEffect(() => {
+    if (unlistedStepId) {
+      onUnknownStepRef.current?.(unlistedStepId);
+    }
+  }, [unlistedStepId]);
 
   return (
     <section className="stack wf-native-chat" aria-label="Workflow chat">
       <WorkflowChatContextBar
         stepLabel={stepLabel}
-        runtimeLabel={runtimeLabel}
         statusLabel={nativeChatContextStatusLabel(status)}
-        overviewHref={overviewHref}
-        evidenceHref={evidenceHref}
         fullPageHref={fullHref}
-        onNavigate={navigate}
       />
       {workflowTerminal ? (
         <WorkflowTerminalChatActions apiBase={apiBase} workflowId={workflowId} />
@@ -134,7 +147,10 @@ export function WorkflowNativeChatRoute({
         ) : null}
         {mountFrame && iframeSrc ? (
           <NativeChatFrame
-            key={`${binding?.chatBindingId}:${iframeSrc}`}
+            // The state is part of the identity: a session that ends while
+            // mounted reloads into its captured final transcript instead of
+            // leaving the live view frozen on its last streamed state.
+            key={`${binding?.chatBindingId}:${iframeSrc}:${bindingState}`}
             chatBindingId={binding?.chatBindingId ?? ''}
             src={iframeSrc}
             title={`${workflowTitle} — Omnigent chat`}
@@ -154,7 +170,7 @@ export function WorkflowNativeChatRoute({
             }}
             fullPageHref={fullHref}
             evidenceHref={evidenceHref}
-            diagnosticsHref={debugHref}
+            diagnosticsHref={diagnosticsHref}
             onNavigate={navigate}
           />
         )}

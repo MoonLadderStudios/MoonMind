@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 export function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -25,18 +25,31 @@ export function FactGroup({ title, children }: { title: string; children: ReactN
 /**
  * Collapsed by default: raw identifiers, digests, refs and detailed provenance
  * stay one click away. Children render only while open so closed details never
- * compete with the operational facts shown above them.
+ * compete with the operational facts shown above them, or fetch their data.
+ * A disclosure with an `anchorId` starts open, scrolled into view, when the URL
+ * fragment names it, so other surfaces can link straight to its contents.
  */
 export function TechnicalDetailsDisclosure({
   summary = 'Technical details',
+  anchorId,
   children,
 }: {
   summary?: string;
+  anchorId?: string;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(
+    () => Boolean(anchorId) && window.location.hash === `#${anchorId}`,
+  );
+  const detailsRef = useRef<HTMLDetailsElement | null>(null);
+  const openedFromAnchor = useRef(open);
+  useEffect(() => {
+    if (openedFromAnchor.current) {
+      detailsRef.current?.scrollIntoView?.({ block: 'start' });
+    }
+  }, []);
   return (
-    <details className="td-technical-details" open={open}>
+    <details ref={detailsRef} id={anchorId} className="td-technical-details" open={open}>
       <summary
         onClick={(event) => {
           event.preventDefault();

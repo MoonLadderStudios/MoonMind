@@ -403,8 +403,6 @@ OMNIGENT_CONTRACT_EXACT = {
     # Omnigent Temporal activities and workflows.
     "moonmind/workflows/temporal/activities/omnigent_activities.py",
     # Frontend Workflow Detail / Workflow Chat integration entrypoints.
-    "frontend/src/entrypoints/WorkflowChatNative.tsx",
-    "frontend/src/entrypoints/WorkflowChatNative.test.tsx",
     "frontend/src/entrypoints/workflow-detail.tsx",
     "frontend/src/entrypoints/omnigent-inventory.tsx",
     "frontend/src/lib/workflowDetailRoutes.ts",
@@ -466,8 +464,6 @@ OMNIGENT_FACADE_EXACT = {
     "moonmind/omnigent/effective_capabilities.py",
     "api_service/api/routers/omnigent_native_ui.py",
     "api_service/api/routers/omnigent_catalog.py",
-    "frontend/src/entrypoints/WorkflowChatNative.tsx",
-    "frontend/src/entrypoints/WorkflowChatNative.test.tsx",
     "frontend/src/entrypoints/workflow-detail.tsx",
     "frontend/src/entrypoints/omnigent-inventory.tsx",
     "frontend/src/lib/workflowDetailRoutes.ts",

@@ -1,3 +1,4 @@
+import type { ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockInstance } from 'vitest';
 
@@ -54,7 +55,11 @@ function mockBinding(
   });
 }
 
-function renderRoute(onNavigate = vi.fn(), workflowTerminal = false) {
+function renderRoute(
+  onNavigate = vi.fn(),
+  workflowTerminal = false,
+  extra: Partial<ComponentProps<typeof WorkflowNativeChatRoute>> = {},
+) {
   renderWithClient(
     <WorkflowNativeChatRoute
       apiBase="/api"
@@ -62,10 +67,10 @@ function renderRoute(onNavigate = vi.fn(), workflowTerminal = false) {
       routeWorkflowId="wf-1"
       search={new URLSearchParams('source=temporal')}
       workflowTitle="Ship the thing"
-      runtimeLabel="Omnigent"
       workflowTerminal={workflowTerminal}
       pollIntervalMs={5000}
       onNavigate={onNavigate}
+      {...extra}
     />,
   );
   return onNavigate;
@@ -93,12 +98,12 @@ describe('WorkflowNativeChatRoute', () => {
     // No legacy custom composer/transcript is rendered on the native path.
     expect(document.querySelector('textarea')).toBeNull();
     expect(screen.queryByTestId('chat-session-blocks')).toBeNull();
-    // Context bar exposes bounded workflow context + actions; the page header
-    // above already owns the workflow title and status, so they are not repeated.
+    // The context bar carries only chat-specific context: the page header owns
+    // the title and status, and the detail tabs already reach Details/Evidence.
     expect(screen.queryByText('Ship the thing')).toBeNull();
-    expect(screen.getByText('Omnigent')).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Back to Overview' })).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'View captured evidence' })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Back to Overview' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'View captured evidence' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Open in Omnigent' })).toBeTruthy();
   });
 
   it('never displays an upstream Omnigent url or provider session id', async () => {
@@ -114,12 +119,39 @@ describe('WorkflowNativeChatRoute', () => {
     expect(openLink.getAttribute('href')).toBe('/omnigent-ui/workflow-chat/cb-1');
   });
 
-  it('routes Back to Overview through SPA navigation instead of a reload', async () => {
-    mockBinding(() => ({ body: AVAILABLE }));
-    const onNavigate = renderRoute();
-    const backLink = await screen.findByRole('link', { name: 'Back to Overview' });
-    fireEvent.click(backLink);
-    expect(onNavigate).toHaveBeenCalledWith('overview', '/workflows/wf-1/overview?source=temporal');
+  it('labels the bound step with its ledger title instead of the logical step id', async () => {
+    mockBinding(() => ({ body: { ...AVAILABLE, logicalStepId: 'tpl:issue:06:abc' } }));
+    renderRoute(vi.fn(), false, {
+      steps: [{ logicalStepId: 'tpl:issue:06:abc', order: 6, title: 'Implement the issue' }],
+    });
+    expect(await screen.findByText('Step 6 · Implement the issue')).toBeTruthy();
+    expect(screen.queryByText(/tpl:issue:06:abc/)).toBeNull();
+  });
+
+  it('asks for a fresh step ledger when the bound step is missing from it', async () => {
+    mockBinding(() => ({ body: { ...AVAILABLE, logicalStepId: 'remediation:1' } }));
+    const onUnknownStep = vi.fn();
+    renderRoute(vi.fn(), false, { steps: [], onUnknownStep });
+    expect(await screen.findByText('Step remediation:1')).toBeTruthy();
+    expect(onUnknownStep).toHaveBeenCalledWith('remediation:1');
+  });
+
+  it('reloads the native frame when the bound session ends instead of leaving a stale live view', async () => {
+    vi.useFakeTimers();
+    let binding: WorkflowChatBinding = AVAILABLE;
+    mockBinding(() => ({ body: binding }));
+    renderRoute();
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    const liveFrame = screen.getByTitle('Ship the thing — Omnigent chat');
+    expect(screen.queryByText(/Session ended/)).toBeNull();
+
+    binding = { ...AVAILABLE, state: 'ended', readOnly: true, capabilities: {} };
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+
+    expect(screen.getByText('Session ended · read-only')).toBeTruthy();
+    const endedFrame = screen.getByTitle('Ship the thing — Omnigent chat');
+    expect(endedFrame).not.toBe(liveFrame);
+    expect(endedFrame.getAttribute('src')).toBe(liveFrame.getAttribute('src'));
   });
 
   it('shows a terminal read-only session and launches an explicit linked continuation', async () => {
@@ -367,7 +399,10 @@ describe('WorkflowNativeChatRoute', () => {
     expect(calls()).toBe(1);
     expect(screen.getByText('Chat service error')).toBeTruthy();
     expect(screen.getByText(/HTTP 500/)).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Open diagnostics' })).toBeTruthy();
+    // Session diagnostics live in a disclosure on the Execution tab.
+    expect(screen.getByRole('link', { name: 'Open diagnostics' }).getAttribute('href')).toBe(
+      '/workflows/wf-1/execution?source=temporal#session-diagnostics',
+    );
 
     // 5 s doubles per consecutive failure (10, 20, 40) and caps at 60 s, but
     // never stops, so a server fix can recover the panel on its own.

@@ -35,6 +35,11 @@ TERMINAL_RESPONSE_EVENT_TYPES = frozenset(
     | _FAILED_RESPONSE_EVENT_TYPES
     | _CANCELED_RESPONSE_EVENT_TYPES
 )
+# Outcomes of one response or turn. They end that turn, not the session, which
+# can go on to run more turns until its owner records the session terminal.
+TURN_TERMINAL_EVENT_TYPES = TERMINAL_RESPONSE_EVENT_TYPES | frozenset(
+    {"turn.completed", "turn.failed", "turn.cancelled"}
+)
 
 _TERMINAL_STATUSES = {
     "completed",
@@ -449,6 +454,7 @@ def _agent_run_id(request: AgentExecutionRequest) -> str:
 __all__ = [
     "BRIDGE_EVENT_SCHEMA_VERSION",
     "TERMINAL_RESPONSE_EVENT_TYPES",
+    "TURN_TERMINAL_EVENT_TYPES",
     "BridgeEventNormalization",
     "build_omnigent_bridge_event",
     "normalize_omnigent_observation",

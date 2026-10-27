@@ -74,8 +74,6 @@ export type DashboardPreferences = {
   liveUpdatesEnabled: boolean;
   /** Create page guided (false) vs expert/advanced (true) default. */
   createExpertMode: boolean;
-  /** Whether diagnostic debug fields are surfaced on the workflow detail page. */
-  debugFieldsVisible: boolean;
   /** Persisted Workflow collection list display mode. */
   workflowListDisplayMode: CollectionListDisplayMode;
   /** Last workflow explicitly opened by the operator. */
@@ -120,7 +118,6 @@ export const DEFAULT_DASHBOARD_PREFERENCES: DashboardPreferences = {
   workflowListSort: { field: 'updatedAt', direction: 'desc' },
   liveUpdatesEnabled: true,
   createExpertMode: false,
-  debugFieldsVisible: true,
   workflowListDisplayMode: 'sidebar',
   lastSelectedWorkflowId: '',
   recurringListDisplayMode: 'table',
@@ -230,10 +227,6 @@ export function sanitizeDashboardPreferences(value: unknown): DashboardPreferenc
     createExpertMode: sanitizeBoolean(
       value.createExpertMode,
       DEFAULT_DASHBOARD_PREFERENCES.createExpertMode,
-    ),
-    debugFieldsVisible: sanitizeBoolean(
-      value.debugFieldsVisible,
-      DEFAULT_DASHBOARD_PREFERENCES.debugFieldsVisible,
     ),
     workflowListDisplayMode: sanitizeListDisplayMode(
       value.workflowListDisplayMode,

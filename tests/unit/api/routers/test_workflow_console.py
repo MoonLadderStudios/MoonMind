@@ -585,9 +585,10 @@ def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         "/workflows/mm:01JNX7SYH6A3K1V8Q2D7E9F4AB",
         "/workflows/mm:workflow-123",
         "/workflows/mm:workflow-123/chat",
-        "/workflows/mm:workflow-123/overview",
         "/workflows/mm:workflow-123/execution",
         "/workflows/mm:workflow-123/evidence",
+        "/workflows/mm:workflow-123/details",
+        "/workflows/mm:workflow-123/overview",
         "/workflows/mm:workflow-123/steps",
         "/workflows/mm:workflow-123/artifacts",
         "/workflows/mm:workflow-123/runs",
@@ -878,8 +879,8 @@ def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
     assert detail["message"] == (
         "Workflow console route was not found. Use /workflows, /workflows/new, "
         "/workflows/{workflowId}, /workflows/{workflowId}/chat, "
-        "/workflows/{workflowId}/overview, /workflows/{workflowId}/execution, "
-        "/workflows/{workflowId}/evidence, or /workflows/{workflowId}/debug."
+        "/workflows/{workflowId}/execution, /workflows/{workflowId}/evidence, "
+        "or /workflows/{workflowId}/details."
     )
 
 
