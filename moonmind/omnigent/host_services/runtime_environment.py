@@ -33,6 +33,7 @@ from moonmind.security.execution_fanout_capabilities import (
     ExecutionFanoutCapabilityError,
     mint_execution_fanout_capability,
     require_execution_fanout_authorization,
+    step_policy_is_assessment_scoped,
 )
 from moonmind.security.mcp_tool_capabilities import (
     JIRA_TOOLS_PURPOSE,
@@ -104,6 +105,10 @@ class OmnigentRuntimeEnvironmentService:
             require_execution_fanout_authorization(
                 required_capabilities,
                 self._execution_fanout_authorization(request),
+                assessment_scoped=request.step_execution is not None
+                and step_policy_is_assessment_scoped(
+                    request.step_execution.skill_source_policy
+                ),
             )
         except ExecutionFanoutCapabilityError as exc:
             raise HarnessPlatformError(str(exc), code="authorization_denied") from exc

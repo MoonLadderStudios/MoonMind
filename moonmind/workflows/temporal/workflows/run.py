@@ -23683,6 +23683,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             skill_source_policy["assessmentScope"] = self._json_value(
                 assessment_scope, path="assessmentScope"
             )
+            # Child runs do not inherit the scope, so fan-out would escape it.
+            skill_source_policy["executionFanout"] = {
+                "authorized": False,
+                "selectedSkill": str(selected_skill or "").strip().lower(),
+                "sourceKind": "assessment_scope",
+                "reasonCode": "assessment_scope_restricts_fanout",
+            }
         execution_ordinal = step_execution or 1
         context_workspace = self._step_execution_workspace(
             node_id,

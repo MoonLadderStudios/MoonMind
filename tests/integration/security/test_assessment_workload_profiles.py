@@ -604,3 +604,110 @@ async def test_unscoped_development_sessions_keep_generic_jobs(journey):
                 json={"tool": "container.submit", "arguments": profiled},
             )
         ).status_code == 200
+
+
+async def test_scoped_step_cannot_fan_out_to_unscoped_children():
+    """Alternate transport: execution fan-out would start children unscoped."""
+
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+    from moonmind.security.execution_fanout_capabilities import (
+        verify_execution_fanout_capability,
+    )
+    from moonmind.workflows.temporal.workflows.run import (
+        RUN_ASSESSMENT_SCOPE_AUTHORITY_PATCH,
+        RUN_EXECUTION_FANOUT_AUTHORIZATION_PATCH,
+        MoonMindRunWorkflow,
+    )
+
+    def step_policy(workflow_parameters):
+        # The production run workflow builds the trusted step policy; the
+        # selected Skill alone would authorize fan-out.
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.info",
+                return_value=SimpleNamespace(
+                    namespace="default",
+                    workflow_id="workflow-1",
+                    run_id="run-1",
+                    parent=None,
+                ),
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                side_effect=lambda patch_id: patch_id
+                in {
+                    RUN_ASSESSMENT_SCOPE_AUTHORITY_PATCH,
+                    RUN_EXECUTION_FANOUT_AUTHORIZATION_PATCH,
+                },
+            ),
+        ):
+            run = MoonMindRunWorkflow()
+            run._execution_fanout_authorization_by_step["assess"] = {
+                "authorized": True,
+                "selectedSkill": "security-review",
+                "sourceKind": "built_in",
+                "reasonCode": "trusted_resolved_skill_requirement",
+            }
+            request = run._build_agent_execution_request(
+                node_inputs={"runtime": {"mode": "omnigent"}},
+                node_id="assess",
+                tool_name="omnigent",
+                workflow_parameters=workflow_parameters,
+            )
+        return dict(request.step_execution.skill_source_policy)
+
+    def build(policy):
+        request = AgentExecutionRequest.model_validate(
+            {
+                "agentKind": "external",
+                "agentId": "omnigent",
+                "correlationId": "workflow-1",
+                "idempotencyKey": STEP,
+                "parameters": {"requiredCapabilities": ["execution.fanout"]},
+                "stepExecution": {
+                    "workflowId": "workflow-1",
+                    "runId": "run-1",
+                    "logicalStepId": "assess",
+                    "executionOrdinal": 1,
+                    "stepExecutionId": STEP,
+                    "runtimeContextPolicy": "fresh_agent_run",
+                    "skillSourcePolicy": policy,
+                },
+            }
+        )
+        return OmnigentRuntimeEnvironmentService(
+            moonmind_url="http://api:8000", signing_secret=SECRET
+        ).build(
+            request=request,
+            plan=_plan("test/model"),
+            host_lease_ref="lease-1",
+            launch_policy=get_launch_policy("omnigent-on-demand@1"),
+            workspace_attachment={"accessMode": "read-write"},
+        )
+
+    # Control: the same Skill on an unscoped run receives a fan-out bearer.
+    unscoped = build(step_policy({}))
+    assert (
+        verify_execution_fanout_capability(
+            unscoped["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"], secret=SECRET
+        ).parent_workflow_id
+        == "workflow-1"
+    )
+
+    scoped_policy = step_policy({"assessmentScope": SCOPE})
+    assert scoped_policy["executionFanout"]["authorized"] is False
+    with pytest.raises(HarnessPlatformError) as denied:
+        build(scoped_policy)
+    assert denied.value.code == "authorization_denied"
+    # Even a forged authorized decision beside the scope cannot mint fan-out.
+    with pytest.raises(HarnessPlatformError, match="assessment-scoped") as forged:
+        build(
+            {
+                **scoped_policy,
+                "executionFanout": {"authorized": True, "sourceKind": "built_in"},
+            }
+        )
+    assert forged.value.code == "authorization_denied"

@@ -101,6 +101,7 @@ from moonmind.security.execution_fanout_capabilities import (
     ExecutionFanoutCapabilityError,
     mint_execution_fanout_capability,
     require_execution_fanout_authorization,
+    step_policy_is_assessment_scoped,
 )
 from moonmind.security.mcp_tool_capabilities import (
     JIRA_TOOLS_PURPOSE,
@@ -746,6 +747,11 @@ class OmnigentOAuthHostRuntime:
             require_execution_fanout_authorization(
                 required_capabilities,
                 execution_fanout_authorization,
+                assessment_scoped=evidence_request is not None
+                and evidence_request.step_execution is not None
+                and step_policy_is_assessment_scoped(
+                    evidence_request.step_execution.skill_source_policy
+                ),
             )
         except ExecutionFanoutCapabilityError as exc:
             raise OmnigentOAuthHostError(str(exc), code="authorization_denied") from exc
@@ -3882,6 +3888,7 @@ class OmnigentOAuthHostRuntime:
             require_execution_fanout_authorization(
                 required_capabilities,
                 execution_fanout_authorization,
+                assessment_scoped=step_policy_is_assessment_scoped(step_policy),
             )
         except ExecutionFanoutCapabilityError as exc:
             raise OmnigentOAuthHostError(str(exc), code="authorization_denied") from exc

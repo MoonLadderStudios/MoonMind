@@ -402,10 +402,22 @@ def test_operator_assessment_scope_reaches_only_trusted_step_policy() -> None:
             patch(
                 "moonmind.workflows.temporal.workflows.run.workflow.patched",
                 side_effect=lambda patch_id: patched
-                and patch_id == RUN_ASSESSMENT_SCOPE_AUTHORITY_PATCH,
+                and patch_id
+                in {
+                    RUN_ASSESSMENT_SCOPE_AUTHORITY_PATCH,
+                    RUN_EXECUTION_FANOUT_AUTHORIZATION_PATCH,
+                },
             ),
         ):
-            return MoonMindRunWorkflow()._build_agent_execution_request(
+            run = MoonMindRunWorkflow()
+            # The selected Skill alone would authorize fan-out for this step.
+            run._execution_fanout_authorization_by_step["node-1"] = {
+                "authorized": True,
+                "selectedSkill": "security-review",
+                "sourceKind": "built_in",
+                "reasonCode": "trusted_resolved_skill_requirement",
+            }
+            return run._build_agent_execution_request(
                 node_inputs={"runtime": {"mode": "omnigent"}, **(node_inputs or {})},
                 node_id="node-1",
                 tool_name="omnigent",
@@ -413,7 +425,18 @@ def test_operator_assessment_scope_reaches_only_trusted_step_policy() -> None:
             )
 
     admitted = build(patched=True, workflow_parameters={"assessmentScope": scope})
-    assert admitted.step_execution.skill_source_policy["assessmentScope"] == scope
+    admitted_policy = admitted.step_execution.skill_source_policy
+    assert admitted_policy["assessmentScope"] == scope
+    # Child runs would not inherit the scope, so the step cannot fan out.
+    assert admitted_policy["executionFanout"]["authorized"] is False
+    assert admitted_policy["executionFanout"]["reasonCode"] == (
+        "assessment_scope_restricts_fanout"
+    )
+    unscoped = build(patched=True, workflow_parameters={})
+    assert (
+        unscoped.step_execution.skill_source_policy["executionFanout"]["authorized"]
+        is True
+    )
     # Step inputs authored by a planner or model are not operator admission.
     step_only = build(
         patched=True,

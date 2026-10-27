@@ -2816,6 +2816,7 @@ class DockerCodexManagedSessionController:
             require_execution_fanout_authorization(
                 (EXECUTION_FANOUT_REQUIRED_CAPABILITY,),
                 request.execution_fanout_authorization,
+                assessment_scoped=request.container_job_assessment_scope is not None,
             )
         if container_jobs_available:
             owner = request.container_job_owner or OwnerIdentity(
