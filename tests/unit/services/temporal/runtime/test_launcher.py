@@ -4974,6 +4974,14 @@ async def test_launch_fails_fast_when_snapshot_ref_has_no_artifact_service(
     request = _make_request(
         instruction_ref="Resolve.",
         resolved_skillset_ref="missing-service",
+        step_execution={
+            "workflowId": "skill-fixture-workflow",
+            "runId": "skill-fixture-run",
+            "logicalStepId": "implement",
+            "executionOrdinal": 1,
+            "stepExecutionId": "skill-fixture-workflow:skill-fixture-run:implement:execution:1",
+            "runtimeContextPolicy": "fresh_agent_run",
+        },
         parameters={"selectedSkill": "pr-resolver"},
     )
     workspace = tmp_path / "workspaces" / "run-no-service" / "repo"
