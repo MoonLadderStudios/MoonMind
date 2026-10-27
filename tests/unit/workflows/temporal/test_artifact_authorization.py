@@ -47,7 +47,10 @@ async def test_link_lookup_outage_preserves_authority_failure_and_recovers(
 
             monkeypatch.setattr(session, "execute", unavailable)
             with pytest.raises(TemporalArtifactError) as raised:
-                await getattr(service, surface)(artifact_id=artifact.artifact_id, principal="workflow:reader")
+                await getattr(service, surface)(
+                    artifact_id=artifact.artifact_id,
+                    access=access_for_test("workflow:reader"),
+                )
             error = raised.value
             assert not isinstance(error, TemporalArtifactAuthorizationError)
             assert error.code == "artifact_authority_unavailable"
@@ -292,7 +295,10 @@ async def test_execution_list_requires_owner_or_admitted_execution(
                     )
                     == []
                 )
-            with pytest.raises(TemporalArtifactAuthorizationError, match="principal required"):
+            with pytest.raises(
+                TemporalArtifactAuthorizationError,
+                match="artifact access identity required",
+            ):
                 await service.list_for_execution(**query, access=access_for_test(""))
             for principal, admitted in (
                 ("service:producer", None), ("workflow:run-a", None),
