@@ -377,7 +377,9 @@ publication with diagnostics rather than redirecting worker filesystem access.
 `workspaceRef` (`workspacePath`) or an artifact its owner can read
 (`artifactRef`). The worker captures each once into job-owned storage, mounts it
 at `/inputs/<name>`, and records its identity and Git/link coverage in
-diagnostics. Such a job has no live `/workspace`; declared outputs resolve under
+diagnostics. Capture opens each entry through its parent's descriptor without
+following links, because the working copy may change while it is read: links
+and entries replaced mid-capture are omitted and counted, never followed. Such a job has no live `/workspace`; declared outputs resolve under
 job-owned `/outputs`, beside a job-owned `/tmp`. Retries reuse the capture and
 confirmed publications; cleanup keeps unpublished outputs.
 

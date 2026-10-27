@@ -307,6 +307,126 @@ async def test_input_cannot_escape_the_admitted_workspace(tmp_path):
         await _backend(tmp_path, commands).create_container(request)
 
 
+def _swap_before_open(monkeypatch, name: str, swap) -> None:
+    """Replace ``name`` right after capture classified it, before it is opened."""
+
+    real_open_at = attachments._open_at
+    swapped = []
+
+    def open_at(entry, flags, dir_fd):
+        if entry == name and not swapped:
+            swapped.append(entry)
+            swap()
+        return real_open_at(entry, flags, dir_fd)
+
+    monkeypatch.setattr(attachments, "_open_at", open_at)
+
+
+def _stored_bytes(root: Path) -> bytes:
+    return b"".join(
+        path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file() and not path.is_symlink()
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry", ["config.txt", "pkg"])
+async def test_entries_swapped_for_links_during_capture_never_copy_host_bytes(
+    tmp_path, monkeypatch, entry
+):
+    commands: list[tuple[str, ...]] = []
+    request = _request(tmp_path)
+    workspace = _workspace(request)
+    outside = tmp_path / "host"
+    outside.mkdir()
+    (outside / "config.txt").write_text("host only")
+    (outside / "mod.py").write_text("host only")
+    (workspace / "app.py").write_text("ok")
+    (workspace / "config.txt").write_text("workspace config")
+    (workspace / "pkg").mkdir()
+    (workspace / "pkg" / "mod.py").write_text("workspace module")
+    target = outside / "config.txt" if entry == "config.txt" else outside
+
+    def swap():
+        os.rename(workspace / entry, tmp_path / f"moved-{entry}")
+        (workspace / entry).symlink_to(target)
+
+    _swap_before_open(monkeypatch, entry, swap)
+
+    await _backend(tmp_path, commands).create_container(request)
+
+    storage = attachments.storage_for(tmp_path, JOB_ID)
+    coverage = attachments.load_manifest(storage)["inputs"]["source"]["coverage"]
+    assert b"host only" not in _stored_bytes(storage.root)
+    captured = {p.name for p in (storage.inputs / "source").iterdir()}
+    assert captured == {"app.py", "config.txt", "pkg"} - {entry}
+    assert coverage["filesChangedDuringCapture"] == 1
+    assert "files_changed_during_capture" in coverage["limitations"]
+
+
+@pytest.mark.asyncio
+async def test_entries_removed_during_capture_are_counted_not_fatal(
+    tmp_path, monkeypatch
+):
+    commands: list[tuple[str, ...]] = []
+    request = _request(tmp_path)
+    workspace = _workspace(request)
+    (workspace / "app.py").write_text("ok")
+    (workspace / "deleted.py").write_text("gone")
+    real_scandir = os.scandir
+
+    class _Listing:
+        def __init__(self, fd):
+            self._scan = real_scandir(fd)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self._scan.close()
+
+        def __iter__(self):
+            for entry in self._scan:
+                if entry.name == "deleted.py":
+                    os.unlink(workspace / "deleted.py")
+                yield entry
+
+    monkeypatch.setattr(attachments.os, "scandir", _Listing)
+
+    await _backend(tmp_path, commands).create_container(request)
+
+    storage = attachments.storage_for(tmp_path, JOB_ID)
+    coverage = attachments.load_manifest(storage)["inputs"]["source"]["coverage"]
+    assert [p.name for p in (storage.inputs / "source").iterdir()] == ["app.py"]
+    assert coverage["filesChangedDuringCapture"] == 1
+
+
+@pytest.mark.asyncio
+async def test_workspace_path_swapped_for_a_link_fails_closed(tmp_path, monkeypatch):
+    commands: list[tuple[str, ...]] = []
+    request = _request(
+        tmp_path, inputAttachments=[{"name": "source", "workspacePath": "src/app"}]
+    )
+    workspace = _workspace(request)
+    (workspace / "src" / "app").mkdir(parents=True)
+    (tmp_path / "other-run").mkdir()
+    (tmp_path / "other-run" / "secret").write_text("host only")
+
+    def swap():
+        os.rename(workspace / "src", tmp_path / "moved-src")
+        (workspace / "src").symlink_to(tmp_path / "other-run")
+
+    _swap_before_open(monkeypatch, "src", swap)
+
+    with pytest.raises(ContainerJobBackendError, match="escapes"):
+        await _backend(tmp_path, commands).create_container(request)
+
+    storage = attachments.storage_for(tmp_path, JOB_ID)
+    assert b"host only" not in _stored_bytes(storage.root)
+    assert not any(c[0] == "create" for c in commands)
+
+
 @pytest.mark.asyncio
 async def test_another_jobs_storage_is_never_reused(tmp_path):
     commands: list[tuple[str, ...]] = []
