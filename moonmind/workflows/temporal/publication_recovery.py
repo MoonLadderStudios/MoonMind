@@ -146,6 +146,7 @@ class PublicationRecoveryContract(BaseModel):
     source_workflow_id: str = Field(..., alias="sourceWorkflowId")
     source_run_id: str = Field(..., alias="sourceRunId")
     source_semantic_outcome: str = Field(..., alias="sourceSemanticOutcome")
+    pull_request_body: str | None = Field(None, alias="pullRequestBody")
     target: PublicationRecoveryTarget
     continuation: PublicationContinuation
     intent: PublicationIntent

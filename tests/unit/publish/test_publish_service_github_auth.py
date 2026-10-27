@@ -168,6 +168,7 @@ async def test_publish_pr_uses_rest_service_without_ambient_gh(monkeypatch, tmp_
     assert result.pr_url == "https://github.com/owner/repo/pull/1"
     assert created["github_token"] == "publish-token"
     assert created["repo"] == "owner/repo"
+    assert "make change" in created["body"]
     assert not any(call["command"][:3] == ["gh", "pr", "create"] for call in calls)
 
 

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
+
+from moonmind.utils.logging import redact_sensitive_text
 
 _FULL_UUID_PATTERN = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
 _MOONMIND_WORD_PATTERN = re.compile(r"\bmoonmind\b", re.IGNORECASE)
@@ -19,6 +22,57 @@ _SECRET_LIKE_METADATA_PATTERN = re.compile(
     )
     """
 )
+_CLOSING_REFERENCE = re.compile(
+    r"\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?)(\s*:?\s+)"
+    r"(?=(?:(?:[\w.-]+/[\w.-]+)?#|https://github\.com/[^/\s]+/[^/\s]+/issues/)\d)",
+    re.IGNORECASE,
+)
+
+
+def publication_task_instructions(task: Mapping[str, object]) -> str:
+    """Read the requested outcome and all authored steps, not a retry summary."""
+    parts = []
+    instructions = task.get("instructions")
+    if isinstance(instructions, str) and instructions.strip():
+        parts.append(instructions.strip())
+    steps = task.get("steps")
+    for step in steps if isinstance(steps, list) else ():
+        if not isinstance(step, Mapping):
+            continue
+        instructions = step.get("instructions")
+        if (
+            isinstance(instructions, str)
+            and instructions.strip()
+            and instructions.strip() not in parts
+        ):
+            parts.append(instructions.strip())
+    return "\n\n".join(parts)
+
+
+def append_publication_task(body: str, *, instructions: str, source: str = "") -> str:
+    """Keep original scope separate from an implementation's own summary.
+
+    Quoted task text is review context, not GitHub issue-closing authority.
+    Large inputs retain their source reference and disclose truncation.
+    """
+
+    scope = redact_sensitive_text(instructions).strip()
+    if not scope:
+        return body
+    scope = _CLOSING_REFERENCE.sub(r"\1\2issue ", scope).replace("<!--", "&lt;!--")
+    if len(scope) > 20_000:
+        scope = (
+            scope[:20_000] + "\n[Task excerpt truncated; consult the original task.]"
+        )
+    origin = f"\nSource: {redact_sensitive_text(source).strip()}\n" if source else ""
+    section = f"## Admitted task\n{origin}\n{scope}"
+    # GitHub accepts 65,536 characters. Reserve space for downstream disclosure
+    # and closing lines while retaining the original outcome over a long summary.
+    available = 30_000 - len(section) - 2
+    if len(body) > available:
+        body = body[: available - 40] + "\n[Implementation summary truncated.]"
+    return f"{body.rstrip()}\n\n{section}"
+
 
 def sanitize_publish_subject(
     value: str,

@@ -53,6 +53,80 @@ def pr_resolve_snapshot_module() -> dict[str, Any]:
         )
     )
 
+
+def test_snapshot_exposes_final_candidate_and_unintegrated_base_changes(
+    pr_resolve_snapshot_module, monkeypatch
+):
+    collect = pr_resolve_snapshot_module["fetch_candidate_changes"]
+    calls = []
+
+    def read(command, **kwargs):
+        calls.append((command, kwargs))
+        if "/files?" in command[2]:
+            return [
+                {
+                    "filename": ".github/workflows/release.yml",
+                    "status": "modified",
+                    "patch": "@@ -1 +0,0 @@\n-qualify-before-latest: true",
+                },
+                {
+                    "filename": "tests/test_release.py",
+                    "status": "removed",
+                    "patch": "@@ -1 +0,0 @@\n-assert qualified(candidate)",
+                },
+            ]
+        assert command[2].endswith("compare/candidate...main-tip")
+        return {
+            "merge_base_commit": {"sha": "original-base"},
+            "commits": [
+                {
+                    "sha": "main-tip",
+                    "commit": {"message": "Require release qualification"},
+                }
+            ],
+            "total_commits": 1,
+        }
+
+    monkeypatch.setitem(collect.__globals__, "run_command_optional", read)
+    result = collect(
+        "example/repository",
+        {
+            "number": 9,
+            "headRefOid": "candidate",
+            "baseRefOid": "main-tip",
+            "changedFiles": 2,
+        },
+    )
+    assert result["headSha"] == "candidate"
+    assert result["baseSha"] == "main-tip"
+    assert result["filesComplete"] is True
+    assert result["files"][1]["status"] == "removed"
+    assert "assert qualified(candidate)" in result["files"][1]["patch"]
+    assert result["baseChanges"]["mergeBaseSha"] == "original-base"
+    assert result["baseChanges"]["commits"][0]["sha"] == "main-tip"
+    assert calls[0][1]["paginated"] is True
+
+
+def test_snapshot_discloses_missing_diff_instead_of_claiming_clean_inventory(
+    pr_resolve_snapshot_module, monkeypatch
+):
+    collect = pr_resolve_snapshot_module["fetch_candidate_changes"]
+    monkeypatch.setitem(
+        collect.__globals__, "run_command_optional", lambda *_args, **_kwargs: None
+    )
+    result = collect(
+        "example/repository",
+        {
+            "number": 9,
+            "headRefOid": "new-head",
+            "baseRefOid": "new-base",
+            "changedFiles": 1,
+        },
+    )
+    assert result["filesComplete"] is False
+    assert result["error"] == "Changed-file inventory unavailable."
+
+
 @pytest.fixture
 def pr_resolve_finalize_module() -> dict[str, Any]:
     return _load_module(

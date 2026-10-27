@@ -98,6 +98,11 @@ If no constraints are provided, default to addressing all applicable feedback.
   clean result.
 - Re-check adjacent comments after each fix to collapse duplicates.
 
+When a finding concerns tests broken by a production removal, compare the final
+diff with the admitted task before deleting assertions. Preserve the supported
+outcome unless its removal or replacement is in scope; bring an unexplained
+rollback back through this same correction and review flow.
+
 7. Run compile/tests and retry until green.
 - Select compile/test entrypoints from authoritative repository guidance
   (`AGENTS.md`, `CONTRIBUTING.md`, docs) for the touched scope. Do not assume
