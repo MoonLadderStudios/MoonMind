@@ -325,12 +325,25 @@ async def test_default_command_runner_clears_supplemental_groups_when_uid_change
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("required_capabilities", "expects_fanout"),
+    ("required_capabilities", "expects_fanout", "assessment_scope"),
     [
-        (None, True),
-        ((), False),
-        (("execution.fanout",), True),
-        (("jira",), False),
+        (None, True, None),
+        ((), False, None),
+        (("execution.fanout",), True, None),
+        (("jira",), False, None),
+        (
+            (),
+            False,
+            {
+                "assessmentRef": "assessment-1",
+                "profileRefs": ["source-scan"],
+                "actionClasses": ["source-analysis"],
+                "targets": [{"workspacePath": "app"}],
+                "maxJobs": 1,
+                "maxJobSeconds": 60,
+                "evidenceIntent": "Source findings",
+            },
+        ),
     ],
 )
 async def test_controller_launches_container_and_returns_typed_handle(
@@ -338,6 +351,7 @@ async def test_controller_launches_container_and_returns_typed_handle(
     tmp_path: Path,
     required_capabilities: tuple[str, ...] | None,
     expects_fanout: bool,
+    assessment_scope: dict | None,
 ) -> None:
     monkeypatch.delenv("MOONMIND_PYTHON_TEST_IMAGE", raising=False)
     monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
@@ -364,6 +378,8 @@ async def test_controller_launches_container_and_returns_typed_handle(
             "authorized": True,
             "sourceKind": "built_in",
         }
+    if assessment_scope is not None:
+        request_payload["containerJobAssessmentScope"] = assessment_scope
     request = LaunchCodexManagedSessionRequest(**request_payload)
     commands: list[tuple[str, ...]] = []
     docker_run_env: dict[str, str] = {}
@@ -458,6 +474,12 @@ async def test_controller_launches_container_and_returns_typed_handle(
     )
     assert capability.agent_run_id == "task-1"
     assert capability.session_id == "sess-1"
+    signed_scope = capability.assessment_scope
+    assert (
+        None
+        if signed_scope is None
+        else signed_scope.model_dump(mode="json", by_alias=True, exclude_defaults=True)
+    ) == assessment_scope
     if expects_fanout:
         assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" in run_command
         assert not any(

@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 from uuid import uuid4
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,6 +59,10 @@ from moonmind.security.container_job_capabilities import (
     container_job_matches_capability,
 )
 from moonmind.security.operator_admission import OperatorAdmission
+from moonmind.security.workload_profiles import (
+    resolve_profile_job,
+    resolved_job_within_scope,
+)
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 
 _STDERR_MARKER = "[stderr]"
@@ -86,6 +90,10 @@ class ContainerJobAuthorizationError(RuntimeError):
     def __init__(self, authorization: RegistryAuthorization) -> None:
         self.authorization = authorization
         super().__init__(authorization.message or "private-image use is denied")
+
+
+class ContainerJobScopeDeniedError(RuntimeError):
+    """Raised when a scoped session's job exceeds its admitted assessment."""
 
 
 class ContainerJobEvidenceUnavailableError(RuntimeError):
@@ -227,6 +235,23 @@ class ContainerJobRepository:
             )
         return existing
 
+    async def count_assessment_jobs(
+        self, *, owner: OwnerIdentity, assessment_ref: str
+    ) -> int:
+        assessment = ContainerJobRecord.request_json["spec"]["workloadProfile"][
+            "assessmentRef"
+        ].as_string()
+        return int(
+            await self._session.scalar(
+                select(func.count()).where(
+                    ContainerJobRecord.owner_id == owner.principal_id,
+                    ContainerJobRecord.owner_type == owner.principal_type,
+                    assessment == assessment_ref,
+                )
+            )
+            or 0
+        )
+
     async def get_for_owner(self, *, owner: OwnerIdentity, job_id: str) -> ContainerJobRecord | None:
         result = await self._session.execute(
             select(ContainerJobRecord).where(
@@ -298,6 +323,7 @@ class ContainerJobService:
         operator: OperatorAdmission | None = None,
     ) -> None:
         self._session = session
+        self._capability = capability
         self.repository = ContainerJobRepository(
             session, capability=capability, operator=operator
         )
@@ -314,6 +340,19 @@ class ContainerJobService:
         from moonmind.security.repository_scanners import validate_scanner_job
 
         validate_scanner_job(request.spec)
+        # Render a profile selection into concrete launch content before any
+        # authorization, so every later check and the persisted request see
+        # what the worker will launch rather than the caller's label.
+        profiles = self._backend_settings.workload_profiles
+        request = request.model_copy(
+            update={"spec": resolve_profile_job(request.spec, profiles)}
+        )
+        scope = self._capability.assessment_scope if self._capability else None
+        if scope is not None:
+            try:
+                resolved_job_within_scope(request.spec, scope, profiles)
+            except (PermissionError, ValueError) as exc:
+                raise ContainerJobScopeDeniedError(str(exc)) from exc
         await self._authorize_input_attachments(owner=owner, spec=request.spec)
         # Authorize private-image execution and credential use before creating
         # durable identity. Fails closed: a denied request never starts a
@@ -362,6 +401,13 @@ class ContainerJobService:
             # by exact replay; new ones must read a captured input instead of
             # the live workspace.
             validate_scanner_job(request.spec, allow_legacy=False)
+            if scope is not None and (
+                await self.repository.count_assessment_jobs(
+                    owner=owner, assessment_ref=scope.assessment_ref
+                )
+                >= scope.max_jobs
+            ):
+                raise ContainerJobScopeDeniedError("assessment job budget is exhausted")
             try:
                 require_explicit_resources(request.spec.resources)
             except ValueError as exc:

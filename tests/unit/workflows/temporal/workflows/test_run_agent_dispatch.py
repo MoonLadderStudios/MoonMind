@@ -34,6 +34,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_CANONICAL_TURN_LINEAGE_PATCH,
     RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH,
     RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH,
+    RUN_ASSESSMENT_SCOPE_AUTHORITY_PATCH,
     RUN_AUTO_PUBLISH_TERMINAL_CONTRACT_PATCH,
     RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH,
     RUN_EMPTY_AGENT_SKILLSET_SNAPSHOT_PATCH,
@@ -373,6 +374,55 @@ def test_agent_request_merges_resolved_skill_capabilities_with_replay_gate() -> 
         "reasonCode": "trusted_resolved_skill_requirement",
     }
     assert replaying.parameters["requiredCapabilities"] == ["git"]
+
+
+def test_operator_assessment_scope_reaches_only_trusted_step_policy() -> None:
+    info = SimpleNamespace(
+        namespace="default",
+        workflow_id="mm:assessment-scope",
+        run_id="run-assessment-scope",
+        parent=None,
+    )
+    scope = {
+        "assessmentRef": "assessment-1",
+        "profileRefs": ["source-scan"],
+        "actionClasses": ["source-analysis"],
+        "targets": [{"workspacePath": "app"}],
+        "maxJobs": 2,
+        "maxJobSeconds": 600,
+        "evidenceIntent": "Source findings",
+    }
+
+    def build(*, patched: bool, workflow_parameters, node_inputs=None):
+        with (
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.info",
+                return_value=info,
+            ),
+            patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                side_effect=lambda patch_id: patched
+                and patch_id == RUN_ASSESSMENT_SCOPE_AUTHORITY_PATCH,
+            ),
+        ):
+            return MoonMindRunWorkflow()._build_agent_execution_request(
+                node_inputs={"runtime": {"mode": "omnigent"}, **(node_inputs or {})},
+                node_id="node-1",
+                tool_name="omnigent",
+                workflow_parameters=workflow_parameters,
+            )
+
+    admitted = build(patched=True, workflow_parameters={"assessmentScope": scope})
+    assert admitted.step_execution.skill_source_policy["assessmentScope"] == scope
+    # Step inputs authored by a planner or model are not operator admission.
+    step_only = build(
+        patched=True,
+        workflow_parameters={},
+        node_inputs={"assessmentScope": scope},
+    )
+    assert "assessmentScope" not in step_only.step_execution.skill_source_policy
+    replaying = build(patched=False, workflow_parameters={"assessmentScope": scope})
+    assert "assessmentScope" not in replaying.step_execution.skill_source_policy
 
 
 def _resolved_skill(skill_name: str) -> ResolvedSkillEntry:
