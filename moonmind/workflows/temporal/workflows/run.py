@@ -121,6 +121,10 @@ with workflow.unsafe.imports_passed_through():
         redact_sensitive_text,
         scrub_github_tokens,
     )
+    from moonmind.publish.sanitization import (
+        append_publication_task,
+        publication_task_instructions,
+    )
     from moonmind.workflows.temporal.jira_agent_skills import (
         JIRA_AGENT_SKILLS,
         JIRA_BACKED_AGENT_SKILLS,
@@ -639,6 +643,7 @@ RUN_ISSUE_EVIDENCE_ELIGIBILITY_PATCH = "run-issue-evidence-eligibility-v1"
 # and the continuation owner's recorded next action; retained histories keep
 # the search-instruction title and generic draft summary they recorded.
 RUN_ISSUE_SOURCE_PUBLICATION_TEXT_PATCH = "run-issue-source-publication-text-v1"
+RUN_PUBLICATION_TASK_SCOPE_PATCH = "run-publication-task-scope-v1"
 _ISSUE_EVIDENCE_NEXT_ACTIONS = {
     "collect-evidence": "collect CI evidence for the same pull request head",
     "evidence-budget-exhausted": (
@@ -18416,6 +18421,22 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             or summary
             or "Automated changes by MoonMind."
         )
+        if self._patched_or_false_outside_workflow(RUN_PUBLICATION_TASK_SCOPE_PATCH):
+            if source_issue:
+                context = self._trusted_issue_context or {}
+                issue = context.get("issue")
+                issue = issue if isinstance(issue, Mapping) else {}
+                instructions = self._coerce_text(
+                    issue.get("body") or context.get("body"), flatten=False
+                )
+                source = source_issue["url"] or source_issue["ref"]
+            else:
+                instructions = publication_task_instructions(task_payload)
+                source = ""
+            if instructions:
+                body = append_publication_task(
+                    body, instructions=instructions, source=source
+                )
         unverified = self._moonspec_unverified_body_section()
         if unverified and self._patched_or_false_outside_workflow(RUN_UNVERIFIED_PR_COMMENT_PATCH):
             gate = self._publish_context["moonSpecGate"]

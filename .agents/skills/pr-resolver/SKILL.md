@@ -87,6 +87,14 @@ You are the master orchestrator for finishing Pull Requests. Use bounded retries
 
 The task is not complete until the target PR is merged or is proven already merged. A local fix, local commit, passing local test run, unresolved review reply, or unpushed branch is not a successful PR resolution.
 
+Before remediation and after conflict resolution, assess the snapshot's current
+PR body and `candidateChanges` against the admitted task. Inspect deleted tests,
+workflow/configuration changes, and base advances alongside the implementation;
+use the repository diff where patches or inventory are incomplete. A failing
+assertion can expose a lost supported outcome. Fix that loss through the normal
+review flow unless retiring or replacing it is authorized by the task. Legitimate
+cleanup, renames, replacements and evidence-backed no-code completion remain valid.
+
 The finalize helper's `phase: intermediate` receipt requests continuation of
 this Skill. It is never a terminal `manual_review` result. Resume the specified
 remediation using the same PR, saved snapshot, and cumulative budgets. Every

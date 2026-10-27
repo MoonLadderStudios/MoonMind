@@ -4903,7 +4903,7 @@ class TemporalIntegrationActivities:
         intent = dict(contract.get("intent") or {})
         target = dict(contract.get("target") or {})
         continuation = dict(contract.get("continuation") or {})
-        body = (
+        body = contract.get("pullRequestBody") or (
             "Publication-only recovery for source workflow "
             f"{contract.get('sourceWorkflowId')}.\n\n"
             "No implementation or verification work was rerun."
