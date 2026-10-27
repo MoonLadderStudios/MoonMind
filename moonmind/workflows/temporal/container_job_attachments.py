@@ -29,6 +29,9 @@ ATTACHMENT_ROOT_NAME = ".container-job-attachments"
 _MANIFEST = "inputs.json"
 _LEDGER = "published.json"
 _OWNER = "owner"
+# Present once collection declined to publish an output that exists, so the
+# outputs directory holds the only copy of it.
+_RETAIN = "retain-outputs"
 
 
 class AttachmentStorageError(RuntimeError):
@@ -201,6 +204,7 @@ def capture_directory(
     files and entries replaced mid-capture are omitted and counted.
     """
 
+    destination.mkdir(parents=True)
     source_fd = _open_source(workspace, relative)
     records: list[list[str]] = []
     omitted_links = omitted_special = changed = 0
@@ -263,7 +267,6 @@ def capture_directory(
                 omitted_special += 1
         return kept
 
-    destination.mkdir(parents=True)
     # Descend depth-first holding one descriptor per level.
     stack: list[list] = [[source_fd, Path("."), None]]
     try:
@@ -277,14 +280,16 @@ def capture_directory(
                 stack.pop()
                 continue
             name, info = child
+            path = level[1] / name
             child_fd = _open_checked(
                 name, _DIRECTORY_FLAGS, level[0], info, stat.S_ISDIR
             )
             if child_fd is None:
                 changed += 1
                 continue
-            stack.append([child_fd, level[1] / name, None])
-            (destination / level[1] / name).mkdir()
+            # The stack owns every open descriptor from here on.
+            stack.append([child_fd, path, None])
+            (destination / path).mkdir()
     finally:
         for level in stack:
             os.close(level[0])
@@ -402,6 +407,16 @@ async def publish_once(
     return ref
 
 
+def retain_outputs(storage: JobAttachmentStorage, *, ownership_token: str) -> None:
+    """Keep outputs through release; collection left one unpublished."""
+
+    if not storage.root.is_dir():
+        return
+    if storage.root.is_symlink() or _owner(storage) != ownership_token:
+        raise AttachmentStorageError("job attachment storage is owned by another job")
+    (storage.root / _RETAIN).touch()
+
+
 def release(
     storage: JobAttachmentStorage, *, ownership_token: str, retain_outputs: bool
 ) -> str:
@@ -413,7 +428,7 @@ def release(
         raise AttachmentStorageError("job attachment storage is owned by another job")
     for directory in (storage.staging, storage.inputs, storage.scratch):
         _remove_tree(directory)
-    if retain_outputs:
+    if retain_outputs or (storage.root / _RETAIN).exists():
         return "outputs_retained"
     _remove_tree(storage.outputs)
     for name in (_MANIFEST, _LEDGER):

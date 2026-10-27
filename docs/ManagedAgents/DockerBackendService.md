@@ -381,7 +381,8 @@ diagnostics. Capture opens each entry through its parent's descriptor without
 following links, because the working copy may change while it is read: links
 and entries replaced mid-capture are omitted and counted, never followed. Such a job has no live `/workspace`; declared outputs resolve under
 job-owned `/outputs`, beside a job-owned `/tmp`. Retries reuse the capture and
-confirmed publications; cleanup keeps unpublished outputs.
+confirmed publications; cleanup keeps outputs that were never published,
+including declared outputs that collection rejected.
 
 ---
 

@@ -430,6 +430,14 @@ _DOCKER_TS_LINE = re.compile(
 # File types accepted by declared-output collection. Anything else (device,
 # fifo, socket, symlink target escaping the workspace) is rejected, not copied.
 _ALLOWED_OUTPUT_MEDIA_FALLBACK = "application/octet-stream"
+# Capture omissions the scanner cannot see, named as the runner names the same
+# omission when it reads a live workspace.
+_CAPTURE_SCANNER_LIMITATIONS = {
+    "files_changed_during_capture": "input_changed_during_snapshot",
+    "git_metadata_external": "external_git_metadata_not_admitted",
+    "special_files_omitted": "nonregular_input_not_examined",
+    "symlinks_omitted": "symlink_input_not_examined",
+}
 
 
 def _parse_rfc3339(value: str) -> datetime | None:
@@ -3113,6 +3121,19 @@ class DockerContainerJobBackend:
         )
 
         manifest = await self._collect_declared_outputs(request)
+        storage = self._attachment_storage(request)
+        if storage is not None and any(
+            item.collection_status
+            in {ArtifactCollectionStatus.REJECTED, ArtifactCollectionStatus.TRUNCATED}
+            for item in manifest
+        ):
+            # Publishing the manifest does not publish these outputs; their
+            # files stay the only copy, so cleanup must keep them.
+            await asyncio.to_thread(
+                attachments.retain_outputs,
+                storage,
+                ownership_token=request.ownership_token,
+            )
         artifacts_ref = await self._publish_output_manifest(request, manifest)
         diagnostics_ref = await self._publish_runtime_diagnostics(
             request,
@@ -3354,6 +3375,7 @@ class DockerContainerJobBackend:
         except (ValueError, TypeError):
             execution = None
             limitations.append("missing_or_invalid_execution_evidence")
+        limitations.extend(await self._capture_limitations(request))
         sanitizer = ScannerOutputSanitizer(
             execution.redacted_metadata_hashes if execution else ()
         )
@@ -3538,6 +3560,32 @@ class DockerContainerJobBackend:
             )
         )
         return manifest
+
+    async def _capture_limitations(
+        self, request: ContainerJobActivityRequest
+    ) -> list[str]:
+        """Scanner limitations for entries capture left out of the snapshot.
+
+        The scanner reads only the captured copy, so it cannot observe what
+        capture omitted; without these an incomplete snapshot would yield a
+        complete security result.
+        """
+
+        storage = self._attachment_storage(request)
+        if storage is None:
+            return []
+        captured = await asyncio.to_thread(attachments.load_manifest, storage)
+        inputs = (captured or {}).get("inputs") or {}
+        recorded = {
+            item
+            for entry in inputs.values()
+            for item in (entry.get("coverage") or {}).get("limitations", ())
+        }
+        return [
+            scanner
+            for capture, scanner in _CAPTURE_SCANNER_LIMITATIONS.items()
+            if capture in recorded
+        ]
 
     async def _publish_output_manifest(
         self,

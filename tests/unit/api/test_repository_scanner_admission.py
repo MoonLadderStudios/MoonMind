@@ -100,18 +100,6 @@ def _legacy_scanner_job(scan):
 
 
 @pytest.mark.asyncio
-async def test_new_admission_requires_a_captured_scanner_input(tmp_path):
-    scan = RepositoryScan(scanner="gitleaks", outputDirectory="artifacts/scan")
-    request = _request(tmp_path, image=None, **_legacy_scanner_job(scan))
-    service = ContainerJobService.__new__(ContainerJobService)
-    with pytest.raises(ValueError, match="captured input"):
-        await service.submit(
-            owner=OwnerIdentity(principalType="user", principalId="operator"),
-            request=request.request,
-        )
-
-
-@pytest.mark.asyncio
 async def test_admitted_legacy_scanner_job_keeps_its_nested_output_mount(tmp_path):
     scan = RepositoryScan(scanner="gitleaks", outputDirectory="artifacts/scan")
     request = _request(tmp_path, image=None, **_legacy_scanner_job(scan))

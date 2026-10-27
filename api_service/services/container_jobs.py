@@ -313,9 +313,7 @@ class ContainerJobService:
     async def submit(self, *, owner: OwnerIdentity, request: ContainerJobSubmitRequest) -> ContainerJobAccepted:
         from moonmind.security.repository_scanners import validate_scanner_job
 
-        # Already-admitted legacy scanner jobs stay executable; new ones must
-        # read a captured input instead of the live workspace.
-        validate_scanner_job(request.spec, allow_legacy=False)
+        validate_scanner_job(request.spec)
         await self._authorize_input_attachments(owner=owner, spec=request.spec)
         # Authorize private-image execution and credential use before creating
         # durable identity. Fails closed: a denied request never starts a
@@ -359,6 +357,10 @@ class ContainerJobService:
             # execution is gated below.
             record, replayed = existing, True
         else:
+            # Already-admitted legacy scanner jobs stay executable, including
+            # by exact replay; new ones must read a captured input instead of
+            # the live workspace.
+            validate_scanner_job(request.spec, allow_legacy=False)
             try:
                 require_explicit_resources(request.spec.resources)
             except ValueError as exc:
