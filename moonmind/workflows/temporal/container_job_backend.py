@@ -48,7 +48,10 @@ from moonmind.config.container_backend_settings import (
 from moonmind.observability.transport import SpoolLogPublisher
 from moonmind.schemas.agent_runtime_models import RunObservabilityEvent
 from moonmind.schemas.container_job_models import (
+    INPUT_ATTACHMENTS_TARGET,
     MAX_LOG_PAGE_ENTRIES,
+    OUTPUT_ATTACHMENT_TARGET,
+    SCRATCH_ATTACHMENT_TARGET,
     ArtifactCollectionStatus,
     AuxiliaryOutcome,
     ContainerJobActivityRequest,
@@ -107,6 +110,7 @@ from moonmind.security.repository_scanners import (
     validate_scanner_job,
 )
 from moonmind.utils.logging import redact_sensitive_text
+from moonmind.workflows.temporal import container_job_attachments as attachments
 from moonmind.workflows.temporal.container_image_acquisition import (
     FilesystemImageAcquisitionLock,
     ImageAcquisitionError,
@@ -139,6 +143,8 @@ from moonmind.workloads.gpu import (
 CommandRunner = Callable[[Sequence[str]], Awaitable[tuple[int, bytes, bytes]]]
 EvidencePublisher = Callable[[ContainerJobActivityRequest, str, bytes], Awaitable[str]]
 ProjectionWriter = Callable[[ContainerJobActivityRequest], Awaitable[None]]
+# Reads one artifact's bytes under the job owner's artifact authority.
+ArtifactReader = Callable[[ContainerJobActivityRequest, str], Awaitable[bytes]]
 RegistryAuthResolver = Callable[[str], Awaitable[RegistryCredential]]
 SecretResolver = Callable[[str], Awaitable[str]]
 
@@ -426,6 +432,14 @@ _DOCKER_TS_LINE = re.compile(
 # File types accepted by declared-output collection. Anything else (device,
 # fifo, socket, symlink target escaping the workspace) is rejected, not copied.
 _ALLOWED_OUTPUT_MEDIA_FALLBACK = "application/octet-stream"
+# Capture omissions the scanner cannot see, named as the runner names the same
+# omission when it reads a live workspace.
+_CAPTURE_SCANNER_LIMITATIONS = {
+    "files_changed_during_capture": "input_changed_during_snapshot",
+    "git_metadata_external": "external_git_metadata_not_admitted",
+    "special_files_omitted": "nonregular_input_not_examined",
+    "symlinks_omitted": "symlink_input_not_examined",
+}
 
 
 def _parse_rfc3339(value: str) -> datetime | None:
@@ -512,6 +526,7 @@ class DockerContainerJobBackend:
         backend_ref: str = "system",
         command_runner: CommandRunner | None = None,
         evidence_publisher: EvidencePublisher | None = None,
+        artifact_reader: ArtifactReader | None = None,
         projection_writer: ProjectionWriter | None = None,
         registry_auth_resolver: RegistryAuthResolver | None = None,
         auth_root: str | Path | None = None,
@@ -538,6 +553,7 @@ class DockerContainerJobBackend:
         self._runner = command_runner or self._run
         self._uses_default_runner = command_runner is None
         self._publish = evidence_publisher
+        self._read_artifact = artifact_reader
         self._write_projection = projection_writer
         self._resolve_registry_auth = (
             registry_auth_resolver or resolve_registry_pull_credentials
@@ -1119,6 +1135,11 @@ class DockerContainerJobBackend:
         if (
             workspace == self._workspace_root
             or not workspace.is_relative_to(self._workspace_root)
+            # Job-owned attachment storage shares the store but is never a
+            # workspace another job could mount.
+            or workspace.is_relative_to(
+                self._workspace_root / attachments.ATTACHMENT_ROOT_NAME
+            )
             or not workspace.is_dir()
         ):
             raise RuntimeError("authorized container-job workspace is unavailable")
@@ -2479,6 +2500,13 @@ class DockerContainerJobBackend:
             )
         if spec.workspace_read_only:
             workspace_mount += ",readonly"
+        # An attachment job never sees the live workspace: its inputs are
+        # captured read-only copies and it writes only to job-owned storage.
+        mounts = (
+            await self._prepare_attachments(request)
+            if spec.input_attachments is not None
+            else [workspace_mount]
+        )
         args = [
             "create",
             "--name",
@@ -2511,11 +2539,11 @@ class DockerContainerJobBackend:
             str(resources.pids),
             "--workdir",
             spec.workdir,
-            "--mount",
-            workspace_mount,
         ]
+        for mount in mounts:
+            args.extend(("--mount", mount))
         args.extend(("--cpus", str(cpu_limit / 1000)))
-        if spec.repository_scan is not None:
+        if spec.repository_scan is not None and spec.input_attachments is None:
             output = self._scanner_output_directory(request)
             if volume_name and volume_subpath:
                 output_mount = (
@@ -2658,6 +2686,132 @@ class DockerContainerJobBackend:
             }),
             resolvedCacheRefs=tuple(resolved_cache_refs),
             gpuObservation=resolved_gpu,
+        )
+
+    def _attachment_storage(
+        self, request: ContainerJobActivityRequest
+    ) -> attachments.JobAttachmentStorage | None:
+        if request.request.spec.input_attachments is None:
+            return None
+        return attachments.storage_for(self._workspace_root, request.job_id)
+
+    def _attachment_mount(
+        self,
+        storage: attachments.JobAttachmentStorage,
+        child: str,
+        target: str,
+        *,
+        read_only: bool,
+    ) -> str:
+        if self._workspace_volume_name is not None:
+            mount = (
+                f"type=volume,src={self._workspace_volume_name},dst={target},"
+                f"volume-subpath={storage.relative}/{child}"
+            )
+        else:
+            mount = f"type=bind,src={storage.root / child},dst={target}"
+        return mount + ",readonly" if read_only else mount
+
+    async def _prepare_attachments(
+        self, request: ContainerJobActivityRequest
+    ) -> list[str]:
+        """Capture inputs once into job-owned storage and return its mounts."""
+
+        storage = self._attachment_storage(request)
+        workspace = Path(request.resolved_workspace_ref).resolve()
+        admitted = {item.name: item for item in request.request.spec.input_attachments}
+
+        async def capture(name: str, destination: Path) -> dict:
+            item = admitted[name]
+            if item.workspace_path is not None:
+                return await asyncio.to_thread(
+                    attachments.capture_directory,
+                    workspace,
+                    item.workspace_path,
+                    destination,
+                    include_git=item.include_git,
+                    max_files=item.max_files,
+                    max_bytes=item.max_bytes,
+                )
+            if self._read_artifact is None:
+                raise attachments.AttachmentStorageError(
+                    "artifact inputs are unavailable on this worker"
+                )
+            try:
+                payload = await self._read_artifact(request, item.artifact_ref)
+            except Exception as exc:
+                # Retention or authority may have changed since admission.
+                raise ContainerJobBackendError(
+                    ContainerJobFailureClass.AUTHORIZATION,
+                    "input attachment artifact is not readable by the job owner",
+                ) from exc
+            if len(payload) > item.max_bytes:
+                raise attachments.AttachmentStorageError(
+                    "input attachment exceeds its admitted bound"
+                )
+            captured = await asyncio.to_thread(
+                attachments.capture_bytes,
+                payload,
+                destination,
+                item.file_name or "content",
+            )
+            return {**captured, "artifactRef": item.artifact_ref}
+
+        try:
+            await attachments.prepare(
+                storage,
+                ownership_token=request.ownership_token,
+                names=list(admitted),
+                capture=capture,
+            )
+        except attachments.AttachmentStorageError as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.WORKSPACE, str(exc)
+            ) from exc
+        except OSError as exc:
+            # Filesystem errors carry host paths; keep them out of history.
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.WORKSPACE,
+                "input attachments could not be captured",
+            ) from exc
+        return [
+            *(
+                self._attachment_mount(
+                    storage,
+                    f"inputs/{name}",
+                    f"{INPUT_ATTACHMENTS_TARGET}/{name}",
+                    read_only=True,
+                )
+                for name in admitted
+            ),
+            self._attachment_mount(
+                storage, "outputs", OUTPUT_ATTACHMENT_TARGET, read_only=False
+            ),
+            self._attachment_mount(
+                storage, "scratch", SCRATCH_ATTACHMENT_TARGET, read_only=False
+            ),
+        ]
+
+    def _output_root(self, request: ContainerJobActivityRequest) -> Path:
+        storage = self._attachment_storage(request)
+        if storage is not None:
+            return storage.outputs
+        return Path(request.resolved_workspace_ref or "").resolve()
+
+    async def _publish_artifact(
+        self, request: ContainerJobActivityRequest, name: str, payload: bytes
+    ) -> str:
+        """Publish terminal evidence; attachment jobs reuse confirmed bytes."""
+
+        storage = self._attachment_storage(request)
+        if storage is None:
+            return await self._publish(request, name, payload)
+        return await attachments.publish_once(
+            storage,
+            name,
+            payload,
+            lambda: self._publish(request, name, payload),
+            ownership_token=request.ownership_token,
         )
 
     async def start_container(self, request: ContainerJobActivityRequest):
@@ -3101,11 +3255,28 @@ class DockerContainerJobBackend:
         # A combined logs artifact preserves the terminal reconstruction
         # fallback; separate stdout/stderr artifacts satisfy the deterministic
         # per-stream requirement.
-        logs_ref = await self._publish(request, f"{job}-logs.txt", combined)
-        stdout_ref = await self._publish(request, f"{job}-stdout.txt", stdout_bytes)
-        stderr_ref = await self._publish(request, f"{job}-stderr.txt", stderr_bytes)
+        logs_ref = await self._publish_artifact(request, f"{job}-logs.txt", combined)
+        stdout_ref = await self._publish_artifact(
+            request, f"{job}-stdout.txt", stdout_bytes
+        )
+        stderr_ref = await self._publish_artifact(
+            request, f"{job}-stderr.txt", stderr_bytes
+        )
 
         manifest = await self._collect_declared_outputs(request)
+        storage = self._attachment_storage(request)
+        if storage is not None and any(
+            item.collection_status
+            in {ArtifactCollectionStatus.REJECTED, ArtifactCollectionStatus.TRUNCATED}
+            for item in manifest
+        ):
+            # Publishing the manifest does not publish these outputs; their
+            # files stay the only copy, so cleanup must keep them.
+            await asyncio.to_thread(
+                attachments.retain_outputs,
+                storage,
+                ownership_token=request.ownership_token,
+            )
         artifacts_ref = await self._publish_output_manifest(request, manifest)
         diagnostics_ref = await self._publish_runtime_diagnostics(
             request,
@@ -3263,9 +3434,8 @@ class DockerContainerJobBackend:
         outputs = request.request.spec.outputs
         if not outputs or self._publish is None:
             return []
-        workspace = Path(request.resolved_workspace_ref or "").resolve()
         raw = await asyncio.to_thread(
-            self._build_output_entries, workspace, list(outputs)
+            self._build_output_entries, self._output_root(request), list(outputs)
         )
         manifest: list[ContainerJobArtifact] = []
         for entry in raw:
@@ -3286,7 +3456,7 @@ class DockerContainerJobBackend:
             name = f"{request.job_id}-output-{entry['name']}{suffixes}"
             if entry["media_type"] == "application/gzip":
                 name = name.removesuffix(suffixes) + ".tar.gz"
-            ref = await self._publish(request, name, payload)
+            ref = await self._publish_artifact(request, name, payload)
             manifest.append(
                 ContainerJobArtifact(
                     name=entry["name"],
@@ -3321,9 +3491,8 @@ class DockerContainerJobBackend:
         spec = request.request.spec
         validate_scanner_job(spec)
         scan = spec.repository_scan
-        workspace = Path(request.resolved_workspace_ref or "").resolve()
         entries = await asyncio.to_thread(
-            self._build_output_entries, workspace, list(spec.outputs)
+            self._build_output_entries, self._output_root(request), list(spec.outputs)
         )
         by_name = {e["name"]: e for e in entries}
         manifest, refs, results, limitations = [], {}, {}, []
@@ -3349,6 +3518,7 @@ class DockerContainerJobBackend:
         except (ValueError, TypeError):
             execution = None
             limitations.append("missing_or_invalid_execution_evidence")
+        limitations.extend(await self._capture_limitations(request))
         sanitizer = ScannerOutputSanitizer(
             execution.redacted_metadata_hashes if execution else ()
         )
@@ -3414,7 +3584,7 @@ class DockerContainerJobBackend:
                     raise ValueError("native evidence unavailable")
                 if len(payload) > bytes_remaining or files_remaining < 1:
                     raise ValueError("sanitized output exceeds the collection ceiling")
-                ref = await self._publish(
+                ref = await self._publish_artifact(
                     request, f"{request.job_id}-output-{mode}.json", payload
                 )
                 refs[mode] = ref
@@ -3466,7 +3636,7 @@ class DockerContainerJobBackend:
             and len(execution_payload) <= min(scan.max_report_bytes, bytes_remaining)
             and files_remaining > 0
         ):
-            execution_ref = await self._publish(
+            execution_ref = await self._publish_artifact(
                 request, f"{request.job_id}-output-execution.json", execution_payload
             )
             manifest.append(
@@ -3518,7 +3688,7 @@ class DockerContainerJobBackend:
                 )
             )
             return manifest
-        ref = await self._publish(
+        ref = await self._publish_artifact(
             request, f"{request.job_id}-output-summary.json", payload
         )
         manifest.append(
@@ -3533,6 +3703,32 @@ class DockerContainerJobBackend:
             )
         )
         return manifest
+
+    async def _capture_limitations(
+        self, request: ContainerJobActivityRequest
+    ) -> list[str]:
+        """Scanner limitations for entries capture left out of the snapshot.
+
+        The scanner reads only the captured copy, so it cannot observe what
+        capture omitted; without these an incomplete snapshot would yield a
+        complete security result.
+        """
+
+        storage = self._attachment_storage(request)
+        if storage is None:
+            return []
+        captured = await asyncio.to_thread(attachments.load_manifest, storage)
+        inputs = (captured or {}).get("inputs") or {}
+        recorded = {
+            item
+            for entry in inputs.values()
+            for item in (entry.get("coverage") or {}).get("limitations", ())
+        }
+        return [
+            scanner
+            for capture, scanner in _CAPTURE_SCANNER_LIMITATIONS.items()
+            if capture in recorded
+        ]
 
     async def _publish_output_manifest(
         self,
@@ -3555,7 +3751,9 @@ class DockerContainerJobBackend:
         data = redact_sensitive_text(
             page.model_dump_json(by_alias=True, exclude_none=True)
         ).encode("utf-8")
-        return await self._publish(request, f"{request.job_id}-artifacts.json", data)
+        return await self._publish_artifact(
+            request, f"{request.job_id}-artifacts.json", data
+        )
 
     async def _publish_runtime_diagnostics(
         self,
@@ -3626,6 +3824,13 @@ class DockerContainerJobBackend:
                 for item in manifest
             ],
         }
+        storage = self._attachment_storage(request)
+        if storage is not None:
+            # The captured identity and coverage of every input, so evidence
+            # names exactly what the job examined (absent when the job ended
+            # before capture).
+            captured = await asyncio.to_thread(attachments.load_manifest, storage)
+            diagnostics["inputAttachments"] = (captured or {}).get("inputs")
         if egress_evidence is not None:
             egress_evidence["launchAttestationRef"] = (
                 request.egress_attestation_ref
@@ -3657,7 +3862,7 @@ class DockerContainerJobBackend:
         data = redact_sensitive_text(
             json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
         ).encode("utf-8")
-        return await self._publish(
+        return await self._publish_artifact(
             request, f"{request.job_id}-diagnostics.json", data
         )
 
@@ -3781,7 +3986,7 @@ class DockerContainerJobBackend:
             data = spool_path.read_bytes()
         except OSError:
             return None
-        ref = await self._publish(
+        ref = await self._publish_artifact(
             request, f"{request.job_id}-{_LIVE_EVENTS_JOURNAL_NAME}", data
         )
         # The durable journal is authoritative once publication succeeds.
@@ -3796,6 +4001,38 @@ class DockerContainerJobBackend:
 
     async def repair_projection(self, request: ContainerJobActivityRequest):
         return await self.project_status(request)
+
+    async def _release_attachments(
+        self,
+        request: ContainerJobActivityRequest,
+        storage: attachments.JobAttachmentStorage,
+    ) -> None:
+        """Remove job-owned storage without losing the only copy of evidence.
+
+        Nothing is removed while the job's container may still use it. Outputs
+        stay retained unless terminal evidence was published, so a failed or
+        interrupted publication leaves them recoverable.
+        """
+
+        ref = request.container_ref or self._name(request)
+        if await self._owned_ownership_label(ref) is not None:
+            raise attachments.AttachmentStorageError(
+                "job container still exists; attachment storage retained"
+            )
+        published = (
+            request.publication is not None
+            and request.publication.state == "succeeded"
+        )
+        released = await asyncio.to_thread(
+            attachments.release,
+            storage,
+            ownership_token=request.ownership_token,
+            retain_outputs=not published,
+        )
+        if released == "outputs_retained":
+            raise attachments.AttachmentStorageError(
+                "unpublished job outputs retained for recovery"
+            )
 
     async def cleanup(self, request: ContainerJobActivityRequest):
         # Deterministic, job-owned removal of any ephemeral registry auth. This
@@ -3822,6 +4059,18 @@ class DockerContainerJobBackend:
                 failure_code = "credential_cleanup_failed"
                 if attempt + 1 < _CREDENTIAL_CLEANUP_ATTEMPTS:
                     await asyncio.sleep(_CREDENTIAL_CLEANUP_BACKOFF_SECONDS)
+
+        storage = self._attachment_storage(request)
+        if storage is not None:
+            try:
+                await self._release_attachments(request, storage)
+            except (
+                ContainerJobBackendError,
+                attachments.AttachmentStorageError,
+                OSError,
+            ):
+                cleanup_succeeded = False
+                failure_code = failure_code or "attachment_storage_retained"
 
         diagnostics_ref = None
         scoped = (

@@ -26,7 +26,12 @@ for retained native reports or explicit inventory/feed artifacts. For a passive
 repository scan, use `moonmind container passive-scan` when that command is
 advertised. Otherwise submit the existing `build_scan_job_workload()` workload
 through `container.run_job` or `moonmind container run --spec <file>` with a
-stable `--request-id`. Never choose an arbitrary scanner image or replace missing
+stable `--request-id`. Run Gitleaks, Opengrep or Trivy with
+`moonmind container repository-scan --admission <file>`. A job that only reads a
+repository snapshot, image archive or exported evidence declares it in
+`inputAttachments` (`workspacePath` or an owner-readable `artifactRef`); it then
+reads a captured read-only copy under `/inputs/<name>` and writes declared reports
+to `/outputs`. Never choose an arbitrary scanner image or replace missing
 cloud/web operations with unrestricted shell or network access.
 
 For a focused Python reproduction or retest, use the repository's supported

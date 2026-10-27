@@ -682,3 +682,58 @@ async def test_new_legacy_shaped_submissions_require_explicit_resources(
             owner=owner, request=legacy_submission(key="new-key")
         ) is None
     assert temporal.start_container_job.await_count == 0
+
+
+def legacy_scanner_submission(*, key: str = "legacy-scan") -> ContainerJobSubmitRequest:
+    """A scanner job admitted before it read a captured input attachment."""
+
+    from moonmind.security.repository_scanners import RepositoryScan, build_scanner_job
+
+    workload = build_scanner_job(
+        RepositoryScan(scanner="gitleaks", outputDirectory="artifacts/scan")
+    )
+    workload.pop("inputAttachments")
+    workload.pop("imageSourceRef")
+    workload["command"] = workload["command"][:-2]
+    return ContainerJobSubmitRequest(
+        idempotencyKey=key,
+        source={"source": "mcp", "callerRequestId": "legacy-scan"},
+        spec={
+            **workload,
+            "image": "alpine",
+            "workspaceRef": {"kind": "sandbox", "workspaceId": "run"},
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_exact_replay_of_admitted_legacy_scanner_job_keeps_its_identity(
+    session_factory, temporal
+) -> None:
+    owner = OwnerIdentity(principalId="legacy-scan-owner", principalType="user")
+    async with session_factory() as seed_session:
+        seeded, _ = await ContainerJobService(
+            seed_session, temporal=AsyncMock()
+        ).repository.create_or_replay(owner=owner, request=legacy_scanner_submission())
+        await seed_session.commit()
+        seeded_job_id = seeded.job_id
+
+    async with session_factory() as session:
+        service = ContainerJobService(session, temporal=temporal)
+        # A retry after a lost acknowledgment converges on the admitted job.
+        accepted = await service.submit(
+            owner=owner, request=legacy_scanner_submission()
+        )
+        assert accepted.job_id == seeded_job_id and accepted.replayed is True
+        # A new identity carrying the retired shape is still refused.
+        with pytest.raises(ValueError, match="captured input"):
+            await service.submit(
+                owner=owner, request=legacy_scanner_submission(key="new-scan")
+            )
+        assert (
+            await service.repository.find_exact_replay(
+                owner=owner, request=legacy_scanner_submission(key="new-scan")
+            )
+            is None
+        )
+    assert temporal.start_container_job.await_count == 1
