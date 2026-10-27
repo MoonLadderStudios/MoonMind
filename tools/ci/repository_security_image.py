@@ -78,6 +78,7 @@ def download(url: str, destination: Path) -> None:
                     if isinstance(payload, dict):
                         detail = str(payload.get("message", detail))
                 except (ValueError, OSError):
+                    # Keep the HTTP reason when an upstream error body is unreadable.
                     pass
                 finally:
                     exc.close()
