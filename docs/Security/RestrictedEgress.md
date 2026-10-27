@@ -2,7 +2,7 @@
 
 **Document Class:** Canonical declarative
 **Viewpoint:** Cross-Cutting Concept
-**Last updated:** 2026-09-16
+**Last updated:** 2026-10-27
 
 This document defines the production restricted-egress
 boundary shared by Container Jobs, managed helper workloads, and static and
@@ -168,6 +168,73 @@ paths, methods, and control-plane destinations are denied. The transport route
 is always available to compatible hosts but grants no authority without the
 operation-specific credential selected by normalized `requiredCapabilities`.
 
+## Admitted assessment policies
+
+A Container Job may select an opaque `egressPolicyRef` with `networkMode:
+bridge` and a deployment-owned `imageSourceRef`. The deployment supplies
+`MOONMIND_CONTAINER_BACKEND_EGRESS_POLICIES` to the API and agent-runtime
+worker as a JSON array. Each policy has `policyRef`, explicit
+`allowedWorkflowIds` and `allowedImageSourceRefs`, and `destinations`. Each
+destination declares an exact `host`, `protocol` (`http` or `https`), `port`,
+and `purpose`: `tool-data`, `provider-api`, `registry-api`, or `live-target`.
+Jobs cannot supply or extend this authority. An omitted policy retains the
+existing bridge profile; offline scans continue to use `networkMode: none`.
+
+Private live targets additionally declare `targetNetworkRef` and
+`targetContainerRef`. Both the deployment-owned target container and its
+network must carry `moonmind.security.target=<policyRef>`. The target must
+have only that internal, IPv4-only bridge attached, with
+`com.docker.network.bridge.inhibit_ipv4=true` so it has no host gateway
+address. This [Docker bridge option](https://docs.docker.com/engine/network/drivers/bridge/#skip-bridge-ip-address-configuration)
+avoids depending on a newer gateway-mode name. The network
+may contain only its admitted targets and this lease's proxy. MoonMind
+control services, host gateways, metadata, and other assessment peers do not
+satisfy this boundary. External private networks and native TCP/UDP tools
+are unsupported; report their coverage gap instead of widening access.
+
+The existing egress owner leases the installed gateway image for each job,
+with a new internal isolated workload bridge and an owned outbound bridge.
+An empty owned reservation lets Docker choose a free subnet before the workload
+bridge declares it explicitly, as required for fixed proxy/client addresses.
+Allocation conflicts fail closed; cleanup also removes interrupted reservations.
+Only the proxy joins admitted target networks. The workload has no host
+interface or external route, and the proxy cannot forward IP packets.
+Scoped policies inherit no provider or control-plane exceptions. Exact
+HTTP methods, ports and DNS names are enforced by Squid. Public DNS answers
+are all validated before launch; private addresses come from the admitted
+container identity. Approved IPv4 addresses are pinned in the proxy's hosts
+file with external DNS disabled, preventing rebinding between validation
+and connection. Global IPv6 answers may coexist with IPv4; prohibited answers
+or IPv6-only destinations fail admission.
+
+Recovery reuses an existing proxy's saved address snapshot and identity. Once
+the create receipt is recorded, proxy loss fails closed. If create was
+interrupted before its receipt and the proxy is lost, retry revalidates the
+same deployment policy and DNS answers; the address snapshot may change.
+Surviving owned networks retain the original lease deadline.
+Live file hashes, network membership and workload labels are rechecked at
+start and observation. Cancellation and terminal cleanup remove only owned
+proxy/network resources; target containers and deployment networks remain.
+Cleanup remains possible after the policy is revoked.
+
+The backend supplies immutable proxy environment defaults. Tool adapters can
+use `tool_proxy_options` from `moonmind.security.egress_policy` for HTTPX,
+Requests, and Chromium to configure clients
+that do not honor environment variables. Unsupported protocols produce an
+explicit error. Runtime evidence records policy identity, its pinned snapshot,
+and bounded per-job denials. Observed denials are persisted each poll and
+rechecked after exit before choosing the terminal result. Diagnostics retain
+their artifact reference if later attestation fails or cleanup removes the
+proxy. Retained observations do not
+certify current attestation. Any observed denial makes coverage partial and
+prevents an exit-zero command from being reported as a successful scan.
+
+Socket-free connection tests exercise actual Squid, SDK, subprocess and
+Chromium requests. Required integration CI additionally runs
+`tools/test_scoped_egress.sh` against disposable `moonmind-test-*` resources
+through the real job backend. Managed workflows run the socket-free tests
+through the container-job service; they do not receive a Docker socket.
+
 ## Lifecycle and evidence
 
 Before readiness or a networked launch, the worker verifies:
@@ -223,9 +290,10 @@ records successful cleanup and reconciliation, and correlates itself to the
 runtime diagnostics ref. Terminal workflow and projection cleanup evidence
 points at this post-removal artifact; pre-cleanup diagnostics do not claim a
 cleanup outcome. The production-shaped local
-conformance suite is `tests/integration/security/test_restricted_egress_live.py`;
-operators run it against the supported Compose topology with
-`MOONMIND_RUN_EGRESS_CONFORMANCE=1` before approving an external-target profile.
+conformance suite is `tests/integration/security/test_restricted_egress_live.py`,
+enabled against a separately available Compose topology with
+`MOONMIND_RUN_EGRESS_CONFORMANCE=1`. Unavailable deployment checks remain
+Unverified; implementation acceptance uses the isolated automated fixtures.
 The opt-in `tools/test_control_plane_network_lifecycle.sh` check starts an
 isolated `moonmind-test-*` project with no pre-existing control-plane network,
 proves standalone managed-session access to `http://api:8000`, observes worker

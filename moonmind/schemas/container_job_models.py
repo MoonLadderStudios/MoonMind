@@ -342,6 +342,78 @@ class OutputDeclaration(ContractModel):
         return "/".join(parts)
 
 
+#: Container paths of job-owned attachment storage. Inputs are read-only
+#: copies; outputs and scratch are writable and separate from every input.
+INPUT_ATTACHMENTS_TARGET = "/inputs"
+OUTPUT_ATTACHMENT_TARGET = "/outputs"
+SCRATCH_ATTACHMENT_TARGET = "/tmp"
+
+
+class InputAttachment(ContractModel):
+    """One logical, read-only Container Job input mounted at ``/inputs/<name>``.
+
+    The source is a path inside the job's own admitted ``workspaceRef`` or an
+    artifact the job owner may read. The worker captures it once into
+    job-owned storage, so later edits to a mutable working copy cannot change
+    the input, and every retry of the same job sees the same captured bytes.
+    Callers never name host paths, volumes, or Docker endpoints.
+    """
+
+    name: str = Field(
+        pattern=r"^[a-z0-9][a-z0-9._-]{0,62}$",
+        description="Logical name; the input is mounted at /inputs/<name>.",
+    )
+    workspace_path: str | None = Field(
+        None,
+        alias="workspacePath",
+        max_length=1000,
+        description=(
+            "Relative directory inside the job's workspaceRef to snapshot; "
+            "'.' captures the whole workspace."
+        ),
+    )
+    artifact_ref: str | None = Field(
+        None,
+        alias="artifactRef",
+        pattern=r"^art_[0-9A-Za-z]{1,64}$",
+        description="Completed artifact the job owner can read.",
+    )
+    file_name: str | None = Field(
+        None,
+        alias="fileName",
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+        description="File name for an artifact input (default 'content').",
+    )
+    include_git: bool = Field(
+        True,
+        alias="includeGit",
+        description=(
+            "Include .git metadata in a workspace snapshot; the captured "
+            "coverage records whether history was present or shallow."
+        ),
+    )
+    max_files: int = Field(200_000, alias="maxFiles", ge=1, le=1_000_000)
+    max_bytes: int = Field(4 * 1024**3, alias="maxBytes", ge=1, le=16 * 1024**3)
+
+    @field_validator("workspace_path")
+    @classmethod
+    def _normalized_workspace_path(cls, value: str | None) -> str | None:
+        if value is None or value == ".":
+            return value
+        parts = value.split("/")
+        if value.startswith("/") or any(p in {"", ".", ".."} for p in parts):
+            raise ValueError("workspacePath must be '.' or a normalized relative path")
+        return value
+
+    @model_validator(mode="after")
+    def _exactly_one_source(self) -> "InputAttachment":
+        if (self.workspace_path is None) == (self.artifact_ref is None):
+            raise ValueError("exactly one of workspacePath or artifactRef is required")
+        if self.file_name is not None and self.artifact_ref is None:
+            raise ValueError("fileName applies only to an artifact input")
+        return self
+
+
 class ContainerJobSpec(ContractModel):
     repository_scan: RepositoryScan | None = Field(None, alias="repositoryScan")
     image: str | None = Field(None, min_length=1, max_length=512)
@@ -364,13 +436,58 @@ class ContainerJobSpec(ContractModel):
     caches: list[CacheMount] = Field(default_factory=list, max_length=32)
     network_mode: Literal["none", "bridge", "service"] = Field("none", alias="networkMode")
     service_ref: str | None = Field(None, alias="serviceRef", pattern=r"^[a-z0-9](?:[a-z0-9.-]{0,126}[a-z0-9])?$", max_length=128)
+    egress_policy_ref: str | None = Field(
+        None, alias="egressPolicyRef", pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$"
+    )
     resources: ResourceLimits
     timeout_seconds: int = Field(1800, alias="timeoutSeconds", ge=1, le=86400)
     pull_policy: Literal["if-missing", "always", "never"] = Field("if-missing", alias="pullPolicy")
     registry_credential_ref: str | None = Field(None, alias="registryCredentialRef", max_length=1024)
     outputs: list[OutputDeclaration] = Field(default_factory=list, max_length=64)
+    # None preserves workspace-only jobs and their serialized shape. When set,
+    # the live workspace is not mounted: inputs are read-only captured copies
+    # and declared outputs resolve against the job-owned /outputs directory.
+    input_attachments: list[InputAttachment] | None = Field(
+        None,
+        alias="inputAttachments",
+        min_length=1,
+        max_length=16,
+        description=(
+            "Read-only captured inputs mounted at /inputs/<name>. Declaring "
+            "any replaces the live /workspace mount with job-owned writable "
+            "/outputs (where declared outputs resolve) and /tmp."
+        ),
+    )
 
     _validate_registry_credential_ref = field_validator("registry_credential_ref")(_opaque_secret_reference)
+
+    @field_validator("input_attachments")
+    @classmethod
+    def _unique_attachment_names(
+        cls, value: list[InputAttachment] | None
+    ) -> list[InputAttachment] | None:
+        if value is not None and len({a.name for a in value}) != len(value):
+            raise ValueError("inputAttachments names must be unique")
+        return value
+
+    @model_validator(mode="after")
+    def _caches_stay_outside_attachments(self) -> "ContainerJobSpec":
+        # A mutable cache must never overlay authoritative input or the owned
+        # output/scratch locations.
+        if self.input_attachments is not None:
+            for cache in self.caches:
+                for reserved in (
+                    INPUT_ATTACHMENTS_TARGET,
+                    OUTPUT_ATTACHMENT_TARGET,
+                    SCRATCH_ATTACHMENT_TARGET,
+                ):
+                    if cache.target == reserved or cache.target.startswith(
+                        reserved + "/"
+                    ):
+                        raise ValueError(
+                            "cache targets cannot overlay attachment locations"
+                        )
+        return self
 
     @model_validator(mode="after")
     def exactly_one_image_authority(self) -> "ContainerJobSpec":
@@ -390,6 +507,15 @@ class ContainerJobSpec(ContractModel):
             raise ValueError("service access requires a deployment-owned image source")
         if self.service_ref is not None and any(item.name.startswith("MOONMIND_SERVICE_") for item in self.environment):
             raise ValueError("service connection environment is deployment-owned")
+        if self.egress_policy_ref is not None:
+            if self.network_mode != "bridge" or self.image_source_ref is None:
+                raise ValueError("egress policy requires bridge and a deployment-owned image source")
+            if any(
+                item.name.lower() in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}
+                or item.name.startswith("MOONMIND_EGRESS_")
+                for item in self.environment
+            ):
+                raise ValueError("egress proxy environment is deployment-owned")
         from moonmind.security.repository_scanners import validate_scanner_job
 
         validate_scanner_job(self)
@@ -1022,6 +1148,13 @@ class ContainerJobWorkflowInput(TemporalContractModel):
         return f"{self.job_id}:{self.contract_version}"
 
 
+class EgressDenialObservation(TemporalContractModel):
+    """Compact pointer to a confirmed, durably published denial observation."""
+
+    artifact_ref: str = Field(alias="artifactRef", min_length=1, max_length=1024)
+    denied_connection_count: int = Field(alias="deniedConnectionCount", ge=1)
+
+
 class ContainerJobActivityRequest(TemporalContractModel):
     """Typed, retry-safe request crossing a container-job Activity boundary."""
 
@@ -1062,6 +1195,9 @@ class ContainerJobActivityRequest(TemporalContractModel):
     container_ref: str | None = Field(None, alias="containerRef", max_length=1024)
     egress_attestation_ref: str | None = Field(
         None, alias="egressAttestationRef", max_length=1024
+    )
+    egress_denial_observation: EgressDenialObservation | None = Field(
+        None, alias="egressDenialObservation"
     )
     terminal_state: ContainerJobState | None = Field(None, alias="terminalState")
     projection_sequence: int = Field(0, alias="projectionSequence", ge=0)
@@ -1122,6 +1258,9 @@ class ContainerJobActivityResult(TemporalContractModel):
     artifacts_ref: str | None = Field(None, alias="artifactsRef", max_length=1024)
     diagnostics_ref: str | None = Field(
         None, alias="diagnosticsRef", max_length=1024
+    )
+    egress_denial_observation: EgressDenialObservation | None = Field(
+        None, alias="egressDenialObservation"
     )
     cleanup_succeeded: bool | None = Field(None, alias="cleanupSucceeded")
     # Durable observability-event journal ref (the terminal fallback for the

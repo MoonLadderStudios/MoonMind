@@ -8588,11 +8588,16 @@ class TemporalAgentRuntimeActivities:
             ContainerJobSubmitRequest,
             OwnerIdentity,
         )
+        from moonmind.workflows import get_temporal_artifact_service
 
         owner = OwnerIdentity.model_validate(payload.get("owner"))
         request = ContainerJobSubmitRequest.model_validate(payload.get("request"))
         async with get_async_session_context() as session:
-            accepted = await ContainerJobService(session).submit(owner=owner, request=request)
+            # Artifact input attachments are admitted under the owner's read
+            # authority, as on the HTTP and MCP submission paths.
+            accepted = await ContainerJobService(
+                session, artifacts=get_temporal_artifact_service(session)
+            ).submit(owner=owner, request=request)
             await session.commit()
         return accepted.model_dump(mode="json", by_alias=True, exclude_none=True)
 

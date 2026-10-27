@@ -17,21 +17,50 @@ WITHHELD_LOG = "Scanner console output withheld; see sanitized native evidence."
 MAX_REPORT_BYTES = 8 * 1024 * 1024
 
 
+SCANNER_SOURCE = "/inputs/source"
+
+
 def build_scanner_job(
     scan: RepositoryScan, *, image_source_ref="repository-security"
 ) -> dict:
-    """Workload only; existing transports stamp workspace and session authority."""
+    """Workload only; existing transports stamp workspace and session authority.
+
+    The scanner reads a captured read-only snapshot of the admitted workspace
+    and writes only to the job-owned output location, never into the source.
+    """
+    return {
+        **_scanner_workload(scan, image_source_ref=image_source_ref),
+        "inputAttachments": [
+            {
+                "name": "source",
+                "workspacePath": ".",
+                "includeGit": scan.scanner == "gitleaks",
+            }
+        ],
+        "command": [
+            *_scanner_argv(scan),
+            SCANNER_SOURCE,
+            f"/outputs/{scan.output_directory}",
+        ],
+    }
+
+
+def _scanner_argv(scan: RepositoryScan) -> list[str]:
+    return [
+        "-I",
+        "-m",
+        "moonmind.security.repository_scanner_runner",
+        scan.model_dump_json(by_alias=True),
+    ]
+
+
+def _scanner_workload(scan: RepositoryScan, *, image_source_ref: str) -> dict:
     return {
         "imageSourceRef": image_source_ref,
         "repositoryScan": scan.model_dump(mode="json", by_alias=True),
         "workspaceReadOnly": True,
         "entrypoint": ["python"],
-        "command": [
-            "-I",
-            "-m",
-            "moonmind.security.repository_scanner_runner",
-            scan.model_dump_json(by_alias=True),
-        ],
+        "command": _scanner_argv(scan),
         "networkMode": "none",
         "workdir": "/workspace",
         "resources": {"cpuMillis": 2000, "memoryMiB": 2048, "pids": 256},
@@ -51,12 +80,30 @@ def build_scanner_job(
     }
 
 
-def validate_scanner_job(spec) -> None:
-    """Rechecked by admission and the worker, including model-copy callers."""
+def validate_scanner_job(spec, *, allow_legacy: bool = True) -> None:
+    """Rechecked by admission and the worker, including model-copy callers.
+
+    The legacy shape (live read-only workspace plus a nested writable output
+    directory) stays decodable and executable only for scanner jobs admitted
+    before attachments existed; their timeouts bound that drain to about an
+    hour, after which the legacy shape and its worker mount can be removed.
+    New admission passes ``allow_legacy=False``.
+    """
     scan = spec.repository_scan
     if scan is None:
         return
     canonical = build_scanner_job(scan)
+    if spec.input_attachments is None:
+        if not allow_legacy:
+            raise ValueError("scanner jobs must read a captured input attachment")
+        canonical = _scanner_workload(scan, image_source_ref="")
+    else:
+        attachment = type(spec.input_attachments[0])
+        if [v.model_dump(by_alias=True) for v in spec.input_attachments] != [
+            attachment.model_validate(item).model_dump(by_alias=True)
+            for item in canonical["inputAttachments"]
+        ]:
+            raise ValueError("scanner input differs from the admitted snapshot")
     for field, expected in (
         ("entrypoint", canonical["entrypoint"]),
         ("command", canonical["command"]),

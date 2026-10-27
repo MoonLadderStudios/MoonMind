@@ -15,6 +15,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from api_service.services.container_jobs import ContainerJobService
+from moonmind.config.container_backend_settings import (
+    CACHE_SOURCES_ENV_KEY,
+    resolve_container_backend_settings,
+)
 from moonmind.schemas.container_job_models import (
     ContainerJobActivityRequest,
     ContainerJobSubmitRequest,
@@ -23,6 +27,7 @@ from moonmind.schemas.container_job_models import (
 from moonmind.security.assessments import content_key
 from moonmind.security.repository_scanner_runner import run_scanner
 from moonmind.security.repository_scanners import RepositoryScan, build_scanner_job
+from moonmind.workflows.temporal.container_job_attachments import storage_for
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from tests.artifact_access import access_for_test
 from tests.integration.security import test_recurring_assessments as recurring
@@ -243,31 +248,9 @@ async def test_repository_job_retains_sanitized_evidence_and_report(
         scanner=scanner, outputDirectory=f"artifacts/scan-{MARKER}", **options
     )
     install_fixture_process(tmp_path, scanner, monkeypatch)
-    code = run_scanner(
-        scan,
-        source=root,
-        output=root / scan.output_directory,
-        database=db,
-        rules_root=tmp_path / "rules",
-    )
-    assert before == {name: (root / name).read_bytes() for name in before}
-    execution = json.loads(
-        (root / scan.output_directory / "execution.json").read_bytes()
-    )
-    if scanner == "gitleaks":
-        assert (
-            "untracked.txt" in execution["untrackedFiles"]
-            if history != "missing"
-            else not execution["gitMetadata"]
-        )
-        assert execution["shallow"] is True if history == "shallow" else True
-    assert all(
-        MARKER.encode() not in p.read_bytes()
-        for p in (root / scan.output_directory).iterdir()
-    )
 
     # Admit through the production service, then drive the actual worker's
-    # process boundary and artifact ingestion using deterministic native data.
+    # launch, process boundary and artifact ingestion with deterministic data.
     workload = build_scanner_job(scan)
     workload.pop("imageSourceRef")
     workload["image"] = "python:3.13"
@@ -290,6 +273,8 @@ async def test_repository_job_retains_sanitized_evidence_and_report(
         return ref
 
     async def runner(argv):
+        if argv[0] == "inspect":
+            return 1, b"", b"no such container"
         timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         return 0, f"{timestamp} {MARKER}\n".encode(), b""
 
@@ -298,16 +283,53 @@ async def test_repository_job_retains_sanitized_evidence_and_report(
         ownershipToken=f"{accepted.job_id}:v1",
         request=submission,
         resolvedWorkspaceRef=str(root),
-        containerRef="fixture-container",
-        terminalState="succeeded" if code == 0 else "failed",
-        exitCode=code,
+        resolvedImageRef="sha256:" + "a" * 64,
     )
     backend = DockerContainerJobBackend(
         workspace_root=tmp_path,
         command_runner=runner,
         evidence_publisher=publish,
         log_spool_root=tmp_path / "live",
+        # The deployment declares the admitted read-only database cache.
+        settings=resolve_container_backend_settings(
+            {
+                CACHE_SOURCES_ENV_KEY: json.dumps(
+                    [
+                        {
+                            "cacheRef": "fixture-db",
+                            "volumeName": "fixture-db",
+                            "target": "/opt/moonmind-scanner-db",
+                            "readOnly": True,
+                        }
+                    ]
+                )
+            }
+        ),
     )
+    await backend.create_container(request)
+    storage = storage_for(tmp_path, accepted.job_id)
+    output = storage.outputs / scan.output_directory
+    code = run_scanner(
+        scan,
+        source=storage.inputs / "source",
+        output=output,
+        database=db,
+        rules_root=tmp_path / "rules",
+    )
+    assert before == {name: (root / name).read_bytes() for name in before}
+    assert not (root / scan.output_directory).exists()
+    execution = json.loads((output / "execution.json").read_bytes())
+    if scanner == "gitleaks":
+        assert (
+            "untracked.txt" in execution["untrackedFiles"]
+            if history != "missing"
+            else not execution["gitMetadata"]
+        )
+        assert execution["shallow"] is True if history == "shallow" else True
+    assert all(MARKER.encode() not in p.read_bytes() for p in output.iterdir())
+    request.container_ref = "fixture-container"
+    request.terminal_state = "succeeded" if code == 0 else "failed"
+    request.exit_code = code
     cursor = await backend._collect_live_logs(request, request.container_ref)
     assert cursor
     assert any((tmp_path / "live").rglob("*"))
@@ -448,12 +470,6 @@ async def retain_native_fixture(
         ]
     scan = RepositoryScan(scanner=scanner, outputDirectory=output_directory, **options)
     install_fixture_process(case, scanner, monkeypatch, reports=reports)
-    code = run_scanner(
-        scan,
-        source=root,
-        output=root / scan.output_directory,
-        rules_root=case / "rules",
-    )
     workload = build_scanner_job(scan)
     workload.pop("imageSourceRef")
     workload.update(
@@ -477,6 +493,8 @@ async def retain_native_fixture(
         return ref
 
     async def runner(argv):
+        if argv[0] == "inspect":
+            return 1, b"", b"no such container"
         timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         return 0, f"{timestamp} {MARKER}\n".encode(), b""
 
@@ -485,9 +503,7 @@ async def retain_native_fixture(
         ownershipToken=f"{accepted.job_id}:v1",
         request=submission,
         resolvedWorkspaceRef=str(root),
-        containerRef="fixture-container",
-        terminalState="succeeded" if code == 0 else "failed",
-        exitCode=code,
+        resolvedImageRef="sha256:" + "a" * 64,
     )
     backend = DockerContainerJobBackend(
         workspace_root=tmp_path,
@@ -495,6 +511,21 @@ async def retain_native_fixture(
         evidence_publisher=publish,
         log_spool_root=case / "live",
     )
+    # The production launch captures the source; the fixture scanner then
+    # runs against the paths the container sees as /inputs and /outputs.
+    await backend.create_container(request)
+    storage = storage_for(tmp_path, accepted.job_id)
+    code = run_scanner(
+        scan,
+        source=storage.inputs / "source",
+        output=storage.outputs / scan.output_directory,
+        rules_root=case / "rules",
+    )
+    # Reports never land in the examined source.
+    assert not (root / scan.output_directory).exists()
+    request.container_ref = "fixture-container"
+    request.terminal_state = "succeeded" if code == 0 else "failed"
+    request.exit_code = code
     await backend._collect_live_logs(request, request.container_ref)
     evidence = await backend.publish_evidence(request)
     assert all(
