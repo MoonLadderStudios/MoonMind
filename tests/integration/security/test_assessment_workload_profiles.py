@@ -46,6 +46,7 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
 )
+from moonmind.workflows.temporal.workflows import container_job
 from moonmind.workflows.temporal.workflows.container_job import (
     MoonMindContainerJobWorkflow,
 )
@@ -316,8 +317,6 @@ async def launch(state, workflow_input, *, settings=None, commands=None):
 
     async def invoke_activity(name, payload, **_kwargs):
         return await getattr(activities, name.replace(".", "_"))(payload)
-
-    import moonmind.workflows.temporal.workflows.container_job as container_job
 
     original = container_job.workflow.execute_activity
     container_job.workflow.execute_activity = invoke_activity
