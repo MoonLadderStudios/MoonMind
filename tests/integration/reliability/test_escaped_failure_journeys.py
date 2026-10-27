@@ -6957,10 +6957,16 @@ async def test_exact_rerun_rejects_incomplete_dynamic_skill_snapshot(
 
     with pytest.raises(TemporalExecutionRerunSkillSnapshotError) as exc_info:
         await service.validate_exact_rerun_skill_snapshot(
-            source_record=SimpleNamespace(owner_id=UUID(int=0)),
+            source_record=SimpleNamespace(
+                owner_id=UUID(int=0), workflow_id=manifest["sourceWorkflowId"]
+            ),
             parameters=manifest["initialParameters"],
         )
 
+    artifact_service.read.assert_awaited_once()
+    access = artifact_service.read.await_args.kwargs["access"]
+    assert access.execution_principal == f"workflow:{manifest['sourceWorkflowId']}"
+    assert access.is_operator is False
     assert expected["statusCode"] == 409
     assert exc_info.value.detail["code"] == expected["code"]
     assert exc_info.value.detail["missingSkills"] == expected["missingSkills"]
