@@ -558,11 +558,11 @@ async def test_resolver_child_successor_binds_the_installed_runtime_with_its_aut
                 )
                 yield current["session"]
 
-        async def load_parent(binding, *, admitted_principal=None):
+        async def load_parent(binding, *, access):
             assert binding == parent.binding
             return parent.envelope
 
-        async def read_json(ref, *, admitted_principal=None):
+        async def read_json(ref, *, access):
             return json.loads(artifacts.payloads[ref])
 
         monkeypatch.setattr(db_base, "async_session_maker", session_maker)
@@ -601,7 +601,8 @@ async def test_resolver_child_successor_binds_the_installed_runtime_with_its_aut
                             "task": {"instructions": "Resolve PR #350."},
                         },
                     },
-                }
+                },
+                access=access_for_test("user-1"),
             )
         )
         parameters = child_request["initial_parameters"]

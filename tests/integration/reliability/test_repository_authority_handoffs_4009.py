@@ -364,7 +364,9 @@ async def test_merge_resolver_child_activity_readmits_mixed_parent_without_calle
     async def execute_activity(name, inputs, **_kwargs):
         assert name == "omnigent.prepare_child_execution_plan"
         assert "childRepositorySnapshotRefs" not in inputs
-        return await children.omnigent_prepare_child_execution_plan_activity(inputs)
+        return await children.omnigent_prepare_child_execution_plan_activity(
+            inputs, access=access_for_test("service:omnigent-session")
+        )
 
     monkeypatch.setattr(merge_automation.workflow, "execute_activity", execute_activity)
     prepared = await workflow._prepare_omnigent_resolver_request(

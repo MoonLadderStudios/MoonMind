@@ -49,6 +49,7 @@ from api_service.db.models import (
 )
 from api_service.migrations.account_source import source_user_ids
 from api_service.services.single_user_conversion import SingleUserConversionRun
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from tests.artifact_access import access_for_test
 from tests.helpers.account_source import (
     User,
@@ -967,13 +968,17 @@ async def test_postgres_artifact_conversion_blocks_authority_writers(
             "preview_of": artifact_id, "policy": "auto-generated"}
         artifacts = TemporalArtifactService(TemporalArtifactRepository(restarted), store=store)
         row, payload = await artifacts.read(
-            artifact_id=artifact_id, access=access_for_test("operator")
+            artifact_id=artifact_id,
+            access=access_for_test("operator", recovery_principal="operator"),
         )
         assert payload == b"retained postgres bytes"
         assert row.created_by_principal == owner
         with pytest.raises(TemporalArtifactAuthorizationError):
             await artifacts.read(
-                artifact_id=artifact_id, access=access_for_test(str(uuid.uuid4()))
+                artifact_id=artifact_id,
+                access=ArtifactAccessContext.for_execution(
+                    "unrelated-recovery", principal=str(uuid.uuid4())
+                ),
             )
         assert not await artifacts.release_saved_work_use(
             artifact_id=artifact_id, principal="operator", request_id="retained")
@@ -1043,7 +1048,8 @@ async def test_postgres_artifact_conversion_blocks_authority_writers(
         assert uuid.UUID(zero) not in await source_user_ids(restarted)
         artifacts = TemporalArtifactService(TemporalArtifactRepository(restarted), store=store)
         row, payload = await artifacts.read(
-            artifact_id=later_human_id, access=access_for_test("operator")
+            artifact_id=later_human_id,
+            access=access_for_test("operator", recovery_principal="operator"),
         )
         assert payload == b"post-completion postgres bytes"
         assert row.created_by_principal == owner

@@ -35,6 +35,7 @@ from moonmind.workflows.executions.repository_contract import (
     materialize_resolved_repository_target,
     persist_repository_connection,
 )
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.runtime.github_auth_broker import (
     GitHubAuthBrokerManager,
 )
@@ -1238,7 +1239,9 @@ def test_assert_profile_launch_ready_preserves_tierless_legacy_activity_payload(
 
 
 def test_apply_resolved_tier_policy_merges_defaults_and_records_codex_effort_status():
-    from moonmind.workflows.temporal.runtime.strategies.codex_cli import CodexCliStrategy
+    from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
+        CodexCliStrategy,
+    )
 
     profile = _make_profile(
         runtime_id="codex_cli",
@@ -4553,7 +4556,8 @@ def _build_skill_snapshot_artifact(
     """Build a JSON-encoded ResolvedSkillSet payload and skill-content payloads."""
 
     import hashlib
-    from datetime import UTC, datetime as _dt
+    from datetime import UTC
+    from datetime import datetime as _dt
 
     from moonmind.schemas.agent_skill_models import (
         AgentSkillProvenance,
@@ -4595,11 +4599,10 @@ class _SkillArtifactService:
     async def read(
         self,
         *,
-        artifact_id: str,
-        principal: str,
-        allow_restricted_raw: bool,
+        artifact_id,
+        access: ArtifactAccessContext,
     ) -> tuple[object, bytes]:
-        del principal, allow_restricted_raw
+        ArtifactAccessContext.require(access)
         return object(), self._payloads[artifact_id]
 
 
@@ -4627,6 +4630,14 @@ async def test_launch_projects_resolved_skill_snapshot_for_claude_code(
     request = _make_request(
         instruction_ref="Resolve the PR.",
         resolved_skillset_ref="resolved-set-1",
+        step_execution={
+            "workflowId": "skill-fixture-workflow",
+            "runId": "skill-fixture-run",
+            "logicalStepId": "implement",
+            "executionOrdinal": 1,
+            "stepExecutionId": "skill-fixture-workflow:skill-fixture-run:implement:execution:1",
+            "runtimeContextPolicy": "fresh_agent_run",
+        },
         parameters={"selectedSkill": "pr-resolver"},
     )
     workspace = tmp_path / "workspaces" / "run-snap" / "repo"
@@ -4717,6 +4728,14 @@ async def test_launch_adds_trusted_jira_tool_hint_for_claude_jira_skill(
     request = _make_request(
         instruction_ref="Create THOR stories.",
         resolved_skillset_ref="resolved-set-jira",
+        step_execution={
+            "workflowId": "skill-fixture-workflow",
+            "runId": "skill-fixture-run",
+            "logicalStepId": "implement",
+            "executionOrdinal": 1,
+            "stepExecutionId": "skill-fixture-workflow:skill-fixture-run:implement:execution:1",
+            "runtimeContextPolicy": "fresh_agent_run",
+        },
         parameters={
             "selectedSkill": "jira-issue-creator",
             "storyBreakdownPath": "artifacts/story-breakdowns/demo/stories.json",
@@ -4991,14 +5010,14 @@ async def test_launch_fails_fast_when_skill_projection_errors(tmp_path, monkeypa
     )
 
     class _BrokenArtifactService:
+
         async def read(
             self,
             *,
-            artifact_id: str,
-            principal: str,
-            allow_restricted_raw: bool,
+            artifact_id,
+            access: ArtifactAccessContext,
         ) -> tuple[object, bytes]:
-            del principal, allow_restricted_raw
+            ArtifactAccessContext.require(access)
             if artifact_id == "broken-set":
                 return object(), snapshot_payload
             raise OSError("artifact backing store unreachable")
@@ -5014,6 +5033,14 @@ async def test_launch_fails_fast_when_skill_projection_errors(tmp_path, monkeypa
     request = _make_request(
         instruction_ref="Resolve.",
         resolved_skillset_ref="broken-set",
+        step_execution={
+            "workflowId": "skill-fixture-workflow",
+            "runId": "skill-fixture-run",
+            "logicalStepId": "implement",
+            "executionOrdinal": 1,
+            "stepExecutionId": "skill-fixture-workflow:skill-fixture-run:implement:execution:1",
+            "runtimeContextPolicy": "fresh_agent_run",
+        },
         parameters={"selectedSkill": "pr-resolver"},
     )
     workspace = tmp_path / "workspaces" / "run-broken" / "repo"
@@ -5753,7 +5780,9 @@ async def test_scratch_launch_receives_no_github_credential(tmp_path, monkeypatc
     )
 
     if adapter_context:
-        from moonmind.workflows.adapters.managed_agent_adapter import build_managed_profile_launch_context
+        from moonmind.workflows.adapters.managed_agent_adapter import (
+            build_managed_profile_launch_context,
+        )
 
         context = build_managed_profile_launch_context(
             profile={"profile_id": "claude-profile"},
@@ -5809,7 +5838,9 @@ async def test_recorded_default_connection_wins_over_ambient_launch_token(
     )
 
     if adapter_context:
-        from moonmind.workflows.adapters.managed_agent_adapter import build_managed_profile_launch_context
+        from moonmind.workflows.adapters.managed_agent_adapter import (
+            build_managed_profile_launch_context,
+        )
 
         context = build_managed_profile_launch_context(
             profile={"profile_id": "claude-profile"},

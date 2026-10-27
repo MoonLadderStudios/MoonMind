@@ -31,6 +31,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactService,
 )
 from moonmind.workflows.temporal.service import TemporalExecutionService
+from tests.artifact_access import access_for_test
 
 
 @asynccontextmanager
@@ -201,7 +202,9 @@ async def test_artifact_operator_read_bypasses_legacy_owner():
     artifact = SimpleNamespace(
         artifact_id="a2", created_by_principal=str(uuid4())
     )
-    await service._assert_artifact_read_access(artifact, principal="operator")
+    await service._assert_artifact_read_access(
+        artifact, access=access_for_test("operator")
+    )
     # Machine readers stay execution-bound: a workflow principal that neither
     # owns the artifact nor links to its execution cannot read. The linked-
     # execution check is covered by repository-level tests; here we assert the
@@ -505,18 +508,26 @@ async def test_machine_binding_success_and_cross_execution_deny():
 
     # Saved-work reads: operator bypass succeeds; cross-execution denied.
     service._repository = SimpleNamespace(
-        principal_owns_linked_execution=AsyncMock(return_value=False)
+        principal_owns_linked_execution=AsyncMock(return_value=False),
+        list_links=AsyncMock(return_value=[]),
     )
-    await service._assert_saved_work_read_access(owned, principal="operator")
+    await service._assert_saved_work_read_access(
+        owned, access=access_for_test("operator")
+    )
     with pytest.raises(TemporalArtifactAuthorizationError):
         await service._assert_saved_work_read_access(
             SimpleNamespace(
                 artifact_id="a-own", created_by_principal="workflow:mm:other-run"
             ),
-            principal="workflow:mm:my-run",
+            access=access_for_test("workflow:mm:my-run"),
         )
-    # Owning execution reads via owner-equality without a repo grant.
-    await service._assert_saved_work_read_access(owned, principal="workflow:mm:my-run")
+    # A verified execution reads through its persisted source link.
+    service._repository.list_links.return_value = [
+        SimpleNamespace(workflow_id="mm:my-run")
+    ]
+    await service._assert_saved_work_read_access(
+        owned, access=access_for_test("workflow:mm:my-run")
+    )
 
     # Raw restricted bytes are not broadened to the operator.
     restricted = SimpleNamespace(
@@ -526,7 +537,8 @@ async def test_machine_binding_success_and_cross_execution_deny():
         metadata_json={},
     )
     assert (
-        service._raw_access_allowed(restricted, principal="operator") is False
+        service._raw_access_allowed(restricted, access=access_for_test("operator"))
+        is False
     )
 
 
@@ -559,8 +571,8 @@ def test_r1_instance_operator_manages_resources_without_legacy_roles():
     """R1: admitted operators manage retained resources; legacy roles grant no admission."""
     from fastapi import HTTPException
 
-    from api_service.api.routers import provider_profiles as provider_router
     from api_service.api.routers import omnigent_agent_profiles as agent_router
+    from api_service.api.routers import provider_profiles as provider_router
     from moonmind.security.operator_admission import OperatorAdmission
 
     operator = OperatorAdmission(via="loopback")
@@ -694,7 +706,10 @@ async def test_r4_schedule_action_payload_cutover_uses_real_bundle(tmp_path: Pat
 
             # The real mismatch detector accepts the current action and
             # rejects drifted workflow types or legacy queues (duplicate/loss guard).
-            from moonmind.workflows.temporal.client import _build_typed_search_attributes
+            from moonmind.workflows.temporal.client import (
+                _build_typed_search_attributes,
+            )
+
             metadata = await service._workflow_start_metadata(
                 definition_id=created.id, owner_user_id=None, workflow_input=workflow_input
             )
@@ -745,8 +760,14 @@ async def test_r5_artifact_control_and_raw_boundary():
     owned = SimpleNamespace(
         artifact_id="a-ctrl-own", created_by_principal="workflow:mm:my-run"
     )
-    # Owning execution reads its own artifact via owner equality.
-    await service._assert_artifact_read_access(owned, principal="workflow:mm:my-run")
+    # A verified execution reads its linked artifact; creator text is not a grant.
+    service._repository.list_links.return_value = [
+        SimpleNamespace(workflow_id="mm:my-run")
+    ]
+    await service._assert_artifact_read_access(
+        owned, access=access_for_test("workflow:mm:my-run")
+    )
+    service._repository.list_links.return_value = []
     # Another execution cannot read without a linked-execution grant.
     with pytest.raises(TemporalArtifactAuthorizationError):
         await service._assert_artifact_read_access(
@@ -754,10 +775,12 @@ async def test_r5_artifact_control_and_raw_boundary():
                 artifact_id="a-ctrl-own",
                 created_by_principal="workflow:mm:other-run",
             ),
-            principal="workflow:mm:my-run",
+            access=access_for_test("workflow:mm:my-run"),
         )
     # Operator control stays allowed without a human-owner lookup.
-    await service._assert_artifact_read_access(owned, principal="operator")
+    await service._assert_artifact_read_access(
+        owned, access=access_for_test("operator")
+    )
 
     # Non-restricted bytes stay readable-gated only by quarantine; restricted
     # bytes stay owner-bound (operator alone is not enough).
@@ -769,17 +792,32 @@ async def test_r5_artifact_control_and_raw_boundary():
         redaction_level=artifact_models.db_models.TemporalArtifactRedactionLevel.NONE,
         metadata_json={},
     )
-    assert service._raw_access_allowed(open_artifact, principal="operator") is True
+    assert (
+        service._raw_access_allowed(open_artifact, access=access_for_test("operator"))
+        is True
+    )
     restricted = SimpleNamespace(
         artifact_id="a-restricted",
         created_by_principal="workflow:mm:other-run",
         redaction_level=artifact_models.db_models.TemporalArtifactRedactionLevel.RESTRICTED,
         metadata_json={},
     )
-    assert service._raw_access_allowed(restricted, principal="operator") is False
+    assert (
+        service._raw_access_allowed(restricted, access=access_for_test("operator"))
+        is False
+    )
     assert (
         service._raw_access_allowed(
-            restricted, principal="workflow:mm:other-run"
+            restricted, access=access_for_test("workflow:mm:other-run")
+        )
+        is False
+    )
+    service._repository.list_links.return_value = [
+        SimpleNamespace(workflow_id="mm:other-run", link_type="input.artifact.raw")
+    ]
+    assert (
+        await service._artifact_raw_access_allowed(
+            restricted, access=access_for_test("workflow:mm:other-run")
         )
         is True
     )
@@ -982,7 +1020,10 @@ async def test_r4b_schedule_reconcile_no_duplicate_or_loss(tmp_path: Path):
                 created
             )
             expected_id = make_scheduled_workflow_id_base(created.id)
-            from moonmind.workflows.temporal.client import _build_typed_search_attributes
+            from moonmind.workflows.temporal.client import (
+                _build_typed_search_attributes,
+            )
+
             metadata = await service._workflow_start_metadata(
                 definition_id=created.id, owner_user_id=None, workflow_input=workflow_input
             )
@@ -1171,8 +1212,6 @@ async def test_r2c_eligible_conversion_pg_parity():
     url = os.environ.get("MOONMIND_TEST_POSTGRES_URL")
     if not url:
         pytest.skip("MOONMIND_TEST_POSTGRES_URL not set; PG parity needs a live PG")
-    from tests.support.isolated_postgres import isolated_postgres
-
     from api_service.db.models import (
         OmnigentPolicy,
         TemporalArtifact,
@@ -1183,6 +1222,7 @@ async def test_r2c_eligible_conversion_pg_parity():
         WorkflowRun,
     )
     from moonmind.statuses.workflow import MoonMindWorkflowState
+    from tests.support.isolated_postgres import isolated_postgres
 
     tables = [
         WorkflowRun.__table__,

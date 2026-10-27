@@ -46,6 +46,8 @@ from moonmind.workflows.temporal.activity_runtime import (
     _default_registry_skill_payload,
 )
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    ExecutionRef,
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
@@ -209,6 +211,17 @@ async def test_loader_brief_read_uses_trusted_verifier_parent(
             from api_service.db.models import TemporalArtifactRedactionLevel
 
             brief.redaction_level = TemporalArtifactRedactionLevel.RESTRICTED
+            # Model producer-approved restricted source input explicitly; its
+            # creator label alone is not a raw grant for the verifier parent.
+            await service._repository.add_link(
+                artifact_id=brief_id,
+                execution=ExecutionRef(
+                    namespace="default",
+                    workflow_id=parent_id,
+                    run_id="parent-run",
+                    link_type="input.artifact.raw",
+                ),
+            )
         elif scope == "quarantined":
             brief.metadata_json = {"quarantine": True}
         await session.commit()
@@ -350,15 +363,15 @@ async def test_loader_brief_read_uses_trusted_verifier_parent(
                 link.id for link in await service._repository.list_links(brief_id)
             } == links_before
             read_scopes = [
-                call.kwargs["admitted_principal"]
+                call.kwargs["access"].execution_principal
                 for call in brief_reads.await_args_list
                 if call.kwargs.get("artifact_id") == brief_id
             ]
-            assert read_scopes
-            if scope == "missing":
-                assert read_scopes == [None]
-            else:
-                assert all(value in {None, "workflow:unrelated"} for value in read_scopes)
+            # New histories may attempt only their verified unrelated parent;
+            # missing ancestry and unbound legacy histories fail before bytes.
+            assert read_scopes == (
+                ["workflow:unrelated"] if scope == "unrelated" and new_history else []
+            )
         gate = published.metadata["moonSpecVerify"]
         if scope in {"own", "restricted", "temporary"}:
             assert not gate.get("contractViolations")
@@ -520,7 +533,13 @@ async def test_parent_read_scope_requires_exact_server_ancestry(monkeypatch, cas
             await lookup()
         assert isinstance(failure.value.__cause__, RuntimeError)
     else:
-        assert await lookup() == ("workflow:parent" if case == "own" else None)
+        assert await lookup() == (
+            ArtifactAccessContext.for_execution(
+                "parent", principal="system:agent_runtime"
+            )
+            if case == "own"
+            else None
+        )
     if case != "no_client":
         request = rpc_calls.await_args_list[0].kwargs["req"]
         assert request.namespace == "default"

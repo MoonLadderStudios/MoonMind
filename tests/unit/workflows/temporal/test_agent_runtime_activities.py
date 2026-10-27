@@ -22,7 +22,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import BaseModel
 
-
 from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
     AgentRunStatus,
@@ -50,22 +49,25 @@ from moonmind.schemas.temporal_activity_models import (
     AgentRuntimeFetchResultInput,
     AgentRuntimeStatusInput,
 )
-from moonmind.workflows.temporal import client as temporal_client_module
 from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
+from moonmind.workflows.temporal import client as temporal_client_module
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalActivityRuntimeError,
     TemporalAgentRuntimeActivities,
     TemporalIntegrationActivities,
 )
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+from moonmind.workflows.temporal.runtime.managed_session_controller import (
+    ManagedSessionReapResult,
+)
+from moonmind.workflows.temporal.runtime.managed_session_store import (
+    ManagedSessionStore,
+)
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
 )
-from moonmind.workflows.temporal.runtime.managed_session_controller import (
-    ManagedSessionReapResult,
-)
-from moonmind.workflows.temporal.runtime.managed_session_store import ManagedSessionStore
-from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -152,12 +154,10 @@ class _StaticArtifactService:
     async def read(
         self,
         *,
-        artifact_id: str,
-        principal: str,
-        allow_restricted_raw: bool,
-        admitted_principal: str | None = None,
+        artifact_id,
+        access: ArtifactAccessContext,
     ) -> tuple[SimpleNamespace, bytes]:
-        del principal, allow_restricted_raw, admitted_principal
+        ArtifactAccessContext.require(access)
         return SimpleNamespace(artifact_id=artifact_id), self._payloads[artifact_id]
 
 
@@ -3642,9 +3642,11 @@ async def test_fetch_result_missing_run_id_raises_error(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 from datetime import timedelta
+
 from temporalio import workflow
 from temporalio.testing import WorkflowEnvironment
-from temporalio.worker import Worker, UnsandboxedWorkflowRunner
+from temporalio.worker import UnsandboxedWorkflowRunner, Worker
+
 
 @workflow.defn(name="AgentRuntimeStatusBoundaryTest")
 class AgentRuntimeStatusBoundaryTest:
@@ -3804,7 +3806,10 @@ async def test_agent_runtime_build_launch_context_temporal_boundary(
 async def test_agent_runtime_build_launch_context_prefers_proxy_for_supported_secret_ref(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from api_service.db.models import ProviderCredentialSource, RuntimeMaterializationMode
+    from api_service.db.models import (
+        ProviderCredentialSource,
+        RuntimeMaterializationMode,
+    )
 
     monkeypatch.setenv("MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION", "1")
     activities_impl = TemporalAgentRuntimeActivities()
@@ -4605,6 +4610,14 @@ async def test_agent_runtime_prepare_turn_instructions_materializes_selected_ski
                 "correlationId": "corr-1",
                 "idempotencyKey": "idem-1",
                 "resolvedSkillsetRef": "art-pr-resolver-snapshot",
+                "stepExecution": {
+                    "workflowId": "skill-fixture-workflow",
+                    "runId": "skill-fixture-run",
+                    "logicalStepId": "implement",
+                    "executionOrdinal": 1,
+                    "stepExecutionId": "skill-fixture-workflow:skill-fixture-run:implement:execution:1",
+                    "runtimeContextPolicy": "fresh_agent_run",
+                },
                 "parameters": {
                     "title": "Verify PR resolver outcome",
                     "instructions": "Resolve the PR.",
@@ -4702,6 +4715,14 @@ async def test_agent_runtime_prepare_turn_instructions_materializes_verifier_ski
                 "correlationId": "corr-verify",
                 "idempotencyKey": "idem-verify",
                 "resolvedSkillsetRef": "art-moonspec-verify-snapshot",
+                "stepExecution": {
+                    "workflowId": "skill-fixture-workflow",
+                    "runId": "skill-fixture-run",
+                    "logicalStepId": "implement",
+                    "executionOrdinal": 1,
+                    "stepExecutionId": "skill-fixture-workflow:skill-fixture-run:implement:execution:1",
+                    "runtimeContextPolicy": "fresh_agent_run",
+                },
                 "parameters": {
                     "instructions": "Run final verification.",
                     "metadata": {
@@ -4921,6 +4942,14 @@ async def test_agent_runtime_prepare_turn_instructions_fails_before_launch_when_
                     "agentId": "codex",
                     "correlationId": "corr-1",
                     "idempotencyKey": "idem-1",
+                    "stepExecution": {
+                        "workflowId": "skill-fixture-workflow",
+                        "runId": "skill-fixture-run",
+                        "logicalStepId": "implement",
+                        "executionOrdinal": 1,
+                        "stepExecutionId": "skill-fixture-workflow:skill-fixture-run:implement:execution:1",
+                        "runtimeContextPolicy": "fresh_agent_run",
+                    },
                     "resolvedSkillsetRef": "art-pr-resolver-snapshot",
                     "parameters": {
                         "instructions": "Resolve the PR.",
@@ -5196,6 +5225,14 @@ async def test_agent_runtime_prepare_turn_instructions_enforces_dependency_sourc
                     "agentId": "codex",
                     "correlationId": "corr-1",
                     "idempotencyKey": "idem-1",
+                    "stepExecution": {
+                        "workflowId": "skill-fixture-workflow",
+                        "runId": "skill-fixture-run",
+                        "logicalStepId": "implement",
+                        "executionOrdinal": 1,
+                        "stepExecutionId": "skill-fixture-workflow:skill-fixture-run:implement:execution:1",
+                        "runtimeContextPolicy": "fresh_agent_run",
+                    },
                     "resolvedSkillsetRef": "art-pr-resolver-snapshot",
                     "parameters": {
                         "instructions": "Resolve the PR.",
@@ -5257,6 +5294,14 @@ async def test_agent_runtime_prepare_turn_instructions_preserves_checked_in_skil
                 "agentId": "codex",
                 "correlationId": "corr-1",
                 "idempotencyKey": "idem-1",
+                "stepExecution": {
+                    "workflowId": "skill-fixture-workflow",
+                    "runId": "skill-fixture-run",
+                    "logicalStepId": "implement",
+                    "executionOrdinal": 1,
+                    "stepExecutionId": "skill-fixture-workflow:skill-fixture-run:implement:execution:1",
+                    "runtimeContextPolicy": "fresh_agent_run",
+                },
                 "resolvedSkillsetRef": "art-pr-resolver-snapshot",
                 "parameters": {
                     "instructions": "Resolve the PR.",

@@ -479,7 +479,8 @@ async def test_child_plan_reads_parent_artifacts_with_its_admitted_principal(
                     },
                 }
             },
-        }
+        },
+        access=access_for_test("user-1"),
     )
     from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 
@@ -488,7 +489,7 @@ async def test_child_plan_reads_parent_artifacts_with_its_admitted_principal(
     )
     child = await reader._load_verified_execution_plan(
         child_binding,
-        access=access_for_test("service:omnigent-session", admitted_principal="user-1"),
+        access=access_for_test("user-1"),
     )
     assert (
         child.payload.credentialBindings["source"].connectionRef
@@ -702,8 +703,27 @@ async def test_production_publisher_uses_destination_connection_before_remote_co
 
 
 @pytest.fixture
-def native_review_activity(monkeypatch):
+def native_review_activity(monkeypatch, repository_consumers):
     from temporalio import activity
+
+    monkeypatch.setattr(activity, "in_activity", lambda: True)
+    compile_parent = repository_consumers.compile
+
+    async def compile_with_admitted_review_inputs(*args, **kwargs):
+        compiled = await compile_parent(*args, **kwargs)
+        # Model the native gate's trusted admission of the verified parent plan,
+        # rather than treating its authored principal as artifact permission.
+        await reader._load_verified_execution_plan(
+            compiled.binding,
+            workflow_id="merge-automation:review-only",
+            run_id="review-run-1",
+            access=access_for_test("user-1"),
+        )
+        return compiled
+
+    monkeypatch.setattr(
+        repository_consumers, "compile", compile_with_admitted_review_inputs
+    )
     monkeypatch.setattr(
         activity,
         "info",
