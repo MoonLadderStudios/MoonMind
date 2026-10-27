@@ -40,6 +40,7 @@ from moonmind.workflows.codex_session_timeouts import (
 from moonmind.workflows.adapters.codex_session_adapter import (
     CodexSessionAdapter,
     CodexSessionRunFailedError,
+    _container_job_assessment_scope,
     _execution_fanout_authorization,
     _jira_skill_blocker_summary,
     _managed_session_required_capabilities,
@@ -98,6 +99,12 @@ async def test_execution_fanout_authorization_comes_from_step_policy() -> None:
         "authorized": True,
         "sourceKind": "built_in",
     }
+    assert _container_job_assessment_scope(request) is None
+    scoped = request.model_copy(deep=True)
+    scoped.step_execution.skill_source_policy["assessmentScope"] = {
+        "assessmentRef": "assessment-1"
+    }
+    assert _container_job_assessment_scope(scoped) == {"assessmentRef": "assessment-1"}
 
 pytestmark = [pytest.mark.asyncio]
 

@@ -794,10 +794,14 @@ def _enforce_container_capability_scope(
                 "message": "Container-job request validation failed.",
             },
         ) from exc
-    # Apply the signed read-only restriction before checking the same scope
-    # predicate used for persisted job lookups.
+    # Apply the signed read-only restriction and assessment identity before
+    # checking the same scope predicate used for persisted job lookups.
     if capability.workspace_read_only:
         submission.spec.workspace_read_only = True
+    profile = submission.spec.workload_profile
+    scope = capability.assessment_scope
+    if scope is not None and profile is not None and profile.assessment_ref is None:
+        profile.assessment_ref = scope.assessment_ref
     if not container_job_matches_capability(submission, capability):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -806,11 +810,11 @@ def _enforce_container_capability_scope(
                 "message": "Container request exceeds the session capability.",
             },
         )
-    if capability.workspace_read_only:
+    if capability.workspace_read_only or scope is not None:
         # The caller can request stricter access, but only the signed session
-        # authority can restrict its omitted or false workspace flag. Persist
-        # this decision before handing the job to Temporal or the Docker worker.
-        submission.spec.workspace_read_only = True
+        # authority can restrict its omitted or false workspace flag or stamp
+        # its assessment. Persist these decisions before handing the job to
+        # Temporal or the Docker worker.
         payload.arguments = submission.model_dump(
             mode="json", by_alias=True, exclude_none=True
         )

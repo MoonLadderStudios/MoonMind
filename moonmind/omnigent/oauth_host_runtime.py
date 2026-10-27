@@ -78,6 +78,8 @@ from moonmind.schemas.workspace_locator_models import (
     WorkspaceLocatorResolutionError,
 )
 from moonmind.security.container_job_capabilities import (
+    ContainerJobCapabilityError,
+    assessment_scope_from_policy,
     mint_container_job_session_capability,
 )
 from moonmind.security.docker_networks import resolve_control_plane_network
@@ -97,6 +99,7 @@ from moonmind.security.execution_fanout_capabilities import (
     ExecutionFanoutCapabilityError,
     mint_execution_fanout_capability,
     require_execution_fanout_authorization,
+    step_policy_is_assessment_scoped,
 )
 from moonmind.security.mcp_tool_capabilities import (
     JIRA_TOOLS_PURPOSE,
@@ -741,6 +744,11 @@ class OmnigentOAuthHostRuntime:
             require_execution_fanout_authorization(
                 required_capabilities,
                 execution_fanout_authorization,
+                assessment_scoped=evidence_request is not None
+                and evidence_request.step_execution is not None
+                and step_policy_is_assessment_scoped(
+                    evidence_request.step_execution.skill_source_policy
+                ),
             )
         except ExecutionFanoutCapabilityError as exc:
             raise OmnigentOAuthHostError(str(exc), code="authorization_denied") from exc
@@ -862,6 +870,12 @@ class OmnigentOAuthHostRuntime:
                 required_capabilities=required_capabilities,
                 execution_fanout_authorization=execution_fanout_authorization,
                 repository_connection_ref=repository_connection_ref,
+                step_policy=(
+                    evidence_request.step_execution.skill_source_policy
+                    if evidence_request is not None
+                    and evidence_request.step_execution is not None
+                    else None
+                ),
             )
             runtime_scripts = self._prepare_runtime_scripts(
                 host_lease.lease_id,
@@ -3841,6 +3855,7 @@ class OmnigentOAuthHostRuntime:
         required_capabilities: Sequence[str] = (),
         execution_fanout_authorization: Mapping[str, Any] | None = None,
         repository_connection_ref: str = "",
+        step_policy: Mapping[str, Any] | None = None,
     ) -> dict[str, str]:
         """Materialize only the runtime capabilities declared for this host lease."""
 
@@ -3874,6 +3889,7 @@ class OmnigentOAuthHostRuntime:
             require_execution_fanout_authorization(
                 required_capabilities,
                 execution_fanout_authorization,
+                assessment_scoped=step_policy_is_assessment_scoped(step_policy),
             )
         except ExecutionFanoutCapabilityError as exc:
             raise OmnigentOAuthHostError(str(exc), code="authorization_denied") from exc
@@ -3892,6 +3908,12 @@ class OmnigentOAuthHostRuntime:
                 normalized_repository_connection_ref
             )
         if "docker" in normalized_capabilities:
+            try:
+                assessment_scope = assessment_scope_from_policy(step_policy)
+            except ContainerJobCapabilityError as exc:
+                raise OmnigentOAuthHostError(
+                    str(exc), code="authorization_denied"
+                ) from exc
             environment.update(
                 {
                     "MOONMIND_CONTAINER_JOBS_MCP_URL": (
@@ -3913,6 +3935,7 @@ class OmnigentOAuthHostRuntime:
                             workspace_kind="sandbox",
                             workspace_id=locator.workspace_id,
                             workspace_relative_path=locator.relative_path,
+                            assessment_scope=assessment_scope,
                             lifetime_seconds=timeout_seconds,
                         )
                     ),

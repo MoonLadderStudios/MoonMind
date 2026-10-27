@@ -51,6 +51,7 @@ from moonmind.schemas.managed_session_models import (
     canonical_managed_session_runtime_id,
 )
 from moonmind.security.container_job_capabilities import (
+    assessment_scope_from_policy,
     mint_container_job_session_capability,
 )
 from moonmind.security.docker_networks import (
@@ -2815,6 +2816,7 @@ class DockerCodexManagedSessionController:
             require_execution_fanout_authorization(
                 (EXECUTION_FANOUT_REQUIRED_CAPABILITY,),
                 request.execution_fanout_authorization,
+                assessment_scoped=request.container_job_assessment_scope is not None,
             )
         if container_jobs_available:
             owner = request.container_job_owner or OwnerIdentity(
@@ -2835,6 +2837,11 @@ class DockerCodexManagedSessionController:
                 ),
                 session_id=request.session_id,
                 runtime_id=runtime_id,
+                assessment_scope=assessment_scope_from_policy(
+                    {"assessmentScope": request.container_job_assessment_scope}
+                    if request.container_job_assessment_scope is not None
+                    else None
+                ),
                 lifetime_seconds=int(_DEFAULT_SESSION_REAP_MAX_AGE_SECONDS),
             )
             session_environment["MOONMIND_CONTAINER_JOBS_MCP_URL"] = (

@@ -225,6 +225,7 @@ from moonmind.schemas.temporal_models import (
     normalize_dependency_ids,
 )
 from moonmind.security.operator_admission import OperatorAdmission
+from moonmind.security.workload_profiles import AdmittedAssessmentScope
 from moonmind.services.control_stop_continuation import admit_control_stop_continuation
 from moonmind.services.skill_step_inputs import validate_skill_step_inputs
 from moonmind.statuses.compat import (
@@ -8080,6 +8081,38 @@ def _invalid_workflow_request(message: str) -> HTTPException:
     )
 
 
+def _admitted_assessment_scope_parameter(
+    value: Any,
+    *,
+    principal: ExecutionPrincipal | None,
+) -> dict[str, Any] | None:
+    """Validate the operator's assessment scope before it becomes run authority."""
+
+    if value is None:
+        return None
+    # Workflow and fan-out callers act inside a run's authority; only the
+    # operator admits an assessment, and a scoped run cannot fan out.
+    if principal is not None and principal.is_workflow_principal:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "assessment_scope_denied",
+                "message": "Only the operator can admit an assessment scope.",
+            },
+        )
+    try:
+        scope = AdmittedAssessmentScope.model_validate(value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_assessment_scope",
+                "message": "assessmentScope is not a valid admitted assessment scope.",
+            },
+        ) from exc
+    return scope.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
 def _validate_runtime_tier_intent_for_submit(
     runtime_payload: Mapping[str, Any] | None,
     *,
@@ -11538,6 +11571,13 @@ async def _create_execution_from_workflow_request(
             run_id_header=(principal_context or {}).get("run_id_header"),
             agent_run_id_header=(principal_context or {}).get("agent_run_id_header"),
         )
+    # Checked before any schedule or execution exists; a recurring definition
+    # stores this payload, so it keeps the normalized scope too.
+    assessment_scope = _admitted_assessment_scope_parameter(
+        payload.pop("assessmentScope", None), principal=principal
+    )
+    if assessment_scope is not None:
+        payload["assessmentScope"] = assessment_scope
     # The canonical identity is deterministic in the request ID. An idempotent
     # retry returns the already-admitted execution before inheritance, preset
     # expansion, Provider Profile loading, or the current runtime default can
@@ -12163,6 +12203,8 @@ async def _create_execution_from_workflow_request(
         initial_parameters["batchTarget"] = dict(payload["batchTarget"])
     if isinstance(payload.get("batchTargets"), list):
         initial_parameters["batchTargets"] = list(payload["batchTargets"])
+    if assessment_scope is not None:
+        initial_parameters["assessmentScope"] = assessment_scope
     # Built-in vector retrieval authoring retired (#4105): explicit `rag` /
     # `followUpRetrieval` requirements fail before scheduling with an
     # actionable validation result. Absent/empty/disabled values are stripped
@@ -15007,6 +15049,11 @@ async def create_execution(
             )
 
         request = CreateExecutionRequest.model_validate(payload)
+        # Rejected before a recurring definition or execution can store it.
+        assessment_scope = _admitted_assessment_scope_parameter(
+            request.initial_parameters.get("assessmentScope"),
+            principal=(principal_context or {}).get("verified_principal"),
+        )
 
         # --- Schedule routing ---
         route = await _resolve_schedule_routing(
@@ -15035,6 +15082,8 @@ async def create_execution(
             else None
         )
         initial_parameters = dict(request.initial_parameters)
+        if assessment_scope is not None:
+            initial_parameters["assessmentScope"] = assessment_scope
         # Preserve every authored runtime before canonicalization. The resolved
         # request below supplies its saved fallback to the existing raw guard.
         selects_omnigent = (

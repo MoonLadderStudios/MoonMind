@@ -109,6 +109,7 @@ from moonmind.security.repository_scanners import (
     sanitize_native,
     validate_scanner_job,
 )
+from moonmind.security.workload_profiles import validate_profile_launch
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.temporal import container_job_attachments as attachments
 from moonmind.workflows.temporal.container_image_acquisition import (
@@ -2392,6 +2393,14 @@ class DockerContainerJobBackend:
             raise RuntimeError("resolved workspace and image are required")
         spec = request.request.spec
         validate_scanner_job(spec)
+        try:
+            # Retries and restarts reach this point too: a profile job runs
+            # only while its persisted content equals the current profile.
+            validate_profile_launch(spec, self._settings.workload_profiles)
+        except ValueError as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.LAUNCH, str(exc)
+            ) from exc
         try:
             self._enforce_resource_ceilings(request)
             resources = spec.resources

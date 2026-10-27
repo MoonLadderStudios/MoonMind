@@ -95,3 +95,22 @@ def test_fanout_mint_requires_explicit_current_skill_authorization() -> None:
             ["execution.fanout"],
             {"authorized": False, "sourceKind": "repo"},
         )
+
+
+@pytest.mark.parametrize(
+    "authorization",
+    [None, {"authorized": True, "sourceKind": "built_in"}],
+)
+def test_assessment_scoped_step_cannot_mint_fanout(authorization) -> None:
+    # Child runs do not inherit an assessment scope, so neither an authorized
+    # Skill decision nor a legacy payload may hand a scoped step fan-out.
+    with pytest.raises(ExecutionFanoutCapabilityError, match="assessment-scoped"):
+        require_execution_fanout_authorization(
+            ["execution.fanout"], authorization, assessment_scoped=True
+        )
+    assert (
+        require_execution_fanout_authorization(
+            ["docker"], authorization, assessment_scoped=True
+        )
+        is False
+    )
