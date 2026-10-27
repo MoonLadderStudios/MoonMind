@@ -204,8 +204,11 @@ file with external DNS disabled, preventing rebinding between validation
 and connection. Global IPv6 answers may coexist with IPv4; prohibited answers
 or IPv6-only destinations fail admission.
 
-Recovery reuses the saved address snapshot, gateway identity and original
-lease deadline. It never resolves additional destinations or renews the lease.
+Recovery reuses an existing proxy's saved address snapshot and identity. Once
+the create receipt is recorded, proxy loss fails closed. If create was
+interrupted before its receipt and the proxy is lost, retry revalidates the
+same deployment policy and DNS answers; the address snapshot may change.
+Surviving owned networks retain the original lease deadline.
 Live file hashes, network membership and workload labels are rechecked at
 start and observation. Cancellation and terminal cleanup remove only owned
 proxy/network resources; target containers and deployment networks remain.
@@ -216,7 +219,10 @@ use `tool_proxy_options` from `moonmind.security.egress_policy` for HTTPX,
 Requests, and Chromium to configure clients
 that do not honor environment variables. Unsupported protocols produce an
 explicit error. Runtime evidence records policy identity, its pinned snapshot,
-and bounded per-job denials. Any observed denial makes coverage partial and
+and bounded per-job denials. Observed denials are persisted before the next
+poll; terminal diagnostics retain their artifact reference even if later
+attestation fails or cleanup removes the proxy. Retained observations do not
+certify current attestation. Any observed denial makes coverage partial and
 prevents an exit-zero command from being reported as a successful scan.
 
 Socket-free connection tests exercise actual Squid, SDK, subprocess and
