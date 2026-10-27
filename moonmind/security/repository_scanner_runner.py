@@ -457,11 +457,19 @@ def run_scanner(
     return 0 if ok else 2
 
 
-if __name__ == "__main__":
+def main(argv: list[str]) -> int:
     try:
-        result = run_scanner(RepositoryScan.model_validate_json(sys.argv[1]))
+        # Attachment jobs name their captured source and owned output; legacy
+        # jobs use the live read-only workspace and its nested output mount.
+        paths = (
+            {"source": Path(argv[2]), "output": Path(argv[3])} if len(argv) == 4 else {}
+        )
+        return run_scanner(RepositoryScan.model_validate_json(argv[1]), **paths)
     # Never print raw scanner exceptions to container logs.
     except Exception:  # noqa: BLE001
         print("Scanner invocation failed; evidence is incomplete.")
-        result = 2
-    raise SystemExit(result)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

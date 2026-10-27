@@ -11,6 +11,7 @@ from moonmind.security.repository_scanners import (
     ScannerExecution,
     build_scanner_job,
 )
+from moonmind.workflows.temporal.container_job_attachments import claim, storage_for
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from tests.unit.workflows.temporal.test_container_job_evidence import (
     _Publisher,
@@ -29,7 +30,10 @@ def scanner_request(
     request = _request(tmp_path, image=None, **build_scanner_job(scan))
     request.terminal_state = terminal
     request.exit_code = 0 if terminal == "succeeded" else 2
-    root = tmp_path / "art_workspace" / scan.output_directory
+    # Scanner reports are written to the job-owned output root.
+    storage = storage_for(tmp_path, request.job_id)
+    claim(storage, request.ownership_token)
+    root = storage.outputs / scan.output_directory
     root.mkdir(parents=True)
     execution = ScannerExecution(
         inputDigest="a" * 64,

@@ -342,6 +342,78 @@ class OutputDeclaration(ContractModel):
         return "/".join(parts)
 
 
+#: Container paths of job-owned attachment storage. Inputs are read-only
+#: copies; outputs and scratch are writable and separate from every input.
+INPUT_ATTACHMENTS_TARGET = "/inputs"
+OUTPUT_ATTACHMENT_TARGET = "/outputs"
+SCRATCH_ATTACHMENT_TARGET = "/tmp"
+
+
+class InputAttachment(ContractModel):
+    """One logical, read-only Container Job input mounted at ``/inputs/<name>``.
+
+    The source is a path inside the job's own admitted ``workspaceRef`` or an
+    artifact the job owner may read. The worker captures it once into
+    job-owned storage, so later edits to a mutable working copy cannot change
+    the input, and every retry of the same job sees the same captured bytes.
+    Callers never name host paths, volumes, or Docker endpoints.
+    """
+
+    name: str = Field(
+        pattern=r"^[a-z0-9][a-z0-9._-]{0,62}$",
+        description="Logical name; the input is mounted at /inputs/<name>.",
+    )
+    workspace_path: str | None = Field(
+        None,
+        alias="workspacePath",
+        max_length=1000,
+        description=(
+            "Relative directory inside the job's workspaceRef to snapshot; "
+            "'.' captures the whole workspace."
+        ),
+    )
+    artifact_ref: str | None = Field(
+        None,
+        alias="artifactRef",
+        pattern=r"^art_[0-9A-Za-z]{1,64}$",
+        description="Completed artifact the job owner can read.",
+    )
+    file_name: str | None = Field(
+        None,
+        alias="fileName",
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+        description="File name for an artifact input (default 'content').",
+    )
+    include_git: bool = Field(
+        True,
+        alias="includeGit",
+        description=(
+            "Include .git metadata in a workspace snapshot; the captured "
+            "coverage records whether history was present or shallow."
+        ),
+    )
+    max_files: int = Field(200_000, alias="maxFiles", ge=1, le=1_000_000)
+    max_bytes: int = Field(4 * 1024**3, alias="maxBytes", ge=1, le=16 * 1024**3)
+
+    @field_validator("workspace_path")
+    @classmethod
+    def _normalized_workspace_path(cls, value: str | None) -> str | None:
+        if value is None or value == ".":
+            return value
+        parts = value.split("/")
+        if value.startswith("/") or any(p in {"", ".", ".."} for p in parts):
+            raise ValueError("workspacePath must be '.' or a normalized relative path")
+        return value
+
+    @model_validator(mode="after")
+    def _exactly_one_source(self) -> "InputAttachment":
+        if (self.workspace_path is None) == (self.artifact_ref is None):
+            raise ValueError("exactly one of workspacePath or artifactRef is required")
+        if self.file_name is not None and self.artifact_ref is None:
+            raise ValueError("fileName applies only to an artifact input")
+        return self
+
+
 class ContainerJobSpec(ContractModel):
     repository_scan: RepositoryScan | None = Field(None, alias="repositoryScan")
     image: str | None = Field(None, min_length=1, max_length=512)
@@ -369,8 +441,50 @@ class ContainerJobSpec(ContractModel):
     pull_policy: Literal["if-missing", "always", "never"] = Field("if-missing", alias="pullPolicy")
     registry_credential_ref: str | None = Field(None, alias="registryCredentialRef", max_length=1024)
     outputs: list[OutputDeclaration] = Field(default_factory=list, max_length=64)
+    # None preserves workspace-only jobs and their serialized shape. When set,
+    # the live workspace is not mounted: inputs are read-only captured copies
+    # and declared outputs resolve against the job-owned /outputs directory.
+    input_attachments: list[InputAttachment] | None = Field(
+        None,
+        alias="inputAttachments",
+        min_length=1,
+        max_length=16,
+        description=(
+            "Read-only captured inputs mounted at /inputs/<name>. Declaring "
+            "any replaces the live /workspace mount with job-owned writable "
+            "/outputs (where declared outputs resolve) and /tmp."
+        ),
+    )
 
     _validate_registry_credential_ref = field_validator("registry_credential_ref")(_opaque_secret_reference)
+
+    @field_validator("input_attachments")
+    @classmethod
+    def _unique_attachment_names(
+        cls, value: list[InputAttachment] | None
+    ) -> list[InputAttachment] | None:
+        if value is not None and len({a.name for a in value}) != len(value):
+            raise ValueError("inputAttachments names must be unique")
+        return value
+
+    @model_validator(mode="after")
+    def _caches_stay_outside_attachments(self) -> "ContainerJobSpec":
+        # A mutable cache must never overlay authoritative input or the owned
+        # output/scratch locations.
+        if self.input_attachments is not None:
+            for cache in self.caches:
+                for reserved in (
+                    INPUT_ATTACHMENTS_TARGET,
+                    OUTPUT_ATTACHMENT_TARGET,
+                    SCRATCH_ATTACHMENT_TARGET,
+                ):
+                    if cache.target == reserved or cache.target.startswith(
+                        reserved + "/"
+                    ):
+                        raise ValueError(
+                            "cache targets cannot overlay attachment locations"
+                        )
+        return self
 
     @model_validator(mode="after")
     def exactly_one_image_authority(self) -> "ContainerJobSpec":

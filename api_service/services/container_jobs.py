@@ -42,6 +42,7 @@ from moonmind.schemas.container_job_models import (
     ContainerJobLogEntry,
     ContainerJobLogPage,
     ContainerJobLogQuery,
+    ContainerJobSpec,
     ContainerJobState,
     ContainerJobStatus,
     ContainerJobSubmitRequest,
@@ -312,7 +313,10 @@ class ContainerJobService:
     async def submit(self, *, owner: OwnerIdentity, request: ContainerJobSubmitRequest) -> ContainerJobAccepted:
         from moonmind.security.repository_scanners import validate_scanner_job
 
-        validate_scanner_job(request.spec)
+        # Already-admitted legacy scanner jobs stay executable; new ones must
+        # read a captured input instead of the live workspace.
+        validate_scanner_job(request.spec, allow_legacy=False)
+        await self._authorize_input_attachments(owner=owner, spec=request.spec)
         # Authorize private-image execution and credential use before creating
         # durable identity. Fails closed: a denied request never starts a
         # workflow and never persists a queued record.
@@ -425,6 +429,37 @@ class ContainerJobService:
             raise
         created_at = record.created_at or datetime.now(timezone.utc)
         return ContainerJobAccepted(jobId=record.job_id, replayed=replayed, createdAt=created_at)
+
+    async def _authorize_input_attachments(
+        self, *, owner: OwnerIdentity, spec: ContainerJobSpec
+    ) -> None:
+        """Admit artifact inputs under the job owner's existing read authority.
+
+        The worker reads them again under the same principal, so authority or
+        retention lost before launch still fails closed there. Missing and
+        unreadable artifacts are refused alike, without revealing which.
+        """
+
+        for item in spec.input_attachments or ():
+            if item.artifact_ref is None:
+                continue
+            if self._artifacts is None:
+                raise ValueError("artifact inputs require the artifact store")
+            try:
+                artifact, *_ = await self._artifacts.get_metadata(
+                    artifact_id=item.artifact_ref,
+                    principal=owner_artifact_principal(owner),
+                )
+            except Exception as exc:  # noqa: BLE001 - authority decides
+                raise ValueError(
+                    "input attachment artifact is not readable by the job owner"
+                ) from exc
+            status = getattr(artifact, "status", None)
+            if getattr(status, "value", status) != "complete":
+                raise ValueError("input attachment artifact is not complete")
+            size = getattr(artifact, "size_bytes", None)
+            if isinstance(size, int) and size > item.max_bytes:
+                raise ValueError("input attachment artifact exceeds its bound")
 
     async def status(self, *, owner: OwnerIdentity, job_id: str) -> ContainerJobStatus:
         record = await self.repository.get_for_owner(owner=owner, job_id=job_id)
