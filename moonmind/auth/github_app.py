@@ -62,6 +62,12 @@ _OPERATION_PERMISSIONS: dict[str, dict[str, str]] = {
     "merge_request": {"pull_requests": "write", "contents": "write"},
     # Issue collaboration: labels, comments, state, and the reads that fence them.
     "issues": {"issues": "write"},
+    # Existing security alerts, read only; no alert dismissal or settings.
+    "security_read": {
+        "security_events": "read",
+        "vulnerability_alerts": "read",
+        "secret_scanning_alerts": "read",
+    },
 }
 
 
