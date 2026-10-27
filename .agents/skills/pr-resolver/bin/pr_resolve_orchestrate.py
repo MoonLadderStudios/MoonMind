@@ -688,7 +688,7 @@ def main() -> None:
     parser.add_argument(
         "--max-elapsed-seconds",
         type=int,
-        default=7200,
+        default=10800,
         help="Hard wall-clock cap for orchestration execution.",
     )
     parser.add_argument(

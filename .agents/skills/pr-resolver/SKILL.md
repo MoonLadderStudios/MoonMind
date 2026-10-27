@@ -123,7 +123,7 @@ check. Under `finishMode=merge` the same state is a durable
 - inputs.finalizeMaxRetries (default 60)
 - inputs.finalizeBackoffSeconds (default 30)
 - inputs.finalizeMaxSleepSeconds (default 120)
-- inputs.finalizeMaxElapsedSeconds (default 7200; limits new remediation, see step 5)
+- inputs.finalizeMaxElapsedSeconds (default 10800; limits new remediation, see step 5)
 - Retryable/no-progress blockers use at least 5 finalize attempts before
   returning `attempts_exhausted`, unless a hard timeout, hard failure, or
   non-retryable blocker is reached first.
