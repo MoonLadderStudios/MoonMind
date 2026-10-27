@@ -5,6 +5,7 @@ import io
 import json
 import subprocess
 import tarfile
+import urllib.error
 
 import pytest
 
@@ -116,6 +117,87 @@ def test_upstream_resolution_failure_has_no_fallback(monkeypatch):
     )
     with pytest.raises(OSError, match="upstream unavailable"):
         image.resolve_inputs()
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_public_release_metadata_recovers_from_rejected_optional_token(
+    monkeypatch, tmp_path, status
+):
+    monkeypatch.setenv("GH_TOKEN", "test-credential")
+    monkeypatch.setattr(image.time, "sleep", lambda _: None)
+    requests = []
+
+    def open_url(request, **kwargs):
+        requests.append(request)
+        if request.has_header("Authorization"):
+            raise urllib.error.HTTPError(
+                request.full_url,
+                status,
+                "Forbidden",
+                {},
+                io.BytesIO(b'{"message":"Resource not accessible by integration"}'),
+            )
+        return io.BytesIO(b'{"tag_name":"v1.2.3"}')
+
+    monkeypatch.setattr(image.urllib.request, "urlopen", open_url)
+    destination = tmp_path / "release.json"
+    image.download(
+        "https://api.github.com/repos/opengrep/opengrep/releases/latest", destination
+    )
+    assert json.loads(destination.read_text()) == {"tag_name": "v1.2.3"}
+    assert len(requests) == 2
+    assert requests[0].has_header("Authorization")
+    assert not requests[1].has_header("Authorization")
+
+
+@pytest.mark.parametrize("with_token", [False, True])
+def test_public_upstream_denial_stays_bounded_and_diagnostic(
+    monkeypatch, tmp_path, with_token
+):
+    if with_token:
+        monkeypatch.setenv("GH_TOKEN", "test-credential")
+    else:
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setattr(image.time, "sleep", lambda _: None)
+    requests = []
+    url = "https://api.github.com/repos/opengrep/opengrep/releases/latest"
+
+    def open_url(request, **kwargs):
+        requests.append(request)
+        message = "API rate limit exceeded"
+        if with_token:
+            message += " for test-credential"
+        raise urllib.error.HTTPError(
+            request.full_url,
+            403,
+            "Forbidden",
+            {},
+            io.BytesIO(json.dumps({"message": message}).encode()),
+        )
+
+    monkeypatch.setattr(image.urllib.request, "urlopen", open_url)
+    with pytest.raises(image.ImageError, match="API rate limit exceeded") as failure:
+        image.download(url, tmp_path / "release.json")
+    assert url in str(failure.value)
+    assert "403" in str(failure.value)
+    assert "test-credential" not in str(failure.value)
+    assert len(requests) == 3
+
+
+def test_release_asset_download_never_receives_api_token(monkeypatch, tmp_path):
+    monkeypatch.setenv("GH_TOKEN", "test-credential")
+    requests = []
+
+    def open_url(request, **kwargs):
+        requests.append(request)
+        return io.BytesIO(b"verified separately before installation")
+
+    monkeypatch.setattr(image.urllib.request, "urlopen", open_url)
+    image.download(
+        "https://github.com/opengrep/opengrep/releases/download/v1.2.3/artifact",
+        tmp_path / "artifact",
+    )
+    assert not requests[0].has_header("Authorization")
 
 
 @pytest.mark.parametrize("tool", ["opengrep", "trivy"])

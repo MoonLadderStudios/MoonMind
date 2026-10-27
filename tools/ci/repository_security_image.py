@@ -53,9 +53,10 @@ def command(*args) -> str:
 
 def download(url: str, destination: Path) -> None:
     headers = {"User-Agent": "MoonMind-repository-security-image"}
+    api_token = os.environ.get("GH_TOKEN", "")
     # Never forward the CI API token to release download redirects.
-    if url.startswith("https://api.github.com/") and os.environ.get("GH_TOKEN"):
-        headers["Authorization"] = "Bearer " + os.environ["GH_TOKEN"]
+    if url.startswith("https://api.github.com/") and api_token:
+        headers["Authorization"] = "Bearer " + api_token
     for attempt in range(3):
         try:
             with urllib.request.urlopen(
@@ -63,6 +64,30 @@ def download(url: str, destination: Path) -> None:
             ) as response, destination.open("wb") as output:
                 shutil.copyfileobj(response, output)
             return
+        except urllib.error.HTTPError as exc:
+            # These upstream releases are public. A repository-scoped CI token
+            # can be refused even when anonymous acquisition is available.
+            if exc.code in {401, 403} and "Authorization" in headers and attempt < 2:
+                headers.pop("Authorization")
+                exc.close()
+                continue
+            if attempt == 2:
+                detail = str(exc.reason)
+                try:
+                    payload = json.loads(exc.read(4096))
+                    if isinstance(payload, dict):
+                        detail = str(payload.get("message", detail))
+                except (ValueError, OSError):
+                    pass
+                finally:
+                    exc.close()
+                if api_token:
+                    detail = detail.replace(api_token, "[redacted]")
+                raise ImageError(
+                    f"Upstream download failed: {url}: HTTP {exc.code}: {detail[:500]}"
+                ) from exc
+            exc.close()
+            time.sleep(attempt + 1)
         except (urllib.error.URLError, TimeoutError):
             if attempt == 2:
                 raise
