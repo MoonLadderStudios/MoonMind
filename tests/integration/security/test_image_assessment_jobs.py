@@ -113,6 +113,10 @@ if args[0] == "image" and "--input" in args:
              "ImageConfig": {{"os": "linux", "architecture": "amd64"}}}}
 elif args[0] == "image":
     assert args[args.index("--image-src") + 1] == "remote"
+    # The job network reaches the registry only through the admitted proxy.
+    if os.environ.get("HTTPS_PROXY") != "http://fixture-gateway:3128":
+        print("dial tcp: lookup registry.example.test: no such host", file=sys.stderr)
+        raise SystemExit(1)
     reference = args[-1]
     repository, _, tag = reference.removeprefix({REGISTRY!r} + "/").partition(":")
     entry = catalog.get(repository)
@@ -326,6 +330,7 @@ class Harness:
     def __init__(self, environment, tmp_path, monkeypatch, *, failure=None):
         self.environment = environment
         self.tmp_path = tmp_path
+        self.monkeypatch = monkeypatch
         self.db = tmp_path / "feeds"
         self.calls = install_trivy(tmp_path, monkeypatch, failure=failure)
         self.temporal = AsyncMock()
@@ -424,7 +429,14 @@ class Harness:
             resolvedImageRef="sha256:" + "a" * 64,
         )
         await backend.create_container(request)
-        create = next(c for c in self.commands if c[0] == "create")
+        create = [c for c in self.commands if c[0] == "create"][-1]
+        # The runner sees the container environment the launch declared.
+        for key in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"):
+            self.monkeypatch.delenv(key, raising=False)
+        for i, item in enumerate(create):
+            if item == "--env":
+                key, _, value = create[i + 1].partition("=")
+                self.monkeypatch.setenv(key, value)
         storage = storage_for(self.tmp_path, accepted.job_id)
         code = run_image_assessment(
             assessment,
@@ -467,13 +479,19 @@ def assert_daemonless(create):
     assert not any("dst=/workspace" in m for m in mounts(create))
 
 
-async def report(environment, summary_ref, asset):
+def summary_ref(harness, accepted):
+    page = json.loads(harness.published[f"{accepted.job_id}-artifacts.json"])
+    return next(a["artifactRef"] for a in page["artifacts"] if a["name"] == "summary")
+
+
+async def report(environment, summary_ref, asset, *, baseline=None, key="occurrence"):
     return await invoke(
         environment.service,
         {
             "scope": {"assets": [asset]},
             "tools": ["retained-report"],
             "reportRefs": [summary_ref],
+            **({"baselineRef": baseline} if baseline else {}),
             "credentialRefs": [],
             "networkRefs": [],
             "budget": {
@@ -482,6 +500,7 @@ async def report(environment, summary_ref, asset):
                 "progressStallSeconds": 60,
             },
         },
+        key=key,
     )
 
 
@@ -686,7 +705,7 @@ async def test_generated_sbom_is_retained_reloaded_and_reassessed_with_newer_dat
         },
         "newer",
     )
-    second, *_ = await harness.run(
+    second, *_, flagged_job = await harness.run(
         ImageAssessment(
             operation="sbom-reassess",
             target="sbom",
@@ -713,6 +732,67 @@ async def test_generated_sbom_is_retained_reloaded_and_reassessed_with_newer_dat
     later = [json.loads(line) for line in harness.calls.read_text().splitlines()]
     assert [call[0] for call in later[before:]] == ["sbom", "sbom"]
     assert "does not establish exploitability" in second["interpretation"]
+
+    # A complete clean reassessment of the same inventory clears those findings.
+    third, *_, clean_job = await harness.run(
+        ImageAssessment(
+            operation="sbom-reassess",
+            target="sbom",
+            inputArtifactRef=retained["artifactRef"],
+            databaseCacheRef="scanner-db",
+            databaseDigest=older,
+        ),
+        "reassess-clean",
+    )
+    asset = second["subject"]["asset"]
+    flagged = await report(environment, summary_ref(harness, flagged_job), asset)
+    cleared = await report(
+        environment,
+        summary_ref(harness, clean_job),
+        asset,
+        baseline=flagged["comparisonRef"],
+        key="clean-occurrence",
+    )
+    assert third["result"]["findings"] == []
+    assert flagged["counts"]["new"] == 2
+    assert cleared["counts"]["absent_comparable"] == 2
+    assert cleared["counts"]["not_reassessed"] == 0
+
+
+async def test_sbom_metadata_credentials_are_withheld_from_every_publication(
+    environment, tmp_path, monkeypatch
+):
+    harness = Harness(environment, tmp_path, monkeypatch)
+    digest = database(harness.db, {}, "one")
+    token = "ghp_" + "Fixture5046Metadata" * 2
+    sbom = await owned_artifact(
+        environment.service,
+        json.dumps(
+            {
+                "bomFormat": "CycloneDX",
+                "specVersion": "1.5",
+                "metadata": {
+                    "tools": {"components": [{"name": f"generator {token}"}]},
+                    "component": {"name": f"app {token}"},
+                },
+                "components": [{"name": "openssl", "purl": VULNERABLE[0]}],
+            }
+        ).encode(),
+    )
+    summary, *_ = await harness.run(
+        ImageAssessment(
+            operation="sbom-reassess",
+            target="sbom",
+            inputArtifactRef=sbom,
+            databaseCacheRef="scanner-db",
+            databaseDigest=digest,
+        ),
+        "sbom-metadata-token",
+    )
+    assert summary["execution"]["sbom"]["generator"].startswith("generator ")
+    assert summary["execution"]["provenance"]["declaredSubject"].startswith("app ")
+    for name, payload in harness.published.items():
+        assert token.encode() not in payload, name
 
 
 @pytest.mark.parametrize("case", ["authorized", "wrong", "unresolvable", "denied"])

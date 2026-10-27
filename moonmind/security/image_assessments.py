@@ -523,7 +523,8 @@ def normalize_image_report(
     """Trivy's native result rows, attributed to the one examined subject.
 
     Native identity keeps each package and location distinct; the asset is the
-    resolved image, archive or SBOM rather than a path inside it.
+    resolved image, archive or SBOM rather than a path inside it. The source
+    matches the image coverage, so a clean reassessment can resolve them.
     """
     try:
         report = json.loads(body)
@@ -546,7 +547,9 @@ def normalize_image_report(
     findings = {
         f.finding_id: f
         for f in (
-            Finding.model_validate({**row.model_dump(), "asset": subject_asset})
+            Finding.model_validate(
+                {**row.model_dump(), "source": "image", "asset": subject_asset}
+            )
             for row in native.findings
         )
     }

@@ -170,6 +170,20 @@ def _redact(text: str, secrets: Sequence[str]) -> str:
         if token:
             redacted = redacted.replace(token, "[redacted]")
     return redacted
+
+
+def _redact_strings(value: object) -> object:
+    """Credential-shaped text removed from every string in a JSON value."""
+
+    if isinstance(value, str):
+        return redact_sensitive_text(value)
+    if isinstance(value, dict):
+        return {key: _redact_strings(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_strings(item) for item in value]
+    return value
+
+
 # Ownership/correlation/expiry label keys. These are applied unconditionally by
 # the backend and can never be supplied or overridden through the public spec
 # (the contract layer rejects ``label``/``labels`` keys outright).
@@ -3854,8 +3868,14 @@ class DockerContainerJobBackend:
 
         execution = None
         try:
-            execution = ImageExecution.model_validate_json(
-                by_name["execution"]["payload"] or b""
+            # Sanitized once: the execution and summary artifacts both carry
+            # SBOM metadata the job read from its input.
+            execution = ImageExecution.model_validate(
+                _redact_strings(
+                    ImageExecution.model_validate_json(
+                        by_name["execution"]["payload"] or b""
+                    ).model_dump(mode="json", by_alias=True)
+                )
             )
             if (execution.operation, execution.target) != (
                 assessment.operation,
@@ -3922,9 +3942,7 @@ class DockerContainerJobBackend:
             try:
                 await publish(
                     "execution",
-                    redact_sensitive_text(
-                        execution.model_dump_json(by_alias=True)
-                    ).encode(),
+                    execution.model_dump_json(by_alias=True).encode(),
                     limit=assessment.max_report_bytes,
                 )
             except ValueError:
