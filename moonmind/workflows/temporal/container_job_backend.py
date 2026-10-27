@@ -2436,6 +2436,11 @@ class DockerContainerJobBackend:
         ]
         args.extend(("--cpus", str(cpu_limit / 1000)))
         if spec.repository_scan is not None:
+            # The runner stages inputs and raw reports in private temporary
+            # storage. Only sanitized output can reach the source volume.
+            args.extend(
+                ("--read-only", "--tmpfs", "/tmp:rw,nosuid,nodev,size=1g,mode=1777")
+            )
             output = self._scanner_output_directory(request)
             if volume_name and volume_subpath:
                 output_mount = (

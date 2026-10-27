@@ -107,6 +107,29 @@ def test_compose_declares_identical_sources_for_api_and_worker() -> None:
         assert api[key] == worker[key]
 
 
+@pytest.mark.parametrize("service", _DECLARING_SERVICES)
+@pytest.mark.parametrize(
+    "override", [None, "registry.example/security:operator-choice"]
+)
+def test_compose_admits_repository_security_image_and_operator_override(
+    service, override
+):
+    environment = _service_environment(service)
+    overrides = {"MOONMIND_REPOSITORY_SECURITY_IMAGE": override} if override else {}
+    settings = resolve_container_backend_settings(
+        {
+            IMAGE_SOURCES_ENV_KEY: _interpolate(
+                environment[IMAGE_SOURCES_ENV_KEY], overrides
+            )
+        }
+    )
+    source = settings.image_source("repository-security")
+    assert source.image == (
+        override or "ghcr.io/moonladderstudios/repository-security:latest"
+    )
+    assert source.pull_policy == "always"
+
+
 _TACTICS_CACHES = [
     {"cacheRef": "unreal-ccache", "target": "/home/ue4/.ccache", "readOnly": False},
     {

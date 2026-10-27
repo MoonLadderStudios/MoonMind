@@ -1,0 +1,7 @@
+**
+!services/
+!services/repository-security/
+!services/repository-security/resolved/
+!services/repository-security/resolved/**
+!LICENSE
+!NOTICE
