@@ -10,6 +10,7 @@ from pydantic import Field
 
 from moonmind.schemas.repository_scanner_models import RepositoryScan
 from moonmind.security.assessments import Contract, Finding, Items, Text, content_key
+from moonmind.security.scanner_feeds import FeedEvidence
 from moonmind.utils.logging import redact_sensitive_text
 
 Scanner = Literal["gitleaks", "opengrep", "trivy"]
@@ -98,6 +99,8 @@ def validate_scanner_job(spec, *, allow_legacy: bool = True) -> None:
             raise ValueError("scanner jobs must read a captured input attachment")
         canonical = _scanner_workload(scan, image_source_ref="")
     else:
+        if not spec.input_attachments:
+            raise ValueError("scanner input differs from the admitted snapshot")
         attachment = type(spec.input_attachments[0])
         if [v.model_dump(by_alias=True) for v in spec.input_attachments] != [
             attachment.model_validate(item).model_dump(by_alias=True)
@@ -500,6 +503,7 @@ class ScannerExecution(Contract):
         Field(default_factory=list, max_length=16384)
     )
     database_digest: str | None = Field(None, pattern=r"^[0-9a-f]{64}$")
+    feed: FeedEvidence | None = None
 
 
 class ScannerSummary(Contract):

@@ -228,6 +228,35 @@ def container_repository_scan(
     _print_container_job_result(result)
 
 
+@container_app.command(
+    "feed-refresh",
+    help="Refresh or import trusted Trivy feeds into a published snapshot.",
+)
+def container_feed_refresh(
+    admission: Annotated[
+        Path, typer.Option("--admission", exists=True, dir_okay=False, readable=True)
+    ],
+    image_source: str = typer.Option("repository-security", "--image-source"),
+) -> None:
+    from moonmind.security.scanner_feeds import FeedRefresh, build_feed_refresh_job
+
+    try:
+        if admission.stat().st_size > 32 * 1024:
+            raise ValueError("feed refresh admission exceeds the input bound")
+        refresh = FeedRefresh.model_validate_json(admission.read_bytes())
+        result = run_container_job(
+            build_feed_refresh_job(refresh, image_source_ref=image_source)
+        )
+    except (ContainerJobCliError, ValueError, OSError) as exc:
+        typer.secho(
+            "Invalid feed refresh admission or container job unavailable.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    _print_container_job_result(result)
+
+
 @worker_app.command("doctor", help="Verify worker prerequisites.")
 def worker_doctor() -> None:
     # MoonLadderStudios/MoonMind#4192: the native Manifest/RAG ingestion

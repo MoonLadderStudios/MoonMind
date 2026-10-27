@@ -214,6 +214,13 @@ class ContainerBackendSettings:
                     or request.source.workflow_id not in policy.allowed_workflow_ids
                 ):
                     raise ValueError("egress policy is not authorized for this workflow and image")
+                if request.spec.feed_refresh is not None:
+                    from moonmind.security.scanner_feeds import feed_policy_admits
+
+                    if not feed_policy_admits(policy):
+                        raise ValueError(
+                            "feed refresh egress may reach only feed hosts"
+                        )
                 return policy
         raise ValueError("egress policy is not deployment-authorized")
 

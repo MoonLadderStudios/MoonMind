@@ -6689,6 +6689,7 @@ export interface components {
         /** ContainerJobSpec */
         ContainerJobSpec: {
             repositoryScan?: components["schemas"]["RepositoryScan"] | null;
+            feedRefresh?: components["schemas"]["FeedRefresh"] | null;
             workloadProfile?: components["schemas"]["WorkloadProfileSelection"] | null;
             /** Image */
             image?: string | null;
@@ -6739,7 +6740,7 @@ export interface components {
             outputs?: components["schemas"]["OutputDeclaration"][];
             /**
              * Inputattachments
-             * @description Read-only captured inputs mounted at /inputs/<name>. Declaring any replaces the live /workspace mount with job-owned writable /outputs (where declared outputs resolve) and /tmp.
+             * @description Read-only captured inputs mounted at /inputs/<name>. Declaring the list, even empty, replaces the live /workspace mount with job-owned writable /outputs (where declared outputs resolve) and /tmp.
              */
             inputAttachments?: components["schemas"]["InputAttachment"][] | null;
         };
@@ -9118,6 +9119,50 @@ export interface components {
             kind: "external_state";
             /** Artifactref */
             artifactRef: string;
+        };
+        /**
+         * FeedRefresh
+         * @description Source-free acquisition of selected Trivy components into a snapshot.
+         *
+         *     Upstream locations are deployment code, not request fields. ``download``
+         *     reaches them through an admitted egress policy; ``import`` validates an
+         *     operator-supplied archive of a Trivy cache directory with no network.
+         */
+        FeedRefresh: {
+            /**
+             * Acquisition
+             * @default download
+             * @enum {string}
+             */
+            acquisition: "download" | "import";
+            /** Components */
+            components?: ("vulnerability" | "java" | "checks")[];
+            /** Feedcacheref */
+            feedCacheRef: string;
+            /** Egresspolicyref */
+            egressPolicyRef?: string | null;
+            /** Archiveartifactref */
+            archiveArtifactRef?: string | null;
+            /**
+             * Outputdirectory
+             * @default feed-refresh
+             */
+            outputDirectory: string;
+            /**
+             * Maxagehours
+             * @default 72
+             */
+            maxAgeHours: number;
+            /**
+             * Maxbytes
+             * @default 8589934592
+             */
+            maxBytes: number;
+            /**
+             * Timeoutseconds
+             * @default 1800
+             */
+            timeoutSeconds: number;
         };
         /** GateReason */
         GateReason: {
@@ -12332,6 +12377,11 @@ export interface components {
             databaseCacheRef?: string | null;
             /** Databasedigest */
             databaseDigest?: string | null;
+            /**
+             * Feedmaxagehours
+             * @default 72
+             */
+            feedMaxAgeHours: number;
             /**
              * Maxfiles
              * @default 4096
