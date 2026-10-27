@@ -342,8 +342,8 @@ metadata flag.
    `finalizeMaxElapsedSeconds`. Retryable/no-progress states receive at least five
    finalize checks unless the elapsed-time limit or a hard failure is reached.
    The elapsed limit stops new remediation, not observation of running CI: past
-   it, keep checking while the gate reports `ci_running` (still bounded by
-   `finalizeMaxRetries`), and merge if it opens. Slow CI can outlast the limit
+   it, keep checking while the gate reports `ci_running` or `ci_infra_transient`
+   (CI it just reran; still bounded by `finalizeMaxRetries`), and merge if it opens. Slow CI can outlast the limit
    on its own, and abandoning a pushed fix mid-run wastes it. Any other blocker
    past the limit returns `attempts_exhausted` with reason `timeout`.
 6. Before reporting success, generate `artifacts/publish_result.json` from the
