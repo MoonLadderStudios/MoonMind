@@ -26,6 +26,7 @@ from moonmind.security.assessments import (
     compare_observations,
     content_key,
 )
+from moonmind.security.github_alerts import alert_observation, correlate_alerts
 from moonmind.security.passive_repo_scan import (
     PASSIVE_SCAN_TOOL_REF,
     parse_scan_report_json,
@@ -333,6 +334,36 @@ class AssessmentExecution:
             return artifact.artifact_id, json.loads(body)
         return None
 
+    async def _import_github_alerts(
+        self, request: AssessmentRequest, observations: list, scan_key: str
+    ) -> dict:
+        from moonmind.workflows.adapters.github_service import GitHubService
+
+        native, usage = await GitHubService().read_security_alerts(
+            request.github_alerts, admitted_workflow_id=self.execution["workflow_id"]
+        )
+        # Sanitized native evidence is durable before any projection.
+        native_ref = await self.write(
+            _json(native), kind="security.github-alerts", key=scan_key
+        )
+        observed_at = datetime.fromisoformat(usage["completedAt"])
+        imported, projection = alert_observation(
+            request, native, native_ref, observed_at
+        )
+        projection["interval"] = {
+            "startedAt": usage["startedAt"],
+            "completedAt": usage["completedAt"],
+        }
+        projection["usage"] = {
+            key: usage[key] for key in ("requests", "items", "bytes")
+        }
+        projection["correlation"] = correlate_alerts(native, imported, observations)
+        observations.append(imported)
+        return {
+            "projection": projection,
+            "outcome": "complete" if imported.complete(observed_at) else "incomplete",
+        }
+
     async def execute(self, request: AssessmentRequest) -> ToolResult:
         now = datetime.now(UTC)
         refs = [*request.report_refs]
@@ -367,16 +398,22 @@ class AssessmentExecution:
             decisions = [
                 TriageDecision.model_validate(item) for item in json.loads(raw)
             ]
-        scan_key = content_key(
-            {
-                "scope": request.scope.model_dump(mode="json"),
-                "tools": request.tools,
-                "inputs": {
-                    ref: hashlib.sha256(body).hexdigest()
-                    for ref, (_, body) in inputs.items()
-                },
+        work_identity = {
+            "scope": request.scope.model_dump(mode="json"),
+            "tools": request.tools,
+            "inputs": {
+                ref: hashlib.sha256(body).hexdigest()
+                for ref, (_, body) in inputs.items()
+            },
+        }
+        if request.github_alerts is not None:
+            # Live alerts are reread by each execution; only this execution's
+            # retries reuse its saved import, with the same admitted request.
+            work_identity["githubAlerts"] = {
+                "request": request.github_alerts.model_dump(mode="json"),
+                "execution": self.execution,
             }
-        )
+        scan_key = content_key(work_identity)
         saved = await self.saved(kind="security.scan", key=scan_key)
         if saved:
             scan_ref, work = saved
@@ -385,6 +422,7 @@ class AssessmentExecution:
             observations = []
             outcomes = []
             scanner_summaries = []
+            github_alerts = None
             if (
                 baseline
                 and baseline["observation"]["provenance"].get("assessmentWork")
@@ -478,6 +516,13 @@ class AssessmentExecution:
                         scan_diagnostics.append(
                             {"boundary": "retained-report", "error": type(exc).__name__}
                         )
+                if request.github_alerts is not None:
+                    github_alerts = await self._import_github_alerts(
+                        request, observations, scan_key
+                    )
+                    outcomes.append(github_alerts["outcome"])
+                    # The live import is observed after this execution began.
+                    now = datetime.now(UTC)
             coverage = [
                 row for observation in observations for row in observation.coverage
             ]
@@ -540,6 +585,8 @@ class AssessmentExecution:
                 "diagnostics": scan_diagnostics,
                 "scannerSummaries": scanner_summaries,
             }
+            if github_alerts is not None:
+                work["githubAlerts"] = github_alerts["projection"]
             scan_ref = await self.write(_json(work), kind="security.scan", key=scan_key)
         comparison = compare_observations(
             observation,
@@ -613,10 +660,33 @@ class AssessmentExecution:
             "reviewStatus": review_status,
             "scannerSummaries": work.get("scannerSummaries", []),
         }
+        github = work.get("githubAlerts")
+        if github is not None:
+            outputs["githubAlerts"] = {
+                "nativeRef": github["nativeRef"],
+                "subjectRevision": github["subjectRevision"],
+                "categories": {
+                    category: {
+                        key: row[key]
+                        for key in (
+                            "outcome",
+                            "coverage",
+                            "findings",
+                            "otherRevision",
+                            "closed",
+                            "outOfScope",
+                        )
+                    }
+                    for category, row in github["categories"].items()
+                },
+                "unverified": github["unverified"],
+            }
+        evidence = [scan_ref] + ([github["nativeRef"]] if github else [])
         try:
             summary = (
                 _summary(comparison)
                 + _scanner_summary(work.get("scannerSummaries", []))
+                + _github_summary(github)
                 + _review_summary(review, review_status)
             ).encode()
             summary_key = content_key(
@@ -644,7 +714,7 @@ class AssessmentExecution:
                 )
             for ref, link_type in (
                 (comparison_ref, "report.structured"),
-                (scan_ref, "report.evidence"),
+                *((ref, "report.evidence") for ref in evidence),
             ):
                 await self.service.link_artifact(
                     artifact_id=ref,
@@ -660,7 +730,7 @@ class AssessmentExecution:
             outputs["reportBundle"] = build_report_bundle_result(
                 primary_report_ref={"artifact_id": summary_ref},
                 structured_ref={"artifact_id": comparison_ref},
-                evidence_refs=[{"artifact_id": scan_ref}]
+                evidence_refs=[{"artifact_id": ref} for ref in evidence]
                 + ([{"artifact_id": request.review_ref}] if review_readable else []),
                 report_type="security_assessment",
                 report_scope=comparison["coverageStatus"],
@@ -711,6 +781,28 @@ def _scanner_summary(summaries: list[dict]) -> str:
         if summary["limitations"]:
             lines.append("Limitations: " + ", ".join(summary["limitations"]) + ".")
     return "\n".join(lines) + ("\n" if lines else "")
+
+
+def _github_summary(github: dict | None) -> str:
+    if github is None:
+        return ""
+    lines = [
+        "",
+        f"GitHub alerts: {github['repository']} {github['ref'] or 'unresolved ref'} at "
+        f"{github['subjectRevision'] or 'an unavailable revision'}.",
+        "Imported upstream observations; MoonMind did not run these scanners.",
+    ]
+    for category, row in github["categories"].items():
+        lines.append(
+            f"- {category}: {row['outcome']}, coverage {row['coverage']}, "
+            f"{row['findings']} findings, {row['otherRevision']} only at another "
+            f"revision, {row['closed']} closed, {row['outOfScope']} outside scope."
+        )
+    lines += [
+        f"- Unverified {row['category']} ({row['outcome']}): {row['nextStep']}"
+        for row in github["unverified"]
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def _review_summary(review: SecurityReview | None, status: str) -> str:
