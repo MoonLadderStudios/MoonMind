@@ -1501,6 +1501,9 @@ RUN_NATIVE_REPOSITORY_PLAN_VALIDATION_PATCH = "run-native-repository-plan-valida
 RUN_CONTAINER_JOB_DERIVED_IDEMPOTENCY_KEY_PATCH = (
     "run-container-job-derived-idempotency-key-v1"
 )
+# Operator-admitted assessment scope reaches only the trusted step policy that
+# launch boundaries sign into container-job capabilities.
+RUN_ASSESSMENT_SCOPE_AUTHORITY_PATCH = "run-assessment-scope-authority-v1"
 # Tool steps receive the run's runtime selection so issue search can check
 # provider capacity before claiming work. Replay-gated so histories that
 # recorded the old tool Activity arguments keep replaying them.
@@ -23667,6 +23670,26 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             if resolved_skillset_ref:
                 fanout_authorization["resolvedSkillsetRef"] = resolved_skillset_ref
             skill_source_policy["executionFanout"] = fanout_authorization
+        assessment_scope = (
+            workflow_parameters.get("assessmentScope")
+            if isinstance(workflow_parameters, Mapping)
+            else None
+        )
+        if assessment_scope is not None and self._workflow_patch_enabled(
+            RUN_ASSESSMENT_SCOPE_AUTHORITY_PATCH
+        ):
+            # Run parameters are the operator's admission; step inputs, Skills
+            # and model output cannot set or widen this scope.
+            skill_source_policy["assessmentScope"] = self._json_value(
+                assessment_scope, path="assessmentScope"
+            )
+            # Child runs do not inherit the scope, so fan-out would escape it.
+            skill_source_policy["executionFanout"] = {
+                "authorized": False,
+                "selectedSkill": str(selected_skill or "").strip().lower(),
+                "sourceKind": "assessment_scope",
+                "reasonCode": "assessment_scope_restricts_fanout",
+            }
         execution_ordinal = step_execution or 1
         context_workspace = self._step_execution_workspace(
             node_id,

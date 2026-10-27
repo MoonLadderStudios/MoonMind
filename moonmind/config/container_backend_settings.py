@@ -34,6 +34,11 @@ from moonmind.security.egress_policy import (
     ScopedEgressPolicy,
     parse_egress_policies,
 )
+from moonmind.security.workload_profiles import (
+    WORKLOAD_PROFILES_ENV_KEY,
+    WorkloadProfile,
+    parse_workload_profiles,
+)
 
 #: The only backend kind this deployment supports. A second backend kind
 #: (Podman, containerd, Kubernetes, endpoint pools) is explicitly out of scope.
@@ -197,6 +202,7 @@ class ContainerBackendSettings:
     cache_sources: tuple[CacheSource, ...]
     service_connections: tuple[ServiceConnection, ...] = ()
     egress_policies: tuple[ScopedEgressPolicy, ...] = ()
+    workload_profiles: tuple[WorkloadProfile, ...] = ()
 
     def authorize_egress(self, request) -> ScopedEgressPolicy | None:
         if request.spec.egress_policy_ref is None:
@@ -620,4 +626,34 @@ def resolve_container_backend_settings(
         cache_sources=cache_sources,
         service_connections=parse_service_connections(source.get(SERVICE_CONNECTIONS_ENV_KEY)),
         egress_policies=parse_egress_policies(source.get(EGRESS_POLICIES_ENV_KEY)),
+        workload_profiles=_workload_profiles(
+            source.get(WORKLOAD_PROFILES_ENV_KEY), image_sources, cache_sources
+        ),
     )
+
+
+def _workload_profiles(
+    raw: object,
+    image_sources: list[ImageSource],
+    cache_sources: tuple[CacheSource, ...],
+) -> tuple[WorkloadProfile, ...]:
+    try:
+        profiles = parse_workload_profiles(None if raw is None else str(raw))
+    except ValueError as exc:
+        raise ContainerBackendConfigError(str(exc)) from exc
+    image_refs = {item.source_ref for item in image_sources}
+    caches = {item.cache_ref: item for item in cache_sources}
+    for index, profile in enumerate(profiles):
+        # A profile names deployment-owned sources only; read-only rule and
+        # data caches keep an untrusted scan from poisoning later assessments.
+        if profile.image_source_ref not in image_refs or any(
+            cache.cache_ref not in caches
+            or not caches[cache.cache_ref].read_only
+            or caches[cache.cache_ref].target != cache.target
+            for cache in profile.caches
+        ):
+            raise ContainerBackendConfigError(
+                f"{WORKLOAD_PROFILES_ENV_KEY}[{index}] names an undeclared "
+                "image source or a writable/mismatched cache"
+            )
+    return profiles
