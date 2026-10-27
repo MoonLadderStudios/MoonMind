@@ -168,3 +168,99 @@ class FeedRefresh(Contract):
         if download == (self.archive_artifact_ref is not None):
             raise ValueError("feed imports, and only imports, read an archive")
         return self
+
+
+ImageOperation = Literal["assess", "sbom-generate", "sbom-reassess"]
+ImageTarget = Literal["registry", "archive", "sbom", "source"]
+#: Which inputs each operation reads. Source inventory is SBOM generation
+#: only; source vulnerability scanning stays with ``RepositoryScan``.
+IMAGE_TARGETS: dict[str, frozenset[str]] = {
+    "assess": frozenset({"registry", "archive"}),
+    "sbom-generate": frozenset({"registry", "archive", "source"}),
+    "sbom-reassess": frozenset({"sbom"}),
+}
+MAX_SBOM_BYTES = 64 * 1024 * 1024
+
+
+class ImageAssessment(Contract):
+    """One Trivy operation on an image, image archive, SBOM or source snapshot.
+
+    A typed workload of its own, so target-image coverage is requested and
+    reported apart from source scanning. Registry targets are read from the
+    registry and archives or SBOMs from captured inputs, never through a
+    container daemon. ``targetCredentialRef`` authorizes the target registry
+    only; the scanner image is a deployment image source with its own pull
+    authority.
+    """
+
+    operation: ImageOperation
+    target: ImageTarget
+    image_reference: str | None = Field(None, min_length=1, max_length=512)
+    platform: str | None = Field(
+        None,
+        pattern=r"^linux/(?:amd64|arm64|arm|386|ppc64le|s390x|riscv64)(?:/v[5-8])?$",
+    )
+    input_artifact_ref: str | None = Field(None, pattern=r"^art_[0-9A-Za-z]{1,64}$")
+    egress_policy_ref: str | None = Field(None, pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$")
+    target_credential_ref: str | None = Field(None, min_length=1, max_length=1024)
+    database_cache_ref: str | None = Field(None, pattern=r"^[a-z0-9][a-z0-9.-]*$")
+    database_digest: str | None = Field(None, pattern=r"^[0-9a-f]{64}$")
+    feed_max_age_hours: int = Field(DEFAULT_FEED_MAX_AGE_HOURS, ge=1, le=8760)
+    output_directory: str = "image-assessment"
+    max_input_bytes: int = Field(2 * 1024**3, ge=1, le=4 * 1024**3)
+    max_sbom_bytes: int = Field(32 * 1024 * 1024, ge=1024, le=MAX_SBOM_BYTES)
+    max_report_bytes: int = Field(MAX_REPORT_BYTES, ge=128, le=MAX_REPORT_BYTES)
+    timeout_seconds: int = Field(900, ge=1, le=3600)
+
+    @field_validator("output_directory")
+    @classmethod
+    def output_relative(cls, value):
+        return relative_path(value)
+
+    @field_validator("target_credential_ref")
+    @classmethod
+    def opaque_reference(cls, value):
+        if value is not None and "://" not in value:
+            raise ValueError("secret references must use an opaque reference URI")
+        return value
+
+    @model_validator(mode="after")
+    def admitted_choices(self):
+        if self.target not in IMAGE_TARGETS[self.operation]:
+            raise ValueError("operation does not read this target")
+        registry = self.target == "registry"
+        if registry != (self.image_reference is not None):
+            raise ValueError("registry targets, and only they, name an image")
+        if registry != (self.egress_policy_ref is not None):
+            raise ValueError("registry targets, and only they, need egress")
+        if not registry and (self.platform or self.target_credential_ref):
+            raise ValueError("platform and target credentials select registry images")
+        if (self.target in {"archive", "sbom"}) != (
+            self.input_artifact_ref is not None
+        ):
+            raise ValueError("archives and SBOMs are read from one input artifact")
+        if registry:
+            from moonmind.schemas.container_job_models import normalize_image_reference
+
+            if any(c.isspace() for c in self.image_reference) or "://" in (
+                self.image_reference
+            ):
+                raise ValueError("image reference must be a registry reference")
+            normalize_image_reference(self.image_reference)
+        if bool(self.database_cache_ref) != bool(self.database_digest):
+            raise ValueError(
+                "database cache and content identity are required together"
+            )
+        # Generation records inventory only; matching needs admitted data.
+        if (self.operation == "sbom-generate") == bool(self.database_digest):
+            raise ValueError(
+                "vulnerability matching, and only matching, reads an offline database"
+            )
+        return self
+
+    def outputs(self) -> list[dict]:
+        native = "sbom" if self.operation == "sbom-generate" else "report"
+        return [
+            {"name": name, "relativePath": f"{self.output_directory}/{name}.json"}
+            for name in [native, "execution", "summary"]
+        ]

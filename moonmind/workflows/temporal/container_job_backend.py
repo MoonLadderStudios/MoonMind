@@ -99,6 +99,15 @@ from moonmind.security.egress import (
 )
 from moonmind.security.egress_conformance_evidence import serialize_conformance_evidence
 from moonmind.security.scoped_egress import ScopedEgressLease
+from moonmind.security.image_assessments import (
+    TARGET_AUTH_TARGET,
+    ImageAssessmentSummary,
+    ImageExecution,
+    RetainedSbom,
+    SbomError,
+    inspect_sbom,
+    normalize_image_report,
+)
 from moonmind.security.repository_scanners import (
     WITHHELD_LOG,
     RepositoryScan,
@@ -161,6 +170,20 @@ def _redact(text: str, secrets: Sequence[str]) -> str:
         if token:
             redacted = redacted.replace(token, "[redacted]")
     return redacted
+
+
+def _redact_strings(value: object) -> object:
+    """Credential-shaped text removed from every string in a JSON value."""
+
+    if isinstance(value, str):
+        return redact_sensitive_text(value)
+    if isinstance(value, dict):
+        return {key: _redact_strings(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_strings(item) for item in value]
+    return value
+
+
 # Ownership/correlation/expiry label keys. These are applied unconditionally by
 # the backend and can never be supplied or overridden through the public spec
 # (the contract layer rejects ``label``/``labels`` keys outright).
@@ -512,6 +535,11 @@ class _OutputRejected(RuntimeError):
 
 class _CapacityWait(RuntimeError):
     """The durable workflow, rather than an Activity retry, owns this wait."""
+
+
+def _withholds_console(spec) -> bool:
+    """Scanner console output can repeat inputs; evidence is the checked output."""
+    return spec.repository_scan is not None or spec.image_assessment is not None
 
 
 class DockerContainerJobBackend:
@@ -2516,6 +2544,7 @@ class DockerContainerJobBackend:
             if spec.input_attachments is not None
             else [workspace_mount]
         )
+        mounts.extend(await self._deliver_target_credential(request))
         args = [
             "create",
             "--name",
@@ -2801,6 +2830,60 @@ class DockerContainerJobBackend:
             ),
         ]
 
+    async def _deliver_target_credential(
+        self, request: ContainerJobActivityRequest
+    ) -> list[str]:
+        """Mount the authorized target-registry credential as a Docker config.
+
+        The API-owned decision travels with the request; the worker enforces
+        it, resolves the value, and writes it only to job-owned storage. The
+        value never enters argv, environment, the request or evidence. The
+        scanner image's own pull authority is a separate deployment source.
+        """
+
+        assessment = request.request.spec.image_assessment
+        if assessment is None or assessment.target_credential_ref is None:
+            return []
+        authorization = request.target_authorization
+        if (
+            authorization is None
+            or not authorization.authorized
+            or authorization.credential_ref != assessment.target_credential_ref
+        ):
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.IMAGE_USE_DENIED,
+                "target registry credential was not authorized for this job",
+            )
+        normalized = normalize_image_reference(assessment.image_reference)
+        self._enforce_authorized_scope(normalized, authorization)
+        credential = await self._resolve_credential(assessment.target_credential_ref)
+        registry = (
+            "https://index.docker.io/v1/"
+            if normalized.registry == "docker.io"
+            else normalized.registry
+        )
+        body = json.dumps(
+            {"auths": {registry: credential.docker_auth_entry()}}
+        ).encode()
+        storage = self._attachment_storage(request)
+        try:
+            await asyncio.to_thread(
+                attachments.deliver_credential,
+                storage,
+                body,
+                ownership_token=request.ownership_token,
+            )
+        except (attachments.AttachmentStorageError, OSError) as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.WORKSPACE,
+                "target registry credential could not be delivered",
+            ) from exc
+        return [
+            self._attachment_mount(
+                storage, "credentials", TARGET_AUTH_TARGET, read_only=True
+            )
+        ]
+
     def _output_root(self, request: ContainerJobActivityRequest) -> Path:
         storage = self._attachment_storage(request)
         if storage is not None:
@@ -3042,7 +3125,7 @@ class DockerContainerJobBackend:
             entries = await self._read_incremental_log_entries(
                 ref, since_dt, base_seq, timestamp_offset
             )
-            if request.request.spec.repository_scan is not None:
+            if _withholds_console(request.request.spec):
                 for entry in entries:
                     entry.text = WITHHELD_LOG
             if not entries:
@@ -3233,7 +3316,7 @@ class DockerContainerJobBackend:
         else:
             ref = request.container_ref or self._name(request)
             code, stdout, stderr = await self._runner(("logs", ref))
-            if request.request.spec.repository_scan is not None:
+            if _withholds_console(request.request.spec):
                 # Scanner diagnostics may contain source/metadata the generic
                 # credential patterns cannot recognize. No raw console bytes
                 # cross either the live or terminal persistence boundary.
@@ -3440,6 +3523,8 @@ class DockerContainerJobBackend:
     ) -> list[ContainerJobArtifact]:
         if request.request.spec.repository_scan is not None:
             return await self._collect_scanner_outputs(request)
+        if request.request.spec.image_assessment is not None:
+            return await self._collect_image_assessment_outputs(request)
         outputs = request.request.spec.outputs
         if not outputs or self._publish is None:
             return []
@@ -3721,6 +3806,176 @@ class DockerContainerJobBackend:
         )
         return manifest
 
+    async def _collect_image_assessment_outputs(
+        self, request: ContainerJobActivityRequest
+    ):
+        """Check image, archive and SBOM evidence again before publication."""
+        storage = self._attachment_storage(request)
+        if storage is not None:
+            # The container has exited; its target credential is not needed.
+            await asyncio.to_thread(attachments.remove_credentials, storage)
+        if self._publish is None:
+            return []
+        spec = request.request.spec
+        assessment = spec.image_assessment
+        generate = assessment.operation == "sbom-generate"
+        native_name = "sbom" if generate else "report"
+        entries = await asyncio.to_thread(
+            self._build_output_entries, self._output_root(request), list(spec.outputs)
+        )
+        by_name = {e["name"]: e for e in entries}
+        manifest, limitations = [], []
+        terminal = str(request.terminal_state or "failed")
+        if terminal != "succeeded":
+            limitations.append(f"container_job_{terminal}")
+        bytes_remaining = self._settings.max_output_total_bytes
+        files_remaining = self._settings.max_output_files
+
+        def relative(name):
+            return f"{assessment.output_directory}/{name}.json"
+
+        async def publish(name, payload, *, limit):
+            nonlocal bytes_remaining, files_remaining
+            if len(payload) > min(limit, bytes_remaining) or files_remaining < 1:
+                raise ValueError("output exceeds the collection ceiling")
+            ref = await self._publish_artifact(
+                request, f"{request.job_id}-output-{name}.json", payload
+            )
+            bytes_remaining -= len(payload)
+            files_remaining -= 1
+            manifest.append(
+                ContainerJobArtifact(
+                    name=name,
+                    artifactRef=ref,
+                    sizeBytes=len(payload),
+                    sha256=hashlib.sha256(payload).hexdigest(),
+                    mediaType="application/json",
+                    relativePath=relative(name),
+                    collectionStatus="collected",
+                )
+            )
+            return ref
+
+        def rejected(name, detail):
+            manifest.append(
+                ContainerJobArtifact(
+                    name=name,
+                    relativePath=relative(name),
+                    collectionStatus="rejected",
+                    detail=detail,
+                )
+            )
+
+        execution = None
+        try:
+            # Sanitized once: the execution and summary artifacts both carry
+            # SBOM metadata the job read from its input.
+            execution = ImageExecution.model_validate(
+                _redact_strings(
+                    ImageExecution.model_validate_json(
+                        by_name["execution"]["payload"] or b""
+                    ).model_dump(mode="json", by_alias=True)
+                )
+            )
+            if (execution.operation, execution.target) != (
+                assessment.operation,
+                assessment.target,
+            ):
+                raise ValueError("image execution differs from admission")
+            if execution.database_digest not in (None, assessment.database_digest) or (
+                execution.feed is not None
+                and execution.feed.snapshot is not None
+                and execution.feed.snapshot.snapshot_id != assessment.database_digest
+            ):
+                raise ValueError("image database differs from admission")
+            limitations.extend(execution.limitations)
+            if assessment.database_digest and execution.database_digest is None:
+                limitations.append("feed_snapshot_unavailable")
+        except (ValueError, TypeError):
+            execution = None
+            limitations.append("missing_or_invalid_execution_evidence")
+        limitations.extend(await self._capture_limitations(request))
+        subject = execution.subject if execution else None
+        if subject is None:
+            limitations.append("target_identity_unavailable")
+        native_ref, safe, sbom = None, b"", None
+        try:
+            payload = by_name[native_name]["payload"]
+            if payload is None:
+                raise ValueError("native evidence unavailable")
+            if generate:
+                # Retained as a standard document, so it is checked rather
+                # than rewritten: credential-shaped text withholds it.
+                inventory, _ = inspect_sbom(payload, assessment.max_sbom_bytes)
+                text = payload.decode()
+                if inventory.format != "cyclonedx" or (
+                    redact_sensitive_text(text) != text
+                ):
+                    raise ValueError("generated SBOM is not admissible evidence")
+                safe = payload
+                limit = assessment.max_sbom_bytes
+            else:
+                safe = sanitize_native("trivy", payload, assessment.max_report_bytes)
+                limit = assessment.max_report_bytes
+            native_ref = await publish(native_name, safe, limit=limit)
+            if generate:
+                sbom = RetainedSbom(
+                    artifactRef=native_ref,
+                    sha256=hashlib.sha256(safe).hexdigest(),
+                    sizeBytes=len(safe),
+                    inventory=inventory,
+                )
+        except (SbomError, ValueError, TypeError, RecursionError, UnicodeDecodeError):
+            safe = b""
+            limitations.append("native_evidence_unavailable")
+            rejected(native_name, "Native evidence unavailable or failed checks.")
+        result = None
+        if not generate:
+            result = normalize_image_report(
+                safe,
+                subject_asset=subject.asset if subject else "unavailable",
+                exit_code=execution.exit_code if execution else None,
+                terminal_state=execution.state if execution else terminal,
+                native_ref=native_ref or "unavailable",
+            )
+        if execution is not None:
+            try:
+                await publish(
+                    "execution",
+                    execution.model_dump_json(by_alias=True).encode(),
+                    limit=assessment.max_report_bytes,
+                )
+            except ValueError:
+                limitations.append("execution_artifact_unavailable")
+                rejected("execution", "Execution evidence exceeds the output bound.")
+        else:
+            rejected("execution", "Execution evidence unavailable.")
+        if (
+            execution is None
+            or (result is not None and result.coverage == "partial")
+            or (generate and sbom is None)
+        ):
+            limitations.append("scanner_coverage_incomplete")
+        summary = ImageAssessmentSummary(
+            admission=assessment,
+            execution=execution,
+            subject=subject,
+            result=result,
+            nativeRef=native_ref,
+            sbom=sbom,
+            coverage="partial" if limitations else "complete",
+            limitations=sorted(set(limitations)),
+        )
+        try:
+            await publish(
+                "summary",
+                summary.model_dump_json(by_alias=True).encode(),
+                limit=assessment.max_report_bytes,
+            )
+        except ValueError:
+            rejected("summary", "Image assessment summary exceeds the output bound.")
+        return manifest
+
     async def _capture_limitations(
         self, request: ContainerJobActivityRequest
     ) -> list[str]:
@@ -3815,7 +4070,7 @@ class DockerContainerJobBackend:
             ),
             "message": (
                 WITHHELD_LOG
-                if request.request.spec.repository_scan is not None and request.message
+                if _withholds_console(request.request.spec) and request.message
                 else request.message
             ),
             "startedAt": request.started_at.isoformat() if request.started_at else None,
