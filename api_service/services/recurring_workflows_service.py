@@ -35,7 +35,12 @@ from api_service.services.omnigent_agent_profile_selection import (
     resolve_agent_profile_snapshot,
     resolve_default_agent_profile_snapshot,
 )
-from api_service.services.provider_profile_projection import provider_profile_label_snapshot
+from api_service.services.omnigent_execution_plan_service import (
+    frozen_execution_artifact_access,
+)
+from api_service.services.provider_profile_projection import (
+    provider_profile_label_snapshot,
+)
 from api_service.services.provider_profile_runtime import (
     require_launch_target_provider_profile_runtime,
     resolve_launch_target_profile_selection,
@@ -68,6 +73,7 @@ from moonmind.workflows.recurring.cron import (
     parse_cron_expression,
     validate_timezone_name,
 )
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.client import (
     ScheduleTriggerResult,
     TemporalClientAdapter,
@@ -79,9 +85,7 @@ from moonmind.workflows.temporal.schedule_errors import (
     ScheduleNotFoundError,
     ScheduleOperationError,
 )
-from moonmind.workflows.temporal.schedule_mapping import (
-    make_scheduled_workflow_id_base,
-)
+from moonmind.workflows.temporal.schedule_mapping import make_scheduled_workflow_id_base
 
 logger = logging.getLogger(__name__)
 
@@ -574,15 +578,17 @@ class RecurringWorkflowsService:
             raise RecurringWorkflowValidationError(
                 "saved schedule Skill manifest lacks its frozen digest"
             )
-        principal = await self._scheduled_task_principal(binding)
+        await self._scheduled_task_provenance(binding)
         artifacts = self._artifact_service or TemporalArtifactService(
             TemporalArtifactRepository(self._session)
         )
         content_ids = await _skill_content_ids(
             artifacts,
             manifest_id,
-            principal=principal,
             expected_digest=manifest_digest,
+            access=await frozen_execution_artifact_access(
+                self._session, binding, workflow_id=f"mm-schedule:{definition.id}"
+            ),
         )
         # Artifact reads record bounded consumer use and may commit. Reacquire
         # the existing schedule fence before publishing any repair.
@@ -872,7 +878,9 @@ class RecurringWorkflowsService:
             == (expected_identity.get("name"), expected_identity.get("email"))
         )
         if has_identity_admission and expected_task_queue is not None:
-            from moonmind.workflows.temporal.activity_catalog import publication_task_queue
+            from moonmind.workflows.temporal.activity_catalog import (
+                publication_task_queue,
+            )
 
             expected_task_queue = publication_task_queue(expected_task_queue)
         return (
@@ -1178,15 +1186,15 @@ class RecurringWorkflowsService:
             }
         )
 
-    async def _scheduled_task_principal(self, binding: Any) -> str:
-        """Return the principal that admitted a schedule's original task input."""
+    async def _scheduled_task_provenance(self, binding: Any) -> str:
+        """Return the saved creator for accounting, without granting read access."""
 
         from api_service.services.omnigent_execution_plan_service import (
-            frozen_task_input_principal,
+            frozen_task_input_provenance,
         )
 
         try:
-            return await frozen_task_input_principal(self._session, binding)
+            return await frozen_task_input_provenance(self._session, binding)
         except ValueError as exc:
             raise RecurringWorkflowValidationError(f"scheduled {exc}") from exc
 
@@ -1215,6 +1223,9 @@ class RecurringWorkflowsService:
             provider_profile=provider_profile,
             initial_parameters=initial_parameters,
             binding=binding,
+            access=await frozen_execution_artifact_access(
+                self._session, binding, workflow_id=workflow_id
+            ),
         )
 
     async def admit_occurrence_execution_plan(
@@ -1261,9 +1272,7 @@ class RecurringWorkflowsService:
         previous_version = definition.version
         previous_target = definition.target
 
-        from moonmind.schemas.agent_runtime_models import (
-            OmnigentExecutionPlanBinding,
-        )
+        from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 
         try:
             current_binding = OmnigentExecutionPlanBinding.model_validate(
@@ -1294,7 +1303,7 @@ class RecurringWorkflowsService:
             raise RecurringWorkflowValidationError(
                 "scheduled Agent Profile snapshot identities conflict"
             )
-        principal = await self._scheduled_task_principal(current_binding)
+        principal = await self._scheduled_task_provenance(current_binding)
         initial_parameters = await refresh_schedule_deployment_snapshot(
             self._session,
             parameters=initial_parameters,
@@ -1545,7 +1554,7 @@ class RecurringWorkflowsService:
         self,
         target: Mapping[str, Any],
         *,
-        principal: str,
+        access: ArtifactAccessContext,
         saved_target: Mapping[str, Any] | None = None,
     ) -> None:
         async def read_input_artifact(ref: str) -> Any:
@@ -1560,8 +1569,7 @@ class RecurringWorkflowsService:
             try:
                 _artifact, body = await service.read(
                     artifact_id=ref.removeprefix("artifact://").removeprefix("input/"),
-                    principal=principal,
-                    allow_restricted_raw=True,
+                    access=access,
                 )
                 import json
 
@@ -1716,9 +1724,7 @@ class RecurringWorkflowsService:
             compile_and_persist_execution_plan,
             persist_json_artifact,
         )
-        from moonmind.omnigent.harness_platform.stores import (
-            SessionExecutionPlanStore,
-        )
+        from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
         from moonmind.workflows.temporal.artifacts import (
             TemporalArtifactRepository,
             TemporalArtifactService,
@@ -1799,9 +1805,7 @@ class RecurringWorkflowsService:
         try:
             persisted_plan = await compile_and_persist_execution_plan(
                 session_factory=None,
-                execution_plan_store=SessionExecutionPlanStore(
-                    self._session
-                ),
+                execution_plan_store=SessionExecutionPlanStore(self._session),
                 artifact_service=artifact_service,
                 principal=principal,
                 workflow_id=f"mm-schedule:{definition_id}",
@@ -1813,6 +1817,11 @@ class RecurringWorkflowsService:
                 task_input_snapshot_ref=task_input_snapshot_ref,
                 task_input_snapshot_digest=task_input_snapshot_digest,
                 db_session=self._session,
+                access=(
+                    ArtifactAccessContext.for_operator(actor)
+                    if actor is not None
+                    else ArtifactAccessContext.for_service("system")
+                ),
             )
         except Exception as exc:
             raise RecurringWorkflowValidationError(
@@ -1878,7 +1887,11 @@ class RecurringWorkflowsService:
         name_text = _clean_text(name, field_name="name", required=True) or ""
         await self._validate_model_selection_submission(
             target,
-            principal=str(getattr(actor, "id", None) or owner_user_id or "system"),
+            access=(
+                ArtifactAccessContext.for_operator(actor)
+                if actor is not None
+                else ArtifactAccessContext.for_service("system")
+            ),
         )
         target_payload = _normalize_target(_json_object(target, field_name="target"))
         # The stored target's initialParameters are what a later schedule action
@@ -2007,8 +2020,10 @@ class RecurringWorkflowsService:
         if target is not None:
             await self._validate_model_selection_submission(
                 target,
-                principal=str(
-                    getattr(actor, "id", None) or definition.owner_user_id or "system"
+                access=(
+                    ArtifactAccessContext.for_operator(actor)
+                    if actor is not None
+                    else ArtifactAccessContext.for_service("system")
                 ),
                 saved_target=definition.target,
             )

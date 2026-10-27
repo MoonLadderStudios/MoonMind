@@ -23,7 +23,10 @@ from moonmind.omnigent.policies import (
     validate_policy_authority_evidence,
 )
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
-from moonmind.workflows.temporal.artifacts import TemporalArtifactService
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    TemporalArtifactService,
+)
 from moonmind.workflows.temporal.remediation_actions import (
     REMEDIATION_BRANCH_SENSITIVE_FIELDS,
     RemediationActionAuthorityService,
@@ -355,13 +358,13 @@ class RemediationEvidenceToolService:
         *,
         remediation_workflow_id: str,
         principal: str = "service:remediation-tools",
-        admitted_principal: str | None = None,
+        access: ArtifactAccessContext,
     ) -> dict[str, Any]:
         """Return the parsed linked remediation context artifact."""
 
         link = await self._load_link(remediation_workflow_id)
         context = await self._read_context_payload(
-            link=link, principal=principal, admitted_principal=admitted_principal
+            link=link, principal=principal, access=access
         )
         from api_service.services.remediation_capabilities import (
             project_remediation_action_inputs,
@@ -389,13 +392,13 @@ class RemediationEvidenceToolService:
         remediation_workflow_id: str,
         artifact_ref: str | Mapping[str, Any],
         principal: str = "service:remediation-tools",
-        admitted_principal: str | None = None,
+        access: ArtifactAccessContext,
     ) -> bytes:
         """Read a target artifact only when declared by the context bundle."""
 
         link = await self._load_link(remediation_workflow_id)
         context = await self._read_context_payload(
-            link=link, principal=principal, admitted_principal=admitted_principal
+            link=link, principal=principal, access=access
         )
         artifact_id = _artifact_id_from_ref(artifact_ref)
         if not artifact_id:
@@ -406,9 +409,7 @@ class RemediationEvidenceToolService:
                 f"Artifact {artifact_id} is not listed in remediation context."
             )
         _artifact, payload = await self._artifact_service.read(
-            artifact_id=artifact_id,
-            principal=principal,
-            admitted_principal=admitted_principal,
+            artifact_id=artifact_id, access=access
         )
         return payload
 
@@ -420,13 +421,13 @@ class RemediationEvidenceToolService:
         include_content: bool = False,
         max_content_bytes: int = 65_536,
         principal: str = "service:remediation-tools",
-        admitted_principal: str | None = None,
+        access: ArtifactAccessContext,
     ) -> RemediationArtifactReadResult:
         """Read metadata and bounded redacted content for a linked artifact."""
 
         link = await self._load_link(remediation_workflow_id)
         context = await self._read_context_payload(
-            link=link, principal=principal, admitted_principal=admitted_principal
+            link=link, principal=principal, access=access
         )
         artifact_id = _artifact_id_from_ref(artifact_ref)
         if not artifact_id:
@@ -436,9 +437,7 @@ class RemediationEvidenceToolService:
                 f"Artifact {artifact_id} is not listed in remediation context."
             )
         artifact, payload = await self._artifact_service.read(
-            artifact_id=artifact_id,
-            principal=principal,
-            admitted_principal=admitted_principal,
+            artifact_id=artifact_id, access=access
         )
         bound = max(0, min(int(max_content_bytes), 1_048_576))
         bounded = payload[:bound] if include_content else b""
@@ -468,7 +467,7 @@ class RemediationEvidenceToolService:
         include_content: bool = False,
         max_content_bytes: int = 65_536,
         principal: str = "service:remediation-tools",
-        admitted_principal: str | None = None,
+        access: ArtifactAccessContext,
     ) -> RemediationEvidencePage:
         """Read a typed Omnigent evidence class without treating refs as grants.
 
@@ -479,7 +478,7 @@ class RemediationEvidenceToolService:
 
         link = await self._load_link(remediation_workflow_id)
         context = await self._read_context_payload(
-            link=link, principal=principal, admitted_principal=admitted_principal
+            link=link, principal=principal, access=access
         )
         normalized_class = _required_string(evidence_class, "evidenceClass")
         evidence = context.get("evidence")
@@ -523,9 +522,7 @@ class RemediationEvidenceToolService:
                 items.append(item)
                 continue
             artifact, payload = await self._artifact_service.read(
-                artifact_id=artifact_id,
-                principal=principal,
-                admitted_principal=admitted_principal,
+                artifact_id=artifact_id, access=access
             )
             item.update(
                 {
@@ -610,13 +607,13 @@ class RemediationEvidenceToolService:
         cursor: str | None = None,
         tail_lines: int | None = None,
         principal: str = "service:remediation-tools",
-        admitted_principal: str | None = None,
+        access: ArtifactAccessContext,
     ) -> RemediationLogReadResult:
         """Read bounded logs for a agentRunId declared by the context bundle."""
 
         link = await self._load_link(remediation_workflow_id)
         context = await self._read_context_payload(
-            link=link, principal=principal, admitted_principal=admitted_principal
+            link=link, principal=principal, access=access
         )
         normalized_agent_run_id = _required_string(agent_run_id, "agentRunId")
         if normalized_agent_run_id not in _collect_context_agent_run_ids(context):
@@ -639,13 +636,13 @@ class RemediationEvidenceToolService:
         agent_run_id: str | None = None,
         from_sequence: int | None = None,
         principal: str = "service:remediation-tools",
-        admitted_principal: str | None = None,
+        access: ArtifactAccessContext,
     ) -> RemediationLiveFollowResult:
         """Follow live target logs only when context and policy allow it."""
 
         link = await self._load_link(remediation_workflow_id)
         context = await self._read_context_payload(
-            link=link, principal=principal, admitted_principal=admitted_principal
+            link=link, principal=principal, access=access
         )
         live_follow = context.get("liveFollow")
         live_mapping = live_follow if isinstance(live_follow, Mapping) else {}
@@ -689,7 +686,7 @@ class RemediationEvidenceToolService:
         remediation_workflow_id: str,
         action_kind: str,
         principal: str = "service:remediation-tools",
-        admitted_principal: str | None = None,
+        access: ArtifactAccessContext,
     ) -> RemediationActionRequestPreparation:
         """Re-read current target health before a side-effecting action request.
 
@@ -701,7 +698,7 @@ class RemediationEvidenceToolService:
         normalized_action_kind = _required_string(action_kind, "actionKind")
         link = await self._load_link(remediation_workflow_id)
         context = await self._read_context_payload(
-            link=link, principal=principal, admitted_principal=admitted_principal
+            link=link, principal=principal, access=access
         )
         target = await load_remediation_target(
             self._session, link.target_workflow_id
@@ -902,7 +899,7 @@ class RemediationEvidenceToolService:
         authority_result: Mapping[str, Any] | None = None,
         guard_result: Mapping[str, Any] | None = None,
         principal: str = "service:remediation-tools",
-        admitted_principal: str | None = None,
+        access: ArtifactAccessContext,
     ) -> dict[str, Any]:
         """Execute an authorized action and publish bounded lifecycle artifacts."""
         link = await self._load_link(remediation_workflow_id)
@@ -921,7 +918,7 @@ class RemediationEvidenceToolService:
                 await self._read_context_payload(
                     link=link,
                     principal=principal,
-                    admitted_principal=admitted_principal,
+                    access=access,
                 )
                 request_receipt = await self._lifecycle_publisher.find_published_artifact(
                     workflow_id=link.remediation_workflow_id,
@@ -935,12 +932,16 @@ class RemediationEvidenceToolService:
                     )
                 _, data = await self._artifact_service.read(
                     artifact_id=receipt.artifact_id,
-                    principal="service:remediation-lifecycle",
+                    access=ArtifactAccessContext.for_service(
+                        "service:remediation-lifecycle"
+                    ),
                 )
                 result = json.loads(data)
                 _, data = await self._artifact_service.read(
                     artifact_id=request_receipt.artifact_id,
-                    principal="service:remediation-lifecycle",
+                    access=ArtifactAccessContext.for_service(
+                        "service:remediation-lifecycle"
+                    ),
                 )
                 request = json.loads(data)
                 saved = {
@@ -980,7 +981,7 @@ class RemediationEvidenceToolService:
                     "Action identity was reused with different inputs."
                 )
             await self._read_context_payload(
-                link=link, principal=principal, admitted_principal=admitted_principal
+                link=link, principal=principal, access=access
             )
             return await self._resume_action_verification(
                 link=link, action_id=str(saved_action_id)
@@ -1067,7 +1068,7 @@ class RemediationEvidenceToolService:
             remediation_workflow_id=remediation_workflow_id,
             action_kind=action_kind,
             principal=principal,
-            admitted_principal=admitted_principal,
+            access=access,
         )
         link = await self._load_link(remediation_workflow_id)
         self._validate_execution_context(
@@ -1362,7 +1363,10 @@ class RemediationEvidenceToolService:
 
         async def read_receipt(ref):
             artifact, data = await self._artifact_service.read(
-                artifact_id=ref, principal="service:remediation-lifecycle"
+                artifact_id=ref,
+                access=ArtifactAccessContext.for_service(
+                    "service:remediation-lifecycle"
+                ),
             )
             return artifact, json.loads(data)
 
@@ -1655,7 +1659,7 @@ class RemediationEvidenceToolService:
         lock_release: str,
         final_audit_ref: str | None = None,
         principal: str = "service:remediation-tools",
-        admitted_principal: str | None = None,
+        access: ArtifactAccessContext,
     ) -> dict[str, Any]:
         """Publish the v1 remediation decision log and final lifecycle summary."""
 
@@ -1731,17 +1735,15 @@ class RemediationEvidenceToolService:
         *,
         link: db_models.TemporalExecutionRemediationLink,
         principal: str,
-        admitted_principal: str | None = None,
+        access: ArtifactAccessContext,
     ) -> dict[str, Any]:
-        cache_key = (link.remediation_workflow_id, link.context_artifact_ref)
+        cache_key = (access, link.remediation_workflow_id, link.context_artifact_ref)
         cached = self._context_payload_cache.get(cache_key)
         if cached is not None:
             return cached
 
         artifact, payload = await self._artifact_service.read(
-            artifact_id=link.context_artifact_ref,
-            principal=principal,
-            admitted_principal=admitted_principal,
+            artifact_id=link.context_artifact_ref, access=access
         )
         metadata = artifact.metadata_json if isinstance(artifact.metadata_json, Mapping) else {}
         if metadata.get("artifact_type") != REMEDIATION_CONTEXT_LINK_TYPE:

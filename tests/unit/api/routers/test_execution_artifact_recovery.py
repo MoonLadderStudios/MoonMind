@@ -10,11 +10,16 @@ from sqlalchemy import select
 from api_service.api.routers import executions as ex
 from api_service.db.base import get_async_session
 from api_service.db.models import (
-    MoonMindWorkflowState, TemporalArtifact, TemporalArtifactLink,
-    TemporalExecutionCanonicalRecord, TemporalExecutionOwnerType, TemporalWorkflowType,
+    MoonMindWorkflowState,
+    TemporalArtifact,
+    TemporalArtifactLink,
+    TemporalExecutionCanonicalRecord,
+    TemporalExecutionOwnerType,
+    TemporalWorkflowType,
 )
 from api_service.services import single_user_conversion as conversion
 from moonmind.workflows.temporal.artifacts import TemporalArtifactRepository
+from tests.artifact_access import access_for_test
 from tests.unit.services.test_artifact_conversion import database, seed, service
 
 pytestmark = pytest.mark.asyncio
@@ -141,7 +146,9 @@ async def test_converted_artifact_attached_to_new_workflow(
                     attachments = destination.parameters["workflow"]["inputAttachments"]
                     assert len(attachments) == 1
                     copied_id = attachments[0]["artifactId"]
-                    _, body = await artifacts.read(artifact_id=copied_id, principal=OPERATOR)
+                    _, body = await artifacts.read(
+                        artifact_id=copied_id, access=access_for_test(OPERATOR)
+                    )
                     assert body == b"retained bytes"
                     links = (await session.execute(select(TemporalArtifactLink).where(
                         TemporalArtifactLink.artifact_id == copied_id))).scalars().all()

@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, Mock, call, patch
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import pytest
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import Request, FastAPI, HTTPException, Response
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -82,7 +82,9 @@ from api_service.db.models import (
     TemporalExecutionRecord,
     TemporalWorkflowType,
 )
-from api_service.services.recurring_workflows_service import RecurringWorkflowValidationError
+from api_service.services.recurring_workflows_service import (
+    RecurringWorkflowValidationError,
+)
 from api_service.services.settings_catalog import WorkflowCreationDefaults
 from moonmind.config.settings import (
     FeatureFlagsSettings,
@@ -119,6 +121,7 @@ from moonmind.workflows.temporal import (
     TemporalExecutionValidationError,
 )
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
     TemporalArtifactAuthorizationError,
     TemporalArtifactStateError,
 )
@@ -133,6 +136,7 @@ from moonmind.workflows.temporal.service import (
     TemporalExecutionRerunSkillSnapshotError,
     TemporalExecutionService,
 )
+from tests.artifact_access import access_for_test
 
 _TARGET_SEARCH_ATTRIBUTE_TYPE = int(IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST)
 
@@ -372,7 +376,7 @@ async def test_remediation_artifact_projection_is_bounded_redacted_and_linkable(
         await executions_module._attach_remediation_artifact_projection(
             link,
             session=session,
-            principal="operator-1",
+            access=access_for_test("operator"),
         )
 
     assert link.lifecycle_artifacts == [
@@ -396,7 +400,7 @@ async def test_remediation_artifact_projection_is_bounded_redacted_and_linkable(
     assert "must-not-reach-the-browser" not in json.dumps(link.latest_action_request)
     artifact_service.read.assert_awaited_once_with(
         artifact_id="art_action_request",
-        principal="operator-1",
+        access=access_for_test("operator"),
     )
 
 
@@ -434,7 +438,7 @@ async def test_remediation_artifact_projection_keeps_metadata_when_body_is_unrea
         await executions_module._attach_remediation_artifact_projection(
             link,
             session=session,
-            principal="operator-1",
+            access=access_for_test("operator"),
         )
 
     assert link.lifecycle_artifacts == [
@@ -1566,6 +1570,20 @@ def _override_user_dependencies(
 
     for dependency in user_dependencies:
         app.dependency_overrides[dependency] = _current_user
+
+    async def fixture_create_access(request: Request):
+        if request.headers.get("X-MoonMind-Execution-Fanout"):
+            return await executions_module._execution_request_artifact_access(
+                request, user=None
+            )
+        return access_for_test("operator")
+
+    app.dependency_overrides[executions_module._execution_request_artifact_access] = (
+        fixture_create_access
+    )
+    app.dependency_overrides[executions_module.get_artifact_access] = (
+        lambda: access_for_test("operator")
+    )
     return mock_user
 
 def _empty_session_override() -> SimpleNamespace:
@@ -14705,9 +14723,7 @@ def test_get_execution_steps_surfaces_accepted_agent_run_progress(
         AGENT_RUN_PROGRESS_PATCH_ID,
         build_progress_projection,
     )
-    from moonmind.workflows.temporal.step_ledger import (
-        build_initial_step_rows,
-    )
+    from moonmind.workflows.temporal.step_ledger import build_initial_step_rows
     from moonmind.workflows.temporal.workflows.run import (
         RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH,
         RUN_REAL_STARTED_AT_PATCH,
@@ -18608,11 +18624,12 @@ class _SavedWorkArtifacts:
         self.links = [
             SimpleNamespace(workflow_id=linked_workflow_id, run_id=linked_run_id)
         ]
-        self.principals: list[str] = []
+        self.accesses: list[ArtifactAccessContext] = []
+        self.delegations: list[tuple[tuple[str, ...], str]] = []
 
-    async def get_metadata(self, *, artifact_id: str, principal: str):
+    async def get_metadata(self, *, artifact_id: str, access: ArtifactAccessContext):
         assert artifact_id in {"art_saved", "art_snapshot"}
-        self.principals.append(principal)
+        self.accesses.append(ArtifactAccessContext.require(access))
         return (
             self.artifact if artifact_id == "art_saved" else self.snapshot,
             self.links if artifact_id == "art_saved" else [],
@@ -18620,17 +18637,19 @@ class _SavedWorkArtifacts:
             SimpleNamespace(raw_access_allowed=True),
         )
 
-    async def read(self, *, artifact_id: str, principal: str):
+    async def read(self, *, artifact_id: str, access: ArtifactAccessContext):
         # HTTP admission checks part metadata; it never extracts the snapshot.
         assert artifact_id == "art_saved"
-        self.principals.append(principal)
+        self.accesses.append(ArtifactAccessContext.require(access))
         return self.artifact, _SAVED_WORK_MANIFEST
+
+    async def delegate_read_access(self, *, artifact_ids, workflow_id, access):
+        assert ArtifactAccessContext.require(access).is_operator
+        self.delegations.append((tuple(artifact_ids), workflow_id))
 
 
 def _lore_connection(projected_repository: str) -> Any:
-    from moonmind.workflows.executions.repository_contract import (
-        RepositoryConnection,
-    )
+    from moonmind.workflows.executions.repository_contract import RepositoryConnection
 
     return RepositoryConnection.model_validate(
         {
@@ -18675,9 +18694,7 @@ def _repository_connections(*connections: Any):
         RepositoryConnectionAuditEvent,
         RepositoryConnectionRecord,
     )
-    from api_service.services.repository_connections import (
-        RepositoryConnectionService,
-    )
+    from api_service.services.repository_connections import RepositoryConnectionService
 
     async def dependency():
         engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
@@ -18726,6 +18743,9 @@ def _saved_work_app(monkeypatch, artifacts: _SavedWorkArtifacts, *connections: A
         executions_module._get_saved_work_repository_connections
     ] = _repository_connections(*connections)
     user = _override_user_dependencies(app, is_superuser=True)
+    app.dependency_overrides[executions_module.get_artifact_access] = (
+        lambda: access_for_test("operator")
+    )
     monkeypatch.setattr(settings.feature_flags, "publication_recovery_enabled", True)
     return app, adapter, record, user
 
@@ -18812,7 +18832,13 @@ def test_saved_work_publication_freezes_one_decision_without_credentials(
     )
     assert "token" not in json.dumps(contract).lower()
     assert first_call.kwargs["memo"]["publication_semantic_context"] == "saved_work"
-    assert set(artifacts.principals) == {str(user.id)}
+    assert artifacts.accesses and all(
+        access.is_operator for access in artifacts.accesses
+    )
+    assert (
+        artifacts.delegations
+        == [(("art_saved", "art_snapshot"), first_call.kwargs["workflow_id"])] * 2
+    )
 
 
 @pytest.mark.parametrize("source_run_id", [None, "run-2"])
@@ -20755,9 +20781,7 @@ def test_mm3833_cli_envelope_with_a_forged_runtime_fails_before_effects() -> Non
 async def test_mm3833_goal_preset_expands_with_the_profile_route(monkeypatch) -> None:
     """Preset steps inherit the runtime Create will admit, not the bare default."""
 
-    from moonmind.workflows.executions.preset_goal_scheduler import (
-        GoalPresetSchedule,
-    )
+    from moonmind.workflows.executions.preset_goal_scheduler import GoalPresetSchedule
 
     monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
     profile = _mm3788_provider_profile(
@@ -20832,9 +20856,7 @@ def test_mm3833_preset_expansion_and_admission_share_one_profile_route(
     """
 
     from api_service.db.models import OmnigentAgentProfile
-    from moonmind.workflows.executions.preset_goal_scheduler import (
-        GoalPresetSchedule,
-    )
+    from moonmind.workflows.executions.preset_goal_scheduler import GoalPresetSchedule
 
     monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
     profile = _mm3788_provider_profile(
@@ -21590,9 +21612,7 @@ class _Mm3833AgentProfileAdmissionSession:
     """
 
     def __init__(self) -> None:
-        from tests.unit.services.test_omnigent_agent_profile_selection import (
-            _Session,
-        )
+        from tests.unit.services.test_omnigent_agent_profile_selection import _Session
 
         self.selection = _Session()
         self.commit = AsyncMock()

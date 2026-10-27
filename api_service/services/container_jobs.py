@@ -58,6 +58,7 @@ from moonmind.security.container_job_capabilities import (
     container_job_matches_capability,
 )
 from moonmind.security.operator_admission import OperatorAdmission
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 
 _STDERR_MARKER = "[stderr]"
@@ -105,7 +106,7 @@ class ContainerJobArtifactReader(Protocol):
     """
 
     async def get_metadata(
-        self, *, artifact_id: str, principal: str
+        self, *, artifact_id: str, access: ArtifactAccessContext
     ) -> tuple[Any, Any, bool, Any]:
         pass
 
@@ -113,8 +114,7 @@ class ContainerJobArtifactReader(Protocol):
         self,
         *,
         artifact_id: str,
-        principal: str,
-        allow_restricted_raw: bool = False,
+        access: ArtifactAccessContext,
     ) -> tuple[Any, bytes]:
         pass
 
@@ -559,7 +559,13 @@ class ContainerJobService:
         try:
             _artifact, payload = await self._artifacts.read(
                 artifact_id=artifact_ref,
-                principal=owner_artifact_principal(owner),
+                access=(
+                    ArtifactAccessContext.for_execution(owner.principal_id)
+                    if owner.principal_type == "workflow"
+                    else ArtifactAccessContext.for_service(
+                        owner_artifact_principal(owner)
+                    )
+                ),
             )
         except ContainerJobEvidenceUnavailableError:
             raise
@@ -575,9 +581,17 @@ class ContainerJobService:
         if self._artifacts is None:
             raise ContainerJobEvidenceUnavailableError("artifact store is not configured")
         try:
-            artifact, _links, _pinned, _read_policy = await self._artifacts.get_metadata(
-                artifact_id=artifact_ref,
-                principal=owner_artifact_principal(owner),
+            artifact, _links, _pinned, _read_policy = (
+                await self._artifacts.get_metadata(
+                    artifact_id=artifact_ref,
+                    access=(
+                        ArtifactAccessContext.for_execution(owner.principal_id)
+                        if owner.principal_type == "workflow"
+                        else ArtifactAccessContext.for_service(
+                            owner_artifact_principal(owner)
+                        )
+                    ),
+                )
             )
         except Exception as exc:  # noqa: BLE001 - normalized to a stable evidence error
             raise ContainerJobEvidenceUnavailableError(

@@ -17,6 +17,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactService,
 )
 from moonmind.workflows.temporal.service import TemporalExecutionService
+from tests.artifact_access import access_for_test
 from tests.integration import test_execution_input_admission_postgres as admission
 from tests.integration.test_execution_start_admission import _submit
 from tests.unit.omnigent.test_admitted_input_authority import _protect, _put
@@ -55,7 +56,7 @@ async def test_first_submissions_do_not_donate_losing_attachments(
             reader = TemporalArtifactService(TemporalArtifactRepository(session))
             _, body = await reader.read(
                 artifact_id=artifact_id,
-                principal=f"workflow:{kwargs['workflow_id']}",
+                access=access_for_test(f"workflow:{kwargs['workflow_id']}"),
             )
             assert body == _IMAGE
         starts.append(kwargs)
@@ -146,14 +147,16 @@ async def test_first_submissions_do_not_donate_losing_attachments(
         )
         reader = TemporalArtifactService(TemporalArtifactRepository(session))
         _, body = await reader.read(
-            artifact_id=winner_id, principal=f"workflow:{record.workflow_id}"
+            artifact_id=winner_id,
+            access=access_for_test(f"workflow:{record.workflow_id}"),
         )
         assert body == _IMAGE
         for denied_id in (loser_id, attachments[2]):
             assert denied_id not in record.artifact_refs
             with pytest.raises(TemporalArtifactAuthorizationError):
                 await reader.read(
-                    artifact_id=denied_id, principal=f"workflow:{record.workflow_id}"
+                    artifact_id=denied_id,
+                    access=access_for_test(f"workflow:{record.workflow_id}"),
                 )
 
 

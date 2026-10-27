@@ -30,6 +30,7 @@ from pydantic import (
 
 from .temporal_artifact_models import ArtifactRefModel
 
+
 def _decode_b64(v: str | bytes | list[int]) -> bytes:
     """Safely decode base64 strings, raw bytes, or legacy list[int] to bytes.
 
@@ -86,7 +87,6 @@ class ArtifactReadInput(BaseModel):
         ...,
         description="The artifact ID or an artifact reference dict/model.",
     )
-    principal: str = Field(..., description="The principal requesting the read.")
 
 class ArtifactReadOutput(BaseModel):
     """Output payload from the artifact.read activity."""

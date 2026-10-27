@@ -18,6 +18,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from tests.artifact_access import access_for_test
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -150,7 +151,7 @@ async def test_trusted_multipart_payload_round_trips_through_configured_store(
             )
             _stored, stored_payload = await service.read(
                 artifact_id=artifact.artifact_id,
-                principal="system:integration-test",
+                access=access_for_test("system:integration-test"),
             )
 
             assert completed.status is TemporalArtifactStatus.COMPLETE
@@ -187,7 +188,7 @@ async def test_content_addressed_publish_repairs_corrupt_configured_store_blob(
             )
             _artifact, restored = await service.read(
                 artifact_id=second.artifact_id,
-                principal="system:integration-test",
+                access=access_for_test("system:integration-test"),
             )
 
             assert not reused
@@ -245,7 +246,6 @@ async def test_report_delete_does_not_cascade_to_observability_artifacts(
             assert deleted_report.status is TemporalArtifactStatus.DELETED
             assert retained_stdout.status is TemporalArtifactStatus.COMPLETE
             _artifact, payload = await service.read(
-                artifact_id=stdout.artifact_id,
-                principal="owner",
+                artifact_id=stdout.artifact_id, access=access_for_test("owner")
             )
             assert payload == b"stdout stays"

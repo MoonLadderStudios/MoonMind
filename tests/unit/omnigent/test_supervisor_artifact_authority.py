@@ -17,6 +17,7 @@ from moonmind.workflows.temporal.activities import (
 from moonmind.workflows.temporal.activities.omnigent_activities import (
     _OnDemandTemporalArtifactService,
 )
+from tests.artifact_access import access_for_test
 from tests.unit.omnigent.test_admitted_input_authority import (  # noqa: F401
     artifacts,
     auth_mode,
@@ -308,7 +309,10 @@ async def test_wrong_strict_certificate_pointer_grants_nothing(supervisor, wrong
     before = await _links(supervisor.sessions)
     with pytest.raises(OmnigentArtifactError, match="support evidence"):
         await activities._load_verified_execution_plan(
-            binding, workflow_id="new-wf", run_id="new-run"
+            binding,
+            workflow_id="new-wf",
+            run_id="new-run",
+            access=access_for_test("workflow:" + "new-wf"),
         )
     assert await _links(supervisor.sessions) == before
 
@@ -324,7 +328,10 @@ async def test_pre_upgrade_missing_certificate_keeps_ordinary_reissue(
     binding = await _replace_support(supervisor, ref=ref, digest="sha256:" + "0" * 64)
     monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "either")
     migrated = await activities._load_verified_execution_plan(
-        binding, workflow_id="new-wf", run_id="new-run"
+        binding,
+        workflow_id="new-wf",
+        run_id="new-run",
+        access=access_for_test("workflow:" + "new-wf"),
     )
     assert migrated.payload.admissionAuthority.admissionMode == "ordinary"
     assert migrated.payload.admissionAuthority.supportTier == "uncertified"
@@ -336,7 +343,10 @@ async def test_ordinary_optional_certificate_is_not_required(supervisor):
         supervisor, ref="artifact:art_missing", digest="sha256:" + "0" * 64
     )
     plan = await activities._load_verified_execution_plan(
-        binding, workflow_id="new-wf", run_id="new-run"
+        binding,
+        workflow_id="new-wf",
+        run_id="new-run",
+        access=access_for_test("workflow:" + "new-wf"),
     )
     assert plan.payload.admissionAuthority.admissionMode == "ordinary"
 
@@ -407,7 +417,10 @@ async def test_legacy_request_snapshot_continues_under_its_original_scope(superv
 
     binding = supervisor.compiled.binding
     plan = await activities._load_verified_execution_plan(
-        binding, admitted_principal=f"workflow:{WORKFLOW}"
+        binding,
+        access=access_for_test(
+            "service:omnigent-session", admitted_principal=f"workflow:{WORKFLOW}"
+        ),
     )
     request = await activities._reconstruct_plan_bound_request(
         binding=binding,
@@ -431,7 +444,8 @@ async def test_legacy_request_snapshot_continues_under_its_original_scope(superv
         expectedRevision=session.revision, fencingGeneration=session.fencing_generation
     )
     snapshot = await activities._read_json_artifact(
-        resolved["compiledExecutionIntentRef"]
+        resolved["compiledExecutionIntentRef"],
+        access=access_for_test(activities._ARTIFACT_PRINCIPAL),
     )
     assert snapshot["schemaVersion"] == "omnigent-compiled-execution-intent/v1"
     restored = await activities._load_intent_request(_activity(resolved))

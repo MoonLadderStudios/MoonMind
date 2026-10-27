@@ -8,6 +8,12 @@ from typing import Any, Awaitable, Callable, Mapping
 
 from pydantic import BaseModel, ValidationError
 
+from moonmind.mcp.tool_registry import (
+    ToolArgumentsValidationError,
+    ToolMetadata,
+    ToolNotFoundError,
+    _ToolDefinition,
+)
 from moonmind.schemas.agent_skill_models import (
     RuntimeMaterializationMode,
     SkillSelector,
@@ -16,16 +22,16 @@ from moonmind.schemas.agent_skill_models import (
     SkillsOnDemandRequest,
 )
 from moonmind.services.skill_materialization import AgentSkillMaterializer
-from moonmind.services.skill_resolution import AgentSkillResolver, SkillResolutionContext
-from moonmind.services.skills_on_demand import SkillsOnDemandService
-from moonmind.mcp.tool_registry import (
-    ToolArgumentsValidationError,
-    ToolMetadata,
-    ToolNotFoundError,
-    _ToolDefinition,
+from moonmind.services.skill_resolution import (
+    AgentSkillResolver,
+    SkillResolutionContext,
 )
-from moonmind.workflows.agent_skills.agent_skills_activities import AgentSkillsActivities
+from moonmind.services.skills_on_demand import SkillsOnDemandService
+from moonmind.workflows.agent_skills.agent_skills_activities import (
+    AgentSkillsActivities,
+)
 from moonmind.workflows.skills.run_projection import load_resolved_skillset
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +40,7 @@ class SkillsOnDemandToolExecutionContext:
 
     enabled: bool
     workspace_root: str
+    artifact_access: ArtifactAccessContext
     artifact_service: Any | None = None
     async_session_maker: Any | None = None
     skills_cache_root: str | None = None
@@ -223,6 +230,7 @@ class SkillsOnDemandToolRegistry:
             materialization = await AgentSkillMaterializer(
                 workspace_root=context.workspace_root,
                 artifact_service=context.artifact_service,
+                access=context.artifact_access,
                 backing_root=context.skills_cache_root,
                 source_preservation_root=context.skills_workspace_root,
             ).materialize(
@@ -270,6 +278,7 @@ class SkillsOnDemandToolRegistry:
             active_snapshot = await load_resolved_skillset(
                 context.artifact_service,
                 request.current_snapshot_ref,
+                access=context.artifact_access,
             )
         except Exception:
             return request.model_copy(update={"active_snapshot": None})

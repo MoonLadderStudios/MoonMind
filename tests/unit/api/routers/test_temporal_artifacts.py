@@ -20,6 +20,7 @@ from api_service.auth_providers import get_instance_access_optional
 from api_service.db import models as db_models
 from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
     TemporalArtifactAuthorizationError,
     TemporalArtifactBytesMissingError,
     TemporalArtifactExpiredError,
@@ -406,10 +407,10 @@ def test_download_previews_inert_artifacts_inline_only_when_requested(tmp_path) 
             text_artifact.artifact_id: (text_artifact, text_path),
             html_artifact.artifact_id: (html_artifact, html_path),
         }
-        def read_path(*, artifact_id, principal, recovery_principal=None):
-            # This UUID fixture bypasses local admission, so it must not gain
-            # the protected operator recovery identity as a side effect.
-            assert recovery_principal is None
+        def read_path(*, artifact_id, access):
+            # Ordinary admitted metadata access does not imply recovery authority.
+            assert ArtifactAccessContext.require(access).is_operator
+            assert not access.operator_recovery
             return paths[artifact_id]
 
         service.read_path.side_effect = read_path

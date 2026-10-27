@@ -31,6 +31,7 @@ from moonmind.workflows.temporal.artifacts import (
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+from tests.artifact_access import access_for_test
 from tests.unit.workflows.temporal.test_acceptance_boundary_regressions import _request
 from tests.unit.workflows.temporal.test_remediation_context import temporal_db
 from tests.unit.workflows.temporal.test_source_brief_artifact_authority import (
@@ -172,6 +173,10 @@ async def test_generated_result_and_summary_reach_actual_parent_reader_only(
         (read,) = build_activity_bindings(
             selected, artifact_activities=TemporalArtifactActivities(service)
         )
+        monkeypatch.setattr(activity, "in_activity", lambda: True)
+        monkeypatch.setattr(activity, "info", lambda: SimpleNamespace(
+            workflow_id="parent", workflow_run_id="parent-run", namespace="default",
+        ))
         result_bytes = await read.handler(
             ArtifactReadInput(
                 principal=parent._principal(),
@@ -193,17 +198,20 @@ async def test_generated_result_and_summary_reach_actual_parent_reader_only(
         ):
             assert (
                 await service.read(
-                    artifact_id=artifact_id, principal="workflow:parent:agent:verify"
+                    artifact_id=artifact_id,
+                    access=access_for_test("workflow:parent:agent:verify"),
                 )
             )[1]
             with pytest.raises(TemporalArtifactAuthorizationError):
                 await service.read(
-                    artifact_id=artifact_id, principal="workflow:unrelated"
+                    artifact_id=artifact_id,
+                    access=access_for_test("workflow:unrelated"),
                 )
         # Knowing a ref in provider output does not delegate that source blob.
         with pytest.raises(TemporalArtifactAuthorizationError):
             await service.read(
-                artifact_id=private.artifact_id, principal="workflow:parent"
+                artifact_id=private.artifact_id,
+                access=access_for_test("workflow:parent"),
             )
 
 
@@ -308,13 +316,15 @@ async def test_generated_outputs_require_the_recorded_parent(
         for artifact_id in refs:
             assert (
                 await service.read(
-                    artifact_id=artifact_id, principal="workflow:parent:agent:verify"
+                    artifact_id=artifact_id,
+                    access=access_for_test("workflow:parent:agent:verify"),
                 )
             )[1]
             if claimed_parent == "parent":
                 assert (
                     await service.read(
-                        artifact_id=artifact_id, principal="workflow:parent"
+                        artifact_id=artifact_id,
+                        access=access_for_test("workflow:parent"),
                     )
                 )[1]
             denied_readers = ["workflow:victim", "workflow:unrelated"]
@@ -322,7 +332,9 @@ async def test_generated_outputs_require_the_recorded_parent(
                 denied_readers.append("workflow:parent")
             for reader in denied_readers:
                 with pytest.raises(TemporalArtifactAuthorizationError):
-                    await service.read(artifact_id=artifact_id, principal=reader)
+                    await service.read(
+                        artifact_id=artifact_id, access=access_for_test(reader)
+                    )
         assert (
             sum(
                 call.kwargs["rpc"] == "describe_workflow_execution"
@@ -385,5 +397,7 @@ async def test_parent_link_failure_retries_instead_of_incomplete_success(
             completed.metadata["outputSummaryRef"],
         ):
             assert (
-                await service.read(artifact_id=artifact_id, principal="workflow:parent")
+                await service.read(
+                    artifact_id=artifact_id, access=access_for_test("workflow:parent")
+                )
             )[1]

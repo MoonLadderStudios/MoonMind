@@ -30,6 +30,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactUnavailableError,
     TemporalArtifactValidationError,
 )
+from tests.artifact_access import access_for_test
 from tests.unit.workflows.temporal.test_saved_work_retention_4017 import (
     _complete_artifact,
     _service,
@@ -243,8 +244,7 @@ async def test_failed_acquisition_does_not_break_safe_preview_derivation(
 
         preview_ref = await service.compute_preview(
             artifact_id=artifact_id,
-            principal=_READER,
-            admitted_principal=_OWNER,
+            access=access_for_test(_READER, admitted_principal=_OWNER),
         )
 
         preview = await service._repository.get_artifact(preview_ref.artifact_id)
@@ -676,6 +676,7 @@ async def test_failed_claim_extension_preserves_loaded_expiry_and_caller_work(
             request_id=request_id,
             operation_kind="restore",
             ttl_seconds=300,
+            access=access_for_test(_OWNER),
         )
         original_id = original.id
         original_expiry = original.expires_at.replace(tzinfo=UTC)

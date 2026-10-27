@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from temporalio.workflow import ParentInfo
+import pytest
 from temporalio.api.common.v1 import WorkflowExecution
 from temporalio.api.namespace.v1 import NamespaceInfo
 from temporalio.api.workflow.v1 import WorkflowExecutionInfo
@@ -13,8 +13,7 @@ from temporalio.api.workflowservice.v1 import (
     DescribeNamespaceResponse,
     DescribeWorkflowExecutionResponse,
 )
-
-import pytest
+from temporalio.workflow import ParentInfo
 
 from api_service.services.checkpoint_branch_turn_execution import (
     build_branch_turn_execution_identity,
@@ -36,6 +35,7 @@ from moonmind.workflows.temporal.artifacts import (
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.workflows import agent_run
+from tests.artifact_access import access_for_test
 from tests.unit.omnigent.test_admitted_input_authority import (  # noqa: F401
     artifacts,
     auth_mode,
@@ -134,6 +134,7 @@ async def test_published_story_preserves_parent_authority_and_auth_read_scope(
     )
     if scenario in {"checkpoint_branch_turn", "retained_checkpoint_branch_turn"}:
         from temporalio.converter import DataConverter
+
         from tests.unit.workflows.temporal.test_source_brief_artifact_authority import (
             _recorded_server,
         )
@@ -169,10 +170,15 @@ async def test_published_story_preserves_parent_authority_and_auth_read_scope(
             # Lookup exhaustion reaches the existing Activity retry owner.
             with pytest.raises(TemporalActivityRuntimeError, match="authority.*unavailable"):
                 await publisher.agent_runtime_publish_artifacts(result)
-            assert await service.list_for_execution(
-                namespace="default", workflow_id=child, run_id="child-run",
-                principal="system:agent_runtime",
-            ) == []
+            assert (
+                await service.list_for_execution(
+                    namespace="default",
+                    workflow_id=child,
+                    run_id="child-run",
+                    access=access_for_test("system:agent_runtime"),
+                )
+                == []
+            )
             assert await TemporalArtifactRepository(session).quota_usage_for_scope(
                 "system:agent_runtime"
             ) == quota_before
@@ -191,7 +197,8 @@ async def test_published_story_preserves_parent_authority_and_auth_read_scope(
                 markdown_ref = published.metadata["storyBreakdownMarkdownArtifactRef"]
                 assert (
                     await service.read(
-                        artifact_id=markdown_ref, principal=f"workflow:{parent}",
+                        artifact_id=markdown_ref,
+                        access=access_for_test(f"workflow:{parent}"),
                     )
                 )[1] == b"# Durable story input"
                 readable_refs.append(markdown_ref)
@@ -204,21 +211,29 @@ async def test_published_story_preserves_parent_authority_and_auth_read_scope(
                     assert (
                         await service.read(
                             artifact_id=artifact_id,
-                            principal=f"workflow:{workflow_id}",
+                            access=access_for_test(f"workflow:{workflow_id}"),
                         )
                     )[1]
                 for workflow_id in ("sibling-parent", "forged-parent"):
                     with pytest.raises(TemporalArtifactAuthorizationError):
                         await service.read(
                             artifact_id=artifact_id,
-                            principal=f"workflow:{workflow_id}",
+                            access=access_for_test(f"workflow:{workflow_id}"),
                         )
             return
         if scenario == "describe_unavailable":
-            assert len(await service.list_for_execution(
-                namespace="default", workflow_id=child, run_id="child-run",
-                principal="system:agent_runtime", link_type="input.instructions",
-            )) == 1
+            assert (
+                len(
+                    await service.list_for_execution(
+                        namespace="default",
+                        workflow_id=child,
+                        run_id="child-run",
+                        link_type="input.instructions",
+                        access=access_for_test("system:agent_runtime"),
+                    )
+                )
+                == 1
+            )
         ref = published.metadata["storyBreakdownArtifactRef"]
         assert published.metadata["storyBreakdownMarkdownArtifactRef"]
         workflow_service.describe_workflow_execution.assert_awaited_once()

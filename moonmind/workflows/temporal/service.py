@@ -80,6 +80,7 @@ from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
 )
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
     ExecutionRef,
     TemporalArtifactAuthorizationError,
     TemporalArtifactError,
@@ -2841,6 +2842,7 @@ class TemporalExecutionService:
                         workflow_id=workflow_id,
                         run_id=run_id,
                         namespace=self._namespace,
+                        access=_admitted_execution_plan.artifact_access,
                     )
                     record.artifact_refs = list(
                         dict.fromkeys([*record.artifact_refs, *admitted_refs])
@@ -3607,8 +3609,10 @@ class TemporalExecutionService:
             )
             _artifact, body = await artifact_service.read(
                 artifact_id=artifact_id,
-                principal=principal,
-                allow_restricted_raw=True,
+                access=ArtifactAccessContext.for_execution(
+                    source_record.workflow_id,
+                    principal="service:temporal-execution-rerun-admission",
+                ),
             )
             resolved = ResolvedSkillSet.model_validate_json(body)
         except (PermissionError, TemporalArtifactAuthorizationError) as exc:
@@ -4196,6 +4200,7 @@ class TemporalExecutionService:
                     workflow_id=workflow_id,
                     run_id=run_id,
                     namespace=self._namespace,
+                    access=ArtifactAccessContext.for_execution(workflow_id),
                 )
             # Temporal may resume immediately after reset. Grants must already
             # be visible to its independent Activity database sessions.

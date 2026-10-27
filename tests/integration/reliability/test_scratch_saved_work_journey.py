@@ -46,32 +46,33 @@ from moonmind.omnigent.runtime_bindings import (
     RuntimeBindingState,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.workflows.executions.repository_contract import DEFAULT_GIT_CONNECTION_REF
 from moonmind.workflows.temporal.activities import omnigent_session_activities as reader
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
-from moonmind.workflows.temporal.runtime import managed_api_key_resolve
 from moonmind.workflows.temporal.client import WorkflowStartResult
-from moonmind.workflows.executions.repository_contract import DEFAULT_GIT_CONNECTION_REF
+from moonmind.workflows.temporal.runtime import managed_api_key_resolve
+from tests.artifact_access import access_for_test
 from tests.helpers.repository_connections import (
     github_pat_connection,
     github_repository_assignment,
     record_repository_connections,
 )
-from tests.support.saved_work_capture import CapturedSavedWork
-from tests.unit.api.routers.test_executions import _saved_work_app
-from tests.unit.publish.test_saved_work_publication_journey import (
-    REPOSITORY,
-    _WorkerLost,
-    _tree,
-    journey,
-)
 from tests.integration.reliability.test_repository_authority_handoffs_4009 import (  # noqa: F401
     _WORKFLOW,
     _compile,
     authority_context,
+)
+from tests.support.saved_work_capture import CapturedSavedWork
+from tests.unit.api.routers.test_executions import _saved_work_app
+from tests.unit.publish.test_saved_work_publication_journey import (
+    REPOSITORY,
+    _tree,
+    _WorkerLost,
+    journey,
 )
 from tests.unit.services.test_omnigent_execution_plan_service import (  # noqa: F401
     _ready_opencode_image_pair,
@@ -173,7 +174,9 @@ async def test_scratch_output_is_saved_and_downloaded_after_host_loss(
         task_input_snapshot_ref=task_input_ref,
         task_input_snapshot_digest=task_input_digest,
     )
-    plan = await reader._load_verified_execution_plan(compiled.binding)
+    plan = await reader._load_verified_execution_plan(
+        compiled.binding, access=access_for_test("service:omnigent-session")
+    )
     assert set(plan.payload.credentialBindings) == {"primary-model"}
     assert not plan.payload.resolvedTools.get("repositoryAccess")
     real_access = managed_api_key_resolve.select_github_access_for_launch
@@ -349,7 +352,7 @@ async def test_scratch_output_is_saved_and_downloaded_after_host_loss(
                 artifact_id=saved["savedWorkRef"]
                 .removeprefix("artifact://")
                 .removeprefix("artifact:"),
-                principal=operator,
+                access=access_for_test(operator),
             )
             summary = artifact.metadata_json["saved_work_summary"]
             assert summary["outputs"][0]["artifact_id"] == archive_id

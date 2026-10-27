@@ -26,17 +26,16 @@ from moonmind.omnigent.host_services.github_credentials import (
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.activities import omnigent_activities as children
 from moonmind.workflows.temporal.activities import omnigent_session_activities as reader
+from tests.artifact_access import access_for_test
 from tests.helpers.repository_connections import (
     github_pat_connection,
     github_repository_assignment,
     record_repository_connections,
 )
 from tests.unit.services.test_omnigent_execution_plan_service import (  # noqa: F401
-    _ready_opencode_image_pair,
-)
-from tests.unit.services.test_omnigent_execution_plan_service import (
     _ArtifactService,
     _compile_opencode_plan,
+    _ready_opencode_image_pair,
 )
 
 pytestmark = [
@@ -162,7 +161,9 @@ async def test_selected_repository_writer_store_reader_reaches_bound_consumer(
         repository=_target(),
         requiredCapabilities=["gh"],
     )
-    plan = await reader._load_verified_execution_plan(compiled.binding)
+    plan = await reader._load_verified_execution_plan(
+        compiled.binding, access=access_for_test("service:omnigent-session")
+    )
     assert (
         plan.payload.credentialBindings["source"].connectionRef == "selected-repository"
     )
@@ -195,7 +196,9 @@ async def test_selected_snapshot_rejects_revoked_or_stale_connection_at_consumer
     authority_context, monkeypatch, state
 ):
     compiled = await _compile(monkeypatch, authority_context, repository=_target())
-    plan = await reader._load_verified_execution_plan(compiled.binding)
+    plan = await reader._load_verified_execution_plan(
+        compiled.binding, access=access_for_test("service:omnigent-session")
+    )
     assert "source" in plan.payload.credentialBindings
     sessions, _artifacts, gateway = authority_context
     async with sessions() as session:
@@ -243,7 +246,9 @@ async def test_anonymous_source_and_scratch_never_acquire_repository_credentials
     authority_context, monkeypatch, authored
 ):
     anonymous = await _compile(monkeypatch, authority_context, **authored)
-    plan = await reader._load_verified_execution_plan(anonymous.binding)
+    plan = await reader._load_verified_execution_plan(
+        anonymous.binding, access=access_for_test("service:omnigent-session")
+    )
     assert set(plan.payload.credentialBindings) == {"primary-model"}
     assert plan.payload.resolvedTools["repositoryAccess"]["source"][
         "snapshotRef"
@@ -267,7 +272,9 @@ async def test_repository_plan_routes_to_authorized_realizer_before_capacity(
     authority_context, monkeypatch
 ):
     compiled = await _compile(monkeypatch, authority_context, repository=_target())
-    plan = await reader._load_verified_execution_plan(compiled.binding)
+    plan = await reader._load_verified_execution_plan(
+        compiled.binding, access=access_for_test("service:omnigent-session")
+    )
     assert "source" in plan.payload.credentialBindings
     selected_realizer = SimpleNamespace(authority_kinds=("model", "repository"))
     monkeypatch.setattr(
@@ -368,7 +375,8 @@ async def test_merge_resolver_child_activity_readmits_mixed_parent_without_calle
     child = await reader._load_verified_execution_plan(
         OmnigentExecutionPlanBinding.model_validate(
             prepared["initial_parameters"]["omnigentExecutionPlan"]
-        )
+        ),
+        access=access_for_test("service:omnigent-session"),
     )
     assert (
         child.payload.credentialBindings["source"].connectionRef
@@ -415,7 +423,9 @@ async def test_loaded_plan_prepares_clone_and_cli_without_ambient_credentials(
     compiled = await _compile(
         monkeypatch, authority_context, requiredCapabilities=["gh"], **parameters
     )
-    plan = await reader._load_verified_execution_plan(compiled.binding)
+    plan = await reader._load_verified_execution_plan(
+        compiled.binding, access=access_for_test("service:omnigent-session")
+    )
     sessions, _artifacts, gateway = authority_context
     calls = []
     owner = "runtime-binding-4009:generation-2"
@@ -627,7 +637,9 @@ async def test_mixed_writer_plan_consumes_only_existing_model_capacity(
         repository=_target(),
         requiredCapabilities=["gh"],
     )
-    plan = await reader._load_verified_execution_plan(compiled.binding)
+    plan = await reader._load_verified_execution_plan(
+        compiled.binding, access=access_for_test("service:omnigent-session")
+    )
     client = _LeaseClient(
         inspection=_inspection(
             profile_ref="provider-opencode-native", plan_ref=plan.planRef
@@ -708,7 +720,9 @@ async def test_omitted_connection_consumes_the_recorded_route_revision(
         connection.policy_revision = 7
         await session.commit()
     compiled = await _compile(monkeypatch, authority_context, repository=_REPO)
-    plan = await reader._load_verified_execution_plan(compiled.binding)
+    plan = await reader._load_verified_execution_plan(
+        compiled.binding, access=access_for_test("service:omnigent-session")
+    )
     credentials = OmnigentGithubCredentialService(
         SimpleNamespace(), session_factory=sessions, artifact_gateway=gateway
     )
@@ -746,7 +760,9 @@ async def test_authenticated_workspace_source_preserves_its_selected_connection(
     compiled = await _compile(
         monkeypatch, authority_context, workspace=spec, requiredCapabilities=["gh"]
     )
-    plan = await reader._load_verified_execution_plan(compiled.binding)
+    plan = await reader._load_verified_execution_plan(
+        compiled.binding, access=access_for_test("service:omnigent-session")
+    )
     assert (
         plan.payload.credentialBindings["source"].connectionRef == "selected-repository"
     )
@@ -770,7 +786,9 @@ async def test_loaded_authority_rejects_altered_or_unbound_consumption(
     authority_context, monkeypatch, alteration
 ):
     compiled = await _compile(monkeypatch, authority_context, repository=_target())
-    plan = await reader._load_verified_execution_plan(compiled.binding)
+    plan = await reader._load_verified_execution_plan(
+        compiled.binding, access=access_for_test("service:omnigent-session")
+    )
     sessions, artifacts, gateway = authority_context
     credentials = OmnigentGithubCredentialService(
         SimpleNamespace(), session_factory=sessions, artifact_gateway=gateway
@@ -807,7 +825,9 @@ async def test_schedule_plan_can_issue_for_its_admitted_execution_owner(
         workflow_id="mm-schedule:4009",
         repository=_target(),
     )
-    plan = await reader._load_verified_execution_plan(compiled.binding)
+    plan = await reader._load_verified_execution_plan(
+        compiled.binding, access=access_for_test("service:omnigent-session")
+    )
     request = _request().model_copy(
         update={
             "correlation_id": "mm:scheduled-fire-4009",

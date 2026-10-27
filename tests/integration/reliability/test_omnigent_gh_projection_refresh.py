@@ -47,6 +47,7 @@ from moonmind.omnigent.runtime_bindings import (
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.activities import omnigent_session_activities as reader
+from tests.artifact_access import access_for_test
 from tests.helpers.git_transport import (
     basic_authorization,
     start_synthetic_github,
@@ -271,7 +272,9 @@ async def _prepared_live_host(monkeypatch, context, tmp_path):
         extra_parameters={"requiredCapabilities": ["gh"], "repository": _target()},
         workflow_id=_WORKFLOW,
     )
-    plan = await reader._load_verified_execution_plan(compiled.binding)
+    plan = await reader._load_verified_execution_plan(
+        compiled.binding, access=access_for_test("service:omnigent-session")
+    )
     backend = _ProjectionBackend(tmp_path / "gh-projection")
 
     async def clone_runner(argv, input_bytes=None):

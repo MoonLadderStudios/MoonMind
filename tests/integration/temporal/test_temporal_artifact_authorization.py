@@ -7,18 +7,18 @@ at the workflow boundary, including the restricted-artifact raw-content boundary
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from pathlib import Path
 from datetime import timedelta
-from uuid import uuid4
+from pathlib import Path
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import httpx
 import pytest
 from botocore.exceptions import ClientError
 from fastapi import FastAPI
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.exc import OperationalError
 from temporalio import workflow
 from temporalio.client import WorkflowFailureError
 from temporalio.exceptions import ApplicationError
@@ -43,6 +43,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from tests.artifact_access import access_for_test
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -173,7 +174,9 @@ async def test_real_download_boundary_maps_lazy_s3_failures(tmp_path, monkeypatc
             app.include_router(routes.router)
             app.dependency_overrides[routes._get_temporal_artifact_service] = lambda: service
             app.dependency_overrides[routes._resolve_principal] = lambda: "workflow:reader"
-            app.dependency_overrides[routes._resolve_recovery_principal] = lambda: None
+            app.dependency_overrides[routes.get_artifact_access] = (
+                lambda: access_for_test("workflow:reader")
+            )
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://fixture") as client:
                 response = await client.get(f"/api/artifacts/{artifact.artifact_id}/download")
             assert response.status_code == status_code
@@ -187,7 +190,9 @@ async def test_real_download_boundary_maps_lazy_s3_failures(tmp_path, monkeypatc
 class ArtifactFailureJourney:
     @workflow.run
     async def run(self, request: dict) -> bytes:
-        from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
+        from moonmind.workflows.temporal.activity_catalog import (
+            build_default_activity_catalog,
+        )
         from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
         route = build_default_activity_catalog().resolve_activity("artifact.read")
         kwargs = MoonMindRunWorkflow()._execute_kwargs_for_route(route)
@@ -197,15 +202,30 @@ class ArtifactFailureJourney:
 
 @pytest.mark.parametrize(("fault_kind", "expected_attempts"), [("transient", 2), ("persistent", 3), ("denied", 1), ("missing", 1)])
 async def test_temporal_read_retries_only_transient_failures(tmp_path, monkeypatch, fault_kind, expected_attempts):
-    from moonmind.workflows.agent_skills.agent_skills_activities import AgentSkillsActivities
-    from moonmind.workflows.temporal.activity_catalog import ARTIFACTS_FLEET, build_default_activity_catalog
+    from moonmind.workflows.agent_skills.agent_skills_activities import (
+        AgentSkillsActivities,
+    )
+    from moonmind.workflows.temporal.activity_catalog import (
+        ARTIFACTS_FLEET,
+        build_default_activity_catalog,
+    )
     from moonmind.workflows.temporal.activity_runtime import build_activity_bindings
 
     async with _db(tmp_path) as maker:
         async with maker() as session:
             store = LocalTemporalArtifactStore(tmp_path / "artifacts")
             service = TemporalArtifactService(TemporalArtifactRepository(session), store=store)
-            artifact, _ = await service.create(principal="owner", content_type="text/plain")
+            queue = f"artifact-failure-{uuid4().hex}"
+            artifact, _ = await service.create(
+                principal="owner",
+                content_type="text/plain",
+                link=ExecutionRef(
+                    namespace="default",
+                    workflow_id=queue,
+                    run_id="run",
+                    link_type="input.test",
+                ),
+            )
             await service.write_complete(artifact_id=artifact.artifact_id, principal="owner", payload=b"retained")
             read = store.read_bytes
             attempts = []
@@ -225,7 +245,6 @@ async def test_temporal_read_retries_only_transient_failures(tmp_path, monkeypat
                 build_default_activity_catalog(), artifact_activities=TemporalArtifactActivities(service),
                 agent_skills_activities=AgentSkillsActivities(), fleets=(ARTIFACTS_FLEET,),
             ) if binding.activity_type == "artifact.read")
-            queue = f"artifact-failure-{uuid4().hex}"
             async with await WorkflowEnvironment.start_time_skipping() as env:
                 async with Worker(env.client, task_queue=queue, workflows=[ArtifactFailureJourney], activities=[handler], workflow_runner=UnsandboxedWorkflowRunner()):
                     result = env.client.execute_workflow(ArtifactFailureJourney.run,
@@ -287,17 +306,17 @@ class TestArtifactAuthorizationBoundaries:
                 with pytest.raises(TemporalArtifactAuthorizationError, match="cannot read"):
                     await service.read(
                         artifact_id=artifact.artifact_id,
-                        principal="attacker@example.com",
+                        access=access_for_test("attacker@example.com"),
                     )
 
                 # Owner read must succeed
                 _artifact, payload = await service.read(
                     artifact_id=artifact.artifact_id,
-                    principal="owner@example.com",
+                    access=access_for_test("owner@example.com"),
                 )
                 assert payload == b"secret-content"
 
-    async def test_service_principal_can_read_any_artifact(
+    async def test_service_reads_require_explicit_execution_delegation(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -315,12 +334,18 @@ class TestArtifactAuthorizationBoundaries:
                     store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
                 )
                 artifact, _upload = await service.create(
-                    principal="owner@example.com",
+                    principal="workflow:owner-run",
                     content_type="text/plain",
+                    link=ExecutionRef(
+                        namespace="default",
+                        workflow_id="owner-run",
+                        run_id="run",
+                        link_type="input.admitted",
+                    ),
                 )
                 await service.write_complete(
                     artifact_id=artifact.artifact_id,
-                    principal="owner@example.com",
+                    principal="workflow:owner-run",
                     payload=b"owner-data",
                     content_type="text/plain",
                 )
@@ -330,13 +355,14 @@ class TestArtifactAuthorizationBoundaries:
                 ):
                     await service.read(
                         artifact_id=artifact.artifact_id,
-                        principal="service:lifecycle",
+                        access=access_for_test("service:lifecycle"),
                     )
 
                 _artifact, payload = await service.read(
                     artifact_id=artifact.artifact_id,
-                    principal="service:lifecycle",
-                    admitted_principal="owner@example.com",
+                    access=access_for_test(
+                        "service:lifecycle", admitted_principal="workflow:owner-run"
+                    ),
                 )
                 assert payload == b"owner-data"
 
@@ -378,7 +404,7 @@ class TestArtifactAuthorizationBoundaries:
                 )
                 _artifact, payload = await service.read(
                     artifact_id=artifact.artifact_id,
-                    principal="owner@example.com",
+                    access=access_for_test("owner@example.com"),
                 )
                 assert payload == b"owner-content"
 
@@ -414,12 +440,11 @@ class TestArtifactAuthorizationBoundaries:
                 ):
                     await service.read(
                         artifact_id=artifact.artifact_id,
-                        principal="anyone",
+                        access=access_for_test("anyone"),
                     )
 
                 _artifact, payload = await service.read(
-                    artifact_id=artifact.artifact_id,
-                    principal=operator,
+                    artifact_id=artifact.artifact_id, access=access_for_test(operator)
                 )
                 assert payload == b"content"
 
@@ -444,8 +469,7 @@ class TestArtifactAuthorizationBoundaries:
                     content_type="text/plain",
                 )
                 _artifact2, payload2 = await service.read(
-                    artifact_id=artifact2.artifact_id,
-                    principal=operator,
+                    artifact_id=artifact2.artifact_id, access=access_for_test(operator)
                 )
                 assert payload2 == b"updated"
 
@@ -503,13 +527,15 @@ class TestArtifactAuthorizationBoundaries:
                     ),
                 )
 
-                _metadata_artifact, _links, _pinned, policy = await service.get_metadata(
-                    artifact_id=artifact.artifact_id,
-                    principal=execution_owner,
+                _metadata_artifact, _links, _pinned, policy = (
+                    await service.get_metadata(
+                        artifact_id=artifact.artifact_id,
+                        access=access_for_test(execution_owner),
+                    )
                 )
                 _read_artifact, payload = await service.read(
                     artifact_id=artifact.artifact_id,
-                    principal=execution_owner,
+                    access=access_for_test(execution_owner),
                 )
 
                 assert policy.raw_access_allowed is True
@@ -517,5 +543,5 @@ class TestArtifactAuthorizationBoundaries:
                 with pytest.raises(TemporalArtifactAuthorizationError):
                     await service.read(
                         artifact_id=artifact.artifact_id,
-                        principal="user-without-view",
+                        access=access_for_test("user-without-view"),
                     )

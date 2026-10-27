@@ -1,21 +1,20 @@
 """Publication-only recovery coverage for MoonLadderStudios/MoonMind#3481."""
 
-from copy import deepcopy
 import json
+from copy import deepcopy
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import ValidationError
 
-from moonmind.workflows.temporal.activity_runtime import (
-    TemporalAgentRuntimeActivities,
-)
+from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
 from moonmind.workflows.temporal.publication_recovery import (
     PUBLICATION_ONLY_PHASES,
     PublicationObservation,
     PublicationRecoveryContract,
-    PublicationRecoveryEvidence,
     PublicationRecoveryError,
+    PublicationRecoveryEvidence,
     PublicationRecoveryRolloutPolicy,
     publication_action_eligibility,
     publication_operation_key,
@@ -214,8 +213,26 @@ def test_destroyed_source_workspace_restores_exact_candidate_to_destination() ->
 
 
 @pytest.mark.asyncio
-async def test_restore_activity_translates_checkpoint_to_typed_managed_request() -> None:
+async def test_restore_activity_translates_checkpoint_to_typed_managed_request(
+    monkeypatch,
+) -> None:
+    from moonmind.workflows.temporal import activity_runtime, publication_recovery
+    from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+
     contract = _contract_payload()
+    access = ArtifactAccessContext.for_execution("mm:source")
+    verify_admission = AsyncMock(return_value=access)
+    monkeypatch.setattr(
+        publication_recovery, "verified_publication_source_access", verify_admission
+    )
+    monkeypatch.setattr(
+        activity_runtime.temporal_activity,
+        "info",
+        lambda: SimpleNamespace(
+            workflow_id="mm:publication",
+            workflow_run_id="run-publication",
+        ),
+    )
     checkpoint = {
         "contentType": (
             "application/vnd.moonmind.step-execution-checkpoint+json;version=1"
@@ -283,6 +300,16 @@ async def test_restore_activity_translates_checkpoint_to_typed_managed_request()
         ]
     )
     assert "sourceWorkspacePath" not in request
+    assert verify_admission.await_count == 2
+    assert verify_admission.await_args.args[0].source_workflow_id == "mm:source"
+    assert all(
+        call.kwargs["access"] is access
+        for call in restore_service._read.await_args_list
+    )
+    assert all(
+        call.kwargs["access"] is access
+        for call in restore_service.restore.await_args_list
+    )
     assert first["treeDigest"] == contract["continuation"]["expectedTreeDigest"]
     assert second["restorationEvidenceRef"] == "artifact://restore/evidence"
 
@@ -497,7 +524,6 @@ def _recovery_provider(
         GitHubService,
         PullRequestReconciliation,
     )
-
     from moonmind.workflows.temporal.runtime import managed_api_key_resolve
 
     seen: dict = {"tokens": [], "creates": []}

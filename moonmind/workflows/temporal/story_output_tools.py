@@ -18,8 +18,8 @@ from temporalio import activity as temporal_activity
 
 from moonmind.config.settings import settings
 from moonmind.integrations.jira.models import (
-    CreateIssueRequest,
     CreateIssueLinkRequest,
+    CreateIssueRequest,
     CreateSubtaskRequest,
     GetIssueRequest,
     GetTransitionsRequest,
@@ -40,27 +40,20 @@ from moonmind.workflows.skills.tool_definitions import (
     GITHUB_IMPLEMENT_WORKFLOWS_TOOL_NAME,
     GITHUB_ORCHESTRATE_WORKFLOWS_TOOL_NAME,
     GITHUB_STORY_TOOL_NAMES,
+    JIRA_CHECK_BLOCKERS_TOOL_NAME,
     JIRA_CREATE_ISSUES_TOOL_NAME,
     JIRA_IMPLEMENT_TASKS_TOOL_NAME,
+    JIRA_LOAD_PRESET_BRIEF_TOOL_NAME,
     JIRA_ORCHESTRATE_TASKS_TOOL_NAME,
     JIRA_STORY_TOOL_NAMES,
-    JIRA_CHECK_BLOCKERS_TOOL_NAME,
-    JIRA_LOAD_PRESET_BRIEF_TOOL_NAME,
     JIRA_UPDATE_ISSUE_STATUS_TOOL_NAME,
     default_registry_tool_payload,
 )
 from moonmind.workflows.skills.tool_plan_contracts import ToolResult
-from moonmind.workflows.temporal.agent_result_payloads import hydrate_acceptance_projection
-from moonmind.workflows.temporal.github_issue_attempts import (
-    activity_for_lifecycle_mode,
-    build_attempt_handoff,
-    get_or_create_installation_id,
-    new_attempt_id,
-    reconcile_uncertain_creation,
-    redact_comment_body,
-    render_attempt_comment,
-    resolve_installation_id,
+from moonmind.workflows.temporal.agent_result_payloads import (
+    hydrate_acceptance_projection,
 )
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.github_issue_admission import (
     ENTRYPOINT_CONTINUATION,
     ENTRYPOINT_EXPLICIT,
@@ -76,6 +69,17 @@ from moonmind.workflows.temporal.github_issue_admission import (
     persist_admission_identity,
     revalidate_for_mutation,
     should_stop_on_resume,
+)
+from moonmind.workflows.temporal.github_issue_attempts import (
+    activity_for_lifecycle_mode,
+    build_attempt_handoff,
+    get_or_create_installation_id,
+    new_attempt_id,
+    parse_attempt_comment,
+    reconcile_uncertain_creation,
+    redact_comment_body,
+    render_attempt_comment,
+    resolve_installation_id,
 )
 from moonmind.workflows.temporal.github_issue_lifecycle import (
     attempt_evidence_blocks_admission,
@@ -102,7 +106,6 @@ from moonmind.workflows.temporal.issue_claim_store import (
     publish_claim_comment,
     verify_claim,
 )
-from moonmind.workflows.temporal.github_issue_attempts import parse_attempt_comment
 
 GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME = "github.load_issue_preset_brief"
 ISSUE_BRIEF_LOADER_TOOL_NAMES = frozenset(
@@ -5244,7 +5247,10 @@ async def load_github_issue_preset_brief(
                         raise ValueError("substitution_denied: execution already selected a different issue")
                 service = github_service_factory()
                 if receipt.pending_comment_body:
-                    from moonmind.workflows.temporal.issue_claim_store import reconcile_claim_comment
+                    from moonmind.workflows.temporal.issue_claim_store import (
+                        reconcile_claim_comment,
+                    )
+
                     receipt = await reconcile_claim_comment(IssueClaimStore(), receipt, service)
                     context["issue_claim_receipt"] = receipt
                 context["verified_issue_claim"] = await verify_claim(receipt, service)
@@ -5412,7 +5418,10 @@ async def _load_github_issue_preset_brief(
 
     async def reconcile_candidate(issue_number: int) -> dict[str, Any]:
         """Reassess an advisory status label against current attempt evidence."""
-        from moonmind.workflows.temporal.github_issue_claim_lease import reconcile_expired_issue
+        from moonmind.workflows.temporal.github_issue_claim_lease import (
+            reconcile_expired_issue,
+        )
+
         try:
             return await reconcile_expired_issue(service=github_service_factory(),
                 repository=repository, issue_number=issue_number)
@@ -6661,22 +6670,17 @@ async def _read_json_artifact_by_ref(
     service = (context or {}).get("temporal_artifact_service")
     if service is None or not ref:
         return None
-    principal = (
-        _string((context or {}).get("deployment_evidence_principal"))
-        or "system:agent_runtime"
+    owner = _admitted_repository_workflow(context)
+    if acceptance_projection is not None and not owner:
+        return None
+    access = (
+        ArtifactAccessContext.for_execution(owner, principal="system:agent_runtime")
+        if owner
+        else ArtifactAccessContext.for_service("system:agent_runtime")
     )
-    read_scope = {}
-    if acceptance_projection is not None:
-        owner = _admitted_repository_workflow(context)
-        if not owner:
-            return None
-        read_scope["admitted_principal"] = f"workflow:{owner}"
     try:
         _artifact, payload = await service.read(
-            artifact_id=ref.removeprefix("artifact://"),
-            principal=principal,
-            allow_restricted_raw=True,
-            **read_scope,
+            artifact_id=ref.removeprefix("artifact://"), access=access
         )
     except Exception:
         return None
@@ -7601,8 +7605,14 @@ async def _prepare_github_issue_claim(*, inputs, context, repository, issue_numb
         for comment, parsed in prior_attempts
     ):
         from dataclasses import replace
-        from moonmind.workflows.temporal.github_issue_attempts import reconstruct_from_comments
-        from moonmind.workflows.temporal.activities.github_issue_reconciliation_activities import _trusted_posters
+
+        from moonmind.workflows.temporal.activities.github_issue_reconciliation_activities import (
+            _trusted_posters,
+        )
+        from moonmind.workflows.temporal.github_issue_attempts import (
+            reconstruct_from_comments,
+        )
+
         trusted = _trusted_posters(service=service) + [str((comment.get("user") or {}).get("login") or "")
             for comment in comments if str((comment.get("user") or {}).get("id")) == actor["actorId"]
             or comment.get("author_association") in {"OWNER", "MEMBER", "COLLABORATOR"}]
@@ -8400,7 +8410,9 @@ async def _finalize_blocked_to_needs_attention(
     completes as degraded instead of failed. GitHub write denials or missing
     terminal evidence keep the ``FAILED``/``blocked`` outcome.
     """
-    from moonmind.workflows.temporal.github_issue_attempts import redacted_error_summary as _redacted_summary
+    from moonmind.workflows.temporal.github_issue_attempts import (
+        redacted_error_summary as _redacted_summary,
+    )
 
     destination = "status: needs-attention"
     observed_labels = [str(label) for label in (current_labels or [])]
@@ -9590,7 +9602,9 @@ async def _update_github_issue_status(
                 )
                 comment_body = ""
             else:
-                from moonmind.workflows.temporal.github_issue_attempts import redacted_error_summary as _redacted_summary
+                from moonmind.workflows.temporal.github_issue_attempts import (
+                    redacted_error_summary as _redacted_summary,
+                )
 
                 summary_text = _redacted_summary(str(create_result.get("summary") or "comment rejected"))
                 return ToolResult(

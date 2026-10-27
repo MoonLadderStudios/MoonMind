@@ -24,6 +24,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from tests.artifact_access import access_for_test
 from tests.support.isolated_postgres import isolated_postgres
 
 pytestmark = [
@@ -142,9 +143,8 @@ async def _claims(sessions, artifact_id):
 async def _read(service, artifact, **kwargs):
     loaded, payload = await service.read(
         artifact_id=artifact.artifact_id,
-        principal=_READER,
-        admitted_principal=_OWNER,
         **kwargs,
+        access=access_for_test(_READER, admitted_principal=_OWNER),
     )
     assert loaded is artifact
     assert payload == _PAYLOAD
@@ -269,13 +269,12 @@ async def test_postgres_claim_failure_does_not_grant_read_access(
     ):
         await service.read(
             artifact_id=artifact.artifact_id,
-            principal=_READER,
-            # Operator metadata visibility is insufficient for another
-            # owner's restricted raw bytes without a protected recovery grant.
-            admitted_principal=(
-                "operator" if denial == "restricted_raw" else "wrong-scope"
+            access=access_for_test(
+                _READER,
+                admitted_principal=(
+                    "operator" if denial == "restricted_raw" else "wrong-scope"
+                ),
             ),
-            allow_restricted_raw=True,
         )
 
     assert await _claims(sessions, artifact.artifact_id) == []
@@ -398,11 +397,10 @@ async def test_caller_bound_preview_preserves_derived_preview_and_caller_writes(
             )
             preview = await reader.compute_preview(
                 artifact_id=artifact.artifact_id,
-                principal=_READER,
-                admitted_principal=_OWNER,
+                access=access_for_test(_READER, admitted_principal=_OWNER),
             )
             preview_row, payload = await reader.read(
-                artifact_id=preview.artifact_id, principal=_READER
+                artifact_id=preview.artifact_id, access=access_for_test(_READER)
             )
             assert payload == _PAYLOAD
             assert (

@@ -24,6 +24,7 @@ from moonmind.workflows.temporal.service import (
     TemporalExecutionRetryUnavailableError,
     TemporalExecutionService,
 )
+from tests.artifact_access import access_for_test
 from tests.unit.omnigent import test_api_planning_input_authority as api_fixtures
 from tests.unit.omnigent.test_admitted_input_authority import _protect, _skill_set
 from tests.unit.workflows.temporal.test_retry_from_step import _History, _rows
@@ -66,6 +67,7 @@ async def _failed_admission(sessions, monkeypatch):
             principal_context={},
             authorization=None,
             execution_fanout=None,
+            access=access_for_test("operator"),
         )
         # Reproduce pre-upgrade admission: inputs exist, but the parent has no
         # grants when it reads its Skill manifest before starting an AgentRun.
@@ -114,7 +116,7 @@ async def test_retry_restores_recorded_inputs_before_reset_and_deduplicates(
         with pytest.raises(TemporalArtifactAuthorizationError):
             await reader.read(
                 artifact_id=saved.skills.manifest_id,
-                principal=f"workflow:{workflow_id}",
+                access=access_for_test(f"workflow:{workflow_id}"),
             )
 
         async def reset(*args, **kwargs):
@@ -133,7 +135,8 @@ async def test_retry_restores_recorded_inputs_before_reset_and_deduplicates(
                 ):
                     assert (
                         await consumer.read(
-                            artifact_id=ref, principal=f"workflow:{workflow_id}"
+                            artifact_id=ref,
+                            access=access_for_test(f"workflow:{workflow_id}"),
                         )
                     )[1]
             if reset_failure and adapter.reset_workflow_execution.await_count == 1:
@@ -167,7 +170,9 @@ async def test_retry_restores_recorded_inputs_before_reset_and_deduplicates(
             (unrelated.manifest_id, f"workflow:{workflow_id}"),
         ):
             with pytest.raises(TemporalArtifactAuthorizationError):
-                await reader.read(artifact_id=artifact_id, principal=principal)
+                await reader.read(
+                    artifact_id=artifact_id, access=access_for_test(principal)
+                )
     assert adapter.reset_workflow_execution.await_count == (2 if reset_failure else 1)
 
 

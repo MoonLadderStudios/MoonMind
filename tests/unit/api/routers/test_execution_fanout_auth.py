@@ -307,10 +307,11 @@ def test_completed_conversion_admits_account_free_artifact_operator(fanout_clien
     assert response.json()["items"] == []
     _assert_no_user_lookup(fanout_client.session)
     fanout_client.completion.assert_awaited_once()
-    assert (
+    access = (
         fanout_client.artifact_service.list_authorized_collection.await_args.kwargs[
-            "principal"
+            "access"
         ]
-        == "00000000-0000-0000-0000-000000000000"
     )
+    assert access.is_operator
+    assert access.principal == "00000000-0000-0000-0000-000000000000"
     _assert_no_writes(fanout_client)

@@ -10,19 +10,28 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, StreamingResponse
 
 from api_service.api.instance_access import access_principal
 from api_service.api.routers.temporal_artifacts import (
-    artifact_read_response_policy,
     _get_temporal_artifact_service,
     _raise_temporal_artifact_http,
     _resolve_principal,
-    _resolve_recovery_principal,
     _serialize_metadata,
+    artifact_read_response_policy,
 )
-from api_service.auth_providers import bounded_operator_stream, get_instance_access
+from api_service.auth_providers import (
+    bounded_operator_stream,
+    get_artifact_access,
+    get_instance_access,
+)
+from moonmind.observability.transport import SpoolLogReader
+from moonmind.schemas.agent_runtime_models import (
+    RunObservabilityEvent,
+    is_terminal_agent_run_state,
+)
+from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 from moonmind.schemas.temporal_artifact_models import (
     ArtifactMetadataModel,
     ArtifactRefModel,
@@ -33,13 +42,9 @@ from moonmind.schemas.temporal_artifact_models import (
     SessionResourceListResponse,
     SessionResourceModel,
 )
-from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
-from moonmind.schemas.agent_runtime_models import RunObservabilityEvent
-from moonmind.workflows.temporal.runtime.store import ManagedRunStore
-from moonmind.workflows.temporal.runtime.managed_session_store import ManagedSessionStore
-from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
-from moonmind.workflows.temporal.client import TemporalClientAdapter
+from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
     TemporalArtifactAuthorizationError,
     TemporalArtifactNotFoundError,
     TemporalArtifactService,
@@ -48,9 +53,12 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactUnavailableError,
     TemporalArtifactValidationError,
 )
-from moonmind.utils.metrics import get_metrics_emitter
-from moonmind.schemas.agent_runtime_models import is_terminal_agent_run_state
-from moonmind.observability.transport import SpoolLogReader
+from moonmind.workflows.temporal.client import TemporalClientAdapter
+from moonmind.workflows.temporal.runtime.managed_session_store import (
+    ManagedSessionStore,
+)
+from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
 router = APIRouter(prefix="/agent-runs", tags=["agent_runs"])
 sessions_router = APIRouter(prefix="/sessions", tags=["session_resources"])
@@ -201,23 +209,24 @@ def _session_projection_not_found() -> None:
         },
     )
 
+
 async def _resolve_projection_artifact(
     *,
     artifact_id: str | None,
     service: TemporalArtifactService,
-    principal: str = "service:agent_runs",
-    recovery_principal: str | None = None,
+    access: ArtifactAccessContext,
 ) -> ArtifactMetadataModel | None:
     normalized = str(artifact_id or "").strip()
     if not normalized:
         return None
     try:
         artifact, links, pinned, read_policy = await service.get_metadata(
-            artifact_id=normalized,
-            principal=principal,
-            recovery_principal=recovery_principal,
+            artifact_id=normalized, access=access
         )
-    except (TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError) as exc:
+    except (
+        TemporalArtifactUnavailableError,
+        TemporalArtifactStorageAccessError,
+    ) as exc:
         _raise_temporal_artifact_http(exc)
         raise
     except (
@@ -233,13 +242,14 @@ async def _resolve_projection_artifact(
         read_policy=read_policy,
     )
 
+
 async def _build_agent_run_artifact_session_projection(
     *,
     agent_run_id: str,
     session_id: str,
     service: TemporalArtifactService,
     principal: str = "service:agent_runs",
-    recovery_principal: str | None = None,
+    access: ArtifactAccessContext,
 ) -> ArtifactSessionProjectionModel | None:
     store = ManagedSessionStore(_get_managed_session_store_root())
     try:
@@ -257,10 +267,7 @@ async def _build_agent_run_artifact_session_projection(
             return None
         if normalized not in cache:
             cache[normalized] = await _resolve_projection_artifact(
-                artifact_id=normalized,
-                service=service,
-                principal=principal,
-                recovery_principal=recovery_principal,
+                artifact_id=normalized, service=service, access=access
             )
         return cache[normalized]
 
@@ -324,13 +331,14 @@ async def _build_agent_run_artifact_session_projection(
         latest_reset_boundary_ref=await _artifact_ref(record.latest_reset_boundary_ref),
     )
 
+
 async def _load_session_projection_for_alias(
     *,
     session_id: str,
     user: Any,
     principal: str,
     service: TemporalArtifactService,
-    recovery_principal: str | None = None,
+    access: ArtifactAccessContext,
 ) -> ArtifactSessionProjectionModel | None:
     store = ManagedSessionStore(_get_managed_session_store_root())
     try:
@@ -346,8 +354,9 @@ async def _load_session_projection_for_alias(
         session_id=record.session_id,
         service=service,
         principal=principal,
-        recovery_principal=recovery_principal,
+        access=access,
     )
+
 
 _SECRET_METADATA_FRAGMENTS = frozenset(
     {
@@ -487,26 +496,24 @@ async def _read_session_resource_artifact(
     user: Any,
     principal: str,
     service: TemporalArtifactService,
-    recovery_principal: str | None = None,
     as_attachment: bool,
+    access: ArtifactAccessContext,
 ):
     projection = await _load_session_projection_for_alias(
         session_id=session_id,
         user=user,
         principal=principal,
-        recovery_principal=recovery_principal,
         service=service,
+        access=access,
     )
     if projection is None:
         _session_projection_not_found()
     _require_session_resource(projection, artifact_id)
     try:
-        artifact, path = await service.read_path(
-            artifact_id=artifact_id,
-            principal=principal,
-            recovery_principal=recovery_principal,
+        artifact, path = await service.read_path(artifact_id=artifact_id, access=access)
+        disposition, headers = artifact_read_response_policy(
+            artifact, as_attachment=as_attachment
         )
-        disposition, headers = artifact_read_response_policy(artifact, as_attachment=as_attachment)
         return FileResponse(
             path,
             filename=_session_resource_filename(artifact),
@@ -521,9 +528,7 @@ async def _read_session_resource_artifact(
 
     try:
         artifact, chunks = await service.read_chunks(
-            artifact_id=artifact_id,
-            principal=principal,
-            recovery_principal=recovery_principal,
+            artifact_id=artifact_id, access=access
         )
     except Exception as exc:
         _raise_temporal_artifact_http(exc)
@@ -541,6 +546,7 @@ async def _read_session_resource_artifact(
             )
         },
     )
+
 
 def _agent_run_session_workflow_id(*, agent_run_id: str, runtime_id: str) -> str:
     return f"{agent_run_id}:session:{runtime_id}"
@@ -1455,6 +1461,7 @@ async def get_observability_summary(
             tags={"stream": "livelogs"},
         )
 
+
 @router.get(
     "/{agent_run_id}/artifact-sessions/{session_id}",
     response_model=ArtifactSessionProjectionModel,
@@ -1467,22 +1474,22 @@ async def get_agent_run_artifact_session(
     agent_run_id: str,
     session_id: str,
     _user: Any = Depends(get_instance_access),
-    recovery_principal: str | None = Depends(_resolve_recovery_principal),
-    artifact_service: TemporalArtifactService = Depends(
-        _get_temporal_artifact_service
-    ),
+    artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
+    *,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
 ) -> ArtifactSessionProjectionModel:
     await _require_agent_run_access(agent_run_id, _user)
     projection = await _build_agent_run_artifact_session_projection(
         principal=access_principal(_user),
-        recovery_principal=recovery_principal,
         agent_run_id=agent_run_id,
         session_id=session_id,
         service=artifact_service,
+        access=access,
     )
     if projection is None:
         _session_projection_not_found()
     return projection
+
 
 @sessions_router.get(
     "/{session_id}/resources",
@@ -1495,22 +1502,22 @@ async def get_agent_run_artifact_session(
 async def list_session_resources(
     session_id: str,
     _user: Any = Depends(get_instance_access),
-    recovery_principal: str | None = Depends(_resolve_recovery_principal),
     principal: str = Depends(_resolve_principal),
-    artifact_service: TemporalArtifactService = Depends(
-        _get_temporal_artifact_service
-    ),
+    artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
+    *,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
 ) -> SessionResourceListResponse:
     projection = await _load_session_projection_for_alias(
-        recovery_principal=recovery_principal,
         session_id=session_id,
         user=_user,
         principal=principal,
         service=artifact_service,
+        access=access,
     )
     if projection is None:
         _session_projection_not_found()
     return _build_session_resource_list(projection)
+
 
 @sessions_router.get(
     "/{session_id}/resources/files",
@@ -1523,19 +1530,19 @@ async def list_session_resources(
 async def list_session_resource_files(
     session_id: str,
     _user: Any = Depends(get_instance_access),
-    recovery_principal: str | None = Depends(_resolve_recovery_principal),
     principal: str = Depends(_resolve_principal),
-    artifact_service: TemporalArtifactService = Depends(
-        _get_temporal_artifact_service
-    ),
+    artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
+    *,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
 ) -> SessionResourceListResponse:
     return await list_session_resources(
-        recovery_principal=recovery_principal,
         session_id=session_id,
         _user=_user,
         principal=principal,
         artifact_service=artifact_service,
+        access=access,
     )
+
 
 @sessions_router.get(
     "/{session_id}/resources/{artifact_id}/content",
@@ -1548,21 +1555,21 @@ async def get_session_resource_content(
     session_id: str,
     artifact_id: str,
     _user: Any = Depends(get_instance_access),
-    recovery_principal: str | None = Depends(_resolve_recovery_principal),
     principal: str = Depends(_resolve_principal),
-    artifact_service: TemporalArtifactService = Depends(
-        _get_temporal_artifact_service
-    ),
+    artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
+    *,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
 ):
     return await _read_session_resource_artifact(
-        recovery_principal=recovery_principal,
         session_id=session_id,
         artifact_id=artifact_id,
         user=_user,
         principal=principal,
         service=artifact_service,
         as_attachment=False,
+        access=access,
     )
+
 
 @sessions_router.get(
     "/{session_id}/resources/{artifact_id}/download",
@@ -1575,19 +1582,21 @@ async def download_session_resource(
     session_id: str,
     artifact_id: str,
     _user: Any = Depends(get_instance_access),
-    recovery_principal: str | None = Depends(_resolve_recovery_principal),
     principal: str = Depends(_resolve_principal),
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
+    *,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
 ):
     return await _read_session_resource_artifact(
-        recovery_principal=recovery_principal,
         session_id=session_id,
         artifact_id=artifact_id,
         user=_user,
         principal=principal,
         service=artifact_service,
         as_attachment=True,
+        access=access,
     )
+
 
 @router.post(
     "/{agent_run_id}/artifact-sessions/{session_id}/control",
@@ -1603,8 +1612,9 @@ async def control_agent_run_artifact_session(
     session_id: str,
     payload: ArtifactSessionControlRequest,
     _user: Any = Depends(get_instance_access),
-    recovery_principal: str | None = Depends(_resolve_recovery_principal),
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
+    *,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
 ) -> ArtifactSessionControlResponse:
     await _require_agent_run_access(agent_run_id, _user)
     store = ManagedSessionStore(_get_managed_session_store_root())
@@ -1689,10 +1699,10 @@ async def control_agent_run_artifact_session(
 
     projection = await _build_agent_run_artifact_session_projection(
         principal=access_principal(_user),
-        recovery_principal=recovery_principal,
         agent_run_id=agent_run_id,
         session_id=session_id,
         service=artifact_service,
+        access=access,
     )
     if projection is None:
         _session_projection_not_found()
@@ -1705,6 +1715,7 @@ async def control_agent_run_artifact_session(
         completedAt=datetime.now(UTC),
         projection=projection,
     )
+
 
 @router.get(
     "/{id}/observability/events",

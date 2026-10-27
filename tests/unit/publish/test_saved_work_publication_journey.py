@@ -25,6 +25,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+from temporalio import activity
 from temporalio.exceptions import ActivityError, ApplicationError
 from temporalio.exceptions import CancelledError as TemporalCancelledError
 from temporalio.exceptions import RetryState
@@ -39,6 +40,7 @@ from moonmind.auth.github_credentials import (
 )
 from moonmind.config.settings import settings
 from moonmind.publish import saved_candidate as saved_candidate_module
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.adapters.github_service import (
     CreatePRResult,
     GitHubService,
@@ -68,6 +70,7 @@ from moonmind.workflows.temporal.workflows import (
 from moonmind.workflows.temporal.workflows.publication_recovery import (
     MoonMindPublicationRecoveryWorkflow,
 )
+from tests.artifact_access import access_for_test
 from tests.support.saved_work_capture import CapturedSavedWork, capture_saved_work, git
 
 OPERATOR = str(uuid.UUID(int=4018))
@@ -284,6 +287,49 @@ class Journey:
         self.runs += 1
         return await MoonMindPublicationRecoveryWorkflow().run(contract)
 
+    async def admit(
+        self,
+        contract: dict[str, Any],
+        workflow_id: str,
+        *,
+        install_grants=True,
+        access=None,
+    ):
+        """Exercise the admission owner before dispatching publication Activities."""
+        from datetime import datetime
+
+        from api_service.api.routers.executions import (
+            SavedWorkPublicationRequest,
+            _admit_saved_work_publication,
+        )
+
+        admission = OperatorAdmission(via="publication-journey-fixture")
+        access = access or access_for_test(OPERATOR)
+        _checked, artifact_ids = await _admit_saved_work_publication(
+            canonical=SimpleNamespace(
+                workflow_id=self.saved.workflow_id,
+                run_id=self.saved.run_id,
+                created_at=datetime.fromisoformat(contract["commit"]["timestamp"]),
+            ),
+            request=SavedWorkPublicationRequest.model_validate(
+                {
+                    "savedWorkRef": contract["savedWorkRef"],
+                    "sourceRunId": contract["sourceRunId"],
+                    "destination": contract["destination"],
+                }
+            ),
+            user=admission,
+            artifact_service=self.service,
+            access=access,
+        )
+        if install_grants:
+            await self.service.delegate_read_access(
+                artifact_ids=artifact_ids,
+                workflow_id=workflow_id,
+                access=access,
+            )
+        return _checked
+
     async def use_claims(self) -> list[Any]:
         from sqlalchemy import select
 
@@ -316,6 +362,7 @@ async def journey(
     emulate_temporal=True,
     saved_work_factory=None,
     artifact_service=None,
+    admit_publication=True,
 ):
     """Saved work, destination, and provider fixtures for one journey.
 
@@ -493,6 +540,37 @@ async def journey(
                     run_id=state.run_id,
                 ),
             )
+            async def no_recorded_start(**_kwargs):
+                for event in ():
+                    yield event
+
+            monkeypatch.setattr(
+                activity,
+                "client",
+                lambda: SimpleNamespace(
+                    namespace="default",
+                    get_workflow_handle=lambda *_args, **_kwargs: SimpleNamespace(
+                        fetch_history_events=no_recorded_start
+                    ),
+                ),
+            )
+            monkeypatch.setattr(activity, "in_activity", lambda: True)
+            monkeypatch.setattr(
+                activity,
+                "info",
+                lambda: SimpleNamespace(
+                    namespace="default",
+                    workflow_id="mm:source:saved-work-publication:x",
+                    workflow_run_id=state.run_id,
+                ),
+            )
+            if admit_publication:
+                await state.admit(
+                    state.contract(
+                        objective="pr", baseBranch="main", strategy="additive_import"
+                    ),
+                    "mm:source:saved-work-publication:x",
+                )
         yield state
 
 
@@ -816,7 +894,8 @@ async def test_a_transient_authority_outage_is_retried_before_publication(
 @pytest.mark.asyncio
 async def test_decision_read_outage_preserves_recorded_publication(tmp_path, monkeypatch):
     from moonmind.workflows.temporal.artifacts import (
-        TemporalArtifactUnavailableError, find_saved_work_publication_decisions,
+        TemporalArtifactUnavailableError,
+        find_saved_work_publication_decisions,
     )
 
     async with journey(tmp_path, monkeypatch, destination_files={"README.md": "x\n"}) as state:
@@ -977,7 +1056,10 @@ async def test_stale_admitted_base_is_rejected_before_any_effect(tmp_path, monke
 @pytest.mark.asyncio
 async def test_unauthorized_owner_cannot_publish_saved_work(tmp_path, monkeypatch):
     async with journey(
-        tmp_path, monkeypatch, destination_files={"README.md": "x\n"}
+        tmp_path,
+        monkeypatch,
+        destination_files={"README.md": "x\n"},
+        admit_publication=False,
     ) as state:
         with pytest.raises(ApplicationError) as exc:
             await state.run(
@@ -1265,7 +1347,7 @@ async def _publication_closure(state: Journey) -> set[str]:
 
     manifest_id = saved_work_artifact_id(state.saved.saved_work_ref)
     _meta, payload = await state.service.read(
-        artifact_id=manifest_id, principal=OPERATOR
+        artifact_id=manifest_id, access=access_for_test(OPERATOR)
     )
     manifest = json.loads(payload)
     (snapshot,) = [
@@ -1428,15 +1510,15 @@ async def _persisted_results(state: Journey) -> list[dict[str, Any]]:
         namespace=state.service._default_namespace,
         workflow_id="mm:source:saved-work-publication:x",
         run_id=state.run_id,
-        principal="workflow:mm:source:saved-work-publication:x",
         link_type="result",
+        access=access_for_test("workflow:mm:source:saved-work-publication:x"),
     ):
         if (artifact.metadata_json or {}).get(
             "name"
         ) == "saved-work-publication-result.json":
             _meta, payload = await state.service.read(
                 artifact_id=artifact.artifact_id,
-                principal="workflow:mm:source:saved-work-publication:x",
+                access=access_for_test("workflow:mm:source:saved-work-publication:x"),
             )
             records.append(json.loads(payload))
     return records

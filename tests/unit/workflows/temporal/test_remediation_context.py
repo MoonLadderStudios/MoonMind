@@ -40,12 +40,12 @@ from moonmind.workflows.temporal.remediation_context import (
     RemediationContextError,
     RemediationLifecyclePublisher,
     build_corrected_instruction_retry_provenance,
-    build_remediation_decision_log,
-    build_remediation_evidence_set,
+    build_non_applicable_remediation_artifact_reason,
     build_remediation_audit_event,
     build_remediation_continue_as_new_state,
+    build_remediation_decision_log,
+    build_remediation_evidence_set,
     build_remediation_final_summary,
-    build_non_applicable_remediation_artifact_reason,
     build_remediation_prevention_outcome,
     build_remediation_repair_decision,
     build_remediation_summary_block,
@@ -54,6 +54,7 @@ from moonmind.workflows.temporal.remediation_context import (
     normalize_remediation_phase,
     normalize_remediation_resolution,
 )
+from tests.artifact_access import access_for_test
 
 
 def test_omnigent_evidence_index_is_complete_bounded_and_explicitly_degraded():
@@ -159,6 +160,7 @@ from moonmind.workflows.temporal.remediation_verification import (
     TargetEvidenceSnapshot,
 )
 from moonmind.workflows.temporal.service import TemporalExecutionService
+
 
 def _valid_user_workflow_parameters() -> dict[str, object]:
     return {"workflow": {"instructions": "Test workflow fixture."}}
@@ -581,7 +583,7 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
 
         _artifact, payload_bytes = await artifact_service.read(
             artifact_id=result.artifact.artifact_id,
-            principal="service:remediation-context",
+            access=access_for_test("service:remediation-context"),
         )
         payload = json.loads(payload_bytes.decode("utf-8"))
         assert payload["schemaVersion"] == "v1"
@@ -755,8 +757,10 @@ async def test_scheduled_failed_run_remediation_context_embeds_failure_evidence(
         assert link.target_run_id == "scheduled-run"
         _artifact, body = await artifact_service.read(
             artifact_id=link.context_artifact_ref,
-            principal="service:remediation-context",
-            admitted_principal=f"workflow:{remediation.workflow_id}",
+            access=access_for_test(
+                "service:remediation-context",
+                admitted_principal=f"workflow:{remediation.workflow_id}",
+            ),
         )
         evidence = json.loads(body)["failureEvidence"]
         assert evidence["failure"]["message"] == "ValueError: PR head no longer matches"
@@ -2008,7 +2012,7 @@ async def test_remediation_lifecycle_publisher_creates_required_artifacts(
 
         _artifact, payload_bytes = await artifact_service.read(
             artifact_id=artifacts[-1].artifact_id,
-            principal="service:remediation-lifecycle",
+            access=access_for_test("service:remediation-lifecycle"),
         )
         published_summary = json.loads(payload_bytes)
         assert published_summary["authorityMode"] == "admin_auto"
@@ -2170,8 +2174,7 @@ class StatusOnlyActionExecutor:
 
 async def _read_artifact_json(artifact_service, artifact_id: str):
     _artifact, payload = await artifact_service.read(
-        artifact_id=artifact_id,
-        principal="service:remediation-lifecycle",
+        artifact_id=artifact_id, access=access_for_test("service:remediation-lifecycle")
     )
     return json.loads(payload.decode("utf-8"))
 
@@ -4424,7 +4427,7 @@ async def test_execute_action_verification_artifact_metadata_carries_classificat
         )
         artifact, _payload_bytes = await artifact_service.read(
             artifact_id=result["artifactRefs"]["verification"],
-            principal="service:remediation-lifecycle",
+            access=access_for_test("service:remediation-lifecycle"),
         )
         assert artifact.metadata_json["verificationOutcome"] == "verified_resolved"
         assert artifact.metadata_json["verificationDeliveryStatus"] == "applied"
@@ -4715,7 +4718,8 @@ async def test_lifecycle_publisher_ignores_caller_created_evidence(
         assert published.created_by_principal == "service:remediation-lifecycle"
         assert published.metadata_json["verificationOutcome"] == "still_failed"
         _, content = await service.read(
-            artifact_id=published.artifact_id, principal="service:remediation-lifecycle"
+            artifact_id=published.artifact_id,
+            access=access_for_test("service:remediation-lifecycle"),
         )
         assert json.loads(content) == {"outcome": "still_failed"}
         # A retry repairs the lost projection and preserves the original
@@ -4902,7 +4906,7 @@ async def test_lifecycle_publisher_reuses_pre_upgrade_consumed_request_receipt(
             assert retried.metadata_json["verificationOutcome"] == "still_failed"
         assert original.artifact_id in remediation.artifact_refs
         _, content = await service.read(
-            artifact_id=retried.artifact_id, principal=principal
+            artifact_id=retried.artifact_id, access=access_for_test(principal)
         )
         assert json.loads(content) == {"outcome": "still_failed"}
         refs = (
@@ -5030,6 +5034,6 @@ async def test_lifecycle_publisher_preserves_competing_pre_upgrade_service_evide
         for artifact, outcome in zip(originals, ("still_failed", "verified_resolved")):
             _, content = await service.read(
                 artifact_id=artifact.artifact_id,
-                principal="service:remediation-lifecycle",
+                access=access_for_test("service:remediation-lifecycle"),
             )
             assert json.loads(content) == {"outcome": outcome}

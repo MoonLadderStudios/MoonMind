@@ -13,11 +13,16 @@ from moonmind.workflows.temporal.activities import omnigent_session_activities a
 from moonmind.workflows.temporal.merge_automation_repository_access import (
     acquire_merge_automation_repository_credential,
 )
+from tests.artifact_access import access_for_test
+from tests.integration.reliability.test_repository_access_consumers_4676 import (  # noqa: F401
+    _ready_opencode_image_pair,
+)
 from tests.integration.reliability.test_repository_access_consumers_4676 import (
     _REPOSITORY,
     _WORKFLOW,
-    _ready_opencode_image_pair,  # noqa: F401
     _target,
+)
+from tests.integration.reliability.test_repository_access_consumers_4676 import (
     repository_consumers as _repository_consumers,
 )
 from tests.unit.services.test_omnigent_execution_plan_service import (
@@ -91,6 +96,7 @@ async def _compile_native_review_plan(context, monkeypatch, tmp_path):
         authored_request_digest=digest,
         task_input_snapshot_ref=snapshot_ref,
         task_input_snapshot_digest=digest,
+        access=access_for_test("user-1"),
     )
     return compiled, parameters
 
@@ -182,6 +188,7 @@ async def test_native_authority_validates_effective_executable_plan(
 ):
     import copy
     import json
+
     from moonmind.workflows.temporal.activity_runtime import (
         TemporalActivityRuntimeError,
         TemporalPlanActivities,
@@ -199,7 +206,9 @@ async def test_native_authority_validates_effective_executable_plan(
         principal="user-1", parameters=parameters
     )
     ref = generated.plan_ref.artifact_id
-    _artifact, body = await context.artifacts.read(artifact_id=ref, principal="user-1")
+    _artifact, body = await context.artifacts.read(
+        artifact_id=ref, access=access_for_test("user-1")
+    )
     payload = json.loads(body)
     if change == "tool":
         payload["nodes"][0]["tool"]["name"] = "github.update_issue_status"

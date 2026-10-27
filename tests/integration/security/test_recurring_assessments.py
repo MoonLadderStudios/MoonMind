@@ -33,6 +33,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactService,
 )
 from moonmind.workflows.temporal.report_artifacts import build_report_projection_summary
+from tests.artifact_access import access_for_test
 from tests.unit.services.test_recurring_workflows_service import recurring_db
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
@@ -169,9 +170,7 @@ async def invoke(
 
 
 async def read(service, ref, *, principal="workflow:assessment"):
-    _, raw = await service.read(
-        artifact_id=ref, principal=principal, allow_restricted_raw=True
-    )
+    _, raw = await service.read(artifact_id=ref, access=access_for_test(principal))
     return json.loads(raw)
 
 
@@ -215,8 +214,8 @@ async def test_feed_update_reassesses_inventory_without_source_change(
                 namespace="default",
                 workflow_id="assessment",
                 run_id="run",
-                principal="workflow:assessment",
                 link_type="security.scan",
+                access=access_for_test("workflow:assessment"),
             )
         )
         == 2
@@ -241,7 +240,7 @@ async def test_authorized_baseline_preserves_finding_rule_asset_and_provenance(
     )
     summary_ref = projection["latest_report_ref"]["artifact_id"]
     _, summary = await service.read(
-        artifact_id=summary_ref, principal="workflow:assessment"
+        artifact_id=summary_ref, access=access_for_test("workflow:assessment")
     )
     assert b"new: 1" in summary and b"Coverage: complete" in summary
 
@@ -454,15 +453,14 @@ async def test_missing_baseline_never_claims_new_or_resolved(environment):
 
 
 async def test_missing_baseline_bytes_publish_current_assessment(environment):
-    from moonmind.workflows.temporal.artifacts import (
-        TemporalArtifactBytesMissingError,
-    )
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactBytesMissingError
 
     service = environment.service
     request, _, _ = await inputs(service)
     first = await invoke(service, request)
     baseline, _ = await service.read(
-        artifact_id=first["comparisonRef"], principal="workflow:assessment"
+        artifact_id=first["comparisonRef"],
+        access=access_for_test("workflow:assessment"),
     )
     LocalTemporalArtifactStore(environment.storage_root).delete(baseline.storage_key)
     with pytest.raises(TemporalArtifactBytesMissingError):
@@ -624,8 +622,8 @@ async def test_activity_retry_keeps_the_original_flat_budget(environment):
         namespace="default",
         workflow_id="assessment",
         run_id="run",
-        principal="workflow:assessment",
         link_type="security.scan",
+        access=access_for_test("workflow:assessment"),
     )
 
 

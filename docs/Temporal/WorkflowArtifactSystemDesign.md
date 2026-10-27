@@ -151,9 +151,9 @@ An artifact containing large operational details that must not be placed in work
 
 ### Read (activity worker → store)
 
-1. Activity receives `ArtifactRef`
-2. Activity fetches bytes using internal credentials
-3. Activity returns compact results to workflow code
+1. Activity receives `ArtifactRef`.
+2. The reader requires `ArtifactAccessContext` from verified Activity identity or an existing admission owner, then applies metadata, raw-byte and quarantine policy.
+3. Activity returns compact results to workflow code.
 
 Examples of read subjects:
 
@@ -438,7 +438,7 @@ Baseline policy:
 
 ## 9.3 Service and worker access
 
-A worker's service identity names the caller; machine reads require artifact ownership or execution linkage in every authentication mode. Readers pass `admitted_principal=workflow:<id>` for their admitted execution. Operator visibility never grants a workflow access. Restricted raw bytes keep their owner gate and quarantined bytes stay preview-only, so admission never releases protected content.
+Every read requires `ArtifactAccessContext`: HTTP operator proof, verified execution admission, or a service reading its own resources. Execution contexts grant only their execution's linked or verified inputs; creator and service labels remain provenance. Metadata, collections, previews, downloads, Skill delivery and restore share this boundary. New saved-work admission delegates its exact raw-readable closure before start and records that in API-owned memo. Older runs recover only their recorded inputs from the actual run’s immutable API start and memo; principal strings confer no authority. Quarantine still denies raw bytes.
 
 Execution inputs gain that linkage at trusted boundaries, never from agent-supplied owner strings:
 
@@ -497,12 +497,7 @@ binding facade, not an unrestricted upstream proxy.
 
 ## 9.6 Single-user operation
 
-Artifacts are instance resources for the admitted operator: the stable
-`operator` principal (and legacy human-owner UUID strings as
-provenance) inspects and controls instance artifacts and saved-work reads
-without a human-owner lookup. In authenticated modes, `workflow:`/`service:`
-machine principals retain owner-equality and linked-execution checks; local
-disabled mode keeps the historical visibility behavior described above.
+Artifacts are instance resources for the admitted operator: verified operator admission inspects instance artifacts without a human-owner lookup. Legacy UUIDs remain creator/quota provenance. Execution reads require verified linkage in every authentication mode; service-only reads require their own resource ownership.
 Restricted raw bytes, quarantine, redaction, and explicit-grant gates are
 enforced independently of ordinary artifact visibility. See
 [Single-User Application Design](../SingleUserApplicationDesign.md).
@@ -510,12 +505,7 @@ enforced independently of ordinary artifact visibility. See
 The guarded upgrade can convert an artifact-only retained dataset after proving
 one human operator (including explicitly attested same-person UUID aliases).
 It records a protected, server-owned recovery disposition on artifacts with a
-proven human creator. Only the exact stable `operator` principal, or a service
-carrying that explicitly admitted principal, may use this disposition for
-restricted raw recovery. HTTP reads carry this identity only after successful
-existing local-operator admission, separately from creator and consumer-claim
-principals. That identity also satisfies literal `operator` ownership without
-a conversion grant; it does not satisfy unrelated machine ownership. Direct
+proven human creator. Only an operator context carrying the existing server-owned recovery proof may use this disposition for restricted raw recovery. HTTP admission binds this proof separately from creator and consumer-claim provenance; payload strings cannot reconstruct it. Explicit input delegation may preserve a selected permitted raw read for one workflow; it never transfers operator recovery authority. Direct
 artifact and durable session-resource reads share this proof and read policy.
 Profile bundle and workflow evidence readers carry it only after their own
 admission and resource-scope checks. Authenticated modes retain their own UUID

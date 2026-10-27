@@ -48,7 +48,7 @@ from moonmind.omnigent.workspace_sources import (
     MAX_PROCESSING_SECONDS,
     OVERLAY_ADDITIVE,
 )
-
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 MAX_INPUT_REFS = 64
 MAX_INPUT_BYTES = 64 * 1024 * 1024
@@ -187,10 +187,6 @@ def _artifact_digest(artifact: Any) -> str | None:
     return None
 
 
-def _admitted_scope(admitted_principal: str | None) -> dict[str, str]:
-    return {"admitted_principal": admitted_principal} if admitted_principal else {}
-
-
 def _check_workflow_family_link(
     links: tuple[Any, ...], required_workflow_id: str
 ) -> None:
@@ -300,11 +296,9 @@ class WorkspaceArtifactProjector:
             workspace,
             refs=restore_refs,
             subdir="restore",
-            principal=RESTORE_PRINCIPAL,
-            # The restore service is not itself a read grant: the service
-            # still requires each input to be owned by or linked to the
-            # admitted execution before it releases bytes.
-            admitted_principal=f"workflow:{workflow_id}",
+            access=ArtifactAccessContext.for_execution(
+                workflow_id, principal=RESTORE_PRINCIPAL
+            ),
             noun="restore inputs",
             runtime_uid=runtime_uid,
             runtime_gid=runtime_gid,
@@ -344,7 +338,7 @@ class WorkspaceArtifactProjector:
             subdir="attachments",
             # The materializer carries the admitted Step Execution's owner.
             # A generic host service principal is not an artifact read grant.
-            principal=f"workflow:{workflow_id}",
+            access=ArtifactAccessContext.for_execution(workflow_id),
             noun="attachments",
             required_workflow_id=workflow_id,
             runtime_uid=runtime_uid,
@@ -418,8 +412,8 @@ class WorkspaceArtifactProjector:
             )
         artifact_id = self._artifact_id(artifact_ref, noun="workspace checkpoint")
         service = self._require_service("workspace checkpoint")
-        admitted_principal = (
-            f"workflow:{admitted_workflow_id}" if admitted_workflow_id else None
+        access = ArtifactAccessContext.for_execution(
+            admitted_workflow_id, principal=RESTORE_PRINCIPAL
         )
         # Historical alias payloads without an authored workspaceSource pass
         # required_workflow_id=None and keep the legacy-tolerant admission so
@@ -429,8 +423,7 @@ class WorkspaceArtifactProjector:
             service,
             artifact_id=artifact_id,
             budget_bytes=min(MAX_CHECKPOINT_BYTES, MAX_COMPRESSED_BYTES),
-            principal=RESTORE_PRINCIPAL,
-            admitted_principal=admitted_principal,
+            access=access,
             required_workflow_id=required_workflow_id,
             expected_digest=expected_digest,
             strict_metadata=strict_metadata,
@@ -460,8 +453,7 @@ class WorkspaceArtifactProjector:
                 artifact_id=artifact_id,
                 target=archive_path,
                 budget_bytes=min(MAX_CHECKPOINT_BYTES, MAX_COMPRESSED_BYTES),
-                principal=RESTORE_PRINCIPAL,
-                admitted_principal=admitted_principal,
+                access=access,
                 expected_digest=admitted.digest or expected_digest,
             )
             staging.mkdir(mode=0o700, parents=False, exist_ok=False)
@@ -1536,8 +1528,7 @@ class WorkspaceArtifactProjector:
         *,
         refs: tuple[str, ...],
         subdir: str,
-        principal: str,
-        admitted_principal: str | None = None,
+        access: ArtifactAccessContext,
         noun: str,
         required_workflow_id: str | None = None,
         runtime_uid: int,
@@ -1575,8 +1566,7 @@ class WorkspaceArtifactProjector:
                 service,
                 artifact_id=artifact_id,
                 budget_bytes=budget,
-                principal=principal,
-                admitted_principal=admitted_principal,
+                access=access,
                 required_workflow_id=required_workflow_id,
             )
             target = root / hashlib.sha256(ref.encode("utf-8")).hexdigest()[:24]
@@ -1597,8 +1587,7 @@ class WorkspaceArtifactProjector:
                     artifact_id=artifact_id,
                     target=staging,
                     budget_bytes=budget,
-                    principal=principal,
-                    admitted_principal=admitted_principal,
+                    access=access,
                     expected_digest=admitted.digest,
                 )
                 self._make_runtime_readable(
@@ -1675,15 +1664,16 @@ class WorkspaceArtifactProjector:
         *,
         artifact_id: str,
         budget_bytes: int,
-        principal: str,
-        admitted_principal: str | None = None,
+        access: ArtifactAccessContext,
         required_workflow_id: str | None = None,
         expected_digest: str | None = None,
         strict_metadata: bool = False,
     ) -> AdmittedSource:
         from moonmind.workflows.temporal.artifacts import (
-            TemporalArtifactStorageAccessError, TemporalArtifactUnavailableError,
+            TemporalArtifactStorageAccessError,
+            TemporalArtifactUnavailableError,
         )
+
         get_metadata = getattr(service, "get_metadata", None)
         if get_metadata is None:
             # A read-bytes-only adapter cannot establish owner, digest, or
@@ -1709,8 +1699,7 @@ class WorkspaceArtifactProjector:
         try:
             metadata = await get_metadata(
                 artifact_id=artifact_id,
-                principal=principal,
-                **_admitted_scope(admitted_principal),
+                access=access,
             )
         except (WorkspaceArtifactProjectionError, TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError):
             raise
@@ -1779,22 +1768,21 @@ class WorkspaceArtifactProjector:
         artifact_id: str,
         target: Path,
         budget_bytes: int,
-        principal: str,
-        admitted_principal: str | None = None,
+        access: ArtifactAccessContext,
         expected_digest: str | None = None,
     ) -> int:
         from moonmind.workflows.temporal.artifacts import (
-            TemporalArtifactStorageAccessError, TemporalArtifactUnavailableError,
+            TemporalArtifactStorageAccessError,
+            TemporalArtifactUnavailableError,
         )
+
         want = expected_digest.strip().lower() if expected_digest else None
         read_chunks = getattr(service, "read_chunks", None)
         if read_chunks is not None:
             try:
                 _artifact, chunks = await read_chunks(
                     artifact_id=artifact_id,
-                    principal=principal,
-                    **_admitted_scope(admitted_principal),
-                    allow_restricted_raw=True,
+                    access=access,
                     chunk_size=STREAM_CHUNK_BYTES,
                 )
             except (WorkspaceArtifactProjectionError, TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError):
@@ -1846,9 +1834,7 @@ class WorkspaceArtifactProjector:
         try:
             _artifact, payload = await service.read(
                 artifact_id=artifact_id,
-                principal=principal,
-                **_admitted_scope(admitted_principal),
-                allow_restricted_raw=True,
+                access=access,
             )
         except (WorkspaceArtifactProjectionError, TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError):
             raise

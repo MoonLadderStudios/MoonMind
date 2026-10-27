@@ -15,6 +15,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from tests.artifact_access import access_for_test
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -53,8 +54,7 @@ async def test_preview_metadata_is_exposed_for_restricted_artifacts(
                 content_type="text/plain",
             )
             _artifact, _links, _pinned, policy = await service.get_metadata(
-                artifact_id=artifact.artifact_id,
-                principal="owner",
+                artifact_id=artifact.artifact_id, access=access_for_test("owner")
             )
             assert policy.preview_artifact_ref is not None
             assert policy.default_read_ref.artifact_id == artifact.artifact_id

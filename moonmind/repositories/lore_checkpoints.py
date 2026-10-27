@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 from .lore_adapter import LorePreparedWorkspace, LoreRepositoryProviderAdapter
 
@@ -60,8 +61,7 @@ class LoreDurableCheckpointService:
     ) -> LorePreparedWorkspace:
         artifact, payload = await self._artifacts.read(
             artifact_id=checkpoint_ref,
-            principal=_PRINCIPAL,
-            allow_restricted_raw=True,
+            access=ArtifactAccessContext.for_service(_PRINCIPAL),
         )
         if str(artifact.content_type) != LORE_CHECKPOINT_CONTENT_TYPE:
             raise ValueError(

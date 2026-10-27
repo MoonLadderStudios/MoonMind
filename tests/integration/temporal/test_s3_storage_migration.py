@@ -28,6 +28,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from tests.artifact_access import access_for_test
 from tests.integration.temporal.test_temporal_artifact_lifecycle import _db
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
@@ -273,8 +274,12 @@ async def test_migration_preserves_identity_authorization_pins_and_shared_bytes(
         async with sessions() as session:
             service = TemporalArtifactService(TemporalArtifactRepository(session), store=new, lifecycle_hard_delete_after_seconds=1)
             with pytest.raises(TemporalArtifactAuthorizationError):
-                await service.read(artifact_id=artifact_id, principal="unauthorized")
-            row, payload = await service.read(artifact_id=artifact_id, principal="owner")
+                await service.read(
+                    artifact_id=artifact_id, access=access_for_test("unauthorized")
+                )
+            row, payload = await service.read(
+                artifact_id=artifact_id, access=access_for_test("owner")
+            )
             assert row.artifact_id == artifact_id and row.storage_key == storage_key
             assert payload == b"saved input"
             now = datetime.now(UTC)

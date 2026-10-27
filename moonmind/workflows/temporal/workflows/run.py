@@ -13217,10 +13217,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         artifact_read_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.read")
         plan_payload = await execute_typed_activity(
             "artifact.read",
-            ArtifactReadInput(
-                principal=self._principal(),
-                artifact_ref=plan_ref,
-            ),
+            ArtifactReadInput(artifact_ref=plan_ref),
             **self._execute_kwargs_for_route(artifact_read_route),
         )
         plan_dict = self._decode_json_payload(
@@ -13237,10 +13234,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             registry_ref = str(plan_definition.metadata.registry_snapshot.artifact_ref)
             registry_payload = await execute_typed_activity(
                 "artifact.read",
-                ArtifactReadInput(
-                    principal=self._principal(),
-                    artifact_ref=registry_ref,
-                ),
+                ArtifactReadInput(artifact_ref=registry_ref),
                 **self._execute_kwargs_for_route(artifact_read_route),
             )
             registry_dict = self._decode_json_payload(
@@ -16042,10 +16036,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         try:
                             diag_payload = await execute_typed_activity(
                                 "artifact.read",
-                                ArtifactReadInput(
-                                    principal=self._principal(),
-                                    artifact_ref=diag_ref,
-                                ),
+                                ArtifactReadInput(artifact_ref=diag_ref),
                                 **self._execute_kwargs_for_route(artifact_read_route),
                             )
                             if isinstance(diag_payload, bytes):
@@ -18971,10 +18962,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         try:
             evidence_payload = await execute_typed_activity(
                 "artifact.read",
-                ArtifactReadInput(
-                    principal=self._principal(),
-                    artifact_ref=evidence_ref,
-                ),
+                ArtifactReadInput(artifact_ref=evidence_ref),
                 **self._execute_kwargs_for_route(artifact_read_route),
             )
         except Exception as exc:
@@ -22196,10 +22184,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 )
                 resolved_payload = await execute_typed_activity(
                     "artifact.read",
-                    ArtifactReadInput(
-                        principal=self._principal(),
-                        artifact_ref=existing_skillset_ref,
-                    ),
+                    ArtifactReadInput(artifact_ref=existing_skillset_ref),
                     **self._execute_kwargs_for_route(artifact_read_route),
                 )
                 resolved = ResolvedSkillSet.model_validate(
@@ -24997,7 +24982,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.read")
             report_bytes = await execute_typed_activity(
                 "artifact.read",
-                ArtifactReadInput(principal=self._principal(), artifact_ref=report_ref),
+                ArtifactReadInput(artifact_ref=report_ref),
                 **self._execute_kwargs_for_route(route),
             )
             if not isinstance(report_bytes, bytes):

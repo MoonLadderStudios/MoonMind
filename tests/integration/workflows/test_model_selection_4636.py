@@ -38,6 +38,7 @@ from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.strategies.codex_cli import CodexCliStrategy
 from moonmind.workflows.temporal.worker_runtime import _build_runtime_planner
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from tests.artifact_access import access_for_test
 from tests.unit.api.test_presets_service import template_db
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration_ci]
@@ -515,9 +516,7 @@ async def test_4636_schedule_artifact_cutoff_and_saved_reference_survive_restart
             )
             assert definition.target["inputArtifactRef"] == artifact.artifact_id
             _artifact, body = await artifacts.read(
-                artifact_id=artifact.artifact_id,
-                principal="system",
-                allow_restricted_raw=True,
+                artifact_id=artifact.artifact_id, access=access_for_test("system")
             )
             saved = json.loads(body)
             profile = await session.get(ManagedAgentProviderProfile, "issue-4636")
@@ -801,8 +800,7 @@ async def test_4636_schedule_replaces_missing_artifact_and_reloads_new_launch_in
             )
             _artifact, body = await artifacts.read(
                 artifact_id=definition.target["inputArtifactRef"],
-                principal="system",
-                allow_restricted_raw=True,
+                access=access_for_test("system"),
             )
             selected = await session.get(ManagedAgentProviderProfile, "issue-4636")
             authored, request, command = launch_from_input(

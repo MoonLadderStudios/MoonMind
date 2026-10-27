@@ -39,6 +39,7 @@ from moonmind.workflows.temporal.service import (
     TemporalExecutionService,
     TemporalExecutionValidationError,
 )
+from tests.artifact_access import access_for_test
 from tests.integration import (
     test_single_user_conversion_postgres_4346 as postgres_fixtures,
 )
@@ -76,6 +77,7 @@ async def sessions(conversion_postgres_url, tmp_path, monkeypatch):
 async def _create(service, sessions, saved, *, key="same-request"):
     envelope = await DbExecutionPlanStore(sessions).load(saved.binding.plan_ref)
     compiled = PersistedOmnigentExecutionPlan(
+        artifact_access=access_for_test("operator"),
         envelope=envelope,
         binding=saved.binding,
         artifact_refs=(),
@@ -173,7 +175,7 @@ async def test_concurrent_same_key_different_inputs_only_grants_the_create_winne
         service = TemporalArtifactService(TemporalArtifactRepository(session))
         _, body = await service.read(
             artifact_id=winner.input_id,
-            principal="workflow:mm:deterministic-api-create",
+            access=access_for_test("workflow:mm:deterministic-api-create"),
         )
         assert body
         for artifact_id in (
@@ -186,7 +188,7 @@ async def test_concurrent_same_key_different_inputs_only_grants_the_create_winne
             with pytest.raises(TemporalArtifactAuthorizationError):
                 await service.read(
                     artifact_id=artifact_id,
-                    principal="workflow:mm:deterministic-api-create",
+                    access=access_for_test("workflow:mm:deterministic-api-create"),
                 )
         links = (
             (
@@ -397,7 +399,7 @@ async def test_frozen_compile_resolves_deployment_skill_in_callers_transaction(
             artifact_id=original.envelope.payload.agentProfileSnapshotRef.removeprefix(
                 "artifact:"
             ),
-            principal="user-1",
+            access=access_for_test("user-1"),
         )
         profile_snapshot = json.loads(profile_body)
 
@@ -427,9 +429,11 @@ async def test_frozen_compile_resolves_deployment_skill_in_callers_transaction(
                 ),
                 initial_parameters=parameters,
                 binding=original.binding,
+                access=access_for_test("user-1"),
             )
             _, manifest = await artifacts.read(
-                artifact_id=admitted.resolved_skillset_ref, principal="user-1"
+                artifact_id=admitted.resolved_skillset_ref,
+                access=access_for_test("user-1"),
             )
             assert {
                 entry["skill_name"]: entry["content_ref"]
@@ -438,12 +442,16 @@ async def test_frozen_compile_resolves_deployment_skill_in_callers_transaction(
                 "saved-database-skill": content_ref,
                 "saved-database-helper": helper_ref,
             }
-            assert (await artifacts.read(artifact_id=content_ref, principal="user-1"))[
-                1
-            ] == content.encode()
-            assert (await artifacts.read(artifact_id=helper_ref, principal="user-1"))[
-                1
-            ] == helper_content.encode()
+            assert (
+                await artifacts.read(
+                    artifact_id=content_ref, access=access_for_test("user-1")
+                )
+            )[1] == content.encode()
+            assert (
+                await artifacts.read(
+                    artifact_id=helper_ref, access=access_for_test("user-1")
+                )
+            )[1] == helper_content.encode()
             assert transaction.is_active
             assert caller.get_transaction() is transaction
             assert (

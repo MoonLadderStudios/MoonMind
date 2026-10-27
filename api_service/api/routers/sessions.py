@@ -1,23 +1,22 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Annotated, Any
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.encoders import jsonable_encoder
 from pydantic import ValidationError
 
-from api_service.api.instance_access import access_principal
 from api_service.api.routers import agent_runs as agent_runs_router
-from api_service.api.routers.temporal_artifacts import (
-    _get_temporal_artifact_service,
-    _resolve_recovery_principal,
-)
-from api_service.auth_providers import get_instance_access
+from api_service.api.routers.temporal_artifacts import _get_temporal_artifact_service
+from api_service.auth_providers import get_artifact_access, get_instance_access
 from moonmind.config.settings import settings
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 from moonmind.schemas.temporal_artifact_models import ArtifactSessionControlRequest
-from moonmind.workflows.temporal.artifacts import TemporalArtifactService
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    TemporalArtifactService,
+)
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -76,15 +75,14 @@ async def _load_agent_run_record(agent_run_id: str) -> object | None:
 async def _session_projection(
     record: CodexManagedSessionRecord,
     artifact_service: TemporalArtifactService,
-    principal: str,
-    recovery_principal: str | None = None,
+    *,
+    access: ArtifactAccessContext,
 ):
     projection = await _build_agent_run_artifact_session_projection(
         agent_run_id=record.agent_run_id,
         session_id=record.session_id,
         service=artifact_service,
-        principal=principal,
-        recovery_principal=recovery_principal,
+        access=access,
     )
     if projection is None:
         agent_runs_router._session_projection_not_found()
@@ -168,12 +166,10 @@ async def get_session_snapshot(
     _enabled: None = Depends(_require_session_api_compat_enabled),
     _user: Any = Depends(get_instance_access),
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
-    recovery_principal: Annotated[str | None, Depends(_resolve_recovery_principal)] = None,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
 ) -> dict[str, Any]:
     record = await _load_authorized_session_record(session_id, _user)
-    projection = await _session_projection(
-        record, artifact_service, access_principal(_user), recovery_principal
-    )
+    projection = await _session_projection(record, artifact_service, access=access)
     run_record = await _load_agent_run_record(record.agent_run_id)
     return {
         "id": record.session_id,
@@ -196,7 +192,7 @@ async def get_session_items(
     _enabled: None = Depends(_require_session_api_compat_enabled),
     _user: Any = Depends(get_instance_access),
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
-    recovery_principal: Annotated[str | None, Depends(_resolve_recovery_principal)] = None,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
 ) -> dict[str, Any]:
     record = await _load_authorized_session_record(session_id, _user)
     run_record = await _load_agent_run_record(record.agent_run_id)
@@ -228,9 +224,7 @@ async def get_session_items(
     truncated = len(events) > limit
     if truncated:
         events = events[:limit]
-    projection = await _session_projection(
-        record, artifact_service, access_principal(_user), recovery_principal
-    )
+    projection = await _session_projection(record, artifact_service, access=access)
     return {
         "items": [_event_item(event) for event in events] + _artifact_items(projection),
         "truncated": truncated,
@@ -268,10 +262,8 @@ async def post_session_event(
     payload: dict[str, Any],
     _enabled: None = Depends(_require_session_api_compat_enabled),
     _user: Any = Depends(get_instance_access),
-    artifact_service: TemporalArtifactService = Depends(
-        _get_temporal_artifact_service
-    ),
-    recovery_principal: Annotated[str | None, Depends(_resolve_recovery_principal)] = None,
+    artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
+    access: ArtifactAccessContext = Depends(get_artifact_access),
 ) -> dict[str, Any]:
     record = await _load_authorized_session_record(session_id, _user)
     event_type = str(payload.get("type") or "").strip()
@@ -330,7 +322,7 @@ async def post_session_event(
         payload=control,
         _user=_user,
         artifact_service=artifact_service,
-        recovery_principal=recovery_principal,
+        access=access,
     )
     return {
         "type": event_type,
@@ -347,7 +339,7 @@ async def resolve_session_elicitation(
     _enabled: None = Depends(_require_session_api_compat_enabled),
     _user: Any = Depends(get_instance_access),
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
-    recovery_principal: Annotated[str | None, Depends(_resolve_recovery_principal)] = None,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
 ) -> dict[str, Any]:
     record = await _load_authorized_session_record(session_id, _user)
     decision = _elicitation_resolution_decision(payload)
@@ -381,7 +373,7 @@ async def resolve_session_elicitation(
         payload=control,
         _user=_user,
         artifact_service=artifact_service,
-        recovery_principal=recovery_principal,
+        access=access,
     )
     return {
         "type": "elicitation_resolution",

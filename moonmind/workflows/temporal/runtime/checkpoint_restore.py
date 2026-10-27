@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -18,17 +18,20 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
 from moonmind.schemas.checkpoint_restore_models import (
+    RESTORATION_EVIDENCE_CONTENT_TYPE,
     CheckpointRestoreError,
     ManagedWorkspaceRestoreRequest,
     ManagedWorkspaceRestoreResult,
     SandboxRestoreDestination,
-    RESTORATION_EVIDENCE_CONTENT_TYPE,
 )
-from moonmind.schemas.workspace_locator_models import ManagedWorkspaceLocator, SandboxWorkspaceLocator
+from moonmind.schemas.workspace_locator_models import (
+    ManagedWorkspaceLocator,
+    SandboxWorkspaceLocator,
+)
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 from .git_auth import build_github_token_git_environment
 from .managed_api_key_resolve import AdmittedGitRead, resolve_admitted_git_read
-
 
 # Checkpoint archive/manifest artifacts are written by the capture path under the
 # ``system`` owner. The artifact service only grants cross-owner reads to
@@ -67,7 +70,11 @@ class ManagedCheckpointRestoreService:
 
     def _destination(self, req):
         if isinstance(req.destination, SandboxRestoreDestination):
-            from .workspace_locators import SandboxWorkspaceRecordStore, resolve_sandbox_workspace_locator
+            from .workspace_locators import (
+                SandboxWorkspaceRecordStore,
+                resolve_sandbox_workspace_locator,
+            )
+
             destination = req.destination
             expected = hashlib.sha256(f"{req.recovery_identity.workflow_id}:{destination.step_execution_id}".encode()).hexdigest()[:24]
             locator = SandboxWorkspaceLocator(workspaceId=destination.workspace_id, relativePath=destination.relative_path)
@@ -90,15 +97,13 @@ class ManagedCheckpointRestoreService:
         ref: str,
         *,
         content_types: set[str],
-        admitted_principal: str | None = _CHECKPOINT_CAPTURE_PRINCIPAL,
+        access: ArtifactAccessContext,
     ) -> bytes:
         try:
             if self.artifact_service is not None:
                 artifact, payload = await self.artifact_service.read(
                     artifact_id=ref.removeprefix("artifact:").removeprefix("//"),
-                    principal=_CHECKPOINT_RESTORE_PRINCIPAL,
-                    admitted_principal=admitted_principal,
-                    allow_restricted_raw=True,
+                    access=access,
                 )
                 content_type = str(getattr(artifact, "content_type", ""))
             else:
@@ -360,7 +365,7 @@ class ManagedCheckpointRestoreService:
             self._verify_git_candidate(target, module, module["baseCommit"])
         return _digest(status)
 
-    async def _restore_submodules(self, workspace, manifest, *, admitted_principal):
+    async def _restore_submodules(self, workspace, manifest, *, access):
         parents = {"": workspace}
         modules = manifest.get("git", {}).get("submodules", [])
         for module in sorted(
@@ -398,7 +403,7 @@ class ManagedCheckpointRestoreService:
             payload = await self._read(
                 history["ref"],
                 content_types={"application/x-git-pack"},
-                admitted_principal=admitted_principal,
+                access=access,
             )
             if _digest(payload) != history.get("digest"):
                 raise CheckpointRestoreError(
@@ -421,21 +426,24 @@ class ManagedCheckpointRestoreService:
                 ["index-pack", "--stdin", "--strict"], target, input_bytes=payload
             )
             self._git(["checkout", "--detach", module["baseCommit"]], target)
-            await self._restore_index(
-                target, module, admitted_principal=admitted_principal
-            )
+            await self._restore_index(target, module, access=access)
             parents[str(name)] = target
 
-    async def _restore_index(self, workspace, manifest, *, admitted_principal):
+    async def _restore_index(self, workspace, manifest, *, access):
         index = manifest.get("git", {}).get("indexPatch")
         if index is None:
             return  # Historical clean-index checkpoints remain restorable.
         for name in index.get("paths", []):
             self._safe_name(name)
-        payload = await self._read(
-            index["ref"], content_types={"application/vnd.moonmind.git-index-patch"},
-            admitted_principal=admitted_principal,
-        ) if index.get("ref") else b""
+        payload = (
+            await self._read(
+                index["ref"],
+                content_types={"application/vnd.moonmind.git-index-patch"},
+                access=access,
+            )
+            if index.get("ref")
+            else b""
+        )
         if _digest(payload) != index.get("digest"):
             raise CheckpointRestoreError("CHECKPOINT_ARCHIVE_CORRUPTED", "Git index patch digest mismatch")
         if payload:
@@ -528,7 +536,7 @@ class ManagedCheckpointRestoreService:
         self,
         raw: Mapping[str, Any] | ManagedWorkspaceRestoreRequest,
         *,
-        admitted_principal: str | None = _CHECKPOINT_CAPTURE_PRINCIPAL,
+        access: ArtifactAccessContext,
     ) -> dict[str, Any]:
         req = (
             raw
@@ -545,9 +553,7 @@ class ManagedCheckpointRestoreService:
             with lock_path.open("a+") as lock:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
                 try:
-                    return await self._restore_locked(
-                        req, admitted_principal=admitted_principal
-                    )
+                    return await self._restore_locked(req, access=access)
                 finally:
                     fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
@@ -555,7 +561,7 @@ class ManagedCheckpointRestoreService:
         self,
         req: ManagedWorkspaceRestoreRequest,
         *,
-        admitted_principal: str | None = _CHECKPOINT_CAPTURE_PRINCIPAL,
+        access: ArtifactAccessContext,
     ) -> dict[str, Any]:
         record_dir = self.root / "managed_restores"
         record_dir.mkdir(parents=True, exist_ok=True)
@@ -582,8 +588,11 @@ class ManagedCheckpointRestoreService:
                         raise CheckpointRestoreError("CHECKPOINT_RESTORE_IDEMPOTENCY_CONFLICT", "restored candidate was subsequently changed")
                     manifest_bytes = await self._read(
                         req.checkpoint.manifest_ref,
-                        content_types={"application/json", "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1"},
-                        admitted_principal=admitted_principal,
+                        content_types={
+                            "application/json",
+                            "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1",
+                        },
+                        access=access,
                     )
                     if _digest(manifest_bytes) != req.checkpoint.manifest_digest:
                         raise CheckpointRestoreError("CHECKPOINT_MANIFEST_CORRUPTED", "saved manifest bytes changed")
@@ -633,8 +642,10 @@ class ManagedCheckpointRestoreService:
 
         checkpoint_bytes = await self._read(
             req.source.checkpoint_ref,
-            content_types={"application/vnd.moonmind.step-execution-checkpoint+json;version=1"},
-            admitted_principal=admitted_principal,
+            content_types={
+                "application/vnd.moonmind.step-execution-checkpoint+json;version=1"
+            },
+            access=access,
         )
         try:
             checkpoint = json.loads(checkpoint_bytes)
@@ -679,7 +690,7 @@ class ManagedCheckpointRestoreService:
         archive = await self._read(
             req.checkpoint.archive_ref,
             content_types={"application/vnd.moonmind.worktree-archive"},
-            admitted_principal=admitted_principal,
+            access=access,
         )
         manifest_bytes = await self._read(
             req.checkpoint.manifest_ref,
@@ -687,7 +698,7 @@ class ManagedCheckpointRestoreService:
                 "application/json",
                 "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1",
             },
-            admitted_principal=admitted_principal,
+            access=access,
         )
         if _digest(archive) != req.checkpoint.archive_digest:
             raise CheckpointRestoreError(
@@ -771,7 +782,11 @@ class ManagedCheckpointRestoreService:
                         code="CHECKPOINT_REPOSITORY_UNAVAILABLE", env=clone_env,
                     )
                 if history and history.get("ref"):
-                    bundle = await self._read(history["ref"], content_types={"application/x-git-bundle"}, admitted_principal=admitted_principal)
+                    bundle = await self._read(
+                        history["ref"],
+                        content_types={"application/x-git-bundle"},
+                        access=access,
+                    )
                     if _digest(bundle) != history.get("digest") or history.get("headCommit") != req.checkpoint.base_commit:
                         raise CheckpointRestoreError("CHECKPOINT_ARCHIVE_CORRUPTED", "selected history identity mismatch")
                     bundle_path = staging / ".git" / "checkpoint.bundle"
@@ -785,12 +800,8 @@ class ManagedCheckpointRestoreService:
                     ["cat-file", "-e", f"{req.checkpoint.base_commit}^{{commit}}"], staging
                 )
                 self._git(["checkout", "--detach", req.checkpoint.base_commit], staging)
-                await self._restore_index(
-                    staging, manifest, admitted_principal=admitted_principal
-                )
-                await self._restore_submodules(
-                    staging, manifest, admitted_principal=admitted_principal
-                )
+                await self._restore_index(staging, manifest, access=access)
+                await self._restore_submodules(staging, manifest, access=access)
                 count, size = self._extract(
                     archive, staging, manifest,
                     max_entries=req.max_entry_count, max_bytes=req.max_restored_bytes,

@@ -20,6 +20,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from tests.artifact_access import access_for_test
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from pydantic import ValidationError
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -8061,7 +8063,9 @@ class _StreamingArtifactService:
         self.metadata_calls: list[str] = []
         self.chunk_calls: list[str] = []
 
-    async def get_metadata(self, *, artifact_id: str, principal: str, **_kwargs):
+    async def get_metadata(
+        self, *, artifact_id: str, access: ArtifactAccessContext, **_kwargs
+    ):
         self.metadata_calls.append(artifact_id)
         payload = self._payloads[artifact_id]
         artifact = SimpleNamespace(size_bytes=len(payload))
@@ -8071,13 +8075,11 @@ class _StreamingArtifactService:
         self,
         *,
         artifact_id: str,
-        principal: str,
-        allow_restricted_raw: bool = False,
+        access: ArtifactAccessContext,
         chunk_size: int = 1024,
-        admitted_principal: str | None = None,
     ):
-        assert allow_restricted_raw is True
-        assert principal == "service:omnigent_workspace_restore"
+        assert ArtifactAccessContext.require(access).execution_principal
+        assert not access.is_operator
         self.chunk_calls.append(artifact_id)
         payload = self._payloads[artifact_id]
         chunks = [
@@ -8146,6 +8148,7 @@ async def test_workspace_checkpoint_streams_beyond_generic_input_limit(
         workspace,
         artifact_ref="artifact://checkpoint/candidate",
         artifact_gateway=service,
+        access=access_for_test("workflow:fixture-restore"),
     )
 
     assert (workspace / "candidate.txt").read_bytes() == restored_payload

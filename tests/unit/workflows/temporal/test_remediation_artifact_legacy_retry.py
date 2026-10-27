@@ -22,6 +22,7 @@ from moonmind.workflows.temporal.remediation_context import (
     RemediationContextError,
     RemediationLifecyclePublisher,
 )
+from tests.artifact_access import access_for_test
 from tests.unit.workflows.temporal.test_remediation_context import temporal_db
 
 
@@ -107,7 +108,9 @@ async def test_retry_reconciles_confirmed_legacy_service_artifact(tmp_path, prin
         assert retried.metadata_json == original_metadata
         assert retried.metadata_json["verificationOutcome"] == "still_failed"
         assert legacy.artifact_id in record.artifact_refs
-        _, content = await service.read(artifact_id=legacy.artifact_id, principal=principal)
+        _, content = await service.read(
+            artifact_id=legacy.artifact_id, access=access_for_test(principal)
+        )
         assert json.loads(content) == {"outcome": "still_failed"}
         assert (await _retry(session, service, record)).artifact_id == legacy.artifact_id
         links = (await session.execute(select(TemporalArtifactLink).where(

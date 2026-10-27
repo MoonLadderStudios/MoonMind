@@ -16,17 +16,22 @@ from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 from api_service.db.models import Base
 from moonmind.schemas.agent_runtime_models import AgentRunResult, ManagedRunRecord
 from moonmind.workflows.temporal.activity_catalog import (
-    TemporalActivityCatalog, build_default_activity_catalog,
+    TemporalActivityCatalog,
+    build_default_activity_catalog,
 )
 from moonmind.workflows.temporal.activity_runtime import (
-    TemporalAgentRuntimeActivities, build_activity_bindings,
+    TemporalAgentRuntimeActivities,
+    build_activity_bindings,
 )
 from moonmind.workflows.temporal.artifacts import (
-    LocalTemporalArtifactStore, TemporalArtifactRepository, TemporalArtifactService,
+    LocalTemporalArtifactStore,
+    TemporalArtifactRepository,
+    TemporalArtifactService,
 )
-from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from tests.artifact_access import access_for_test
 from tests.integration.reliability.test_unversioned_cutover_journey import connect
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.reliability_journey]
@@ -111,7 +116,10 @@ async def test_published_acceptance_remains_valid_and_replayable(tmp_path, monke
             if not expired:
                 evidence = result["validatedRefs"]["acceptance"]
                 artifact_ref = evidence["evidence"][0]["evidenceRefs"][0]
-                _, path = await service.read_path(artifact_id=artifact_ref, principal="system:agent_runtime")
+                _, path = await service.read_path(
+                    artifact_id=artifact_ref,
+                    access=access_for_test("system:agent_runtime"),
+                )
                 assert json.loads(path.read_text())["validatedRefs"]["acceptance"] == acceptance
     finally:
         await engine.dispose()

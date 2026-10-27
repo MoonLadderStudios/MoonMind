@@ -15,6 +15,7 @@ from typing import Any, Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
@@ -123,9 +124,9 @@ class ArtifactRemediationHeadLoader:
         try:
             _artifact, payload = await self.artifact_service.read(
                 artifact_id=ref.removeprefix("artifact://"),
-                principal="service:remediation_workspace",
-                admitted_principal=f"workflow:{self.workflow_id}",
-                allow_restricted_raw=True,
+                access=ArtifactAccessContext.for_execution(
+                    self.workflow_id, principal="service:remediation_workspace"
+                ),
             )
             value = json.loads(payload)
         except Exception as exc:
@@ -144,8 +145,9 @@ class ArtifactRemediationHeadLoader:
 class ManagedServiceRemediationRestorer:
     """Adapt the canonical checkpoint restore data plane to sandbox destinations."""
 
-    def __init__(self, service: Any) -> None:
+    def __init__(self, service: Any, *, access: ArtifactAccessContext) -> None:
         self.service = service
+        self.access = ArtifactAccessContext.require(access)
 
     async def restore(
         self,
@@ -185,7 +187,7 @@ class ManagedServiceRemediationRestorer:
             }
         )
         result = await _await_restore_with_activity_heartbeats(
-            self.service.restore(request)
+            self.service.restore(request, access=self.access)
         )
         return {
             "checkpointRef": result.get("checkpointRef"),

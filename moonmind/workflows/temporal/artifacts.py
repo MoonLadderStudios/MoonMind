@@ -17,7 +17,15 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Iterable, Mapping, NoReturn
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Callable,
+    Iterable,
+    Mapping,
+    NoReturn,
+)
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
@@ -28,11 +36,9 @@ if TYPE_CHECKING:
     )
 
 import boto3
-from botocore.exceptions import (
-    ClientError,
-    ConnectionError as S3ConnectionError,
-    ReadTimeoutError,
-)
+from botocore.exceptions import ClientError
+from botocore.exceptions import ConnectionError as S3ConnectionError
+from botocore.exceptions import ReadTimeoutError
 from sqlalchemy import (
     Select,
     case,
@@ -51,9 +57,13 @@ from sqlalchemy.exc import (
     DisconnectionError,
     InterfaceError,
     OperationalError,
-    TimeoutError as SQLTimeoutError,
 )
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, AsyncSessionTransaction
+from sqlalchemy.exc import TimeoutError as SQLTimeoutError
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    AsyncSession,
+    AsyncSessionTransaction,
+)
 
 from api_service.db import models as db_models
 from moonmind.config.settings import settings
@@ -68,6 +78,8 @@ logger = logging.getLogger(__name__)
 _CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _PREVIEW_MAX_BYTES = 16 * 1024
 _STREAM_CHUNK_BYTES = 64 * 1024
+_DELEGATED_INPUT_LINK_TYPE = "input.artifact.admitted"
+_DELEGATED_RAW_LINK_TYPE = "input.artifact.raw"
 _SCHEDULE_ARTIFACT_REF_PATHS = (
     ("inputArtifactRef",),
     ("planArtifactRef",),
@@ -151,6 +163,157 @@ class TemporalArtifactValidationError(TemporalArtifactError):
 
 class TemporalArtifactAuthorizationError(TemporalArtifactError):
     """Raised when principal is not permitted to access an artifact."""
+
+
+@dataclass(frozen=True, init=False)
+class ArtifactAccessContext:
+    """Read authority issued by a trusted admission owner, never a payload.
+
+    Creator strings remain provenance. Operator admission, a service reading
+    its own records, and a verified execution delegation are distinct grants.
+    This object stays process-local; Activities rebind it to their real identity.
+    """
+
+    principal: str
+    execution_principal: str | None
+    is_operator: bool
+    operator_recovery: bool
+    admitted_inputs: frozenset[str]
+    _recorded_publication_inputs: frozenset[str]
+
+    @classmethod
+    def _issue(cls, principal, execution=None, *, operator=False, recovery=False):
+        principal = str(principal or "").strip()
+        if not principal:
+            raise TemporalArtifactAuthorizationError(
+                "artifact access identity required"
+            )
+        context = object.__new__(cls)
+        for name, value in (
+            ("principal", principal),
+            ("execution_principal", execution),
+            ("is_operator", operator),
+            ("operator_recovery", recovery),
+            ("admitted_inputs", frozenset()),
+            ("_recorded_publication_inputs", frozenset()),
+        ):
+            object.__setattr__(context, name, value)
+        return context
+
+    def _with_verified_inputs(
+        self, artifact_ids: Iterable[str]
+    ) -> "ArtifactAccessContext":
+        """Read the immutable closure the existing persisted-plan owner verified.
+
+        Used by that owner before it installs durable execution links. This
+        grants metadata/ordinary bytes only, not restricted raw or recovery.
+        A ref or digest supplied by an Activity payload is not this proof.
+        """
+        context = self._issue(
+            self.principal,
+            self.execution_principal,
+            operator=self.is_operator,
+            recovery=self.operator_recovery,
+        )
+        object.__setattr__(
+            context, "admitted_inputs", self.admitted_inputs | frozenset(artifact_ids)
+        )
+        object.__setattr__(
+            context, "_recorded_publication_inputs", self._recorded_publication_inputs
+        )
+        return context
+
+    def _with_recorded_publication_inputs(
+        self, artifact_ids: Iterable[str]
+    ) -> "ArtifactAccessContext":
+        """Translate a verified v1 API-start receipt into its exact input rights.
+
+        Only the publication admission decoder uses this before persisting the
+        existing execution links. No creator, payload principal, operator role,
+        recovery grant or quarantine exception is inferred from that receipt.
+        """
+        if self.execution_principal is None or self.is_operator:
+            raise TemporalArtifactAuthorizationError(
+                "recorded publication requires its execution"
+            )
+        ids = frozenset(artifact_ids)
+        context = self._with_verified_inputs(ids)
+        object.__setattr__(
+            context,
+            "_recorded_publication_inputs",
+            self._recorded_publication_inputs | ids,
+        )
+        return context
+
+    @property
+    def candidates(self) -> frozenset[str]:
+        # A service identity on an execution context is accounting provenance,
+        # not a second grant to every artifact that service ever produced.
+        return frozenset((self.execution_principal or self.principal,))
+
+    @classmethod
+    def for_service(cls, principal: str) -> "ArtifactAccessContext":
+        """A trusted service owner reading its own artifacts, without escalation."""
+        if TemporalArtifactService._is_instance_operator_principal(principal):
+            raise TemporalArtifactAuthorizationError(
+                "operator reads require operator admission"
+            )
+        if str(principal).startswith("workflow:"):
+            raise TemporalArtifactAuthorizationError(
+                "workflow reads require execution admission"
+            )
+        return cls._issue(principal)
+
+    @classmethod
+    def for_execution(
+        cls, workflow_id: str, *, principal: str = "service:temporal-artifacts"
+    ) -> "ArtifactAccessContext":
+        """Bind the execution already verified by the calling admission owner."""
+        workflow_id = str(workflow_id or "").strip()
+        if not workflow_id:
+            raise TemporalArtifactAuthorizationError(
+                "admitted artifact execution required"
+            )
+        # The supplied principal is provenance only; candidates contains just
+        # this verified execution, and never grants an operator/service role.
+        return cls._issue(principal, f"workflow:{workflow_id}")
+
+    @classmethod
+    def for_activity(
+        cls, *, principal: str = "service:temporal-artifacts"
+    ) -> "ArtifactAccessContext":
+        from temporalio import activity
+
+        if not activity.in_activity():
+            raise TemporalArtifactAuthorizationError(
+                "artifact read requires Activity admission"
+            )
+        return cls.for_execution(activity.info().workflow_id, principal=principal)
+
+    @classmethod
+    def for_operator(
+        cls, admission, *, recovery: bool = False
+    ) -> "ArtifactAccessContext":
+        from moonmind.security.operator_admission import OperatorAdmission
+
+        if not isinstance(admission, OperatorAdmission):
+            raise TemporalArtifactAuthorizationError(
+                "artifact read requires operator admission"
+            )
+        from api_service.auth_providers import instance_operator_principal
+
+        return cls._issue(
+            instance_operator_principal(), operator=True, recovery=recovery
+        )
+
+    @staticmethod
+    def require(context: "ArtifactAccessContext") -> "ArtifactAccessContext":
+        if not isinstance(context, ArtifactAccessContext):
+            raise TemporalArtifactAuthorizationError(
+                "trusted artifact access context required"
+            )
+        return context
+
 
 class TemporalArtifactUnavailableError(TemporalArtifactError):
     """A dependency failed to establish authority or serve retained bytes."""
@@ -2398,19 +2561,9 @@ class TemporalArtifactService:
         except Exception:
             return False
 
-    @classmethod
-    def _reads_all_instance_artifacts(
-        cls, principal: str | None, admitted_principal: str | None
-    ) -> bool:
-        """Single-user (#4351): instance-operator visibility.
-
-        The admitted HTTP operator inspects any instance artifact without a
-        human-owner lookup; legacy owner strings stay as provenance. Machine
-        (workflow:/service:, bare system) readers remain execution-bound.
-        """
-        return cls._is_instance_operator_principal(
-            principal
-        ) or cls._is_instance_operator_principal(admitted_principal)
+    @staticmethod
+    def _reads_all_instance_artifacts(access: ArtifactAccessContext) -> bool:
+        return ArtifactAccessContext.require(access).is_operator
 
     @staticmethod
     def _workflow_id_for_principal(principal: str | None) -> str | None:
@@ -2421,34 +2574,17 @@ class TemporalArtifactService:
         candidate = text[len("workflow:"):].strip()
         return candidate or None
 
-    @staticmethod
-    def _read_candidates(
-        principal: str, admitted_principal: str | None = None
-    ) -> set[str]:
-        """Candidate scopes for a service-to-service read (#4017 impl-06).
-
-        A bare ``service:`` principal is never a generic permission: callers
-        must carry the admitted user/execution scope explicitly. Service
-        candidates are kept for owner-equality (a service owner reading its
-        own artifact) but are skipped for linked-execution grants.
-        """
-        candidates = {str(principal or "").strip()}
-        if admitted_principal:
-            candidates.add(str(admitted_principal).strip())
-        return {item for item in candidates if item}
-
     def _assert_read_access(
         self,
         artifact: db_models.TemporalArtifact,
         *,
-        principal: str,
-        admitted_principal: str | None = None,
+        access: ArtifactAccessContext,
     ) -> None:
+        access = ArtifactAccessContext.require(access)
+        principal = access.principal
         owner = self._owner_principal(artifact)
-        if not owner:
-            return
-        candidates = self._read_candidates(principal, admitted_principal)
-        if owner in candidates:
+        candidates = access.candidates
+        if access.execution_principal is None and owner in candidates:
             return
         # No blanket service-principal bypass: a bare service principal
         # without an admitted user/execution scope is denied here; linked
@@ -2460,7 +2596,7 @@ class TemporalArtifactService:
             raise TemporalArtifactAuthorizationError(
                 f"principal '{principal}' cannot read artifact "
                 f"{artifact.artifact_id} without an admitted scope; "
-                "service readers must carry admitted_principal"
+                "service readers must carry trusted execution admission"
             )
         if any(
             not self._is_service_principal(candidate) for candidate in candidates
@@ -2477,14 +2613,18 @@ class TemporalArtifactService:
         self,
         artifact: db_models.TemporalArtifact,
         *,
-        principal: str,
-        admitted_principal: str | None = None,
+        access: ArtifactAccessContext,
     ) -> None:
-        if self._reads_all_instance_artifacts(principal, admitted_principal):
+        access = ArtifactAccessContext.require(access)
+        principal = access.principal
+        if (
+            artifact.artifact_id in access.admitted_inputs
+            or self._reads_all_instance_artifacts(access)
+        ):
             return
         # Execution-scoped workflow principals may read artifacts linked to
         # their own execution without an operator bypass.
-        for candidate in (principal, admitted_principal):
+        for candidate in access.candidates:
             workflow_id = self._workflow_id_for_principal(candidate)
             if workflow_id is None:
                 continue
@@ -2495,13 +2635,11 @@ class TemporalArtifactService:
             ):
                 return
         try:
-            self._assert_read_access(
-                artifact, principal=principal, admitted_principal=admitted_principal
-            )
+            self._assert_read_access(artifact, access=access)
             return
         except TemporalArtifactAuthorizationError:
             pass
-        candidates = self._read_candidates(principal, admitted_principal)
+        candidates = access.candidates
         for candidate in candidates:
             if self._is_service_principal(candidate):
                 continue
@@ -2558,10 +2696,10 @@ class TemporalArtifactService:
         self,
         artifact: db_models.TemporalArtifact,
         *,
-        principal: str,
-        admitted_principal: str | None = None,
-        recovery_principal: str | None = None,
+        access: ArtifactAccessContext,
     ) -> bool:
+        access = ArtifactAccessContext.require(access)
+        recovery_principal = "operator" if access.operator_recovery else None
         if self._is_quarantined(artifact):
             # Quarantined bytes are never served raw, even to the owner or
             # an admitted scope, and even in local mode: quarantine is a
@@ -2574,8 +2712,8 @@ class TemporalArtifactService:
         ):
             return True
         owner = self._owner_principal(artifact)
-        candidates = self._read_candidates(principal, admitted_principal)
-        if owner and owner in candidates:
+        candidates = access.candidates
+        if access.execution_principal is None and owner and owner in candidates:
             return True
         # HTTP operator recovery is access-only: unlike admitted_principal it
         # never replaces the owner of observed claims or quota accounting.
@@ -2592,12 +2730,11 @@ class TemporalArtifactService:
         self,
         artifact: db_models.TemporalArtifact,
         *,
-        principal: str,
-        admitted_principal: str | None = None,
+        access: ArtifactAccessContext,
     ) -> None:
-        if self._raw_access_allowed(
-            artifact, principal=principal, admitted_principal=admitted_principal
-        ):
+        access = ArtifactAccessContext.require(access)
+        principal = access.principal
+        if self._raw_access_allowed(artifact, access=access):
             return
         raise TemporalArtifactAuthorizationError(
             f"principal '{principal}' cannot access restricted raw artifact {artifact.artifact_id}"
@@ -2607,25 +2744,13 @@ class TemporalArtifactService:
         self,
         artifact: db_models.TemporalArtifact,
         *,
-        principal: str,
-        admitted_principal: str | None = None,
-        recovery_principal: str | None = None,
+        access: ArtifactAccessContext,
     ) -> None:
+        access = ArtifactAccessContext.require(access)
+        principal = access.principal
         self._assert_not_quarantined(artifact)
-        if self._raw_access_allowed(
-            artifact, principal=principal, admitted_principal=admitted_principal,
-            recovery_principal=recovery_principal
-        ):
+        if await self._artifact_raw_access_allowed(artifact, access=access):
             return
-        candidates = self._read_candidates(principal, admitted_principal)
-        for candidate in candidates:
-            if self._is_service_principal(candidate):
-                continue
-            if await self._repository.principal_owns_linked_execution(
-                artifact_id=artifact.artifact_id,
-                principal=candidate,
-            ):
-                return
         raise TemporalArtifactAuthorizationError(
             f"principal '{principal}' cannot access restricted raw artifact {artifact.artifact_id}"
         )
@@ -2634,18 +2759,26 @@ class TemporalArtifactService:
         self,
         artifact: db_models.TemporalArtifact,
         *,
-        principal: str,
-        admitted_principal: str | None = None,
-        recovery_principal: str | None = None,
+        access: ArtifactAccessContext,
     ) -> bool:
+        access = ArtifactAccessContext.require(access)
         if self._is_quarantined(artifact):
             return False
+        if artifact.artifact_id in access._recorded_publication_inputs:
+            return True
         if self._raw_access_allowed(
-            artifact, principal=principal, admitted_principal=admitted_principal,
-            recovery_principal=recovery_principal
+            artifact,
+            access=access,
         ):
             return True
-        candidates = self._read_candidates(principal, admitted_principal)
+        workflow_id = self._workflow_id_for_principal(access.execution_principal)
+        if workflow_id is not None and any(
+            link.workflow_id == workflow_id
+            and link.link_type == _DELEGATED_RAW_LINK_TYPE
+            for link in await self._repository.list_links(artifact.artifact_id)
+        ):
+            return True
+        candidates = access.candidates
         for candidate in candidates:
             if self._is_service_principal(candidate):
                 continue
@@ -2657,46 +2790,9 @@ class TemporalArtifactService:
         return False
 
     async def _assert_saved_work_read_access(
-        self,
-        artifact: db_models.TemporalArtifact,
-        *,
-        principal: str,
-        admitted_principal: str | None = None,
+        self, artifact: db_models.TemporalArtifact, *, access: ArtifactAccessContext
     ) -> None:
-        """Uniform owner policy for saved-work reads (#4017 impl-06).
-
-        Ownership or linked-execution ownership grants access. A bare
-        ``service:`` principal or an ``allow_restricted_raw`` flag is never a
-        generic permission: service-to-service reads must carry the admitted
-        user/execution scope explicitly via ``admitted_principal``.
-        Source-connection provenance, content-hash equality, and knowledge of
-        an artifact/manifest id grant nothing on their own.
-
-        Single-user (#4351): the admitted operator inspects any instance
-        saved-work artifact without a human-owner lookup; legacy owner
-        strings stay as provenance. Machine (``workflow:``/``service:``)
-        readers remain execution-bound below; raw restricted bytes,
-        quarantine, and redaction checks keep their owning gates.
-        """
-        if self._reads_all_instance_artifacts(principal, admitted_principal):
-            return
-        owner = self._owner_principal(artifact)
-        candidates = {principal, *( [admitted_principal] if admitted_principal else [])}
-        candidates = {str(item or "").strip() for item in candidates} - {""}
-        if owner and owner in candidates:
-            return
-        for candidate in candidates:
-            if self._is_service_principal(candidate):
-                continue
-            if await self._repository.principal_owns_linked_execution(
-                artifact_id=artifact.artifact_id,
-                principal=candidate,
-            ):
-                return
-        raise TemporalArtifactAuthorizationError(
-            f"principal '{principal}' cannot read saved-work artifact "
-            f"{artifact.artifact_id}"
-        )
+        await self._assert_artifact_read_access(artifact, access=access)
 
     @staticmethod
     def saved_work_availability_of(
@@ -2740,10 +2836,10 @@ class TemporalArtifactService:
         self,
         dependencies: Any,
         *,
-        principal: str,
-        admitted_principal: str | None = None,
+        access: ArtifactAccessContext,
     ) -> dict[str, Any]:
         """Validate a manifest's bounded dependency graph (#4017 impl-01)."""
+        access = ArtifactAccessContext.require(access)
         entries = _saved_work_retention.validate_saved_work_dependency_entries(
             dependencies
         )
@@ -2787,8 +2883,7 @@ class TemporalArtifactService:
                 continue
             await self._assert_saved_work_read_access(
                 artifact,
-                principal=principal,
-                admitted_principal=admitted_principal,
+                access=access,
             )
             status_value = getattr(artifact.status, "value", artifact.status)
             if str(status_value).lower() != "complete":
@@ -2901,10 +2996,10 @@ class TemporalArtifactService:
         *,
         artifact_id: str,
         principal: str,
+        access: ArtifactAccessContext,
         request_id: str,
         operation_kind: str,
         ttl_seconds: int = 3600,
-        admitted_principal: str | None = None,
         quotas: Mapping[str, int] | None = None,
     ) -> db_models.TemporalArtifactUseClaim:
         """Admit one restore/publication/download use (#4017 impl-03/04).
@@ -2915,11 +3010,11 @@ class TemporalArtifactService:
         recorded. A use request therefore either holds protection before GC
         selects the dependency or receives an explicit terminal state.
         """
+        access = ArtifactAccessContext.require(access)
         artifact = await self._repository.get_artifact_for_update(artifact_id)
         await self._assert_saved_work_read_access(
             artifact,
-            principal=principal,
-            admitted_principal=admitted_principal,
+            access=access,
         )
         reference_now = datetime.now(UTC)
         availability = self.saved_work_availability_of(artifact, now=reference_now)
@@ -3886,35 +3981,20 @@ class TemporalArtifactService:
         self,
         *,
         artifact_id: str,
-        principal: str,
-        admitted_principal: str | None = None,
-        recovery_principal: str | None = None,
-        allow_restricted_raw: bool = False,
+        access: ArtifactAccessContext,
     ) -> tuple[db_models.TemporalArtifact, bytes]:
-        """Read bytes under the uniform saved-work owner policy (#4017 impl-06).
-
-        ``allow_restricted_raw`` is retained for backward compatibility but is
-        never a generic permission: quarantined bytes are unavailable through
-        this raw surface even to the owner or an admitted scope; use the
-        preview/diagnostics path instead. A bare ``service:`` principal
-        without ``admitted_principal`` is denied.
-
-        ``recovery_principal`` carries trusted HTTP admission only to the
-        literal operator ownership or protected conversion grant; it is never
-        a request payload field or an alternative delegation/consumer-accounting
-        scope.
-        """
+        """Read bytes using trusted admission, with separate raw/quarantine gates."""
+        access = ArtifactAccessContext.require(access)
+        principal = access.principal
+        admitted_principal = access.execution_principal
         artifact = await self._repository.get_artifact(artifact_id)
-        await self._assert_artifact_read_access(
-            artifact, principal=principal, admitted_principal=admitted_principal
-        )
+        await self._assert_artifact_read_access(artifact, access=access)
         if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
             raise TemporalArtifactStateError("artifact is not readable")
-        _ = allow_restricted_raw
         self._assert_not_quarantined(artifact)
         await self._assert_artifact_raw_access(
-            artifact, principal=principal, admitted_principal=admitted_principal,
-            recovery_principal=recovery_principal
+            artifact,
+            access=access,
         )
         async with self._bounded_consumer_use(
             artifact_id=artifact.artifact_id,
@@ -3934,23 +4014,20 @@ class TemporalArtifactService:
         self,
         *,
         artifact_id: str,
-        principal: str,
-        admitted_principal: str | None = None,
-        recovery_principal: str | None = None,
-        allow_restricted_raw: bool = False,
+        access: ArtifactAccessContext,
         chunk_size: int = _STREAM_CHUNK_BYTES,
     ) -> tuple[db_models.TemporalArtifact, Iterable[bytes]]:
+        access = ArtifactAccessContext.require(access)
+        principal = access.principal
+        admitted_principal = access.execution_principal
         artifact = await self._repository.get_artifact(artifact_id)
-        await self._assert_artifact_read_access(
-            artifact, principal=principal, admitted_principal=admitted_principal
-        )
+        await self._assert_artifact_read_access(artifact, access=access)
         if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
             raise TemporalArtifactStateError("artifact is not readable")
-        _ = allow_restricted_raw
         self._assert_not_quarantined(artifact)
         await self._assert_artifact_raw_access(
-            artifact, principal=principal, admitted_principal=admitted_principal,
-            recovery_principal=recovery_principal
+            artifact,
+            access=access,
         )
         await self._observe_consumer_use(
             artifact_id=artifact.artifact_id,
@@ -3986,22 +4063,19 @@ class TemporalArtifactService:
         self,
         *,
         artifact_id: str,
-        principal: str,
-        admitted_principal: str | None = None,
-        recovery_principal: str | None = None,
-        allow_restricted_raw: bool = False,
+        access: ArtifactAccessContext,
     ) -> tuple[db_models.TemporalArtifact, Path]:
+        access = ArtifactAccessContext.require(access)
+        principal = access.principal
+        admitted_principal = access.execution_principal
         artifact = await self._repository.get_artifact(artifact_id)
-        await self._assert_artifact_read_access(
-            artifact, principal=principal, admitted_principal=admitted_principal
-        )
+        await self._assert_artifact_read_access(artifact, access=access)
         if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
             raise TemporalArtifactStateError("artifact is not readable")
-        _ = allow_restricted_raw
         self._assert_not_quarantined(artifact)
         await self._assert_artifact_raw_access(
-            artifact, principal=principal, admitted_principal=admitted_principal,
-            recovery_principal=recovery_principal
+            artifact,
+            access=access,
         )
         async with self._bounded_consumer_use(
             artifact_id=artifact.artifact_id,
@@ -4024,10 +4098,9 @@ class TemporalArtifactService:
         self,
         *,
         artifact: db_models.TemporalArtifact,
-        principal: str,
-        admitted_principal: str | None = None,
-        recovery_principal: str | None = None,
+        access: ArtifactAccessContext,
     ) -> ArtifactReadPolicy:
+        access = ArtifactAccessContext.require(access)
         metadata = dict(artifact.metadata_json or {})
         preview_ref: ArtifactRef | None = None
         preview_artifact_id = metadata.get("preview_artifact_id")
@@ -4042,8 +4115,8 @@ class TemporalArtifactService:
                 preview_ref = build_artifact_ref(preview_artifact)
 
         raw_access_allowed = await self._artifact_raw_access_allowed(
-            artifact, principal=principal, admitted_principal=admitted_principal,
-            recovery_principal=recovery_principal
+            artifact,
+            access=access,
         )
         default_read_ref = (
             preview_ref
@@ -4060,34 +4133,28 @@ class TemporalArtifactService:
         self,
         *,
         artifact_id: str,
-        principal: str,
-        admitted_principal: str | None = None,
-        recovery_principal: str | None = None,
+        access: ArtifactAccessContext,
     ) -> tuple[
         db_models.TemporalArtifact,
         list[db_models.TemporalArtifactLink],
         bool,
         ArtifactReadPolicy,
     ]:
+        access = ArtifactAccessContext.require(access)
         artifact = await self._repository.get_artifact(artifact_id)
-        await self._assert_artifact_read_access(
-            artifact, principal=principal, admitted_principal=admitted_principal
-        )
+        await self._assert_artifact_read_access(artifact, access=access)
         links = await self._repository.list_links(artifact.artifact_id)
         pinned = await self._repository.get_pin(artifact.artifact_id)
         read_policy = await self.get_read_policy(
             artifact=artifact,
-            principal=principal,
-            admitted_principal=admitted_principal,
-            recovery_principal=recovery_principal,
+            access=access,
         )
         return artifact, links, pinned is not None, read_policy
 
     async def list_authorized_collection(
         self,
         *,
-        principal: str,
-        admitted_principal: str | None = None,
+        access: ArtifactAccessContext,
         category: str,
         query: str | None,
         offset: int,
@@ -4104,7 +4171,8 @@ class TemporalArtifactService:
         fills; there is no exact total because counting every match is the
         unbounded part.
         """
-        if self._reads_all_instance_artifacts(principal, admitted_principal):
+        access = ArtifactAccessContext.require(access)
+        if self._reads_all_instance_artifacts(access):
             page = await self._repository.list_collection_page(
                 category=category, query=query, offset=offset, limit=limit + 1
             )
@@ -4124,8 +4192,7 @@ class TemporalArtifactService:
                     try:
                         await self._assert_artifact_read_access(
                             artifact,
-                            principal=principal,
-                            admitted_principal=admitted_principal,
+                            access=access,
                         )
                     except TemporalArtifactAuthorizationError:
                         continue
@@ -4154,21 +4221,20 @@ class TemporalArtifactService:
         self,
         *,
         artifact_id: str,
-        principal: str,
-        admitted_principal: str | None = None,
-        recovery_principal: str | None = None,
+        access: ArtifactAccessContext,
         use_ttl_seconds: int | None = None,
     ) -> tuple[db_models.TemporalArtifact, datetime, str]:
+        access = ArtifactAccessContext.require(access)
+        principal = access.principal
+        admitted_principal = access.execution_principal
         artifact = await self._repository.get_artifact(artifact_id)
-        await self._assert_artifact_read_access(
-            artifact, principal=principal, admitted_principal=admitted_principal
-        )
+        await self._assert_artifact_read_access(artifact, access=access)
         if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
             raise TemporalArtifactStateError("artifact is not readable")
         self._assert_not_quarantined(artifact)
         await self._assert_artifact_raw_access(
-            artifact, principal=principal, admitted_principal=admitted_principal,
-            recovery_principal=recovery_principal
+            artifact,
+            access=access,
         )
 
         # Bound signed-download validity by artifact/use/security policy
@@ -4211,6 +4277,60 @@ class TemporalArtifactService:
         )
         return artifact, expires_at, url
 
+    async def delegate_read_access(
+        self,
+        *,
+        artifact_ids: Iterable[str],
+        workflow_id: str,
+        access: ArtifactAccessContext,
+        namespace: str | None = None,
+    ) -> None:
+        """Persist the exact read rights approved by an existing admission owner.
+
+        Uses ordinary artifact execution links. An empty run identifies this
+        workflow's input admission before Temporal assigns its first run; it
+        never claims a source run was a destination run. Only restricted bytes
+        explicitly authorized at admission receive a raw-read link. Quarantine
+        always overrides these grants. Creator and quota ownership are untouched.
+        """
+        access = ArtifactAccessContext.require(access)
+        if not str(workflow_id or "").strip():
+            raise TemporalArtifactValidationError("delegated workflow is required")
+        admitted = []
+        for artifact_id in sorted(set(artifact_ids)):
+            artifact = await self._repository.get_artifact_for_update(artifact_id)
+            await self._assert_artifact_read_access(artifact, access=access)
+            await self._assert_artifact_raw_access(artifact, access=access)
+            if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
+                raise TemporalArtifactStateError("artifact is not readable")
+            admitted.append(artifact)
+        namespace = namespace or self._default_namespace
+        for artifact in admitted:
+            link_type = (
+                _DELEGATED_RAW_LINK_TYPE
+                if artifact.redaction_level
+                is db_models.TemporalArtifactRedactionLevel.RESTRICTED
+                else _DELEGATED_INPUT_LINK_TYPE
+            )
+            if any(
+                link.namespace == namespace
+                and link.workflow_id == workflow_id
+                and link.link_type == link_type
+                for link in await self._repository.list_links(artifact.artifact_id)
+            ):
+                continue
+            await self._repository.add_link(
+                artifact_id=artifact.artifact_id,
+                execution=ExecutionRef(
+                    namespace=namespace,
+                    workflow_id=workflow_id,
+                    run_id="",
+                    link_type=link_type,
+                    label="Admitted workflow input",
+                ),
+            )
+        await self._repository.commit()
+
     async def link_artifact(
         self,
         *,
@@ -4222,6 +4342,13 @@ class TemporalArtifactService:
         # between this read and the link's foreign-key check.
         artifact = await self._repository.get_artifact_for_update(artifact_id)
         coerced_execution_ref = self._coerce_execution_ref(execution_ref)
+        if coerced_execution_ref.link_type in {
+            _DELEGATED_RAW_LINK_TYPE,
+            _DELEGATED_INPUT_LINK_TYPE,
+        }:
+            raise TemporalArtifactAuthorizationError(
+                "read grants require trusted input admission"
+            )
         # Single-user (#4351): execution-scoped workflow principals may link
         # to their own execution without an operator bypass; linking to any
         # other execution still requires owner/operator mutation access.
@@ -4268,11 +4395,12 @@ class TemporalArtifactService:
         namespace: str,
         workflow_id: str,
         run_id: str,
-        principal: str,
-        admitted_principal: str | None = None,
+        access: ArtifactAccessContext,
         link_type: str | None = None,
         latest_only: bool = False,
     ) -> list[db_models.TemporalArtifact]:
+        access = ArtifactAccessContext.require(access)
+        principal = access.principal
         if not principal:
             raise TemporalArtifactAuthorizationError("principal required")
         if latest_only and link_type:
@@ -4296,8 +4424,7 @@ class TemporalArtifactService:
             try:
                 await self._assert_artifact_read_access(
                     artifact,
-                    principal=principal,
-                    admitted_principal=admitted_principal,
+                    access=access,
                 )
             except TemporalArtifactAuthorizationError:
                 continue
@@ -4954,8 +5081,7 @@ class TemporalArtifactService:
         self,
         *,
         artifact_id: str,
-        principal: str,
-        admitted_principal: str | None = None,
+        access: ArtifactAccessContext,
         policy: str | None = None,
     ) -> ArtifactRef:
         """Serve a safe preview separately from raw restore (#4017 impl-06).
@@ -4968,19 +5094,18 @@ class TemporalArtifactService:
         readable here through a trusted internal bypass so a safe preview
         can still be generated while direct raw surfaces stay blocked.
         """
+        access = ArtifactAccessContext.require(access)
+        principal = access.principal
+        admitted_principal = access.execution_principal
         artifact = await self._repository.get_artifact(artifact_id)
-        await self._assert_artifact_read_access(
-            artifact, principal=principal, admitted_principal=admitted_principal
-        )
+        await self._assert_artifact_read_access(artifact, access=access)
         if self._is_quarantined(artifact):
             # Trusted preview path: quarantined bytes are never served raw,
             # but an authorized caller may still derive a safe preview.
             # The raw-access gate stays enforced for non-quarantined content.
             pass
         else:
-            await self._assert_artifact_raw_access(
-                artifact, principal=principal, admitted_principal=admitted_principal
-            )
+            await self._assert_artifact_raw_access(artifact, access=access)
         if artifact.status is not db_models.TemporalArtifactStatus.COMPLETE:
             raise TemporalArtifactStateError("artifact is not readable")
         async with self._bounded_consumer_use(
@@ -5354,8 +5479,8 @@ async def _persist_publication_record(
         namespace=service._default_namespace,
         workflow_id=workflow_id,
         run_id=run_id,
-        principal=principal,
         link_type=link_type,
+        access=ArtifactAccessContext.for_execution(workflow_id),
     ):
         metadata = dict(artifact.metadata_json or {})
         if artifact.status is db_models.TemporalArtifactStatus.COMPLETE and all(
@@ -5432,7 +5557,6 @@ async def find_saved_work_publication_decisions(
     the earlier runs' decisions; the caller reuses the newest one that is
     exactly its own request under the current authority (#4018).
     """
-    principal = f"workflow:{workflow_id}"
     key_hash = _publication_key_hash(operation_key)
     decisions: list[dict[str, Any]] = []
     for artifact in await service._repository.list_for_workflow(
@@ -5449,7 +5573,8 @@ async def find_saved_work_publication_decisions(
             continue
         try:
             _artifact, payload = await service.read(
-                artifact_id=artifact.artifact_id, principal=principal
+                artifact_id=artifact.artifact_id,
+                access=ArtifactAccessContext.for_execution(workflow_id),
             )
             record = json.loads(payload)
         except (TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError):
@@ -5644,8 +5769,8 @@ class TemporalArtifactActivities:
                 namespace=namespace,
                 workflow_id=workflow_id,
                 run_id=run_id,
-                principal=principal,
                 link_type=link_type,
+                access=ArtifactAccessContext.for_activity(),
             )
             for artifact in artifacts:
                 metadata = dict(artifact.metadata_json or {})
@@ -5738,7 +5863,9 @@ class TemporalArtifactActivities:
     def _normalize_activity_artifact_id(
         artifact_ref: ArtifactRef | Mapping[str, Any] | str,
     ) -> str:
-        if isinstance(artifact_ref, ArtifactRef):
+        from moonmind.schemas.temporal_artifact_models import ArtifactRefModel
+
+        if isinstance(artifact_ref, (ArtifactRef, ArtifactRefModel)):
             return artifact_ref.artifact_id
         if isinstance(artifact_ref, Mapping):
             raw_artifact_id = artifact_ref.get("artifact_id") or artifact_ref.get(
@@ -5768,55 +5895,68 @@ class TemporalArtifactActivities:
                 metadata = {}
             metadata.setdefault("name", legacy_name)
             normalized_kwargs["metadata_json"] = metadata
+        from temporalio import activity
+
+        if activity.in_activity():
+            info = activity.info()
+            link = self._service._coerce_execution_ref(normalized_kwargs.get("link"))
+            if link is not None and (
+                link.workflow_id != info.workflow_id
+                or link.link_type
+                in {_DELEGATED_RAW_LINK_TYPE, _DELEGATED_INPUT_LINK_TYPE}
+            ):
+                raise TemporalArtifactAuthorizationError(
+                    "artifact creation target is outside the active execution"
+                )
+            if link is None:
+                normalized_kwargs["link"] = ExecutionRef(
+                    namespace=info.workflow_namespace,
+                    workflow_id=info.workflow_id,
+                    run_id=info.workflow_run_id,
+                    link_type="output.artifact",
+                )
         artifact, upload = await self._service.create(
             principal=principal,
             **normalized_kwargs,
         )
+        if (
+            activity.in_activity()
+            and artifact.redaction_level
+            is db_models.TemporalArtifactRedactionLevel.RESTRICTED
+        ):
+            # This owner just created the resource. Preserve its producer's raw
+            # right without interpreting any historical creator label as a grant.
+            await self._service._repository.add_link(
+                artifact_id=artifact.artifact_id,
+                execution=ExecutionRef(
+                    namespace=info.workflow_namespace,
+                    workflow_id=info.workflow_id,
+                    run_id=info.workflow_run_id,
+                    link_type=_DELEGATED_RAW_LINK_TYPE,
+                ),
+            )
+            await self._service._repository.commit()
         return build_artifact_ref(artifact), upload
 
     async def artifact_read(
         self,
         request: "ArtifactReadInput | Mapping[str, Any] | None" = None,
     ) -> bytes:
+        # Retained histories may contain a principal field. It is decoded as
+        # an ignored extra, never as authority; new callers send only the ref.
+        from pydantic import ValidationError
+
         from moonmind.schemas.temporal_activity_models import ArtifactReadInput
+
         try:
-            from pydantic import ValidationError
-        except ImportError:
-            ValidationError = Exception
-
-        model = None
-        artifact_ref = None
-        principal = None
-
-        if request is not None and isinstance(request, ArtifactReadInput):
-            # Model fast path
-            model = request
-        elif isinstance(request, Mapping):
-            try:
-                # Validate legacy dictionary through the new model
-                model = ArtifactReadInput.model_validate(request)
-            except ValidationError as e:
-                logger.warning(
-                    "Failed to parse artifact.read legacy payload as ArtifactReadInput: %s",
-                    e,
-                )
-                principal = request.get("principal")
-                artifact_ref = request.get("artifact_ref")
-
-        if model:
-            principal = model.principal
-            artifact_ref = getattr(
-                model.artifact_ref, "artifact_id", model.artifact_ref
-            )
-
-        if artifact_ref is None:
-            raise TemporalArtifactValidationError("artifact_ref is required")
-        if not principal:
-            raise TemporalArtifactValidationError("principal is required")
-
+            model = ArtifactReadInput.model_validate(request)
+        except ValidationError as exc:
+            raise TemporalArtifactValidationError(
+                "artifact.read requires a valid artifact_ref"
+            ) from exc
         _artifact, payload = await self._service.read(
-            artifact_id=self._normalize_activity_artifact_id(artifact_ref),
-            principal=principal,
+            artifact_id=self._normalize_activity_artifact_id(model.artifact_ref),
+            access=ArtifactAccessContext.for_activity(),
         )
         return payload
 
@@ -5874,6 +6014,12 @@ class TemporalArtifactActivities:
         elif not isinstance(payload, bytes):
             payload = bytes(payload)
 
+        from temporalio import activity
+
+        if activity.in_activity():
+            await self._service.get_metadata(
+                artifact_id=artifact_id, access=ArtifactAccessContext.for_activity()
+            )
         artifact = await self._service.write_complete(
             artifact_id=artifact_id,
             principal=principal,
@@ -6185,7 +6331,9 @@ class TemporalArtifactActivities:
                     namespace=namespace,
                     workflow_id=workflow_id,
                     run_id=run_id,
-                    principal=_RUN_DIGEST_PERSIST_PRINCIPAL,
+                    access=ArtifactAccessContext.for_service(
+                        _RUN_DIGEST_PERSIST_PRINCIPAL
+                    ),
                     link_type=_RUN_DIGEST_ARTIFACT_LINK_TYPE,
                 )
                 pending_match = None
@@ -6289,9 +6437,9 @@ class TemporalArtifactActivities:
             namespace=namespace,
             workflow_id=workflow_id,
             run_id=run_id,
-            principal=principal,
             link_type=link_type,
             latest_only=latest_only,
+            access=ArtifactAccessContext.for_activity(),
         )
         return [build_artifact_ref(item) for item in artifacts]
 
@@ -6304,8 +6452,8 @@ class TemporalArtifactActivities:
     ) -> ArtifactRef:
         return await self._service.compute_preview(
             artifact_id=artifact_ref.artifact_id,
-            principal=principal,
             policy=policy,
+            access=ArtifactAccessContext.for_activity(),
         )
 
     async def artifact_lifecycle_sweep(
@@ -6367,6 +6515,15 @@ class TemporalArtifactActivities:
         principal: str,
         execution_ref: dict[str, Any] | ExecutionRef,
     ) -> str:
+        access = ArtifactAccessContext.for_activity()
+        execution = self._service._coerce_execution_ref(execution_ref)
+        if execution.workflow_id != self._service._workflow_id_for_principal(
+            access.execution_principal
+        ):
+            raise TemporalArtifactAuthorizationError(
+                "artifact link target is outside the active execution"
+            )
+        await self._service.get_metadata(artifact_id=artifact_id, access=access)
         link = await self._service.link_artifact(
             artifact_id=artifact_id,
             principal=principal,

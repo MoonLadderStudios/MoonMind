@@ -44,6 +44,7 @@ from moonmind.workflows.temporal.report_artifacts import (
     validate_report_artifact_contract,
     validate_report_bundle_result,
 )
+from tests.artifact_access import access_for_test
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -88,7 +89,9 @@ async def test_read_faults_keep_storage_meaning_and_preserve_artifact(
             assert "synthetic" not in str(raised.value)
             assert artifact.status is TemporalArtifactStatus.COMPLETE
             monkeypatch.setattr(store, target, original)
-            _, data = await service.read(artifact_id=artifact.artifact_id, principal="owner")
+            _, data = await service.read(
+                artifact_id=artifact.artifact_id, access=access_for_test("owner")
+            )
             assert data == b"retained"
 
 @asynccontextmanager
@@ -128,7 +131,9 @@ async def test_serving_failure_survives_consumer_cleanup_failure(tmp_path, monke
             monkeypatch.setattr(service, "_release_observed_use", cleanup)
             expected = asyncio.CancelledError if cancel else artifact_module.TemporalArtifactUnavailableError
             with pytest.raises(expected) as raised:
-                await service.read(artifact_id=artifact.artifact_id, principal="owner")
+                await service.read(
+                    artifact_id=artifact.artifact_id, access=access_for_test("owner")
+                )
             if cancel:
                 assert raised.value is primary
             else:
@@ -158,14 +163,21 @@ async def test_preview_write_failure_is_storage_failure(tmp_path, monkeypatch, f
             with monkeypatch.context() as injected:
                 injected.setattr(store, "write_bytes", fail)
                 with pytest.raises(TemporalArtifactError) as raised:
-                    await service.compute_preview(artifact_id=artifact.artifact_id, principal="owner")
+                    await service.compute_preview(
+                        artifact_id=artifact.artifact_id,
+                        access=access_for_test("owner"),
+                    )
                 assert raised.value.code == code
                 assert raised.value.retryable is retryable
             assert artifact.status is TemporalArtifactStatus.COMPLETE
             assert not (artifact.metadata_json or {}).get("preview_artifact_id")
-            preview = await service.compute_preview(artifact_id=artifact.artifact_id, principal="owner")
+            preview = await service.compute_preview(
+                artifact_id=artifact.artifact_id, access=access_for_test("owner")
+            )
             assert preview.artifact_id != artifact.artifact_id
-            _, payload = await service.read(artifact_id=artifact.artifact_id, principal="owner")
+            _, payload = await service.read(
+                artifact_id=artifact.artifact_id, access=access_for_test("owner")
+            )
             assert payload == b"retained"
 
 
@@ -518,8 +530,7 @@ async def test_create_write_read_and_list_for_execution(tmp_path: Path) -> None:
             assert ref.size_bytes == len(b"artifact-bytes")
 
             _artifact, payload = await service.read(
-                artifact_id=artifact.artifact_id,
-                principal="user-1",
+                artifact_id=artifact.artifact_id, access=access_for_test("user-1")
             )
             assert payload == b"artifact-bytes"
 
@@ -527,7 +538,7 @@ async def test_create_write_read_and_list_for_execution(tmp_path: Path) -> None:
                 namespace="moonmind",
                 workflow_id="wf-1",
                 run_id="run-1",
-                principal="user-1",
+                access=access_for_test("user-1"),
             )
             assert [item.artifact_id for item in listed] == [artifact.artifact_id]
 
@@ -1004,9 +1015,9 @@ async def test_latest_report_primary_uses_existing_execution_linkage(
                 namespace="moonmind",
                 workflow_id="wf-report",
                 run_id="run-report",
-                principal="workflow-producer",
                 link_type="report.primary",
                 latest_only=True,
+                access=access_for_test("workflow-producer"),
             )
 
             assert [artifact.artifact_id for artifact in latest] == [
@@ -1078,9 +1089,9 @@ async def test_latest_report_primary_coexists_with_intermediate_report_without_m
                 namespace="moonmind",
                 workflow_id="wf-report",
                 run_id="run-report",
-                principal="workflow-producer",
                 link_type="report.primary",
                 latest_only=True,
+                access=access_for_test("workflow-producer"),
             )
 
             assert [artifact.artifact_id for artifact in latest] == [
@@ -1089,8 +1100,7 @@ async def test_latest_report_primary_coexists_with_intermediate_report_without_m
 
             final_payload_artifact, final_payload = await service.read(
                 artifact_id=final_bundle["primary_report_ref"]["artifact_id"],
-                principal="workflow-producer",
-                allow_restricted_raw=True,
+                access=access_for_test("workflow-producer"),
             )
             assert final_payload_artifact.artifact_id == final_bundle["primary_report_ref"]["artifact_id"]
             assert final_payload == b"# Final report"
@@ -1247,8 +1257,7 @@ async def test_publish_report_bundle_writes_links_final_marker_and_step_metadata
 
             _structured, structured_payload = await service.read(
                 artifact_id=bundle["structured_ref"]["artifact_id"],
-                principal="workflow-producer",
-                allow_restricted_raw=True,
+                access=access_for_test("workflow-producer"),
             )
             assert structured_payload == b'{"findings": [], "status": "complete"}'
 
@@ -1481,12 +1490,10 @@ async def test_compute_preview_redacts_token_like_pairs(tmp_path: Path) -> None:
             )
 
             preview_ref = await service.compute_preview(
-                artifact_id=artifact.artifact_id,
-                principal="user-1",
+                artifact_id=artifact.artifact_id, access=access_for_test("user-1")
             )
             _preview, preview_bytes = await service.read(
-                artifact_id=preview_ref.artifact_id,
-                principal="user-1",
+                artifact_id=preview_ref.artifact_id, access=access_for_test("user-1")
             )
             preview_text = preview_bytes.decode("utf-8")
             assert "abc123" not in preview_text
@@ -1776,8 +1783,7 @@ async def test_write_payload_complete_persists_trusted_multipart_bytes(
                 content_type="application/octet-stream",
             )
             _stored, stored_payload = await service.read(
-                artifact_id=artifact.artifact_id,
-                principal="system",
+                artifact_id=artifact.artifact_id, access=access_for_test("system")
             )
 
             assert completed.status.value == "complete"
@@ -1838,8 +1844,7 @@ async def test_content_addressed_checkpoint_blobs_keep_logical_retention_authori
             )
             assert blob_path.read_bytes() == payload
             _metadata, restored = await service.read(
-                artifact_id=second.artifact_id,
-                principal="system",
+                artifact_id=second.artifact_id, access=access_for_test("system")
             )
             assert restored == payload
 
@@ -1926,7 +1931,7 @@ async def test_write_integration_event_artifact_creates_restricted_preview(
 
             artifact, _links, _pinned, policy = await service.get_metadata(
                 artifact_id=artifact_ref.artifact_id,
-                principal="service:integration-callback",
+                access=access_for_test("service:integration-callback"),
             )
             assert artifact.metadata_json["artifact_kind"] == "integration_event"
             assert artifact.retention_class.value == "ephemeral"
@@ -2014,11 +2019,11 @@ async def test_execution_owner_can_read_linked_artifact_from_other_principal(
 
             linked_artifact, _links, _pinned, policy = await service.get_metadata(
                 artifact_id=artifact.artifact_id,
-                principal=execution_owner,
+                access=access_for_test(execution_owner),
             )
             _raw_artifact, payload = await service.read(
                 artifact_id=artifact.artifact_id,
-                principal=execution_owner,
+                access=access_for_test(execution_owner),
             )
 
             assert linked_artifact.artifact_id == artifact.artifact_id
@@ -2036,7 +2041,7 @@ async def test_execution_owner_can_read_linked_artifact_from_other_principal(
             with pytest.raises(TemporalArtifactAuthorizationError, match="cannot read"):
                 await service.get_metadata(
                     artifact_id=artifact.artifact_id,
-                    principal="user-no-execution-access",
+                    access=access_for_test("user-no-execution-access"),
                 )
 
 async def test_write_integration_result_and_failure_artifacts_assign_link_retention(

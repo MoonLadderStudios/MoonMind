@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -13,20 +13,13 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.api.instance_access import (
-    access_principal,
-    access_user_id,
-    is_instance_operator,
-)
+from api_service.api.instance_access import access_user_id, is_instance_operator
 from api_service.api.routers.omnigent_bridge import (
     _get_bridge_proxy,
     _require_bridge_enabled,
 )
-from api_service.api.routers.temporal_artifacts import (
-    _get_temporal_artifact_service,
-    _resolve_recovery_principal,
-)
-from api_service.auth_providers import get_instance_access
+from api_service.api.routers.temporal_artifacts import _get_temporal_artifact_service
+from api_service.auth_providers import get_artifact_access, get_instance_access
 from api_service.db.base import get_async_session
 from api_service.db.models import (
     ManagedAgentProviderProfile,
@@ -75,7 +68,10 @@ from moonmind.workflows.executions.execution_contract import (
     WorkflowContractError,
     reject_retired_vector_fields,
 )
-from moonmind.workflows.temporal.artifacts import TemporalArtifactService
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    TemporalArtifactService,
+)
 
 router = APIRouter(
     prefix="/api/omnigent/agent-profiles", tags=["Omnigent Agent Profiles"]
@@ -769,15 +765,13 @@ def _bridge_refresh(
 
 
 def _artifact_bundle_reader(
-    artifact_service: TemporalArtifactService, current_user: Any,
-    recovery_principal: str | None = None,
+    artifact_service: TemporalArtifactService, *, access: ArtifactAccessContext
 ):
     """Bind artifact-boundary bundle reads to the readiness-check core."""
 
     async def _read(artifact_id: str) -> bytes:
         _stored_artifact, bundle_bytes = await artifact_service.read(
-            artifact_id=artifact_id, principal=access_principal(current_user),
-            recovery_principal=recovery_principal,
+            artifact_id=artifact_id, access=access
         )
         return bundle_bytes
 
@@ -1208,7 +1202,8 @@ async def validate_profile(
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
     bridge_config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     bridge_proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
-    recovery_principal: Annotated[str | None, Depends(_resolve_recovery_principal)] = None,
+    *,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
 ) -> dict[str, Any]:
     """Perform bounded, credential-free readiness validation before activation."""
     profile, versions = await _load(session, profile_id)
@@ -1229,9 +1224,7 @@ async def validate_profile(
             config=bridge_config,
             proxy=bridge_proxy,
         ),
-        read_bundle_bytes=_artifact_bundle_reader(
-            artifact_service, current_user, recovery_principal
-        ),
+        read_bundle_bytes=_artifact_bundle_reader(artifact_service, access=access),
     )
     target.upstream_snapshot = outcome.upstream_snapshot
     validation_schema = (
@@ -1266,7 +1259,8 @@ async def smoke_validate_profile(
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
     bridge_config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     bridge_proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
-    recovery_principal: Annotated[str | None, Depends(_resolve_recovery_principal)] = None,
+    *,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
 ) -> dict[str, Any]:
     """Run an operator-triggered bounded smoke preflight (Sec 7).
 
@@ -1300,9 +1294,7 @@ async def smoke_validate_profile(
                 config=bridge_config,
                 proxy=bridge_proxy,
             ),
-            read_bundle_bytes=_artifact_bundle_reader(
-                artifact_service, current_user, recovery_principal
-            ),
+            read_bundle_bytes=_artifact_bundle_reader(artifact_service, access=access),
         )
 
     async def _session_start_probe() -> dict[str, Any]:
@@ -1359,7 +1351,8 @@ async def import_profile_bundle(
     artifact_service: TemporalArtifactService = Depends(_get_temporal_artifact_service),
     bridge_config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     bridge_proxy: OmnigentBridgeSessionProxy | None = Depends(_get_bridge_proxy),
-    recovery_principal: Annotated[str | None, Depends(_resolve_recovery_principal)] = None,
+    *,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
 ) -> dict[str, Any]:
     """Publish one validated immutable bundle through the authorized facade."""
 
@@ -1428,8 +1421,7 @@ async def import_profile_bundle(
 
     artifact_id = artifact_ref.removeprefix("artifact:")
     stored_artifact, bundle_bytes = await artifact_service.read(
-        artifact_id=artifact_id, principal=access_principal(current_user),
-        recovery_principal=recovery_principal,
+        artifact_id=artifact_id, access=access
     )
     filename = f"{profile_id}-v{target.version}.bundle"
     try:

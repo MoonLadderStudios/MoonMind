@@ -16,6 +16,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from tests.artifact_access import access_for_test
 
 ROOT = Path(__file__).resolve().parents[4]
 REPLAY = json.loads(
@@ -140,7 +141,8 @@ async def test_plan_generate_replays_without_planner_docker_authority(
                 PlanGenerateInput.model_validate(request) if typed_request else request
             )
             _, content = await service.read(
-                artifact_id=result.plan_ref.artifact_id, principal=principal
+                artifact_id=result.plan_ref.artifact_id,
+                access=access_for_test(principal),
             )
             plan = json.loads(content)
             node = plan["nodes"][0]

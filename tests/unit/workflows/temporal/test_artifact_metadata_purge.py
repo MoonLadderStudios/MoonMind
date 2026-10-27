@@ -31,6 +31,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactStateError,
     generate_artifact_id,
 )
+from tests.artifact_access import access_for_test
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -579,7 +580,9 @@ async def test_missing_artifact_older_than_horizon_reports_expiration(
                 datetime.now(UTC) - HORIZON - timedelta(days=1)
             )
             with pytest.raises(TemporalArtifactExpiredError) as expired:
-                await service.get_metadata(artifact_id=old_id, principal="user-1")
+                await service.get_metadata(
+                    artifact_id=old_id, access=access_for_test("user-1")
+                )
             message = str(expired.value)
             assert message.startswith(f"Artifact {old_id} was not found")
             assert "expired" in message
@@ -587,11 +590,13 @@ async def test_missing_artifact_older_than_horizon_reports_expiration(
 
             recent_id = generate_artifact_id()
             with pytest.raises(TemporalArtifactNotFoundError) as missing:
-                await service.get_metadata(artifact_id=recent_id, principal="user-1")
+                await service.get_metadata(
+                    artifact_id=recent_id, access=access_for_test("user-1")
+                )
             assert not isinstance(missing.value, TemporalArtifactExpiredError)
 
             with pytest.raises(TemporalArtifactNotFoundError) as opaque:
                 await service.get_metadata(
-                    artifact_id="art_unknown", principal="user-1"
+                    artifact_id="art_unknown", access=access_for_test("user-1")
                 )
             assert not isinstance(opaque.value, TemporalArtifactExpiredError)

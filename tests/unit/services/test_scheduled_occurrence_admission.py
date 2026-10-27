@@ -17,10 +17,9 @@ import pytest
 
 from api_service.db.models import ManagedAgentProviderProfile, TemporalArtifact
 from api_service.services import omnigent_execution_plan_service as plan_service
-from api_service.services.recurring_workflows_service import (
-    RecurringWorkflowsService,
-)
+from api_service.services.recurring_workflows_service import RecurringWorkflowsService
 from moonmind.omnigent.harness_platform import stores
+from tests.artifact_access import access_for_test
 from tests.unit.services.test_omnigent_execution_plan_service import (
     _ArtifactService,
     _configure_ready_host_image_pair,
@@ -68,9 +67,7 @@ class _RetiringArtifacts(_ArtifactService):
         self.retired: list[str] = []
 
     async def read(self, *, artifact_id: str, **_kwargs):
-        from moonmind.workflows.temporal.artifacts import (
-            TemporalArtifactNotFoundError,
-        )
+        from moonmind.workflows.temporal.artifacts import TemporalArtifactNotFoundError
 
         if artifact_id not in self.payloads:
             raise TemporalArtifactNotFoundError(artifact_id)
@@ -168,6 +165,7 @@ async def _schedule_parameters(artifacts) -> dict:
         task_input_snapshot_ref=_TASK_REF,
         task_input_snapshot_digest=_TASK_DIGEST,
         execution_plan_store=_PlanStore(object()),
+        access=access_for_test("original-task-principal"),
     )
     parameters["omnigentExecutionPlan"] = stored.binding.model_dump(
         mode="json", by_alias=True, exclude_none=True

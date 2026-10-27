@@ -14,13 +14,13 @@ from urllib.parse import urlsplit
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import CancelledError
-from temporalio.workflow import (
-    ActivityCancellationType,
-    ChildWorkflowCancellationType,
-)
+from temporalio.workflow import ActivityCancellationType, ChildWorkflowCancellationType
+
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 with workflow.unsafe.imports_passed_through():
     from sqlalchemy import select
+
     from api_service.db.base import async_session_maker
     from api_service.db.models import (
         OmnigentBridgeSessionEvent,
@@ -646,8 +646,9 @@ async def _write_result_artifact(
             if getattr(artifact.status, "value", artifact.status) == "complete":
                 _stored, existing_payload = await artifacts.read(
                     artifact_id=artifact.artifact_id,
-                    principal=principal,
-                    allow_restricted_raw=True,
+                    access=ArtifactAccessContext.for_execution(
+                        source_workflow_id, principal=_RETENTION_PRINCIPAL
+                    ),
                 )
                 if existing_payload != data:
                     raise CheckpointBranchRetainedEvidenceError(
@@ -706,7 +707,7 @@ async def _pin_temporal_artifact(
     source_workflow_id: str,
     source_run_id: str,
     branch_turn_id: str,
-    read_scopes: tuple[str, ...],
+    read_scopes: tuple[ArtifactAccessContext, ...],
 ) -> bytes:
     """Read, durably link, and pin one Temporal-owned evidence artifact."""
 
@@ -720,15 +721,11 @@ async def _pin_temporal_artifact(
                 try:
                     _metadata, links, pinned, _read_policy = (
                         await artifacts.get_metadata(
-                            artifact_id=artifact_id,
-                            principal=_RETENTION_PRINCIPAL,
-                            admitted_principal=read_scope,
+                            artifact_id=artifact_id, access=read_scope
                         )
                     )
                     _artifact, data = await artifacts.read(
-                        artifact_id=artifact_id,
-                        principal=_RETENTION_PRINCIPAL,
-                        admitted_principal=read_scope,
+                        artifact_id=artifact_id, access=read_scope
                     )
                     break
                 except TemporalArtifactAuthorizationError:
@@ -808,8 +805,7 @@ async def _promote_omnigent_artifact(
             if getattr(artifact.status, "value", artifact.status) == "complete":
                 _stored, existing = await artifacts.read(
                     artifact_id=artifact.artifact_id,
-                    principal=_RETENTION_PRINCIPAL,
-                    allow_restricted_raw=True,
+                    access=ArtifactAccessContext.for_service(_RETENTION_PRINCIPAL),
                 )
                 if existing != data:
                     raise CheckpointBranchRetainedEvidenceError(
@@ -850,7 +846,7 @@ async def _promote_omnigent_artifact(
             )
         _metadata, _links, pinned, _read_policy = await artifacts.get_metadata(
             artifact_id=artifact.artifact_id,
-            principal=_RETENTION_PRINCIPAL,
+            access=ArtifactAccessContext.for_service(_RETENTION_PRINCIPAL),
         )
         if not pinned:
             await artifacts.pin(
@@ -869,7 +865,7 @@ async def _retain_artifact(
     source_workflow_id: str,
     source_run_id: str,
     branch_turn_id: str,
-    read_scopes: tuple[str, ...],
+    read_scopes: tuple[ArtifactAccessContext, ...],
 ) -> tuple[str, bytes]:
     """Resolve evidence and transfer lifecycle authority before it is recorded."""
 
@@ -946,9 +942,7 @@ async def _record_branch_terminal_meaning(
         TerminalMeaning,
         terminal_meaning_patch,
     )
-    from moonmind.omnigent.control_plane.identities import (
-        canonical_omnigent_session_id,
-    )
+    from moonmind.omnigent.control_plane.identities import canonical_omnigent_session_id
 
     # Resolve the canonical session exactly the way the branch claim does: the
     # provider-session scope is authoritative once a realizer has attached its
@@ -1020,7 +1014,9 @@ async def persist_checkpoint_branch_turn_terminal(
         )
         read_scopes = tuple(
             dict.fromkeys(
-                f"workflow:{scope}"
+                ArtifactAccessContext.for_execution(
+                    scope, principal=_RETENTION_PRINCIPAL
+                )
                 for scope in (
                     branch.workflow_id,
                     locked_turn.diagnostics["executionWorkflowId"],
@@ -1135,8 +1131,9 @@ async def persist_checkpoint_branch_turn_terminal(
                     )
                     _manifest, manifest_bytes = await artifacts.read(
                         artifact_id=manifest_ref.removeprefix("artifact://"),
-                        principal=_RETENTION_PRINCIPAL,
-                        admitted_principal=f"workflow:{branch.workflow_id}",
+                        access=ArtifactAccessContext.for_execution(
+                            branch.workflow_id, principal=_RETENTION_PRINCIPAL
+                        ),
                     )
                     stored_request = AgentExecutionRequest.model_validate(
                         json.loads(manifest_bytes)["agentExecutionRequest"]
@@ -1454,7 +1451,9 @@ async def persist_checkpoint_branch_turn_terminal_rejection(
         )
         read_scopes = tuple(
             dict.fromkeys(
-                f"workflow:{scope}"
+                ArtifactAccessContext.for_execution(
+                    scope, principal=_RETENTION_PRINCIPAL
+                )
                 for scope in (
                     branch.workflow_id,
                     locked_turn.diagnostics["executionWorkflowId"],

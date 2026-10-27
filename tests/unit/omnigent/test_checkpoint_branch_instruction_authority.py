@@ -37,6 +37,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from tests.artifact_access import access_for_test
 
 pytestmark = pytest.mark.asyncio
 
@@ -230,8 +231,10 @@ async def test_claimed_owner_admits_instruction_before_dispatch_and_on_retry(
         assert links[0].run_id == fixture.identity.semantic_run_id
         artifact, body = await fixture.artifacts(session).read(
             artifact_id=fixture.ref.removeprefix("artifact://"),
-            principal="service:omnigent-generic-host",
-            admitted_principal=f"workflow:{fixture.identity.workflow_id}",
+            access=access_for_test(
+                "service:omnigent-generic-host",
+                admitted_principal=f"workflow:{fixture.identity.workflow_id}",
+            ),
         )
         assert body == fixture.text
         assert artifact.created_by_principal == fixture.producer
@@ -240,8 +243,9 @@ async def test_claimed_owner_admits_instruction_before_dispatch_and_on_retry(
                 with pytest.raises(TemporalArtifactAuthorizationError):
                     await fixture.artifacts(session).read(
                         artifact_id=fixture.ref.removeprefix("artifact://"),
-                        principal="service:omnigent-generic-host",
-                        admitted_principal=scope,
+                        access=access_for_test(
+                            "service:omnigent-generic-host", admitted_principal=scope
+                        ),
                     )
 
 
@@ -400,8 +404,10 @@ async def test_retained_inflight_turn_recovers_only_recorded_instruction(
     async with fixture.sessions() as session:
         artifact, links, pinned, _ = await fixture.artifacts(session).get_metadata(
             artifact_id=fixture.ref.removeprefix("artifact://"),
-            principal="service:checkpoint-branch-turn",
-            admitted_principal=f"workflow:{fixture.identity.workflow_id}",
+            access=access_for_test(
+                "service:checkpoint-branch-turn",
+                admitted_principal=f"workflow:{fixture.identity.workflow_id}",
+            ),
         )
         assert pinned
         assert artifact.created_by_principal == fixture.producer
@@ -557,8 +563,10 @@ async def test_prepared_input_list_cannot_admit_another_instruction(
             with pytest.raises(TemporalArtifactAuthorizationError):
                 await fixture.artifacts(session).read(
                     artifact_id=other_ref.removeprefix("artifact://"),
-                    principal="service:checkpoint-branch-turn",
-                    admitted_principal=f"workflow:{fixture.identity.workflow_id}",
+                    access=access_for_test(
+                        "service:checkpoint-branch-turn",
+                        admitted_principal=f"workflow:{fixture.identity.workflow_id}",
+                    ),
                 )
 
 
@@ -642,14 +650,16 @@ async def test_local_instruction_preserves_validation_and_terminal_promotion(
     async with fixture.sessions() as session:
         _, result_bytes = await fixture.artifacts(session).read(
             artifact_id=result["agentResultRef"].removeprefix("artifact://"),
-            principal="service:checkpoint-branch-turn",
-            admitted_principal="workflow:source",
+            access=access_for_test(
+                "service:checkpoint-branch-turn", admitted_principal="workflow:source"
+            ),
         )
         promoted_ref = json.loads(result_bytes)["outputRefs"][0]
         assert promoted_ref.startswith("artifact://art_")
         _, promoted_bytes = await fixture.artifacts(session).read(
             artifact_id=promoted_ref.removeprefix("artifact://"),
-            principal="service:checkpoint-branch-turn",
-            admitted_principal="workflow:source",
+            access=access_for_test(
+                "service:checkpoint-branch-turn", admitted_principal="workflow:source"
+            ),
         )
         assert promoted_bytes == fixture.text
