@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+[[rules]]
+id = "moonmind-qualification-secret"
+description = "Synthetic credential fixture"
+regex = '''MOONMIND_TEST_SECRET_[A-Z0-9]{16}'''
