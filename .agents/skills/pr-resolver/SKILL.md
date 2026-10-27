@@ -123,7 +123,7 @@ check. Under `finishMode=merge` the same state is a durable
 - inputs.finalizeMaxRetries (default 60)
 - inputs.finalizeBackoffSeconds (default 30)
 - inputs.finalizeMaxSleepSeconds (default 120)
-- inputs.finalizeMaxElapsedSeconds (default 7200)
+- inputs.finalizeMaxElapsedSeconds (default 7200; limits new remediation, see step 5)
 - Retryable/no-progress blockers use at least 5 finalize attempts before
   returning `attempts_exhausted`, unless a hard timeout, hard failure, or
   non-retryable blocker is reached first.
@@ -341,6 +341,11 @@ metadata flag.
 5. Enforce `maxIterations`, `finalizeMaxRetries`, and
    `finalizeMaxElapsedSeconds`. Retryable/no-progress states receive at least five
    finalize checks unless the elapsed-time limit or a hard failure is reached.
+   The elapsed limit stops new remediation, not observation of running CI: past
+   it, keep checking while the gate reports `ci_running` (still bounded by
+   `finalizeMaxRetries`), and merge if it opens. Slow CI can outlast the limit
+   on its own, and abandoning a pushed fix mid-run wastes it. Any other blocker
+   past the limit returns `attempts_exhausted` with reason `timeout`.
 6. Before reporting success, generate `artifacts/publish_result.json` from the
    final resolver result with the shared publish-evidence helper.
 
