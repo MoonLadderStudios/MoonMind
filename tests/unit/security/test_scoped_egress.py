@@ -193,6 +193,7 @@ class LeaseDocker:
         self.forwarding = b"0\n"
         self.proxy_healthy = True
         self.fail_start = False
+        self.configured_subnets = set()
         self.networks = {
             "moonmind-test-lab": {
                 "Id": "lab-network-id",
@@ -239,6 +240,8 @@ class LeaseDocker:
             result = "\n".join(self.networks).encode()
         elif args[:2] == ("network", "create"):
             name = args[-1]
+            if "--subnet" in args:
+                self.configured_subnets.add(name)
             self.networks[name] = {
                 "Id": name + "-id",
                 "Driver": "bridge",
@@ -249,9 +252,15 @@ class LeaseDocker:
                 "IPAM": {
                     "Config": [
                         {
-                            "Subnet": "10.248.0.0/24"
-                            if "--internal" in args
-                            else "10.249.0.0/24"
+                            "Subnet": (
+                                self.values(args, "--subnet")[0]
+                                if "--subnet" in args
+                                else (
+                                    "10.248.0.0/24"
+                                    if "--internal" in args
+                                    else "10.249.0.0/24"
+                                )
+                            )
                         }
                     ]
                 },
@@ -266,6 +275,7 @@ class LeaseDocker:
             if self.networks[name]["Containers"]:
                 return 1, b"", b"active endpoints"
             del self.networks[name]
+            self.configured_subnets.discard(name)
         elif args[0] == "inspect":
             target = self.container(args[-1])
             if target is None:
@@ -302,6 +312,8 @@ class LeaseDocker:
         elif args[0] == "create":
             name = self.values(args, "--name")[0]
             network = self.values(args, "--network")[0]
+            if "--ip" in args and network not in self.configured_subnets:
+                return 1, b"", b"static IP requires a user configured subnet"
             image = next(v for v in args if v.startswith("sha256:"))
             self.containers[name] = {
                 "Id": name + "-id",
@@ -432,6 +444,49 @@ def lease_setup(tmp_path, monkeypatch):
         evidence_publisher=publish,
     )
     return scoped_egress, docker, request, backend, published
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["reservation-receipt", "configured-create"])
+async def test_scoped_network_setup_failure_recovers_and_cleans_owned_reservations(
+    lease_setup, monkeypatch, failure
+):
+    _, docker, request, backend, _ = lease_setup
+    lease = backend._scoped_lease(request)
+
+    async def fail_network_setup(args):
+        if tuple(args[:2]) == ("network", "create"):
+            if (
+                failure == "reservation-receipt"
+                and args[-1] == lease.network_ref + "-subnet"
+            ):
+                await docker(args)
+                return 1, b"", b"lost network create receipt"
+            if failure == "configured-create" and args[-1] == lease.network_ref:
+                return 1, b"", b"network create transport failure"
+        return await docker(args)
+
+    monkeypatch.setattr(backend, "_runner", fail_network_setup)
+    with pytest.raises(RuntimeError, match="network.*failed"):
+        await backend.create_container(request)
+    assert (await backend.cleanup(request)).cleanup_succeeded is True
+    assert set(docker.networks) == {"moonmind-test-lab"}
+    assert set(docker.containers) == {"moonmind-test-target"}
+
+    monkeypatch.setattr(backend, "_runner", docker)
+    created = await backend.create_container(request)
+    request.container_ref = created.container_ref
+    assert lease.network_ref in docker.configured_subnets
+    assert set(docker.networks) == {
+        "moonmind-test-lab",
+        lease.network_ref,
+        lease.outbound_ref,
+    }
+    await backend.start_container(request)
+    await backend.remove_container(request)
+    assert (await backend.cleanup(request)).cleanup_succeeded is True
+    assert set(docker.networks) == {"moonmind-test-lab"}
+    assert set(docker.containers) == {"moonmind-test-target"}
 
 
 @pytest.mark.asyncio

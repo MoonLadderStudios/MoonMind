@@ -170,6 +170,7 @@ class ScopedEgressLease:
             "moonmind-egress-" + hashlib.sha256(ownership.encode()).hexdigest()[:20]
         )
         self.network_ref = self.gateway_ref + "-internal"
+        self.subnet_ref = self.network_ref + "-subnet"
         self.outbound_ref = self.gateway_ref + "-outbound"
 
     @property
@@ -351,8 +352,6 @@ class ScopedEgressLease:
                     f"{_OWNER}={self.ownership}",
                     "--label",
                     f"{_LABEL}={self.policy.digest}",
-                    "--label",
-                    f"{_DEADLINE}={expires}",
                 ]
                 if internal:
                     args.extend(
@@ -362,7 +361,29 @@ class ScopedEgressLease:
                             "com.docker.network.bridge.inhibit_ipv4=true",
                         )
                     )
-                await self._checked(*args, name)
+                    # Docker selects a free pool, but --ip requires an explicit
+                    # subnet. Release the empty reservation before using that
+                    # pool explicitly; a concurrent allocation fails closed.
+                    reservation = await self._optional(self.subnet_ref, network=True)
+                    if reservation is None:
+                        await self._checked(
+                            *args, "--label", f"{_DEADLINE}={expires}", self.subnet_ref
+                        )
+                        reservation = await self._optional(
+                            self.subnet_ref, network=True
+                        )
+                    self._owned(reservation or {}, network=True)
+                    subnet = ipaddress.ip_network(
+                        reservation["IPAM"]["Config"][0]["Subnet"]
+                    )
+                    if subnet.version != 4 or subnet.num_addresses < 8:
+                        raise RuntimeError(
+                            "scoped egress network address space is invalid"
+                        )
+                    expires = min(expires, float(reservation["Labels"][_DEADLINE]))
+                    await self._checked("network", "rm", reservation["Id"])
+                    args.extend(("--subnet", str(subnet)))
+                await self._checked(*args, "--label", f"{_DEADLINE}={expires}", name)
                 network = await self._optional(name, network=True)
             self._owned(network or {}, network=True)
             expires = min(expires, float(network["Labels"][_DEADLINE]))
@@ -703,7 +724,7 @@ class ScopedEgressLease:
         if gateway is not None:
             self._owned(gateway, cleanup=True)
             await self._checked("rm", "--force", gateway["Id"])
-        for name in (self.network_ref, self.outbound_ref):
+        for name in (self.network_ref, self.outbound_ref, self.subnet_ref):
             network = await self._optional(name, network=True)
             if network is not None:
                 self._owned(network, network=True, cleanup=True)

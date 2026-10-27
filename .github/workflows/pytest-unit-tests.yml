@@ -883,12 +883,12 @@ jobs:
     permissions:
       contents: read
       packages: read
-    # Hermetic worst case: 17m bounded setup/proxy checks + 33m execution/cleanup + 4m
-    # evidence collection/upload + 1m runner/post-action overhead.
+    # Hermetic worst case: 12m setup + 5m proxy checks + 5m scoped-egress checks
+    # + 33m execution/cleanup + 4m reports + 1m runner/post-action overhead.
     # Journey worst case: 23m bootstrap/image/Node + 25m npm/OS/browser +
     # 2m disk diagnostics + 25m tests + 6m reporting + 4m post-action reserve.
     # Setup gets its own budget; the journey test deadlines are unchanged.
-    timeout-minutes: ${{ matrix.suite == 'hermetic' && 55 || 85 }}
+    timeout-minutes: ${{ matrix.suite == 'hermetic' && 60 || 85 }}
     strategy:
       fail-fast: ${{ github.event_name != 'schedule' }}
       matrix: ${{ fromJSON(needs.select-test-suites.outputs.integration_matrix) }}

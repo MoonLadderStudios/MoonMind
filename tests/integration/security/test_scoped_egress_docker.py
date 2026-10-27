@@ -24,6 +24,7 @@ from moonmind.workflows.temporal.container_job_backend import DockerContainerJob
 
 pytestmark = [
     pytest.mark.integration,
+    pytest.mark.integration_ci,
     pytest.mark.skipif(
         os.environ.get("MOONMIND_RUN_SCOPED_EGRESS_DOCKER") != "1",
         reason="dedicated isolated CI Docker entrypoint",
