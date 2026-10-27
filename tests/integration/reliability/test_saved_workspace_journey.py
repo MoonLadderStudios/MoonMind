@@ -17,6 +17,7 @@ from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
 from moonmind.omnigent.workspace_publication import OmnigentWorkspacePublicationService
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
     LocalTemporalArtifactStore,
     S3TemporalArtifactStore,
     TemporalArtifactRepository,
@@ -315,7 +316,8 @@ async def test_saved_candidate_is_readable_after_worker_and_workspace_loss(
                 repository_source_root=tmp_path / "absent-source",
             )
             result = await restore.restore(
-                restore_request, admitted_principal="service:omnigent-generic-host"
+                restore_request,
+                access=ArtifactAccessContext.for_execution(workflow_id),
             )
         restored = root / "temporal_sandbox" / destination_id / "repo"
         restored_head = subprocess.check_output(

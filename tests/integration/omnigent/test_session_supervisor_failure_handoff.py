@@ -23,6 +23,7 @@ from moonmind.workflows.temporal.activities.omnigent_session_activities import (
     omnigent_persist_failure_activity,
     omnigent_stop_host_activity,
 )
+from tests.artifact_access import access_for_test
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -288,7 +289,9 @@ async def test_post_terminal_integration_failure_preserves_primary_evidence(
 
     session = await _seed_session(production_store, "post-terminal-failure")
     session, primary_ref = await _attach_primary_success(production_store, session)
-    primary_before = await _read_json_artifact(primary_ref)
+    primary_before = await _read_json_artifact(
+        primary_ref, access=access_for_test("workflow:" + session.moonmind_workflow_id)
+    )
     async with production_store.transaction() as repos:
         turns_before = await repos.turn_attempts.list_for_session(session.session_id)
         commands_before = await repos.commands.list_for_session(session.session_id)
@@ -322,7 +325,13 @@ async def test_post_terminal_integration_failure_preserves_primary_evidence(
     assert persisted.metadata["workflowFailureEvidenceRef"] == (
         response["terminalResultRef"]
     )
-    assert await _read_json_artifact(primary_ref) == primary_before
+    assert (
+        await _read_json_artifact(
+            primary_ref,
+            access=access_for_test("workflow:" + session.moonmind_workflow_id),
+        )
+        == primary_before
+    )
     async with production_store.transaction() as repos:
         turns_after = await repos.turn_attempts.list_for_session(session.session_id)
         commands_after = await repos.commands.list_for_session(session.session_id)

@@ -4,9 +4,9 @@ import json
 from typing import Any
 
 import pytest
-from tests.support.issue_claims import ClaimCommentFixture, issue_claim_store  # noqa: F401
 
 from moonmind.workflows.temporal import story_output_tools as story_tools
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.story_output_tools import (
     check_github_issue_blockers,
     check_jira_blockers,
@@ -23,6 +23,11 @@ from moonmind.workflows.temporal.story_output_tools import (
     update_github_issue_status,
     update_jira_issue_status,
 )
+from tests.support.issue_claims import (  # noqa: F401
+    ClaimCommentFixture,
+    issue_claim_store,
+)
+
 
 class _FakeJiraService:
     def __init__(self) -> None:
@@ -137,7 +142,6 @@ class _RecordingDispatcher:
 
 
 import re as _re_for_fake_urls
-
 
 # Shared fake GitHub issue state so targeted label mutations performed through
 # the fake service are visible to HTTP read-back, while unrelated labels are
@@ -5358,22 +5362,25 @@ class _FakeAssessmentArtifactService:
         self,
         *,
         artifact_id: str,
-        principal: str,
-        allow_restricted_raw: bool = False,
+        access: ArtifactAccessContext,
     ) -> tuple[object, bytes]:
+        ArtifactAccessContext.require(access)
+        assert not access.is_operator and not access.operator_recovery
         self.read_calls.append(artifact_id)
         payload = self._payloads[artifact_id]
         return object(), json.dumps(payload).encode("utf-8")
 
 
 class _FakeMappingAssessmentArtifactService(_FakeAssessmentArtifactService):
+
     async def read(
         self,
         *,
         artifact_id: str,
-        principal: str,
-        allow_restricted_raw: bool = False,
+        access: ArtifactAccessContext,
     ) -> tuple[object, dict[str, Any]]:
+        ArtifactAccessContext.require(access)
+        assert not access.is_operator and not access.operator_recovery
         self.read_calls.append(artifact_id)
         return object(), self._payloads[artifact_id]
 

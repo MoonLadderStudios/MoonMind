@@ -295,8 +295,21 @@ def test_pr_resolver_terminal_publication_is_idempotent(tmp_path: Path):
                 },
             }
 
-            first = await activities.pr_resolver_write_terminal_result(request)
-            second = await activities.pr_resolver_write_terminal_result(request)
+            from temporalio.testing import ActivityEnvironment
+
+            environment = ActivityEnvironment()
+            environment.info = replace(
+                environment.info,
+                workflow_id="resolver-wf",
+                workflow_run_id="resolver-run",
+                workflow_namespace="default",
+            )
+            first = await environment.run(
+                activities.pr_resolver_write_terminal_result, request
+            )
+            second = await environment.run(
+                activities.pr_resolver_write_terminal_result, request
+            )
 
             assert second == first
             _artifact, publish_payload = await service.read(

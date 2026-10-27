@@ -28,15 +28,16 @@ async def test_ready_workspace_readmits_ordinary_attachments_without_replacing_c
     metadata_reads = []
 
     class Artifacts:
-        async def get_metadata(self, *, artifact_id, principal):
-            assert principal == "workflow:workflow-1"
+
+        async def get_metadata(self, *, artifact_id, access):
+            assert access.execution_principal == "workflow:workflow-1"
             metadata_reads.append(artifact_id)
             return SimpleNamespace(size_bytes=len(payloads[artifact_id])), [
                 SimpleNamespace(workflow_id="workflow-1")
             ]
 
         async def read_chunks(self, *, artifact_id, **kwargs):
-            assert kwargs["principal"] == "workflow:workflow-1"
+            assert kwargs["access"].execution_principal == "workflow:workflow-1"
             return SimpleNamespace(), iter((payloads[artifact_id],))
 
     async def no_clone(*args, **kwargs):

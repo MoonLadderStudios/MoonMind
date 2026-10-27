@@ -31,10 +31,7 @@ from moonmind.workflows.agent_skills.agent_skills_activities import (
     AgentSkillsActivities,
 )
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
-from moonmind.workflows.skills.deployment_tools import (
-    DEPLOYMENT_UPDATE_TOOL_NAME,
-    DEPLOYMENT_UPDATE_TOOL_VERSION,
-)
+from moonmind.workflows.skills.deployment_tools import DEPLOYMENT_UPDATE_TOOL_NAME
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
 from moonmind.workflows.skills.skill_plan_contracts import SkillResult
 from moonmind.workflows.skills.skill_registry import (
@@ -92,6 +89,24 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from tests.artifact_access import access_for_test
+
+
+async def _run_artifact_activity(
+    service, function, *, artifact_ids=(), admission_access=None, **kwargs
+):
+    from temporalio.testing import ActivityEnvironment
+
+    environment = ActivityEnvironment()
+    await service.delegate_read_access(
+        artifact_ids=artifact_ids,
+        workflow_id=environment.info.workflow_id,
+        access=admission_access or access_for_test("user-1"),
+    )
+
+    async def invoke():
+        return await function(**kwargs)
+
+    return await environment.run(invoke)
 
 
 @pytest.mark.asyncio
@@ -1138,7 +1153,13 @@ async def test_plan_validate_accepts_temporal_registry_artifact_ids(tmp_path: Pa
                 content_type="application/json",
             )
 
-            validated_ref = await planner.plan_validate(
+            validated_ref = await _run_artifact_activity(
+                service,
+                planner.plan_validate,
+                artifact_ids=(
+                    plan_artifact.artifact_id,
+                    registry_completed.artifact_id,
+                ),
                 plan_ref=plan_artifact.artifact_id,
                 registry_snapshot_ref=registry_completed.artifact_id,
                 principal="user-1",
@@ -1618,15 +1639,16 @@ async def test_plan_generate_fallback_registry_includes_input_artifact_tool_step
                 artifact_service=service,
                 planner=_build_runtime_planner(),
             )
-            result = await planner.plan_generate(
+            result = await _run_artifact_activity(
+                service,
+                planner.plan_generate,
+                artifact_ids=(inputs_artifact.artifact_id,),
                 principal="user-1",
                 inputs_ref=inputs_artifact.artifact_id,
                 parameters={
                     "repository": "MoonLadderStudios/MoonMind",
                     "targetRuntime": "codex_cli",
-                    "workflow": {
-                        "tool": {"type": "skill", "name": "auto"}
-                    },
+                    "workflow": {"tool": {"type": "skill", "name": "auto"}},
                 },
             )
 
@@ -1688,7 +1710,10 @@ async def test_skill_execute_loads_registry_snapshot_from_temporal_artifact(
             )
 
             activities = TemporalSkillActivities(dispatcher=dispatcher)
-            result = await activities.mm_skill_execute(
+            result = await _run_artifact_activity(
+                service,
+                activities.mm_skill_execute,
+                artifact_ids=(registry_artifact.artifact_id,),
                 invocation_payload={
                     "id": "n1",
                     "skill": {"name": "repo.run_tests"},
@@ -1735,7 +1760,10 @@ async def test_skill_execute_uses_bound_artifact_service_when_not_passed(
                 dispatcher=dispatcher,
                 artifact_service=service,
             )
-            result = await activities.mm_skill_execute(
+            result = await _run_artifact_activity(
+                service,
+                activities.mm_skill_execute,
+                artifact_ids=(registry_artifact.artifact_id,),
                 invocation_payload={
                     "id": "n1",
                     "skill": {"name": "repo.run_tests"},
@@ -1759,15 +1787,17 @@ async def test_artifact_read_invalid_ref_failures_surface_cleanly(tmp_path: Path
 
             with pytest.raises(
                 TemporalArtifactValidationError,
-                match="artifact_id is required",
+                match="artifact.read requires a valid artifact_ref",
             ):
                 await activities.artifact_read(
                     {"artifact_ref": {"artifactId": "  "}, "principal": "user-1"}
                 )
 
             with pytest.raises(TemporalArtifactNotFoundError):
-                await activities.artifact_read(
-                    {"artifact_ref": "art:sha256:dummy", "principal": "user-1"}
+                await _run_artifact_activity(
+                    service,
+                    activities.artifact_read,
+                    request={"artifact_ref": "art:sha256:dummy", "principal": "user-1"},
                 )
 
 async def test_sandbox_run_command_writes_diagnostics_artifact(tmp_path: Path):
@@ -1995,7 +2025,10 @@ async def test_sandbox_apply_patch_enforces_file_allowlist(tmp_path: Path):
                 TemporalActivityRuntimeError,
                 match="modified files outside the allowlist: blocked.txt",
             ):
-                await activities.sandbox_apply_patch(
+                await _run_artifact_activity(
+                    service,
+                    activities.sandbox_apply_patch,
+                    artifact_ids=(patch_artifact.artifact_id,),
                     workspace_ref=workspace,
                     patch_ref=patch_artifact.artifact_id,
                     principal="user-1",
@@ -2116,7 +2149,10 @@ async def test_sandbox_checkout_apply_patch_and_run_tests(tmp_path: Path):
             )
             assert Path(workspace).exists()
 
-            patched_workspace = await activities.sandbox_apply_patch(
+            patched_workspace = await _run_artifact_activity(
+                service,
+                activities.sandbox_apply_patch,
+                artifact_ids=(patch_artifact.artifact_id,),
                 workspace_ref=workspace,
                 patch_ref=patch_artifact.artifact_id,
                 principal="user-1",
@@ -2295,11 +2331,14 @@ async def test_build_activity_bindings_artifact_read_accepts_request_mapping(
                 if binding.activity_type == "artifact.read"
             )
 
-            payload = await artifact_read_handler(
-                {
+            payload = await _run_artifact_activity(
+                service,
+                artifact_read_handler,
+                artifact_ids=(stored.artifact_id,),
+                request={
                     "artifact_ref": build_artifact_ref(stored),
                     "principal": "user-1",
-                }
+                },
             )
 
             assert payload == b'{"ok": true}'
@@ -2326,7 +2365,16 @@ async def test_artifact_read_binding_carries_retry_meaning(tmp_path, monkeypatch
                 agent_skills_activities=AgentSkillsActivities(), fleets=(ARTIFACTS_FLEET,),
             ) if b.activity_type == "artifact.read")
             with pytest.raises(temporal_exceptions.ApplicationError) as raised:
-                await binding.handler({"artifact_ref": artifact.artifact_id, "principal": "owner"})
+                await _run_artifact_activity(
+                    service,
+                    binding.handler,
+                    artifact_ids=(artifact.artifact_id,),
+                    admission_access=access_for_test("owner"),
+                    request={
+                        "artifact_ref": artifact.artifact_id,
+                        "principal": "owner",
+                    },
+                )
             assert raised.value.type == code
             assert raised.value.non_retryable is non_retryable
             cause = raised.value.original_error.__cause__
@@ -2436,11 +2484,14 @@ async def test_build_activity_bindings_artifact_read_accepts_serialized_ref_mapp
                 "encryption": stored.encryption,
             }
 
-            payload = await artifact_read_handler(
-                {
+            payload = await _run_artifact_activity(
+                service,
+                artifact_read_handler,
+                artifact_ids=(stored.artifact_id,),
+                request={
                     "artifact_ref": serialized_ref,
                     "principal": "user-1",
-                }
+                },
             )
 
             assert payload == b'{"ok": true}'
@@ -3149,6 +3200,7 @@ async def test_publisher_downgrades_blocker_outside_frozen_issue_scope(
     monkeypatch.setattr(temporal_activity, "info", lambda: SimpleNamespace(
         namespace="default", workflow_id="parent-wf:agent:verify", workflow_run_id="child-run",
     ))
+    monkeypatch.setattr(temporal_activity, "in_activity", lambda: True)
     monkeypatch.setattr(run_module.workflow, "patched", lambda _patch: True)
     monkeypatch.setattr(run_module.workflow, "now", lambda: datetime.now(timezone.utc))
     async with temporal_db(tmp_path) as session_maker:
@@ -3158,7 +3210,14 @@ async def test_publisher_downgrades_blocker_outside_frozen_issue_scope(
                 store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
             )
             artifact, _ = await service.create(
-                principal="system:agent_runtime", content_type="application/json",
+                principal="system:agent_runtime",
+                content_type="application/json",
+                link=ExecutionRef(
+                    namespace="default",
+                    workflow_id="parent-wf:agent:verify",
+                    run_id="child-run",
+                    link_type="output.assessment",
+                ),
             )
             await service.write_complete(
                 artifact_id=artifact.artifact_id,

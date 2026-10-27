@@ -23,13 +23,12 @@ from moonmind.omnigent.host_services.workspace import (
 )
 from moonmind.omnigent.workspace_artifacts import WorkspaceArtifactProjector
 from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
+from moonmind.workflows.executions.repository_contract import RepositoryIdentity
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
     resolve_sandbox_workspace_locator,
 )
-from moonmind.workflows.executions.repository_contract import RepositoryIdentity
-
 
 # Controlled clone commands write as this process; root runners can hand off
 # to the normal positive runtime identity without relaxing the production gate.
@@ -654,9 +653,8 @@ async def test_materializer_projects_checkpoint_and_declared_inputs_before_mount
                 "assessment": b'{"verdict":"PARTIALLY_IMPLEMENTED"}',
             }
 
-        async def get_metadata(
-            self, *, artifact_id, principal, admitted_principal=None
-        ):
+        async def get_metadata(self, *, artifact_id, access):
+            principal = access.execution_principal or access.principal
             self.reads.append((artifact_id, principal))
             artifact = SimpleNamespace(size_bytes=len(self.payloads[artifact_id]))
             links = [SimpleNamespace(workflow_id="workflow-1")]
@@ -666,12 +664,11 @@ async def test_materializer_projects_checkpoint_and_declared_inputs_before_mount
             self,
             *,
             artifact_id,
-            principal,
-            allow_restricted_raw,
+            access,
             chunk_size,
-            admitted_principal=None,
         ):
-            assert allow_restricted_raw is True
+            principal = access.execution_principal or access.principal
+            assert not access.is_operator and not access.operator_recovery
             self.reads.append((artifact_id, principal))
             return SimpleNamespace(), iter((self.payloads[artifact_id],))
 
@@ -1168,9 +1165,7 @@ async def test_materializer_retries_clone_interrupted_mid_transfer(
 def test_clone_failure_classification_keeps_deterministic_errors_fail_closed(
     stderr: str,
 ):
-    from moonmind.omnigent.host_services.workspace import (
-        _is_transient_clone_failure,
-    )
+    from moonmind.omnigent.host_services.workspace import _is_transient_clone_failure
 
     assert not _is_transient_clone_failure(stderr)
 
@@ -1329,13 +1324,14 @@ async def test_historical_remediation_request_materializes_named_evidence_and_re
     }
 
     class Artifacts:
-        async def get_metadata(self, *, artifact_id, principal):
-            assert principal == 'workflow:workflow-1'
+
+        async def get_metadata(self, *, artifact_id, access):
+            assert access.execution_principal == "workflow:workflow-1"
             return (SimpleNamespace(size_bytes=len(payloads[artifact_id])),
                     [SimpleNamespace(workflow_id='workflow-1')])
 
         async def read_chunks(self, *, artifact_id, **kwargs):
-            assert kwargs['principal'] == 'workflow:workflow-1'
+            assert kwargs["access"].execution_principal == "workflow:workflow-1"
             return SimpleNamespace(), iter((payloads[artifact_id],))
 
     async def no_clone(*args, **kwargs):

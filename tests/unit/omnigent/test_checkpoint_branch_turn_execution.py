@@ -18,12 +18,6 @@ from api_service.services.checkpoint_branch_turn_execution import (
     _launch_retry_payloads_equivalent,
     build_branch_turn_execution_identity,
 )
-from moonmind.workflows.temporal.remediation_verification import (
-    verification_contract_for,
-)
-from moonmind.workflows.temporal.workflows import (
-    checkpoint_branch_turn as branch_turn_module,
-)
 from api_service.services.omnigent_policies import OmnigentPolicyService
 from moonmind.omnigent.checkpoints import CandidateWorkspaceAuthority
 from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
@@ -37,6 +31,13 @@ from moonmind.schemas.checkpoint_branch_models import (
     CheckpointBranchTurnLaunchRequest,
 )
 from moonmind.schemas.temporal_models import StepExecutionCheckpointModel
+from moonmind.workflows.temporal.remediation_verification import (
+    verification_contract_for,
+)
+from moonmind.workflows.temporal.workflows import (
+    checkpoint_branch_turn as branch_turn_module,
+)
+from tests.artifact_access import access_for_test
 
 
 class _ScalarResult:
@@ -349,6 +350,7 @@ async def test_owner_allocates_and_claims_canonical_omnigent_request_before_star
         client=client,  # type: ignore[arg-type]
         artifact_service=SimpleNamespace(),  # type: ignore[arg-type]
         turn_command_service=turn_commands,
+        access=access_for_test("service:test"),
     )
     branch, turn, binding, source, checkpoint, profile, policy = _authority_graph()
     branch.diagnostics["runtimeSelection"]["agentProfileSnapshot"] = {
@@ -470,6 +472,7 @@ async def test_source_and_destination_validation_are_separate_boundaries() -> No
         principal="service:test",
         client=SimpleNamespace(),  # type: ignore[arg-type]
         artifact_service=SimpleNamespace(),  # type: ignore[arg-type]
+        access=access_for_test("service:test"),
     )
     branch, turn, binding, source, checkpoint, profile, policy = _authority_graph()
     events: list[str] = []
@@ -626,6 +629,7 @@ async def test_destination_authority_accepts_cold_restore_without_live_session(
         principal="service:test",
         client=SimpleNamespace(),  # type: ignore[arg-type]
         artifact_service=SimpleNamespace(),  # type: ignore[arg-type]
+        access=access_for_test("service:test"),
     )
     policy = _branch_policy_snapshot()
     checkpoint_bytes, instruction_bytes, referenced = _restorable_checkpoint_bytes(
@@ -661,6 +665,7 @@ async def test_destination_authority_tolerates_authorized_credential_rotation(
         principal="service:test",
         client=SimpleNamespace(),  # type: ignore[arg-type]
         artifact_service=SimpleNamespace(),  # type: ignore[arg-type]
+        access=access_for_test("service:test"),
     )
     policy = _branch_policy_snapshot()
     checkpoint_bytes, instruction_bytes, referenced = _restorable_checkpoint_bytes(
@@ -712,6 +717,7 @@ async def test_destination_authority_still_rejects_incompatible_live_authority(
         principal="service:test",
         client=SimpleNamespace(),  # type: ignore[arg-type]
         artifact_service=SimpleNamespace(),  # type: ignore[arg-type]
+        access=access_for_test("service:test"),
     )
     policy = _branch_policy_snapshot()
     checkpoint_bytes, instruction_bytes, referenced = _restorable_checkpoint_bytes(
@@ -753,6 +759,7 @@ async def test_launch_emits_destination_publish_spelling(
             ),
             settle=AsyncMock(),
         ),
+        access=access_for_test("service:test"),
     )
     branch, turn, binding, source, checkpoint, profile, policy = _authority_graph()
     branch.diagnostics["runtimeSelection"]["publishMode"] = "pull_request"
@@ -812,6 +819,7 @@ async def test_owner_validates_turn_owned_remediation_context_binding() -> None:
         principal="service:test",
         client=SimpleNamespace(),  # type: ignore[arg-type]
         artifact_service=SimpleNamespace(),  # type: ignore[arg-type]
+        access=access_for_test("service:test"),
     )
     owner._read_ref = AsyncMock(return_value=b"{}")  # type: ignore[method-assign]
     turn = SimpleNamespace(
@@ -839,6 +847,7 @@ async def test_owner_rejects_stale_authority_before_claim_or_start(
         principal="service:test",
         client=SimpleNamespace(),  # type: ignore[arg-type]
         artifact_service=SimpleNamespace(),  # type: ignore[arg-type]
+        access=access_for_test("service:test"),
     )
     branch, turn, binding, source, *_rest = _authority_graph()
     owner._load_graph_authority = AsyncMock(  # type: ignore[method-assign]
@@ -1036,6 +1045,7 @@ async def test_owner_rejects_stored_authority_mismatches_before_artifact_or_runt
         principal="service:test",
         client=SimpleNamespace(),  # type: ignore[arg-type]
         artifact_service=SimpleNamespace(),  # type: ignore[arg-type]
+        access=access_for_test("service:test"),
     )
     branch, turn, binding, source, *_rest = _authority_graph()
     mutation(branch, turn, binding, source)
@@ -1103,6 +1113,7 @@ async def test_owner_rejects_complete_authority_mismatch_matrix_before_mutation(
         principal="service:test",
         client=SimpleNamespace(),  # type: ignore[arg-type]
         artifact_service=SimpleNamespace(),  # type: ignore[arg-type]
+        access=access_for_test("service:test"),
     )
     branch, turn, binding, source, *_rest = _authority_graph()
     checkpoint_bytes, instruction_bytes = _valid_source_checkpoint()

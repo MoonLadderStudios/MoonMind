@@ -8,20 +8,21 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from moonmind.core.artifacts import (
-    TemporalArtifactStorageBackend,
     TemporalArtifactEncryption,
-    TemporalArtifactStatus,
-    TemporalArtifactRetentionClass,
     TemporalArtifactRedactionLevel,
+    TemporalArtifactRetentionClass,
+    TemporalArtifactStatus,
+    TemporalArtifactStorageBackend,
     TemporalArtifactUploadMode,
     assert_model_agnostic_metadata,
 )
 from moonmind.schemas._validation import require_non_blank
 
+
 class ArtifactRefModel(BaseModel):
     """JSON-serializable artifact reference passed through workflows."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
     artifact_ref_v: int = Field(1, alias="artifact_ref_v")
     artifact_id: str = Field(..., alias="artifact_id")

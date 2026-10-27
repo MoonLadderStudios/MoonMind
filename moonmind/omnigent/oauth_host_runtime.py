@@ -1931,7 +1931,7 @@ class OmnigentOAuthHostRuntime:
             )
             _artifact, resolved = await read(
                 artifact_id=ref,
-                principal=principal,
+                access=ArtifactAccessContext.for_service(principal),
             )
         parse_and_verify_conformance_evidence(
             resolved,

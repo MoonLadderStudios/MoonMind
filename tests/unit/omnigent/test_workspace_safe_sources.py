@@ -101,9 +101,9 @@ class FakeArtifactService:
         self.omit_digest = omit_digest
         self.calls: list[tuple] = []
 
-    async def get_metadata(
-        self, *, artifact_id: str, principal: str, admitted_principal=None
-    ):
+    async def get_metadata(self, *, artifact_id: str, access):
+        principal = access.execution_principal or access.principal
+        assert not access.is_operator and not access.operator_recovery
         self.calls.append(("metadata", artifact_id, principal))
         payload = self.payloads[artifact_id]
         artifact = SimpleNamespace(
@@ -125,10 +125,14 @@ class FakeArtifactService:
         return artifact, links, False, SimpleNamespace(raw_access_allowed=True)
 
     async def read_chunks(
-        self, *, artifact_id: str, principal: str, allow_restricted_raw: bool,
-        chunk_size: int, admitted_principal=None,
+        self,
+        *,
+        artifact_id: str,
+        access,
+        chunk_size: int,
     ):
-        assert allow_restricted_raw is True
+        principal = access.execution_principal or access.principal
+        assert not access.is_operator and not access.operator_recovery
         self.calls.append(("read", artifact_id, principal))
         return SimpleNamespace(), iter((self.payloads[artifact_id],))
 

@@ -332,7 +332,9 @@ async def test_ordinary_plan_loader_does_not_require_certificate() -> None:
         )
     )
     # No certificate artifacts exist; ordinary load must still succeed.
-    await activities._validate_plan_admission_authority(persisted)
+    await activities._validate_plan_admission_authority(
+        persisted, access=access_for_test("service:omnigent-session")
+    )
 
 
 def _support_identity(*, materializer_ref: str, build_tag: str) -> dict:
@@ -685,11 +687,13 @@ async def test_plan_reader_distinguishes_history_from_new_effect(
     # History load: the artifact store must not even be consulted.
     forbidden_reader = AsyncMock(side_effect=AssertionError("certificate must not be read"))
     monkeypatch.setattr(activities, "_read_json_artifact", forbidden_reader)
-    await activities._validate_plan_admission_authority(_persisted(mode="ordinary"))
+    await activities._validate_plan_admission_authority(
+        _persisted(mode="ordinary"), access=access_for_test("service:omnigent-session")
+    )
     forbidden_reader.assert_not_awaited()
 
     # New effect under strict semantics: tampered evidence still fails.
-    async def _tampered(_ref: str) -> dict:
+    async def _tampered(_ref: str, *, access) -> dict:
         return {"tampered": True}
 
     monkeypatch.setattr(activities, "_read_json_artifact", _tampered)
@@ -700,14 +704,17 @@ async def test_plan_reader_distinguishes_history_from_new_effect(
                 ref="artifact:art_strict",
                 digest="sha256:" + "00" * 32,
                 tier="supported",
-            )
+            ),
+            access=access_for_test("service:omnigent-session"),
         )
 
     # Substantive gates still apply to ordinary history loads.
     stale = _persisted(mode="ordinary")
     stale.payload.admissionAuthority.featureGeneration = "ancient-generation"
     with pytest.raises(ValueError, match="feature generation"):
-        await activities._validate_plan_admission_authority(stale)
+        await activities._validate_plan_admission_authority(
+            stale, access=access_for_test("service:omnigent-session")
+        )
 
 
 @pytest.mark.asyncio
@@ -744,12 +751,14 @@ async def test_strict_certificate_failure_is_distinguishable_for_resume(
         )
     )
 
-    async def _missing(_ref: str) -> dict:
+    async def _missing(_ref: str, *, access) -> dict:
         raise ValueError("artifact unavailable")
 
     monkeypatch.setattr(activities, "_read_json_artifact", _missing)
     with pytest.raises(activities._AdmissionCertificateError) as excinfo:
-        await activities._validate_plan_admission_authority(persisted)
+        await activities._validate_plan_admission_authority(
+            persisted, access=access_for_test("service:omnigent-session")
+        )
     assert isinstance(excinfo.value, ValueError)
 
 
@@ -861,7 +870,7 @@ async def test_resume_migrates_stranded_pre_upgrade_plan(
 
     import json
 
-    async def _read_artifact(ref: str) -> dict:
+    async def _read_artifact(ref: str, *, access) -> dict:
         try:
             return json.loads(artifacts.payloads[ref])
         except KeyError:
@@ -952,7 +961,7 @@ async def test_resume_keeps_strict_failure_closed(
         lambda _session_factory: store,
     )
 
-    async def _read_artifact(ref: str) -> dict:
+    async def _read_artifact(ref: str, *, access) -> dict:
         if ref == compiled.binding.plan_artifact_ref:
             return artifact_wire
         raise ValueError(f"artifact {ref} is unavailable")

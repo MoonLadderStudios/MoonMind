@@ -438,7 +438,7 @@ Baseline policy:
 
 ## 9.3 Service and worker access
 
-Every read requires `ArtifactAccessContext`: HTTP operator proof, verified execution admission, or a service reading its own resources. Execution contexts grant only their execution's linked or verified inputs; creator and service labels remain provenance. Metadata, collections, previews, downloads, Skill delivery and restore share this boundary. New saved-work admission delegates its exact raw-readable closure before start and records that in API-owned memo. Older runs recover only their recorded inputs from the actual run’s immutable API start and memo; principal strings confer no authority. Quarantine still denies raw bytes.
+Every read requires `ArtifactAccessContext`: operator proof, verified execution admission, or a service reading its resources. Metadata, collections, previews, downloads, Skill delivery and restore share this boundary; creator labels confer no authority. Saved-work and Container Job admission persist exact approved raw rights before start. Retained saved-work runs recover only inputs recorded in their immutable API start/memo; retained create/write pairs recover producer links from that exact run’s completed creation before the write. These decoders drain older admissions without adopting payload identities. Canonical journal records admit their exact ordinary input refs for compaction. Quarantine always denies raw bytes.
 
 Execution inputs gain that linkage at trusted boundaries, never from agent-supplied owner strings:
 

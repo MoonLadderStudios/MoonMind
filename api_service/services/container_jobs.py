@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from typing import Any, Iterable, Protocol
 from uuid import uuid4
 
 from sqlalchemy import and_, or_, select
@@ -52,6 +52,7 @@ from moonmind.schemas.container_job_models import (
     OwnerIdentity,
     RegistryAuthorization,
     TerminalOutcome,
+    container_job_workflow_id,
     require_explicit_resources,
 )
 from moonmind.security.container_job_capabilities import (
@@ -117,6 +118,15 @@ class ContainerJobArtifactReader(Protocol):
         artifact_id: str,
         access: ArtifactAccessContext,
     ) -> tuple[Any, bytes]:
+        pass
+
+    async def delegate_read_access(
+        self,
+        *,
+        artifact_ids: Iterable[str],
+        workflow_id: str,
+        access: ArtifactAccessContext,
+    ) -> None:
         pass
 
 
@@ -412,6 +422,20 @@ class ContainerJobService:
             return ContainerJobAccepted(
                 jobId=record.job_id, replayed=True, createdAt=record.created_at
             )
+        inputs = [
+            item.artifact_ref
+            for item in request.spec.input_attachments or ()
+            if item.artifact_ref
+        ]
+        if inputs:
+            # The trusted caller just approved these exact rights, including
+            # restricted raw bytes. Persist them for the canonical job before
+            # starting it; its Activity payload cannot grant those rights later.
+            await self._artifacts.delegate_read_access(
+                artifact_ids=inputs,
+                workflow_id=container_job_workflow_id(record.job_id),
+                access=ArtifactAccessContext.require(self._artifact_access),
+            )
         if recovering_start_failure:
             record.state = ContainerJobState.QUEUED.value
             record.terminal_outcome_json = None
@@ -452,8 +476,8 @@ class ContainerJobService:
     ) -> None:
         """Admit artifact inputs under the job owner's existing read authority.
 
-        The worker reads them again under the same principal, so authority or
-        retention lost before launch still fails closed there. Missing and
+        The worker reads them under this job's delegated input rights, so
+        quarantine or retention lost before launch still fails closed. Missing and
         unreadable artifacts are refused alike, without revealing which.
         """
 

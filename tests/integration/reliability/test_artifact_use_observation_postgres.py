@@ -33,7 +33,7 @@ pytestmark = [
     pytest.mark.reliability_journey,
 ]
 
-_OWNER = "saved-work-owner"
+_OWNER = "workflow:saved-work-owner"
 _READER = "service:artifact-consumer"
 _PAYLOAD = b"recoverable saved work"
 _LOGGER = "moonmind.workflows.temporal.artifacts"
@@ -61,6 +61,15 @@ async def artifact_context(tmp_path, monkeypatch):
 
 
 async def _complete_artifact(service, **kwargs):
+    kwargs.setdefault(
+        "link",
+        {
+            "namespace": "default",
+            "workflow_id": "saved-work-owner",
+            "run_id": "saved-work-run",
+            "link_type": "output.saved",
+        },
+    )
     artifact, _ = await service.create(
         principal=_OWNER, content_type="application/octet-stream", **kwargs
     )
@@ -334,8 +343,7 @@ async def test_caller_bound_read_releases_only_its_completed_observation(
             )
             loaded, content = await getattr(reader, surface)(
                 artifact_id=artifact.artifact_id,
-                principal=_READER,
-                admitted_principal=_OWNER,
+                access=access_for_test(_READER, admitted_principal=_OWNER),
             )
             assert loaded.artifact_id == artifact.artifact_id
             assert (content if surface == "read" else content.read_bytes()) == _PAYLOAD

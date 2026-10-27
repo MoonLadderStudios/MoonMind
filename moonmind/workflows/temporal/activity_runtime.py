@@ -241,6 +241,7 @@ from moonmind.workflows.skills.artifact_store import (
 )
 from moonmind.workflows.skills.plan_validation import validate_plan_payload
 from moonmind.workflows.skills.run_projection import (
+    SkillProjectionError,
     append_remediation_attempt_context,
     prepend_skill_activation_summary,
     step_execution_artifact_access,
@@ -10963,7 +10964,10 @@ class TemporalAgentRuntimeActivities:
         }
         if not evidence_refs:
             return {}
-        access = await step_execution_artifact_access(request)
+        try:
+            access = await step_execution_artifact_access(request)
+        except SkillProjectionError as exc:
+            raise TemporalActivityRuntimeError(str(exc)) from exc
         if not workspace_path:
             raise TemporalActivityRuntimeError(
                 "verifier evidence materialization requires payload.workspacePath"

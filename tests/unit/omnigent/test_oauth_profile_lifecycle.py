@@ -20,8 +20,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from tests.artifact_access import access_for_test
-from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from pydantic import ValidationError
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -141,10 +139,12 @@ from moonmind.security.egress_conformance_evidence import (
 from moonmind.security.execution_fanout_capabilities import (
     verify_execution_fanout_capability,
 )
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
 )
+from tests.artifact_access import access_for_test
 from tests.unit.omnigent.test_policy_authority import policy_document
 
 
@@ -1733,7 +1733,10 @@ async def test_skill_projection_retry_reuses_existing_bind_source(tmp_path) -> N
         def __init__(self) -> None:
             self.reads: list[str] = []
 
-        async def read(self, *, artifact_id, **_kwargs):
+        async def read(self, *, artifact_id, access):
+            assert access == ArtifactAccessContext.for_execution(
+                "workflow-1", principal="agent_runtime"
+            )
             self.reads.append(artifact_id)
             if artifact_id == skillset_ref:
                 return object(), skillset.model_dump_json(by_alias=True).encode()
@@ -1747,10 +1750,32 @@ async def test_skill_projection_retry_reuses_existing_bind_source(tmp_path) -> N
         workspace_root=tmp_path / "workspaces",
     )
 
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="workflow-1",
+        idempotencyKey="skill-projection-retry",
+        stepExecution={
+            "schemaVersion": "v1",
+            "workflowId": "workflow-1",
+            "runId": "run-1",
+            "logicalStepId": "remediate",
+            "executionOrdinal": 1,
+            "stepExecutionId": "workflow-1:run-1:remediate:execution:1",
+            "reason": "initial",
+            "runtimeContextPolicy": "fresh_agent_run",
+            "contextBundleRef": "artifact://context/1",
+            "contextBundleDigest": "sha256:" + "c" * 64,
+            "preparedInputRefs": [],
+            "runtimeSelection": {},
+            "skillSourcePolicy": {},
+        },
+    )
     first = await runtime._prepare_skill_projection(
         workspace_key="workspace-1",
         resolved_skillset_ref=skillset_ref,
         artifact_gateway=artifacts,
+        request=request,
     )
     first_inode = first.stat().st_ino
 
@@ -1758,6 +1783,7 @@ async def test_skill_projection_retry_reuses_existing_bind_source(tmp_path) -> N
         workspace_key="workspace-1",
         resolved_skillset_ref=skillset_ref,
         artifact_gateway=artifacts,
+        request=request,
     )
 
     assert second == first
@@ -2118,7 +2144,16 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
         "current_step_execution_id": "step-1",
         "resolved_skillset_ref": skillset_ref,
         "artifact_gateway": artifact_service,
-        "evidence_request": _execution_request(),
+        "evidence_request": _execution_request(
+            stepExecution={
+                "workflowId": "workflow-1",
+                "runId": "run-1",
+                "logicalStepId": "step",
+                "executionOrdinal": 1,
+                "stepExecutionId": "workflow-1:run-1:step:execution:1",
+                "runtimeContextPolicy": "fresh_agent_run",
+            }
+        ),
         "cleanup_authority_store": cleanup_authority_store,
         "effective_launch": launch,
     }
@@ -7766,15 +7801,12 @@ class _FakeArtifactService:
         self,
         *,
         artifact_id: str,
-        principal: str | None = None,
-        allow_restricted_raw: bool = False,
-        **_kwargs,
+        access: ArtifactAccessContext,
     ):
         self.read_calls.append(
             {
                 "artifact_id": artifact_id,
-                "principal": principal,
-                "allow_restricted_raw": allow_restricted_raw,
+                "access": access,
             }
         )
         return {}, self._payloads[artifact_id]
@@ -7813,8 +7845,9 @@ async def test_prepare_workspace_materializes_restore_inputs_as_refs(tmp_path) -
     assert service.read_calls == [
         {
             "artifact_id": "checkpoint/workspace-archive",
-            "principal": "service:omnigent_workspace_restore",
-            "allow_restricted_raw": True,
+            "access": ArtifactAccessContext.for_execution(
+                "workflow-1", principal="service:omnigent_workspace_restore"
+            ),
         }
     ]
 
@@ -7879,8 +7912,9 @@ async def test_prepare_workspace_materializes_attachments_as_refs(tmp_path) -> N
     assert service.read_calls == [
         {
             "artifact_id": "attachments/spec.pdf",
-            "principal": "service:omnigent_workspace_attachment",
-            "allow_restricted_raw": True,
+            "access": ArtifactAccessContext.for_execution(
+                "workflow-1", principal="service:omnigent_workspace_attachment"
+            ),
         }
     ]
 

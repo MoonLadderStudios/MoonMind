@@ -71,9 +71,7 @@ class FakeArtifactService:
         self.status = status
         self.redaction_level = redaction_level
 
-    async def get_metadata(
-        self, *, artifact_id: str, principal: str, admitted_principal=None
-    ):
+    async def get_metadata(self, *, artifact_id: str, access):
         payload = self.payloads[artifact_id]
         artifact = SimpleNamespace(
             artifact_id=artifact_id,
@@ -92,10 +90,14 @@ class FakeArtifactService:
         return artifact, links, False, SimpleNamespace(raw_access_allowed=True)
 
     async def read_chunks(
-        self, *, artifact_id: str, principal: str, allow_restricted_raw: bool,
-        chunk_size: int, admitted_principal=None,
+        self,
+        *,
+        artifact_id: str,
+        access,
+        chunk_size: int,
     ):
-        assert allow_restricted_raw is True
+        assert access.execution_principal == "workflow:" + self.workflow_id
+        assert not access.is_operator and not access.operator_recovery
         return SimpleNamespace(), iter((self.payloads[artifact_id],))
 
 
@@ -511,10 +513,10 @@ async def test_materialize_backend_grant_matrix(tmp_path, monkeypatch):
     assert shared["accessMode"] == "read-only"
 
     monkeypatch.setenv("WORKFLOW_DOCKER_DAEMON_MODE", "local")
+    from moonmind.omnigent.workspace_sources import parse_existing_workspace_grant
     from moonmind.workflows.temporal.runtime.workspace_locators import (
         SandboxWorkspaceRecordStore as _RecordStore,
     )
-    from moonmind.omnigent.workspace_sources import parse_existing_workspace_grant
 
     _store = _RecordStore(tmp_path)
     # The digest includes issuance time; releasing a newly issued grant can

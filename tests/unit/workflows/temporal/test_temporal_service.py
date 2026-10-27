@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 from uuid import uuid4
 
 import pytest
@@ -23,8 +23,8 @@ from api_service.db.models import (
     MoonMindWorkflowState,
     SettingsOverride,
     TemporalArtifact,
-    TemporalArtifactLink,
     TemporalArtifactEncryption,
+    TemporalArtifactLink,
     TemporalArtifactRedactionLevel,
     TemporalArtifactRetentionClass,
     TemporalArtifactStatus,
@@ -48,6 +48,21 @@ from api_service.services.provider_profile_runtime import (
     ProviderProfileRuntimeMismatchError,
 )
 from moonmind.config.settings import settings
+from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
+from moonmind.schemas.temporal_models import (
+    CreateExecutionRequest,
+    has_user_workflow_plan_source,
+)
+from moonmind.statuses.compat import (
+    canonicalize_finish_outcome_code_alias,
+    canonicalize_workflow_state_alias,
+    normalize_no_commit_finish_summary,
+)
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+from moonmind.workflows.temporal.hard_switch_cutover import RENAMED_USER_WORKFLOW_TYPE
+from moonmind.workflows.temporal.runtime.managed_session_store import (
+    ManagedSessionStore,
+)
 from moonmind.workflows.temporal.service import (
     TemporalExecutionNotFoundError,
     TemporalExecutionRerunPlanError,
@@ -59,18 +74,6 @@ from moonmind.workflows.temporal.service import (
     _visibility_runtime_from_parameters,
     _visibility_skill_from_parameters,
 )
-from moonmind.workflows.temporal.hard_switch_cutover import RENAMED_USER_WORKFLOW_TYPE
-from moonmind.schemas.temporal_models import (
-    CreateExecutionRequest,
-    has_user_workflow_plan_source,
-)
-from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
-from moonmind.statuses.compat import (
-    canonicalize_finish_outcome_code_alias,
-    canonicalize_workflow_state_alias,
-    normalize_no_commit_finish_summary,
-)
-from moonmind.workflows.temporal.runtime.managed_session_store import ManagedSessionStore
 
 
 def test_legacy_no_changes_aliases_are_quarantined_in_compat_helpers() -> None:
@@ -382,6 +385,7 @@ async def test_exact_rerun_rejects_plan_for_replaced_server_before_creation(
 @pytest.mark.parametrize("unavailable", [None, OSError("catalog offline")])
 async def test_exact_rerun_preserves_plan_through_catalog_recovery(monkeypatch, unavailable):
     from copy import deepcopy
+
     from moonmind.omnigent.bootstrap import store
 
     parameters = _historical_omnigent_rerun_parameters()
@@ -4466,8 +4470,10 @@ async def test_request_rerun_rejects_incomplete_skill_snapshot_at_shared_boundar
         }
         artifact_service.read.assert_awaited_once_with(
             artifact_id="art_old_skill_snapshot",
-            principal=str(owner_id),
-            allow_restricted_raw=True,
+            access=ArtifactAccessContext.for_execution(
+                created.workflow_id,
+                principal="service:temporal-execution-rerun-admission",
+            ),
         )
         mock_client_adapter.update_workflow.assert_not_awaited()
 

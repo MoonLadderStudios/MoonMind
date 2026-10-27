@@ -2,7 +2,6 @@ import hashlib
 from pathlib import Path
 
 import pytest
-from tests.artifact_access import access_for_test
 
 from moonmind.omnigent.remediation_workspace import (
     ArtifactRemediationHeadLoader,
@@ -16,7 +15,7 @@ from moonmind.omnigent.remediation_workspace import (
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
 )
-
+from tests.artifact_access import access_for_test
 
 _DIGEST = "sha256:" + "a" * 64
 
@@ -80,9 +79,10 @@ async def test_owner_rejects_request_self_attestation_without_durable_head(tmp_p
 @pytest.mark.asyncio
 async def test_artifact_head_loader_normalizes_canonical_ref() -> None:
     class Service:
-        async def read(self, *, artifact_id, admitted_principal, **_kwargs):
+
+        async def read(self, *, artifact_id, access):
             assert artifact_id == "loop-head/2"
-            assert admitted_principal == "workflow:workflow-1"
+            assert access.execution_principal == "workflow:workflow-1"
             return object(), b'{"loopId":"loop-01"}'
 
     value = await ArtifactRemediationHeadLoader(Service(), workflow_id="workflow-1").load(
