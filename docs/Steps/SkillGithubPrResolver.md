@@ -95,7 +95,7 @@ New MoonMind submissions supply one explicit structured PR locator through the s
 | `finalizeMaxRetries` | int | 60 | Orchestration retries, including finalize waits/remediation. |
 | `finalizeBackoffSeconds` | int | 30 | Initial bounded exponential-backoff delay. |
 | `finalizeMaxSleepSeconds` | int | 120 | Per-sleep cap. |
-| `finalizeMaxElapsedSeconds` | int | 7200 | Skill orchestration wall-clock cap. |
+| `finalizeMaxElapsedSeconds` | int | 7200 | Wall-clock cap on new remediation. A `ci_running` wait past it continues within `finalizeMaxRetries`, so slow CI on a pushed fix can still merge. |
 
 The Skill enforces its loop values. Runtime timeout/intervention remains an outer envelope, not another implementation of retry semantics. In a scoped child, target and finish inputs are derived from the admitted parent contract and cannot broaden it.
 
