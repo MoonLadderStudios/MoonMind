@@ -46,7 +46,8 @@ def container(
         "--memory=2g",
         "--cpus=2",
         "--tmpfs",
-        "/tmp:rw,nosuid,nodev,size=1g,mode=1777",
+        # Opengrep's official one-file release executes a child from its cache.
+        "/tmp:rw,nosuid,nodev,exec,size=1g,mode=1777",
         "--mount",
         f"type=bind,src={source},dst=/workspace,readonly",
         "--mount",
