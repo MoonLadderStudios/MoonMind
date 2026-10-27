@@ -53,7 +53,9 @@ SCOPE = {"assets": ["app/routes.py"]}
 def job_workspace():
     # A root runner's private pytest parents cannot be traversed after dropping UID.
     with TemporaryDirectory(prefix="moonmind-security-job-") as directory:
-        workspace = Path(directory)
+        # Canonicalize this owned temporary root before the strict path walker
+        # encounters macOS's /var alias; application path policy stays intact.
+        workspace = Path(directory).resolve()
         workspace.chmod(0o755)
         yield workspace
 
