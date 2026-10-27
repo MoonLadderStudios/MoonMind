@@ -83,6 +83,7 @@ def fixture_servers(root, *, bind="127.0.0.1", http_port=0, https_port=0):
     tls = ThreadingHTTPServer((bind, https_port), FixtureHandler)
     cert, key = fixture_certificate(root)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(cert, key)
     tls.socket = ctx.wrap_socket(tls.socket, server_side=True)
     threads = [
