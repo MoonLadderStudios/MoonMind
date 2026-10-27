@@ -3365,6 +3365,52 @@ class TemporalArtifactService:
         artifact.metadata_json = metadata
         await self._repository.commit()
 
+    async def create_for_activity(self, *, principal: str, **kwargs: Any):
+        """Create under actual Activity scope and retain its producer raw right."""
+        normalized_kwargs = dict(kwargs)
+        from temporalio import activity
+
+        if activity.in_activity():
+            info = activity.info()
+            link = self._coerce_execution_ref(normalized_kwargs.get("link"))
+            if link is not None and (
+                link.workflow_id != info.workflow_id
+                or link.link_type
+                in {_DELEGATED_RAW_LINK_TYPE, _DELEGATED_INPUT_LINK_TYPE}
+            ):
+                raise TemporalArtifactAuthorizationError(
+                    "artifact creation target is outside the active execution"
+                )
+            if link is None:
+                normalized_kwargs["link"] = ExecutionRef(
+                    namespace=info.workflow_namespace,
+                    workflow_id=info.workflow_id,
+                    run_id=info.workflow_run_id,
+                    link_type="output.artifact",
+                )
+        artifact, upload = await self.create(
+            principal=principal,
+            **normalized_kwargs,
+        )
+        if (
+            activity.in_activity()
+            and artifact.redaction_level
+            is db_models.TemporalArtifactRedactionLevel.RESTRICTED
+        ):
+            # This owner just created the resource. Preserve its producer's raw
+            # right without interpreting any historical creator label as a grant.
+            await self._repository.add_link(
+                artifact_id=artifact.artifact_id,
+                execution=ExecutionRef(
+                    namespace=info.workflow_namespace,
+                    workflow_id=info.workflow_id,
+                    run_id=info.workflow_run_id,
+                    link_type=_DELEGATED_RAW_LINK_TYPE,
+                ),
+            )
+            await self._repository.commit()
+        return artifact, upload
+
     async def create(
         self,
         *,
@@ -4127,6 +4173,67 @@ class TemporalArtifactService:
             raw_access_allowed=raw_access_allowed,
             preview_artifact_ref=preview_ref,
             default_read_ref=default_read_ref,
+        )
+
+    async def recover_recorded_saved_work_inputs(self, *, contract: Any) -> None:
+        """Decode retained publication input admission in this concrete session.
+
+        Workers call this operation through their session-bound artifact proxy;
+        private repository operations stay within the artifact-service owner.
+        """
+        from moonmind.workflows.temporal.publication_recovery import (
+            recover_recorded_saved_work_inputs,
+        )
+
+        await recover_recorded_saved_work_inputs(self, contract)
+
+    async def find_saved_work_publication_decisions(
+        self, *, workflow_id: str, operation_key: str
+    ) -> list[dict[str, Any]]:
+        return await find_saved_work_publication_decisions(
+            self, workflow_id=workflow_id, operation_key=operation_key
+        )
+
+    async def persist_saved_work_publication_decision(
+        self,
+        *,
+        workflow_id: str,
+        run_id: str,
+        operation_key: str,
+        decision: Mapping[str, Any],
+    ) -> None:
+        await persist_saved_work_publication_decision(
+            self,
+            workflow_id=workflow_id,
+            run_id=run_id,
+            operation_key=operation_key,
+            decision=decision,
+        )
+
+    async def persist_publication_record(
+        self,
+        *,
+        name: str,
+        link_type: str,
+        payload: dict[str, Any],
+        workflow_id: str,
+        run_id: str,
+        operation_key: str,
+        producer: str,
+        labels: list[str],
+        identity: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
+        return await _persist_publication_record(
+            self,
+            name=name,
+            link_type=link_type,
+            payload=payload,
+            workflow_id=workflow_id,
+            run_id=run_id,
+            operation_key=operation_key,
+            producer=producer,
+            labels=labels,
+            identity=identity,
         )
 
     async def get_metadata(
@@ -5728,8 +5835,7 @@ class TemporalArtifactActivities:
         run_id: str,
         operation_key: str,
     ) -> dict[str, Any]:
-        return await _persist_publication_record(
-            self._service,
+        return await self._service.persist_publication_record(
             name=name,
             link_type="result",
             payload=payload,
@@ -5895,47 +6001,9 @@ class TemporalArtifactActivities:
                 metadata = {}
             metadata.setdefault("name", legacy_name)
             normalized_kwargs["metadata_json"] = metadata
-        from temporalio import activity
-
-        if activity.in_activity():
-            info = activity.info()
-            link = self._service._coerce_execution_ref(normalized_kwargs.get("link"))
-            if link is not None and (
-                link.workflow_id != info.workflow_id
-                or link.link_type
-                in {_DELEGATED_RAW_LINK_TYPE, _DELEGATED_INPUT_LINK_TYPE}
-            ):
-                raise TemporalArtifactAuthorizationError(
-                    "artifact creation target is outside the active execution"
-                )
-            if link is None:
-                normalized_kwargs["link"] = ExecutionRef(
-                    namespace=info.workflow_namespace,
-                    workflow_id=info.workflow_id,
-                    run_id=info.workflow_run_id,
-                    link_type="output.artifact",
-                )
-        artifact, upload = await self._service.create(
-            principal=principal,
-            **normalized_kwargs,
+        artifact, upload = await self._service.create_for_activity(
+            principal=principal, **normalized_kwargs
         )
-        if (
-            activity.in_activity()
-            and artifact.redaction_level
-            is db_models.TemporalArtifactRedactionLevel.RESTRICTED
-        ):
-            # This owner just created the resource. Preserve its producer's raw
-            # right without interpreting any historical creator label as a grant.
-            await self._service._repository.add_link(
-                artifact_id=artifact.artifact_id,
-                execution=ExecutionRef(
-                    namespace=info.workflow_namespace,
-                    workflow_id=info.workflow_id,
-                    run_id=info.workflow_run_id,
-                    link_type=_DELEGATED_RAW_LINK_TYPE,
-                ),
-            )
-            await self._service._repository.commit()
         return build_artifact_ref(artifact), upload
 
     async def artifact_read(
@@ -6516,8 +6584,8 @@ class TemporalArtifactActivities:
         execution_ref: dict[str, Any] | ExecutionRef,
     ) -> str:
         access = ArtifactAccessContext.for_activity()
-        execution = self._service._coerce_execution_ref(execution_ref)
-        if execution.workflow_id != self._service._workflow_id_for_principal(
+        execution = TemporalArtifactService._coerce_execution_ref(execution_ref)
+        if execution.workflow_id != TemporalArtifactService._workflow_id_for_principal(
             access.execution_principal
         ):
             raise TemporalArtifactAuthorizationError(
