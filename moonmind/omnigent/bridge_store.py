@@ -4233,7 +4233,7 @@ class OmnigentBridgeSessionStore:
                         artifact_id=artifact_id,
                         access=ArtifactAccessContext.for_execution(
                             row.moonmind_workflow_id
-                        ),
+                        )._with_verified_inputs((artifact_id,)),
                     )
                     try:
                         entries = [
@@ -4403,7 +4403,8 @@ class OmnigentBridgeSessionStore:
             await artifacts._repository.commit()
             if artifact.status is TemporalArtifactStatus.COMPLETE:
                 _, existing = await artifacts.read(
-                    artifact_id=artifact.artifact_id, access=access
+                    artifact_id=artifact.artifact_id,
+                    access=access._with_verified_inputs((artifact.artifact_id,)),
                 )
                 if existing != payload:
                     raise OmnigentIdempotencyError(

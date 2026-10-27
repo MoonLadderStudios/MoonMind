@@ -3411,6 +3411,126 @@ class TemporalArtifactService:
             await self._repository.commit()
         return artifact, upload
 
+    async def _recover_activity_creation(self, artifact_id: str) -> None:
+        """Drain retained creates that predate producer links, from run history.
+
+        Remove this decoder once those runs leave retention. A creator label or
+        a reference in an Activity payload is never evidence of creation.
+        """
+        from temporalio import activity
+        from temporalio.service import RPCError
+
+        def denied() -> NoReturn:
+            raise TemporalArtifactAuthorizationError(
+                "artifact write requires its recorded creation"
+            )
+
+        info = activity.info()
+        client = activity.client()
+        namespace = info.workflow_namespace
+        if client.namespace != namespace:
+            denied()
+        creates: dict[int, bool] = {}
+        completed: dict[str, bool] = {}
+        proven = False
+        try:
+            async with asyncio.timeout(10):
+                handle = client.get_workflow_handle(
+                    info.workflow_id, run_id=info.workflow_run_id
+                )
+                async for event in handle.fetch_history_events(page_size=100):
+                    if event.HasField("activity_task_scheduled_event_attributes"):
+                        scheduled = event.activity_task_scheduled_event_attributes
+                        if scheduled.activity_type.name == "artifact.create":
+                            values = await client.data_converter.decode(
+                                scheduled.input.payloads
+                            )
+                            if len(values) == 1 and isinstance(values[0], Mapping):
+                                creates[event.event_id] = (
+                                    values[0].get("redaction_level", "none")
+                                    == "restricted"
+                                )
+                        elif scheduled.activity_id == info.activity_id:
+                            values = await client.data_converter.decode(
+                                scheduled.input.payloads
+                            )
+                            if (
+                                scheduled.activity_type.name
+                                == "artifact.write_complete"
+                                and len(values) == 1
+                                and isinstance(values[0], Mapping)
+                                and values[0].get("artifact_id") == artifact_id
+                                and artifact_id in completed
+                            ):
+                                proven = True
+                            break
+                    elif event.HasField("activity_task_completed_event_attributes"):
+                        result = event.activity_task_completed_event_attributes
+                        if result.scheduled_event_id not in creates:
+                            continue
+                        values = await client.data_converter.decode(
+                            result.result.payloads
+                        )
+                        if (
+                            len(values) == 1
+                            and isinstance(values[0], (list, tuple))
+                            and len(values[0]) == 2
+                            and isinstance(values[0][0], Mapping)
+                            and isinstance(values[0][0].get("artifact_id"), str)
+                        ):
+                            completed[values[0][0]["artifact_id"]] = creates[
+                                result.scheduled_event_id
+                            ]
+        except (RPCError, TimeoutError, ConnectionError) as exc:
+            raise TemporalArtifactUnavailableError(
+                artifact_id, dependency="authority", operation="write_complete"
+            ) from exc
+        if not proven:
+            denied()
+        artifact = await self._repository.get_artifact_for_update(artifact_id)
+        self._assert_not_quarantined(artifact)
+        if artifact.status not in {
+            db_models.TemporalArtifactStatus.PENDING_UPLOAD,
+            db_models.TemporalArtifactStatus.COMPLETE,
+        }:
+            raise TemporalArtifactStateError("artifact cannot be completed")
+        for link_type in (
+            "output.artifact",
+            *(
+                (_DELEGATED_RAW_LINK_TYPE,)
+                if completed[artifact_id]
+                and artifact.redaction_level
+                is db_models.TemporalArtifactRedactionLevel.RESTRICTED
+                else ()
+            ),
+        ):
+            await self._repository.add_link(
+                artifact_id=artifact_id,
+                execution=ExecutionRef(
+                    namespace=namespace,
+                    workflow_id=info.workflow_id,
+                    run_id=info.workflow_run_id,
+                    link_type=link_type,
+                ),
+            )
+        await self._repository.commit()
+
+    async def write_for_activity(self, **kwargs: Any) -> db_models.TemporalArtifact:
+        """Bind completion to the current producer, including retained creates."""
+        from temporalio import activity
+
+        if activity.in_activity():
+            artifact_id = kwargs["artifact_id"]
+            try:
+                artifact, *_ = await self.get_metadata(
+                    artifact_id=artifact_id, access=ArtifactAccessContext.for_activity()
+                )
+            except TemporalArtifactAuthorizationError:
+                await self._recover_activity_creation(artifact_id)
+                artifact = await self._repository.get_artifact(artifact_id)
+            self._assert_not_quarantined(artifact)
+        return await self.write_complete(**kwargs)
+
     async def create(
         self,
         *,
@@ -3426,6 +3546,13 @@ class TemporalArtifactService:
         content_addressed_scope: str | None = None,
     ) -> tuple[db_models.TemporalArtifact, ArtifactUploadDescriptor]:
         now = datetime.now(UTC)
+        try:
+            # Activity JSON carries the enum's string value, not its identity.
+            redaction_level = db_models.TemporalArtifactRedactionLevel(redaction_level)
+        except ValueError as exc:
+            raise TemporalArtifactValidationError(
+                "invalid artifact redaction level"
+            ) from exc
         try:
             assert_model_agnostic_metadata(
                 metadata_json,
@@ -6082,13 +6209,7 @@ class TemporalArtifactActivities:
         elif not isinstance(payload, bytes):
             payload = bytes(payload)
 
-        from temporalio import activity
-
-        if activity.in_activity():
-            await self._service.get_metadata(
-                artifact_id=artifact_id, access=ArtifactAccessContext.for_activity()
-            )
-        artifact = await self._service.write_complete(
+        artifact = await self._service.write_for_activity(
             artifact_id=artifact_id,
             principal=principal,
             payload=payload,

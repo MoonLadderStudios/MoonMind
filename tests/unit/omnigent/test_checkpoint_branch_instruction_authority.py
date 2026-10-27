@@ -197,7 +197,10 @@ async def _dispatch_claimed(fixture):
     client = SimpleNamespace(start_workflow=AsyncMock())
     async with fixture.sessions() as session:
         owner = CheckpointBranchTurnExecutionOwner(
-            session, principal=fixture.producer, client=client
+            session,
+            principal=fixture.producer,
+            client=client,
+            access=access_for_test(fixture.producer),
         )
         await owner._start_claimed_turn(
             branch=await session.get(WorkflowCheckpointBranch, "branch"),
@@ -613,7 +616,11 @@ async def test_local_instruction_preserves_validation_and_terminal_promotion(
         if changed == "digest":
             turn.instruction_digest = "sha256:" + "0" * 64
         await session.commit()
-        owner = CheckpointBranchTurnExecutionOwner(session, principal=fixture.producer)
+        owner = CheckpointBranchTurnExecutionOwner(
+            session,
+            principal=fixture.producer,
+            access=access_for_test(fixture.producer),
+        )
         assert (
             await owner._read_ref(local_ref, field_name="instructionRef")
             == fixture.text

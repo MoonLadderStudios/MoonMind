@@ -22,6 +22,7 @@ from api_service.services.provider_profile_runtime import (
 )
 from api_service.services.settings_catalog import SettingsCatalogService
 from moonmind.config.settings import settings
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal.service import TemporalExecutionService
 from tests.unit.api.routers.test_executions import _override_user_dependencies
 
@@ -68,6 +69,17 @@ async def saved_profile_submission(tmp_path, monkeypatch):
             app.dependency_overrides[_get_service] = lambda: service
             app.dependency_overrides[get_async_session] = lambda: session
             _override_user_dependencies(app, is_superuser=True)
+            for dependency in list(app.dependency_overrides):
+                if getattr(dependency, "__name__", "") in {
+                    "_current_user_fallback",
+                    "_strict_current_user",
+                    "_optional_current_user",
+                    "get_instance_access",
+                    "get_instance_access_optional",
+                }:
+                    app.dependency_overrides[dependency] = lambda: OperatorAdmission(
+                        via="saved-profile-fixture"
+                    )
             catalog = SettingsCatalogService(session=session)
             await catalog.apply_overrides(
                 changes={"workflow.default_provider_profile_ref": "saved-codex_cli"},

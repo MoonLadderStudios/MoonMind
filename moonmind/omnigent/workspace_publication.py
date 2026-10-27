@@ -5,11 +5,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from datetime import UTC, datetime
 import logging
 import os
 import re
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -273,7 +273,13 @@ class OmnigentWorkspacePublicationService:
     async def restore_saved_request_workspace(self, request, saved):
         """Resume the same finalization owner after its local volume was lost."""
         from moonmind.omnigent.realizers.turn_delivery import execution_identity
-        from moonmind.workflows.temporal.runtime.workspace_locators import SandboxWorkspaceRecord
+        from moonmind.workflows.skills.run_projection import (
+            step_execution_artifact_access,
+        )
+        from moonmind.workflows.temporal.runtime.workspace_locators import (
+            SandboxWorkspaceRecord,
+        )
+
         identity = request.step_execution
         if identity is None or not saved.get("checkpointRef") or self._artifacts is None:
             raise HarnessPlatformError("Saved work lacks an immutable resume checkpoint", code="WORKSPACE_RESTORE_UNAVAILABLE")
@@ -292,17 +298,42 @@ class OmnigentWorkspacePublicationService:
         plan = identity.omnigent_execution_plan
         if plan is None:
             raise HarnessPlatformError("Finalization restore requires its original execution plan", code="WORKSPACE_RESTORE_UNAVAILABLE")
-        return await self._artifacts.restore_checkpoint(authority_root=self._workspace_root, restore_request={
-            "schemaVersion": "v1", "recoveryIdentity": source,
-            "source": {**source, "checkpointRef": saved["checkpointRef"], "checkpointBoundary": "after_execution",
-                       "sourceWorkspaceLocator": locator.model_dump(by_alias=True)},
-            "checkpoint": {key: saved[key] for key in ("kind", "baseCommit", "archiveRef", "archiveDigest", "manifestRef", "manifestDigest")},
-            "destination": {**locator.model_dump(by_alias=True), "stepExecutionId": step_id,
-                            "repository": authored_repository_source(request)},
-            "workspacePolicy": "restore_publication_candidate", "resumePhase": "resume_publication",
-            "capabilitySetVersion": "omnigent-plan/v1", "capabilityDigest": plan.plan_digest,
-            "idempotencyKey": request.idempotency_key + ":restore-finalization",
-        })
+        access = await step_execution_artifact_access(request)
+        return await self._artifacts.restore_checkpoint(
+            authority_root=self._workspace_root,
+            access=access,
+            restore_request={
+                "schemaVersion": "v1",
+                "recoveryIdentity": source,
+                "source": {
+                    **source,
+                    "checkpointRef": saved["checkpointRef"],
+                    "checkpointBoundary": "after_execution",
+                    "sourceWorkspaceLocator": locator.model_dump(by_alias=True),
+                },
+                "checkpoint": {
+                    key: saved[key]
+                    for key in (
+                        "kind",
+                        "baseCommit",
+                        "archiveRef",
+                        "archiveDigest",
+                        "manifestRef",
+                        "manifestDigest",
+                    )
+                },
+                "destination": {
+                    **locator.model_dump(by_alias=True),
+                    "stepExecutionId": step_id,
+                    "repository": authored_repository_source(request),
+                },
+                "workspacePolicy": "restore_publication_candidate",
+                "resumePhase": "resume_publication",
+                "capabilitySetVersion": "omnigent-plan/v1",
+                "capabilityDigest": plan.plan_digest,
+                "idempotencyKey": request.idempotency_key + ":restore-finalization",
+            },
+        )
 
     async def inspect_request_terminal(self, request: AgentExecutionRequest):
         from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
@@ -321,9 +352,12 @@ class OmnigentWorkspacePublicationService:
         A live-host recovery probe is provisional until its caller confirms
         the stopped boundary. It keeps recovery bytes without publication.
         """
-        from moonmind.workflows.temporal.activity_runtime import TemporalSandboxActivities
-        from moonmind.schemas.temporal_models import WorkspaceCheckpointCaptureInput
         from moonmind.omnigent.realizers.turn_delivery import execution_identity
+        from moonmind.schemas.temporal_models import WorkspaceCheckpointCaptureInput
+        from moonmind.workflows.temporal.activity_runtime import (
+            TemporalSandboxActivities,
+        )
+
         if self._artifacts is None:
             raise HarnessPlatformError("durable workspace storage is unavailable", code="WORKSPACE_SAVE_UNAVAILABLE")
         gateway = self._artifacts
@@ -393,8 +427,14 @@ class OmnigentWorkspacePublicationService:
         # canonical checkpoint instead of leaving an archive with no resume input.
         plan = identity.omnigent_execution_plan
         if plan is not None:
-            from moonmind.workflows.temporal.step_checkpoints import build_step_checkpoint_payload
-            from moonmind.schemas.temporal_models import StepExecutionIdentityModel, STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE
+            from moonmind.schemas.temporal_models import (
+                STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+                StepExecutionIdentityModel,
+            )
+            from moonmind.workflows.temporal.step_checkpoints import (
+                build_step_checkpoint_payload,
+            )
+
             payload = build_step_checkpoint_payload(
                 identity=StepExecutionIdentityModel(
                     workflowId=identity.workflow_id,

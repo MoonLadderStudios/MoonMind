@@ -64,6 +64,7 @@ from api_service.services.checkpoint_branch_turn_execution import (
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.schemas.omnigent_session_models import OmnigentSessionWorkflowInput
 from moonmind.schemas.temporal_models import StepExecutionCheckpointModel
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows import get_temporal_artifact_repository
 from moonmind.workflows.temporal.activities import omnigent_activities
 from moonmind.workflows.temporal.activities.omnigent_activities import (
@@ -1081,7 +1082,9 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
         if getattr(dependency.call, "__name__", "") == "_current_user_fallback"
     } or {get_instance_access}
     for dependency in user_dependencies:
-        app.dependency_overrides[dependency] = lambda: user
+        app.dependency_overrides[dependency] = lambda: OperatorAdmission(
+            via="checkpoint-operator-fixture"
+        )
 
     ledger = CheckpointBranchRuntimeLedger(artifact_writer=write_artifact)
     created_checkpoint_ids: set[str] = set()
@@ -2326,6 +2329,7 @@ async def test_preclaim_artifact_retry_reuses_exact_owned_ref(
         owner = CheckpointBranchTurnExecutionOwner(
             session,
             principal="service:test",
+            access=access_for_test("service:test"),
         )
         first = await owner._write_artifact(
             content_type="application/json",

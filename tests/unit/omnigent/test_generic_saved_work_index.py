@@ -17,6 +17,14 @@ from moonmind.workflows.temporal.runtime.workspace_archive import (
 from tests.artifact_access import access_for_test
 
 
+def _install_service(monkeypatch, artifact_module, service):
+    class BoundService(artifact_module.TemporalArtifactService):
+        def __new__(cls, *_args, **_kwargs):
+            return service
+
+    monkeypatch.setattr(artifact_module, "TemporalArtifactService", BoundService)
+
+
 def digest(payload):
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
@@ -158,7 +166,7 @@ async def test_durable_saved_index_is_linked_only_after_verified_readback(monkey
         service.read.side_effect = OSError("read failed")
     elif failure == "mismatch":
         service.read.return_value = (None, b"different")
-    monkeypatch.setattr(artifact_module, "TemporalArtifactService", lambda _repo: service)
+    _install_service(monkeypatch, artifact_module, service)
 
     @asynccontextmanager
     async def sessions():
@@ -198,7 +206,7 @@ async def test_checkpoint_retry_reuses_durable_objects_before_saved_index(tmp_pa
     from tests.unit.publish.test_saved_work_publication_journey import _artifact_service
 
     async with _artifact_service(tmp_path) as service:
-        monkeypatch.setattr(artifact_module, "TemporalArtifactService", lambda _repo: service)
+        _install_service(monkeypatch, artifact_module, service)
 
         @asynccontextmanager
         async def sessions():
@@ -231,7 +239,7 @@ async def test_lost_saved_link_ack_reuses_one_saved_result(tmp_path, monkeypatch
 
     fixture = await _recovery_fixture(tmp_path, monkeypatch)
     async with _artifact_service(tmp_path) as service:
-        monkeypatch.setattr(artifact_module, "TemporalArtifactService", lambda _repo: service)
+        _install_service(monkeypatch, artifact_module, service)
 
         @asynccontextmanager
         async def sessions():

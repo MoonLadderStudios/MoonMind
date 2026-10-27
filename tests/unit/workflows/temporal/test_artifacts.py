@@ -81,7 +81,9 @@ async def test_read_faults_keep_storage_meaning_and_preserve_artifact(
             original = getattr(store, target)
             monkeypatch.setattr(store, target, fail_stream if target == "read_chunks" else fail)
             with pytest.raises(TemporalArtifactError) as raised:
-                await getattr(service, surface)(artifact_id=artifact.artifact_id, principal="owner")
+                await getattr(service, surface)(
+                    artifact_id=artifact.artifact_id, access=access_for_test("owner")
+                )
             assert raised.value.code == code
             assert raised.value.retryable is retryable
             assert type(raised.value.__cause__) is type(fault)

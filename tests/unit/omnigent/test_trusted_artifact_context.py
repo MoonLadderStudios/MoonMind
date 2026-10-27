@@ -746,3 +746,54 @@ async def test_container_job_reader_keeps_exact_durable_input_admission(
                     artifact_id=selected,
                     access=ArtifactAccessContext.for_execution("owner"),
                 )
+
+
+@pytest.mark.asyncio
+async def test_cold_workspace_gateway_restore_keeps_original_candidate(
+    artifacts, tmp_path, monkeypatch
+):
+    from contextlib import asynccontextmanager
+
+    from tests.integration.reliability import test_saved_workspace_journey as journey
+
+    @asynccontextmanager
+    async def database(_tables):
+        yield artifacts
+
+    monkeypatch.setattr(journey, "isolated_postgres", database)
+    await journey.test_saved_candidate_is_readable_after_worker_and_workspace_loss(
+        tmp_path,
+        monkeypatch,
+        backend="local_fs",
+        multipart=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_restore_gateway_cannot_select_scope_from_payload(tmp_path):
+    from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
+    from tests.unit.workflows.temporal.test_checkpoint_restore import _request
+
+    request = _request(
+        checkpoint_ref="artifact://art_checkpoint",
+        capture={
+            "workspace": {
+                "kind": "worktree_archive",
+                "baseCommit": "a" * 40,
+                "archiveRef": "artifact://art_archive",
+                "archiveDigest": "sha256:" + "b" * 64,
+                "manifestRef": "artifact://art_manifest",
+                "manifestDigest": "sha256:" + "c" * 64,
+            }
+        },
+        base="a" * 40,
+    )
+    gateway = TemporalOmnigentArtifactGateway(
+        lambda: pytest.fail("unadmitted restore opened the database")
+    )
+    with pytest.raises(TemporalArtifactAuthorizationError, match="admitted execution"):
+        await gateway.restore_checkpoint(
+            restore_request=request,
+            authority_root=tmp_path,
+            access=ArtifactAccessContext.for_execution("unrelated"),
+        )

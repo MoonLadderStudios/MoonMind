@@ -800,8 +800,14 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
     async def read_text(self, artifact_ref: str) -> str:
         return (await self.read_bytes(artifact_ref)).decode("utf-8")
 
-    async def restore_checkpoint(self, *, restore_request, authority_root):
+    async def restore_checkpoint(
+        self, *, restore_request, authority_root, access: ArtifactAccessContext
+    ):
+        from moonmind.schemas.checkpoint_restore_models import (
+            ManagedWorkspaceRestoreRequest,
+        )
         from moonmind.workflows.temporal.artifacts import (
+            TemporalArtifactAuthorizationError,
             TemporalArtifactRepository,
             TemporalArtifactService,
         )
@@ -809,17 +815,27 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
             ManagedCheckpointRestoreService,
         )
 
+        request = (
+            restore_request
+            if isinstance(restore_request, ManagedWorkspaceRestoreRequest)
+            else ManagedWorkspaceRestoreRequest.model_validate(restore_request)
+        )
+        access = ArtifactAccessContext.require(access)
+        if (
+            access.execution_principal
+            != f"workflow:{request.recovery_identity.workflow_id}"
+        ):
+            raise TemporalArtifactAuthorizationError(
+                "restore context differs from its admitted execution"
+            )
         async with self._session_factory() as session:
             service = ManagedCheckpointRestoreService(
                 authority_root=authority_root,
                 artifact_service=TemporalArtifactService(TemporalArtifactRepository(session)),
             )
             return await service.restore(
-                restore_request,
-                access=ArtifactAccessContext.for_execution(
-                    restore_request.recovery_identity.workflow_id,
-                    principal=self._principal,
-                ),
+                request,
+                access=access,
             )
 
     async def read_bytes(self, artifact_ref: str) -> bytes:

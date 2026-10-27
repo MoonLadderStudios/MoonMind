@@ -5502,9 +5502,7 @@ async def test_daemon_workspace_root_infers_remote_from_daemon_root(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Unset daemon mode with a configured daemon root must inspect the volume."""
-    from moonmind.omnigent.host_services.workspace import (
-        resolve_daemon_workspace_root,
-    )
+    from moonmind.omnigent.host_services.workspace import resolve_daemon_workspace_root
 
     monkeypatch.delenv("WORKFLOW_DOCKER_DAEMON_MODE", raising=False)
     monkeypatch.setenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", "/daemon/root")
@@ -5584,7 +5582,9 @@ async def test_skill_attachment_mounts_the_deployment_volume_subpath(
         "skills": [],
     }
 
-    admitted_request = object()
+    admitted_request = SimpleNamespace(
+        step_execution=SimpleNamespace(workflow_id="workflow-1")
+    )
 
     class Gateway:
         async def read_admitted_input(self, artifact_id: str, *, request) -> bytes:

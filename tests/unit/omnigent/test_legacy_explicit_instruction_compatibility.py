@@ -17,6 +17,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from tests.artifact_access import access_for_test
 
 
 @pytest.mark.asyncio
@@ -67,7 +68,7 @@ async def test_retained_explicit_prompt_requires_admission_and_stays_recoverable
             request=request,
             prompt={"instructionRef": ref},
             artifact_gateway=TemporalOmnigentArtifactGateway(
-                sessions, principal="operator"
+                sessions, principal="operator", access=access_for_test("operator")
             ),
         )
         assert message["data"]["content"][0]["text"] == body.decode()

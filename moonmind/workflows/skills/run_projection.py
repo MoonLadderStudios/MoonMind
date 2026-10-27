@@ -93,14 +93,15 @@ async def step_execution_artifact_access(request: Any) -> ArtifactAccessContext:
             workflow_id, principal="agent_runtime"
         )
 
-    import asyncio
     from datetime import timedelta
     from types import SimpleNamespace
+
     from temporalio.api.common.v1 import WorkflowExecution
     from temporalio.api.workflowservice.v1 import (
-        DescribeWorkflowExecutionRequest,
         DescribeNamespaceRequest,
+        DescribeWorkflowExecutionRequest,
     )
+
     from moonmind.workflows.temporal.activity_runtime import (
         _verified_artifact_parent_access,
     )

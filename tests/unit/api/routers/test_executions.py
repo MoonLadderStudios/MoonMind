@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, Mock, call, patch
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import pytest
-from fastapi import Request, FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -7855,13 +7855,7 @@ async def test_strict_unavailable_tier_consumes_no_resources_and_default_clamps(
             service._client_adapter.start_workflow = AsyncMock(
                 return_value=SimpleNamespace(run_id="run-mm3795-clamp")
             )
-            user = SimpleNamespace(
-                id=uuid4(),
-                email="mm3795@example.com",
-                is_active=True,
-                is_superuser=False,
-                roles=[],
-            )
+            user = OperatorAdmission(via="strict-tier-fixture")
             request_payload = {
                 "type": "workflow",
                 "payload": {
@@ -7886,6 +7880,7 @@ async def test_strict_unavailable_tier_consumes_no_resources_and_default_clamps(
                     user=user,
                     session=session,
                     principal_context={},
+                    access=ArtifactAccessContext.for_operator(user),
                 )
 
             assert exc_info.value.status_code == 422
@@ -7906,6 +7901,7 @@ async def test_strict_unavailable_tier_consumes_no_resources_and_default_clamps(
                 user=user,
                 session=session,
                 principal_context={},
+                access=ArtifactAccessContext.for_operator(user),
             )
 
             assert clamped.model == "gpt-5.5"
