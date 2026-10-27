@@ -24,6 +24,8 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.container_job_models import OwnerIdentity
 from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
 from moonmind.security.container_job_capabilities import (
+    ContainerJobCapabilityError,
+    assessment_scope_from_policy,
     mint_container_job_session_capability,
 )
 from moonmind.security.execution_fanout_capabilities import (
@@ -31,6 +33,7 @@ from moonmind.security.execution_fanout_capabilities import (
     ExecutionFanoutCapabilityError,
     mint_execution_fanout_capability,
     require_execution_fanout_authorization,
+    step_policy_is_assessment_scoped,
 )
 from moonmind.security.mcp_tool_capabilities import (
     JIRA_TOOLS_PURPOSE,
@@ -102,6 +105,10 @@ class OmnigentRuntimeEnvironmentService:
             require_execution_fanout_authorization(
                 required_capabilities,
                 self._execution_fanout_authorization(request),
+                assessment_scoped=request.step_execution is not None
+                and step_policy_is_assessment_scoped(
+                    request.step_execution.skill_source_policy
+                ),
             )
         except ExecutionFanoutCapabilityError as exc:
             raise HarnessPlatformError(str(exc), code="authorization_denied") from exc
@@ -154,6 +161,16 @@ class OmnigentRuntimeEnvironmentService:
                     "container jobs require authoritative workspace access mode",
                     code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
                 )
+            try:
+                assessment_scope = assessment_scope_from_policy(
+                    step_execution.skill_source_policy
+                    if step_execution is not None
+                    else None
+                )
+            except ContainerJobCapabilityError as exc:
+                raise HarnessPlatformError(
+                    str(exc), code="authorization_denied"
+                ) from exc
             environment.update(
                 {
                     "MOONMIND_CONTAINER_JOBS_MCP_URL": self._moonmind_url.rstrip("/")
@@ -173,6 +190,7 @@ class OmnigentRuntimeEnvironmentService:
                         workspace_id=locator.workspace_id,
                         workspace_relative_path=locator.relative_path,
                         workspace_read_only=access_mode == "read-only",
+                        assessment_scope=assessment_scope,
                         lifetime_seconds=capability_lifetime_seconds,
                     ),
                     "MOONMIND_CONTAINER_JOBS_SOURCE_KIND": "omnigent",

@@ -31,6 +31,7 @@ from moonmind.security.container_job_capabilities import (
     verify_container_job_session_capability,
 )
 from moonmind.security.execution_fanout_capabilities import (
+    ExecutionFanoutCapabilityError,
     verify_execution_fanout_capability,
 )
 from moonmind.security.mcp_tool_capabilities import verify_mcp_tool_capability
@@ -325,12 +326,25 @@ async def test_default_command_runner_clears_supplemental_groups_when_uid_change
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("required_capabilities", "expects_fanout"),
+    ("required_capabilities", "expects_fanout", "assessment_scope"),
     [
-        (None, True),
-        ((), False),
-        (("execution.fanout",), True),
-        (("jira",), False),
+        (None, True, None),
+        ((), False, None),
+        (("execution.fanout",), True, None),
+        (("jira",), False, None),
+        (
+            (),
+            False,
+            {
+                "assessmentRef": "assessment-1",
+                "profileRefs": ["source-scan"],
+                "actionClasses": ["source-analysis"],
+                "targets": [{"workspacePath": "app"}],
+                "maxJobs": 1,
+                "maxJobSeconds": 60,
+                "evidenceIntent": "Source findings",
+            },
+        ),
     ],
 )
 async def test_controller_launches_container_and_returns_typed_handle(
@@ -338,6 +352,7 @@ async def test_controller_launches_container_and_returns_typed_handle(
     tmp_path: Path,
     required_capabilities: tuple[str, ...] | None,
     expects_fanout: bool,
+    assessment_scope: dict | None,
 ) -> None:
     monkeypatch.delenv("MOONMIND_PYTHON_TEST_IMAGE", raising=False)
     monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
@@ -364,6 +379,8 @@ async def test_controller_launches_container_and_returns_typed_handle(
             "authorized": True,
             "sourceKind": "built_in",
         }
+    if assessment_scope is not None:
+        request_payload["containerJobAssessmentScope"] = assessment_scope
     request = LaunchCodexManagedSessionRequest(**request_payload)
     commands: list[tuple[str, ...]] = []
     docker_run_env: dict[str, str] = {}
@@ -458,6 +475,12 @@ async def test_controller_launches_container_and_returns_typed_handle(
     )
     assert capability.agent_run_id == "task-1"
     assert capability.session_id == "sess-1"
+    signed_scope = capability.assessment_scope
+    assert (
+        None
+        if signed_scope is None
+        else signed_scope.model_dump(mode="json", by_alias=True, exclude_defaults=True)
+    ) == assessment_scope
     if expects_fanout:
         assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" in run_command
         assert not any(
@@ -523,6 +546,60 @@ async def test_controller_launches_container_and_returns_typed_handle(
         call.kwargs["kind"]
         for call in session_supervisor.emit_session_event.call_args_list
     ] == ["session_started", "runtime_status", "model_status"]
+
+
+@pytest.mark.asyncio
+async def test_controller_refuses_fanout_for_assessment_scoped_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A scoped session cannot mint fan-out that would start unscoped children."""
+
+    monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
+    workspace_root = tmp_path / "agent_jobs"
+    request = LaunchCodexManagedSessionRequest(
+        agentRunId="task-1",
+        workflowId="wf-task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        turnCompletionTimeoutSeconds=1800,
+        requiredCapabilities=["execution.fanout"],
+        executionFanoutAuthorization={"authorized": True, "sourceKind": "built_in"},
+        containerJobAssessmentScope={
+            "assessmentRef": "assessment-1",
+            "profileRefs": ["source-scan"],
+            "actionClasses": ["source-analysis"],
+            "targets": [{"workspacePath": "app"}],
+            "maxJobs": 1,
+            "maxJobSeconds": 60,
+            "evidenceIntent": "Source findings",
+        },
+    )
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(command, *, input_text=None, env=None):
+        commands.append(command)
+        return 1, "", "No such container"
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        moonmind_url="http://api:8000",
+        session_store=ManagedSessionStore(tmp_path / "session-store"),
+        session_supervisor=AsyncMock(),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    with pytest.raises(ExecutionFanoutCapabilityError, match="assessment-scoped"):
+        await controller.launch_session(request)
+    assert not any(command[:2] == ("docker", "run") for command in commands)
 
 
 @pytest.mark.asyncio

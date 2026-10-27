@@ -51,6 +51,8 @@ def _submission(*attachments) -> ContainerJobSubmitRequest:
 def _service(artifacts) -> ContainerJobService:
     service = ContainerJobService.__new__(ContainerJobService)
     service._artifacts = artifacts
+    service._capability = None
+    service._backend_settings = SimpleNamespace(workload_profiles=())
     return service
 
 
