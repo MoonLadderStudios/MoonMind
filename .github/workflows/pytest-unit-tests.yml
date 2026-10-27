@@ -933,6 +933,14 @@ jobs:
           mkdir -p artifacts/integration-ci
           timeout --signal=INT --kill-after=20s 260s python3 tools/test_docker_proxy.py \
             2>&1 | tee artifacts/integration-ci/docker-proxy.log
+      - name: Verify real scoped egress connections and owned cleanup
+        if: matrix.suite == 'hermetic'
+        timeout-minutes: 5
+        env:
+          MOONMIND_PYTHON_TEST_IMAGE: moonmind-python-tests:ci
+        run: |
+          set -euo pipefail
+          bash tools/test_scoped_egress.sh 2>&1 | tee artifacts/integration-ci/scoped-egress.log
       - name: Run hermetic integration CI suite
         # The suite takes about 20 minutes before the storage restart
         # checks. Allow 25 minutes for the combined run, then 30s

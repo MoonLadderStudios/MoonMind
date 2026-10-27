@@ -6718,6 +6718,8 @@ export interface components {
             networkMode: "none" | "bridge" | "service";
             /** Serviceref */
             serviceRef?: string | null;
+            /** Egresspolicyref */
+            egressPolicyRef?: string | null;
             resources: components["schemas"]["ResourceLimits"];
             /**
              * Timeoutseconds
