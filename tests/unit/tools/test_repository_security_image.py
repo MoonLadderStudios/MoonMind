@@ -411,6 +411,28 @@ def test_qualification_does_not_count_missing_or_incomplete_evidence_as_clean(
         qualification.count_findings(scanner, body)
 
 
+def test_qualification_failure_exposes_diagnostics_and_retains_full_evidence(
+    monkeypatch, tmp_path
+):
+    output = "original diagnostic\n" * 1000 + "scanner failed to load its engine\n"
+    monkeypatch.setattr(
+        qualification.subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 2, stdout=output),
+    )
+    evidence = tmp_path / "failure.json"
+    with pytest.raises(
+        image.ImageError, match="scanner failed to load its engine"
+    ) as failure:
+        qualification.invoke(["opengrep", "scan"], evidence)
+    assert len(str(failure.value)) < len(output)
+    assert json.loads(evidence.read_text()) == {
+        "command": ["opengrep", "scan"],
+        "exitCode": 2,
+        "output": output,
+    }
+
+
 def test_qualification_runtime_has_read_only_inputs_and_only_declared_writes(tmp_path):
     argv = qualification.container(
         "image",
