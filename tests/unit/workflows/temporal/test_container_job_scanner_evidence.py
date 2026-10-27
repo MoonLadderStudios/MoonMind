@@ -1,6 +1,7 @@
 """Pre-persistence scanner boundaries for GitHub issue #5040."""
 
 import json
+import os
 from dataclasses import replace
 from datetime import UTC, datetime
 
@@ -13,6 +14,7 @@ from moonmind.security.repository_scanners import (
 )
 from moonmind.workflows.temporal.container_job_attachments import claim, storage_for
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
+from tests.unit.workflows.temporal.test_container_job_backend import _recording_runner
 from tests.unit.workflows.temporal.test_container_job_evidence import (
     _Publisher,
     _request,
@@ -340,3 +342,43 @@ async def test_unreadable_native_evidence_withholds_unknown_sensitive_metadata(
     if valid_sibling:
         assert summary["results"]["worktree"]["findings"]
         assert summary["nativeRefs"]["worktree"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("omit", "limitation"),
+    [
+        (lambda w: None, None),
+        (
+            lambda w: (w / "link.txt").symlink_to("tracked.txt"),
+            "symlink_input_not_examined",
+        ),
+        (lambda w: os.mkfifo(w / "pipe"), "nonregular_input_not_examined"),
+    ],
+)
+async def test_inputs_omitted_at_capture_keep_scanner_coverage_partial(
+    tmp_path, omit, limitation
+):
+    request, _ = scanner_request(tmp_path)
+    workspace = tmp_path / "art_workspace"
+    (workspace / "tracked.txt").write_text("tracked\n")
+    omit(workspace)
+    request.resolved_image_ref = "sha256:" + "a" * 64
+    publisher = _Publisher()
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=_recording_runner([]),
+        evidence_publisher=publisher,
+    )
+    # The scanner only ever sees the captured copy, so an entry omitted there
+    # must still make its security result incomplete.
+    await backend.create_container(request)
+
+    await backend.publish_evidence(request)
+
+    summary = json.loads(publisher.artifacts[f"{request.job_id}-output-summary.json"])
+    if limitation is None:
+        assert summary["coverage"] == "complete"
+    else:
+        assert summary["coverage"] == "partial"
+        assert limitation in summary["limitations"]

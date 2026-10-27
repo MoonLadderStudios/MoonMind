@@ -123,3 +123,58 @@ def test_runner_reads_the_paths_its_admitted_command_names(monkeypatch, argv, pa
     # ``python -I -m <module> <args>`` leaves the module path in argv[0].
     assert repository_scanner_runner.main(["runner", *argv[3:]]) == 0
     assert seen == paths
+
+
+@pytest.mark.asyncio
+async def test_temporal_submission_admits_artifacts_with_the_artifact_store(
+    monkeypatch,
+):
+    from contextlib import asynccontextmanager
+
+    import api_service.db.base as db_base
+    import moonmind.workflows as workflows
+    from moonmind.workflows.temporal.activity_runtime import (
+        TemporalAgentRuntimeActivities,
+    )
+
+    stores = []
+
+    class _Session:
+        async def commit(self):
+            return None
+
+    session = _Session()
+    store = _Artifacts()
+
+    @asynccontextmanager
+    async def session_context():
+        yield session
+
+    def artifact_service(bound):
+        assert bound is session
+        return store
+
+    async def submit(self, *, owner, request):
+        stores.append(self._artifacts)
+        from moonmind.schemas.container_job_models import ContainerJobAccepted
+
+        return ContainerJobAccepted(
+            jobId="container-job:" + "0" * 32,
+            replayed=False,
+            createdAt="2026-10-27T00:00:00Z",
+        )
+
+    monkeypatch.setattr(db_base, "get_async_session_context", session_context)
+    monkeypatch.setattr(workflows, "get_temporal_artifact_service", artifact_service)
+    monkeypatch.setattr(ContainerJobService, "submit", submit)
+    request = _submission({"name": "image", "artifactRef": "art_01OWNED"})
+
+    await TemporalAgentRuntimeActivities.container_job_submit(
+        TemporalAgentRuntimeActivities.__new__(TemporalAgentRuntimeActivities),
+        {
+            "owner": OWNER.model_dump(mode="json", by_alias=True),
+            "request": request.model_dump(mode="json", by_alias=True),
+        },
+    )
+
+    assert stores == [store]

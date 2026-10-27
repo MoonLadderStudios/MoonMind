@@ -294,6 +294,30 @@ async def test_capture_beyond_its_bound_fails_closed(tmp_path):
     assert not any(c[0] == "create" for c in commands)
 
 
+@pytest.mark.skipif(
+    not Path("/proc/self/fd").is_dir(), reason="needs per-process descriptor listing"
+)
+def test_failed_capture_releases_every_descriptor(tmp_path):
+    workspace = tmp_path / "repo"
+    (workspace / "pkg").mkdir(parents=True)
+    (workspace / "pkg" / "a.txt").write_text("a")
+    destination = tmp_path / "captured"
+    destination.mkdir()  # an unusable destination fails after the source opens
+    before = len(os.listdir("/proc/self/fd"))
+
+    with pytest.raises(FileExistsError):
+        attachments.capture_directory(
+            workspace,
+            ".",
+            destination,
+            include_git=False,
+            max_files=10,
+            max_bytes=1024,
+        )
+
+    assert len(os.listdir("/proc/self/fd")) == before
+
+
 @pytest.mark.asyncio
 async def test_input_cannot_escape_the_admitted_workspace(tmp_path):
     commands: list[tuple[str, ...]] = []
@@ -658,6 +682,34 @@ async def test_cleanup_retains_unpublished_outputs(tmp_path):
 
     assert result.cleanup_succeeded is False
     assert (storage.outputs / "report.json").read_text() == "only copy"
+    assert not storage.inputs.exists() and not storage.scratch.exists()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_retains_outputs_that_collection_rejected(tmp_path):
+    commands: list[tuple[str, ...]] = []
+    request, storage = await _launched(tmp_path, commands)
+    (storage.outputs / "reports").mkdir()
+    (storage.outputs / "reports" / "report.json").write_bytes(b"x" * 4096)
+    publisher = _Publisher()
+    backend = _backend(
+        tmp_path,
+        commands,
+        evidence_publisher=publisher,
+        settings=resolve_container_backend_settings(
+            {"MOONMIND_CONTAINER_BACKEND_MAX_OUTPUT_TOTAL_BYTES": "1024"}
+        ),
+    )
+    result = await backend.publish_evidence(request)
+    report = json.loads(publisher.payloads[result.artifacts_ref])["artifacts"][0]
+    assert report["collectionStatus"] == "rejected"
+    # Publishing the manifest succeeded, but it holds no copy of the report.
+    request.publication = AuxiliaryOutcome(state="succeeded")
+
+    cleaned = await backend.cleanup(request)
+
+    assert cleaned.cleanup_succeeded is False
+    assert (storage.outputs / "reports" / "report.json").read_bytes() == b"x" * 4096
     assert not storage.inputs.exists() and not storage.scratch.exists()
 
 
