@@ -399,6 +399,38 @@ def test_sbom_inventory_records_generator_coverage_and_unverified_claims():
     assert inspect_sbom(cyclonedx([]), 1 << 20)[1] == ["sbom_inventory_empty"]
 
 
+def test_trivy_cyclonedx_context_components_are_not_unidentified_packages():
+    """Mirrors ``trivy rootfs --format cyclonedx`` from Trivy 0.76.1."""
+    document = json.loads(
+        cyclonedx(
+            [
+                {"bom-ref": "os", "type": "operating-system", "name": "alpine"},
+                {"bom-ref": "bin", "type": "application", "name": "usr/bin/trivy"},
+                {"bom-ref": "a", "type": "library", "name": "a", "purl": "pkg:apk/a"},
+                {"bom-ref": "b", "type": "library", "name": "b", "purl": "pkg:go/b"},
+            ],
+            dependencies=[
+                {"ref": "os", "dependsOn": ["a"]},
+                {"ref": "bin", "dependsOn": ["b"]},
+                {"ref": "a", "dependsOn": []},
+            ],
+        )
+    )
+    document["specVersion"] = "1.7"
+    inventory, limitations = inspect_sbom(json.dumps(document).encode(), 1 << 20)
+    assert inventory.spec_version == "1.7"
+    assert inventory.components == 2 and inventory.components_without_identifiers == 0
+    assert limitations == []
+    # An identifier-less application that groups nothing is a real package.
+    document["components"].append({"type": "application", "name": "vendored-tool"})
+    inventory, limitations = inspect_sbom(json.dumps(document).encode(), 1 << 20)
+    assert inventory.components == 3 and inventory.components_without_identifiers == 1
+    assert limitations == ["sbom_packages_without_identifiers"]
+    document["specVersion"] = "1.8"
+    with pytest.raises(SbomError, match="sbom_format_unsupported"):
+        inspect_sbom(json.dumps(document).encode(), 1 << 20)
+
+
 @pytest.mark.parametrize(
     "body, code",
     [
