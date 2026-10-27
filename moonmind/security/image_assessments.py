@@ -192,6 +192,8 @@ class SbomInventory(Contract):
     spec_version: Text
     generator: Text | None = None
     generator_version: Text | None = None
+    # Package components only: an operating-system component or an
+    # identifier-less application that merely groups packages is context.
     components: int = Field(ge=0)
     components_without_identifiers: int = Field(ge=0)
     # The document's own statement of completeness, when it makes one.
@@ -202,7 +204,7 @@ class SbomInventory(Contract):
     embedded_claims: Items = Field(default_factory=list)
 
 
-_CYCLONEDX_VERSIONS = {"1.2", "1.3", "1.4", "1.5", "1.6"}
+_CYCLONEDX_VERSIONS = {"1.2", "1.3", "1.4", "1.5", "1.6", "1.7"}
 _SPDX_VERSIONS = {"SPDX-2.2", "SPDX-2.3"}
 _MAX_COMPONENTS = 200_000
 
@@ -251,7 +253,16 @@ def _cyclonedx(document: dict, claims: set) -> SbomInventory:
     if isinstance(tools, dict):  # CycloneDX 1.5+ groups tools by kind
         tools = tools.get("components") or []
     tool = next((t for t in tools if isinstance(t, dict) and t.get("name")), {})
-    total = unidentified = 0
+    # Generators such as Trivy add the detected OS and one application per
+    # lock file or binary, linked to their packages through dependencies.
+    # Those have no package identifier by design; counting them would mark
+    # every real inventory as partial.
+    groups = {
+        entry.get("ref")
+        for entry in document.get("dependencies") or []
+        if entry.get("dependsOn")
+    }
+    examined = total = unidentified = 0
     pending = list(document.get("components") or [])
     while pending:
         component = pending.pop()
@@ -259,15 +270,23 @@ def _cyclonedx(document: dict, claims: set) -> SbomInventory:
             component.get("name"), str
         ):
             raise SbomError("sbom_malformed")
-        total += 1
-        if total > _MAX_COMPONENTS:
+        examined += 1
+        if examined > _MAX_COMPONENTS:
             raise SbomError("sbom_exceeds_bound")
-        if not (component.get("purl") or component.get("cpe")):
-            unidentified += 1
         nested = component.get("components") or []
         if not isinstance(nested, list):
             raise SbomError("sbom_malformed")
         pending.extend(nested)
+        identified = bool(component.get("purl") or component.get("cpe"))
+        kind = component.get("type")
+        if kind == "operating-system" or (
+            kind == "application"
+            and not identified
+            and (nested or component.get("bom-ref") in groups)
+        ):
+            continue
+        total += 1
+        unidentified += not identified
     complete = None
     for composition in document.get("compositions") or []:
         aggregate = composition.get("aggregate")

@@ -149,12 +149,24 @@ if fmt == "cyclonedx":
     if digests:
         component["purl"] = ("pkg:oci/app@" + digests[0].split("@")[1].replace(":", "%3A")
                              + "?arch=" + meta["ImageConfig"]["architecture"])
+    # Shaped like Trivy 0.76 output: CycloneDX 1.7, an identifier-less OS
+    # component and lock-file application grouping their packages.
+    component["bom-ref"] = "subject"
+    groups = {{}}
+    for p in packages:
+        groups.setdefault("os" if p.startswith("pkg:apk/") else "app", []).append(p)
+    contexts = {{"os": {{"type": "operating-system", "name": "alpine", "version": "3.20.3"}},
+                "app": {{"type": "application", "name": "app/requirements.txt"}}}}
     output.write_text(json.dumps({{
-        "bomFormat": "CycloneDX", "specVersion": "1.5",
-        "metadata": {{"tools": {{"components": [{{"name": "trivy", "version": "0.58.1"}}]}},
+        "bomFormat": "CycloneDX", "specVersion": "1.7",
+        "metadata": {{"tools": {{"components": [{{"type": "application",
+                      "group": "aquasecurity", "name": "trivy", "version": "0.76.1"}}]}},
                       "component": component}},
-        "components": [{{"name": p.split("/")[-1].split("@")[0], "purl": p}}
-                       for p in packages]}}))
+        "components": [{{"bom-ref": g, **contexts[g]}} for g in groups] + [
+            {{"bom-ref": p, "type": "library", "name": p.split("/")[-1].split("@")[0],
+              "purl": p}} for p in packages],
+        "dependencies": [{{"ref": "subject", "dependsOn": list(groups)}}] + [
+            {{"ref": g, "dependsOn": refs}} for g, refs in groups.items()]}}))
     raise SystemExit(0)
 database = json.loads((cache / "db" / "trivy.db").read_text())
 vulnerabilities = [
@@ -631,9 +643,12 @@ async def test_generated_sbom_is_retained_reloaded_and_reassessed_with_newer_dat
     assert generated["coverage"] == "complete", generated["limitations"]
     retained = generated["sbom"]
     assert retained["inventory"]["format"] == "cyclonedx"
+    assert retained["inventory"]["specVersion"] == "1.7"
     assert retained["inventory"]["generator"] == "trivy"
-    assert retained["inventory"]["generatorVersion"] == "0.58.1"
+    assert retained["inventory"]["generatorVersion"] == "0.76.1"
+    # The OS and application grouping components are context, not packages.
     assert retained["inventory"]["components"] == 2
+    assert retained["inventory"]["componentsWithoutIdentifiers"] == 0
     assert generated["subject"]["kind"] == "archive"
     # Read from the archive's own image config, not Trivy's SBOM output.
     assert generated["subject"]["os"] == "linux"
@@ -644,7 +659,13 @@ async def test_generated_sbom_is_retained_reloaded_and_reassessed_with_newer_dat
     _, reloaded = await environment.service.read(
         artifact_id=retained["artifactRef"], principal=owner_artifact_principal(OWNER)
     )
-    assert json.loads(reloaded)["bomFormat"] == "CycloneDX"
+    document = json.loads(reloaded)
+    assert document["bomFormat"] == "CycloneDX"
+    assert {c["type"] for c in document["components"]} == {
+        "operating-system",
+        "application",
+        "library",
+    }
 
     before = len(harness.calls.read_text().splitlines())
     first, *_ = await harness.run(
@@ -679,6 +700,8 @@ async def test_generated_sbom_is_retained_reloaded_and_reassessed_with_newer_dat
     assert first["subject"]["asset"] == second["subject"]["asset"]
     assert first["subject"]["inputDigest"] == retained["sha256"]
     assert first["result"]["findings"] == []
+    for summary in (first, second):
+        assert summary["coverage"] == "complete", summary["limitations"]
     assert sorted(f["ruleId"] for f in second["result"]["findings"]) == [
         "CVE-2024-0001",
         "CVE-2024-0002",
