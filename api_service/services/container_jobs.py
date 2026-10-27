@@ -389,6 +389,18 @@ class ContainerJobService:
                 )
                 if not authorization.authorized:
                     raise ContainerJobAuthorizationError(authorization)
+        target_authorization = None
+        assessment = request.spec.image_assessment
+        if assessment is not None and assessment.target == "registry":
+            # Decided here like the job image, from deployment grants alone;
+            # the worker resolves the credential only under this decision.
+            target_authorization = self._authorizer.authorize_reference(
+                owner=owner,
+                image=assessment.image_reference,
+                credential_ref=assessment.target_credential_ref,
+            )
+            if not target_authorization.authorized:
+                raise ContainerJobAuthorizationError(target_authorization)
         existing = await self.repository.find_exact_replay(owner=owner, request=request)
         if existing is not None:
             # An exact idempotent replay preserves the existing job identity
@@ -465,6 +477,7 @@ class ContainerJobService:
                     ),
                     request=request,
                     registryAuthorization=authorization,
+                    targetAuthorization=target_authorization,
                 )
             )
         except Exception:

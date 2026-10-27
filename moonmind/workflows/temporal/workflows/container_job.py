@@ -141,6 +141,7 @@ class MoonMindContainerJobWorkflow:
             ownershipToken=inp.ownership_token,
             request=inp.request,
             registryAuthorization=inp.registry_authorization,
+            targetAuthorization=inp.target_authorization,
             waitForCapacity=_workflow_patch_enabled(CONTAINER_JOB_CAPACITY_WAIT_PATCH),
         )
         terminal_state = ContainerJobState.FAILED
