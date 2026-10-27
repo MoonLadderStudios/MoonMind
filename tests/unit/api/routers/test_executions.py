@@ -18414,7 +18414,9 @@ def test_workflow_gate_actions_expose_distinct_capabilities_and_consumed_refs(
 
 
 def _publication_recovery_record() -> SimpleNamespace:
-    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    record = _build_execution_record(
+        state=MoonMindWorkflowState.FAILED, has_workflow_input_snapshot=False
+    )
     operation_key = publication_operation_key(
         source_workflow_id=record.workflow_id,
         source_run_id=record.run_id,
@@ -18513,11 +18515,15 @@ def test_retry_publication_starts_stable_linked_workflow_and_deduplicates(
     for call_args in adapter.start_workflow.await_args_list:
         assert call_args.kwargs["workflow_id"] == destination_id
         assert call_args.kwargs["workflow_type"] == "MoonMind.PublicationRecoveryV1"
-        assert call_args.kwargs["input_args"] == (
-            PublicationRecoveryContract.model_validate(contract_payload).model_dump(
-                by_alias=True, mode="json"
-            )
-        )
+        expected = PublicationRecoveryContract.model_validate(
+            contract_payload
+        ).model_dump(by_alias=True, mode="json")
+        actual = dict(call_args.kwargs["input_args"])
+        body = actual.pop("pullRequestBody")
+        expected.pop("pullRequestBody")
+        assert actual == expected
+        assert "workflow mm:wf-1, run run-2" in body
+        assert "Original task input was not retained" in body
         assert call_args.kwargs["memo"]["source_workflow_id"] == "mm:wf-1"
         assert call_args.kwargs["memo"]["publication_semantic_context"] == "accepted"
         assert call_args.kwargs["memo"][

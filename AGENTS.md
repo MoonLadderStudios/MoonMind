@@ -23,6 +23,8 @@ Keep docs accurate in the same change as the code, fixes included, by rewriting 
 
 Preserve the user's scope and acceptance criteria. Identify conflicts in guidance rather than silently weakening requirements or rewriting what counts as done. Verify current behavior in code and tests, then complete the change across its actual producers and consumers. Avoid unrelated cleanup and speculative frameworks.
 
+Review the final diff against its integrated base and admitted task, including deleted assertions and workflow/configuration changes. Distinguish authorized retirement or replacement from unrelated outcome loss before changing tests to match a production removal.
+
 **Issues describe outcomes, not permanent implementation obligations.** Before acting on a checklist, compare it with current code, the operator's current architectural direction, and existing PRs. Do not rebuild completed work or preserve a mechanism the operator has explicitly superseded. Reuse saved work and continue the existing implementation owner. When authorized to revise scope, replace stale requirements and consolidate duplicate issues instead of appending another conflicting checklist. Keep user-visible outcomes, access controls, data integrity, and active-work preservation explicit. An evidence-backed no-code resolution is valid when the work is already done, redundant, or no longer needed.
 
 Measure before adding an optimization, and prefer removing unnecessary work over adding machinery to manage it.

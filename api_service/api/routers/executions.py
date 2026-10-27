@@ -20417,6 +20417,87 @@ def _saved_work_publication_error(
     )
 
 
+async def _publication_recovery_review_body(
+    *,
+    artifact_service: Any,
+    principal: str,
+    source_workflow_id: str,
+    source_run_id: str,
+    body: str,
+    task_input_ref: str | None,
+    task_input_digest: str | None = None,
+) -> str:
+    """Freeze source task context in the existing publication decision.
+
+    Saved-work callers use the manifest's source attempt, never today's mutable
+    execution parameters or another run's memo. Raw-read policy remains owned
+    by the artifact service; recovery grants no extra access to task contents.
+    """
+    from moonmind.publish.sanitization import (
+        append_publication_task,
+        publication_task_instructions,
+    )
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactValidationError
+    from moonmind.workflows.executions.execution_contract import (
+        original_task_snapshot_parameters,
+    )
+
+    source = f"workflow {source_workflow_id}, run {source_run_id}"
+    if not task_input_ref:
+        provenance = (
+            "\n\nTask provenance: "
+            + redact_sensitive_text(source)
+            + (
+                ". Original task input was not retained for this capture; "
+                "its scope is not reconstructed from later remediation parameters."
+            )
+        )
+        return body if body.endswith(provenance) else body.rstrip() + provenance
+    artifact_id = _artifact_id_from_ref(task_input_ref)
+    if not artifact_id:
+        raise _saved_work_publication_error(
+            409,
+            "publication_task_input_unavailable",
+            "Original task input reference is invalid.",
+        )
+    try:
+        _artifact, raw = await artifact_service.read(
+            artifact_id=artifact_id, principal=principal
+        )
+        if (
+            task_input_digest
+            and "sha256:" + hashlib.sha256(raw).hexdigest() != task_input_digest
+        ):
+            raise ValueError("Original task digest mismatch")
+        snapshot = json.loads(raw)
+        if not isinstance(snapshot, Mapping):
+            raise ValueError("Unsupported original task input")
+        task = original_task_snapshot_parameters(snapshot).get("workflow")
+        if not isinstance(task, Mapping):
+            raise ValueError("Original task input is malformed")
+    except (TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError):
+        raise
+    except (
+        TemporalArtifactNotFoundError,
+        TemporalArtifactAuthorizationError,
+        TemporalArtifactStateError,
+        TemporalArtifactValidationError,
+        ValueError,
+        UnicodeDecodeError,
+    ) as exc:
+        raise _saved_work_publication_error(
+            409,
+            "publication_task_input_unavailable",
+            "Original task input could not be verified for publication.",
+        ) from exc
+    instructions = publication_task_instructions(task)
+    if not instructions:
+        instructions = "The original task is expressed by its saved Skill/inputs; consult the immutable task input."
+    return append_publication_task(
+        body, instructions=instructions, source=f"{source}; {task_input_ref}"
+    )
+
+
 def _require_publishable_saved_work_artifact(
     *,
     artifact: Any,
@@ -20537,7 +20618,7 @@ async def _admit_saved_work_publication(
         size_bytes=len(manifest_bytes),
     )
     try:
-        _manifest, publication_objects = parse_saved_work_publication_manifest(
+        manifest, publication_objects = parse_saved_work_publication_manifest(
             manifest_bytes
         )
         for publication_object in publication_objects:
@@ -20576,6 +20657,21 @@ async def _admit_saved_work_publication(
     if created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=UTC)
     default_title = f"Publish saved work from {canonical.workflow_id}"
+    source = manifest.get("source")
+    source = source if isinstance(source, Mapping) else {}
+    body = await _publication_recovery_review_body(
+        artifact_service=artifact_service,
+        principal=principal,
+        source_workflow_id=canonical.workflow_id,
+        source_run_id=source_run_id,
+        body=request.pullRequestBody
+        or (
+            f"Saved work `{saved_work_digest}` from `{canonical.workflow_id}`, "
+            "published without another model run."
+        ),
+        task_input_ref=source.get("taskInputSnapshotRef"),
+        task_input_digest=source.get("taskInputSnapshotDigest"),
+    )
     try:
         return SavedWorkPublicationContract(
             sourceWorkflowId=canonical.workflow_id,
@@ -20597,11 +20693,7 @@ async def _admit_saved_work_publication(
                 if destination.objective == "branch"
                 else request.pullRequestTitle or default_title
             ),
-            pullRequestBody=request.pullRequestBody
-            or (
-                f"Saved work `{saved_work_digest}` from `{canonical.workflow_id}`, "
-                "published without another model run."
-            ),
+            pullRequestBody=body,
             publicationIdempotencyKey=saved_work_publication_operation_key(
                 saved_work_digest=saved_work_digest,
                 destination=destination,
@@ -20753,6 +20845,26 @@ async def retry_execution_publication(
             },
         )
     destination_id = publication_recovery_workflow_id(contract)
+    original_input_ref = _workflow_input_snapshot_ref_from_memo(
+        dict(getattr(canonical, "memo", None) or {})
+    )
+    try:
+        body = await _publication_recovery_review_body(
+            artifact_service=artifact_service() if original_input_ref else None,
+            principal=_execution_principal(user),
+            source_workflow_id=contract.source_workflow_id,
+            source_run_id=contract.source_run_id,
+            body=contract.pull_request_body
+            or f"Publication-only recovery for source workflow {contract.source_workflow_id}.\n\nNo implementation or verification work was rerun.",
+            task_input_ref=original_input_ref,
+        )
+    except (
+        TemporalArtifactUnavailableError,
+        TemporalArtifactStorageAccessError,
+    ) as exc:
+        _raise_temporal_artifact_http(exc)
+        raise
+    contract = contract.model_copy(update={"pull_request_body": body})
     started = await adapter.start_workflow(
         workflow_type="MoonMind.PublicationRecoveryV1",
         workflow_id=destination_id,

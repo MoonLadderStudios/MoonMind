@@ -135,7 +135,10 @@ async def test_publish_branch_blocks_high_security_scan_before_push(
     assert not any(call["command"][:2] == ["git", "push"] for call in calls)
 
 
-async def test_publish_pr_uses_rest_service_without_ambient_gh(monkeypatch, tmp_path: Path):
+@pytest.mark.parametrize("with_bare_credential", [False, True])
+async def test_publish_pr_uses_rest_service_without_ambient_gh(
+    monkeypatch, tmp_path: Path, with_bare_credential
+):
     monkeypatch.setenv("GITHUB_TOKEN", "publish-token")
     monkeypatch.setenv("GH_TOKEN", "ambient-gh-token")
     calls: list[dict[str, object]] = []
@@ -152,9 +155,13 @@ async def test_publish_pr_uses_rest_service_without_ambient_gh(monkeypatch, tmp_
         return SimpleNamespace(created=True, url="https://github.com/owner/repo/pull/1")
 
     service = PublishService(github_create_pull_request=_create_pr)
+    credential = "ATATT" + "fixture-not-a-real-token-1234"
+    instruction = "make change"
+    if with_bare_credential:
+        instruction += f". Authenticate with {credential}; preserve the exporter."
     result = await service.publish(
         job_id=uuid4(),
-        instruction="make change",
+        instruction=instruction,
         publish_mode="pr",
         publish_base_branch="main",
         runtime_mode="codex",
@@ -168,6 +175,10 @@ async def test_publish_pr_uses_rest_service_without_ambient_gh(monkeypatch, tmp_
     assert result.pr_url == "https://github.com/owner/repo/pull/1"
     assert created["github_token"] == "publish-token"
     assert created["repo"] == "owner/repo"
+    assert "make change" in created["body"]
+    if with_bare_credential:
+        assert credential not in created["body"]
+        assert "preserve the exporter" in created["body"]
     assert not any(call["command"][:3] == ["gh", "pr", "create"] for call in calls)
 
 

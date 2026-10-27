@@ -598,14 +598,22 @@ async def test_recovery_publish_creates_once_with_admitted_destination_token(
     )
 
     seen = _recovery_provider(monkeypatch, state="absent")
+    contract = _contract_payload()
+    contract["pullRequestBody"] = (
+        "Original task: preserve qualification while fixing credentials."
+    )
 
     result = await TemporalIntegrationActivities().publication_recovery_publish(
-        {"contract": _contract_payload()}
+        {"contract": contract}
     )
 
     assert result["created"] is True
     assert result["reconciliationOutcome"] == "new"
     assert [call["github_token"] for call in seen["creates"]] == ["destination-token"]
+    assert (
+        "Original task: preserve qualification while fixing credentials."
+        in seen["creates"][0]["body"]
+    )
 
 
 @pytest.mark.asyncio
