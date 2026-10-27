@@ -163,8 +163,17 @@ def test_signature_verification_is_required_and_uses_the_upstream_identity(
         )
     argv = calls[0]
     assert argv[:2] == ("cosign", "verify-blob")
-    assert "https://token.actions.githubusercontent.com" in argv
-    assert image.REPOSITORIES[tool].replace("/", r"/") in " ".join(map(str, argv))
+    assert argv[argv.index("--certificate-oidc-issuer") + 1] == (
+        "https://token.actions.githubusercontent.com"
+    )
+    ref = (
+        r"refs/(?:tags/v1\.2\.3|heads/release-v1\.2\.3)"
+        if tool == "opengrep"
+        else r"refs/tags/v1\.2\.3"
+    )
+    assert argv[argv.index("--certificate-identity-regexp") + 1] == (
+        rf"^https://github.com/{image.REPOSITORIES[tool]}/\.github/workflows/[^/]+\.ya?ml@{ref}$"
+    )
     assert not any("insecure" in str(a) or "ignore" in str(a) for a in argv)
 
 

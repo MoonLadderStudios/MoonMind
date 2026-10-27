@@ -2439,7 +2439,11 @@ class DockerContainerJobBackend:
             # The runner stages inputs and raw reports in private temporary
             # storage. Only sanitized output can reach the source volume.
             args.extend(
-                ("--read-only", "--tmpfs", "/tmp:rw,nosuid,nodev,size=1g,mode=1777")
+                (
+                    "--read-only",
+                    "--tmpfs",
+                    f"/tmp:rw,nosuid,nodev,size={spec.repository_scan.scratch_bytes},mode=1777",
+                )
             )
             output = self._scanner_output_directory(request)
             if volume_name and volume_subpath:

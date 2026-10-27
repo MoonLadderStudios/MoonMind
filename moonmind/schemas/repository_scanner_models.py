@@ -21,6 +21,7 @@ Text = Annotated[
 Items = Annotated[list[Text], Field(max_length=4096)]
 Scanner = Literal["gitleaks", "opengrep", "trivy"]
 MAX_REPORT_BYTES = 8 * 1024 * 1024
+MAX_DATABASE_BYTES = 2 * 1024**3
 
 
 class Contract(BaseModel):
@@ -115,6 +116,12 @@ class RepositoryScan(Contract):
         ):
             raise ValueError("output directory cannot contain the admitted input")
         return self
+
+    @property
+    def scratch_bytes(self) -> int:
+        """Private copies plus 1 GiB for raw reports and tool working data."""
+        database_bytes = MAX_DATABASE_BYTES if self.database_cache_ref else 0
+        return self.max_input_bytes + database_bytes + 1024**3
 
     @property
     def modes(self) -> list[str]:
