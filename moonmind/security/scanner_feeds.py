@@ -92,6 +92,8 @@ class FeedComponentRecord(Contract):
     content_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     upstream_digest: str | None = Field(None, pattern=r"^sha256:[0-9a-f]{64}$")
     downloaded_at: datetime
+    # Freshness clock: upstream ``UpdatedAt`` for databases; the checks bundle
+    # records only when Trivy downloaded it.
     updated_at: datetime | None = None
     next_update: datetime | None = None
 
@@ -125,6 +127,8 @@ class FeedRefreshResult(Contract):
     # A failed refresh names the prior snapshot it fell back to, if any.
     fallback: bool = False
     usable: bool
+    # Requested components the fallback snapshot does not contain.
+    missing_components: list[FeedComponent] = Field(default_factory=list)
     feed: FeedEvidence
     limitations: list[str] = Field(default_factory=list)
 
@@ -231,9 +235,10 @@ def _component_records(
             ):
                 raise FeedSnapshotError("feed_snapshot_incomplete")
             upstream_digest = meta.get("Digest")
-            if not isinstance(upstream_digest, str):
+            updated = _timestamp(meta.get("DownloadedAt"))
+            if not isinstance(upstream_digest, str) or updated is None:
                 raise FeedSnapshotError("feed_snapshot_incompatible")
-            schema, updated, following = None, None, None
+            schema, following = None, None
         else:
             if meta.get("Version") != _SCHEMA[component]:
                 raise FeedSnapshotError("feed_snapshot_incompatible")
@@ -455,8 +460,12 @@ def _prune(root: Path, keep: int) -> None:
 def extract_archive(
     archive: Path, stage: Path, *, max_bytes: int, max_files: int = MAX_FILES
 ) -> None:
-    """Extract a Trivy cache archive: regular files and directories only."""
+    """Extract a Trivy cache archive: regular files and directories only.
+
+    ``max_files`` bounds every created entry, including implicit parents.
+    """
     count = total = 0
+    directories: set[tuple[str, ...]] = set()
     try:
         with tarfile.open(archive, "r:*") as bundle:
             for member in bundle:
@@ -470,15 +479,22 @@ def extract_archive(
                 if parts[0] not in _LAYOUT.values():
                     raise FeedSnapshotError("feed_archive_rejected")
                 destination = stage.joinpath(*parts)
+                if not member.isdir() and not member.isreg():
+                    raise FeedSnapshotError("feed_archive_rejected")
+                parents = parts if member.isdir() else parts[:-1]
+                created = {
+                    tuple(parents[:depth]) for depth in range(1, len(parents) + 1)
+                } - directories
+                directories |= created
+                count += len(created)
+                if member.isreg():
+                    count += 1
+                    total += member.size
+                if count > max_files or total > max_bytes:
+                    raise FeedSnapshotError("feed_archive_rejected")
                 if member.isdir():
                     destination.mkdir(parents=True, exist_ok=True)
                     continue
-                if not member.isreg():
-                    raise FeedSnapshotError("feed_archive_rejected")
-                count += 1
-                total += member.size
-                if count > max_files or total > max_bytes:
-                    raise FeedSnapshotError("feed_archive_rejected")
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 source = bundle.extractfile(member)
                 # Exclusive create: a repeated member cannot replace content.
@@ -559,7 +575,8 @@ def feed_evidence(
     stale = sorted(
         name
         for name, record in (snapshot.components.items() if snapshot else ())
-        if record.updated_at is not None and now - record.updated_at > limit
+        # A component whose age cannot be established is not within policy.
+        if record.updated_at is None or now - record.updated_at > limit
     )
     if not misconfig:
         checks = "not_selected"
@@ -657,13 +674,17 @@ def run_refresh(
             prune(root)
         except OSError:
             pass  # Retention is best effort; the publication stands.
-    limitations = []
+    limitations, missing = [], []
     if failure is not None:
         limitations.append("feed_refresh_failed")
         try:
             snapshot = current_snapshot(root)
         except FeedSnapshotError as exc:
             limitations.append(exc.code)
+        else:
+            missing = [c for c in refresh.components if c not in snapshot.components]
+            if missing:
+                limitations.append("feed_components_missing")
     evidence = feed_evidence(
         snapshot,
         misconfig=True,
@@ -672,12 +693,13 @@ def run_refresh(
     )
     if evidence.stale_components:
         limitations.append("feed_snapshot_stale")
-    usable = snapshot is not None and not evidence.stale_components
+    usable = snapshot is not None and not evidence.stale_components and not missing
     result = FeedRefreshResult(
         outcome=outcome,
         failure=failure,
         fallback=failure is not None and snapshot is not None,
         usable=usable,
+        missingComponents=missing,
         feed=evidence,
         limitations=sorted(set(limitations)),
     )

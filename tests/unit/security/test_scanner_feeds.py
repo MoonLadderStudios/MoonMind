@@ -206,7 +206,29 @@ def test_corrupt_or_mutated_snapshot_is_rejected(tmp_path, change):
         feeds.load_snapshot(root, snapshot.snapshot_id)
 
 
-@pytest.mark.parametrize("where", ["manifest", "database"])
+def test_checks_bundle_freshness_follows_its_recorded_download(tmp_path):
+    root = tmp_path / "feeds"
+    (root / "snapshots").mkdir(parents=True)
+    stage = root / "staging" / "mixed"
+    trivy_cache(stage, ("vulnerability",))
+    trivy_cache(stage, ("checks",), updated=NOW - timedelta(hours=100))
+    snapshot, _ = feeds.publish_snapshot(
+        root,
+        stage,
+        components=["vulnerability", "checks"],
+        acquisition="download",
+        upstreams=feeds.UPSTREAMS,
+        now=NOW,
+    )
+    assert snapshot.components["checks"].updated_at == NOW - timedelta(hours=100)
+    evidence, limitations, _ = use(
+        root, snapshot.snapshot_id, tmp_path, feedMaxAgeHours=72
+    )
+    assert evidence.stale_components == ["checks"]
+    assert limitations == ["feed_snapshot_stale"]
+
+
+@pytest.mark.parametrize("where", ["manifest", "database", "checks"])
 def test_incompatible_snapshot_is_rejected(tmp_path, where):
     root = tmp_path / "feeds"
     if where == "manifest":
@@ -220,16 +242,24 @@ def test_incompatible_snapshot_is_rejected(tmp_path, where):
     else:
         stage = tmp_path / "feeds" / "staging" / "new"
         (tmp_path / "feeds" / "snapshots").mkdir(parents=True)
-        trivy_cache(stage)
-        metadata = stage / "db" / "metadata.json"
-        metadata.write_text(
-            json.dumps({**json.loads(metadata.read_text()), "Version": 3})
-        )
+        if where == "database":
+            components = ["vulnerability"]
+            trivy_cache(stage)
+            metadata = stage / "db" / "metadata.json"
+            metadata.write_text(
+                json.dumps({**json.loads(metadata.read_text()), "Version": 3})
+            )
+        else:
+            # Without its download time a checks bundle's age is unknown.
+            components = ["checks"]
+            trivy_cache(stage, components)
+            metadata = stage / "policy" / "metadata.json"
+            metadata.write_text(json.dumps({"Digest": "sha256:" + "c" * 64}))
         with pytest.raises(feeds.FeedSnapshotError) as error:
             feeds.publish_snapshot(
                 root,
                 stage,
-                components=["vulnerability"],
+                components=components,
                 acquisition="download",
                 upstreams=feeds.UPSTREAMS,
                 now=NOW,
@@ -373,8 +403,30 @@ def test_network_failure_keeps_prior_snapshot_only_within_policy(tmp_path):
     )
     result = refresh_result(output)
     assert result["fallback"] is True and result["usable"] is False
-    assert result["feed"]["staleComponents"] == ["vulnerability"]
+    assert result["feed"]["staleComponents"] == ["checks", "vulnerability"]
     assert result["limitations"] == ["feed_refresh_failed", "feed_snapshot_stale"]
+
+
+def test_fallback_without_requested_components_is_not_usable(tmp_path):
+    root, output = tmp_path / "feeds", tmp_path / "out"
+    database_only = FeedRefresh(
+        feedCacheRef="feeds", egressPolicyRef="feeds", components=["vulnerability"]
+    )
+    feeds.run_refresh(
+        database_only, root, output, fetch=fake_fetch(), clock=lambda: NOW
+    )
+
+    code = feeds.run_refresh(
+        refresh(), root, output, fetch=failing_fetch, clock=lambda: NOW
+    )
+    result = refresh_result(output)
+    assert code == 2
+    assert result["fallback"] is True and result["usable"] is False
+    assert result["missingComponents"] == ["checks"]
+    assert result["limitations"] == [
+        "feed_components_missing",
+        "feed_refresh_failed",
+    ]
 
 
 def test_network_failure_without_prior_snapshot_reports_missing_data(tmp_path):
@@ -482,6 +534,8 @@ def test_concurrent_refresh_and_reads_never_observe_partial_snapshots(tmp_path):
                 if exc.code != "feed_snapshot_unavailable":
                     errors.append(exc)
             except FileNotFoundError:
+                # The reader's own private copy can lose a file to a racing
+                # retirement mid-copy; only shared-tree errors matter here.
                 pass
 
     readers = [threading.Thread(target=reader) for _ in range(3)]
@@ -518,6 +572,7 @@ def archive(tmp_path, members) -> Path:
                 "hardlink": tarfile.LNKTYPE,
                 "device": tarfile.CHRTYPE,
                 "fifo": tarfile.FIFOTYPE,
+                "dir": tarfile.DIRTYPE,
             }[kind]
             info.linkname = body.decode()
             bundle.addfile(info)
@@ -596,6 +651,24 @@ def test_import_bounds_archive_size(tmp_path):
         feeds.extract_archive(
             archive(tmp_path, cache_members(tmp_path)), stage, max_bytes=4
         )
+
+
+@pytest.mark.parametrize(
+    "members",
+    [
+        [(f"db/empty-{index}", "dir", b"") for index in range(101)],
+        [("db/" + "/".join("n" * 101) + "/trivy.db", "file", b"x")],
+    ],
+    ids=["explicit", "implicit"],
+)
+def test_import_bounds_directory_entries(tmp_path, members):
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    with pytest.raises(feeds.FeedSnapshotError):
+        feeds.extract_archive(
+            archive(tmp_path, members), stage, max_bytes=1024, max_files=100
+        )
+    assert len(list(stage.rglob("*"))) <= 100
 
 
 # ------------------------------------------------ job boundaries (A4/S5)
