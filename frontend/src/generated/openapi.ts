@@ -6718,6 +6718,8 @@ export interface components {
             networkMode: "none" | "bridge" | "service";
             /** Serviceref */
             serviceRef?: string | null;
+            /** Egresspolicyref */
+            egressPolicyRef?: string | null;
             resources: components["schemas"]["ResourceLimits"];
             /**
              * Timeoutseconds
@@ -6734,6 +6736,11 @@ export interface components {
             registryCredentialRef?: string | null;
             /** Outputs */
             outputs?: components["schemas"]["OutputDeclaration"][];
+            /**
+             * Inputattachments
+             * @description Read-only captured inputs mounted at /inputs/<name>. Declaring any replaces the live /workspace mount with job-owned writable /outputs (where declared outputs resolve) and /tmp.
+             */
+            inputAttachments?: components["schemas"]["InputAttachment"][] | null;
         };
         /**
          * ContainerJobState
@@ -9488,6 +9495,54 @@ export interface components {
             runtimeId: "codex_cli" | "claude_code" | "opencode";
             /** Gatereasons */
             gateReasons: components["schemas"]["GateReason"][];
+        };
+        /**
+         * InputAttachment
+         * @description One logical, read-only Container Job input mounted at ``/inputs/<name>``.
+         *
+         *     The source is a path inside the job's own admitted ``workspaceRef`` or an
+         *     artifact the job owner may read. The worker captures it once into
+         *     job-owned storage, so later edits to a mutable working copy cannot change
+         *     the input, and every retry of the same job sees the same captured bytes.
+         *     Callers never name host paths, volumes, or Docker endpoints.
+         */
+        InputAttachment: {
+            /**
+             * Name
+             * @description Logical name; the input is mounted at /inputs/<name>.
+             */
+            name: string;
+            /**
+             * Workspacepath
+             * @description Relative directory inside the job's workspaceRef to snapshot; '.' captures the whole workspace.
+             */
+            workspacePath?: string | null;
+            /**
+             * Artifactref
+             * @description Completed artifact the job owner can read.
+             */
+            artifactRef?: string | null;
+            /**
+             * Filename
+             * @description File name for an artifact input (default 'content').
+             */
+            fileName?: string | null;
+            /**
+             * Includegit
+             * @description Include .git metadata in a workspace snapshot; the captured coverage records whether history was present or shallow.
+             * @default true
+             */
+            includeGit: boolean;
+            /**
+             * Maxfiles
+             * @default 200000
+             */
+            maxFiles: number;
+            /**
+             * Maxbytes
+             * @default 4294967296
+             */
+            maxBytes: number;
         };
         /**
          * IntegrationCallbackRequest
