@@ -40,6 +40,9 @@ from pr_resolve_contract import (  # noqa: E402
 from pr_resolve_finalize import _env_flag  # noqa: E402
 
 DEFAULT_MIN_ATTEMPTS_BEFORE_EXHAUSTED = 5
+# CI in progress on the unchanged head, including failed jobs finalize just
+# reran after an infrastructure failure; watched even past the elapsed budget.
+CI_IN_PROGRESS_REASONS = frozenset({"ci_running", "ci_infra_transient"})
 
 SECRET_LIKE_RE = re.compile(
     r"(ghp_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|"
@@ -273,10 +276,10 @@ def run_orchestration(
         # The elapsed budget bounds new work, not observation of CI already
         # running: abandoning a pushed fix while its checks run wastes the
         # remediation (slow native CI can outlast the budget by itself).
-        # Waits stay bounded by the attempt cap.
+        # Waits stay bounded by the attempt cap and finalize's rerun cap.
         if (
             monotonic_fn() - started_monotonic > max_elapsed_seconds
-            and normalize_text(reason) != "ci_running"
+            and normalize_text(reason) not in CI_IN_PROGRESS_REASONS
         ):
             result = _build_result(
                 status="attempts_exhausted",

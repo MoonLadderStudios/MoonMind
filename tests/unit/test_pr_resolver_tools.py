@@ -1420,6 +1420,46 @@ def test_orchestrate_spent_budget_starts_no_new_remediation(
     assert full_calls == []
 
 
+def test_orchestrate_spent_budget_watches_infrastructure_rerun_it_started(
+    pr_resolve_orchestrate_module: dict[str, Any],
+) -> None:
+    run_orchestration = pr_resolve_orchestrate_module["run_orchestration"]
+
+    finalize_results = iter(
+        [
+            {"status": "blocked", "merge_outcome": "blocked", "reason": "ci_running"},
+            {
+                "status": "blocked",
+                "merge_outcome": "blocked",
+                "reason": "ci_infra_transient",
+            },
+            {"status": "merged", "merge_outcome": "merged", "reason": "ci_complete"},
+        ]
+    )
+    clock = iter([0.0])
+    full_calls: list[str] = []
+
+    result, exit_code = run_orchestration(
+        finalize_runner=lambda _attempt: next(finalize_results),
+        full_runner=lambda _attempt, _escalation, reason: (
+            full_calls.append(reason)
+            or {"status": "needs_remediation", "merge_outcome": "blocked"}
+        ),
+        sleep_fn=lambda _seconds: None,
+        monotonic_fn=lambda: next(clock, 1000.0),
+        finalize_max_retries=10,
+        fix_max_iterations=5,
+        base_sleep_seconds=15,
+        max_sleep_seconds=60,
+        max_elapsed_seconds=900,
+        merge_not_ready_grace_retries=1,
+    )
+
+    assert exit_code == 0
+    assert result["status"] == "merged"
+    assert full_calls == []
+
+
 def test_orchestrate_returns_ci_wait_to_durable_owner_without_sleeping(
     pr_resolve_orchestrate_module,
     monkeypatch,
