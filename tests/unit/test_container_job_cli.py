@@ -80,6 +80,36 @@ def test_repository_scanner_cli_submits_one_selected_job(tmp_path, monkeypatch):
     assert submitted[0]["image"] == "scanner-fixture:latest"
 
 
+def test_feed_refresh_cli_submits_one_source_free_job(tmp_path, monkeypatch):
+    admission = tmp_path / "refresh.json"
+    admission.write_text(
+        json.dumps({"feedCacheRef": "scanner-feeds", "egressPolicyRef": "feeds"})
+    )
+    submitted = []
+
+    def run(spec, **kwargs):
+        submitted.append(spec)
+        return ContainerJobResult(
+            job_id="container-job:" + "1" * 32,
+            state="succeeded",
+            exit_code=0,
+            failure_class=None,
+            message=None,
+            logs_ref=None,
+            artifacts_ref=None,
+        )
+
+    monkeypatch.setattr("moonmind.cli.run_container_job", run)
+    result = CliRunner().invoke(
+        app, ["container", "feed-refresh", "--admission", str(admission)]
+    )
+    assert result.exit_code == 0, result.output
+    assert len(submitted) == 1
+    assert submitted[0]["feedRefresh"]["components"] == ["vulnerability"]
+    assert submitted[0]["inputAttachments"] == []
+    assert submitted[0]["imageSourceRef"] == "repository-security"
+
+
 class _FakeClient:
     def __init__(self, states: list[str]) -> None:
         self.states = states

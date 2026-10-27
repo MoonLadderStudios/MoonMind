@@ -32,7 +32,7 @@ from moonmind.schemas.workspace_locator_models import (
     WorkspaceLocator,
 )
 from moonmind.utils.logging import redact_sensitive_text
-from moonmind.schemas.repository_scanner_models import RepositoryScan
+from moonmind.schemas.repository_scanner_models import FeedRefresh, RepositoryScan
 
 CONTAINER_JOB_CONTRACT_VERSION = "v1"
 MAX_TEMPORAL_PAYLOAD_BYTES = 64 * 1024
@@ -445,6 +445,7 @@ class WorkloadProfileSelection(ContractModel):
 
 class ContainerJobSpec(ContractModel):
     repository_scan: RepositoryScan | None = Field(None, alias="repositoryScan")
+    feed_refresh: FeedRefresh | None = Field(None, alias="feedRefresh")
     workload_profile: WorkloadProfileSelection | None = Field(
         None, alias="workloadProfile"
     )
@@ -482,12 +483,12 @@ class ContainerJobSpec(ContractModel):
     input_attachments: list[InputAttachment] | None = Field(
         None,
         alias="inputAttachments",
-        min_length=1,
         max_length=16,
         description=(
             "Read-only captured inputs mounted at /inputs/<name>. Declaring "
-            "any replaces the live /workspace mount with job-owned writable "
-            "/outputs (where declared outputs resolve) and /tmp."
+            "the list, even empty, replaces the live /workspace mount with "
+            "job-owned writable /outputs (where declared outputs resolve) and "
+            "/tmp."
         ),
     )
 
@@ -560,8 +561,10 @@ class ContainerJobSpec(ContractModel):
             ):
                 raise ValueError("egress proxy environment is deployment-owned")
         from moonmind.security.repository_scanners import validate_scanner_job
+        from moonmind.security.scanner_feeds import validate_feed_refresh_job
 
         validate_scanner_job(self)
+        validate_feed_refresh_job(self)
         return self
 
     @field_validator("workdir")

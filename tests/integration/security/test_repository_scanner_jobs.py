@@ -24,9 +24,9 @@ from moonmind.schemas.container_job_models import (
     ContainerJobSubmitRequest,
     OwnerIdentity,
 )
-from moonmind.security.assessments import content_key
 from moonmind.security.repository_scanner_runner import run_scanner
 from moonmind.security.repository_scanners import RepositoryScan, build_scanner_job
+from moonmind.security.scanner_feeds import publish_snapshot
 from moonmind.workflows.temporal.container_job_attachments import storage_for
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from tests.integration.security import test_recurring_assessments as recurring
@@ -227,21 +227,26 @@ async def test_repository_job_retains_sanitized_evidence_and_report(
             }
         ]
     db = tmp_path / "database"
-    db.mkdir()
-    (db / "fixture-db.json").write_text('{"CVE-EXAMPLE":"1.0"}')
     if scanner == "trivy":
+        # A refresh job's published snapshot, selected by content identity.
+        stage = db / "staging" / "fixture"
+        (stage / "db").mkdir(parents=True)
+        (db / "snapshots").mkdir()
+        (stage / "db" / "trivy.db").write_text('{"CVE-EXAMPLE":"1.0"}')
+        now = datetime.now(UTC).isoformat()
+        (stage / "db" / "metadata.json").write_text(
+            json.dumps({"Version": 2, "UpdatedAt": now, "DownloadedAt": now})
+        )
+        snapshot, _ = publish_snapshot(
+            db,
+            stage,
+            components=["vulnerability"],
+            acquisition="import",
+            upstreams={"vulnerability": "artifact:art_fixture"},
+            now=datetime.now(UTC),
+        )
         options.update(
-            databaseCacheRef="fixture-db",
-            databaseDigest=content_key(
-                [
-                    [
-                        "fixture-db.json",
-                        hashlib.sha256(
-                            (db / "fixture-db.json").read_bytes()
-                        ).hexdigest(),
-                    ]
-                ]
-            ),
+            databaseCacheRef="fixture-db", databaseDigest=snapshot.snapshot_id
         )
     scan = RepositoryScan(
         scanner=scanner, outputDirectory=f"artifacts/scan-{MARKER}", **options
@@ -447,6 +452,9 @@ async def retain_native_fixture(
     key,
     *,
     output_directory="artifacts/scan",
+    scan_options=None,
+    database=None,
+    settings=None,
 ):
     """Replace the detector process only; retain production admission and storage."""
     case = tmp_path / key
@@ -469,6 +477,7 @@ async def retain_native_fixture(
                 "license": "MIT",
             }
         ]
+    options.update(scan_options or {})
     scan = RepositoryScan(scanner=scanner, outputDirectory=output_directory, **options)
     install_fixture_process(case, scanner, monkeypatch, reports=reports)
     workload = build_scanner_job(scan)
@@ -511,6 +520,7 @@ async def retain_native_fixture(
         command_runner=runner,
         evidence_publisher=publish,
         log_spool_root=case / "live",
+        **({"settings": settings} if settings else {}),
     )
     # The production launch captures the source; the fixture scanner then
     # runs against the paths the container sees as /inputs and /outputs.
@@ -521,6 +531,7 @@ async def retain_native_fixture(
         source=storage.inputs / "source",
         output=storage.outputs / scan.output_directory,
         rules_root=case / "rules",
+        **({"database": database} if database else {}),
     )
     # Reports never land in the examined source.
     assert not (root / scan.output_directory).exists()
@@ -551,6 +562,47 @@ async def retain_native_fixture(
     )
     ref = published[f"{accepted.job_id}-output-summary.json"]
     return ref, await read(environment.service, ref)
+
+
+async def test_missing_feed_snapshot_reaches_report_as_incomplete_coverage(
+    environment, tmp_path, monkeypatch
+):
+    feeds = tmp_path / "feeds"
+    (feeds / "snapshots").mkdir(parents=True)
+    _, summary = await retain_native_fixture(
+        environment,
+        tmp_path,
+        monkeypatch,
+        "trivy",
+        {"scan": native("trivy")},
+        "issue-5041-absent-feed",
+        scan_options={
+            "trivyScanners": ["vuln", "misconfig"],
+            "databaseCacheRef": "fixture-db",
+            "databaseDigest": "e" * 64,
+        },
+        database=feeds,
+        settings=resolve_container_backend_settings(
+            {
+                CACHE_SOURCES_ENV_KEY: json.dumps(
+                    [
+                        {
+                            "cacheRef": "fixture-db",
+                            "volumeName": "scanner-feeds",
+                            "target": "/opt/moonmind-scanner-db",
+                            "readOnly": True,
+                        }
+                    ]
+                )
+            }
+        ),
+    )
+    assert summary["coverage"] == "partial"
+    assert "feed_snapshot_unavailable" in summary["limitations"]
+    # The runner's own record survives; missing data is never a clean result.
+    assert "missing_or_invalid_execution_evidence" not in summary["limitations"]
+    assert summary["execution"]["databaseDigest"] is None
+    assert all(not row["findings"] for row in summary["results"].values())
 
 
 def retained_assessment(ref, assets):
