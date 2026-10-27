@@ -122,6 +122,7 @@ from moonmind.utils.logging import SecretRedactor, redact_sensitive_text
 from moonmind.security.execution_fanout_capabilities import (
     ExecutionFanoutCapabilityError,
     require_execution_fanout_authorization,
+    step_policy_is_assessment_scoped,
 )
 from moonmind.workflows.executions.runtime_capabilities import (
     RuntimeCapabilityError,
@@ -1072,6 +1073,10 @@ class OmnigentProfileBoundExecutionCoordinator:
                 require_execution_fanout_authorization(
                     self._required_capabilities(request),
                     fanout_authorization,
+                    assessment_scoped=request.step_execution is not None
+                    and step_policy_is_assessment_scoped(
+                        request.step_execution.skill_source_policy
+                    ),
                 )
             except ExecutionFanoutCapabilityError as exc:
                 raise OmnigentOAuthHostError(

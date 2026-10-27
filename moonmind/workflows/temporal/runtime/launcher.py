@@ -34,6 +34,7 @@ from moonmind.security.execution_fanout_capabilities import (
     ExecutionFanoutCapabilityError,
     mint_execution_fanout_capability,
     require_execution_fanout_authorization,
+    step_policy_is_assessment_scoped,
 )
 from moonmind.security.mcp_tool_capabilities import (
     JIRA_TOOLS_PURPOSE,
@@ -1110,6 +1111,10 @@ class ManagedRuntimeLauncher:
         require_execution_fanout_authorization(
             required_capabilities,
             authorization,
+            assessment_scoped=request.step_execution is not None
+            and step_policy_is_assessment_scoped(
+                request.step_execution.skill_source_policy
+            ),
         )
         # Share the canonical request reader with Omnigent: portable fan-out
         # Skills need the parent's connection authority in every runtime host.

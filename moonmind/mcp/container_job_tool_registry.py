@@ -91,6 +91,7 @@ def classify_container_job_error(exc: Exception) -> ContainerJobToolError:
         ContainerJobEvidenceUnavailableError,
         ContainerJobIdempotencyConflictError,
         ContainerJobNotFoundError,
+        ContainerJobScopeDeniedError,
     )
 
     if isinstance(exc, ContainerJobToolError):
@@ -105,6 +106,12 @@ def classify_container_job_error(exc: Exception) -> ContainerJobToolError:
         return ContainerJobToolError(
             code="permission_denied",
             message="Container-job authorization denied.",
+            http_status=403,
+        )
+    if isinstance(exc, ContainerJobScopeDeniedError):
+        return ContainerJobToolError(
+            code="assessment_scope_denied",
+            message="Container job exceeds the admitted assessment scope.",
             http_status=403,
         )
     if isinstance(exc, ContainerJobNotFoundError):

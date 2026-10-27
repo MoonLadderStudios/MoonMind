@@ -56,6 +56,8 @@ def _service(artifacts, owner=OWNER) -> ContainerJobService:
     service._artifact_access = ArtifactAccessContext.for_service(
         f"{owner.principal_type}:{owner.principal_id}"
     )
+    service._capability = None
+    service._backend_settings = SimpleNamespace(workload_profiles=())
     return service
 
 

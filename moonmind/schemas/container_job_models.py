@@ -8,7 +8,15 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    StrictStr,
+    field_validator,
+    model_validator,
+)
 
 from moonmind.schemas.workload_models import (
     WorkloadGpuCapability,
@@ -414,8 +422,32 @@ class InputAttachment(ContractModel):
         return self
 
 
+class WorkloadProfileSelection(ContractModel):
+    """Caller choice within a deployment-declared workload profile.
+
+    Admission renders the profile's image, argv, environment, caches, network
+    and outputs into the spec; the caller never supplies them directly.
+    ``assessmentRef`` is stamped from a scoped session capability.
+    """
+
+    profile_ref: str = Field(alias="profileRef", pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$")
+    mode: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$")
+    arguments: dict[str, StrictStr | StrictInt] = Field(
+        default_factory=dict, max_length=32
+    )
+    configuration_exceptions: list[str] = Field(
+        default_factory=list, alias="configurationExceptions", max_length=16
+    )
+    assessment_ref: str | None = Field(
+        None, alias="assessmentRef", pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$"
+    )
+
+
 class ContainerJobSpec(ContractModel):
     repository_scan: RepositoryScan | None = Field(None, alias="repositoryScan")
+    workload_profile: WorkloadProfileSelection | None = Field(
+        None, alias="workloadProfile"
+    )
     image: str | None = Field(None, min_length=1, max_length=512)
     image_source_ref: str | None = Field(
         None,
@@ -491,7 +523,18 @@ class ContainerJobSpec(ContractModel):
 
     @model_validator(mode="after")
     def exactly_one_image_authority(self) -> "ContainerJobSpec":
-        if (self.image is None) == (self.image_source_ref is None):
+        if self.workload_profile is not None:
+            # Admission resolves the profile's image source; until then the
+            # request carries no image authority of its own.
+            if self.image is not None or self.repository_scan is not None:
+                raise ValueError(
+                    "workload profile jobs cannot select an image or scanner"
+                )
+            if self.input_attachments is None:
+                raise ValueError(
+                    "workload profile jobs read captured input attachments"
+                )
+        elif (self.image is None) == (self.image_source_ref is None):
             raise ValueError("exactly one of image or imageSourceRef is required")
         if self.image_source_ref is not None and self.registry_credential_ref is not None:
             raise ValueError(
