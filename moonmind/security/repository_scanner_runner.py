@@ -5,13 +5,13 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-import shutil
 import signal
 import stat
 import subprocess
 import sys
 import tempfile
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 from moonmind.security.assessments import content_key
@@ -21,6 +21,7 @@ from moonmind.security.repository_scanners import (
     ScannerOutputSanitizer,
     sanitize_native,
 )
+from moonmind.security.scanner_feeds import FeedSnapshotError, scanner_feed
 
 
 def scanner_commands(
@@ -193,34 +194,6 @@ def _copy_inputs(
     return assets, content_key(records), sorted(set(limitations))
 
 
-def _database(scan: RepositoryScan, source: Path, destination: Path) -> str | None:
-    if not scan.database_cache_ref:
-        return None
-    records, total = [], 0
-    for directory, dirs, files in os.walk(source, followlinks=False):
-        if any((Path(directory) / name).is_symlink() for name in [*dirs, *files]):
-            raise ValueError("database links are not admitted")
-        for name in sorted(files):
-            path = Path(directory) / name
-            info = path.stat()
-            total += info.st_size
-            if (
-                not stat.S_ISREG(info.st_mode)
-                or total > 2 * 1024**3
-                or len(records) >= 4096
-            ):
-                raise ValueError("database exceeds bounded input")
-            with path.open("rb") as stream:
-                digest = hashlib.file_digest(stream, "sha256").hexdigest()
-            relative = path.relative_to(source)
-            records.append([relative.as_posix(), digest])
-    digest = content_key(sorted(records))
-    if not records or digest != scan.database_digest:
-        raise ValueError("database content differs from admitted identity")
-    shutil.copytree(source, destination, dirs_exist_ok=True)
-    return digest
-
-
 def run_scanner(
     scan: RepositoryScan,
     *,
@@ -325,7 +298,12 @@ def run_scanner(
                     raise ValueError("rule file is not admitted")
                 if hashlib.sha256(path.read_bytes()).hexdigest() != rule.sha256:
                     raise ValueError("rule content differs from admitted identity")
-            metadata.database_digest = _database(scan, database, cache)
+            metadata.feed, feed_limitations = scanner_feed(
+                scan, database, cache, metadata.assets, now=datetime.now(UTC)
+            )
+            metadata.limitations.extend(feed_limitations)
+            if metadata.feed is not None and metadata.feed.snapshot is not None:
+                metadata.database_digest = metadata.feed.snapshot.snapshot_id
             version = root / "version"
             execute(
                 [
@@ -388,10 +366,18 @@ def run_scanner(
                 code, state = execute(argv)
                 metadata.exits[mode], metadata.states[mode] = code, state
         # Retain safe diagnostics for scanner/setup failures.
+        except FeedSnapshotError as exc:
+            # Absent, partial, corrupt or incompatible data is never coverage.
+            metadata.limitations.extend([exc.code, "scanner_prerequisite_failed"])
         except Exception:  # noqa: BLE001
             metadata.limitations.append("scanner_prerequisite_failed")
         finally:
             signal.signal(signal.SIGTERM, previous)
+            # Modes a failed prerequisite never started remain on record, so
+            # ingestion keeps the reason instead of discarding the evidence.
+            for mode in scan.modes:
+                metadata.states.setdefault(mode, "failed")
+                metadata.exits.setdefault(mode, None)
             sanitizer = ScannerOutputSanitizer()
             native_inputs = {}
             unsafe_metadata = False
