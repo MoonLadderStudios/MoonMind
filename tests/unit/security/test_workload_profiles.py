@@ -321,7 +321,7 @@ def test_scope_admits_profile_jobs_inside_targets():
     "job",
     [
         lambda: scoped(assessmentRef="assessment-2"),
-        lambda: spec(),
+        spec,
         lambda: scoped(configurationExceptions=["inline-suppressions"]),
         lambda: scoped([{"name": "source", "workspacePath": "."}]),
         # Capturing app would include the excluded app/vendor subtree.
