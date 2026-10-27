@@ -78,8 +78,11 @@ def invoke(argv, evidence: Path, *, exits=(0,)):
         + "\n"
     )
     if result.returncode not in exits:
+        # These commands use synthetic qualification inputs, never operator source.
+        diagnostic = result.stdout[-4096:].strip()
         raise ImageError(
-            f"scanner qualification failed ({result.returncode}); see {evidence}"
+            f"scanner qualification failed ({result.returncode}); see {evidence}\n"
+            f"{diagnostic}"
         )
     return result.stdout
 
