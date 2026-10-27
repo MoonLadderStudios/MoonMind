@@ -40,6 +40,9 @@ from pr_resolve_contract import (  # noqa: E402
 from pr_resolve_finalize import _env_flag  # noqa: E402
 
 DEFAULT_MIN_ATTEMPTS_BEFORE_EXHAUSTED = 5
+# CI in progress on the unchanged head, including failed jobs finalize just
+# reran after an infrastructure failure; watched even past the elapsed budget.
+CI_IN_PROGRESS_REASONS = frozenset({"ci_running", "ci_infra_transient"})
 
 SECRET_LIKE_RE = re.compile(
     r"(ghp_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|"
@@ -197,25 +200,6 @@ def run_orchestration(
     started_monotonic = monotonic_fn()
 
     for attempt in range(1, max_attempts + 1):
-        elapsed = monotonic_fn() - started_monotonic
-        if elapsed > max_elapsed_seconds:
-            result = _build_result(
-                status="attempts_exhausted",
-                decision="retry budget exhausted (timeout)",
-                merge_outcome="attempts_exhausted",
-                final_reason="timeout",
-                next_step="manual_review",
-                max_attempts=max_attempts,
-                finalize_max_retries=finalize_max_retries,
-                fix_max_iterations=fix_max_iterations,
-                min_attempts_before_exhausted=min_attempts_before_exhausted,
-                history=history,
-                escalations=escalations,
-                started_at=started_at,
-                finished_at=now_utc_iso(),
-            )
-            return result, EXIT_CODE_ATTEMPTS_EXHAUSTED
-
         finalize_payload = finalize_runner(attempt)
         reason = parse_reason(finalize_payload)
         finalize_status = _normalize_status(finalize_payload)
@@ -288,6 +272,31 @@ def run_orchestration(
                 finished_at=now_utc_iso(),
             )
             return result, EXIT_CODE_FAILED
+
+        # The elapsed budget bounds new work, not observation of CI already
+        # running: abandoning a pushed fix while its checks run wastes the
+        # remediation (slow native CI can outlast the budget by itself).
+        # Waits stay bounded by the attempt cap and finalize's rerun cap.
+        if (
+            monotonic_fn() - started_monotonic > max_elapsed_seconds
+            and normalize_text(reason) not in CI_IN_PROGRESS_REASONS
+        ):
+            result = _build_result(
+                status="attempts_exhausted",
+                decision="retry budget exhausted (timeout)",
+                merge_outcome="attempts_exhausted",
+                final_reason="timeout",
+                next_step="manual_review",
+                max_attempts=max_attempts,
+                finalize_max_retries=finalize_max_retries,
+                fix_max_iterations=fix_max_iterations,
+                min_attempts_before_exhausted=min_attempts_before_exhausted,
+                history=history,
+                escalations=escalations,
+                started_at=started_at,
+                finished_at=now_utc_iso(),
+            )
+            return result, EXIT_CODE_ATTEMPTS_EXHAUSTED
 
         if (
             pending_progress_reason
@@ -682,7 +691,7 @@ def main() -> None:
     parser.add_argument(
         "--max-elapsed-seconds",
         type=int,
-        default=7200,
+        default=10800,
         help="Hard wall-clock cap for orchestration execution.",
     )
     parser.add_argument(
