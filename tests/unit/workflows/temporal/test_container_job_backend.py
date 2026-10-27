@@ -342,6 +342,8 @@ async def test_scanner_private_scratch_accommodates_admitted_inputs(
     assert "--read-only" in created
     assert scratch.startswith("/tmp:rw,nosuid,nodev,")
     assert "mode=1777" in scratch
+    assert "exec" in scratch.split(":", 1)[1].split(",")
+    assert "noexec" not in scratch.split(":", 1)[1].split(",")
     mounts = [created[i + 1] for i, arg in enumerate(created) if arg == "--mount"]
     assert next(m for m in mounts if "dst=/workspace" in m).endswith(",readonly")
     assert len([m for m in mounts if not m.endswith(",readonly")]) == 1

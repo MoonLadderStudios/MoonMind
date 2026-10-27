@@ -2438,11 +2438,13 @@ class DockerContainerJobBackend:
         if spec.repository_scan is not None:
             # The runner stages inputs and raw reports in private temporary
             # storage. Only sanitized output can reach the source volume.
+            # Opengrep's official one-file release executes its extracted child
+            # from the private cache; Docker otherwise defaults tmpfs to noexec.
             args.extend(
                 (
                     "--read-only",
                     "--tmpfs",
-                    f"/tmp:rw,nosuid,nodev,size={spec.repository_scan.scratch_bytes},mode=1777",
+                    f"/tmp:rw,nosuid,nodev,exec,size={spec.repository_scan.scratch_bytes},mode=1777",
                 )
             )
             output = self._scanner_output_directory(request)
