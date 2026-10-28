@@ -52,14 +52,22 @@ PLAN_JOB_TYPES = frozenset(
     }
 )
 _STRENGTH = {"low": "Low", "medium": "Medium", "high": "High"}
-# Arguments: output directory, then the bearer site (``-`` for none). The
-# upstream image does not read proxy variables, so the admitted egress proxy
-# is passed as ZAP's upstream proxy; the secret is read from its file only.
-_LAUNCH = r"""out="$1"; bearer_site="$2"; set --
+# Arguments: output directory, the bearer site (``-`` for none), then the
+# admitted requests per second. ZAP's network rate limiter applies that rate
+# to every request it sends, so crawling, imports, authentication checks and
+# attacks share one bound. The upstream image does not read proxy variables,
+# so the admitted egress proxy is passed as ZAP's upstream proxy; the secret
+# is read from its file only.
+_LAUNCH = r"""out="$1"; bearer_site="$2"; rate="$3"; set -- \
+  -config 'network.ratelimit.rules.rule(0).description=moonmind-admitted-rate' \
+  -config 'network.ratelimit.rules.rule(0).enabled=true' \
+  -config 'network.ratelimit.rules.rule(0).regex=true' \
+  -config 'network.ratelimit.rules.rule(0).matchStr=.*' \
+  -config "network.ratelimit.rules.rule(0).reqsPerSec=$rate"
 case "${MOONMIND_EGRESS_PROXY:-}" in
 http://*:3128)
   p="${MOONMIND_EGRESS_PROXY#http://}"
-  set -- -config network.connection.httpProxy.enabled=true \
+  set -- "$@" -config network.connection.httpProxy.enabled=true \
     -config "network.connection.httpProxy.host=${p%:*}" \
     -config "network.connection.httpProxy.port=${p##*:}" ;;
 esac
@@ -243,7 +251,6 @@ def build_web_assessment_plan(assessment: WebAssessment) -> dict:
                     "maxScanDurationInMins": _minutes(budget * 0.4),
                     "maxRuleDurationInMins": _minutes(budget * 0.1),
                     "threadPerHost": 1,
-                    "delayInMs": -(-1000 // a.max_requests_per_second),
                     "handleAntiCSRFTokens": True,
                 },
                 # Intensity is exactly the admitted strength, never inferred.
@@ -308,8 +315,9 @@ def _bearer_site(assessment: WebAssessment) -> str:
     identity = assessment.identity
     if identity is None or identity.method != "bearer":
         return "-"
-    # ZAP matches the header site as host[:port] within the request URL.
-    return assessment.origin.split("://", 1)[1]
+    # ZAP adds the header when the request's host name, without its port,
+    # contains this value; egress reaches only the origin's port.
+    return urlsplit(assessment.origin).hostname
 
 
 def build_web_assessment_job(
@@ -339,6 +347,7 @@ def build_web_assessment_job(
             "moonmind-web-assessment",
             f"/outputs/{assessment.output_directory}",
             _bearer_site(assessment),
+            str(assessment.max_requests_per_second),
         ],
         "networkMode": "bridge",
         "egressPolicyRef": assessment.egress_policy_ref,
@@ -951,17 +960,20 @@ def _bounded(value, limit: int) -> str | None:
 
 
 def _authentication(identity, responses: list[dict], challenges: set[str]):
-    """The anonymous request comes first; the identity's must then answer.
+    """The identity's verification requests must show its marker.
 
-    ZAP polls the same route to keep the session, so any later failure after
-    a successful answer means the session ended during the assessment.
+    A form identity's first request is anonymous and must not show it. A
+    bearer header rides on every request, so all of its requests are the
+    identity's and only the identity-specific marker proves the token
+    worked. ZAP polls the same route to keep the session, so any later
+    failure after a successful answer means the session ended.
     """
     marker = identity.logged_in_marker
 
     def answered(response) -> bool:
         status = response.get("status") or 0
         text = str((response.get("content") or {}).get("text") or "")
-        return 200 <= status < 300 and (marker is None or marker in text)
+        return 200 <= status < 300 and marker in text
 
     def result(status, reason=None, compared=False):
         return WebAuthentication(
@@ -982,10 +994,8 @@ def _authentication(identity, responses: list[dict], challenges: set[str]):
             "not_attempted",
             "verification route was not requested anonymously and as the identity",
         )
-    anonymous, rest = responses[0], responses[1:]
-    # Bearer headers are attached to every request, so its anonymous request
-    # is authenticated too and cannot serve as the comparison.
     compared = identity.method == "form"
+    anonymous, rest = (responses[0], responses[1:]) if compared else (None, responses)
     first = next((i for i, r in enumerate(rest) if answered(r)), None)
     if first is None:
         return result(

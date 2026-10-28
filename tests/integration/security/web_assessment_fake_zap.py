@@ -6,8 +6,9 @@ resolved from the environment, poll verification, requestor, OpenAPI import,
 spider, passive header checks, reflected-input active checks at the plan's
 strength, traditional-json-plus reports and HAR exports. Requests go through
 the upstream proxy given by ``-config``, exactly as the launch script passes
-it. ``FIXTURE_ZAP_FAULT`` selects a failure: ``malformed`` output, a plan
-``warning`` (exit 2), or ``cancel`` after the passive phase.
+it, no faster than its network rate-limit rule allows. ``FIXTURE_ZAP_FAULT``
+selects a failure: ``malformed`` output, a plan ``warning`` (exit 2), or
+``cancel`` after the passive phase.
 """
 
 from __future__ import annotations
@@ -17,6 +18,8 @@ import json
 import os
 import re
 import sys
+import time
+from datetime import UTC, datetime
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit
 
 PAYLOAD = "<script>alert(5044)</script>"
@@ -43,9 +46,11 @@ def resolve(value):
 
 
 class Zap:
-    def __init__(self, plan: dict, proxy: tuple[str, int] | None):
+    def __init__(self, plan: dict, proxy: tuple[str, int] | None, rate: int | None):
         self.plan = plan
         self.proxy = proxy
+        self.interval = 1 / rate if rate else 0.0
+        self.last_sent = 0.0
         (self.context,) = plan["env"]["contexts"]
         self.include = [java_regex(p) for p in self.context.get("includePaths", [])]
         self.exclude = [java_regex(p) for p in self.context.get("excludePaths", [])]
@@ -68,11 +73,16 @@ class Zap:
         if user is not None and user in self.sessions:
             headers["Cookie"] = self.sessions[user]
         bearer = os.environ.get("ZAP_AUTH_HEADER_VALUE")
-        if bearer and urlsplit(url).netloc == os.environ.get("ZAP_AUTH_HEADER_SITE"):
+        site = os.environ.get("ZAP_AUTH_HEADER_SITE", "")
+        # ZAP matches the site against the request's host name, not its port.
+        if bearer and site in (urlsplit(url).hostname or ""):
             headers[os.environ.get("ZAP_AUTH_HEADER", "Authorization")] = bearer
         if body:
             headers["content-type"] = "application/x-www-form-urlencoded"
         status, response_headers, text = 0, [], ""
+        time.sleep(max(0.0, self.last_sent + self.interval - time.monotonic()))
+        self.last_sent = time.monotonic()
+        started = datetime.now(UTC).isoformat(timespec="milliseconds")
         try:
             host, port = self.proxy or (
                 urlsplit(url).hostname,
@@ -90,7 +100,7 @@ class Zap:
         except OSError:
             pass  # recorded as a network failure (status 0)
         message = {
-            "startedDateTime": "2026-10-28T00:00:00Z",
+            "startedDateTime": started,
             "request": {
                 "method": method,
                 "url": url,
@@ -297,9 +307,13 @@ def main(argv: list[str]) -> int:
         )
         host, _, port = mapped.get(named, named).partition(":")
         proxy = (host, int(port))
+    rule = "network.ratelimit.rules.rule(0)."
+    rate = None
+    if config.get(rule + "enabled") == "true" and config.get(rule + "matchStr") == ".*":
+        rate = int(config[rule + "reqsPerSec"])
     with open(local(argv[2])) as handle:
         plan = json.load(handle)
-    return Zap(plan, proxy).run()
+    return Zap(plan, proxy, rate).run()
 
 
 if __name__ == "__main__":
