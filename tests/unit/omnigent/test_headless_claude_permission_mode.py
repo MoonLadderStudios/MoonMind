@@ -5,6 +5,10 @@ authorized the work by launching the workflow. Without an explicit launch mode
 Claude Code falls back to the account default (``auto``), whose classifier
 refused the batch-pr-resolver helper as "Merge Without Review" and failed
 mm:e7413769-f241-4695-af14-0723d9322cbc on every retry.
+
+A step also ends with its turn, so nothing owns a deferred ``ScheduleWakeup``
+continuation; the direct Claude strategy denies it for the same reason, and the
+deny holds whatever permission mode the step authored.
 """
 
 from types import SimpleNamespace
@@ -89,6 +93,7 @@ def _launch_args(bound: AgentExecutionRequest) -> list[str]:
 
 
 _BINDERS = pytest.mark.parametrize("bind", [_bind_profile, _bind_generic])
+_DENY_WAKEUP = ["--disallowedTools", "ScheduleWakeup"]
 
 
 @_BINDERS
@@ -96,6 +101,7 @@ def test_claude_workflow_session_launches_without_permission_prompts(bind):
     assert _launch_args(bind(_request(), "claude-native")) == [
         "--permission-mode",
         "bypassPermissions",
+        *_DENY_WAKEUP,
     ]
 
 
@@ -111,7 +117,32 @@ def test_claude_workflow_session_launches_without_permission_prompts(bind):
 def test_explicit_claude_permission_choice_is_preserved(bind, explicit):
     request = _request({"terminalLaunchArgs": ["--verbose", *explicit]})
 
-    assert _launch_args(bind(request, "claude-native")) == ["--verbose", *explicit]
+    assert _launch_args(bind(request, "claude-native")) == [
+        "--verbose",
+        *explicit,
+        *_DENY_WAKEUP,
+    ]
+
+
+@_BINDERS
+@pytest.mark.parametrize(
+    ("authored", "merged"),
+    [
+        (["--disallowedTools", "Bash"], ["--disallowedTools", "Bash,ScheduleWakeup"]),
+        (
+            ["--disallowedTools=WebFetch,ScheduleWakeup"],
+            ["--disallowedTools=WebFetch,ScheduleWakeup"],
+        ),
+    ],
+)
+def test_wakeup_deny_merges_into_authored_disallowed_tools(bind, authored, merged):
+    request = _request({"terminalLaunchArgs": ["--permission-mode", "plan", *authored]})
+
+    assert _launch_args(bind(request, "claude-native")) == [
+        "--permission-mode",
+        "plan",
+        *merged,
+    ]
 
 
 @_BINDERS
@@ -122,7 +153,22 @@ def test_unattended_mode_is_added_beside_other_launch_args(bind):
         "--verbose",
         "--permission-mode",
         "bypassPermissions",
+        *_DENY_WAKEUP,
     ]
+
+
+def test_claude_workflow_session_carries_the_plan_effort():
+    # The direct strategy's ``--effort``: the claude-native harness turns the
+    # session's reasoning effort into the same flag.
+    bound = _bind_generic(_request(), "claude-native")
+    payload = build_omnigent_session_create_payload(
+        request=bound,
+        selection=build_omnigent_selection(bound),
+        target=OmnigentResolvedTarget(agent_id="agent-1", source="agent_id"),
+        launch_defaults=WORKFLOW_LAUNCH_DEFAULTS,
+    )
+
+    assert payload["reasoning_effort"] == "high"
 
 
 @_BINDERS
@@ -170,7 +216,7 @@ async def test_session_launch_retries_preserve_pre_upgrade_payload(
     bound = bind(authored, "claude-native")
     expected = ["--verbose"]
     if not legacy:
-        expected += ["--permission-mode", "bypassPermissions"]
+        expected += ["--permission-mode", "bypassPermissions", *_DENY_WAKEUP]
     provider_payloads = []
 
     if legacy:
@@ -209,9 +255,9 @@ async def test_session_launch_retries_preserve_pre_upgrade_payload(
             row = await store.get_existing(bound.idempotency_key)
             assert row is not None
             if not legacy:
-                assert row.metadata_["workflowLaunchDefaults"] == {
-                    "claude-native": ["--permission-mode", "bypassPermissions"]
-                }
+                assert row.metadata_["workflowLaunchDefaults"] == (
+                    WORKFLOW_LAUNCH_DEFAULTS
+                )
             assert payload["terminal_launch_args"] == expected
             if provider_payloads:
                 assert payload == provider_payloads[0]
@@ -343,12 +389,14 @@ async def test_unmarked_retry_reconciles_actual_predecessor_session(
                 predecessor_args is None
             ), "Never replay an accepted predecessor create with guessed flags"
             persisted = await store.get_existing(request.idempotency_key)
-            assert persisted.metadata_["workflowLaunchDefaults"] == {
-                "claude-native": ["--permission-mode", "bypassPermissions"]
-            }
+            assert (
+                persisted.metadata_["workflowLaunchDefaults"]
+                == WORKFLOW_LAUNCH_DEFAULTS
+            )
             assert payload["terminal_launch_args"] == [
                 "--permission-mode",
                 "bypassPermissions",
+                *_DENY_WAKEUP,
             ]
             provider.update(payload)
             return {"id": provider["id"]}
@@ -378,7 +426,7 @@ async def test_unmarked_retry_reconciles_actual_predecessor_session(
         assert provider["terminal_launch_args"] == (
             predecessor_args
             if predecessor_args is not None
-            else ["--permission-mode", "bypassPermissions"]
+            else ["--permission-mode", "bypassPermissions", *_DENY_WAKEUP]
         )
     finally:
         await engine.dispose()

@@ -1241,7 +1241,12 @@ async def assert_native_turn_saved_and_cleaned(
     assert created["agent_id"] == journey.harness + "-agent"
     assert created["model_override"] == server.model
     assert created["terminal_launch_args"] == (
-        ["--permission-mode", "bypassPermissions"]
+        [
+            "--permission-mode",
+            "bypassPermissions",
+            "--disallowedTools",
+            "ScheduleWakeup",
+        ]
         if journey.harness == "claude-native"
         else []
     )
