@@ -62,6 +62,15 @@ class JobAttachmentStorage:
     def staging(self) -> Path:
         return self.root / "staging"
 
+    @property
+    def credentials(self) -> Path:
+        return self.root / "credentials"
+
+    @property
+    def workload_credentials(self) -> Path:
+        """Scoped workload credentials: ``files/`` is mounted, the rest is not."""
+        return self.root / "workload-credentials"
+
 
 def storage_for(workspace_root: Path, job_id: str) -> JobAttachmentStorage:
     # Job ids are validated ``container-job:<32 hex>`` identities.
@@ -407,6 +416,185 @@ async def publish_once(
     return ref
 
 
+def deliver_credential(
+    storage: JobAttachmentStorage, body: bytes, *, ownership_token: str
+) -> None:
+    """Write one worker-resolved credential file for the job's read-only mount.
+
+    It sits beside the captured inputs, never in them, and is replaced on each
+    launch and removed after the container exits and on release. The file is
+    world-readable only so an image's non-root user can read it; the store
+    itself is reachable only by the worker and the Docker daemon.
+    """
+
+    if storage.root.is_symlink() or _owner(storage) != ownership_token:
+        raise AttachmentStorageError("job attachment storage is owned by another job")
+    _remove_tree(storage.credentials)
+    storage.credentials.mkdir(mode=0o755)
+    fd = os.open(
+        storage.credentials / "config.json",
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+    )
+    try:
+        os.write(fd, body)
+        os.fchmod(fd, 0o444)
+    finally:
+        os.close(fd)
+
+
+def remove_credentials(storage: JobAttachmentStorage) -> None:
+    _remove_tree(storage.credentials)
+
+
+def _owned(storage: JobAttachmentStorage, ownership_token: str) -> None:
+    if storage.root.is_symlink() or _owner(storage) != ownership_token:
+        raise AttachmentStorageError("job attachment storage is owned by another job")
+
+
+def _write_new(path: Path, body: bytes, mode: int) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        os.write(fd, body)
+        os.fchmod(fd, mode)
+    finally:
+        os.close(fd)
+
+
+def deliver_workload_credentials(
+    storage: JobAttachmentStorage,
+    *,
+    ownership_token: str,
+    files: dict[str, bytes],
+    environment: dict[str, str],
+) -> Path | None:
+    """Write this launch's workload credentials; return the env file, if any.
+
+    Files under ``files/`` are mounted read-only; like the target-registry
+    config they are world-readable so a non-root tool user can read them,
+    while the store itself is reachable only by the worker and the daemon.
+    The env file stays worker-only (0600) and is read by the Docker CLI, so
+    no value appears in argv.
+    """
+
+    _owned(storage, ownership_token)
+    root = storage.workload_credentials
+    if root.is_symlink():
+        root.unlink()
+    root.mkdir(mode=0o700, exist_ok=True)
+    retire_workload_credentials(storage)
+    (root / "files").mkdir(mode=0o755)
+    for name, body in files.items():
+        _write_new(root / "files" / name, body, 0o444)
+    if not environment:
+        return None
+    lines = []
+    for name, value in environment.items():
+        if "\n" in value or "\r" in value or "\0" in value:
+            raise AttachmentStorageError("environment credential is not a single line")
+        lines.append(f"{name}={value}\n")
+    _write_new(root / "env", "".join(lines).encode(), 0o600)
+    return root / "env"
+
+
+def replace_workload_credential_file(
+    storage: JobAttachmentStorage, *, ownership_token: str, name: str, body: bytes
+) -> None:
+    """Atomically swap one mounted file, as a renewed session does."""
+
+    _owned(storage, ownership_token)
+    files = storage.workload_credentials / "files"
+    if files.is_symlink() or not files.is_dir():
+        raise AttachmentStorageError("workload credentials were not delivered")
+    pending = files / f".{name}.{uuid.uuid4().hex}"
+    _write_new(pending, body, 0o444)
+    current = files / name
+    if current.is_file() and not current.is_symlink():
+        # The container may already have written the replaced values.
+        os.link(current, _retired(storage) / uuid.uuid4().hex)
+    os.replace(pending, current)
+
+
+def _retired(storage: JobAttachmentStorage) -> Path:
+    retired = storage.workload_credentials / "retired"
+    if retired.is_symlink():
+        retired.unlink()
+    retired.mkdir(mode=0o700, exist_ok=True)
+    return retired
+
+
+def retire_workload_credentials(storage: JobAttachmentStorage) -> None:
+    """Take delivered values out of the job's reach, kept only for redaction.
+
+    Evidence can still hold any value a launch or renewal ever delivered, and
+    a publication retry must redact it again, so values stay worker-only
+    until cleanup removes them.
+    """
+
+    root = storage.workload_credentials
+    if root.is_symlink() or not root.is_dir():
+        return
+    files = root / "files"
+    delivered = [root / "env"]
+    if files.is_dir() and not files.is_symlink():
+        delivered.extend(files.iterdir())
+    for path in delivered:
+        if path.is_file() and not path.is_symlink():
+            os.replace(path, _retired(storage) / uuid.uuid4().hex)
+    _remove_tree(files)
+    (root / "env").unlink(missing_ok=True)
+
+
+def delivered_workload_values(storage: JobAttachmentStorage) -> list[str]:
+    """Every value delivered to the job, read back only to redact evidence."""
+
+    root = storage.workload_credentials
+    bodies = []
+    for path in (
+        root / "env",
+        *sorted((root / "files").glob("[!.]*")),
+        *sorted((root / "retired").glob("*")),
+    ):
+        if path.is_file() and not path.is_symlink():
+            bodies.append(path.read_text(errors="replace"))
+    values = []
+    for body in bodies:
+        values.append(body.strip())
+        for line in body.splitlines():
+            if not line.startswith("["):
+                values.append(line.split("=", 1)[-1].strip())
+    return sorted({value for value in values if len(value) >= 8}, key=len, reverse=True)
+
+
+def load_workload_lease(storage: JobAttachmentStorage) -> dict | None:
+    try:
+        return json.loads((storage.workload_credentials / "lease.json").read_text())
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+
+
+def write_workload_lease(
+    storage: JobAttachmentStorage, lease: dict, *, ownership_token: str
+) -> None:
+    """Value-free record of issued sessions, kept beside (not in) the mount."""
+
+    _owned(storage, ownership_token)
+    storage.workload_credentials.mkdir(mode=0o700, exist_ok=True)
+    _write_json(storage.workload_credentials / "lease.json", lease)
+
+
+def remove_workload_credentials(storage: JobAttachmentStorage) -> None:
+    """Delete every delivered and retired value; the lease record stays."""
+
+    root = storage.workload_credentials
+    if root.is_symlink():
+        root.unlink()
+        return
+    _remove_tree(root / "files")
+    _remove_tree(root / "retired")
+    (root / "env").unlink(missing_ok=True)
+
+
 def retain_outputs(storage: JobAttachmentStorage, *, ownership_token: str) -> None:
     """Keep outputs through release; collection left one unpublished."""
 
@@ -426,7 +614,13 @@ def release(
         return "absent"
     if storage.root.is_symlink() or _owner(storage) != ownership_token:
         raise AttachmentStorageError("job attachment storage is owned by another job")
-    for directory in (storage.staging, storage.inputs, storage.scratch):
+    for directory in (
+        storage.staging,
+        storage.inputs,
+        storage.scratch,
+        storage.credentials,
+        storage.workload_credentials,
+    ):
         _remove_tree(directory)
     if retain_outputs or (storage.root / _RETAIN).exists():
         return "outputs_retained"

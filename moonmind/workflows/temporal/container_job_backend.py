@@ -99,6 +99,15 @@ from moonmind.security.egress import (
 )
 from moonmind.security.egress_conformance_evidence import serialize_conformance_evidence
 from moonmind.security.scoped_egress import ScopedEgressLease
+from moonmind.security.image_assessments import (
+    TARGET_AUTH_TARGET,
+    ImageAssessmentSummary,
+    ImageExecution,
+    RetainedSbom,
+    SbomError,
+    inspect_sbom,
+    normalize_image_report,
+)
 from moonmind.security.repository_scanners import (
     WITHHELD_LOG,
     RepositoryScan,
@@ -109,7 +118,19 @@ from moonmind.security.repository_scanners import (
     sanitize_native,
     validate_scanner_job,
 )
-from moonmind.security.workload_profiles import validate_profile_launch
+from moonmind.security.workload_credentials import (
+    READ_ONLY_POLICY_ARNS,
+    AwsStsSessionIssuer,
+    CloudSessionIssuer,
+    CredentialIssueError,
+    launch_authorizations,
+    parse_aws_source,
+    session_seconds,
+)
+from moonmind.security.workload_profiles import (
+    WORKLOAD_CREDENTIALS_TARGET,
+    validate_profile_launch,
+)
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.temporal import container_job_attachments as attachments
 from moonmind.workflows.temporal.container_image_acquisition import (
@@ -147,7 +168,11 @@ ProjectionWriter = Callable[[ContainerJobActivityRequest], Awaitable[None]]
 # Reads one artifact's bytes under the job owner's artifact authority.
 ArtifactReader = Callable[[ContainerJobActivityRequest, str], Awaitable[bytes]]
 RegistryAuthResolver = Callable[[str], Awaitable[RegistryCredential]]
-SecretResolver = Callable[[str], Awaitable[str]]
+# ``(secretRef, required credential revision)`` -> plaintext.
+SecretResolver = Callable[[str, int | None], Awaitable[str]]
+#: Issued cloud sessions are renewed this long before they expire.
+_SESSION_RENEWAL_MARGIN_SECONDS = 300
+_MAX_INSPECTED_ARCHIVE_BYTES = 256 * 1024 * 1024
 
 logger = getLogger(__name__)
 
@@ -161,6 +186,44 @@ def _redact(text: str, secrets: Sequence[str]) -> str:
         if token:
             redacted = redacted.replace(token, "[redacted]")
     return redacted
+
+
+def _redact_strings(value: object) -> object:
+    """Credential-shaped text removed from every string in a JSON value."""
+
+    if isinstance(value, str):
+        return redact_sensitive_text(value)
+    if isinstance(value, dict):
+        return {key: _redact_strings(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_strings(item) for item in value]
+    return value
+
+
+def _without_delivered(
+    payload: bytes, media_type: str | None, delivered: Sequence[str]
+) -> bytes | None:
+    """Redact delivered credential values; withhold an archive containing one.
+
+    An archive too large or malformed to inspect within the bound is withheld.
+    """
+
+    if media_type == "application/gzip":
+        import zlib
+
+        inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        try:
+            expanded = inflater.decompress(payload, _MAX_INSPECTED_ARCHIVE_BYTES)
+        except zlib.error:
+            return None
+        if inflater.unconsumed_tail:
+            return None
+        return None if any(v.encode() in expanded for v in delivered) else payload
+    for value in delivered:
+        payload = payload.replace(value.encode(), b"[redacted]")
+    return payload
+
+
 # Ownership/correlation/expiry label keys. These are applied unconditionally by
 # the backend and can never be supplied or overridden through the public spec
 # (the contract layer rejects ``label``/``labels`` keys outright).
@@ -514,6 +577,11 @@ class _CapacityWait(RuntimeError):
     """The durable workflow, rather than an Activity retry, owns this wait."""
 
 
+def _withholds_console(spec) -> bool:
+    """Scanner console output can repeat inputs; evidence is the checked output."""
+    return spec.repository_scan is not None or spec.image_assessment is not None
+
+
 class DockerContainerJobBackend:
     """Thin, deployment-selected Docker CLI adapter with owned identities."""
 
@@ -538,6 +606,7 @@ class DockerContainerJobBackend:
         pull_lock_poll_seconds: float = 2.0,
         pull_lock_max_wait_seconds: float = 280.0,
         secret_resolver: SecretResolver | None = None,
+        cloud_session_issuer: CloudSessionIssuer | None = None,
         managed_run_store: ManagedRunRecordStore | None = None,
         workspace_volume_name: str | None = None,
         log_spool_root: str | Path | None = None,
@@ -579,6 +648,7 @@ class DockerContainerJobBackend:
         self._pull_lock_poll_seconds = pull_lock_poll_seconds
         self._pull_lock_max_wait_seconds = pull_lock_max_wait_seconds
         self._resolve_secret = secret_resolver
+        self._cloud_sessions = cloud_session_issuer or AwsStsSessionIssuer()
         self._managed_run_store = managed_run_store
         self._workspace_volume_name = str(workspace_volume_name or "").strip() or None
         if self._workspace_volume_name is not None and not re.fullmatch(
@@ -2370,23 +2440,284 @@ class DockerContainerJobBackend:
     async def _materialized_env(
         self, request: ContainerJobActivityRequest
     ) -> list[str]:
-        """Return ``--env`` argv pairs with execution-time secrets materialized.
+        """Return ``--env`` argv pairs for plain values.
 
-        Secret values are injected only into the container launch arguments and
-        are never returned to the workflow, persisted, or rendered into any
-        diagnostics or evidence artifact.
+        ``secretRef`` entries are admitted workload credential slots; their
+        values reach the container only through the job-owned env file
+        :meth:`_deliver_workload_credentials` wrote, never through argv.
         """
 
         args: list[str] = []
         for item in request.request.spec.environment:
-            if item.secret_ref is not None:
-                raise RuntimeError(
-                    "secretRef is unsupported until container-job authority can "
-                    "authorize each requested secret"
-                )
-            else:
+            if item.secret_ref is None:
                 args.extend(("--env", f"{item.name}={item.value}"))
         return args
+
+    async def _resolve_workload_secret(self, decision) -> str:
+        if self._resolve_secret is None:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.CREDENTIAL_UNRESOLVED,
+                "workload credential resolution is unavailable on this worker",
+            )
+        try:
+            return await self._resolve_secret(
+                decision.credential_ref, decision.credential_revision
+            )
+        except Exception as exc:  # noqa: BLE001 - resolver text may echo refs
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.CREDENTIAL_UNRESOLVED,
+                f"workload credential {decision.slot} is missing, revoked or "
+                "no longer at its admitted revision",
+            ) from exc
+
+    def _workload_decisions(self, request, now: datetime):
+        try:
+            return launch_authorizations(
+                request, self._settings.workload_profiles, now=now
+            )
+        except TimeoutError as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.CREDENTIAL_EXPIRED, str(exc)
+            ) from exc
+        except (PermissionError, ValueError) as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.AUTHORIZATION, str(exc)
+            ) from exc
+
+    async def _issue_session(self, request, storage, lease, slot, decision, now):
+        """Issue one read-only session, recording issuance before it happens.
+
+        A record still marked ``issuing`` means an earlier attempt's outcome
+        is unknown. That session is bounded by its own duration and holds only
+        read-only policies, so it is counted and left to expire; the stored
+        source key is never rotated or deleted.
+        """
+
+        try:
+            seconds = session_seconds(
+                decision,
+                now=now,
+                budget_end=datetime.fromisoformat(lease["budgetEndsAt"]),
+            )
+        except TimeoutError as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.CREDENTIAL_EXPIRED, str(exc)
+            ) from exc
+        source_value = await self._resolve_workload_secret(decision)
+        try:
+            source = parse_aws_source(source_value)
+        except ValueError as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.CREDENTIAL_UNRESOLVED, str(exc)
+            ) from exc
+        record = lease["sessions"].setdefault(
+            slot.name, {"renewals": -1, "uncertainIssuances": 0}
+        )
+        if record.get("state") == "issuing":
+            record["uncertainIssuances"] += 1
+        record.update(state="issuing", account=decision.account)
+        await asyncio.to_thread(
+            attachments.write_workload_lease,
+            storage,
+            lease,
+            ownership_token=request.ownership_token,
+        )
+        try:
+            session = await self._cloud_sessions.issue(
+                source=source,
+                role_arn=decision.role_arn,
+                session_name="moonmind-"
+                + hashlib.sha256(request.job_id.encode()).hexdigest()[:20],
+                duration_seconds=seconds,
+                policy_arns=READ_ONLY_POLICY_ARNS,
+            )
+        except CredentialIssueError as exc:
+            record.update(
+                state="issuing" if exc.uncertain else "failed", failureCode=exc.code
+            )
+            await asyncio.to_thread(
+                attachments.write_workload_lease,
+                storage,
+                lease,
+                ownership_token=request.ownership_token,
+            )
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.CREDENTIAL_ISSUANCE_FAILED,
+                f"cloud session issuance for {slot.name} failed: {exc.code}",
+            ) from None
+        record.pop("failureCode", None)
+        record.update(
+            state="issued",
+            expiresAt=session.expiration.isoformat(),
+            renewals=record["renewals"] + 1,
+        )
+        return session
+
+    async def _deliver_workload_credentials(
+        self, request: ContainerJobActivityRequest
+    ) -> list[str]:
+        """Deliver admitted workload credentials; return mount and env args.
+
+        Runs on every create, including retries and restarts, so each launch
+        receives freshly resolved values under a fresh authority check. The
+        job budget is fixed at first delivery and never extended by a retry.
+        """
+
+        now = datetime.now(timezone.utc)
+        pairs = self._workload_decisions(request, now)
+        if not pairs:
+            return []
+        storage = self._attachment_storage(request)
+        lease = await asyncio.to_thread(attachments.load_workload_lease, storage)
+        if lease is None:
+            budget_end = now + timedelta(seconds=request.request.spec.timeout_seconds)
+            lease = {"budgetEndsAt": budget_end.isoformat(), "sessions": {}}
+        files: dict[str, bytes] = {}
+        environment: dict[str, str] = {}
+        args: list[str] = []
+        for slot, decision in pairs:
+            if slot.issuer == "aws-sts":
+                session = await self._issue_session(
+                    request, storage, lease, slot, decision, now
+                )
+                files[slot.name] = session.credentials_file()
+                credentials_file = f"{WORKLOAD_CREDENTIALS_TARGET}/{slot.name}"
+                args.extend(
+                    (
+                        "--env",
+                        f"AWS_SHARED_CREDENTIALS_FILE={credentials_file}",
+                        "--env",
+                        "AWS_CONFIG_FILE=/dev/null",
+                        "--env",
+                        "AWS_EC2_METADATA_DISABLED=true",
+                    )
+                )
+            elif slot.delivery == "env":
+                environment[slot.environment_name] = (
+                    await self._resolve_workload_secret(decision)
+                )
+            else:
+                files[slot.name] = (
+                    await self._resolve_workload_secret(decision)
+                ).encode()
+        try:
+            await asyncio.to_thread(
+                attachments.write_workload_lease,
+                storage,
+                lease,
+                ownership_token=request.ownership_token,
+            )
+            env_file = await asyncio.to_thread(
+                attachments.deliver_workload_credentials,
+                storage,
+                ownership_token=request.ownership_token,
+                files=files,
+                environment=environment,
+            )
+        except (attachments.AttachmentStorageError, OSError) as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.WORKSPACE,
+                "workload credentials could not be delivered",
+            ) from exc
+        if files:
+            args.extend(
+                (
+                    "--mount",
+                    self._attachment_mount(
+                        storage,
+                        "workload-credentials/files",
+                        WORKLOAD_CREDENTIALS_TARGET,
+                        read_only=True,
+                    ),
+                )
+            )
+        if env_file is not None:
+            args.extend(("--env-file", str(env_file)))
+        return args
+
+    async def _renew_workload_sessions(
+        self, request: ContainerJobActivityRequest
+    ) -> None:
+        """Renew issued sessions near expiry, within the grant and job budget."""
+
+        storage = self._attachment_storage(request)
+        if storage is None or request.request.spec.workload_profile is None:
+            return
+        lease = await asyncio.to_thread(attachments.load_workload_lease, storage)
+        if not lease or not lease.get("sessions"):
+            return
+        now = datetime.now(timezone.utc)
+        budget_end = datetime.fromisoformat(lease["budgetEndsAt"])
+        if now >= budget_end:
+            return
+
+        def expires(record) -> datetime | None:
+            if record.get("state") != "issued":
+                return None
+            return datetime.fromisoformat(record["expiresAt"])
+
+        # A session lasting through the job budget never needs renewal.
+        due = {
+            name
+            for name, record in lease["sessions"].items()
+            if (expiry := expires(record)) is None
+            or (
+                expiry < budget_end
+                and expiry - now < timedelta(seconds=_SESSION_RENEWAL_MARGIN_SECONDS)
+            )
+        }
+        if not due:
+            return
+        for slot, decision in self._workload_decisions(request, now):
+            if slot.name not in due:
+                continue
+            try:
+                session = await self._issue_session(
+                    request, storage, lease, slot, decision, now
+                )
+            except ContainerJobBackendError as exc:
+                current = expires(lease["sessions"][slot.name])
+                if (
+                    exc.failure_class is ContainerJobFailureClass.CREDENTIAL_EXPIRED
+                    and current is not None
+                    and current > now
+                ):
+                    # The grant is too close to its end for another session;
+                    # the current one serves the job until it expires.
+                    continue
+                raise
+            try:
+                await asyncio.to_thread(
+                    attachments.replace_workload_credential_file,
+                    storage,
+                    ownership_token=request.ownership_token,
+                    name=slot.name,
+                    body=session.credentials_file(),
+                )
+            except (attachments.AttachmentStorageError, OSError) as exc:
+                raise ContainerJobBackendError(
+                    ContainerJobFailureClass.CREDENTIAL_ISSUANCE_FAILED,
+                    "renewed cloud session could not be delivered",
+                ) from exc
+            await asyncio.to_thread(
+                attachments.write_workload_lease,
+                storage,
+                lease,
+                ownership_token=request.ownership_token,
+            )
+
+    async def _delivered_values(
+        self, request: ContainerJobActivityRequest
+    ) -> list[str]:
+        storage = self._attachment_storage(request)
+        if storage is None:
+            return []
+        try:
+            return await asyncio.to_thread(
+                attachments.delivered_workload_values, storage
+            )
+        except OSError:
+            return []
 
     async def create_container(self, request: ContainerJobActivityRequest):
         if not request.resolved_workspace_ref or not request.resolved_image_ref:
@@ -2516,6 +2847,8 @@ class DockerContainerJobBackend:
             if spec.input_attachments is not None
             else [workspace_mount]
         )
+        mounts.extend(await self._deliver_target_credential(request))
+        credential_args = await self._deliver_workload_credentials(request)
         args = [
             "create",
             "--name",
@@ -2600,6 +2933,7 @@ class DockerContainerJobBackend:
             args.extend(("--mount", mount))
             resolved_cache_refs.append(cache.cache_ref)
         args.extend(await self._materialized_env(request))
+        args.extend(credential_args)
         scoped_host = None
         if scoped is not None:
             scoped_host = f"{scoped.gateway_ref}:{scoped_evidence['proxyAddress']}"
@@ -2801,6 +3135,60 @@ class DockerContainerJobBackend:
             ),
         ]
 
+    async def _deliver_target_credential(
+        self, request: ContainerJobActivityRequest
+    ) -> list[str]:
+        """Mount the authorized target-registry credential as a Docker config.
+
+        The API-owned decision travels with the request; the worker enforces
+        it, resolves the value, and writes it only to job-owned storage. The
+        value never enters argv, environment, the request or evidence. The
+        scanner image's own pull authority is a separate deployment source.
+        """
+
+        assessment = request.request.spec.image_assessment
+        if assessment is None or assessment.target_credential_ref is None:
+            return []
+        authorization = request.target_authorization
+        if (
+            authorization is None
+            or not authorization.authorized
+            or authorization.credential_ref != assessment.target_credential_ref
+        ):
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.IMAGE_USE_DENIED,
+                "target registry credential was not authorized for this job",
+            )
+        normalized = normalize_image_reference(assessment.image_reference)
+        self._enforce_authorized_scope(normalized, authorization)
+        credential = await self._resolve_credential(assessment.target_credential_ref)
+        registry = (
+            "https://index.docker.io/v1/"
+            if normalized.registry == "docker.io"
+            else normalized.registry
+        )
+        body = json.dumps(
+            {"auths": {registry: credential.docker_auth_entry()}}
+        ).encode()
+        storage = self._attachment_storage(request)
+        try:
+            await asyncio.to_thread(
+                attachments.deliver_credential,
+                storage,
+                body,
+                ownership_token=request.ownership_token,
+            )
+        except (attachments.AttachmentStorageError, OSError) as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.WORKSPACE,
+                "target registry credential could not be delivered",
+            ) from exc
+        return [
+            self._attachment_mount(
+                storage, "credentials", TARGET_AUTH_TARGET, read_only=True
+            )
+        ]
+
     def _output_root(self, request: ContainerJobActivityRequest) -> Path:
         storage = self._attachment_storage(request)
         if storage is not None:
@@ -2977,6 +3365,7 @@ class DockerContainerJobBackend:
         # here never fails the observation of container liveness/terminality.
         log_cursor = await self._collect_live_logs(request, ref)
         if state.get("Running"):
+            await self._renew_workload_sessions(request)
             return ContainerJobActivityResult(
                 containerRef=ref,
                 running=True,
@@ -3042,9 +3431,12 @@ class DockerContainerJobBackend:
             entries = await self._read_incremental_log_entries(
                 ref, since_dt, base_seq, timestamp_offset
             )
-            if request.request.spec.repository_scan is not None:
+            if _withholds_console(request.request.spec):
                 for entry in entries:
                     entry.text = WITHHELD_LOG
+            delivered = await self._delivered_values(request)
+            for entry in entries:
+                entry.text = _redact(entry.text, delivered)
             if not entries:
                 return request.log_cursor
             spool_dir.mkdir(parents=True, exist_ok=True)
@@ -3218,6 +3610,19 @@ class DockerContainerJobBackend:
 
     async def publish_evidence(self, request: ContainerJobActivityRequest):
         limit = self._settings.max_output_bytes
+        # The container has exited: take delivered values out of its mount,
+        # keeping them worker-only so this and any retried publication can
+        # redact them. Cleanup deletes them.
+        storage = self._attachment_storage(request)
+        if storage is not None:
+            try:
+                await asyncio.to_thread(
+                    attachments.retire_workload_credentials, storage
+                )
+            except OSError:
+                # Cleanup removes them again and reports a failure.
+                pass
+        delivered = await self._delivered_values(request)
         if request.container_ref is None:
             # ``container_ref`` is the only authority that a reconcile or create
             # Activity actually produced a container. A deterministic container
@@ -3233,7 +3638,7 @@ class DockerContainerJobBackend:
         else:
             ref = request.container_ref or self._name(request)
             code, stdout, stderr = await self._runner(("logs", ref))
-            if request.request.spec.repository_scan is not None:
+            if _withholds_console(request.request.spec):
                 # Scanner diagnostics may contain source/metadata the generic
                 # credential patterns cannot recognize. No raw console bytes
                 # cross either the live or terminal persistence boundary.
@@ -3243,10 +3648,10 @@ class DockerContainerJobBackend:
             # a non-TTY container ``docker logs`` writes container stdout/stderr
             # to the matching streams, so each is captured deterministically.
             stdout_raw = redact_sensitive_text(
-                stdout.decode("utf-8", errors="replace")
+                _redact(stdout.decode("utf-8", errors="replace"), delivered)
             ).encode("utf-8")
             stderr_raw = redact_sensitive_text(
-                stderr.decode("utf-8", errors="replace")
+                _redact(stderr.decode("utf-8", errors="replace"), delivered)
             ).encode("utf-8")
             combined_raw = stdout_raw + (
                 b"\n[stderr]\n" + stderr_raw if stderr_raw else b""
@@ -3272,8 +3677,7 @@ class DockerContainerJobBackend:
             request, f"{job}-stderr.txt", stderr_bytes
         )
 
-        manifest = await self._collect_declared_outputs(request)
-        storage = self._attachment_storage(request)
+        manifest = await self._collect_declared_outputs(request, delivered)
         if storage is not None and any(
             item.collection_status
             in {ArtifactCollectionStatus.REJECTED, ArtifactCollectionStatus.TRUNCATED}
@@ -3436,10 +3840,12 @@ class DockerContainerJobBackend:
         return buffer.getvalue(), used_files, used_bytes
 
     async def _collect_declared_outputs(
-        self, request: ContainerJobActivityRequest
+        self, request: ContainerJobActivityRequest, delivered: Sequence[str] = ()
     ) -> list[ContainerJobArtifact]:
         if request.request.spec.repository_scan is not None:
             return await self._collect_scanner_outputs(request)
+        if request.request.spec.image_assessment is not None:
+            return await self._collect_image_assessment_outputs(request)
         outputs = request.request.spec.outputs
         if not outputs or self._publish is None:
             return []
@@ -3449,6 +3855,13 @@ class DockerContainerJobBackend:
         manifest: list[ContainerJobArtifact] = []
         for entry in raw:
             payload = entry["payload"]
+            if payload is not None and delivered:
+                payload = _without_delivered(payload, entry["media_type"], delivered)
+                if payload is None:
+                    entry.update(
+                        status=ArtifactCollectionStatus.REJECTED,
+                        detail="output contains delivered credential material",
+                    )
             if payload is None:
                 manifest.append(
                     ContainerJobArtifact(
@@ -3519,11 +3932,19 @@ class DockerContainerJobBackend:
                 scan.modes
             ):
                 raise ValueError("scanner execution modes differ from admission")
-            if execution.database_digest != scan.database_digest:
+            # No database means the runner recorded why; any other identity
+            # than the admitted snapshot is invalid evidence.
+            if execution.database_digest not in (None, scan.database_digest) or (
+                execution.feed is not None
+                and execution.feed.snapshot is not None
+                and execution.feed.snapshot.snapshot_id != scan.database_digest
+            ):
                 raise ValueError("scanner database differs from admission")
             if len(execution.assets) > scan.max_files:
                 raise ValueError("scanner input exceeds admission")
             limitations.extend(execution.limitations)
+            if scan.database_digest and execution.database_digest is None:
+                limitations.append("feed_snapshot_unavailable")
         except (ValueError, TypeError):
             execution = None
             limitations.append("missing_or_invalid_execution_evidence")
@@ -3713,6 +4134,176 @@ class DockerContainerJobBackend:
         )
         return manifest
 
+    async def _collect_image_assessment_outputs(
+        self, request: ContainerJobActivityRequest
+    ):
+        """Check image, archive and SBOM evidence again before publication."""
+        storage = self._attachment_storage(request)
+        if storage is not None:
+            # The container has exited; its target credential is not needed.
+            await asyncio.to_thread(attachments.remove_credentials, storage)
+        if self._publish is None:
+            return []
+        spec = request.request.spec
+        assessment = spec.image_assessment
+        generate = assessment.operation == "sbom-generate"
+        native_name = "sbom" if generate else "report"
+        entries = await asyncio.to_thread(
+            self._build_output_entries, self._output_root(request), list(spec.outputs)
+        )
+        by_name = {e["name"]: e for e in entries}
+        manifest, limitations = [], []
+        terminal = str(request.terminal_state or "failed")
+        if terminal != "succeeded":
+            limitations.append(f"container_job_{terminal}")
+        bytes_remaining = self._settings.max_output_total_bytes
+        files_remaining = self._settings.max_output_files
+
+        def relative(name):
+            return f"{assessment.output_directory}/{name}.json"
+
+        async def publish(name, payload, *, limit):
+            nonlocal bytes_remaining, files_remaining
+            if len(payload) > min(limit, bytes_remaining) or files_remaining < 1:
+                raise ValueError("output exceeds the collection ceiling")
+            ref = await self._publish_artifact(
+                request, f"{request.job_id}-output-{name}.json", payload
+            )
+            bytes_remaining -= len(payload)
+            files_remaining -= 1
+            manifest.append(
+                ContainerJobArtifact(
+                    name=name,
+                    artifactRef=ref,
+                    sizeBytes=len(payload),
+                    sha256=hashlib.sha256(payload).hexdigest(),
+                    mediaType="application/json",
+                    relativePath=relative(name),
+                    collectionStatus="collected",
+                )
+            )
+            return ref
+
+        def rejected(name, detail):
+            manifest.append(
+                ContainerJobArtifact(
+                    name=name,
+                    relativePath=relative(name),
+                    collectionStatus="rejected",
+                    detail=detail,
+                )
+            )
+
+        execution = None
+        try:
+            # Sanitized once: the execution and summary artifacts both carry
+            # SBOM metadata the job read from its input.
+            execution = ImageExecution.model_validate(
+                _redact_strings(
+                    ImageExecution.model_validate_json(
+                        by_name["execution"]["payload"] or b""
+                    ).model_dump(mode="json", by_alias=True)
+                )
+            )
+            if (execution.operation, execution.target) != (
+                assessment.operation,
+                assessment.target,
+            ):
+                raise ValueError("image execution differs from admission")
+            if execution.database_digest not in (None, assessment.database_digest) or (
+                execution.feed is not None
+                and execution.feed.snapshot is not None
+                and execution.feed.snapshot.snapshot_id != assessment.database_digest
+            ):
+                raise ValueError("image database differs from admission")
+            limitations.extend(execution.limitations)
+            if assessment.database_digest and execution.database_digest is None:
+                limitations.append("feed_snapshot_unavailable")
+        except (ValueError, TypeError):
+            execution = None
+            limitations.append("missing_or_invalid_execution_evidence")
+        limitations.extend(await self._capture_limitations(request))
+        subject = execution.subject if execution else None
+        if subject is None:
+            limitations.append("target_identity_unavailable")
+        native_ref, safe, sbom = None, b"", None
+        try:
+            payload = by_name[native_name]["payload"]
+            if payload is None:
+                raise ValueError("native evidence unavailable")
+            if generate:
+                # Retained as a standard document, so it is checked rather
+                # than rewritten: credential-shaped text withholds it.
+                inventory, _ = inspect_sbom(payload, assessment.max_sbom_bytes)
+                text = payload.decode()
+                if inventory.format != "cyclonedx" or (
+                    redact_sensitive_text(text) != text
+                ):
+                    raise ValueError("generated SBOM is not admissible evidence")
+                safe = payload
+                limit = assessment.max_sbom_bytes
+            else:
+                safe = sanitize_native("trivy", payload, assessment.max_report_bytes)
+                limit = assessment.max_report_bytes
+            native_ref = await publish(native_name, safe, limit=limit)
+            if generate:
+                sbom = RetainedSbom(
+                    artifactRef=native_ref,
+                    sha256=hashlib.sha256(safe).hexdigest(),
+                    sizeBytes=len(safe),
+                    inventory=inventory,
+                )
+        except (SbomError, ValueError, TypeError, RecursionError, UnicodeDecodeError):
+            safe = b""
+            limitations.append("native_evidence_unavailable")
+            rejected(native_name, "Native evidence unavailable or failed checks.")
+        result = None
+        if not generate:
+            result = normalize_image_report(
+                safe,
+                subject_asset=subject.asset if subject else "unavailable",
+                exit_code=execution.exit_code if execution else None,
+                terminal_state=execution.state if execution else terminal,
+                native_ref=native_ref or "unavailable",
+            )
+        if execution is not None:
+            try:
+                await publish(
+                    "execution",
+                    execution.model_dump_json(by_alias=True).encode(),
+                    limit=assessment.max_report_bytes,
+                )
+            except ValueError:
+                limitations.append("execution_artifact_unavailable")
+                rejected("execution", "Execution evidence exceeds the output bound.")
+        else:
+            rejected("execution", "Execution evidence unavailable.")
+        if (
+            execution is None
+            or (result is not None and result.coverage == "partial")
+            or (generate and sbom is None)
+        ):
+            limitations.append("scanner_coverage_incomplete")
+        summary = ImageAssessmentSummary(
+            admission=assessment,
+            execution=execution,
+            subject=subject,
+            result=result,
+            nativeRef=native_ref,
+            sbom=sbom,
+            coverage="partial" if limitations else "complete",
+            limitations=sorted(set(limitations)),
+        )
+        try:
+            await publish(
+                "summary",
+                summary.model_dump_json(by_alias=True).encode(),
+                limit=assessment.max_report_bytes,
+            )
+        except ValueError:
+            rejected("summary", "Image assessment summary exceeds the output bound.")
+        return manifest
+
     async def _capture_limitations(
         self, request: ContainerJobActivityRequest
     ) -> list[str]:
@@ -3807,7 +4398,7 @@ class DockerContainerJobBackend:
             ),
             "message": (
                 WITHHELD_LOG
-                if request.request.spec.repository_scan is not None and request.message
+                if _withholds_console(request.request.spec) and request.message
                 else request.message
             ),
             "startedAt": request.started_at.isoformat() if request.started_at else None,
@@ -3840,6 +4431,11 @@ class DockerContainerJobBackend:
             # before capture).
             captured = await asyncio.to_thread(attachments.load_manifest, storage)
             diagnostics["inputAttachments"] = (captured or {}).get("inputs")
+            # Value-free issuance record: account, state, expiry, renewals,
+            # uncertain issuances and the issuer's original failure code.
+            lease = await asyncio.to_thread(attachments.load_workload_lease, storage)
+            if lease:
+                diagnostics["workloadCredentials"] = lease.get("sessions")
         if egress_evidence is not None:
             egress_evidence["launchAttestationRef"] = (
                 request.egress_attestation_ref
@@ -4071,6 +4667,13 @@ class DockerContainerJobBackend:
 
         storage = self._attachment_storage(request)
         if storage is not None:
+            try:
+                await asyncio.to_thread(
+                    attachments.remove_workload_credentials, storage
+                )
+            except OSError:
+                cleanup_succeeded = False
+                failure_code = "credential_cleanup_failed"
             try:
                 await self._release_attachments(request, storage)
             except (
