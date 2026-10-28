@@ -76,6 +76,26 @@ def test_every_retained_row_names_its_consumer_and_removal_condition() -> None:
     assert missing == []
 
 
+@pytest.mark.parametrize("field", ["sharedOperation", "missingOutcome"])
+def test_a_path_that_still_admits_must_map_to_a_shared_operation(
+    field: str,
+) -> None:
+    mapped = {"sharedOperation": "Shared op.", "missingOutcome": "Gap."}
+    mapped[field] = " "
+    with pytest.raises(ValueError, match="still admits new work must name"):
+        _record(
+            retirementClass=RetirementClass.ACTIVE_PRODUCT_PATH,
+            newAdmissionSource="moonmind.omnigent.execute:run_omnigent_execution",
+            **mapped,
+        )
+
+
+@pytest.mark.parametrize("field", ["sharedOperation", "missingOutcome"])
+def test_a_closed_path_names_no_shared_lifecycle_gap(field: str) -> None:
+    with pytest.raises(ValueError, match="only such a path may"):
+        _record(**{field: "Something."})
+
+
 @pytest.mark.parametrize(
     "surface",
     [

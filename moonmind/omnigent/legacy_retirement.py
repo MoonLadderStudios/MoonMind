@@ -89,6 +89,12 @@ class LegacyPathRecord(BaseModel):
     # The observable state that permits deleting the path together with this
     # row. It names what must migrate or drain, not a date or phase.
     removal_condition: str = Field(alias="removalCondition")
+    # For a path that still admits new work: the shared Omnigent lifecycle
+    # operation that would serve its consumer, and the concrete outcome that
+    # operation still lacks. Keeping a path live needs a named gap, not age.
+    # Both are empty exactly when the class no longer admits.
+    shared_operation: str = Field("", alias="sharedOperation")
+    missing_outcome: str = Field("", alias="missingOutcome")
 
     @property
     def admits_new_work(self) -> bool:
@@ -118,6 +124,15 @@ class LegacyPathRecord(BaseModel):
                 f"{self.path_id}: class {self.retirement_class.value!r} does not "
                 "admit new work, so it must not name a new-admission source"
             )
+        for name, value in (
+            ("shared operation", self.shared_operation),
+            ("missing outcome", self.missing_outcome),
+        ):
+            if admits != bool(value.strip()):
+                raise ValueError(
+                    f"{self.path_id}: a path that still admits new work must "
+                    f"name its {name}, and only such a path may"
+                )
         return self
 
 
@@ -170,6 +185,17 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "lifecycle, and no open history can schedule or retry a direct "
             "Codex launch."
         ),
+        sharedOperation=(
+            "``codex-native`` through ``generic-omnigent-host@1``, "
+            "already the unset default."
+        ),
+        missingOutcome=(
+            "API-key and custom-endpoint Codex Provider Profiles (only "
+            "``codex-oauth-home@1`` exists and the shared OAuth packs "
+            "forbid ``OPENAI_API_KEY``/``OPENAI_BASE_URL``), which "
+            "``profile_route_runtime`` routes here, and one session "
+            "reused across a run's steps (see the AgentSession row)."
+        ),
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.direct_claude_launch",
@@ -198,6 +224,17 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "lifecycle, and no open history can schedule or retry a direct "
             "Claude launch."
         ),
+        sharedOperation=(
+            "``claude-native`` through ``generic-omnigent-host@1``, "
+            "already the unset default."
+        ),
+        missingOutcome=(
+            "API-key and custom-endpoint Claude Provider Profiles "
+            "(MiniMax via ``ANTHROPIC_BASE_URL``; the shared OAuth packs "
+            "forbid ``ANTHROPIC_API_KEY``), and the direct strategy's "
+            "``--effort``, ``ANTHROPIC_MODEL`` override, "
+            "``ScheduleWakeup`` deny and slash-command passthrough."
+        ),
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.managed_runtime_launcher",
@@ -223,6 +260,15 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         removalCondition=(
             "Both direct launch rows are deleted. The Codex and Claude CLIs "
             "and Node leave the application image in the same change."
+        ),
+        sharedOperation=(
+            "The generic host launcher, workspace, credential "
+            "materializers and janitor under "
+            "``moonmind.omnigent.host_services``."
+        ),
+        missingOutcome=(
+            "Every outcome the two direct launch rows still name; the "
+            "launcher has no consumer of its own."
         ),
     ),
     LegacyPathRecord(
@@ -257,6 +303,15 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "The direct Codex launch row is deleted and no open history "
             "starts, signals or replays a ``MoonMind.AgentSession`` child."
         ),
+        sharedOperation=(
+            "Bridge sessions with ``sendMessage``, ``interruptTurn``, "
+            "steering and attested host resume."
+        ),
+        missingOutcome=(
+            "One provider session reused across a run's steps with "
+            "same-epoch reuse; shared session identity is derived per "
+            "step execution (``control_plane.identities``)."
+        ),
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.profile_bound_realizer",
@@ -285,6 +340,17 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "Codex work and no open plan or history records "
             "``codex-profile-bound@1``."
         ),
+        sharedOperation=(
+            "``generic-omnigent-host@1``, a superset for on-demand Codex."
+        ),
+        missingOutcome=(
+            "Static-connected Codex (``codex-static@1``); the generic "
+            "host selector admits only on-demand host modes. The "
+            "generic-qualification opt-out and "
+            "``restore_legacy_or_direct_default`` rollback controls "
+            "select this realizer on purpose and lose their meaning once "
+            "it closes."
+        ),
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.profile_bound_execution",
@@ -304,6 +370,14 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "recorded histories."
         ),
         removalCondition="The profile-bound realizer row is deleted.",
+        sharedOperation=(
+            "The generic realizer's execution, cancellation and cleanup."
+        ),
+        missingOutcome=(
+            "Whatever the profile-bound realizer row names; plan "
+            "compilation also still imports this module's "
+            "persisted-launch helpers."
+        ),
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.oauth_host_runtime",
@@ -331,6 +405,16 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "maintenance drains and revalidates hosts through the shared "
             "host lifecycle."
         ),
+        sharedOperation=(
+            "``codex-oauth-home@1`` materialization and attestation's "
+            "ended-login check in ``host_services``."
+        ),
+        missingOutcome=(
+            "OAuth credential maintenance (draining bound hosts before an"
+            " OAuth mutation, revalidating a reconnected or validated "
+            "profile) and the OAuth host-lease janitor, which call this "
+            "runtime whichever realizer ran."
+        ),
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.codex_static_host_startup",
@@ -356,6 +440,13 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         removalCondition=(
             "Static-connected Codex runs on the shared host image without "
             "this wrapper and no deployment enables the Compose profile."
+        ),
+        sharedOperation=(
+            "The shared host image with a static Host Class."
+        ),
+        missingOutcome=(
+            "Generic static-connected host support (attach, drain and "
+            "no-remove semantics) for ``codex-static@1``."
         ),
     ),
     LegacyPathRecord(
@@ -383,6 +474,13 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "Static-connected Claude runs on the shared host image without "
             "this wrapper and no deployment enables the Compose profile."
         ),
+        sharedOperation=(
+            "The shared host image with a static Host Class."
+        ),
+        missingOutcome=(
+            "Generic static-connected host support (attach, drain and "
+            "no-remove semantics) for ``claude-static@1``."
+        ),
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.projection_host_startup",
@@ -407,6 +505,13 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         removalCondition=(
             "Runner projections start from the shared host image and no "
             "deployment enables the ``omnigent-host`` profile."
+        ),
+        sharedOperation=(
+            "The shared host image expression."
+        ),
+        missingOutcome=(
+            "A runner-projection start path on the shared image; this "
+            "service still resolves the legacy image variable."
         ),
     ),
     LegacyPathRecord(
@@ -435,6 +540,14 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         removalCondition=(
             "Each alias completes its obsolete-configuration deprecation "
             "window in ``OBSOLETE_CONFIGURATION``."
+        ),
+        sharedOperation=(
+            "The canonical shared-image variable."
+        ),
+        missingOutcome=(
+            "Nothing functional; deployments still supplying the old "
+            "variables keep their pinned image until the deprecation "
+            "window ends."
         ),
     ),
     LegacyPathRecord(
@@ -466,6 +579,14 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "``omnigent-opencode@1`` and the variable completes its "
             "obsolete-configuration deprecation window."
         ),
+        sharedOperation=(
+            "``omnigent-opencode@2`` on the shared image, already "
+            "selected for fresh work."
+        ),
+        missingOutcome=(
+            "Nothing for new work; recorded ``omnigent-opencode@1`` plans"
+            " and explicit requests for it still resolve this variable."
+        ),
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.pi_host_image_alias",
@@ -485,6 +606,13 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "still resolves this variable."
         ),
         removalCondition="Pi runs from the shared host image through a runtime pack.",
+        sharedOperation=(
+            "A runtime pack on the shared host image."
+        ),
+        missingOutcome=(
+            "A Pi runtime pack; ``omnigent-pi@1`` has only its "
+            "per-provider image."
+        ),
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.native_ui_compat",
@@ -503,6 +631,13 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "Workflow Detail and native chat read only the generic bridge "
             "event projection and no retained session needs the "
             "compatibility classifier."
+        ),
+        sharedOperation=(
+            "The generic bridge event projection."
+        ),
+        missingOutcome=(
+            "A projection for retained direct and embedded sessions whose"
+            " recorded events only this classifier reads."
         ),
     ),
     LegacyPathRecord(
@@ -535,8 +670,10 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         removalCondition=(
             "``/embedded-transport-drain`` reports drained on every "
             "deployment: zero active embedded sessions and host leases and "
-            "observed-empty pending cleanup. Read-only history decoding and "
-            "``embedded=1`` native UI remain."
+            "observed-empty pending cleanup. Admitted-key create retries "
+            "reattach only rows that count as active embedded sessions, so a "
+            "drained report also rules out a retry recreating a consumer. "
+            "Read-only history decoding and ``embedded=1`` native UI remain."
         ),
     ),
 )
