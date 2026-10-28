@@ -78,6 +78,7 @@ def target():
     app.shutdown()
     gateway.shutdown()
     fixture.Gateway.denied.clear()
+    fixture.App.posted.clear()
 
 
 def origin(app) -> str:
@@ -370,6 +371,7 @@ class Harness:
         )
         await backend._collect_live_logs(request, request.container_ref)
         await backend.publish_evidence(request)
+        self.backend, self.request = backend, request
         summary = json.loads(self.published[f"{accepted.job_id}-output-summary.json"])
         # The identity secret's lifetime ends with the container.
         assert not storage.credentials.exists()
@@ -529,6 +531,30 @@ async def test_failed_login_cannot_report_clean(
     assert "authentication_failed" in summary["limitations"]
 
 
+async def test_publication_retry_still_redacts_the_identity_secret(
+    environment, tmp_path, monkeypatch, target
+):
+    app, gateway = target
+    harness = Harness(environment, tmp_path, monkeypatch, app, gateway)
+    web = assessment(app, identity=identity("alice"))
+    _, _, storage, accepted, _ = await harness.run(web, "retry")
+    # ZAP evidence can echo an opaque password that no pattern recognizes.
+    report = storage.outputs / web.output_directory / "report.json"
+    native = json.loads(report.read_text())
+    native["site"][0]["alerts"][0]["instances"][0]["evidence"] = fixture.PASSWORDS[
+        "alice"
+    ]
+    report.write_text(json.dumps(native))
+    harness.published.clear()
+    await harness.backend.publish_evidence(harness.request)
+    assert f"{accepted.job_id}-output-report.json" in harness.published
+    harness.assert_no_secret()
+    # Cleanup removes the value kept for redaction.
+    assert list(storage.workload_credentials.rglob("credential-secret"))
+    await harness.backend.cleanup(harness.request)
+    assert not list(storage.root.rglob("credential-secret"))
+
+
 async def test_bearer_identity_is_verified_only_when_its_token_works(
     environment, tmp_path, monkeypatch, target
 ):
@@ -561,6 +587,22 @@ async def test_bearer_identity_is_verified_only_when_its_token_works(
         assert "authentication_failed" in summary["limitations"]
         assert "GET /account/settings" not in summary["coverage"]["testedRoutes"]
     harness.assert_no_secret()
+
+
+async def test_unadmitted_methods_never_reach_the_target(
+    environment, tmp_path, monkeypatch, target
+):
+    app, gateway = target
+    harness = Harness(environment, tmp_path, monkeypatch, app, gateway)
+    summary, *_ = await harness.run(
+        assessment(app, mode="active", activeStrength="low"), "methods"
+    )
+    # Active crawling submits forms, but only where a route admits POST: the
+    # login form reaches the app while the home page's GET-only form does not.
+    assert "/login" in fixture.App.posted and "/feedback" not in fixture.App.posted
+    assert "POST request-denied.moonmind.invalid" in fixture.Gateway.denied
+    assert "POST /login" in summary["coverage"]["testedRoutes"]
+    assert not any("/feedback" in r for r in summary["coverage"]["testedRoutes"])
 
 
 async def test_admitted_rate_bounds_every_request_zap_sends(

@@ -36,9 +36,11 @@ API_FILES = {"openapi": "definition.json", "graphql": "schema.graphql"}
 CREDENTIAL_TARGET = "/run/moonmind-web-credential"
 SECRET_ENV = "MOONMIND_WEB_SECRET"
 #: The only Automation Framework jobs a plan may contain. No Nuclei, template
-#: catalog or script job is reachable from an admission.
+#: catalog or caller script is reachable from an admission; the one script is
+#: MoonMind's request guard.
 PLAN_JOB_TYPES = frozenset(
     {
+        "script",
         "passiveScan-config",
         "requestor",
         "openapi",
@@ -83,6 +85,64 @@ if [ -r /run/moonmind-web-credential/secret ]; then
 fi
 exec zap.sh -cmd -autorun "$out/plan.yaml" "$@"
 """
+
+
+#: The request guard's name and the unresolvable host it sends refused
+#: requests to; the egress proxy refuses that host too.
+GUARD_SCRIPT = "moonmind-request-guard"
+DENIED_HOST = "request-denied.moonmind.invalid"
+# ZAP contexts scope URLs only, while the spider, the AJAX spider's browser
+# and active scan rules choose their own methods. Every request ZAP sends,
+# from any component, passes this HTTP sender script first; one to the origin
+# host outside the admitted routes and methods is redirected to DENIED_HOST.
+_GUARD = """var SCOPE = %s;
+var URI = Java.type("org.apache.commons.httpclient.URI");
+function within(path, prefix) {
+  return prefix === "/" || path === prefix || path.indexOf(prefix + "/") === 0;
+}
+function admitted(path, method) {
+  var i;
+  for (i = 0; i < SCOPE.exclusions.length; i++) {
+    if (within(path, SCOPE.exclusions[i])) return false;
+  }
+  for (i = 0; i < SCOPE.routes.length; i++) {
+    var route = SCOPE.routes[i];
+    if (within(path, route.path) && route.methods.indexOf(method) >= 0) return true;
+  }
+  return false;
+}
+function sendingRequest(msg, initiator, helper) {
+  var header = msg.getRequestHeader();
+  var uri = header.getURI();
+  var host = uri.getHost();
+  if (host === null || String(host).toLowerCase() !== SCOPE.host) return;
+  var raw = uri.getEscapedPath();
+  var path = raw === null || String(raw) === "" ? "/" : String(raw);
+  if (!admitted(path, String(header.getMethod()).toUpperCase())) {
+    header.setURI(new URI("http://" + SCOPE.denied + path, true));
+  }
+}
+function responseReceived(msg, initiator, helper) {}
+"""
+
+
+def _guard_job(assessment: WebAssessment) -> dict:
+    scope = {
+        "host": urlsplit(assessment.origin).hostname,
+        "routes": [{"path": r.path, "methods": r.methods} for r in assessment.routes],
+        "exclusions": assessment.exclusions,
+        "denied": DENIED_HOST,
+    }
+    return {
+        "type": "script",
+        "parameters": {
+            "action": "add",
+            "type": "httpsender",
+            "engine": "ECMAScript : Graal.js",
+            "name": GUARD_SCRIPT,
+            "inline": _GUARD % json.dumps(scope, sort_keys=True),
+        },
+    }
 
 
 def _url_regex(origin: str, prefix: str) -> str:
@@ -153,10 +213,11 @@ def build_web_assessment_plan(assessment: WebAssessment) -> dict:
     budget = a.timeout_seconds
     discovery_minutes = _minutes(budget * 0.3 / max(1, len(a.discovery)))
     jobs: list[dict] = [
+        _guard_job(a),
         {
             "type": "passiveScan-config",
             "parameters": {"scanOnlyInScope": True, "maxAlertsPerRule": 10},
-        }
+        },
     ]
     if identity is not None:
         # Anonymous first, then as the identity: authentication is checked
@@ -211,8 +272,10 @@ def build_web_assessment_plan(assessment: WebAssessment) -> dict:
                         "maxChildren": a.max_children,
                         "threadCount": 1,
                         # Crawling follows links; submitting forms is an
-                        # application action reserved for active mode.
-                        "postForm": a.mode == "active",
+                        # application action reserved for active mode, and
+                        # the guard refuses posts to routes without POST.
+                        "postForm": a.mode == "active"
+                        and any("POST" in r.methods for r in a.routes),
                         "parseRobotsTxt": False,
                         "parseSitemapXml": False,
                     },
@@ -266,7 +329,9 @@ def build_web_assessment_plan(assessment: WebAssessment) -> dict:
         "env": {
             "contexts": [context],
             "parameters": {
-                "failOnError": False,
+                # An error, such as a guard ZAP cannot load, ends the plan
+                # before further requests; the reports still run.
+                "failOnError": True,
                 "failOnWarning": False,
                 "continueOnFailure": True,
                 "progressToStdout": True,
@@ -283,6 +348,7 @@ def _reports(a: WebAssessment, out: str, *, passive: bool) -> list[dict]:
     return [
         {
             "type": "report",
+            "alwaysRun": True,
             "parameters": {
                 "template": "traditional-json-plus",
                 "reportDir": out,
@@ -292,6 +358,7 @@ def _reports(a: WebAssessment, out: str, *, passive: bool) -> list[dict]:
         },
         {
             "type": "export",
+            "alwaysRun": True,
             "parameters": {
                 "context": CONTEXT,
                 "type": "har",
@@ -578,6 +645,23 @@ def _load(body: bytes | None, kind: str):
     return value
 
 
+def _objects(value, kind: str) -> list[dict]:
+    """A list of JSON objects; anything else is malformed evidence."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(v, dict) for v in value):
+        raise WebEvidenceError(f"{kind}_malformed")
+    return value
+
+
+def _object(value, kind: str) -> dict:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise WebEvidenceError(f"{kind}_malformed")
+    return value
+
+
 def _alerts(report: dict | None) -> list[tuple[dict, dict]]:
     if report is None:
         return []
@@ -609,9 +693,9 @@ def sanitize_report(body: bytes, secrets: Sequence[str], limit: int) -> bytes:
     """Native ZAP JSON with credentials removed and bodies bounded."""
     scrub = _Scrubber(secrets)
     report = _load(body, "report")
-    for site in report.get("site") or []:
-        for alert in site.get("alerts") or []:
-            for instance in alert.get("instances") or []:
+    for site in _objects(report.get("site"), "report"):
+        for alert in _objects(site.get("alerts"), "report"):
+            for instance in _objects(alert.get("instances"), "report"):
                 for key in ("request-header", "response-header"):
                     if key in instance:
                         instance[key] = scrub.header_block(instance[key], 4096)
@@ -629,25 +713,26 @@ def sanitize_messages(body: bytes, secrets: Sequence[str], limit: int) -> bytes:
     """HAR without credentials, session values, login bodies or large content."""
     scrub = _Scrubber(secrets)
     har = _load(body, "messages")
-    entries = (har.get("log") or {}).get("entries")
+    entries = _object(har.get("log"), "messages").get("entries")
     if not isinstance(entries, list):
         raise WebEvidenceError("messages_malformed")
-    for entry in entries:
-        for side in ("request", "response"):
-            message = entry.get(side) or {}
-            for header in message.get("headers") or []:
+    for entry in _objects(entries, "messages"):
+        request = _object(entry.get("request"), "messages")
+        response = _object(entry.get("response"), "messages")
+        for message in (request, response):
+            for header in _objects(message.get("headers"), "messages"):
                 if str(header.get("name", "")).lower() in SENSITIVE_HEADERS:
                     header["value"] = "[REDACTED]"
-            for cookie in message.get("cookies") or []:
+            for cookie in _objects(message.get("cookies"), "messages"):
                 cookie["value"] = "[REDACTED]"
-        post = (entry.get("request") or {}).get("postData")
-        if isinstance(post, dict):
+        post = _object(request.get("postData"), "messages")
+        if post:
             # Form posts carry credentials; only their shape is retained.
             post["text"] = "[REDACTED]" if post.get("text") else ""
-            for param in post.get("params") or []:
+            for param in _objects(post.get("params"), "messages"):
                 param["value"] = "[REDACTED]"
-        content = (entry.get("response") or {}).get("content")
-        if isinstance(content, dict) and "text" in content:
+        content = _object(response.get("content"), "messages")
+        if "text" in content:
             content["text"] = scrub.text(content["text"], EXCERPT_BYTES)
     safe = _scrub_tree(har, scrub)
     payload = json.dumps(safe, sort_keys=True, separators=(",", ":")).encode()
@@ -826,20 +911,23 @@ def summarize_web_assessment(
     authentication = None
     if identity is not None:
         try:
-            # The first export holds the verification requests before any
-            # attack traffic, in the order they were sent.
+            # The final export holds every message in the order it was sent,
+            # so verification checks during active testing count too; the
+            # passive export stands in when active testing never finished.
             exchanged = _entries(
-                early_messages if a.mode == "active" else final_messages
+                final_messages if final_messages is not None else early_messages
             )
         except WebEvidenceError:
             exchanged = []
-        # Unsent site-tree nodes carry no response and prove nothing.
+        # Unsent site-tree nodes carry no response and prove nothing, and
+        # attacks on the route alter its query.
         verify_responses = [
             e.get("response") or {}
             for e in exchanged
             if (e.get("response") or {}).get("status")
-            if _split(str((e.get("request") or {}).get("url", "")))
-            == (a.origin, identity.verification_path)
+            for url in [str((e.get("request") or {}).get("url", ""))]
+            if _split(url) == (a.origin, identity.verification_path)
+            and not urlsplit(url).query
             and str((e.get("request") or {}).get("method", "GET")).upper() == "GET"
         ]
         authentication = _authentication(identity, verify_responses, challenges)
