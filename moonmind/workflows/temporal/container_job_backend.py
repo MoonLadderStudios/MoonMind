@@ -126,6 +126,19 @@ from moonmind.security.workload_credentials import (
     launch_authorizations,
     parse_aws_source,
     session_seconds,
+    web_identity_authorization,
+)
+from moonmind.security.web_assessments import (
+    API_FILES,
+    API_INPUT,
+    CREDENTIAL_TARGET as WEB_CREDENTIAL_TARGET,
+    WEB_OUTPUT_FILES,
+    WebEvidenceError,
+    check_api_definition,
+    render_web_assessment_plan,
+    sanitize_messages,
+    sanitize_report,
+    summarize_web_assessment,
 )
 from moonmind.security.workload_profiles import (
     WORKLOAD_CREDENTIALS_TARGET,
@@ -579,7 +592,11 @@ class _CapacityWait(RuntimeError):
 
 def _withholds_console(spec) -> bool:
     """Scanner console output can repeat inputs; evidence is the checked output."""
-    return spec.repository_scan is not None or spec.image_assessment is not None
+    return (
+        spec.repository_scan is not None
+        or spec.image_assessment is not None
+        or spec.web_assessment is not None
+    )
 
 
 class DockerContainerJobBackend:
@@ -2848,6 +2865,7 @@ class DockerContainerJobBackend:
             else [workspace_mount]
         )
         mounts.extend(await self._deliver_target_credential(request))
+        mounts.extend(await self._prepare_web_assessment(request))
         credential_args = await self._deliver_workload_credentials(request)
         args = [
             "create",
@@ -3191,6 +3209,75 @@ class DockerContainerJobBackend:
         return [
             self._attachment_mount(
                 storage, "credentials", TARGET_AUTH_TARGET, read_only=True
+            )
+        ]
+
+    async def _prepare_web_assessment(
+        self, request: ContainerJobActivityRequest
+    ) -> list[str]:
+        """Check the definition, write the plan and deliver the identity secret.
+
+        Runs on every create. The plan is rendered from the admitted
+        assessment alone; the secret is a read-only file outside the plan,
+        argv and environment, and is removed once the container exits.
+        """
+
+        web = request.request.spec.web_assessment
+        if web is None:
+            return []
+        storage = self._attachment_storage(request)
+        if web.api_definition is not None:
+            captured = storage.inputs / API_INPUT / API_FILES[web.api_definition.format]
+            try:
+                body = await asyncio.to_thread(captured.read_bytes)
+                check_api_definition(web, body)
+            except (OSError, WebEvidenceError) as exc:
+                raise ContainerJobBackendError(
+                    ContainerJobFailureClass.AUTHORIZATION,
+                    "API definition is unreadable or outside the admitted scope",
+                ) from exc
+        try:
+            await asyncio.to_thread(
+                attachments.write_plan,
+                storage.outputs / web.output_directory,
+                render_web_assessment_plan(web),
+            )
+        except OSError as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.WORKSPACE,
+                "web assessment plan could not be written",
+            ) from exc
+        try:
+            decision = web_identity_authorization(
+                request, now=datetime.now(timezone.utc)
+            )
+        except TimeoutError as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.CREDENTIAL_EXPIRED, str(exc)
+            ) from exc
+        except PermissionError as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.AUTHORIZATION, str(exc)
+            ) from exc
+        if decision is None:
+            return []
+        secret = await self._resolve_workload_secret(decision)
+        try:
+            await asyncio.to_thread(
+                attachments.deliver_credential,
+                storage,
+                secret.encode(),
+                ownership_token=request.ownership_token,
+                file_name="secret",
+            )
+        except (attachments.AttachmentStorageError, OSError) as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.WORKSPACE,
+                "web identity credential could not be delivered",
+            ) from exc
+        return [
+            self._attachment_mount(
+                storage, "credentials", WEB_CREDENTIAL_TARGET, read_only=True
             )
         ]
 
@@ -3851,6 +3938,8 @@ class DockerContainerJobBackend:
             return await self._collect_scanner_outputs(request)
         if request.request.spec.image_assessment is not None:
             return await self._collect_image_assessment_outputs(request)
+        if request.request.spec.web_assessment is not None:
+            return await self._collect_web_assessment_outputs(request)
         outputs = request.request.spec.outputs
         if not outputs or self._publish is None:
             return []
@@ -4307,6 +4396,127 @@ class DockerContainerJobBackend:
             )
         except ValueError:
             rejected("summary", "Image assessment summary exceeds the output bound.")
+        return manifest
+
+    async def _collect_web_assessment_outputs(
+        self, request: ContainerJobActivityRequest
+    ):
+        """Sanitize ZAP's native evidence and publish it with its summary.
+
+        Reads whatever exists, so a timeout or cancellation during active
+        testing still publishes the passive phase. The identity secret is
+        read once to scrub every copy, then removed with its directory.
+        """
+        storage = self._attachment_storage(request)
+        secrets: list[str] = []
+        if storage is not None:
+            secret = storage.credentials / "secret"
+            if secret.is_file() and not secret.is_symlink():
+                secrets.append(await asyncio.to_thread(secret.read_text))
+            await asyncio.to_thread(attachments.remove_credentials, storage)
+        if self._publish is None:
+            return []
+        spec = request.request.spec
+        web = spec.web_assessment
+        entries = await asyncio.to_thread(
+            self._build_output_entries, self._output_root(request), list(spec.outputs)
+        )
+        payloads = {e["name"]: e["payload"] for e in entries}
+        manifest: list[ContainerJobArtifact] = []
+        bytes_remaining = self._settings.max_output_total_bytes
+        files_remaining = self._settings.max_output_files
+        limit = web.max_report_bytes
+
+        async def publish(name, payload, *, media_type, relative_path):
+            nonlocal bytes_remaining, files_remaining
+            if len(payload) > min(limit, bytes_remaining) or files_remaining < 1:
+                manifest.append(
+                    ContainerJobArtifact(
+                        name=name,
+                        relativePath=relative_path,
+                        collectionStatus="rejected",
+                        detail="Output exceeds the collection ceiling.",
+                    )
+                )
+                return None
+            suffix = os.path.splitext(relative_path)[1]
+            ref = await self._publish_artifact(
+                request, f"{request.job_id}-output-{name}{suffix}", payload
+            )
+            bytes_remaining -= len(payload)
+            files_remaining -= 1
+            manifest.append(
+                ContainerJobArtifact(
+                    name=name,
+                    artifactRef=ref,
+                    sizeBytes=len(payload),
+                    sha256=hashlib.sha256(payload).hexdigest(),
+                    mediaType=media_type,
+                    relativePath=relative_path,
+                    collectionStatus="collected",
+                )
+            )
+            return ref
+
+        limitations: list[str] = []
+        refs: dict[str, str | None] = dict.fromkeys(WEB_OUTPUT_FILES)
+        safe: dict[str, bytes | None] = dict.fromkeys(WEB_OUTPUT_FILES)
+        for output in spec.outputs:
+            name, relative = output.name, output.relative_path
+            payload = payloads.get(name)
+            if payload is None:
+                manifest.append(
+                    ContainerJobArtifact(
+                        name=name,
+                        relativePath=relative,
+                        collectionStatus="missing",
+                        detail="ZAP did not produce this output.",
+                    )
+                )
+                continue
+            sanitize = sanitize_report if relative.endswith(".json") else sanitize_messages
+            try:
+                safe[name] = sanitize(payload, secrets, limit)
+            except WebEvidenceError as exc:
+                limitations.append(f"{name}_{exc}")
+                safe[name] = None
+                manifest.append(
+                    ContainerJobArtifact(
+                        name=name,
+                        relativePath=relative,
+                        collectionStatus="rejected",
+                        detail="Native evidence is malformed or exceeds its bound.",
+                    )
+                )
+                continue
+            refs[name] = await publish(
+                name, safe[name], media_type="application/json", relative_path=relative
+            )
+        plan_ref = await publish(
+            "plan",
+            render_web_assessment_plan(web),
+            media_type="application/yaml",
+            relative_path=f"{web.output_directory}/plan.yaml",
+        )
+        summary = summarize_web_assessment(
+            web,
+            report=safe["report"],
+            messages=safe["messages"],
+            passive_report=safe["passive-report"],
+            passive_messages=safe["passive-messages"],
+            exit_code=request.exit_code,
+            terminal_state=str(request.terminal_state or "failed"),
+            native_ref=refs["report"] or refs["passive-report"],
+            messages_ref=refs["messages"] or refs["passive-messages"],
+            plan_ref=plan_ref,
+            limitations=limitations,
+        )
+        await publish(
+            "summary",
+            summary.model_dump_json(by_alias=True).encode(),
+            media_type="application/json",
+            relative_path=f"{web.output_directory}/summary.json",
+        )
         return manifest
 
     async def _capture_limitations(

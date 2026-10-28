@@ -353,6 +353,11 @@ class ContainerJobService:
             update={"spec": resolve_profile_job(request.spec, profiles)}
         )
         scope = self._capability.assessment_scope if self._capability else None
+        if request.spec.web_assessment is not None and scope is None:
+            # Reaching a target does not authorize acting on it.
+            raise ContainerJobScopeDeniedError(
+                "web assessments run only inside an admitted assessment scope"
+            )
         if scope is not None:
             try:
                 resolved_job_within_scope(request.spec, scope, profiles)

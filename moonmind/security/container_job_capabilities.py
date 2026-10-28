@@ -71,7 +71,9 @@ def container_job_matches_capability(
     if scope is not None:
         if not selection_within_scope(request.spec, scope):
             return False
-    elif profile is not None and profile.assessment_ref is not None:
+    elif (
+        profile is not None and profile.assessment_ref is not None
+    ) or request.spec.web_assessment is not None:
         return False
     source = request.source
     session_id = (

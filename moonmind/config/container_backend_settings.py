@@ -228,6 +228,13 @@ class ContainerBackendSettings:
                         raise ValueError(
                             "image assessment egress may reach only its registry"
                         )
+                if request.spec.web_assessment is not None:
+                    from moonmind.security.web_assessments import web_policy_admits
+
+                    if not web_policy_admits(policy, request.spec.web_assessment):
+                        raise ValueError(
+                            "web assessment egress may reach only admitted targets"
+                        )
                 return policy
         raise ValueError("egress policy is not deployment-authorized")
 
