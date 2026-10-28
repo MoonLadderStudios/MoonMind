@@ -455,16 +455,15 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "get_opencode_host_image_ref"
         ),
         consumer=(
-            "Fresh and admitted ``opencode-native`` work, which selects "
-            "``omnigent-opencode@1``: this is the only Host Class whose image "
-            "carries the bootstrap server/host compatibility quarantine. "
-            "Deployments that pin the OpenCode host use this variable."
+            "Plans and retries that recorded ``omnigent-opencode@1`` and "
+            "explicit ``omnigent.hostClassRef`` requests for it. Fresh "
+            "``opencode-native`` work selects the shared-image "
+            "``omnigent-opencode@2``. Deployments that pin the OpenCode host "
+            "through this variable still have it judged by bootstrap."
         ),
         removalCondition=(
-            "The shared-image Host Class carries the same compatibility "
-            "quarantine, fresh OpenCode work selects "
-            "``omnigent-opencode@2``, no open plan or history records "
-            "``omnigent-opencode@1``, and the variable completes its "
+            "No open plan or retained history records "
+            "``omnigent-opencode@1`` and the variable completes its "
             "obsolete-configuration deprecation window."
         ),
     ),

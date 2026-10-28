@@ -181,10 +181,11 @@ omnigent-claude@1    claude-native    + claude-native-pack@1    + claude-oauth-h
 omnigent-opencode@2  opencode-native  + opencode-native-pack@1  + opencode-auth-json@1, none@1
 ```
 
-(Fresh and admitted OpenCode work still selects `omnigent-opencode@1`: only
-the OpenCode image variable carries the bootstrap server/host compatibility
-quarantine. `@2` is the shared-image row that replaces it once the shared
-image carries the same quarantine; see the `omnigent.legacy.opencode_host_image_alias`
+(Fresh OpenCode work selects `omnigent-opencode@2`. It carries the same
+bootstrap server/host compatibility quarantine as the OpenCode image: Host
+Class selection requires a ready OpenCode verdict for the exact shared digest
+and server. `omnigent-opencode@1` resolves only plans that recorded it and
+explicit requests; see the `omnigent.legacy.opencode_host_image_alias`
 retirement row.)
 
 Separate classes reference the same `OMNIGENT_SHARED_HOST_IMAGE_REF` digest without conflating harness support. Each class declares only its own harness, runtime pack, and materializers, so a shared image never authorizes every installed runtime. One-harness admission is enforced at selection (the pack must own the harness, the materializers must be allowlisted) and again at planning (the Host Class must declare the plan's harness implementation).

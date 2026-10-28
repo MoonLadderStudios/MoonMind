@@ -209,7 +209,7 @@ register_harness_product(
             "harnessId": "opencode-native",
             "aliases": ["opencode"],
             "executionTargetRef": "omnigent-opencode@1",
-            "hostClassRef": "omnigent-opencode@1",
+            "hostClassRef": "omnigent-opencode@2",
             "materializerRef": "opencode-auth-json@1",
             "authModel": "own-auth",
         }

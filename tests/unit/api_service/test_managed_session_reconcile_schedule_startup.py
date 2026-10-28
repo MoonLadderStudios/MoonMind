@@ -35,8 +35,15 @@ async def test_inventory_maintenance_retries_failure_and_propagates_shutdown(mon
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "evidence_key",
+    # A distinct shared image carries its own verdict because fresh OpenCode
+    # work launches it through omnigent-opencode@2.
+    ["opencodeHostCompatibility", "sharedHostOpencodeCompatibility"],
+)
 async def test_image_sync_blocks_a_quarantined_opencode_host(
     monkeypatch: pytest.MonkeyPatch,
+    evidence_key: str,
 ) -> None:
     from moonmind.omnigent.bootstrap import image_resolution
     from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
@@ -53,10 +60,11 @@ async def test_image_sync_blocks_a_quarantined_opencode_host(
                 "architecture": "linux/amd64",
                 "resolvedAt": datetime(2026, 8, 31, tzinfo=UTC),
                 "details": {
-                    "opencodeHostCompatibility": {
+                    "opencodeHostCompatibility": {"status": "ready"},
+                    evidence_key: {
                         "status": "blocked",
                         "failureCode": "omnigent_server_host_build_mismatch",
-                    }
+                    },
                 },
             }
         )
