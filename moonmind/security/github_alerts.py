@@ -555,6 +555,39 @@ def _next_step(category: str, outcome: str) -> str:
     )
 
 
+_CLOSURES = {
+    "fixed": "fixed",
+    "dismissed": "dismissed",
+    "auto_dismissed": "dismissed",
+    "resolved": "resolved",
+}
+
+
+def _analyzers(native: dict, subject: str | None) -> dict[str, list[str]]:
+    """Code-scanning tool identity and version that analyzed the subject.
+
+    Dependabot and secret scanning are GitHub-managed and expose no version.
+    """
+    tools = {
+        (row["tool"]["name"], row["tool"]["version"])
+        for row in (native.get("analyses") or {}).get("records") or []
+        if row["commitSha"] == subject and row["tool"]["name"]
+    }
+    for record in (native["categories"].get("code-scanning") or {}).get("records", []):
+        tool = record.get("tool") or {}
+        if (record.get("locator") or {}).get("revision") == subject and tool.get(
+            "name"
+        ):
+            tools.add((tool["name"], tool.get("version")))
+    if not tools:
+        return {}
+    return {
+        "code-scanning": sorted(
+            f"{name}@{version or 'unversioned'}" for name, version in tools
+        )
+    }
+
+
 def alert_observation(
     request: AssessmentRequest, native: dict, native_ref: str, observed_at: datetime
 ) -> tuple[Observation, dict]:
@@ -562,8 +595,9 @@ def alert_observation(
     config = request.github_alerts
     scope = request.scope
     subject = native["subject"]["revision"]
-    findings, other, outside = [], [], []
+    findings, other, outside, closed = [], [], [], {}
     coverage, unverified, categories = [], [], {}
+    analyzers = _analyzers(native, subject)
     for category, result in native["categories"].items():
         tool = f"{SOURCE}-{category}"
         counts = {"findings": 0, "closed": 0, "otherRevision": 0, "outOfScope": 0}
@@ -574,25 +608,13 @@ def alert_observation(
                 "number": record["number"],
                 "url": record["url"],
             }
-            if record["state"] != "open":
-                counts["closed"] += 1
-                continue
-            if not subject or locator.get("revision") != subject:
-                counts["otherRevision"] += 1
-                other.append({**alert, "revision": locator.get("revision")})
-                continue
             path = locator.get("path")
             asset = (
                 path
                 if path in scope.assets
                 else config.repository if config.repository in scope.assets else None
             )
-            if asset is None:
-                counts["outOfScope"] += 1
-                outside.append({**alert, "path": path})
-                continue
-            counts["findings"] += 1
-            findings.append(
+            finding = (
                 Finding(
                     source=SOURCE,
                     tool=tool,
@@ -601,7 +623,27 @@ def alert_observation(
                     native_id=str(record["number"]),
                     evidence_refs=[native_ref],
                 )
+                if asset is not None
+                else None
             )
+            if record["state"] != "open":
+                counts["closed"] += 1
+                # GitHub's own state; fixed means its analysis no longer
+                # reports the alert, dismissed/resolved are upstream decisions.
+                state = _CLOSURES.get(record["state"])
+                if finding is not None and state is not None:
+                    closed[finding.finding_id] = state
+                continue
+            if not subject or locator.get("revision") != subject:
+                counts["otherRevision"] += 1
+                other.append({**alert, "revision": locator.get("revision")})
+                continue
+            if finding is None:
+                counts["outOfScope"] += 1
+                outside.append({**alert, "path": path})
+                continue
+            counts["findings"] += 1
+            findings.append(finding)
         outcome = result["outcome"]
         status = _COVERAGE.get(outcome, "partial" if result["records"] else "failed")
         if status == "complete" and (
@@ -620,10 +662,22 @@ def alert_observation(
                 # A complete category lists every alert its filters select, so
                 # an alert missing from it is comparable absence.
                 all_rules=status == "complete",
+                # A different analyzer or version can drop an alert without
+                # a fix, so it is part of what makes absence comparable.
                 config_ref=content_key(
-                    [config.repository, native["subject"]["ref"], result["filters"]]
+                    [
+                        config.repository,
+                        native["subject"]["ref"],
+                        result["filters"],
+                        analyzers.get(category, []),
+                    ]
                 ),
                 status=status,
+                intelligence=(
+                    {"analyzers": ", ".join(analyzers[category])[:1024]}
+                    if analyzers.get(category)
+                    else {}
+                ),
             )
         )
         if outcome != "complete":
@@ -679,6 +733,7 @@ def alert_observation(
             expires_at=observed_at + timedelta(days=1),
             coverage=coverage,
             findings=findings,
+            upstream_closed=closed,
             provenance={
                 "githubAlerts": native_ref,
                 "githubRepository": config.repository,

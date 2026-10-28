@@ -31,8 +31,20 @@ FindingState = Literal[
     "new",
     "still_observed",
     "absent_comparable",
+    "remediated_verified",
+    "closed_upstream",
     "not_reassessed",
     "observed_without_baseline",
+]
+FINDING_STATES: tuple[str, ...] = FindingState.__args__
+UpstreamClosure = Literal["fixed", "dismissed", "resolved"]
+ReviewReason = Literal[
+    "review_due",
+    "expired",
+    "review_pending",
+    "intelligence_changed",
+    "provenance_changed",
+    "retest_contradicted",
 ]
 
 
@@ -201,6 +213,11 @@ class Coverage(Contract):
     all_rules: bool = False
     config_ref: Text
     status: CoverageStatus
+    # Feed, rule, and tool identity that interpreted the inputs. A difference
+    # here explains a changed result without implying the subject changed.
+    intelligence: Annotated[dict[Text, Text], Field(max_length=16)] = Field(
+        default_factory=dict
+    )
 
     def covers(self, finding: Finding) -> bool:
         return (
@@ -219,12 +236,19 @@ class Observation(Contract):
     coverage: Annotated[list[Coverage], Field(min_length=1, max_length=64)]
     findings: Annotated[list[Finding], Field(max_length=4096)]
     provenance: Annotated[dict[Text, Text], Field(min_length=1, max_length=64)]
+    # Finding IDs the source itself reports closed, such as a GitHub alert
+    # fixed by its own analysis. Only the source's own state is recorded here.
+    upstream_closed: Annotated[dict[Text, UpstreamClosure], Field(max_length=4096)] = (
+        Field(default_factory=dict)
+    )
 
     @model_validator(mode="after")
     def validate_findings(self):
         ids = [finding.finding_id for finding in self.findings]
         if len(ids) != len(set(ids)):
             raise ValueError("duplicate native finding identity")
+        if set(ids) & set(self.upstream_closed):
+            raise ValueError("an observed finding cannot be closed upstream")
         if any(finding.asset not in self.scope.assets for finding in self.findings):
             raise ValueError("finding outside assessment scope")
         if any(set(row.assets) - set(self.scope.assets) for row in self.coverage):
@@ -268,6 +292,11 @@ class ComparedFinding(Contract):
     state: FindingState
     observed_coverage_key: Text | None
     evidence_expires_at: AwareDatetime
+    # How remediation was verified; set only for remediated_verified.
+    verification: Literal["retest_passed", "upstream_fixed"] | None = None
+    # Intelligence of the covering tool that differs from the baseline, so a
+    # new or absent finding is not attributed to a subject change alone.
+    changed_intelligence: Items = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_identity(self):
@@ -279,6 +308,9 @@ class ComparedFinding(Contract):
 class ComparedDecision(Contract):
     decision: TriageDecision
     status: Literal["active", "review_required", "out_of_scope"]
+    review_reasons: Annotated[list[ReviewReason], Field(max_length=6)] = Field(
+        default_factory=list
+    )
 
 
 class Comparison(Contract):
@@ -289,6 +321,7 @@ class Comparison(Contract):
     decisions: Annotated[list[ComparedDecision], Field(max_length=4096)]
     counts: dict[Text, int]
     coverage_status: Literal["complete", "stale_or_partial"]
+    intelligence_changes: Items = Field(default_factory=list)
     baseline_ref: Text | None = None
     scan_ref: Text | None = None
 
@@ -468,6 +501,29 @@ def _comparable(
     return current_key is not None and current_key == retained.observed_coverage_key
 
 
+def _intelligence(observation: Observation, finding: Finding | None = None) -> dict:
+    return {
+        f"{row.tool}:{key}": value
+        for row in observation.coverage
+        if finding is None or row.covers(finding)
+        for key, value in row.intelligence.items()
+    }
+
+
+def _intelligence_changes(
+    current: Observation, previous: Observation | None, finding: Finding | None = None
+) -> list[str]:
+    """Keys both observations recorded with different values.
+
+    A tool absent from either side was not refreshed; it was added or lost,
+    which coverage already reports.
+    """
+    if previous is None:
+        return []
+    now, before = _intelligence(current, finding), _intelligence(previous, finding)
+    return sorted(key for key in now.keys() & before.keys() if now[key] != before[key])
+
+
 def compare_observations(
     current: Observation,
     previous: dict | None,
@@ -479,11 +535,45 @@ def compare_observations(
 ) -> dict:
     """Carry unobserved findings unless both observations prove comparable coverage.
 
-    A disposition annotates a finding; it never changes the scanner's facts or
-    asserts a fix. Absence is a coverage observation, separate from fix-retest.
+    A disposition annotates a finding; it never changes the scanner's facts.
+    Absence alone is a coverage observation. It becomes verified remediation
+    only with a linked passing fix-retest, or when the source itself reports
+    the finding fixed.
     """
     prior = Comparison.model_validate(previous) if previous is not None else None
+    previous_observation = prior.observation if prior else None
     old = {row.finding_id: row for row in prior.findings} if prior else {}
+    previous_decisions = (
+        {row.decision.finding_id: row for row in prior.decisions} if prior else {}
+    )
+    all_decisions = {
+        finding_id: row.decision for finding_id, row in previous_decisions.items()
+    }
+    for payload in decisions:
+        decision = TriageDecision.model_validate(payload)
+        all_decisions[decision.finding_id] = decision
+    passing_retests = {
+        finding_id
+        for finding_id, decision in all_decisions.items()
+        if decision.disposition == "fix_retest"
+        and decision.retest_outcome == "passed"
+        and current.scope.equivalent(decision.scope)
+    }
+    # A contradiction stays with its unchanged decision; only a replacement
+    # retest, or one still within its validity, can verify later absence.
+    contradicted = {
+        finding_id
+        for finding_id in passing_retests
+        if (retained := previous_decisions.get(finding_id)) is not None
+        and retained.decision == all_decisions[finding_id]
+        and "retest_contradicted" in retained.review_reasons
+    }
+    retest_passed = {
+        finding_id
+        for finding_id in passing_retests - contradicted
+        if all_decisions[finding_id].expires_at is None
+        or now < all_decisions[finding_id].expires_at
+    }
     compared = []
     for finding in current.findings:
         retained = old.pop(finding.finding_id, None)
@@ -523,55 +613,76 @@ def compare_observations(
                     if observed_key is not None or not retained
                     else retained.evidence_expires_at
                 ),
+                changed_intelligence=(
+                    []
+                    if retained
+                    else _intelligence_changes(current, previous_observation, finding)
+                ),
             )
         )
     for retained in old.values():
-        absent = _comparable(retained, current, prior.observation, now)
+        closure = current.upstream_closed.get(retained.finding_id)
+        verification = None
+        if closure == "fixed":
+            state, verification = "remediated_verified", "upstream_fixed"
+        elif closure is not None:
+            state = "closed_upstream"
+        elif _comparable(retained, current, prior.observation, now):
+            if retained.finding_id in retest_passed:
+                state, verification = "remediated_verified", "retest_passed"
+            else:
+                state = "absent_comparable"
+        else:
+            state = "not_reassessed"
         compared.append(
             retained.model_copy(
-                update={"state": "absent_comparable" if absent else "not_reassessed"}
+                update={
+                    "state": state,
+                    "verification": verification,
+                    "changed_intelligence": (
+                        _intelligence_changes(
+                            current, previous_observation, retained.finding
+                        )
+                        if state in {"absent_comparable", "remediated_verified"}
+                        else []
+                    ),
+                }
             )
         )
-    previous_decisions = (
-        {row.decision.finding_id: row for row in prior.decisions} if prior else {}
-    )
-    all_decisions = {
-        finding_id: row.decision for finding_id, row in previous_decisions.items()
-    }
-    for payload in decisions:
-        decision = TriageDecision.model_validate(payload)
-        all_decisions[decision.finding_id] = decision
+    by_id = {row.finding_id: row for row in compared}
     triage = []
     for finding_id, decision in all_decisions.items():
         retained = previous_decisions.get(finding_id)
-        if not current.scope.equivalent(decision.scope):
-            status = "out_of_scope"
-        elif (
-            now >= decision.review_at
-            or (decision.expires_at is not None and now >= decision.expires_at)
-            or (
-                retained is not None
-                and retained.decision == decision
-                and (
-                    retained.status != "active"
-                    or prior.observation.provenance != current.provenance
-                )
-            )
+        row = by_id.get(finding_id)
+        reasons = []
+        if now >= decision.review_at:
+            reasons.append("review_due")
+        if decision.expires_at is not None and now >= decision.expires_at:
+            reasons.append("expired")
+        if retained is not None and retained.decision == decision:
+            if retained.status != "active":
+                reasons.append("review_pending")
+            if row is not None and _intelligence_changes(
+                current, prior.observation, row.finding
+            ):
+                reasons.append("intelligence_changed")
+            elif prior.observation.provenance != current.provenance:
+                reasons.append("provenance_changed")
+        if finding_id in contradicted or (
+            finding_id in passing_retests
+            and row is not None
+            and row.state in {"still_observed", "new"}
         ):
-            status = "review_required"
+            # The scanner still reports what the retest said was fixed.
+            reasons.append("retest_contradicted")
+        if not current.scope.equivalent(decision.scope):
+            status, reasons = "out_of_scope", []
         else:
-            status = "active"
-        triage.append(ComparedDecision(decision=decision, status=status))
-    counts = {
-        key: sum(row.state == key for row in compared)
-        for key in (
-            "new",
-            "still_observed",
-            "absent_comparable",
-            "not_reassessed",
-            "observed_without_baseline",
+            status = "review_required" if reasons else "active"
+        triage.append(
+            ComparedDecision(decision=decision, status=status, review_reasons=reasons)
         )
-    }
+    counts = {key: sum(row.state == key for row in compared) for key in FINDING_STATES}
     counts["review_required"] = sum(row.status == "review_required" for row in triage)
     return Comparison(
         observation=current,
@@ -585,4 +696,5 @@ def compare_observations(
         decisions=triage,
         counts=counts,
         coverage_status="complete" if current.complete(now) else "stale_or_partial",
+        intelligence_changes=_intelligence_changes(current, previous_observation),
     ).model_dump(mode="json", by_alias=True)

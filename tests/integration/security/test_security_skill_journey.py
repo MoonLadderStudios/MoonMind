@@ -656,3 +656,145 @@ async def test_scoped_job_journey_reproduces_logic_and_retests_authorized_fix(
         result["counts"]["new"] == 0
     )  # Regex absence alone did not prove the logic fix.
     assert (await read(service, result["scanRef"]))["observation"]["coverage"]
+
+
+ADMITTED_SCOPE = {
+    "assessmentRef": "invoice-assessment",
+    "profileRefs": ["source-scan"],
+    "actionClasses": ["source-analysis"],
+    "targets": [{"workspacePath": "app"}],
+    "maxJobs": 2,
+    "maxJobSeconds": 600,
+    "evidenceIntent": "Invoice ownership review",
+}
+
+
+def _run_step_request(*, harness, selected, publish_mode):
+    """Build the security Skill step from the operator's admitted run parameters."""
+    from unittest.mock import patch
+
+    from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
+    info = SimpleNamespace(
+        namespace="default",
+        workflow_id="mm:security-assessment",
+        run_id="run-1",
+        parent=None,
+    )
+    workflow_parameters = {
+        "assessmentScope": ADMITTED_SCOPE,
+        "publishMode": publish_mode,
+        "requiredCapabilities": ["docker"],
+    }
+    node_inputs = {
+        "runtime": {
+            "mode": "omnigent",
+            "providerProfileRef": f"selected-{harness}",
+            "model": "selected-model",
+            "effort": "high",
+        },
+        "selectedSkill": selected,
+        "timeoutPolicy": {
+            "timeout_seconds": 30,
+            "max_timeout_seconds": 60,
+            "progress_stall_seconds": 30,
+        },
+    }
+    with (
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=info,
+        ),
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            return_value=True,
+        ),
+    ):
+        return MoonMindRunWorkflow()._build_agent_execution_request(
+            node_inputs=node_inputs,
+            node_id="security",
+            tool_name="omnigent",
+            workflow_parameters=workflow_parameters,
+        )
+
+
+@pytest.mark.parametrize("harness", ["codex", "claude", "opencode"])
+@pytest.mark.parametrize(
+    ("selected", "publish_mode"),
+    [("security-review", "none"), ("security-remediate", "pr")],
+)
+async def test_operator_request_reaches_security_step_with_its_own_authority(
+    harness, selected, publish_mode
+):
+    """Selection, budget, scope and publication authority come from the run.
+
+    Assessment-only (no publication) gets read-only GitHub operations; an
+    already authorized fix/test/publish request gets publication operations
+    with no approval policy added for the security step.
+    """
+    from moonmind.omnigent.harness_platform.host_classes import get_launch_policy
+    from moonmind.omnigent.host_services.runtime_environment import (
+        OmnigentRuntimeEnvironmentService,
+    )
+    from moonmind.omnigent.workspace_intent import (
+        authored_github_operations,
+        authored_repository_mutation_required,
+    )
+    from moonmind.security.container_job_capabilities import (
+        verify_container_job_session_capability,
+    )
+    from tests.unit.omnigent.test_generic_platform_production_services import _plan
+
+    request = _run_step_request(
+        harness=harness, selected=selected, publish_mode=publish_mode
+    )
+    assert request.execution_profile_ref == f"selected-{harness}"
+    assert request.parameters["model"] == "selected-model"
+    assert request.parameters["effort"] == "high"
+    assert request.timeout_policy["max_timeout_seconds"] == 60
+    policy = request.step_execution.skill_source_policy
+    assert policy["selectedSkill"] == selected
+    assert policy["assessmentScope"] == ADMITTED_SCOPE
+    assert policy["executionFanout"]["authorized"] is False
+    # No approval or review gate is introduced for an admitted security step.
+    assert request.approval_policy == {}
+
+    # The agent's own GitHub credential stays read-only either way; publication
+    # authority is the run's publisher destination, derived from publishMode.
+    assert set(authored_github_operations(request)) == {"read"}
+    publication = set(authored_github_operations(request, for_publication=True))
+    if publish_mode == "none":
+        assert publication == set()
+        assert authored_repository_mutation_required(request) is False
+    else:
+        assert publication - {"read"}
+        assert authored_repository_mutation_required(request) is True
+
+    # The launch boundary signs the run's scope; the test does not mint it.
+    launch = request.model_copy(
+        update={
+            "workspace_spec": {
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": "security-workspace",
+                    "relativePath": "repo",
+                }
+            }
+        }
+    )
+    secret = "pa4-signing-secret"
+    environment = OmnigentRuntimeEnvironmentService(
+        moonmind_url="http://api:8000", signing_secret=secret
+    ).build(
+        request=launch,
+        plan=_plan("selected-model"),
+        host_lease_ref="lease-1",
+        launch_policy=get_launch_policy("omnigent-on-demand@1"),
+        workspace_attachment={"accessMode": "read-write"},
+    )
+    capability = verify_container_job_session_capability(
+        environment["MOONMIND_CONTAINER_JOBS_BEARER_TOKEN"], secret=secret
+    )
+    assert capability.assessment_scope is not None
+    assert capability.assessment_scope.assessment_ref == "invoice-assessment"
+    assert capability.workflow_id == "mm:security-assessment"

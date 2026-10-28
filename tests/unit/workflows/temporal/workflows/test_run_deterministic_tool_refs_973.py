@@ -942,6 +942,89 @@ async def test_container_job_derives_stable_key_and_reconciles_lost_ack(
     assert list(jobs_by_key.keys()) == [expected_key]
 
 
+@pytest.mark.asyncio
+async def test_scheduled_feed_refresh_step_submits_the_canonical_source_free_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tool-only run needs no workspace to refresh source-free feeds."""
+
+    from moonmind.schemas.repository_scanner_models import FeedRefresh
+    from moonmind.security.scanner_feeds import build_feed_refresh_job
+    from moonmind.workflows.temporal.workflows import run as run_module
+    from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
+    submitted: list[dict[str, Any]] = []
+    job_id = "container-job:" + "cd" * 16
+
+    async def fake_execute_activity(
+        activity_type: str, payload: Any, **_kwargs: Any
+    ) -> Any:
+        normalized = _normalize_payload(payload)
+        if activity_type == "container_job.submit":
+            submitted.append(normalized["request"])
+            return {"jobId": job_id, "state": "queued"}
+        if activity_type == "container_job.status":
+            return {"jobId": job_id, "state": "succeeded", "terminal": {"exitCode": 0}}
+        raise AssertionError(f"unexpected activity: {activity_type}")
+
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "info",
+        type(
+            "WorkflowInfo",
+            (),
+            {
+                "task_queue": "mm.workflow.user.v2",
+                "namespace": "default",
+                "workflow_id": "mm:feeds",
+                "run_id": "run-1",
+                "search_attributes": {},
+            },
+        ),
+    )
+    monkeypatch.setattr(run_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    refresh = {
+        "feedCacheRef": "scanner-feeds",
+        "egressPolicyRef": "scanner-feeds",
+        "components": ["vulnerability", "checks"],
+    }
+    resources = {"cpuMillis": 2000, "memoryMiB": 2048, "pids": 256}
+
+    result = await workflow._execute_container_job_tool(
+        node_inputs={"spec": {"feedRefresh": refresh, "resources": resources}},
+        node_id="refresh-feeds",
+        execution_ordinal=1,
+    )
+
+    assert result["status"] == "COMPLETED"
+    spec = submitted[0]["spec"]
+    assert "workspaceRef" not in spec
+    canonical = build_feed_refresh_job(FeedRefresh.model_validate(refresh))
+    for key in (
+        "imageSourceRef",
+        "entrypoint",
+        "command",
+        "networkMode",
+        "egressPolicyRef",
+        "inputAttachments",
+        "caches",
+        "outputs",
+        "timeoutSeconds",
+    ):
+        assert spec[key] == canonical[key], key
+    # A generic job without a managed runtime still needs its workspace.
+    with pytest.raises(ValueError, match="workspaceRef"):
+        await workflow._execute_container_job_tool(
+            node_inputs={"spec": {"image": "alpine:3", "resources": resources}},
+            node_id="generic",
+            execution_ordinal=1,
+        )
+
+
 def _collect_payload_keys(value: Any, *, _seen: set[str] | None = None) -> set[str]:
     seen = _seen if _seen is not None else set()
     if isinstance(value, dict):

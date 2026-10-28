@@ -6766,7 +6766,7 @@ export interface components {
             /** Imagesourceref */
             imageSourceRef?: string | null;
             /** Workspaceref */
-            workspaceRef: components["schemas"]["SandboxWorkspaceLocator"] | components["schemas"]["ManagedWorkspaceLocator"] | components["schemas"]["ExternalStateLocator"];
+            workspaceRef?: (components["schemas"]["SandboxWorkspaceLocator"] | components["schemas"]["ManagedWorkspaceLocator"] | components["schemas"]["ExternalStateLocator"]) | null;
             /** Workspacereadonly */
             workspaceReadOnly?: boolean | null;
             /** Command */
