@@ -191,8 +191,9 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         ),
         missingOutcome=(
             "API-key and custom-endpoint Codex Provider Profiles (only "
-            "``codex-oauth-home@1`` exists and the shared OAuth packs "
-            "forbid ``OPENAI_API_KEY``/``OPENAI_BASE_URL``), which "
+            "``codex-oauth-home@1`` exists, the shared OAuth packs "
+            "forbid ``OPENAI_API_KEY``/``OPENAI_BASE_URL``, and no managed "
+            "configuration accepts a ``secret_ref`` Profile), which "
             "``profile_route_runtime`` routes here, and one session "
             "reused across a run's steps (see the AgentSession row)."
         ),
@@ -230,10 +231,12 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         ),
         missingOutcome=(
             "API-key and custom-endpoint Claude Provider Profiles "
-            "(MiniMax via ``ANTHROPIC_BASE_URL``; the shared OAuth packs "
-            "forbid ``ANTHROPIC_API_KEY``), and the direct strategy's "
-            "``--effort``, ``ANTHROPIC_MODEL`` override, "
-            "``ScheduleWakeup`` deny and slash-command passthrough."
+            "(MiniMax via ``ANTHROPIC_BASE_URL`` with its "
+            "``ANTHROPIC_MODEL`` override; the shared OAuth packs forbid "
+            "``ANTHROPIC_API_KEY`` and no managed configuration accepts a "
+            "``secret_ref`` Profile), and slash-command passthrough "
+            "(``execution_contract`` classifies ``omnigent`` as unable to "
+            "run slash commands)."
         ),
     ),
     LegacyPathRecord(

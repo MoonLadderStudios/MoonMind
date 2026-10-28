@@ -451,6 +451,11 @@ work such as queueing pr-resolver children. Omnigent policy hooks still enforce
 deployment deny rules, and a permission flag authored in `terminalLaunchArgs` is
 validated and preserved.
 
+They also deny `ScheduleWakeup`, whatever permission mode the step authored,
+merged into any authored `--disallowedTools`: a step ends with its turn, so no
+owner remains to resume a deferred wakeup. The direct launcher denies it for the
+same reason. Rows frozen before the deny keep their recorded arguments.
+
 The bridge row freezes launch defaults when the attempt is first persisted,
 before provider session creation, and both the streaming execution driver and
 the canonical OmnigentSession Activity use that decision, including on a retry
