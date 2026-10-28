@@ -141,6 +141,8 @@ class MoonMindContainerJobWorkflow:
             ownershipToken=inp.ownership_token,
             request=inp.request,
             registryAuthorization=inp.registry_authorization,
+            targetAuthorization=inp.target_authorization,
+            workloadCredentials=inp.workload_credentials,
             waitForCapacity=_workflow_patch_enabled(CONTAINER_JOB_CAPACITY_WAIT_PATCH),
         )
         terminal_state = ContainerJobState.FAILED
@@ -238,6 +240,10 @@ class MoonMindContainerJobWorkflow:
                 # Carry the resumable live-log cursor across polls so each poll
                 # publishes only the newer log delta.
                 request.log_cursor = observed.log_cursor
+                if observed.egress_denial_observation is not None:
+                    request.egress_denial_observation = (
+                        observed.egress_denial_observation
+                    )
                 if observed.terminal_state is not None:
                     terminal_state = observed.terminal_state
                     exit_code = observed.exit_code

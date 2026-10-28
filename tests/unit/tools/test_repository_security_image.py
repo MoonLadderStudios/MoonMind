@@ -351,14 +351,25 @@ def test_failed_update_does_not_write_the_working_default(monkeypatch, problem):
     assert not calls
 
 
-def test_packaged_runner_imports_with_only_its_declared_python_dependency(tmp_path):
+# Every job that defaults to the repository-security alias runs one of these.
+@pytest.mark.parametrize(
+    "entrypoint",
+    [
+        "moonmind.security.repository_scanner_runner",
+        "moonmind.security.scanner_feeds",
+        "moonmind.security.image_assessment_runner",
+    ],
+)
+def test_packaged_runner_imports_with_only_its_declared_python_dependency(
+    tmp_path, entrypoint
+):
     image.stage_runner(tmp_path)
     result = subprocess.run(
         [
             "python",
             "-I",
             "-c",
-            f"import sys; from pathlib import Path; sys.path.insert(0, {str(tmp_path)!r}); import moonmind.security.repository_scanner_runner as runner; assert Path(runner.__file__).is_relative_to({str(tmp_path)!r})",
+            f"import sys; from pathlib import Path; sys.path.insert(0, {str(tmp_path)!r}); import {entrypoint} as runner; assert Path(runner.__file__).is_relative_to({str(tmp_path)!r})",
         ],
         check=False,
         capture_output=True,

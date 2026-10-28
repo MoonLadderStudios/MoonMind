@@ -2413,7 +2413,7 @@ class PRResolverPolicyModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     poll_interval_seconds: int = Field(60, alias="pollIntervalSeconds", ge=1, le=3600)
-    max_elapsed_seconds: int = Field(7200, alias="maxElapsedSeconds", ge=1, le=86400)
+    max_elapsed_seconds: int = Field(10800, alias="maxElapsedSeconds", ge=1, le=86400)
     max_finalize_attempts: int = Field(60, alias="maxFinalizeAttempts", ge=1, le=500)
     max_remediations_per_type: int = Field(
         2, alias="maxRemediationsPerType", ge=1, le=20

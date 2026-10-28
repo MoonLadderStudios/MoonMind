@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 from uuid import uuid4
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,6 +42,7 @@ from moonmind.schemas.container_job_models import (
     ContainerJobLogEntry,
     ContainerJobLogPage,
     ContainerJobLogQuery,
+    ContainerJobSpec,
     ContainerJobState,
     ContainerJobStatus,
     ContainerJobSubmitRequest,
@@ -51,6 +52,7 @@ from moonmind.schemas.container_job_models import (
     OwnerIdentity,
     RegistryAuthorization,
     TerminalOutcome,
+    WorkloadCredentialAuthorization,
     require_explicit_resources,
 )
 from moonmind.security.container_job_capabilities import (
@@ -58,6 +60,14 @@ from moonmind.security.container_job_capabilities import (
     container_job_matches_capability,
 )
 from moonmind.security.operator_admission import OperatorAdmission
+from moonmind.security.workload_credentials import (
+    authorize_workload_credentials,
+    owner_principal,
+)
+from moonmind.security.workload_profiles import (
+    resolve_profile_job,
+    resolved_job_within_scope,
+)
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 
 _STDERR_MARKER = "[stderr]"
@@ -85,6 +95,10 @@ class ContainerJobAuthorizationError(RuntimeError):
     def __init__(self, authorization: RegistryAuthorization) -> None:
         self.authorization = authorization
         super().__init__(authorization.message or "private-image use is denied")
+
+
+class ContainerJobScopeDeniedError(RuntimeError):
+    """Raised when a scoped session's job exceeds its admitted assessment."""
 
 
 class ContainerJobEvidenceUnavailableError(RuntimeError):
@@ -226,6 +240,23 @@ class ContainerJobRepository:
             )
         return existing
 
+    async def count_assessment_jobs(
+        self, *, owner: OwnerIdentity, assessment_ref: str
+    ) -> int:
+        assessment = ContainerJobRecord.request_json["spec"]["workloadProfile"][
+            "assessmentRef"
+        ].as_string()
+        return int(
+            await self._session.scalar(
+                select(func.count()).where(
+                    ContainerJobRecord.owner_id == owner.principal_id,
+                    ContainerJobRecord.owner_type == owner.principal_type,
+                    assessment == assessment_ref,
+                )
+            )
+            or 0
+        )
+
     async def get_for_owner(self, *, owner: OwnerIdentity, job_id: str) -> ContainerJobRecord | None:
         result = await self._session.execute(
             select(ContainerJobRecord).where(
@@ -297,6 +328,7 @@ class ContainerJobService:
         operator: OperatorAdmission | None = None,
     ) -> None:
         self._session = session
+        self._capability = capability
         self.repository = ContainerJobRepository(
             session, capability=capability, operator=operator
         )
@@ -313,10 +345,39 @@ class ContainerJobService:
         from moonmind.security.repository_scanners import validate_scanner_job
 
         validate_scanner_job(request.spec)
+        # Render a profile selection into concrete launch content before any
+        # authorization, so every later check and the persisted request see
+        # what the worker will launch rather than the caller's label.
+        profiles = self._backend_settings.workload_profiles
+        request = request.model_copy(
+            update={"spec": resolve_profile_job(request.spec, profiles)}
+        )
+        scope = self._capability.assessment_scope if self._capability else None
+        if scope is not None:
+            try:
+                resolved_job_within_scope(request.spec, scope, profiles)
+            except (PermissionError, ValueError) as exc:
+                raise ContainerJobScopeDeniedError(str(exc)) from exc
+
+        def authorize_credentials(at: datetime) -> list[dict]:
+            # Value-free; each decision is bound to the job once it exists.
+            try:
+                return authorize_workload_credentials(
+                    request.spec,
+                    scope,
+                    profiles,
+                    principal=owner_principal(owner),
+                    now=at,
+                )
+            except (PermissionError, ValueError) as exc:
+                raise ContainerJobScopeDeniedError(str(exc)) from exc
+
+        await self._authorize_input_attachments(owner=owner, spec=request.spec)
         # Authorize private-image execution and credential use before creating
         # durable identity. Fails closed: a denied request never starts a
         # workflow and never persists a queued record.
         self._backend_settings.authorize_service(request.spec)
+        self._backend_settings.authorize_egress(request)
         authorization = None
         if request.spec.image is not None:
             authorization = self._authorizer.authorize(
@@ -347,6 +408,18 @@ class ContainerJobService:
                 )
                 if not authorization.authorized:
                     raise ContainerJobAuthorizationError(authorization)
+        target_authorization = None
+        assessment = request.spec.image_assessment
+        if assessment is not None and assessment.target == "registry":
+            # Decided here like the job image, from deployment grants alone;
+            # the worker resolves the credential only under this decision.
+            target_authorization = self._authorizer.authorize_reference(
+                owner=owner,
+                image=assessment.image_reference,
+                credential_ref=assessment.target_credential_ref,
+            )
+            if not target_authorization.authorized:
+                raise ContainerJobAuthorizationError(target_authorization)
         existing = await self.repository.find_exact_replay(owner=owner, request=request)
         if existing is not None:
             # An exact idempotent replay preserves the existing job identity
@@ -355,6 +428,17 @@ class ContainerJobService:
             # execution is gated below.
             record, replayed = existing, True
         else:
+            # Already-admitted legacy scanner jobs stay executable, including
+            # by exact replay; new ones must read a captured input instead of
+            # the live workspace.
+            validate_scanner_job(request.spec, allow_legacy=False)
+            if scope is not None and (
+                await self.repository.count_assessment_jobs(
+                    owner=owner, assessment_ref=scope.assessment_ref
+                )
+                >= scope.max_jobs
+            ):
+                raise ContainerJobScopeDeniedError("assessment job budget is exhausted")
             try:
                 require_explicit_resources(request.spec.resources)
             except ValueError as exc:
@@ -362,6 +446,7 @@ class ContainerJobService:
                     "container-job resources must be explicit for new jobs: "
                     f"{exc}"
                 ) from exc
+            credential_decisions = authorize_credentials(datetime.now(timezone.utc))
             record, replayed = await self.repository.create_or_replay(
                 owner=owner, request=request, authorization=authorization
             )
@@ -391,6 +476,15 @@ class ContainerJobService:
             return ContainerJobAccepted(
                 jobId=record.job_id, replayed=True, createdAt=record.created_at
             )
+        if existing is not None:
+            # A restart needs a grant covering a fresh budget; an exact replay
+            # of admitted live work is checked as of its admission.
+            admitted_at = record.created_at
+            if recovering_start_failure or admitted_at is None:
+                admitted_at = datetime.now(timezone.utc)
+            elif admitted_at.tzinfo is None:
+                admitted_at = admitted_at.replace(tzinfo=timezone.utc)
+            credential_decisions = authorize_credentials(admitted_at)
         if recovering_start_failure:
             record.state = ContainerJobState.QUEUED.value
             record.terminal_outcome_json = None
@@ -412,6 +506,16 @@ class ContainerJobService:
                     ),
                     request=request,
                     registryAuthorization=authorization,
+                    targetAuthorization=target_authorization,
+                    workloadCredentials=(
+                        tuple(
+                            WorkloadCredentialAuthorization.model_validate(
+                                {**item, "jobId": record.job_id}
+                            )
+                            for item in credential_decisions
+                        )
+                        or None
+                    ),
                 )
             )
         except Exception:
@@ -425,6 +529,37 @@ class ContainerJobService:
             raise
         created_at = record.created_at or datetime.now(timezone.utc)
         return ContainerJobAccepted(jobId=record.job_id, replayed=replayed, createdAt=created_at)
+
+    async def _authorize_input_attachments(
+        self, *, owner: OwnerIdentity, spec: ContainerJobSpec
+    ) -> None:
+        """Admit artifact inputs under the job owner's existing read authority.
+
+        The worker reads them again under the same principal, so authority or
+        retention lost before launch still fails closed there. Missing and
+        unreadable artifacts are refused alike, without revealing which.
+        """
+
+        for item in spec.input_attachments or ():
+            if item.artifact_ref is None:
+                continue
+            if self._artifacts is None:
+                raise ValueError("artifact inputs require the artifact store")
+            try:
+                artifact, *_ = await self._artifacts.get_metadata(
+                    artifact_id=item.artifact_ref,
+                    principal=owner_artifact_principal(owner),
+                )
+            except Exception as exc:  # noqa: BLE001 - authority decides
+                raise ValueError(
+                    "input attachment artifact is not readable by the job owner"
+                ) from exc
+            status = getattr(artifact, "status", None)
+            if getattr(status, "value", status) != "complete":
+                raise ValueError("input attachment artifact is not complete")
+            size = getattr(artifact, "size_bytes", None)
+            if isinstance(size, int) and size > item.max_bytes:
+                raise ValueError("input attachment artifact exceeds its bound")
 
     async def status(self, *, owner: OwnerIdentity, job_id: str) -> ContainerJobStatus:
         record = await self.repository.get_for_owner(owner=owner, job_id=job_id)

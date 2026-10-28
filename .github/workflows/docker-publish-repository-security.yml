@@ -9,6 +9,8 @@ on:
       - "services/repository-security/**"
       - "tools/ci/*repository_security_image*.py"
       - "moonmind/security/repository_scanner*.py"
+      - "moonmind/security/scanner_feeds.py"
+      - "moonmind/security/image_assessment*.py"
       - "moonmind/security/assessments.py"
       - "moonmind/schemas/**"
       - "moonmind/provider_profiles/model_tiers.py"
@@ -20,6 +22,8 @@ on:
       - "tools/ci/*repository_security_image*.py"
       - "tests/unit/tools/test_repository_security_image.py"
       - "moonmind/security/repository_scanner*.py"
+      - "moonmind/security/scanner_feeds.py"
+      - "moonmind/security/image_assessment*.py"
       - ".github/workflows/docker-publish-repository-security.yml"
   workflow_dispatch:
     inputs:

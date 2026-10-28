@@ -33,6 +33,7 @@ from api_service.api.routers.temporal_artifacts import (
     _resolve_principal,
 )
 from api_service.api.routers.temporal_artifacts import router as artifact_router
+from api_service.services.omnigent_execution_plan_service import persist_json_artifact
 from moonmind.auth import bound_acquisition, github_credentials
 from moonmind.omnigent import production
 from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
@@ -149,7 +150,29 @@ async def test_scratch_output_is_saved_and_downloaded_after_host_loss(
     )
 
     # Admission: no repository source, so only model authority is bound.
-    compiled = await _compile(monkeypatch, authority_context)
+    operator = str(uuid.UUID(int=4003))
+    task = {"instructions": "Generate a report without a repository."}
+    snapshot = executions._build_original_workflow_input_snapshot_payload(
+        source_kind="create", payload={}, task_payload=task
+    )
+    async with sessions() as session:
+        original_inputs = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(blob_root),
+        )
+        task_input_ref, task_input_digest = await persist_json_artifact(
+            artifact_service=original_inputs,
+            principal=operator,
+            artifact_class="original_task_input_snapshot",
+            payload=snapshot,
+        )
+    compiled = await _compile(
+        monkeypatch,
+        authority_context,
+        workflow=task,
+        task_input_snapshot_ref=task_input_ref,
+        task_input_snapshot_digest=task_input_digest,
+    )
     plan = await reader._load_verified_execution_plan(compiled.binding)
     assert set(plan.payload.credentialBindings) == {"primary-model"}
     assert not plan.payload.resolvedTools.get("repositoryAccess")
@@ -291,7 +314,6 @@ async def test_scratch_output_is_saved_and_downloaded_after_host_loss(
     assert saved["savedWorkDigest"].startswith("sha256:")
 
     archive_id = saved["archiveRef"].removeprefix("artifact://")
-    operator = str(uuid.UUID(int=4003))
     async with sessions() as session:
         service = TemporalArtifactService(
             TemporalArtifactRepository(session),
@@ -411,6 +433,8 @@ async def test_scratch_output_is_saved_and_downloaded_after_host_loss(
                 assert admitted.status_code == 201, admitted.text
                 contract = adapter.start_workflow.await_args.kwargs["input_args"]
                 assert contract["savedWorkDigest"] == saved["savedWorkDigest"]
+                assert task["instructions"] in contract["pullRequestBody"]
+                assert task_input_ref in contract["pullRequestBody"]
                 before = state.saved_bytes()
                 assert before, "the original saved bytes must be checked after retry"
 
@@ -432,6 +456,7 @@ async def test_scratch_output_is_saved_and_downloaded_after_host_loss(
                 assert (
                     state.provider.creates[0]["github_token"] == "destination-b-fixture"
                 )
+                assert task["instructions"] in state.provider.creates[0]["body"]
                 assert state.saved_objects_unchanged(before)
                 assert await state.use_claims() == []
                 again = await state.run(contract)

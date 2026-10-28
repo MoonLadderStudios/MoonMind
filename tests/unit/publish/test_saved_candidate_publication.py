@@ -482,6 +482,45 @@ async def test_same_baseline_applies_recorded_delta_onto_advanced_destination(tm
     assert candidate.base_sha == advanced
 
 
+@pytest.mark.parametrize("cleanup_edits_lock", [False, True])
+async def test_dependency_cleanup_preserves_concurrent_security_floor_or_conflicts(
+    tmp_path, cleanup_edits_lock
+):
+    original_lock = "safe-library==1.0\nobsolete-library==1.0\n"
+    secured_lock = "safe-library==2.0\nobsolete-library==1.0\n"
+    remote, writer, baseline = _destination(
+        tmp_path, {"requirements.lock": original_lock, "client.py": "old client\n"}
+    )
+    advanced = _commit_files(
+        writer,
+        {"requirements.lock": secured_lock},
+        "Raise the supported security floor",
+    )
+    git("push", "origin", "main", cwd=writer)
+    saved_lock = "safe-library==1.0\n" if cleanup_edits_lock else original_lock
+    content = _saved(
+        tmp_path,
+        {"requirements.lock": saved_lock, "client.py": "replacement client\n"},
+        baseline=baseline,
+    )
+    admission = _admission(strategy="baseline_delta", expectedBaseSha=advanced)
+    if cleanup_edits_lock:
+        before = _remote_refs(remote)
+        with pytest.raises(SavedPublicationError) as error:
+            await _prepare(tmp_path, admission, content, remote)
+        assert error.value.code == "PUBLICATION_APPLICATION_CONFLICT"
+        assert (
+            "destination_changed_since_baseline:requirements.lock"
+            in error.value.details
+        )
+        assert _remote_refs(remote) == before
+    else:
+        candidate = await _prepare(tmp_path, admission, content, remote)
+        files = _tree_files(tmp_path / "publication", candidate.head_sha)
+        assert files["requirements.lock"] == secured_lock.strip()
+        assert files["client.py"] == "replacement client"
+
+
 async def test_recorded_delta_is_the_only_deletion_evidence(tmp_path):
     remote, _writer, baseline = _destination(
         tmp_path,

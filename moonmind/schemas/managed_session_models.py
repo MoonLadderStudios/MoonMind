@@ -1184,6 +1184,12 @@ class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
         None,
         alias="executionFanoutAuthorization",
     )
+    # Operator-admitted assessment scope from the trusted step policy; the
+    # controller signs it into the session's container-job capability.
+    container_job_assessment_scope: dict[str, Any] | None = Field(
+        None,
+        alias="containerJobAssessmentScope",
+    )
     container_job_owner: OwnerIdentity | None = Field(
         None, alias="containerJobOwner"
     )

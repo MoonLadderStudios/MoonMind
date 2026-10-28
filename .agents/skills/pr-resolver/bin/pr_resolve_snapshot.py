@@ -59,7 +59,7 @@ _FAILURE_CHECK_STATES = {
 
 _SYSTEM_PATH_FALLBACK = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 _PR_VIEW_FIELDS = (
-    "number,title,url,isDraft,state,headRefName,headRefOid,baseRefName,updatedAt,mergeable,"
+    "number,title,body,url,isDraft,state,headRefName,headRefOid,baseRefName,changedFiles,updatedAt,mergeable,"
     "mergeStateStatus,reviewDecision,statusCheckRollup"
 )
 _COMMAND_COMMENT_PATTERN = re.compile(
@@ -236,6 +236,81 @@ def run_command_optional(
         cmd, paginated=paginated, records_key=records_key
     )
     return payload
+
+
+def fetch_candidate_changes(repository: str, pr: dict) -> dict:
+    """Expose the current diff and base advances to the existing reviewer.
+
+    This is evidence, not a path-based preservation policy. Missing patches
+    (large or binary files) remain explicit so a reviewer can inspect Git.
+    The enclosing snapshot rechecks head/base after these reads.
+    """
+    head, base = pr.get("headRefOid"), pr.get("baseRefOid")
+    result = {"headSha": head, "baseSha": base, "filesComplete": False}
+    files = run_command_optional(
+        [
+            "gh",
+            "api",
+            f"repos/{repository}/pulls/{pr['number']}/files?per_page=100",
+            "--paginate",
+        ],
+        paginated=True,
+    )
+    if not isinstance(files, list):
+        result["error"] = "Changed-file inventory unavailable."
+    else:
+        result["files"] = [
+            {
+                key: item[key]
+                for key in (
+                    "filename",
+                    "previous_filename",
+                    "status",
+                    "additions",
+                    "deletions",
+                    "patch",
+                )
+                if key in item
+            }
+            for item in files
+            if isinstance(item, dict)
+        ]
+        result["filesComplete"] = (
+            len(result["files"]) == pr.get("changedFiles") and len(files) < 3000
+        )
+        result["patchesMissing"] = [
+            item.get("filename") for item in result["files"] if "patch" not in item
+        ]
+    if not head or not base:
+        result["baseChanges"] = {
+            "complete": False,
+            "error": "Base or head unavailable.",
+        }
+        return result
+    comparison = run_command_optional(
+        ["gh", "api", f"repos/{repository}/compare/{head}...{base}"]
+    )
+    if not isinstance(comparison, dict) or not isinstance(
+        comparison.get("commits"), list
+    ):
+        result["baseChanges"] = {
+            "complete": False,
+            "error": "Base comparison unavailable.",
+        }
+    else:
+        commits = comparison["commits"]
+        result["baseChanges"] = {
+            "mergeBaseSha": (comparison.get("merge_base_commit") or {}).get("sha"),
+            "commits": [
+                {
+                    "sha": item.get("sha"),
+                    "message": (item.get("commit") or {}).get("message"),
+                }
+                for item in commits
+            ],
+            "complete": len(commits) == comparison.get("total_commits"),
+        }
+    return result
 
 
 def _current_branch_name() -> str | None:
@@ -2349,6 +2424,7 @@ def main():
     # Bind every full inventory to the current target, even with the review
     # loop disabled. Comments/reactions have no reviewed commit, and a race
     # cannot authorize fixes or a fix-only clean receipt.
+    candidate_changes = fetch_candidate_changes(pr_repo, pr_data)
     completed_pr, _, _ = fetch_pr_data(args.pr)
     completed_requirements = None
     if isinstance(completed_pr, dict):
@@ -2366,9 +2442,21 @@ def main():
                 branch_data=completed_base,
             )
     observed_fields = (
-        "number", "url", "headRefOid", "headRefName", "baseRefName", "baseRefOid",
-        "statusCheckRollup", "updatedAt", "isDraft", "state", "mergeable",
-        "mergeStateStatus", "reviewDecision",
+        "number",
+        "url",
+        "headRefOid",
+        "headRefName",
+        "baseRefName",
+        "baseRefOid",
+        "statusCheckRollup",
+        "updatedAt",
+        "isDraft",
+        "state",
+        "mergeable",
+        "mergeStateStatus",
+        "reviewDecision",
+        "body",
+        "changedFiles",
     )
     if (
         not head_sha
@@ -2423,6 +2511,7 @@ def main():
             "requireFreshReview": bool(args.require_fresh_review),
         },
         "pr": pr_data,
+        "candidateChanges": candidate_changes,
         "ci": ci_summary,
         "commentsFetch": {
             "succeeded": isinstance(comments_data, dict)

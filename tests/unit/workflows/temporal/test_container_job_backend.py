@@ -285,10 +285,9 @@ async def test_historical_activity_preserves_workspace_access_at_launch(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("input_bytes", [128 * 1024**2, 2 * 1024**3])
 @pytest.mark.parametrize("with_database", [False, True])
-async def test_scanner_private_scratch_accommodates_admitted_inputs(
-    tmp_path, input_bytes, with_database
+async def test_scanner_writes_only_job_owned_outputs_and_scratch(
+    tmp_path, with_database
 ):
     from moonmind.security.repository_scanners import RepositoryScan, build_scanner_job
 
@@ -296,7 +295,6 @@ async def test_scanner_private_scratch_accommodates_admitted_inputs(
     scan = RepositoryScan(
         scanner="trivy",
         outputDirectory="artifacts/trivy",
-        maxInputBytes=input_bytes,
         trivyScanners=["vuln"] if with_database else ["misconfig"],
         databaseCacheRef="scanner-db" if with_database else None,
         databaseDigest="a" * 64 if with_database else None,
@@ -323,30 +321,19 @@ async def test_scanner_private_scratch_accommodates_admitted_inputs(
         _request(tmp_path, image=None, **build_scanner_job(scan))
     )
     created = next(command for command in commands if command[0] == "create")
-    scratch = created[created.index("--tmpfs") + 1]
-    capacity = next(
-        option.split("=", 1)[1]
-        for option in scratch.split(",")
-        if option.startswith("size=")
-    )
-    units = {"k": 1024, "m": 1024**2, "g": 1024**3}
-    scratch_bytes = (
-        int(capacity[:-1]) * units[capacity[-1]]
-        if capacity[-1] in units
-        else int(capacity)
-    )
-    staged_bytes = input_bytes + (2 * 1024**3 if with_database else 0)
-    assert scratch_bytes >= staged_bytes + 1024**3
-    memory_mib = int(created[created.index("--memory") + 1].removesuffix("m"))
-    assert memory_mib * 1024**2 >= scratch_bytes + 2 * 1024**3
     assert "--read-only" in created
-    assert scratch.startswith("/tmp:rw,nosuid,nodev,")
-    assert "mode=1777" in scratch
-    assert "exec" in scratch.split(":", 1)[1].split(",")
-    assert "noexec" not in scratch.split(":", 1)[1].split(",")
+    # Docker refuses a tmpfs over the job-owned /tmp mount.
+    assert "--tmpfs" not in created
     mounts = [created[i + 1] for i, arg in enumerate(created) if arg == "--mount"]
-    assert next(m for m in mounts if "dst=/workspace" in m).endswith(",readonly")
-    assert len([m for m in mounts if not m.endswith(",readonly")]) == 1
+    writable = sorted(
+        m.split("dst=", 1)[1].split(",", 1)[0]
+        for m in mounts
+        if not m.endswith(",readonly")
+    )
+    assert writable == ["/outputs", "/tmp"]
+    # Opengrep's packaged release executes a child extracted into /tmp.
+    assert not any("noexec" in m for m in mounts)
+    assert next(m for m in mounts if "dst=/inputs/source" in m).endswith(",readonly")
 
 
 @pytest.mark.asyncio
@@ -1719,9 +1706,15 @@ async def test_secret_ref_requires_job_authority(tmp_path) -> None:
         tmp_path,
         environment=[{"name": "API_TOKEN", "secretRef": "db://api-token"}],
     )
-    with pytest.raises(RuntimeError, match="secretRef is unsupported"):
+    # A reference without an admitted workload credential slot never resolves
+    # and never reaches a container.
+    with pytest.raises(
+        ContainerJobBackendError, match="no admitted credential slot"
+    ) as denied:
         await backend.create_container(request)
+    assert denied.value.failure_class is ContainerJobFailureClass.AUTHORIZATION
     resolver.assert_not_awaited()
+    assert not any(command[0] == "create" for command in commands)
 
 
 @pytest.mark.asyncio

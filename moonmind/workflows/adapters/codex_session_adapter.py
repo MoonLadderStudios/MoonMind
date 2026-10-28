@@ -529,6 +529,16 @@ def _execution_fanout_authorization(
         raise ValueError("executionFanout authorization evidence must be a mapping")
     return dict(evidence)
 
+def _container_job_assessment_scope(
+    request: AgentExecutionRequest,
+) -> dict[str, Any] | None:
+    # Only the run workflow writes this policy, from the operator's admission;
+    # the controller validates it before signing it into the capability.
+    step_execution = request.step_execution
+    if step_execution is None:
+        return None
+    return step_execution.skill_source_policy.get("assessmentScope")
+
 def _application_error_metadata(error: ApplicationError) -> dict[str, Any]:
     for detail in error.details:
         if isinstance(detail, Mapping):
@@ -1991,6 +2001,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             workloadMode=workload_mode,
             requiredCapabilities=required_capabilities,
             executionFanoutAuthorization=_execution_fanout_authorization(request),
+            containerJobAssessmentScope=_container_job_assessment_scope(request),
             containerJobOwner=container_job_owner,
             turnCompletionTimeoutSeconds=turn_completion_timeout_seconds,
             environment=launch_environment,

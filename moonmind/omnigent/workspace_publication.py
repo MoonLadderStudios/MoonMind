@@ -483,6 +483,9 @@ class OmnigentWorkspacePublicationService:
             entries.append(normalized)
         identity = request.step_execution
         high_security = resolve_high_security_mode()
+        plan = getattr(request, "omnigent_execution_plan", None) or getattr(
+            identity, "omnigent_execution_plan", None
+        )
         manifest = build_saved_work_manifest(
             capture_id=f"{request.idempotency_key}:saved-work",
             identity={
@@ -492,15 +495,29 @@ class OmnigentWorkspacePublicationService:
                 "executionOrdinal": identity.execution_ordinal,
                 "boundary": "after_execution",
             },
-            source={"kind": "sandbox-workspace"},
+            source={
+                "kind": "sandbox-workspace",
+                **(
+                    {
+                        "taskInputSnapshotRef": plan.task_input_snapshot_ref,
+                        "taskInputSnapshotDigest": plan.task_input_snapshot_digest,
+                    }
+                    if plan is not None
+                    else {}
+                ),
+            },
             content_digest=saved["archiveDigest"],
             file_manifest_digest=workspace_content_digest(entries),
             capture_policy={"includeUntracked": True, "includeIgnored": False},
             required_formats=["full_snapshot"],
-            outputs=[describe_output_claim(
-                fmt="full_snapshot", status="self_contained",
-                ref=saved["archiveRef"], digest=saved["archiveDigest"],
-            )],
+            outputs=[
+                describe_output_claim(
+                    fmt="full_snapshot",
+                    status="self_contained",
+                    ref=saved["archiveRef"],
+                    digest=saved["archiveDigest"],
+                )
+            ],
             exclusions=[
                 {"path": path, "reason": "capture-policy"}
                 for path in checkpoint.get("excludedPaths", [])
@@ -511,7 +528,10 @@ class OmnigentWorkspacePublicationService:
                 "disposition": "unknown" if high_security else "not_scanned",
                 "manifestScan": "allow" if high_security else "not_scanned",
             },
-            quiescence={"verified": True, "mechanism": "checked archive file fingerprints"},
+            quiescence={
+                "verified": True,
+                "mechanism": "checked archive file fingerprints",
+            },
             artifact_scope="checkpoint_archive",
             retention_ref="artifact-ownership",
         )

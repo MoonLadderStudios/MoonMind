@@ -30,6 +30,7 @@ from moonmind.publish.saved_candidate import (
 from moonmind.utils.cli import verify_cli_is_executable
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.publish.sanitization import (
+    append_publication_task,
     sanitize_metadata_footer_value,
     sanitize_publish_subject,
 )
@@ -235,6 +236,7 @@ class PublishService:
         runtime_mode: str,
         base_branch: str,
         head_branch: str,
+        instruction: str = "",
     ) -> str:
         runtime_value = cls._sanitize_metadata_footer_value(
             runtime_mode, fallback="codex"
@@ -252,7 +254,7 @@ class PublishService:
             f"Head: {head_value}",
             "<!-- moonmind:end -->",
         ]
-        return "\n".join(lines)
+        return append_publication_task("\n".join(lines), instructions=instruction)
 
     async def publish(
         self,
@@ -549,6 +551,7 @@ class PublishService:
             runtime_mode=runtime_mode,
             base_branch=base_branch,
             head_branch=branch_name,
+            instruction=instruction,
         )
         if repo and token:
             create_pull_request = (

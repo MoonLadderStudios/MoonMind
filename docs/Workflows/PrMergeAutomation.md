@@ -207,17 +207,17 @@ For merge and fix-only, the gate starts an ordinary child UserWorkflow with `tas
   "initialParameters": {
     "publishMode": "auto",
     "requiredCapabilities": ["git", "gh"],
-    "timeoutPolicy": {"timeout_seconds": 9000},
+    "timeoutPolicy": {"timeout_seconds": 12600},
     "task": {
       "tool": {"type": "skill", "name": "pr-resolver"},
       "inputs": {"repo": "owner/repo", "pr": "123", "mergeMethod": "squash", "finishMode": "merge"},
-      "timeoutPolicy": {"timeout_seconds": 9000}
+      "timeoutPolicy": {"timeout_seconds": 12600}
     }
   }
 }
 ```
 
-Target and finish values come from trusted context. The 9000-second default covers the Skill's 7200-second finalize budget plus preparation and artifact time, and is carried at workflow and task levels.
+Target and finish values come from trusted context. The 12600-second default covers the Skill's 10800-second finalize budget plus preparation and artifact time, and is carried at workflow and task levels.
 
 For Omnigent, a bounded preparation Activity validates parent authority, preserves Runtime/Profile configuration, derives the resolver target, workspace, and inherited policy, resolves the pinned Skill closure, and persists a new plan owned by the deterministic child ID; the child carries that plan and resolvedSkillsetRef. The parent plan is never reused as the child's. Missing or ambiguous plan, profile, task, workspace, or Skill authority fails before host creation or credential acquisition.
 

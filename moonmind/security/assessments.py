@@ -337,11 +337,49 @@ class AdvisoryFeed(Contract):
         return self
 
 
+GitHubAlertCategory = Literal["code-scanning", "dependabot", "secret-scanning"]
+
+
+class GitHubAlertImport(Contract):
+    """Read existing GitHub alerts through the run's admitted repository connection.
+
+    Bounds apply to the whole import. ``revision`` names the assessed checkout;
+    when omitted, the ref's tip at import time is the subject.
+    """
+
+    repository: Annotated[
+        str, StringConstraints(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+    ]
+    ref: (
+        Annotated[str, StringConstraints(pattern=r"^refs/heads/[^\s]{1,255}$")] | None
+    ) = None
+    revision: (
+        Annotated[str, StringConstraints(pattern=r"^([0-9a-f]{40}|[0-9a-f]{64})$")]
+        | None
+    ) = None
+    categories: Annotated[list[GitHubAlertCategory], Field(min_length=1)] = Field(
+        default_factory=lambda: ["code-scanning", "dependabot", "secret-scanning"]
+    )
+    state: Literal["open", "all"] = "open"
+    include_analyses: bool = True
+    per_page: Annotated[int, Field(ge=1, le=100)] = 100
+    max_requests: Annotated[int, Field(ge=1, le=100)] = 30
+    max_items: Annotated[int, Field(ge=1, le=4096)] = 1000
+    max_bytes: Annotated[int, Field(ge=1, le=8 * 1024 * 1024)] = 4 * 1024 * 1024
+    max_seconds: Annotated[int, Field(ge=1, le=300)] = 60
+
+    @model_validator(mode="after")
+    def validate_categories(self):
+        if len(set(self.categories)) != len(self.categories):
+            raise ValueError("duplicate GitHub alert category")
+        return self
+
+
 class AssessmentRequest(Contract):
     scope: AssessmentScope
     tools: Annotated[
-        list[Literal["inventory-feed", "retained-report"]],
-        Field(max_length=2),
+        list[Literal["inventory-feed", "retained-report", "github-alerts"]],
+        Field(max_length=3),
     ]
     budget: ExecutionBudget
     credential_refs: Items
@@ -352,6 +390,7 @@ class AssessmentRequest(Contract):
     baseline_ref: Text | None = None
     decisions_ref: Text | None = None
     review_ref: Text | None = None
+    github_alerts: GitHubAlertImport | None = None
 
     @model_validator(mode="after")
     def validate_admission(self):
@@ -367,12 +406,20 @@ class AssessmentRequest(Contract):
             )
         if self.budget.progress_stall_seconds <= 0:
             raise ValueError("assessment progress stall budget must be positive")
-        # These adapters only read authorized artifacts. Active scanner adapters
-        # must admit credentials/egress through their own existing owners.
+        # These adapters only read authorized artifacts, or GitHub through the
+        # run's admitted repository connection. Active scanner adapters must
+        # admit credentials/egress through their own existing owners.
         if self.credential_refs or self.network_refs:
             raise ValueError(
                 "offline assessment tools require empty credentialRefs and networkRefs"
             )
+        if ("github-alerts" in self.tools) != (self.github_alerts is not None):
+            raise ValueError("github-alerts requires githubAlerts")
+        if (
+            self.github_alerts is not None
+            and self.github_alerts.max_seconds > self.budget.base_seconds
+        ):
+            raise ValueError("GitHub alert import must fit the base assessment budget")
         inventory_selected = "inventory-feed" in self.tools
         if inventory_selected != bool(self.inventory_ref and self.feed_ref):
             raise ValueError("inventory-feed requires inventoryRef and feedRef")

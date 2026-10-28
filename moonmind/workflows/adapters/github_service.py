@@ -954,6 +954,40 @@ class GitHubService:
             raise ValueError("Repository reader returned an unknown comparison status")
         return status in {"ahead", "identical"}
 
+    async def read_security_alerts(
+        self, request: Any, *, admitted_workflow_id: str
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Import existing GitHub security alerts with the run's admitted connection.
+
+        Acquisition asks for exactly ``security_read``; a denied or failed
+        acquisition sends no request and reports every category unavailable,
+        never another credential or zero alerts. Reads are GET only.
+        """
+        from moonmind.security.github_alerts import (
+            collect_github_alerts,
+            unavailable_alerts,
+        )
+
+        if not str(admitted_workflow_id or "").strip():
+            raise ValueError("An admitted workflow is required for alert import")
+        try:
+            api_base, headers = await self._repository_reader(
+                request.repository,
+                None,
+                admitted_workflow_id,
+                operation="security_read",
+            )
+        except Exception as exc:
+            return unavailable_alerts(
+                request, "authorization_unavailable", error=type(exc).__name__
+            )
+        async with httpx.AsyncClient(
+            timeout=self._timeout, follow_redirects=False
+        ) as client:
+            return await collect_github_alerts(
+                client, api_base=api_base, headers=headers, request=request
+            )
+
     async def _repository_reader(
         self,
         repository: str,
@@ -1031,7 +1065,9 @@ class GitHubService:
                 connection_ref or DEFAULT_GIT_CONNECTION_REF, repository=repository
             )
         if active is None:
-            if operation != "read":
+            # The unrecorded default derives from the deployment's declared
+            # credential; it grants reads, never an unrecorded mutation.
+            if operation not in {"read", "security_read"}:
                 raise ValueError(
                     f"No recorded repository connection grants {operation} {repository}"
                 )

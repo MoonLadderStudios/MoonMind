@@ -3151,7 +3151,7 @@ def test_runtime_planner_pr_resolver_injects_branch_selector_into_instruction():
         "Execute skill 'pr-resolver' with inputs:"
     )
     assert '"pr": "fix/my-feature-branch"' in node_inputs["instructions"]
-    assert node_inputs["timeoutPolicy"] == {"timeout_seconds": 9000}
+    assert node_inputs["timeoutPolicy"] == {"timeout_seconds": 12600}
     assert plan["metadata"]["title"] == "fix/my-feature-branch"
 
 
@@ -3191,7 +3191,7 @@ def test_runtime_planner_pr_resolver_timeout_reaches_agent_execution_request(
         tool_name=node["tool"]["name"],
     )
 
-    assert request.timeout_policy == {"timeout_seconds": 9000}
+    assert request.timeout_policy == {"timeout_seconds": 12600}
 
 
 def test_runtime_planner_pr_resolver_timeout_is_not_inherited_by_other_steps():

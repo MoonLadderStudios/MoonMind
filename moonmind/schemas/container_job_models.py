@@ -8,7 +8,15 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    StrictStr,
+    field_validator,
+    model_validator,
+)
 
 from moonmind.schemas.workload_models import (
     WorkloadGpuCapability,
@@ -24,7 +32,11 @@ from moonmind.schemas.workspace_locator_models import (
     WorkspaceLocator,
 )
 from moonmind.utils.logging import redact_sensitive_text
-from moonmind.schemas.repository_scanner_models import RepositoryScan
+from moonmind.schemas.repository_scanner_models import (
+    FeedRefresh,
+    ImageAssessment,
+    RepositoryScan,
+)
 
 CONTAINER_JOB_CONTRACT_VERSION = "v1"
 MAX_TEMPORAL_PAYLOAD_BYTES = 64 * 1024
@@ -132,6 +144,10 @@ class ContainerJobFailureClass(StrEnum):
     REPOSITORY_SCOPE_MISMATCH = "repository_scope_mismatch"
     REGISTRY_AUTH_FAILED = "registry_auth_failed"
     CREDENTIAL_CLEANUP_FAILED = "credential_cleanup_failed"
+    # Scoped workload credentials: an elapsed grant, or a session the issuer
+    # refused or could not renew.
+    CREDENTIAL_EXPIRED = "credential_expired"
+    CREDENTIAL_ISSUANCE_FAILED = "credential_issuance_failed"
     RESOURCE_LIMIT_EXCEEDED = "resource_limit_exceeded"
     # Generic accelerator/GPU resource outcomes (#3779). Every value describes a
     # resource-request decision the service made; none names a vendor product,
@@ -342,8 +358,124 @@ class OutputDeclaration(ContractModel):
         return "/".join(parts)
 
 
+#: Container paths of job-owned attachment storage. Inputs are read-only
+#: copies; outputs and scratch are writable and separate from every input.
+INPUT_ATTACHMENTS_TARGET = "/inputs"
+OUTPUT_ATTACHMENT_TARGET = "/outputs"
+SCRATCH_ATTACHMENT_TARGET = "/tmp"
+
+
+class InputAttachment(ContractModel):
+    """One logical, read-only Container Job input mounted at ``/inputs/<name>``.
+
+    The source is a path inside the job's own admitted ``workspaceRef`` or an
+    artifact the job owner may read. The worker captures it once into
+    job-owned storage, so later edits to a mutable working copy cannot change
+    the input, and every retry of the same job sees the same captured bytes.
+    Callers never name host paths, volumes, or Docker endpoints.
+    """
+
+    name: str = Field(
+        pattern=r"^[a-z0-9][a-z0-9._-]{0,62}$",
+        description="Logical name; the input is mounted at /inputs/<name>.",
+    )
+    workspace_path: str | None = Field(
+        None,
+        alias="workspacePath",
+        max_length=1000,
+        description=(
+            "Relative directory inside the job's workspaceRef to snapshot; "
+            "'.' captures the whole workspace."
+        ),
+    )
+    artifact_ref: str | None = Field(
+        None,
+        alias="artifactRef",
+        pattern=r"^art_[0-9A-Za-z]{1,64}$",
+        description="Completed artifact the job owner can read.",
+    )
+    file_name: str | None = Field(
+        None,
+        alias="fileName",
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+        description="File name for an artifact input (default 'content').",
+    )
+    include_git: bool = Field(
+        True,
+        alias="includeGit",
+        description=(
+            "Include .git metadata in a workspace snapshot; the captured "
+            "coverage records whether history was present or shallow."
+        ),
+    )
+    max_files: int = Field(200_000, alias="maxFiles", ge=1, le=1_000_000)
+    max_bytes: int = Field(4 * 1024**3, alias="maxBytes", ge=1, le=16 * 1024**3)
+
+    @field_validator("workspace_path")
+    @classmethod
+    def _normalized_workspace_path(cls, value: str | None) -> str | None:
+        if value is None or value == ".":
+            return value
+        parts = value.split("/")
+        if value.startswith("/") or any(p in {"", ".", ".."} for p in parts):
+            raise ValueError("workspacePath must be '.' or a normalized relative path")
+        return value
+
+    @model_validator(mode="after")
+    def _exactly_one_source(self) -> "InputAttachment":
+        if (self.workspace_path is None) == (self.artifact_ref is None):
+            raise ValueError("exactly one of workspacePath or artifactRef is required")
+        if self.file_name is not None and self.artifact_ref is None:
+            raise ValueError("fileName applies only to an artifact input")
+        return self
+
+
+_REF_PATTERN = r"^[a-z0-9][a-z0-9.-]{0,127}$"
+
+
+class WorkloadCredentialSelection(ContractModel):
+    """A requested reference for one profile credential slot; never a value."""
+
+    slot: str = Field(pattern=_REF_PATTERN)
+    credential_ref: str = Field(alias="credentialRef", max_length=1024)
+    account: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,254}$")
+
+    _validate_credential_ref = field_validator("credential_ref")(
+        _opaque_secret_reference
+    )
+
+
+class WorkloadProfileSelection(ContractModel):
+    """Caller choice within a deployment-declared workload profile.
+
+    Admission renders the profile's image, argv, environment, caches, network
+    and outputs into the spec; the caller never supplies them directly.
+    ``assessmentRef`` is stamped from a scoped session capability.
+    ``credentials`` request admitted references for the profile's slots.
+    """
+
+    profile_ref: str = Field(alias="profileRef", pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$")
+    mode: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$")
+    arguments: dict[str, StrictStr | StrictInt] = Field(
+        default_factory=dict, max_length=32
+    )
+    configuration_exceptions: list[str] = Field(
+        default_factory=list, alias="configurationExceptions", max_length=16
+    )
+    assessment_ref: str | None = Field(
+        None, alias="assessmentRef", pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$"
+    )
+    # None keeps the serialized shape of profile jobs admitted before slots.
+    credentials: list[WorkloadCredentialSelection] | None = Field(None, max_length=8)
+
+
 class ContainerJobSpec(ContractModel):
     repository_scan: RepositoryScan | None = Field(None, alias="repositoryScan")
+    feed_refresh: FeedRefresh | None = Field(None, alias="feedRefresh")
+    image_assessment: ImageAssessment | None = Field(None, alias="imageAssessment")
+    workload_profile: WorkloadProfileSelection | None = Field(
+        None, alias="workloadProfile"
+    )
     image: str | None = Field(None, min_length=1, max_length=512)
     image_source_ref: str | None = Field(
         None,
@@ -364,17 +496,77 @@ class ContainerJobSpec(ContractModel):
     caches: list[CacheMount] = Field(default_factory=list, max_length=32)
     network_mode: Literal["none", "bridge", "service"] = Field("none", alias="networkMode")
     service_ref: str | None = Field(None, alias="serviceRef", pattern=r"^[a-z0-9](?:[a-z0-9.-]{0,126}[a-z0-9])?$", max_length=128)
+    egress_policy_ref: str | None = Field(
+        None, alias="egressPolicyRef", pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$"
+    )
     resources: ResourceLimits
     timeout_seconds: int = Field(1800, alias="timeoutSeconds", ge=1, le=86400)
     pull_policy: Literal["if-missing", "always", "never"] = Field("if-missing", alias="pullPolicy")
     registry_credential_ref: str | None = Field(None, alias="registryCredentialRef", max_length=1024)
     outputs: list[OutputDeclaration] = Field(default_factory=list, max_length=64)
+    # None preserves workspace-only jobs and their serialized shape. When set,
+    # the live workspace is not mounted: inputs are read-only captured copies
+    # and declared outputs resolve against the job-owned /outputs directory.
+    input_attachments: list[InputAttachment] | None = Field(
+        None,
+        alias="inputAttachments",
+        max_length=16,
+        description=(
+            "Read-only captured inputs mounted at /inputs/<name>. Declaring "
+            "the list, even empty, replaces the live /workspace mount with "
+            "job-owned writable /outputs (where declared outputs resolve) and "
+            "/tmp."
+        ),
+    )
 
     _validate_registry_credential_ref = field_validator("registry_credential_ref")(_opaque_secret_reference)
 
+    @field_validator("input_attachments")
+    @classmethod
+    def _unique_attachment_names(
+        cls, value: list[InputAttachment] | None
+    ) -> list[InputAttachment] | None:
+        if value is not None and len({a.name for a in value}) != len(value):
+            raise ValueError("inputAttachments names must be unique")
+        return value
+
+    @model_validator(mode="after")
+    def _caches_stay_outside_attachments(self) -> "ContainerJobSpec":
+        # A mutable cache must never overlay authoritative input or the owned
+        # output/scratch locations.
+        if self.input_attachments is not None:
+            for cache in self.caches:
+                for reserved in (
+                    INPUT_ATTACHMENTS_TARGET,
+                    OUTPUT_ATTACHMENT_TARGET,
+                    SCRATCH_ATTACHMENT_TARGET,
+                ):
+                    if cache.target == reserved or cache.target.startswith(
+                        reserved + "/"
+                    ):
+                        raise ValueError(
+                            "cache targets cannot overlay attachment locations"
+                        )
+        return self
+
     @model_validator(mode="after")
     def exactly_one_image_authority(self) -> "ContainerJobSpec":
-        if (self.image is None) == (self.image_source_ref is None):
+        if self.workload_profile is not None:
+            # Admission resolves the profile's image source; until then the
+            # request carries no image authority of its own.
+            if (
+                self.image is not None
+                or self.repository_scan is not None
+                or self.image_assessment is not None
+            ):
+                raise ValueError(
+                    "workload profile jobs cannot select an image or scanner"
+                )
+            if self.input_attachments is None:
+                raise ValueError(
+                    "workload profile jobs read captured input attachments"
+                )
+        elif (self.image is None) == (self.image_source_ref is None):
             raise ValueError("exactly one of image or imageSourceRef is required")
         if self.image_source_ref is not None and self.registry_credential_ref is not None:
             raise ValueError(
@@ -390,9 +582,22 @@ class ContainerJobSpec(ContractModel):
             raise ValueError("service access requires a deployment-owned image source")
         if self.service_ref is not None and any(item.name.startswith("MOONMIND_SERVICE_") for item in self.environment):
             raise ValueError("service connection environment is deployment-owned")
+        if self.egress_policy_ref is not None:
+            if self.network_mode != "bridge" or self.image_source_ref is None:
+                raise ValueError("egress policy requires bridge and a deployment-owned image source")
+            if any(
+                item.name.lower() in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}
+                or item.name.startswith("MOONMIND_EGRESS_")
+                for item in self.environment
+            ):
+                raise ValueError("egress proxy environment is deployment-owned")
+        from moonmind.security.image_assessments import validate_image_assessment_job
         from moonmind.security.repository_scanners import validate_scanner_job
+        from moonmind.security.scanner_feeds import validate_feed_refresh_job
 
         validate_scanner_job(self)
+        validate_feed_refresh_job(self)
+        validate_image_assessment_job(self)
         return self
 
     @field_validator("workdir")
@@ -533,6 +738,35 @@ class RegistryAuthorization(ContractModel):
     )
     message: str | None = Field(None, max_length=512)
 
+    _validate_credential_ref = field_validator("credential_ref")(
+        _opaque_secret_reference
+    )
+
+
+class WorkloadCredentialAuthorization(ContractModel):
+    """Value-free admission decision for one workload credential slot.
+
+    Admission derives it from the scoped session's grant and binds it to one
+    job, principal, assessment and profile. The worker checks it again, with
+    the secret's current revision, before resolving or issuing anything, so a
+    retry, sibling job or other assessment cannot adopt it.
+    """
+
+    job_id: str = Field(alias="jobId")
+    principal: str = Field(min_length=1, max_length=300)
+    assessment_ref: str = Field(alias="assessmentRef", pattern=_REF_PATTERN)
+    profile_ref: str = Field(alias="profileRef", pattern=_REF_PATTERN)
+    slot: str = Field(pattern=_REF_PATTERN)
+    purpose: Literal["cloud_inventory", "application_auth"]
+    credential_ref: str = Field(alias="credentialRef", max_length=1024)
+    account: str = Field(max_length=255)
+    expires_at: datetime = Field(alias="expiresAt")
+    credential_revision: int | None = Field(None, alias="credentialRevision", ge=1)
+    role_arn: str | None = Field(None, alias="roleArn", max_length=600)
+    max_session_seconds: int = Field(3600, alias="maxSessionSeconds", ge=900, le=43200)
+    access_level: Literal["read_only"] = Field("read_only", alias="accessLevel")
+
+    _valid_job_id = field_validator("job_id")(_validate_job_id)
     _validate_credential_ref = field_validator("credential_ref")(
         _opaque_secret_reference
     )
@@ -973,6 +1207,14 @@ class ContainerJobWorkflowInput(TemporalContractModel):
     registry_authorization: RegistryAuthorization | None = Field(
         None, alias="registryAuthorization"
     )
+    # Image assessment target credential; separate from the job image's pull.
+    target_authorization: RegistryAuthorization | None = Field(
+        None, alias="targetAuthorization"
+    )
+    # None keeps histories started before workload credentials decodable.
+    workload_credentials: tuple[WorkloadCredentialAuthorization, ...] | None = Field(
+        None, alias="workloadCredentials", max_length=8
+    )
     observe_interval_seconds: int = Field(
         10, alias="observeIntervalSeconds", ge=1, le=300
     )
@@ -1022,6 +1264,13 @@ class ContainerJobWorkflowInput(TemporalContractModel):
         return f"{self.job_id}:{self.contract_version}"
 
 
+class EgressDenialObservation(TemporalContractModel):
+    """Compact pointer to a confirmed, durably published denial observation."""
+
+    artifact_ref: str = Field(alias="artifactRef", min_length=1, max_length=1024)
+    denied_connection_count: int = Field(alias="deniedConnectionCount", ge=1)
+
+
 class ContainerJobActivityRequest(TemporalContractModel):
     """Typed, retry-safe request crossing a container-job Activity boundary."""
 
@@ -1038,6 +1287,14 @@ class ContainerJobActivityRequest(TemporalContractModel):
     request: ContainerJobSubmitRequest
     registry_authorization: RegistryAuthorization | None = Field(
         None, alias="registryAuthorization"
+    )
+    # Image assessment target credential; separate from the job image's pull.
+    target_authorization: RegistryAuthorization | None = Field(
+        None, alias="targetAuthorization"
+    )
+    # None keeps histories started before workload credentials decodable.
+    workload_credentials: tuple[WorkloadCredentialAuthorization, ...] | None = Field(
+        None, alias="workloadCredentials", max_length=8
     )
     state: ContainerJobState | None = None
     resolved_workspace_ref: str | None = Field(
@@ -1062,6 +1319,9 @@ class ContainerJobActivityRequest(TemporalContractModel):
     container_ref: str | None = Field(None, alias="containerRef", max_length=1024)
     egress_attestation_ref: str | None = Field(
         None, alias="egressAttestationRef", max_length=1024
+    )
+    egress_denial_observation: EgressDenialObservation | None = Field(
+        None, alias="egressDenialObservation"
     )
     terminal_state: ContainerJobState | None = Field(None, alias="terminalState")
     projection_sequence: int = Field(0, alias="projectionSequence", ge=0)
@@ -1122,6 +1382,9 @@ class ContainerJobActivityResult(TemporalContractModel):
     artifacts_ref: str | None = Field(None, alias="artifactsRef", max_length=1024)
     diagnostics_ref: str | None = Field(
         None, alias="diagnosticsRef", max_length=1024
+    )
+    egress_denial_observation: EgressDenialObservation | None = Field(
+        None, alias="egressDenialObservation"
     )
     cleanup_succeeded: bool | None = Field(None, alias="cleanupSucceeded")
     # Durable observability-event journal ref (the terminal fallback for the

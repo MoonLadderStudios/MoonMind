@@ -2829,6 +2829,73 @@ def test_omnigent_container_job_environment_is_sandbox_and_host_lease_scoped(
     )
 
 
+def test_omnigent_container_capability_signs_or_refuses_admitted_scope(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
+    monkeypatch.setattr(
+        settings.security, "JWT_SECRET_KEY", "test-container-capability-secret"
+    )
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+    scope = {
+        "assessmentRef": "assessment-1",
+        "profileRefs": ["source-scan"],
+        "actionClasses": ["source-analysis"],
+        "targets": [{"workspacePath": "app"}],
+        "maxJobs": 1,
+        "maxJobSeconds": 60,
+        "evidenceIntent": "Source findings",
+    }
+
+    def environment(policy, required_capabilities=("docker",)):
+        return runtime._container_job_environment(
+            binding=_binding().model_copy(
+                update={
+                    "static_host_id": None,
+                    "host_launch_profile_ref": "codex-oauth-v1",
+                }
+            ),
+            host_lease=_host_lease(),
+            workspace_locator={
+                "kind": "sandbox",
+                "workspaceId": "sandbox-1",
+                "relativePath": "repo",
+            },
+            current_workflow_id="workflow-1",
+            current_step_execution_id="agent-run-1",
+            timeout_seconds=3600,
+            required_capabilities=required_capabilities,
+            execution_fanout_authorization=(policy or {}).get("executionFanout"),
+            step_policy=policy,
+        )
+
+    token = environment({"assessmentScope": scope})
+    capability = verify_container_job_session_capability(
+        token["MOONMIND_CONTAINER_JOBS_BEARER_TOKEN"],
+        secret="test-container-capability-secret",
+    )
+    assert capability.assessment_scope.assessment_ref == "assessment-1"
+    # A malformed admitted scope never degrades to an unrestricted session.
+    with pytest.raises(OmnigentOAuthHostError) as exc_info:
+        environment({"assessmentScope": {"assessmentRef": "assessment-1"}})
+    assert exc_info.value.code == "authorization_denied"
+    # Fan-out children would run unscoped, so a scoped step gets no fan-out
+    # bearer even beside an authorized Skill decision.
+    with pytest.raises(OmnigentOAuthHostError, match="assessment-scoped") as fanout:
+        environment(
+            {
+                "assessmentScope": scope,
+                "executionFanout": {"authorized": True, "sourceKind": "built_in"},
+            },
+            required_capabilities=("docker", "execution.fanout"),
+        )
+    assert fanout.value.code == "authorization_denied"
+
+
 def test_omnigent_runtime_authority_is_not_minted_without_required_capabilities(
     tmp_path, monkeypatch
 ) -> None:

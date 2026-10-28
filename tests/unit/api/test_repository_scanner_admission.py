@@ -29,6 +29,8 @@ from tests.unit.workflows.temporal.test_container_job_evidence import _request
             ]
         },
         {"timeoutSeconds": 9000},
+        {"inputAttachments": [{"name": "source", "workspacePath": "src"}]},
+        {"inputAttachments": None},
     ],
 )
 def test_direct_scanner_spec_cannot_weaken_admission(override):
@@ -66,12 +68,13 @@ async def test_service_and_worker_reject_forged_model_before_side_effects(tmp_pa
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("volume", [None, "workspaces"])
-async def test_worker_mounts_source_read_only_and_only_output_writable(
+async def test_worker_mounts_captured_source_read_only_and_owned_output(
     tmp_path, volume
 ):
     scan = RepositoryScan(scanner="gitleaks", outputDirectory="artifacts/scan")
     request = _request(tmp_path, image=None, **build_scanner_job(scan))
     request.resolved_image_ref = "sha256:" + "a" * 64
+    (tmp_path / "art_workspace" / "app.py").write_text("source\n")
     commands = []
     backend = DockerContainerJobBackend(
         workspace_root=tmp_path,
@@ -81,13 +84,38 @@ async def test_worker_mounts_source_read_only_and_only_output_writable(
     await backend.create_container(request)
     argv = next(argv for argv in commands if argv[0] == "create")
     mounts = [argv[i + 1] for i, item in enumerate(argv) if item == "--mount"]
+    assert not any("dst=/workspace" in m for m in mounts)
+    assert next(m for m in mounts if "dst=/inputs/source" in m).endswith(",readonly")
+    assert not next(m for m in mounts if "dst=/outputs" in m).endswith(",readonly")
+    assert "--read-only" in argv
+    assert argv[-6:-3] == ("-I", "-m", "moonmind.security.repository_scanner_runner")
+    assert argv[-2:] == ("/inputs/source", "/outputs/artifacts/scan")
+
+
+def _legacy_scanner_job(scan):
+    """The pre-attachment shape of an already-admitted scanner job."""
+    workload = build_scanner_job(scan)
+    workload.pop("inputAttachments")
+    workload["command"] = workload["command"][:-2]
+    return workload
+
+
+@pytest.mark.asyncio
+async def test_admitted_legacy_scanner_job_keeps_its_nested_output_mount(tmp_path):
+    scan = RepositoryScan(scanner="gitleaks", outputDirectory="artifacts/scan")
+    request = _request(tmp_path, image=None, **_legacy_scanner_job(scan))
+    request.resolved_image_ref = "sha256:" + "a" * 64
+    commands = []
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=_recording_runner(commands)
+    )
+    await backend.create_container(request)
+    argv = next(argv for argv in commands if argv[0] == "create")
+    mounts = [argv[i + 1] for i, item in enumerate(argv) if item == "--mount"]
     assert next(m for m in mounts if "dst=/workspace" in m).endswith(",readonly")
     assert not next(m for m in mounts if "dst=/scan-output" in m).endswith(",readonly")
-    assert "--read-only" in argv
-    assert argv[argv.index("--tmpfs") + 1] == (
-        f"/tmp:rw,nosuid,nodev,size={1152 * 1024**2},mode=1777"
-    )
-    assert argv[-4:-1] == ("-I", "-m", "moonmind.security.repository_scanner_runner")
+    # Draining legacy jobs have no job-owned /tmp, so their root stays writable.
+    assert "--read-only" not in argv
 
 
 @pytest.mark.parametrize(
@@ -118,9 +146,9 @@ def test_unadmitted_config_rules_and_scopes_are_refused(overrides):
 
 
 @pytest.mark.asyncio
-async def test_output_mount_cannot_make_existing_source_writable(tmp_path):
+async def test_legacy_output_mount_cannot_make_existing_source_writable(tmp_path):
     scan = RepositoryScan(scanner="gitleaks", outputDirectory="src")
-    request = _request(tmp_path, image=None, **build_scanner_job(scan))
+    request = _request(tmp_path, image=None, **_legacy_scanner_job(scan))
     request.resolved_image_ref = "sha256:" + "a" * 64
     source = tmp_path / "art_workspace" / "src"
     source.mkdir()

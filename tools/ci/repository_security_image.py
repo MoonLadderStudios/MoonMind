@@ -25,10 +25,13 @@ REPOSITORIES = {
 }
 ARCHITECTURES = ("amd64", "arm64")
 ROOT = Path(__file__).resolve().parents[2]
-# Package the runner's imports, without schema-package reexports or the app.
+# Package the runners' imports, without schema-package reexports or the app.
 RUNNER_FILES = (
     "security/repository_scanner_runner.py",
     "security/repository_scanners.py",
+    "security/scanner_feeds.py",
+    "security/image_assessment_runner.py",
+    "security/image_assessments.py",
     "security/assessments.py",
     "schemas/repository_scanner_models.py",
     "schemas/agent_runtime_models.py",
