@@ -1,0 +1,75 @@
+name: Qualify / Upstream Assessment Images
+
+# Runs the deployment's default ZAP and Prowler images (their `stable` tags,
+# or explicit dispatch overrides) with MoonMind's rendered plan and argv
+# against local fixtures. Nothing is published or pinned: a failure reports
+# that the current upstream release no longer satisfies MoonMind's adapters.
+
+on:
+  schedule:
+    - cron: "41 7 * * 1"
+  push:
+    branches: [main]
+    paths:
+      - "moonmind/security/web_assessments.py"
+      - "moonmind/security/cloud_assessments.py"
+      - "moonmind/schemas/repository_scanner_models.py"
+      - "tests/integration/security/test_upstream_assessment_images.py"
+      - "tests/integration/security/upstream_prowler_driver.py"
+      - "tests/integration/security/web_assessment_fixture_app.py"
+      - ".github/workflows/upstream-assessment-images.yml"
+  pull_request:
+    paths:
+      - "moonmind/security/web_assessments.py"
+      - "moonmind/security/cloud_assessments.py"
+      - "moonmind/schemas/repository_scanner_models.py"
+      - "tests/integration/security/test_upstream_assessment_images.py"
+      - "tests/integration/security/upstream_prowler_driver.py"
+      - "tests/integration/security/web_assessment_fixture_app.py"
+      - ".github/workflows/upstream-assessment-images.yml"
+  workflow_dispatch:
+    inputs:
+      web_assessment_image:
+        description: "ZAP image override; omitted qualifies ghcr.io/zaproxy/zaproxy:stable"
+        type: string
+      cloud_posture_image:
+        description: "Prowler image override; omitted qualifies prowlercloud/prowler:stable"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-assessment-images-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MOONMIND_RUN_UPSTREAM_ASSESSMENT_IMAGES: "1"
+      MOONMIND_WEB_ASSESSMENT_IMAGE: ${{ inputs.web_assessment_image || 'ghcr.io/zaproxy/zaproxy:stable' }}
+      MOONMIND_CLOUD_POSTURE_IMAGE: ${{ inputs.cloud_posture_image || 'prowlercloud/prowler:stable' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install runtime dependencies via uv
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .[tests]
+      - name: Pull images
+        run: |
+          set -euo pipefail
+          for image in "$MOONMIND_WEB_ASSESSMENT_IMAGE" "$MOONMIND_CLOUD_POSTURE_IMAGE"; do
+            docker pull --quiet "$image"
+            # Evidence of what ran, not a pin for later runs.
+            echo "- \`$image\`: $(docker image inspect --format '{{index .RepoDigests 0}}' "$image")" >> "$GITHUB_STEP_SUMMARY"
+          done
+      - name: Qualify images against local fixtures
+        run: >-
+          python -m pytest -q -s
+          tests/integration/security/test_upstream_assessment_images.py
+          -m "integration_ci or integration"

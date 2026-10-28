@@ -659,3 +659,82 @@ async def test_scope_refuses_unadmitted_cloud_work_before_any_job(
         assessment(provider="azure")
     harness.temporal.start_container_job.assert_not_called()
     assert ProviderApi.calls == []
+
+
+def posture_review(summary_ref, **extra):
+    return {
+        "scope": {"assets": [f"aws:{ACCOUNT}"]},
+        "tools": ["retained-report"],
+        "reportRefs": [summary_ref],
+        "credentialRefs": [],
+        "networkRefs": [],
+        "budget": {"baseSeconds": 60, "maxSeconds": 120, "progressStallSeconds": 60},
+        **extra,
+    }
+
+
+@pytest.mark.parametrize("case", ["repaired", "retested", "regions-changed"])
+async def test_repaired_account_is_verified_only_with_comparable_retest(
+    environment, tmp_path, monkeypatch, provider, case
+):
+    """Vulnerable -> repaired posture: absence, verified retest, or neither."""
+    harness = Harness(environment, tmp_path, monkeypatch, provider)
+    _, _, _, accepted = await harness.run(
+        assessment(), "vulnerable", scenario="findings"
+    )
+    baseline = await invoke(
+        environment.service,
+        posture_review(artifact_names(harness, accepted)["summary"]["artifactRef"]),
+        key="cloud-vulnerable",
+    )
+    assert baseline["counts"]["new"] == 3
+    prior = await recurring.read(environment.service, baseline["comparisonRef"])
+    # Same account and checks with every resource passing; or fewer regions.
+    regions = ["us-east-1"] if case == "regions-changed" else ["us-east-1", "eu-west-1"]
+    repaired = assessment(regions=regions)
+    summary, _, _, accepted = await harness.run(
+        repaired, "repaired", scenario="compliant"
+    )
+    assert (summary["outcome"], summary["status"]) == ("clean", "complete")
+    extra = {"baselineRef": baseline["comparisonRef"]}
+    if case != "repaired":
+        extra["decisionsRef"] = await recurring.put(
+            environment.service,
+            [
+                {
+                    "findingId": row["findingId"],
+                    "disposition": "fix_retest",
+                    "reason": "Enabled the control and reran the check",
+                    "evidenceRefs": [baseline["scanRef"]],
+                    "author": "operator",
+                    "source": "security-remediate",
+                    "scope": {"assets": [f"aws:{ACCOUNT}"]},
+                    "reviewAt": "2099-01-01T00:00:00+00:00",
+                    "reviewConditions": ["check or region change"],
+                    "retestOutcome": "passed",
+                }
+                for row in prior["findings"]
+            ],
+        )
+    outputs = await invoke(
+        environment.service,
+        posture_review(
+            artifact_names(harness, accepted)["summary"]["artifactRef"], **extra
+        ),
+        key=f"cloud-{case}",
+    )
+    assert not outputs["diagnostics"]
+    comparison = await recurring.read(environment.service, outputs["comparisonRef"])
+    states = {row["state"] for row in comparison["findings"]}
+    # A changed selection is not the coverage the findings were observed
+    # under, so a passing retest still cannot verify their absence.
+    assert (
+        states
+        == {
+            "repaired": {"absent_comparable"},
+            "retested": {"remediated_verified"},
+            "regions-changed": {"not_reassessed"},
+        }[case]
+    )
+    assert outputs["coverageStatus"] == "complete"
+    assert outputs["counts"]["new"] == 0

@@ -792,3 +792,61 @@ async def test_scope_refuses_unadmitted_modes_and_unscoped_sessions(
                 },
             ),
         )
+
+
+async def test_clean_target_is_complete_and_distinct_from_lost_coverage(
+    environment, tmp_path, monkeypatch, target
+):
+    """A hardened route with no alerts is clean; losing the target is not."""
+    app, gateway = target
+    harness = Harness(environment, tmp_path, monkeypatch, app, gateway)
+    routes = [{"path": "/fixed/search", "methods": ["GET"]}]
+    web = assessment(app, routes=routes, exclusions=[], startPaths=["/fixed/search"])
+    clean, _, _, accepted, _ = await harness.run(web, "clean")
+    assert (clean["status"], clean["findings"], clean["limitations"]) == (
+        "complete",
+        [],
+        [],
+    )
+    assert clean["coverage"]["testedRoutes"] == ["GET /fixed/search"]
+
+    def review(summary_ref, **extra):
+        return {
+            "scope": {"assets": [origin(app)]},
+            "tools": ["retained-report"],
+            "reportRefs": [summary_ref],
+            "credentialRefs": [],
+            "networkRefs": [],
+            "budget": {
+                "baseSeconds": 60,
+                "maxSeconds": 120,
+                "progressStallSeconds": 60,
+            },
+            **extra,
+        }
+
+    first = await invoke(
+        environment.service,
+        review(artifact_names(harness, accepted)["summary"]["artifactRef"]),
+        key="web-clean",
+    )
+    assert first["coverageStatus"] == "complete"
+    assert first["scannerSummaries"][0]["coverage"] == "complete"
+    assert sum(first["counts"].values()) == 0
+
+    # The same admitted job against an unreachable target finds nothing too,
+    # but that is lost coverage, never a second clean result.
+    app.shutdown()
+    app.server_close()
+    lost, _, _, accepted, _ = await harness.run(web, "clean-unreachable")
+    assert lost["findings"] == [] and lost["status"] == "partial"
+    second = await invoke(
+        environment.service,
+        review(
+            artifact_names(harness, accepted)["summary"]["artifactRef"],
+            baselineRef=first["comparisonRef"],
+        ),
+        key="web-clean-unreachable",
+    )
+    assert second["coverageStatus"] == "stale_or_partial"
+    assert second["scannerSummaries"][0]["coverage"] == "partial"

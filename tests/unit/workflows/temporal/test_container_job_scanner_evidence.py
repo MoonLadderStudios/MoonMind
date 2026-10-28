@@ -382,3 +382,30 @@ async def test_inputs_omitted_at_capture_keep_scanner_coverage_partial(
     else:
         assert summary["coverage"] == "partial"
         assert limitation in summary["limitations"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("body", "status"), [(None, "missing"), ("[", "rejected")])
+async def test_unproduced_native_report_is_missing_and_not_retained(
+    tmp_path, body, status
+):
+    """A stopped scan that never wrote a report leaves nothing to keep.
+
+    A malformed report is the only copy of what the scanner wrote, so its
+    outputs stay retained for recovery; an absent one is merely missing.
+    """
+    request, root = scanner_request(tmp_path, terminal="canceled")
+    if body is None:
+        (root / "worktree.json").unlink()
+    else:
+        (root / "worktree.json").write_text(body)
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=_recording_runner([]),
+        evidence_publisher=_Publisher(),
+    )
+    await backend.publish_evidence(request)
+    manifest = await backend._collect_declared_outputs(request)
+    assert next(e for e in manifest if e.name == "worktree").collection_status == status
+    storage = storage_for(tmp_path, request.job_id)
+    assert (storage.root / "retain-outputs").exists() is (status == "rejected")

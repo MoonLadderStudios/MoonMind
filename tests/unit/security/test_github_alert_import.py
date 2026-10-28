@@ -516,3 +516,87 @@ async def test_service_denied_acquisition_makes_no_request(monkeypatch):
     assert {row["outcome"] for row in native["categories"].values()} == {
         "authorization_unavailable"
     }
+
+
+@pytest.mark.asyncio
+async def test_analyzer_change_and_upstream_closure_keep_comparison_honest():
+    """A CodeQL upgrade is not comparable absence; fixed is not dismissed."""
+    from datetime import timedelta
+
+    from moonmind.security.assessments import compare_observations
+
+    request = AssessmentRequest.model_validate(
+        assessment_request(
+            githubAlerts={
+                "repository": REPO,
+                "categories": ["code-scanning"],
+                "state": "all",
+            }
+        )
+    )
+    now = datetime.now(UTC)
+
+    async def observe(*alerts, version="2.19.0"):
+        analysis = {
+            "id": 1,
+            "ref": "refs/heads/main",
+            "commit_sha": SUBJECT,
+            "tool": {"name": "CodeQL", "version": version},
+            "created_at": "2026-10-20T00:00:00Z",
+        }
+        fake = FakeGitHub(
+            {
+                "code-scanning/alerts": [list(alerts)],
+                "code-scanning/analyses": [[analysis]],
+            }
+        )
+        native, _ = await collect(
+            fake,
+            import_request(
+                categories=["code-scanning"], state="all", includeAnalyses=True
+            ),
+        )
+        return alert_observation(request, native, "art_import", now)[0]
+
+    first = await observe(code_alert(1), code_alert(2), code_alert(3))
+    assert first.coverage[0].status == "complete"
+    baseline = compare_observations(first, None, now=now)
+    ids = {row["finding"]["nativeId"]: row["findingId"] for row in baseline["findings"]}
+
+    # Same analyzer, alerts gone: comparable absence.
+    gone = compare_observations(await observe(code_alert(3)), baseline, now=now)
+    assert {row["state"] for row in gone["findings"]} == {
+        "absent_comparable",
+        "still_observed",
+    }
+
+    upgraded = await observe(
+        code_alert(9, tool={"name": "CodeQL", "version": "2.20.0"}),
+        version="2.20.0",
+    )
+    assert upgraded.coverage[0].intelligence == {"analyzers": "CodeQL@2.20.0"}
+    after_upgrade = compare_observations(upgraded, baseline, now=now)
+    states = {
+        row["finding"]["nativeId"]: row["state"] for row in after_upgrade["findings"]
+    }
+    assert states == {
+        "1": "not_reassessed",
+        "2": "not_reassessed",
+        "3": "not_reassessed",
+        "9": "new",
+    }
+    row = next(r for r in after_upgrade["findings"] if r["state"] == "new")
+    assert row["changedIntelligence"] == ["github-code-scanning:analyzers"]
+    assert after_upgrade["intelligenceChanges"] == ["github-code-scanning:analyzers"]
+
+    closed = await observe(
+        code_alert(1, state="fixed"), code_alert(2, state="dismissed"), code_alert(3)
+    )
+    assert closed.upstream_closed == {ids["1"]: "fixed", ids["2"]: "dismissed"}
+    result = compare_observations(closed, baseline, now=now + timedelta(seconds=1))
+    states = {row["finding"]["nativeId"]: row["state"] for row in result["findings"]}
+    assert states == {
+        "1": "remediated_verified",
+        "2": "closed_upstream",
+        "3": "still_observed",
+    }

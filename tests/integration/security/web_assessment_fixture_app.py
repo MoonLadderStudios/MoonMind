@@ -25,7 +25,11 @@ PASSWORDS = {"alice": "alice-fixture-pass-5044", "root": "root-fixture-pass-5044
 ROLES = {"alice": "user", "root": "admin", "svc": "user"}
 TOKENS = {"svc-fixture-token-5044": "svc"}
 HARDENED = {
-    "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+    # form-action and base-uri have no default-src fallback; ZAP flags them.
+    "Content-Security-Policy": (
+        "default-src 'none'; frame-ancestors 'none'; form-action 'none'; "
+        "base-uri 'none'"
+    ),
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Cache-Control": "no-store",

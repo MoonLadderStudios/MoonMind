@@ -542,6 +542,49 @@ async def test_passive_report_composes_existing_native_scanner(environment, tmp_
     assert "example-fixture" not in json.dumps(comparison)
 
 
+async def test_github_upstream_closure_survives_assessment_aggregation(
+    environment, monkeypatch
+):
+    from moonmind.workflows.adapters.github_service import GitHubService
+    from tests.unit.security.test_github_alert_import import (
+        FakeGitHub,
+        assessment_request,
+        code_alert,
+        collect,
+    )
+
+    alerts = [code_alert(1), code_alert(2)]
+
+    async def read_security_alerts(_self, request, *, admitted_workflow_id):
+        return await collect(FakeGitHub({"code-scanning/alerts": [alerts]}), request)
+
+    monkeypatch.setattr(GitHubService, "read_security_alerts", read_security_alerts)
+    request = assessment_request(
+        githubAlerts={
+            "repository": "acme/repo",
+            "categories": ["code-scanning"],
+            "state": "all",
+        }
+    )
+    baseline = await invoke(environment.service, request, key="first")
+    alerts[:] = [code_alert(1, state="fixed"), code_alert(2, state="dismissed")]
+    result = await invoke(
+        environment.service,
+        {**request, "baselineRef": baseline["comparisonRef"]},
+        run_id="next-occurrence",
+        key="second",
+    )
+    comparison = await read(environment.service, result["comparisonRef"])
+    states = {
+        row["finding"]["nativeId"]: (row["state"], row["verification"])
+        for row in comparison["findings"]
+    }
+    assert states == {
+        "1": ("remediated_verified", "upstream_fixed"),
+        "2": ("closed_upstream", None),
+    }
+
+
 async def test_multiple_reports_preserve_evidence_for_one_native_finding(environment):
     service = environment.service
     request, _, _ = await inputs(service)

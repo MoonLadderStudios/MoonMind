@@ -775,6 +775,39 @@ def build_feed_refresh_job(
     }
 
 
+def expand_feed_refresh_job(value):
+    """Fill a typed refresh request with its canonical job, for every entry.
+
+    A schedule or other caller names only ``feedRefresh`` (and resources);
+    supplied fields win, so any divergence still fails validation below.
+    """
+    if not isinstance(value, dict):
+        return value
+    raw = value.get("feedRefresh", value.get("feed_refresh"))
+    if raw is None:
+        return value
+    try:
+        refresh = FeedRefresh.model_validate(raw)
+    except ValueError:
+        return value
+    source = value.get("imageSourceRef", value.get("image_source_ref"))
+    canonical = build_feed_refresh_job(
+        refresh,
+        **({"image_source_ref": source} if isinstance(source, str) else {}),
+    )
+    if "image" in value:
+        canonical.pop("imageSourceRef")
+    # Field names and aliases both count as supplied (populate_by_name).
+    supplied = {
+        head + "".join(part.title() for part in rest)
+        for head, *rest in (str(key).split("_") for key in value)
+    }
+    return {
+        **{key: item for key, item in canonical.items() if key not in supplied},
+        **value,
+    }
+
+
 def validate_feed_refresh_job(spec) -> None:
     """Rechecked wherever a spec is decoded: admission, persistence, worker."""
     refresh = spec.feed_refresh
