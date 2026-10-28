@@ -24835,7 +24835,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if not isinstance(spec, Mapping):
             raise ValueError("container.run_job inputs.spec is required")
         resolved_spec = dict(spec)
-        if "workspaceRef" not in resolved_spec:
+        # A typed feed refresh is source-free and mounts no workspace. Plans
+        # could not name feedRefresh before, so no recorded history changes.
+        if "workspaceRef" not in resolved_spec and "feedRefresh" not in resolved_spec:
             runtime_id = self._managed_runtime_id(self._target_runtime or "")
             if not runtime_id:
                 raise ValueError(

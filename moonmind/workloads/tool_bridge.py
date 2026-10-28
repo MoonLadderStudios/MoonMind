@@ -65,9 +65,12 @@ def build_container_job_tool_definition_payload(*, name: str) -> dict[str, Any]:
     }
     spec_schema = {
         "type": "object",
-        "required": ["image", "resources"],
+        # A typed feedRefresh replaces image: the container-job owner derives
+        # its deployment image source and the rest of the source-free job.
+        "required": ["resources"],
         "properties": {
             "image": {"type": "string", "minLength": 1, "maxLength": 512},
+            "feedRefresh": {"type": "object"},
             "workspaceRef": locator_schema,
             "command": {"type": "array", "items": {"type": "string"}, "maxItems": 128},
             "entrypoint": {"type": "array", "items": {"type": "string"}, "maxItems": 32},

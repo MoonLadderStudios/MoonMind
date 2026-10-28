@@ -160,3 +160,41 @@ def test_cpu_only_canonical_container_job_carries_no_device_request() -> None:
     assert "gpu" not in submitted.model_dump(
         mode="json", by_alias=True, exclude_none=True
     )["spec"]["resources"]
+
+
+def test_scheduled_plan_can_name_a_typed_feed_refresh() -> None:
+    """A recurring tool step refreshes feeds without hand-copying the job."""
+    from moonmind.workflows.skills.plan_validation import (
+        PlanValidationError,
+        validate_json_value,
+    )
+
+    schema = build_container_job_tool_definition_payload(
+        name=CONTAINER_RUN_JOB_TOOL
+    )["inputs"]["schema"]
+    inputs = {
+        "spec": {
+            "feedRefresh": {
+                "feedCacheRef": "scanner-feeds",
+                "egressPolicyRef": "scanner-feeds",
+                "components": ["vulnerability", "checks"],
+            },
+            "resources": {"cpuMillis": 2000, "memoryMiB": 2048, "pids": 256},
+        }
+    }
+    validate_json_value(value=inputs, schema=schema, path="refresh.inputs")
+    request = ContainerJobSubmitRequest.model_validate(
+        {
+            "idempotencyKey": "feeds",
+            "source": {"source": "workflow", "workflowId": "mm:feeds"},
+            **inputs,
+        }
+    )
+    assert request.spec.feed_refresh is not None
+    assert request.spec.workspace_ref is None
+    with pytest.raises(PlanValidationError):
+        validate_json_value(
+            value={"spec": {**inputs["spec"], "privileged": True}},
+            schema=schema,
+            path="refresh.inputs",
+        )

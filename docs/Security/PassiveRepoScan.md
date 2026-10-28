@@ -163,8 +163,10 @@ source-revision pin.
 Use the existing schedule policy (`overlap.mode`, `catchup.mode`) and manual
 `POST /api/recurring-workflows/{id}/run` with an `Idempotency-Key`. Supply a newer
 `feedRef` through normal workflow/schedule authoring when intelligence changes,
-and the last `comparisonRef` as the next `baselineRef`. There is no feed poller
-or second scheduler. Identical admitted inputs reuse a confirmed scanner save;
+and the last `comparisonRef` as the next `baselineRef`. Trivy feed snapshots
+refresh through a recurring `container.run_job` step
+([feed snapshots](SecurityTools.md#trivy-feed-snapshots)); there is no feed
+poller or second scheduler. Identical admitted inputs reuse a confirmed scanner save;
 a later occurrence can also reuse the supplied baseline's scanner observation.
 Scanner results are saved before report publication, so publication retries
 do not repeat completed work. Cancellation propagates without a successor.
@@ -190,9 +192,17 @@ The versioned JSON contracts live in `moonmind/security/assessments.py`:
   counts and baseline/scan artifact references. Identity never depends on a
   presentation title or severity.
 
-Comparisons distinguish `new`, `still_observed`, `absent_comparable` and
-`not_reassessed`. Absence requires fresh, completed coverage of the original
-asset/rule under comparable scope, exclusions and configuration. Partial scans,
+Comparisons distinguish `new`, `still_observed`, `absent_comparable`,
+`remediated_verified`, `closed_upstream` and `not_reassessed`. Absence requires
+fresh, completed coverage of the original asset/rule under comparable scope,
+exclusions and configuration. Comparable absence becomes `remediated_verified`
+only with a passing `fix_retest` decision for the finding; a source's own fixed
+state (a GitHub alert GitHub reports fixed) also counts, while dismissed or
+resolved alerts are `closed_upstream`. Coverage rows record the feed, rule and
+tool identity that interpreted the inputs (`intelligence`). New or absent
+findings whose covering tool's intelligence changed list the keys in
+`changedIntelligence`, and the comparison lists them in `intelligenceChanges`.
+A changed code-scanning analyzer or version makes GitHub absence incomparable. Partial scans,
 failed authentication, unsupported assets, expired evidence and changed scope
 retain prior findings and evidence. Large evidence unions remain reachable
 through retained input reports. An unavailable or malformed baseline, including
@@ -205,11 +215,14 @@ decision names `findingId`, `disposition`, `reason`, `evidenceRefs`, `author`,
 `source`, `scope`, `reviewAt` and `reviewConditions`, with optional `expiresAt`.
 Dispositions are `accepted_risk`, `false_positive`, `confirmed_vulnerability`
 and `fix_retest`; only the latter requires `retestOutcome` (`passed`, `failed`
-or `inconclusive`). Due or expired decisions re-enter review. Scope/provenance
-changes require review too; that status persists until a renewed decision for
-the finding replaces it. Replaying the same decision cannot clear review.
-Earlier decisions remain in baseline artifacts. Decisions annotate observations
-and cannot assert a scanner fix. Repository exceptions remain explicit scope
+or `inconclusive`). Due or expired decisions re-enter review, as do unrenewed
+decisions whose finding's intelligence or the observation's provenance changed,
+and passing retests the scanner contradicts by still reporting the finding.
+`reviewReasons` names which (`review_due`, `expired`, `review_pending`,
+`intelligence_changed`, `provenance_changed`, `retest_contradicted`). Review
+persists until a renewed decision for the finding replaces it; replaying the
+same decision cannot clear it. Earlier decisions remain in baseline artifacts.
+Decisions annotate observations and never change scanner facts. Repository exceptions remain explicit scope
 configuration.
 
 The existing report links expose a readable delta/coverage/review summary,

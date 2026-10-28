@@ -1200,6 +1200,10 @@ class DockerContainerJobBackend:
 
     async def resolve_workspace(self, request: ContainerJobActivityRequest):
         locator = request.request.spec.workspace_ref
+        if locator is None:
+            # Source-free: the job reads only captured artifacts and job-owned
+            # storage, so there is no workspace to authorize or mount.
+            return ContainerJobActivityResult(workspaceProbe="not_mounted")
         if isinstance(locator, ManagedWorkspaceLocator):
             if self._managed_run_store is None:
                 raise RuntimeError("managed run store is unavailable")
@@ -1849,7 +1853,7 @@ class DockerContainerJobBackend:
         spec = request.request.spec
         # Workspace visibility is authorized before any expensive acquisition,
         # so a missing-image pull can never precede workspace resolution.
-        if not request.resolved_workspace_ref:
+        if not request.resolved_workspace_ref and spec.workspace_ref is not None:
             raise ImageAcquisitionError(
                 "workspace must be resolved before image acquisition",
                 failure_class=ContainerJobFailureClass.WORKSPACE,
@@ -2739,9 +2743,11 @@ class DockerContainerJobBackend:
             return []
 
     async def create_container(self, request: ContainerJobActivityRequest):
-        if not request.resolved_workspace_ref or not request.resolved_image_ref:
-            raise RuntimeError("resolved workspace and image are required")
         spec = request.request.spec
+        if not request.resolved_image_ref or (
+            not request.resolved_workspace_ref and spec.workspace_ref is not None
+        ):
+            raise RuntimeError("resolved workspace and image are required")
         validate_scanner_job(spec)
         try:
             # Retries and restarts reach this point too: a profile job runs
@@ -2813,52 +2819,60 @@ class DockerContainerJobBackend:
             )
             network_mode = egress_attestation.network_ref
         await self._reject_ownership_collision(request, name)
-        volume_name = request.resolved_workspace_volume_name
-        volume_subpath = request.resolved_workspace_volume_subpath
-        if (
-            not volume_name
-            and not volume_subpath
-            and self._workspace_volume_name is not None
-        ):
-            # Already-running workflows may carry the pre-volume Activity shape.
-            # Reconstruct only deployment-owned metadata at the trusted launch
-            # boundary so those histories use the same daemon-visible mount.
-            workspace = Path(request.resolved_workspace_ref).resolve()
-            if not workspace.is_relative_to(self._workspace_root):
-                raise RuntimeError("resolved workspace escapes its authority")
-            derived_subpath = workspace.relative_to(self._workspace_root).as_posix()
-            if not derived_subpath or derived_subpath == "." or "," in derived_subpath:
-                raise RuntimeError(
-                    "resolved workspace has an invalid volume subpath"
+        workspace_mount = None
+        if spec.workspace_ref is not None:
+            volume_name = request.resolved_workspace_volume_name
+            volume_subpath = request.resolved_workspace_volume_subpath
+            if (
+                not volume_name
+                and not volume_subpath
+                and self._workspace_volume_name is not None
+            ):
+                # Already-running workflows may carry the pre-volume Activity shape.
+                # Reconstruct only deployment-owned metadata at the trusted launch
+                # boundary so those histories use the same daemon-visible mount.
+                workspace = Path(request.resolved_workspace_ref).resolve()
+                if not workspace.is_relative_to(self._workspace_root):
+                    raise RuntimeError("resolved workspace escapes its authority")
+                derived_subpath = workspace.relative_to(self._workspace_root).as_posix()
+                if (
+                    not derived_subpath
+                    or derived_subpath == "."
+                    or "," in derived_subpath
+                ):
+                    raise RuntimeError(
+                        "resolved workspace has an invalid volume subpath"
+                    )
+                volume_name = self._workspace_volume_name
+                volume_subpath = derived_subpath
+            if bool(volume_name) != bool(volume_subpath):
+                raise RuntimeError("resolved workspace volume metadata is incomplete")
+            if volume_name and volume_subpath:
+                if volume_name != self._workspace_volume_name:
+                    raise RuntimeError(
+                        "resolved workspace volume is not deployment-authorized"
+                    )
+                workspace = Path(request.resolved_workspace_ref).resolve()
+                if not workspace.is_relative_to(self._workspace_root):
+                    raise RuntimeError("resolved workspace escapes its authority")
+                expected_subpath = workspace.relative_to(
+                    self._workspace_root
+                ).as_posix()
+                if volume_subpath != expected_subpath:
+                    raise RuntimeError(
+                        "resolved workspace volume subpath does not match workspace"
+                    )
+                workspace_mount = (
+                    f"type=volume,src={volume_name},dst=/workspace,"
+                    f"volume-subpath={volume_subpath}"
                 )
-            volume_name = self._workspace_volume_name
-            volume_subpath = derived_subpath
-        if bool(volume_name) != bool(volume_subpath):
-            raise RuntimeError("resolved workspace volume metadata is incomplete")
-        if volume_name and volume_subpath:
-            if volume_name != self._workspace_volume_name:
-                raise RuntimeError(
-                    "resolved workspace volume is not deployment-authorized"
+            else:
+                # Preserve the pre-volume activity shape for already-started runs.
+                workspace_mount = (
+                    f"type=bind,src={request.resolved_workspace_ref},dst=/workspace"
                 )
-            workspace = Path(request.resolved_workspace_ref).resolve()
-            if not workspace.is_relative_to(self._workspace_root):
-                raise RuntimeError("resolved workspace escapes its authority")
-            expected_subpath = workspace.relative_to(self._workspace_root).as_posix()
-            if volume_subpath != expected_subpath:
-                raise RuntimeError(
-                    "resolved workspace volume subpath does not match workspace"
-                )
-            workspace_mount = (
-                f"type=volume,src={volume_name},dst=/workspace,"
-                f"volume-subpath={volume_subpath}"
-            )
-        else:
-            # Preserve the pre-volume activity shape for already-started runs.
-            workspace_mount = (
-                f"type=bind,src={request.resolved_workspace_ref},dst=/workspace"
-            )
-        if spec.workspace_read_only:
-            workspace_mount += ",readonly"
+            if spec.workspace_read_only:
+                workspace_mount += ",readonly"
         # An attachment job never sees the live workspace: its inputs are
         # captured read-only copies and it writes only to job-owned storage.
         mounts = (
@@ -3087,7 +3101,12 @@ class DockerContainerJobBackend:
         """Capture inputs once into job-owned storage and return its mounts."""
 
         storage = self._attachment_storage(request)
-        workspace = Path(request.resolved_workspace_ref).resolve()
+        # Source-free jobs have no workspace and capture no workspace paths.
+        workspace = (
+            Path(request.resolved_workspace_ref).resolve()
+            if request.resolved_workspace_ref
+            else None
+        )
         admitted = {item.name: item for item in request.request.spec.input_attachments}
 
         async def capture(name: str, destination: Path) -> dict:
@@ -4153,12 +4172,19 @@ class DockerContainerJobBackend:
             except (ValueError, TypeError, RecursionError):
                 payload = b""
                 limitations.append("native_evidence_unavailable")
+                # An unproduced report (a stopped scan) leaves nothing to keep;
+                # a rejected one is the only copy, so release retains it.
+                missing = by_name[mode]["status"] == ArtifactCollectionStatus.MISSING
                 manifest.append(
                     ContainerJobArtifact(
                         name=mode,
                         relativePath=f"{output_directory}/{mode}.json",
-                        collectionStatus="rejected",
-                        detail="Native evidence unavailable or sanitization failed.",
+                        collectionStatus="missing" if missing else "rejected",
+                        detail=(
+                            "Native evidence was not produced."
+                            if missing
+                            else "Native evidence unavailable or sanitization failed."
+                        ),
                     )
                 )
             state = execution.states[mode] if execution else terminal
