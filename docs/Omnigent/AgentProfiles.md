@@ -19,8 +19,11 @@ Workflow, schedule, checkpoint-branch, and remediation authoring pair **Harness*
 | --- | --- | --- |
 | Codex OAuth, `codex_cli` / `openai` | `codex-native` | `codex-oauth-home@1` |
 | Claude Code OAuth, `claude_code` / `anthropic` | `claude-native` | `claude-oauth-home@1` |
+| Claude Code API key, `claude_code` / `anthropic` | `claude-native` | `omnigent-provider-config@1` |
 | Keyed OpenCode Go | `opencode-native` | `opencode-auth-json@1` |
 | Credentialless OpenCode Zen | `opencode-native` | `none@1` |
+
+An API-key Claude Profile uses `omnigent-provider-config@1` only when that config can carry its launch environment exactly: one key SecretRef (`ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`), plus an optional `ANTHROPIC_BASE_URL` that the Omnigent egress profile admits, and optional `ANTHROPIC_MODEL` and per-tier model pins. The managed `omnigent-claude-api-key` configuration accepts such Profiles. Any other Claude key Profile, such as the seeded MiniMax Profile with its `API_TIMEOUT_MS`, stays on its direct route.
 
 These are compatibility relationships, not a blanket support claim. The selected configuration, materializer, Host Class, launch policy, model and exact support evidence still have to admit the execution. A shared upstream provider name alone cannot establish harness or backend compatibility.
 

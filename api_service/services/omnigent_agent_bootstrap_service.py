@@ -62,6 +62,7 @@ logger = logging.getLogger(__name__)
 
 BOOTSTRAP_PROFILE_ID = "omnigent-bootstrap-default"
 CLAUDE_BUILTIN_PROFILE_ID = "omnigent-claude-default"
+CLAUDE_API_KEY_BUILTIN_PROFILE_ID = "omnigent-claude-api-key"
 OPENCODE_BUILTIN_PROFILE_ID = "omnigent-opencode-default"
 _ENV_DEFAULT_AGENT_NAME = "OMNIGENT_DEFAULT_AGENT_NAME"
 _BUILTIN_DEFAULT_AGENT_NAME = "codex-native-ui"
@@ -145,6 +146,8 @@ def build_bootstrap_document(
     harness: str = _BOOTSTRAP_HARNESS,
     provider_runtime_id: str = _BOOTSTRAP_PROVIDER_RUNTIME_ID,
     provider_ids: tuple[str, ...] = (),
+    credential_source: str = _BOOTSTRAP_PROVIDER_CREDENTIAL_SOURCE,
+    materialization_mode: str = _BOOTSTRAP_PROVIDER_MATERIALIZATION_MODE,
 ) -> dict[str, Any]:
     """Build the normalized bootstrap profile document for a stable agent ID.
 
@@ -169,8 +172,8 @@ def build_bootstrap_document(
         "model": {"settings": {}},
         "policyRef": launch_policy_ref,
         "providerRequirements": {
-            "credentialSource": _BOOTSTRAP_PROVIDER_CREDENTIAL_SOURCE,
-            "materializationMode": _BOOTSTRAP_PROVIDER_MATERIALIZATION_MODE,
+            "credentialSource": credential_source,
+            "materializationMode": materialization_mode,
             "providerIds": list(provider_ids),
             "runtimeId": provider_runtime_id,
         },
@@ -659,6 +662,49 @@ async def _active_bootstrap_launch_policy_ref(session: AsyncSession) -> str:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _ManagedClaudeConfiguration:
+    profile_id: str
+    marker: str
+    display_name: str
+    description: str
+    credential_source: str
+    materialization_mode: str
+
+
+# The stock Claude agent backs one managed configuration per Provider Profile
+# credential shape. Selection keeps them disjoint (credential source), and an
+# authored configuration for the same shape wins over either fallback.
+_MANAGED_CLAUDE_CONFIGURATIONS = (
+    _ManagedClaudeConfiguration(
+        profile_id=CLAUDE_BUILTIN_PROFILE_ID,
+        marker="claude",
+        display_name="Claude Code via Omnigent",
+        description=(
+            "MoonMind-managed Claude Code configuration using the connected "
+            "Anthropic OAuth Provider Profile."
+        ),
+        credential_source="oauth_volume",
+        materialization_mode="oauth_home",
+    ),
+    _ManagedClaudeConfiguration(
+        profile_id=CLAUDE_API_KEY_BUILTIN_PROFILE_ID,
+        marker="claude-api-key",
+        display_name="Claude Code via Omnigent (API key)",
+        description=(
+            "MoonMind-managed Claude Code configuration for API-key Provider "
+            "Profiles whose key, endpoint and model pins the Omnigent "
+            "provider config carries."
+        ),
+        credential_source="secret_ref",
+        materialization_mode="api_key_env",
+    ),
+)
+MANAGED_CLAUDE_BUILTINS = {
+    item.profile_id: item.marker for item in _MANAGED_CLAUDE_CONFIGURATIONS
+}
+
+
 async def reconcile_builtin_claude_agent_profile(
     session: AsyncSession,
     *,
@@ -666,7 +712,7 @@ async def reconcile_builtin_claude_agent_profile(
     env: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> bool:
-    """Bind the observed stock Claude agent to its active managed policy."""
+    """Bind the observed stock Claude agent to its managed configurations."""
 
     if not generic_claude_qualified(env=env):
         return False
@@ -703,6 +749,31 @@ async def reconcile_builtin_claude_agent_profile(
         required_capabilities=_BOOTSTRAP_REQUIRED_CAPABILITIES,
     )["ready"]:
         return False
+    results = [
+        await _reconcile_managed_claude_configuration(
+            session,
+            managed,
+            upstream_id=upstream_id,
+            upstream_version=upstream_version,
+            launch_policy_ref=launch_policy_ref,
+            projection=projection,
+            observed_at=observed_at,
+        )
+        for managed in _MANAGED_CLAUDE_CONFIGURATIONS
+    ]
+    return all(results)
+
+
+async def _reconcile_managed_claude_configuration(
+    session: AsyncSession,
+    managed: _ManagedClaudeConfiguration,
+    *,
+    upstream_id: str,
+    upstream_version: str | None,
+    launch_policy_ref: str,
+    projection: OmnigentUpstreamAgentProjection,
+    observed_at: datetime,
+) -> bool:
     document = build_bootstrap_document(
         upstream_id,
         upstream_version=upstream_version,
@@ -711,15 +782,17 @@ async def reconcile_builtin_claude_agent_profile(
         harness="claude-native",
         provider_runtime_id="claude_code",
         provider_ids=("anthropic",),
+        credential_source=managed.credential_source,
+        materialization_mode=managed.materialization_mode,
     )
     digest = _digest(document)
-    profile = await session.get(OmnigentAgentProfile, CLAUDE_BUILTIN_PROFILE_ID)
+    profile = await session.get(OmnigentAgentProfile, managed.profile_id)
     active = await _load_active_version(session, profile) if profile else None
     if profile is not None and (
         profile.state != "active"
         or active is None
         or active.created_by is not None
-        or (active.rollout_metadata or {}).get("managedBuiltin") != "claude"
+        or (active.rollout_metadata or {}).get("managedBuiltin") != managed.marker
     ):
         # An operator-owned edit or disablement cannot be silently replaced by
         # the stock reconciliation loop.
@@ -729,7 +802,7 @@ async def reconcile_builtin_claude_agent_profile(
 
     candidate = await session.scalar(
         select(OmnigentAgentProfileVersion).where(
-            OmnigentAgentProfileVersion.profile_id == CLAUDE_BUILTIN_PROFILE_ID,
+            OmnigentAgentProfileVersion.profile_id == managed.profile_id,
             OmnigentAgentProfileVersion.digest == digest,
         )
     )
@@ -737,13 +810,13 @@ async def reconcile_builtin_claude_agent_profile(
         latest = int(
             await session.scalar(
                 select(func.max(OmnigentAgentProfileVersion.version)).where(
-                    OmnigentAgentProfileVersion.profile_id == CLAUDE_BUILTIN_PROFILE_ID
+                    OmnigentAgentProfileVersion.profile_id == managed.profile_id
                 )
             )
             or 0
         )
         candidate = OmnigentAgentProfileVersion(
-            profile_id=CLAUDE_BUILTIN_PROFILE_ID,
+            profile_id=managed.profile_id,
             version=latest + 1,
             digest=digest,
             document=document,
@@ -765,7 +838,7 @@ async def reconcile_builtin_claude_agent_profile(
             },
             rollout_metadata={
                 "origin": "builtin_claude",
-                "managedBuiltin": "claude",
+                "managedBuiltin": managed.marker,
                 "materializedAt": observed_at.isoformat(),
                 "launchPolicyRef": launch_policy_ref,
             },
@@ -774,12 +847,9 @@ async def reconcile_builtin_claude_agent_profile(
         session.add(candidate)
     if profile is None:
         profile = OmnigentAgentProfile(
-            profile_id=CLAUDE_BUILTIN_PROFILE_ID,
-            display_name="Claude Code via Omnigent",
-            description=(
-                "MoonMind-managed Claude Code configuration using the connected "
-                "Anthropic OAuth Provider Profile."
-            ),
+            profile_id=managed.profile_id,
+            display_name=managed.display_name,
+            description=managed.description,
             owner_id=None,
             visibility="workspace",
             state="active",
@@ -791,7 +861,7 @@ async def reconcile_builtin_claude_agent_profile(
         profile.active_version = candidate.version
     session.add(
         OmnigentAgentProfileAuditEvent(
-            profile_id=CLAUDE_BUILTIN_PROFILE_ID,
+            profile_id=managed.profile_id,
             action="bootstrap_materialized" if active is None else "bootstrap_updated",
             version=candidate.version,
             actor_id=None,
@@ -806,7 +876,7 @@ async def reconcile_builtin_claude_agent_profile(
         await session.commit()
     except IntegrityError:
         await session.rollback()
-        current = await session.get(OmnigentAgentProfile, CLAUDE_BUILTIN_PROFILE_ID)
+        current = await session.get(OmnigentAgentProfile, managed.profile_id)
         version = await _load_active_version(session, current) if current else None
         return bool(version is not None and version.digest == digest)
     return True
@@ -983,7 +1053,9 @@ async def reconcile_bootstrap_agent_profile(
 
 __all__ = [
     "BOOTSTRAP_PROFILE_ID",
+    "CLAUDE_API_KEY_BUILTIN_PROFILE_ID",
     "CLAUDE_BUILTIN_PROFILE_ID",
+    "MANAGED_CLAUDE_BUILTINS",
     "OPENCODE_BUILTIN_PROFILE_ID",
     "BootstrapDefaultConflictError",
     "DefaultAgentResolution",

@@ -215,9 +215,13 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "moonmind.workflows.temporal.runtime.strategies:RUNTIME_STRATEGIES"
         ),
         consumer=(
-            "Explicit ``claude_code`` managed-runtime selections, their "
-            "queued starts, retries and recovery, and recorded direct-run "
-            "histories that replay these activities."
+            "Explicit ``claude_code`` managed-runtime selections; Claude "
+            "Provider Profiles no Omnigent configuration accepts (key "
+            "Profiles whose launch environment the provider config cannot "
+            "carry, and every Claude Profile while generic Claude is "
+            "unqualified), which ``profile_route_runtime`` routes here; "
+            "their queued starts, retries and recovery; and recorded "
+            "direct-run histories that replay these activities."
         ),
         removalCondition=(
             "New ``claude_code`` admission is closed by this row's class, "
@@ -230,11 +234,14 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "already the unset default."
         ),
         missingOutcome=(
-            "API-key and custom-endpoint Claude Provider Profiles "
-            "(MiniMax via ``ANTHROPIC_BASE_URL`` with its "
-            "``ANTHROPIC_MODEL`` override; the shared OAuth packs forbid "
-            "``ANTHROPIC_API_KEY`` and no managed configuration accepts a "
-            "``secret_ref`` Profile), and slash-command passthrough "
+            "Custom-endpoint Claude key Profiles the Omnigent provider "
+            "config cannot carry exactly: the seeded MiniMax ``env_bundle`` "
+            "Profile sets ``API_TIMEOUT_MS`` and "
+            "``CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC``, which have no "
+            "provider-config field, and its ``api.minimax.io`` endpoint "
+            "needs a deployment egress entry. Exact API-key Profiles already "
+            "run through ``omnigent-provider-config@1`` "
+            "(``omnigent-claude-api-key``). Also slash-command passthrough "
             "(``execution_contract`` classifies ``omnigent`` as unable to "
             "run slash commands)."
         ),

@@ -519,3 +519,86 @@ def test_cloud_removal_preserves_retained_profile_requirements(runtime_id):
         select_execution_configuration(retained, [(row, version)])["providerProfileRef"]
         == retained.profile_id
     )
+
+
+def _claude_api_key_provider(**env):
+    return provider(
+        profile_id="claude_anthropic_api",
+        runtime_id="claude_code",
+        provider_id="anthropic",
+        credential_source="secret_ref",
+        runtime_materialization_mode="api_key_env",
+        secret_refs={"anthropic_api_key": "env://ANTHROPIC_API_KEY"},
+        env_template={
+            "ANTHROPIC_API_KEY": {"from_secret_ref": "anthropic_api_key"},
+            **env,
+        },
+        file_templates=None,
+        home_path_overrides=None,
+    )
+
+
+def _claude_api_key_configuration(name, *, managed=True):
+    row, version = _claude_configuration(
+        name,
+        rollout_metadata={"managedBuiltin": "claude-api-key"} if managed else None,
+    )
+    version.document["providerRequirements"].update(
+        credentialSource="secret_ref", materializationMode="api_key_env"
+    )
+    return row, version
+
+
+def test_api_key_claude_profile_moves_to_managed_api_key_configuration():
+    stock_oauth = _claude_configuration(
+        "omnigent-claude-default", rollout_metadata={"managedBuiltin": "claude"}
+    )
+    stock_api_key = _claude_api_key_configuration("omnigent-claude-api-key")
+    api_key = _claude_api_key_provider()
+
+    # Before the managed API-key configuration exists (an older deployment or
+    # an unqualified Claude host) the Profile keeps its direct route.
+    assert profile_has_native_inventory_route(api_key, [stock_oauth])
+    # With it, new work is admitted through the shared lifecycle instead.
+    assert not profile_has_native_inventory_route(api_key, [stock_oauth, stock_api_key])
+    assert (
+        select_execution_configuration(api_key, [stock_oauth, stock_api_key])[
+            "profileId"
+        ]
+        == "omnigent-claude-api-key"
+    )
+    # The two managed shapes stay disjoint for OAuth Profiles.
+    assert (
+        select_execution_configuration(
+            _claude_provider(), [stock_oauth, stock_api_key]
+        )["profileId"]
+        == "omnigent-claude-default"
+    )
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"API_TIMEOUT_MS": "3000000"},
+        {"ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic"},
+        {"ANTHROPIC_MODEL": "{{model}}"},
+    ],
+)
+def test_untranslatable_api_key_claude_profile_keeps_direct_route(env):
+    stock_api_key = _claude_api_key_configuration("omnigent-claude-api-key")
+    api_key = _claude_api_key_provider(**env)
+
+    assert not configuration_accepts_profile(stock_api_key[1].document, api_key)
+    assert profile_has_native_inventory_route(api_key, [stock_api_key])
+
+
+def test_authored_api_key_claude_configuration_wins_over_managed_fallback():
+    stock_api_key = _claude_api_key_configuration("omnigent-claude-api-key")
+    authored = _claude_api_key_configuration("claude-api-team", managed=False)
+
+    assert (
+        select_execution_configuration(
+            _claude_api_key_provider(), [stock_api_key, authored]
+        )["profileId"]
+        == "claude-api-team"
+    )

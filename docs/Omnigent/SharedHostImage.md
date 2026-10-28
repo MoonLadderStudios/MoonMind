@@ -177,7 +177,7 @@ Changing a vendor pin is a deployment change that must land in the image build a
 
 ```text
 omnigent-codex@1     codex-native     + codex-native-pack@1     + codex-oauth-home@1, none@1
-omnigent-claude@1    claude-native    + claude-native-pack@1    + claude-oauth-home@1, none@1
+omnigent-claude@1    claude-native    + claude-native-pack@1    + claude-oauth-home@1, omnigent-provider-config@1, none@1
 omnigent-opencode@2  opencode-native  + opencode-native-pack@1  + opencode-auth-json@1, none@1
 ```
 
@@ -197,6 +197,7 @@ Separate classes reference the same `OMNIGENT_SHARED_HOST_IMAGE_REF` digest with
 | `opencode-auth-json@1` | run | Keyed OpenCode Go route: per-run volume, destroyed on cleanup |
 | `codex-oauth-home@1` | profile | Enrollment-owned OAuth home volume attached read-write; generation-marker fenced; detached but preserved on cleanup |
 | `claude-oauth-home@1` | profile | Same profile-owned contract for the Claude enrollment home |
+| `omnigent-provider-config@1` | run | API-key Claude route: a per-run read-only volume holding the Omnigent provider config, with its key, endpoint and model pins. Omnigent turns it into Claude Code's base URL, key helper and model pins. The volume is destroyed on cleanup |
 | `none@1` | none | Credentialless OpenCode Zen creates no auth state or dummy secret; its real Provider Profile still governs routing and capacity |
 | `host-owned-auth@1` | host | No runtime state copied or deleted; only supported static-host combinations may use this authority |
 
