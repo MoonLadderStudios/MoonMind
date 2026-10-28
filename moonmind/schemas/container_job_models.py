@@ -36,6 +36,7 @@ from moonmind.schemas.repository_scanner_models import (
     FeedRefresh,
     ImageAssessment,
     RepositoryScan,
+    WebAssessment,
 )
 
 CONTAINER_JOB_CONTRACT_VERSION = "v1"
@@ -473,6 +474,7 @@ class ContainerJobSpec(ContractModel):
     repository_scan: RepositoryScan | None = Field(None, alias="repositoryScan")
     feed_refresh: FeedRefresh | None = Field(None, alias="feedRefresh")
     image_assessment: ImageAssessment | None = Field(None, alias="imageAssessment")
+    web_assessment: WebAssessment | None = Field(None, alias="webAssessment")
     workload_profile: WorkloadProfileSelection | None = Field(
         None, alias="workloadProfile"
     )
@@ -558,6 +560,7 @@ class ContainerJobSpec(ContractModel):
                 self.image is not None
                 or self.repository_scan is not None
                 or self.image_assessment is not None
+                or self.web_assessment is not None
             ):
                 raise ValueError(
                     "workload profile jobs cannot select an image or scanner"
@@ -594,10 +597,12 @@ class ContainerJobSpec(ContractModel):
         from moonmind.security.image_assessments import validate_image_assessment_job
         from moonmind.security.repository_scanners import validate_scanner_job
         from moonmind.security.scanner_feeds import validate_feed_refresh_job
+        from moonmind.security.web_assessments import validate_web_assessment_job
 
         validate_scanner_job(self)
         validate_feed_refresh_job(self)
         validate_image_assessment_job(self)
+        validate_web_assessment_job(self)
         return self
 
     @field_validator("workdir")

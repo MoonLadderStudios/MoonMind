@@ -417,7 +417,11 @@ async def publish_once(
 
 
 def deliver_credential(
-    storage: JobAttachmentStorage, body: bytes, *, ownership_token: str
+    storage: JobAttachmentStorage,
+    body: bytes,
+    *,
+    ownership_token: str,
+    file_name: str = "config.json",
 ) -> None:
     """Write one worker-resolved credential file for the job's read-only mount.
 
@@ -432,7 +436,7 @@ def deliver_credential(
     _remove_tree(storage.credentials)
     storage.credentials.mkdir(mode=0o755)
     fd = os.open(
-        storage.credentials / "config.json",
+        storage.credentials / file_name,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
         0o600,
     )
@@ -445,6 +449,18 @@ def deliver_credential(
 
 def remove_credentials(storage: JobAttachmentStorage) -> None:
     _remove_tree(storage.credentials)
+
+
+def write_plan(directory: Path, body: bytes) -> None:
+    """Replace a worker-rendered plan in the job's own output directory."""
+
+    directory.mkdir(parents=True, exist_ok=True)
+    # The image's non-root user writes its reports beside the plan.
+    os.chmod(directory, 0o777)
+    plan = directory / "plan.yaml"
+    if plan.is_symlink() or plan.exists():
+        plan.unlink()
+    _write_new(plan, body, 0o444)
 
 
 def _owned(storage: JobAttachmentStorage, ownership_token: str) -> None:

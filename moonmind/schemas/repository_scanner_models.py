@@ -481,9 +481,10 @@ class WebAssessment(Contract):
         return WEB_ACTION_CLASSES[self.mode]
 
     def outputs(self) -> list[dict]:
-        # The passive phase reports first, so a timeout or cancellation during
-        # active testing still leaves its checked evidence.
+        # Active mode reports its passive phase first, so a timeout or
+        # cancellation during active testing still leaves checked evidence.
         return [
             {"name": name, "relativePath": f"{self.output_directory}/{file}"}
             for name, file in WEB_OUTPUT_FILES.items()
+            if self.mode == "active" or not name.startswith("passive-")
         ]
