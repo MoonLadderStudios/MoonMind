@@ -28,6 +28,7 @@ from moonmind.security.assessments import (
 )
 from moonmind.security.github_alerts import alert_observation, correlate_alerts
 from moonmind.security.image_assessments import ImageAssessmentSummary
+from moonmind.security.web_assessments import WebAssessmentSummary
 from moonmind.security.passive_repo_scan import (
     PASSIVE_SCAN_TOOL_REF,
     parse_scan_report_json,
@@ -329,6 +330,65 @@ def _image_observation(
     )
 
 
+def _web_observation(
+    request, summary: WebAssessmentSummary, ref: str, created_at: datetime
+) -> Observation:
+    """ZAP findings as web coverage of one origin, mode and identity."""
+    result, admission = summary.result, summary.admission
+    if any(not set(f.evidence_refs) <= {summary.native_ref} for f in result.findings):
+        raise ValueError("finding evidence differs from retained native records")
+    if any(f.asset not in request.scope.assets for f in result.findings):
+        raise ValueError("web finding outside admitted assessment scope")
+    assets = [a for a in result.examined_assets if a in request.scope.assets]
+    identity = admission.identity.name if admission.identity else "anonymous"
+    return Observation(
+        scope=request.scope,
+        observed_at=created_at,
+        expires_at=created_at + timedelta(days=1),
+        findings=result.findings,
+        coverage=[
+            Coverage(
+                source="web",
+                tool="zap",
+                assets=assets,
+                rule_ids=[],
+                all_rules=summary.status == "complete",
+                # Mode, identity, admitted routes and the routes actually
+                # tested decide what absence can mean: a finding on a route
+                # this crawl never reached was not reassessed.
+                config_ref=content_key(
+                    [
+                        "web",
+                        admission.mode,
+                        admission.active_strength,
+                        identity,
+                        [r.model_dump(mode="json") for r in admission.routes],
+                        admission.exclusions,
+                        sorted(summary.coverage.tested_routes),
+                    ]
+                ),
+                status=(
+                    "complete"
+                    if summary.status == "complete" and assets
+                    else (
+                        "authentication_failed"
+                        if summary.coverage.authentication is not None
+                        and summary.coverage.authentication.status == "failed"
+                        else "partial"
+                    )
+                ),
+            )
+        ],
+        provenance={
+            "webSummary": ref,
+            "webNativeReport": summary.native_ref or "unavailable",
+            "webPlan": summary.plan_ref or "unavailable",
+            "webMode": admission.mode,
+            "webIdentity": identity,
+        },
+    )
+
+
 class AssessmentExecution:
     def __init__(self, service: Any, *, principal: str, context: Mapping[str, Any]):
         self.service = service
@@ -586,6 +646,35 @@ class AssessmentExecution:
                                     ),
                                     "verification": image_summary.verification,
                                     "interpretation": image_summary.interpretation,
+                                }
+                            )
+                        elif payload.get("schemaVersion") == "web-assessment/v1":
+                            web_summary = WebAssessmentSummary.model_validate(payload)
+                            if web_summary.native_ref:
+                                await self.read(web_summary.native_ref)
+                            observed_at = metadata.created_at
+                            if observed_at.tzinfo is None:
+                                observed_at = observed_at.replace(tzinfo=UTC)
+                            observation = _web_observation(
+                                request, web_summary, ref, observed_at
+                            )
+                            scanner_summaries.append(
+                                {
+                                    "scanner": "zap",
+                                    "target": web_summary.admission.origin,
+                                    "summaryRef": ref,
+                                    "nativeRefs": (
+                                        {"report": web_summary.native_ref}
+                                        if web_summary.native_ref
+                                        else {}
+                                    ),
+                                    "coverage": observation.coverage[0].status,
+                                    "execution": {
+                                        "report": web_summary.result.execution
+                                    },
+                                    "limitations": sorted(web_summary.limitations),
+                                    "verification": web_summary.verification,
+                                    "interpretation": web_summary.interpretation,
                                 }
                             )
                         elif payload.get("toolRef") == PASSIVE_SCAN_TOOL_REF:
