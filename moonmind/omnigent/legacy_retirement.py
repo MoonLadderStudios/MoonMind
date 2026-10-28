@@ -6,8 +6,10 @@ MoonLadderStudios/MoonMind#3932.
 Each row names a retained legacy surface that a new-admission boundary can still
 select (a runtime strategy, a non-generic realizer, a provider-specific startup
 script or Compose service, a legacy image variable, the embedded transport) or
-that owns an enforced-boundary exemption, together with its retirement class.
-The class decides only one thing: whether *new* work may still be admitted.
+that owns an enforced-boundary exemption, together with its retirement class,
+the actual consumer it still serves, and the observable condition under which
+it can be deleted. The class decides only one thing: whether *new* work may
+still be admitted.
 Already-recorded work keeps executing, cancelling, cleaning up, replaying, and
 reading through its own owner regardless of the class.
 
@@ -80,6 +82,13 @@ class LegacyPathRecord(BaseModel):
     # The concrete code path that can still create new records or admit new work
     # through this component. Empty exactly when the class no longer admits.
     new_admission_source: str = Field("", alias="newAdmissionSource")
+    # Who still depends on the path: the supported journeys, explicit choices,
+    # and retained histories or records it serves. An unknown installed state
+    # is not evidence that no consumer remains.
+    consumer: str
+    # The observable state that permits deleting the path together with this
+    # row. It names what must migrate or drain, not a date or phase.
+    removal_condition: str = Field(alias="removalCondition")
 
     @property
     def admits_new_work(self) -> bool:
@@ -91,6 +100,12 @@ class LegacyPathRecord(BaseModel):
             parse_surface_ref(ref)
         if len(set(self.surfaces)) != len(self.surfaces):
             raise ValueError(f"{self.path_id}: duplicate surface refs")
+        for name, value in (
+            ("consumer", self.consumer),
+            ("removal condition", self.removal_condition),
+        ):
+            if not value.strip():
+                raise ValueError(f"{self.path_id}: row must name its {name}")
 
         admits = self.admits_new_work
         if admits and not self.new_admission_source.strip():
@@ -142,6 +157,19 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         newAdmissionSource=(
             "moonmind.workflows.temporal.runtime.strategies:RUNTIME_STRATEGIES"
         ),
+        consumer=(
+            "Explicit ``codex_cli`` managed-runtime selections and restored "
+            "direct defaults, their queued starts, retries and recovery, "
+            "workflow-scoped Codex AgentSession turns, and recorded "
+            "direct-run histories that replay these activities."
+        ),
+        removalCondition=(
+            "New ``codex_cli`` admission is closed "
+            "(``MOONMIND_CODEX_DIRECT_RETIRED_AT`` or this row's class), "
+            "explicit selections translate to the shared Omnigent "
+            "lifecycle, and no open history can schedule or retry a direct "
+            "Codex launch."
+        ),
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.direct_claude_launch",
@@ -158,6 +186,76 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         ),
         newAdmissionSource=(
             "moonmind.workflows.temporal.runtime.strategies:RUNTIME_STRATEGIES"
+        ),
+        consumer=(
+            "Explicit ``claude_code`` managed-runtime selections, their "
+            "queued starts, retries and recovery, and recorded direct-run "
+            "histories that replay these activities."
+        ),
+        removalCondition=(
+            "New ``claude_code`` admission is closed by this row's class, "
+            "explicit selections translate to the shared Omnigent "
+            "lifecycle, and no open history can schedule or retry a direct "
+            "Claude launch."
+        ),
+    ),
+    LegacyPathRecord(
+        pathId="omnigent.legacy.managed_runtime_launcher",
+        owner="omnigent-runtime-plane",
+        description=(
+            "Direct managed-runtime launcher that owns process launch, "
+            "environment, credential, workspace and cleanup for the direct "
+            "runtime strategies, separately from the shared host lifecycle."
+        ),
+        retirementClass=RetirementClass.ACTIVE_PRODUCT_PATH,
+        surfaces=(
+            "python:moonmind.workflows.temporal.runtime.launcher:"
+            "ManagedRuntimeLauncher",
+        ),
+        newAdmissionSource=(
+            "moonmind.workflows.temporal.runtime.strategies:RUNTIME_STRATEGIES"
+        ),
+        consumer=(
+            "New, queued and recovered ``codex_cli`` and ``claude_code`` "
+            "managed runs, wired by "
+            "``moonmind.workflows.temporal.worker_runtime``."
+        ),
+        removalCondition=(
+            "Both direct launch rows are deleted. The Codex and Claude CLIs "
+            "and Node leave the application image in the same change."
+        ),
+    ),
+    LegacyPathRecord(
+        pathId="omnigent.legacy.direct_agent_session",
+        owner="omnigent-runtime-plane",
+        description=(
+            "Direct workflow-scoped Codex AgentSession: the "
+            "``MoonMind.AgentSession`` child, its app-server session runtime, "
+            "and the Docker session controller."
+        ),
+        retirementClass=RetirementClass.ACTIVE_PRODUCT_PATH,
+        surfaces=(
+            "python:moonmind.workflows.temporal.workflows.agent_session:"
+            "MoonMindAgentSessionWorkflow",
+            "python:moonmind.workflows.temporal.runtime.codex_session_runtime:"
+            "CodexManagedSessionRuntime",
+            "python:moonmind.workflows.temporal.runtime."
+            "managed_session_controller:DockerCodexManagedSessionController",
+        ),
+        newAdmissionSource=(
+            "moonmind.workflows.temporal.workflows.run:"
+            "MoonMindRunWorkflow._maybe_bind_workflow_scoped_session"
+        ),
+        consumer=(
+            "Managed ``codex_cli`` runs that bind a workflow-scoped session: "
+            "session reuse and clearing between steps, bound native "
+            "interaction, steering, interrupt and recovery of the session "
+            "container, and recorded histories that replay the child "
+            "workflow and its patches."
+        ),
+        removalCondition=(
+            "The direct Codex launch row is deleted and no open history "
+            "starts, signals or replays a ``MoonMind.AgentSession`` child."
         ),
     ),
     LegacyPathRecord(
@@ -176,6 +274,17 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         newAdmissionSource=(
             "moonmind.omnigent.harness_platform.planner:select_execution_realizer"
         ),
+        consumer=(
+            "Codex plans the trusted planner still routes to "
+            "``codex-profile-bound@1``: the explicit profile-bound opt-out, "
+            "restore controls and custom rollouts, plus admitted plans that "
+            "record this realizer."
+        ),
+        removalCondition=(
+            "The planner selects only ``generic-omnigent-host@1`` for new "
+            "Codex work and no open plan or history records "
+            "``codex-profile-bound@1``."
+        ),
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.profile_bound_execution",
@@ -188,6 +297,14 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         ),
         newAdmissionSource=(
             "moonmind.omnigent.realizers.codex_profile_bound:CodexProfileBoundRealizer"
+        ),
+        consumer=(
+            "Execution, cancellation, retry and cleanup of plans admitted "
+            "through ``codex-profile-bound@1``, including replay of their "
+            "recorded histories."
+        ),
+        removalCondition=(
+            "The profile-bound realizer row is deleted."
         ),
     ),
     LegacyPathRecord(
@@ -205,6 +322,16 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "moonmind.omnigent.profile_bound_execution:"
             "OmnigentProfileBoundExecutionCoordinator"
         ),
+        consumer=(
+            "Codex OAuth host launch, credential-volume mounts and egress "
+            "attestation for profile-bound executions, and OAuth enrollment "
+            "hosts."
+        ),
+        removalCondition=(
+            "The profile-bound execution row is deleted and OAuth "
+            "enrollment and maintenance launch through the shared host "
+            "lifecycle."
+        ),
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.codex_static_host_startup",
@@ -221,6 +348,16 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "compose-profile:omnigent-host-codex",
         ),
         newAdmissionSource="docker-compose.yaml:omnigent-host-codex",
+        consumer=(
+            "Operators who enable the ``omnigent-host-codex`` Compose "
+            "profile for static-connected Codex execution "
+            "(``codex-static@1``) and the OAuth host launches that share "
+            "its wrapper."
+        ),
+        removalCondition=(
+            "Static-connected Codex runs on the shared host image without "
+            "this wrapper and no deployment enables the Compose profile."
+        ),
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.claude_static_host_startup",
@@ -237,6 +374,16 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "compose-profile:omnigent-host-claude",
         ),
         newAdmissionSource="docker-compose.yaml:omnigent-host-claude",
+        consumer=(
+            "Operators who enable the ``omnigent-host-claude`` Compose "
+            "profile for static-connected Claude execution "
+            "(``claude-static@1``) and the OAuth host launches that share "
+            "its wrapper."
+        ),
+        removalCondition=(
+            "Static-connected Claude runs on the shared host image without "
+            "this wrapper and no deployment enables the Compose profile."
+        ),
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.projection_host_startup",
@@ -254,6 +401,14 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "compose-profile:omnigent-host",
         ),
         newAdmissionSource="docker-compose.yaml:omnigent-host",
+        consumer=(
+            "Deployments that enable the ``omnigent-host`` Compose profile "
+            "for runner-projection hosts."
+        ),
+        removalCondition=(
+            "Runner projections start from the shared host image and no "
+            "deployment enables the ``omnigent-host`` profile."
+        ),
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.host_image_variable_alias",
@@ -274,6 +429,14 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "moonmind.omnigent.harness_platform.static_hosts:"
             "resolve_static_host_image_ref"
         ),
+        consumer=(
+            "Existing deployment configuration that pins a host image "
+            "through the pre-shared-image variables."
+        ),
+        removalCondition=(
+            "Each alias completes its obsolete-configuration deprecation "
+            "window in ``OBSOLETE_CONFIGURATION``."
+        ),
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.opencode_host_image_alias",
@@ -292,6 +455,17 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "moonmind.omnigent.harness_platform.host_classes:"
             "get_opencode_host_image_ref"
         ),
+        consumer=(
+            "Admitted ``omnigent-opencode@1`` plans and retries that replay "
+            "their recorded host image, and deployments that pin the "
+            "OpenCode host through this variable. Fresh OpenCode work "
+            "selects ``omnigent-opencode@2``."
+        ),
+        removalCondition=(
+            "No open plan or history records ``omnigent-opencode@1`` and "
+            "the variable completes its obsolete-configuration deprecation "
+            "window."
+        ),
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.pi_host_image_alias",
@@ -306,6 +480,13 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         newAdmissionSource=(
             "moonmind.omnigent.harness_platform.host_classes:get_pi_host_image_ref"
         ),
+        consumer=(
+            "``pi-native`` execution, whose ``omnigent-pi@1`` Host Class "
+            "still resolves this variable."
+        ),
+        removalCondition=(
+            "Pi runs from the shared host image through a runtime pack."
+        ),
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.native_ui_compat",
@@ -315,6 +496,15 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         surfaces=("python:moonmind.omnigent.native_ui_compat:classify_native_ui_http",),
         newAdmissionSource=(
             "api_service.api.routers.omnigent_bridge:_bridge_event_payload"
+        ),
+        consumer=(
+            "Native chat and Workflow Detail projections of recorded bridge "
+            "events, including retained direct and embedded sessions."
+        ),
+        removalCondition=(
+            "Workflow Detail and native chat read only the generic bridge "
+            "event projection and no retained session needs the "
+            "compatibility classifier."
         ),
     ),
     LegacyPathRecord(
@@ -338,6 +528,17 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "_reject_new_embedded_transport_admission",
             "python:api_service.api.routers.omnigent_bridge:"
             "_require_new_embedded_transport_admission",
+        ),
+        consumer=(
+            "Retained embedded sessions, host leases and pending cleanup "
+            "authority draining through their recorded mode, endpoint and "
+            "cleanup owner."
+        ),
+        removalCondition=(
+            "``/embedded-transport-drain`` reports drained on every "
+            "deployment: zero active embedded sessions and host leases and "
+            "observed-empty pending cleanup. Read-only history decoding and "
+            "``embedded=1`` native UI remain."
         ),
     ),
 )

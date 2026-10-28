@@ -157,6 +157,7 @@ def test_summarize_reports_drained_only_when_fully_drained() -> None:
     disposition = summarize_embedded_drain(
         active_embedded_sessions=0,
         active_embedded_leases=0,
+        pending_cleanup_host_leases=0,
         historical_decoding_available=True,
     )
 
@@ -172,6 +173,7 @@ def test_summarize_names_every_blocker_and_never_implies_drain() -> None:
     disposition = summarize_embedded_drain(
         active_embedded_sessions=2,
         active_embedded_leases=1,
+        pending_cleanup_host_leases=0,
         historical_decoding_available=False,
     )
 
@@ -183,7 +185,9 @@ def test_summarize_names_every_blocker_and_never_implies_drain() -> None:
     )
 
     leases_only = summarize_embedded_drain(
-        active_embedded_sessions=0, active_embedded_leases=3
+        active_embedded_sessions=0,
+        active_embedded_leases=3,
+        pending_cleanup_host_leases=0,
     )
     assert leases_only["drained"] is False
     assert leases_only["blockers"] == ("active_embedded_leases:3",)
@@ -191,9 +195,29 @@ def test_summarize_names_every_blocker_and_never_implies_drain() -> None:
 
 def test_summarize_rejects_malformed_counts() -> None:
     with pytest.raises(EmbeddedDrainError):
-        summarize_embedded_drain(active_embedded_sessions=-1, active_embedded_leases=0)
+        summarize_embedded_drain(
+            active_embedded_sessions=-1,
+            active_embedded_leases=0,
+            pending_cleanup_host_leases=0,
+        )
     with pytest.raises(EmbeddedDrainError):
-        summarize_embedded_drain(active_embedded_sessions=True, active_embedded_leases=0)  # type: ignore[arg-type]
+        summarize_embedded_drain(
+            active_embedded_sessions=True,  # type: ignore[arg-type]
+            active_embedded_leases=0,
+            pending_cleanup_host_leases=0,
+        )
+
+
+def test_summarize_treats_unobserved_cleanup_as_a_blocker() -> None:
+    disposition = summarize_embedded_drain(
+        active_embedded_sessions=0,
+        active_embedded_leases=0,
+        pending_cleanup_host_leases=None,
+    )
+
+    assert disposition["drained"] is False
+    assert disposition["blockers"] == ("pending_cleanup_host_leases:unobserved",)
+    assert disposition["pendingCleanupHostLeases"] is None
 
 
 # ---------------------------------------------------------- import boundary

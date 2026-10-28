@@ -108,8 +108,8 @@ def summarize_embedded_drain(
     *,
     active_embedded_sessions: int,
     active_embedded_leases: int,
+    pending_cleanup_host_leases: int | None,
     historical_decoding_available: bool = True,
-    pending_cleanup_host_leases: int = 0,
     lease_list_truncated: bool = False,
 ) -> dict[str, Any]:
     """Aggregate durable embedded counts into a bounded drain disposition.
@@ -118,7 +118,8 @@ def summarize_embedded_drain(
     embedded host lease, and no pending janitor cleanup authority remains
     *and* read-only historical decoding is available for the retained rows.
     Every other shape names its blockers; missing evidence is a blocker,
-    never an implicit drain.
+    never an implicit drain. ``pending_cleanup_host_leases`` is ``None`` when
+    the store could not observe cleanup authority, which blocks drain.
 
     ``active_embedded_leases`` must be the uncapped durable total (the
     bounded readiness list is capped for payload safety, so it cannot serve
@@ -132,6 +133,8 @@ def summarize_embedded_drain(
         ("active_embedded_leases", active_embedded_leases),
         ("pending_cleanup_host_leases", pending_cleanup_host_leases),
     ):
+        if value is None and name == "pending_cleanup_host_leases":
+            continue
         if not isinstance(value, int) or isinstance(value, bool):
             raise EmbeddedDrainError(f"{name} must be an int, got {value!r}")
         if value < 0:
@@ -141,7 +144,9 @@ def summarize_embedded_drain(
         blockers.append(f"active_embedded_sessions:{active_embedded_sessions}")
     if active_embedded_leases > 0:
         blockers.append(f"active_embedded_leases:{active_embedded_leases}")
-    if pending_cleanup_host_leases > 0:
+    if pending_cleanup_host_leases is None:
+        blockers.append("pending_cleanup_host_leases:unobserved")
+    elif pending_cleanup_host_leases > 0:
         blockers.append(
             f"pending_cleanup_host_leases:{pending_cleanup_host_leases}"
         )
@@ -193,7 +198,9 @@ async def probe_embedded_drain(store: Any) -> dict[str, Any]:
     list length is used and the observation is reported as untruncated.
     Terminal sessions that still carry janitor cleanup authority are
     invisible to both readers above, so their refs are counted separately:
-    the probe reports ``drained`` only when that set is empty.
+    the probe reports ``drained`` only when that set is observed and empty.
+    A store without that reader, or a lease total it cannot report, blocks
+    drain rather than counting as zero.
 
     A store failure propagates instead of implying drain: missing evidence
     is a blocker, never an implicit drain, and the caller observes the
@@ -216,7 +223,9 @@ async def probe_embedded_drain(store: Any) -> dict[str, Any]:
     if callable(count_reader):
         raw_total = await count_reader()
         try:
-            active_leases = int(raw_total or 0)
+            if raw_total is None:
+                raise TypeError("unobserved")
+            active_leases = int(raw_total)
         except (TypeError, ValueError) as exc:
             raise EmbeddedDrainError(
                 "active embedded lease count must be an int, "
@@ -237,7 +246,7 @@ async def probe_embedded_drain(store: Any) -> dict[str, Any]:
                 f"collection, got {type(pending_cleanup_refs).__name__}"
             ) from exc
     else:
-        pending_cleanup = 0
+        pending_cleanup = None
     try:
         active_sessions = int(modes.get(HOST_PROTOCOL_MODE_EMBEDDED, 0) or 0)
     except (TypeError, ValueError) as exc:

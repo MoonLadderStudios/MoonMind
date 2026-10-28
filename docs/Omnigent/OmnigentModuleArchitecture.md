@@ -201,8 +201,11 @@ legacy surface that no row classifies.
 
 - `RETIREMENT_INVENTORY` holds one row per retained legacy path that a
   new-admission boundary can select or that an architecture exemption names.
-  Each row records its owner, **retirement class**, surfaces, and the source
-  that still admits new work.
+  Each row records its owner, **retirement class**, surfaces, the source
+  that still admits new work, the actual consumer it serves (journeys,
+  explicit choices, retained histories), and the observable removal
+  condition. Direct Codex/Claude launch, the managed-runtime launcher and the
+  direct Codex AgentSession each have a row.
 - `ARCHITECTURE_BOUNDARY_EXCEPTIONS` holds the boundary exemptions and names the
   row each one shelters.
 - `moonmind/omnigent/retirement_surfaces.py` derives the legacy surfaces the
