@@ -2885,6 +2885,11 @@ class DockerContainerJobBackend:
         for mount in mounts:
             args.extend(("--mount", mount))
         args.extend(("--cpus", str(cpu_limit / 1000)))
+        if spec.repository_scan is not None and spec.input_attachments is not None:
+            # The scanner writes only to its job-owned /outputs and /tmp; its
+            # image root stays read-only. Opengrep's one-file release executes
+            # an extracted child from that /tmp, so scratch must stay exec.
+            args.append("--read-only")
         if spec.repository_scan is not None and spec.input_attachments is None:
             output = self._scanner_output_directory(request)
             if volume_name and volume_subpath:
