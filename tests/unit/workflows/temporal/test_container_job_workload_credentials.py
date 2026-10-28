@@ -257,7 +257,8 @@ class Fixture:
         if argv[0] == "inspect":
             return 1, b"", b"No such container"
         if argv[0] == "logs":
-            return 0, *self.logs
+            stdout, stderr = self.logs
+            return 0, stdout, stderr
         return 0, b"", b""
 
     async def publish(self, _request, name, payload):
