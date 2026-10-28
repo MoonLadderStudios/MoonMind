@@ -473,6 +473,18 @@ def retire_credential(storage: JobAttachmentStorage, file_name: str) -> str | No
     return None
 
 
+def prepare_output_directory(directory: Path) -> None:
+    """Give a fresh launch an empty, image-writable report directory.
+
+    Evidence left by an earlier, unpublished launch would mix two runs.
+    """
+
+    _remove_tree(directory)
+    directory.mkdir(parents=True)
+    # The image's non-root user writes its reports here.
+    os.chmod(directory, 0o777)
+
+
 def write_plan(directory: Path, body: bytes) -> None:
     """Replace a worker-rendered plan in the job's own output directory."""
 

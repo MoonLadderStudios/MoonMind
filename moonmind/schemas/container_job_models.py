@@ -33,6 +33,7 @@ from moonmind.schemas.workspace_locator_models import (
 )
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.schemas.repository_scanner_models import (
+    CloudAssessment,
     FeedRefresh,
     ImageAssessment,
     RepositoryScan,
@@ -475,6 +476,7 @@ class ContainerJobSpec(ContractModel):
     feed_refresh: FeedRefresh | None = Field(None, alias="feedRefresh")
     image_assessment: ImageAssessment | None = Field(None, alias="imageAssessment")
     web_assessment: WebAssessment | None = Field(None, alias="webAssessment")
+    cloud_assessment: CloudAssessment | None = Field(None, alias="cloudAssessment")
     workload_profile: WorkloadProfileSelection | None = Field(
         None, alias="workloadProfile"
     )
@@ -561,6 +563,7 @@ class ContainerJobSpec(ContractModel):
                 or self.repository_scan is not None
                 or self.image_assessment is not None
                 or self.web_assessment is not None
+                or self.cloud_assessment is not None
             ):
                 raise ValueError(
                     "workload profile jobs cannot select an image or scanner"
@@ -594,6 +597,7 @@ class ContainerJobSpec(ContractModel):
                 for item in self.environment
             ):
                 raise ValueError("egress proxy environment is deployment-owned")
+        from moonmind.security.cloud_assessments import validate_cloud_assessment_job
         from moonmind.security.image_assessments import validate_image_assessment_job
         from moonmind.security.repository_scanners import validate_scanner_job
         from moonmind.security.scanner_feeds import validate_feed_refresh_job
@@ -603,6 +607,7 @@ class ContainerJobSpec(ContractModel):
         validate_feed_refresh_job(self)
         validate_image_assessment_job(self)
         validate_web_assessment_job(self)
+        validate_cloud_assessment_job(self)
         return self
 
     @field_validator("workdir")

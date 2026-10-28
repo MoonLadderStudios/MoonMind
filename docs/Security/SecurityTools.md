@@ -1,12 +1,12 @@
 # Security Tools and Assessment Workflows
 
-This describes MoonMind's security program, including capabilities that still need qualification. The [passive repository scan](PassiveRepoScan.md), repository scanner adapters, image and SBOM jobs, web and API assessment jobs, and Trivy feed snapshots below have implemented job/report paths.
+This describes MoonMind's security program, including capabilities that still need qualification. The [passive repository scan](PassiveRepoScan.md), repository scanner adapters, image and SBOM jobs, web and API assessment jobs, cloud posture jobs, and Trivy feed snapshots below have implemented job/report paths.
 
 ## Purpose and ownership
 
-MoonMind helps its operator investigate and improve the security of source code, dependencies, build systems, container images, cloud resources, and running applications. An assessment explains what it examined, what it could not examine, the evidence behind each finding, and what verification supports a proposed fix. Direct review, threat modeling, and business-logic analysis are useful even when a scanner reports nothing.
+MoonMind helps its operator investigate and improve the security of source code, dependencies, build systems, container images, cloud resources, and running applications. An assessment explains what it examined, what it could not examine, the evidence behind each finding, and what verification supports a proposed fix.
 
-The existing Omnigent agent remains responsible for reasoning. Its selected harness and Provider Profile apply to security work just as they do to other tasks. Security utilities run on demand in separate containers; they do not require a second model provider, a new agent backend, or scanner installations in the Omnigent host.
+The existing Omnigent agent remains responsible for reasoning. Security utilities run on demand in separate containers; they do not require a second model provider, a new agent backend, or scanner installations in the Omnigent host.
 
 | Responsibility | Owner |
 | --- | --- |
@@ -16,7 +16,7 @@ The existing Omnigent agent remains responsible for reasoning. Its selected harn
 | Tool execution, resource limits, logs, outputs, and cleanup | Existing [Container Jobs](../ManagedAgents/DockerBackendService.md) |
 | Evidence retention and operator presentation | Existing [report artifacts](../Artifacts/ReportArtifacts.md) and [artifact presentation](../Artifacts/ArtifactPresentationContract.md) |
 
-Adapters translate a tool's invocation and results into those interfaces. Scanner-specific interpretation belongs in adapters and Skills, rather than branches in generic Temporal orchestration. Deterministic scanner jobs do not acquire model capacity. Completed work survives a retry of an interrupted step; a new attempt consumes the existing logical step's budget.
+Adapters translate a tool's invocation and results into those interfaces. Scanner-specific interpretation belongs in adapters and Skills, rather than branches in generic Temporal orchestration. Deterministic scanner jobs do not acquire model capacity.
 
 ### Repository scanner jobs
 
@@ -62,7 +62,7 @@ Collection redacts credentials, cookies, and login bodies from the native report
 
 ## Packaging and recommended tools
 
-The recommended default is a small MoonMind-maintained repository-security image containing **Opengrep, Gitleaks, Trivy, Git, CA certificates, and only the helper runtime needed to invoke tools and prepare reports**. The same image can serve independent jobs with separate inputs, limits, results, and retries. A single invocation does not have to run every installed tool.
+The recommended default is a small MoonMind-maintained repository-security image containing **Opengrep, Gitleaks, Trivy, Git, CA certificates, and only the helper runtime needed to invoke tools and prepare reports**.
 
 Cloud and application scanners use their maintained upstream images. Their larger Python, Java, and browser dependencies remain outside the repository toolbox and the Omnigent host. The image is a collection of executable utilities; it contains no agent loop or model credentials. Container execution goes through MoonMind's job service, without exposing a Docker socket, nested Docker, host networking, or privileged mode to the agent or scanner.
 
@@ -73,11 +73,11 @@ Cloud and application scanners use their maintained upstream images. Their large
 | Source security analysis | [Opengrep](https://github.com/opengrep/opengrep), official release binaries in the curated image | Selected source-pattern and taint rules. Coverage depends on the language, framework, rules, and analysis mode; syntax support alone does not establish whole-application or cross-file coverage. |
 | Exposed secrets | [Gitleaks](https://github.com/gitleaks/gitleaks), in the curated image | Separate working-tree and available Git-history scans, with full secret redaction. Gitleaks is in security-maintenance mode; keep the adapter replaceable and evaluate Betterleaks separately before adopting its interface. |
 | Dependencies, basic IaC, images, and SBOMs | [Trivy](https://trivy.dev/docs/latest/), in the curated image | Select scanners explicitly. Gitleaks owns default repository secret scanning to avoid duplicate work. An ordinary findings report is not automatically an SBOM; inventory generation is an explicit operation. |
-| Cloud posture | [Prowler CLI](https://hub.docker.com/r/prowlercloud/prowler), `prowlercloud/prowler:stable` | Scoped provider/account/region assessments with native JSON-OCSF evidence. The upstream `stable` tag follows stable releases; `latest` follows development. MoonMind does not need Prowler's server, database, UI, or MCP stack for CLI jobs. |
+| Cloud posture | [Prowler CLI](https://hub.docker.com/r/prowlercloud/prowler), `prowlercloud/prowler:stable` | Typed `cloudAssessment` jobs with native JSON-OCSF evidence; see [cloud posture assessment jobs](#cloud-posture-assessment-jobs). `stable` follows stable releases. Prowler's server, database, UI, and MCP stack are not needed. |
 | Running web applications and APIs | [ZAP](https://www.zaproxy.org/docs/docker/about/), `ghcr.io/zaproxy/zaproxy:stable` | Typed `webAssessment` jobs running a rendered [Automation Framework](https://www.zaproxy.org/docs/automate/automation-framework/) plan; see [web and API assessment jobs](#web-and-api-assessment-jobs). |
 | Contextual review | Existing Omnigent agent and security Skills | Architecture, trust boundaries, authorization and business logic, evidence validation, prioritization, proposed fixes, and retesting. Tool findings are inputs, not a prerequisite for investigation. |
 
-Opengrep packaging uses its [official installer and release assets](https://github.com/opengrep/opengrep/blob/main/install.sh); the design does not assume a maintained upstream Docker image. Verify the selected platform/libc artifact and enable required upstream verification rather than silently accepting a missing verifier.
+Opengrep packaging uses its [official installer and release assets](https://github.com/opengrep/opengrep/blob/main/install.sh); the design does not assume a maintained upstream Docker image.
 
 Engine, rule, template, and adapted Skill licenses are separate concerns. Ship only material whose terms permit the intended distribution and use. Deployment-provided rules retain their own terms; mounting them does not grant additional rights. In particular, adopting Opengrep does not remove restrictions on a separately obtained [Semgrep rule corpus](https://semgrep.dev/legal/rules-license).
 
@@ -87,19 +87,26 @@ These tools are alternatives or extensions for a demonstrated coverage gap, not 
 
 | Candidate | Selection reason |
 | --- | --- |
-| [OSV-Scanner](https://google.github.io/osv-scanner/usage/), `ghcr.io/google/osv-scanner` | Dependency or ecosystem coverage that improves on the selected Trivy profile. Source call analysis is language-specific; do not promise universal application reachability. Build-assisted analysis needs separately admitted execution of untrusted build inputs. |
+| [OSV-Scanner](https://google.github.io/osv-scanner/usage/), `ghcr.io/google/osv-scanner` | Dependency coverage beyond the selected Trivy profile. Call analysis is language-specific, and build-assisted analysis needs separately admitted execution of untrusted build inputs. |
 | [Checkov](https://www.checkov.io/), `bridgecrew/checkov` | Deeper IaC policy or graph checks for the operator's actual infrastructure. |
-| [Nuclei](https://docs.projectdiscovery.io/opensource/nuclei/running), `projectdiscovery/nuclei` | Selected known-issue templates against admitted application targets. Ordinary scans use the existing agent for interpretation; optional model-assisted features are not required. Template signatures establish origin, not safe impact. |
+| [Nuclei](https://docs.projectdiscovery.io/opensource/nuclei/running), `projectdiscovery/nuclei` | Selected known-issue templates against admitted application targets. Template signatures establish origin, not safe impact. |
 | [zizmor](https://docs.zizmor.sh/), `ghcr.io/zizmorcore/zizmor` | Focused CI/CD configuration review, especially GitHub Actions. |
 | [Syft and Grype](https://oss.anchore.com/docs/), `anchore/syft` and `anchore/grype` | An alternative inventory and vulnerability workflow when independently retained SBOMs or coverage justify it. |
-| [Cloudsplaining](https://github.com/salesforce/cloudsplaining) | Deeper AWS IAM-policy analysis, including analysis of an authorized exported snapshot. Verify packaging when selected; no upstream image contract is assumed. |
+| [Cloudsplaining](https://github.com/salesforce/cloudsplaining) | Deeper AWS IAM-policy analysis where Prowler's IAM checks leave a concrete gap. No upstream image contract is assumed. |
 | [Kubescape](https://kubescape.io/docs/) | Kubernetes-specific manifest or cluster checks. Ephemeral CLI assessment is distinct from deploying a cluster operator or runtime agent. |
 | [Trail of Bits Skills](https://github.com/trailofbits/skills) | Selected review procedures adapted to MoonMind's harness, authority, and evidence contracts, with attribution and applicable redistribution obligations. |
-| Existing GitHub security findings | Import authorized CodeQL, dependency, and secret-alert evidence through the existing GitHub connection. Preserve the source's identity and limitations. Importing evidence neither enables a paid service nor claims MoonMind executed its scanner. |
 
-[Strix](https://github.com/usestrix/strix), [HexStrike](https://github.com/0x4m4/hexstrike-ai), and similar agentic systems remain optional. Systems with their own agent loop add a separate runtime contract; replacing that loop with Omnigent is not the same as configuring a model endpoint.
+[Strix](https://github.com/usestrix/strix), [HexStrike](https://github.com/0x4m4/hexstrike-ai), and similar agentic systems remain optional: their own agent loops would add a separate runtime contract, not just a model endpoint.
 
 Tool selection weighs measurable coverage, output quality, maintenance, licensing, runtime cost, and overlap. An ephemeral scan does not claim continuous protection.
+
+#### Cloud posture assessment jobs
+
+`moonmind container cloud-assessment --admission cloud.json` submits one typed `cloudAssessment` job (`provider`, `account`, `credentialRef`, `regions`, `checks` or `services`, `egressPolicyRef`, limits). It runs the `cloud-posture` image source (Compose default `prowlercloud/prowler:stable`, override `MOONMIND_CLOUD_POSTURE_IMAGE`) through the image's entrypoint with an argv rendered from the admission. That argv has no remediation, export, notification, role, or profile options, and admission and the worker refuse any other entrypoint, argv, environment, mount, or network. AWS is the only provider because `aws-sts` is the only authorized cloud credential issuer; other providers are refused as unsupported, and no other cloud tool is installed by default.
+
+The scope must admit the `cloud-posture` profile ref and action class, a `cloudAccount` target whose `cloudProvider` and `cloudRegions` cover the job, an egress policy of HTTPS `provider-api` hosts under `amazonaws.com`, and a `cloud_inventory` grant for the account and `cloud-posture`. Prowler reads credentials once, so one [workload credential](#credentials-and-networking) session, bounded by the grant's `maxSessionSeconds`, must cover the job timeout.
+
+Collection publishes the native report and log tail, both redacted, with a `cloud-posture/v1` summary. It records the image that ran, Prowler's version, timestamps, findings with upstream identifiers, resource and region coverage, and checks with and without results. Prowler omits what it could not collect and only logs why, so log errors become value-free diagnostics; not-found answers are not errors. Any diagnostic, `MANUAL` result, unadmitted account, unfinished run, or unusable report makes coverage `partial`. A resource is compliant only when all its results pass. Outcomes are `findings`, `clean` (complete coverage only), `incomplete`, or `execution_failed`. A summary that contradicts its observations fails validation, so `security.assess` cannot promote it.
 
 ## Assessment authority and execution
 
@@ -115,9 +122,9 @@ A job selects `workloadProfile: {profileRef, mode, arguments, configurationExcep
 
 Repository rules, plugins, ignore files, inline suppressions, and environment overrides are effective configuration. The deployment disables them in each mode's argv and fixed environment, and caller environment is refused. A request can name only a `configurationException` the profile defines as fixed argv text. The persisted spec records it, so it cannot select another mode, target, or credential.
 
-The run's `assessmentScope` parameter is the operator's admission: `assessmentRef`, `profileRefs`, `actionClasses`, `targets` (workspace paths, artifact refs, or web origins with routes), `exclusions`, `configurationExceptions`, `networkRefs` (egress policies), `grants` (workload credentials), `maxJobs`, `maxJobSeconds`, and `evidenceIntent`. The operator submits it as `payload.assessmentScope` on a task-shaped `POST /api/executions` (or `initialParameters.assessmentScope`), and a malformed scope is rejected before any execution or schedule exists. Workflow and fan-out callers cannot set it. The run workflow copies it only into trusted step policy. Each launch boundary signs it into the session's container-job capability, and a malformed scope fails the launch. Step inputs, Skills, repository text, and model output cannot set or widen it. Child runs do not inherit the scope, so a scoped step gets no execution fan-out capability, and a step that requires fan-out fails at launch.
+The run's `assessmentScope` parameter is the operator's admission: `assessmentRef`, `profileRefs`, `actionClasses`, `targets` (workspace paths, artifact refs, web origins with routes, or cloud accounts with regions), `exclusions`, `configurationExceptions`, `networkRefs` (egress policies), `grants` (workload credentials), `maxJobs`, `maxJobSeconds`, and `evidenceIntent`. The operator submits it as `payload.assessmentScope` on a task-shaped `POST /api/executions` (or `initialParameters.assessmentScope`), and a malformed scope is rejected before any execution or schedule exists. Workflow and fan-out callers cannot set it. The run workflow copies it only into trusted step policy. Each launch boundary signs it into the session's container-job capability, and a malformed scope fails the launch. Step inputs, Skills, repository text, and model output cannot set or widen it. Child runs do not inherit the scope, so a scoped step gets no execution fan-out capability, and a step that requires fan-out fails at launch.
 
-A scoped session's CLI, MCP, and replayed submissions must be profile or web assessment jobs inside that scope. Generic image/entrypoint jobs, repository-scanner jobs, other assessments' refs, unadmitted profiles, action classes, exceptions, or networks are refused before any job record exists. So are inputs outside the targets and inputs at, inside, or containing an exclusion (a capture cannot omit a subtree). Scoped jobs cannot select pull credentials. `maxJobs` counts the owner's jobs for the assessment, and exact replays consume nothing. Unscoped sessions cannot claim an `assessmentRef`. Older verifiers reject scoped capabilities rather than ignore the scope.
+A scoped session's CLI, MCP, and replayed submissions must be profile, web, or cloud assessment jobs inside that scope. Generic image/entrypoint jobs, repository-scanner jobs, other assessments' refs, unadmitted profiles, action classes, exceptions, or networks are refused before any job record exists. So are inputs outside the targets and inputs at, inside, or containing an exclusion (a capture cannot omit a subtree). Scoped jobs cannot select pull credentials. `maxJobs` counts the owner's jobs for the assessment, and exact replays consume nothing. Unscoped sessions cannot claim an `assessmentRef`. Older verifiers reject scoped capabilities rather than ignore the scope.
 
 Tool configuration is part of the evidence: record effective rules, exclusions, ignore files, allowlists, severities, scanners, and environment options. Source, imported alerts, web pages, and scanner output are untrusted data; embedded instructions do not become workflow authority.
 
@@ -125,11 +132,9 @@ Tool configuration is part of the evidence: record effective rules, exclusions, 
 
 Container Job `inputAttachments` capture source snapshots and supplied artifacts once and mount them read-only, so later working-copy edits and retries cannot change what a job examines. Reports and temporary working data use separate, job-owned writable locations. Inputs are logical references owned by the existing workspace and artifact systems, never host paths or mounts. Output collection rejects traversal and symlink escapes. Native reports remain accessible through retained artifact references after the container is removed.
 
-An agent authorized to edit code does so through the normal working-copy path, while the scanner examines an identified snapshot so results stay attributable.
-
 A bounded, source-free refresh job obtains approved databases, rules, and templates without repository contents or assessment credentials. Scanners read an admitted read-only snapshot, so an untrusted scan cannot poison data later assessments use.
 
-Record data source, resolved identity, acquisition and upstream update times, required components, and whether freshness was met. Missing or stale required data is reported as a coverage limitation or failure, never silently replaced by a clean result. Offline behavior covers every enabled component and remote dependency lookup, rather than only a single database-update switch; see [Trivy's air-gap guidance](https://trivy.dev/docs/latest/advanced/air-gap/). Feed refresh does not require rebuilding the tool image or introducing a permanent feed service.
+Record data source, resolved identity, acquisition and upstream update times, required components, and whether freshness was met. Missing or stale required data is reported as a coverage limitation or failure, never silently replaced by a clean result. Offline behavior covers every enabled component and remote dependency lookup, rather than only a single database-update switch; see [Trivy's air-gap guidance](https://trivy.dev/docs/latest/advanced/air-gap/).
 
 ### Credentials and networking
 
@@ -138,10 +143,6 @@ Workload credentials use the existing [Secrets System](SecretsSystem.md). A prof
 Model credentials, source-repository credentials, scanner-image pull credentials, private target-image credentials, cloud assessment credentials, and application authentication are distinct uses. Possession of one does not authorize another. Cloud identity and resource permissions enforce account/resource scope as well as the network policy; access to a cloud API hostname alone cannot confine a scan to an account.
 
 Passive source analysis runs with `networkMode: none`, using prepared rule/data snapshots. Feed refresh, image acquisition, cloud APIs, and live-target assessment receive only their admitted destinations through the existing [restricted-egress owner](RestrictedEgress.md). Docker bridge mode alone is insufficient. Target enforcement addresses DNS resolution, redirects, alternate routes, private destinations, and control-plane/metadata access. Internal applications may be admitted explicitly without opening unrelated private networks.
-
-Unsupported providers, expired credentials, denied API calls, skipped regions, and absent services remain visible in coverage. Prowler cloud results use native JSON-OCSF.
-
-A passive web baseline still sends crawl requests, so it needs authorized target access like active testing ([web and API assessment jobs](#web-and-api-assessment-jobs)).
 
 Scanner jobs are bounded CLI executions; a persistent cross-turn browser or proxy endpoint is a separate capability added only for a concrete need.
 
@@ -170,13 +171,11 @@ Retesting links before/after inputs, findings, configuration, coverage, and rele
 
 ## Composable workflows
 
-Skills compose these procedures through MoonMind's existing workflow, tool, artifact, and scheduling interfaces.
-
 | Workflow | Composition and result |
 | --- | --- |
 | Repository assessment | Identify assets and trust boundaries; run applicable source, secret, dependency, and IaC checks as bounded jobs; perform targeted agent review; produce evidence, coverage, and prioritized recommendations. |
 | Image and supply-chain assessment | Inspect an admitted image, supported image archive or OCI layout, or existing SBOM without a Docker socket; retain the actual image/inventory identity and generate an SBOM when requested; assess vulnerabilities and configuration with stated coverage. |
-| Cloud assessment | Select provider/accounts/regions/checks; run Prowler with scoped credentials; explain permission and resource gaps; relate findings to IaC or code when evidence supports the connection. |
+| Cloud assessment | Admit account, regions, and checks or services; run one `cloudAssessment` job; explain permission and resource gaps; relate findings to IaC or code when evidence supports the connection. |
 | Web/API assessment | Admit origin, routes, mode, and identity; run one `webAssessment` job per identity; investigate selected findings from its retained route, identity, and coverage evidence. |
 | Investigate and repair | Combine scanner or imported findings with direct review, produce an authorized fix, run focused regression/retest work, and publish through the normal delivery path when requested. |
 | Recurring review and advisory response | Reuse existing schedules and saved Skill definitions; reassess retained authorized inputs or SBOMs with refreshed data; compare compatible evidence and explain scope or coverage changes. |
@@ -195,4 +194,4 @@ The image exposes `/usr/local/share/repository-security/inventory.json` and adja
 
 Qualification exercises the actual admitted Skill/tool-to-job-to-artifact/report journey with known vulnerable, repaired, and clean fixtures. Relevant cases include history versus worktree coverage, unsupported inputs, configuration overrides, missing/stale feeds, denied credentials/network targets, secret redaction, malformed reports, cancellation, cleanup, and resuming after one scanner has already completed. Cloud/API transports and local applications provide deterministic fixtures without mandatory paid providers or live production accounts. Optional external qualification is recorded as Unverified when unavailable; observed defects remain blocking.
 
-Measure useful coverage and investigation quality, including findings from direct review that scanners miss, rather than detection percentages or broad benchmarks. Add tools when their demonstrated benefit warrants their maintenance cost.
+Measure useful coverage and investigation quality, including findings from direct review that scanners miss, rather than detection percentages or broad benchmarks.
