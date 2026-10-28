@@ -146,6 +146,7 @@ def _catalog_snapshot():
 def _resolved_state() -> SimpleNamespace:
     return SimpleNamespace(
         opencode_host_image_ref=_HOST_IMAGE_REF,
+        shared_host_image_ref=_HOST_IMAGE_REF,
         server_image_ref=_SERVER_IMAGE_REF,
         architecture="linux/amd64",
         details={
@@ -309,7 +310,7 @@ async def test_qualification_attests_the_launch_policy_admission_selects(
     if shared_image:
         monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", _HOST_IMAGE_REF)
     evidence = await _qualify(qualification_boundary)
-    assert evidence["supportIdentity"]["hostClassRef"] == "omnigent-opencode@1"
+    assert evidence["supportIdentity"]["hostClassRef"] == "omnigent-opencode@2"
 
     expected = default_launch_policy_ref(_ALLOWED_LAUNCH_POLICIES)
     assert expected == "omnigent-on-demand@1"
@@ -610,6 +611,7 @@ async def test_generic_default_requalification_preserves_exact_selection(
     resolved = ResolvedOmnigentDeploymentState(
         serverImageRef=_SERVER_IMAGE_REF,
         opencodeHostImageRef=_HOST_IMAGE_REF,
+        sharedHostImageRef=_HOST_IMAGE_REF,
         omnigentBuildDigest="sha256:" + "a" * 64,
     )
     resolved = resolved.model_copy(update={"details": _resolved_state().details})

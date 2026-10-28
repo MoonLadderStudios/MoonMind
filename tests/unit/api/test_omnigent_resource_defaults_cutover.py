@@ -80,6 +80,7 @@ async def test_startup_migrates_shared_cpu_defaults_to_fixed_successors(
     custom_memory,
 ):
     monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
+    _resolved_shared_host(monkeypatch)
     _no_daemon(monkeypatch)
     async with policy_db(tmp_path) as sessions, sessions() as session:
         with monkeypatch.context() as previous_release:
@@ -209,6 +210,7 @@ async def test_customized_zero_policy_is_left_for_operator_disposition(
     """A customized zero-valued policy is never guessed to be stock."""
 
     monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
+    _resolved_shared_host(monkeypatch)
     _no_daemon(monkeypatch)
     async with policy_db(tmp_path) as sessions, sessions() as session:
         await policies.seed_bootstrap_policies(session, image_resolver=_image)

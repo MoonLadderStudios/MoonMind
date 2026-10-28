@@ -2,7 +2,7 @@
 
 Covers:
 - Digest-pinned shared host image expectations
-- Host Class omnigent-opencode@1 vs Codex preservation
+- Host Class omnigent-opencode@2 (fresh) / @1 (recorded) vs Codex preservation
 - opencode-auth-json@1 materializer filesystem, permissions, secret-free, generation fencing
 - Forbidden ambient env rejection
 - Exact-host OpenCode preflight and attestation
@@ -320,6 +320,166 @@ def test_opencode_image_ref_fail_closed(monkeypatch):
     )
     assert get_opencode_host_image_ref() == valid
     os.environ.pop("OMNIGENT_OPENCODE_HOST_IMAGE_REF", None)
+
+
+_SHARED_HOST_REF = "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + (
+    "e" * 64
+)
+_OTHER_SHARED_HOST_REF = (
+    "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "f" * 64
+)
+
+
+def _shared_opencode_state(
+    *,
+    opencode_ref: str = _SHARED_HOST_REF,
+    status: str = "ready",
+    shared_evidence: dict | None = None,
+):
+    details = {
+        "opencodeHostCompatibility": {
+            "status": status,
+            "failureCode": (
+                None
+                if status == "ready"
+                else "omnigent_host_bootstrap_contract_missing"
+            ),
+            "serverImageRef": _SERVER_REF,
+            "hostImageRef": opencode_ref,
+            "hostBuildDigest": "sha256:" + "b" * 64,
+            "hostVersion": "1.0.0",
+        },
+        "hostImageProvenance": {
+            ref: {"buildDigest": "sha256:" + "b" * 64, "version": "1.0.0"}
+            for ref in (_SHARED_HOST_REF, _OTHER_SHARED_HOST_REF)
+        },
+    }
+    if shared_evidence is not None:
+        details["sharedHostOpencodeCompatibility"] = shared_evidence
+    return SimpleNamespace(
+        server_image_ref=_SERVER_REF,
+        opencode_host_image_ref=opencode_ref,
+        shared_host_image_ref=_SHARED_HOST_REF,
+        pi_host_image_ref=None,
+        details=details,
+    )
+
+
+def _select_registered_opencode_host_class(monkeypatch, state, shared_ref):
+    from moonmind.omnigent.bootstrap import store
+    from moonmind.omnigent.harness_platform.harness_registry import harness_registration
+
+    monkeypatch.setattr(store, "load_resolved_state", lambda: state)
+    implementation = SimpleNamespace(
+        implementation_ref=lambda: "omnigent-harness-implementation:sha256:" + "a" * 64
+    )
+    harness = SimpleNamespace(id="opencode-native", implementation=implementation)
+    return OmnigentHostClassSelector(
+        environment={
+            "OMNIGENT_IMAGE_REF": _SERVER_REF,
+            "OMNIGENT_SHARED_HOST_IMAGE_REF": shared_ref,
+            "OMNIGENT_OPENCODE_HOST_IMAGE_REF": state.opencode_host_image_ref,
+        }
+    ).select(
+        harness=harness,
+        omnigent_version="1.0.0",
+        integration_mode="native-server",
+        materializer_refs=["opencode-auth-json@1"],
+        requested_host_class_ref=harness_registration("opencode-native").hostClassRef,
+    )
+
+
+def test_fresh_opencode_work_selects_the_shared_image_host_class(monkeypatch):
+    from moonmind.omnigent.harness_platform.harness_registry import harness_registration
+
+    registration = harness_registration("opencode-native")
+    assert registration.hostClassRef == "omnigent-opencode@2"
+    # The execution profile identity is unchanged, so recorded histories and
+    # replay keep decoding the same target.
+    assert registration.executionTargetRef == "omnigent-opencode@1"
+
+    host_class = _select_registered_opencode_host_class(
+        monkeypatch, _shared_opencode_state(), _SHARED_HOST_REF
+    )
+
+    assert host_class.ref == "omnigent-opencode@2"
+    assert host_class.imageRef == _SHARED_HOST_REF
+    assert {e.harnessId for e in host_class.declaredHarnessImplementations} == {
+        "opencode-native"
+    }
+
+
+def test_shared_image_opencode_host_class_keeps_the_bootstrap_quarantine(
+    monkeypatch,
+):
+    with pytest.raises(HarnessPlatformError) as exc:
+        _select_registered_opencode_host_class(
+            monkeypatch, _shared_opencode_state(status="blocked"), _SHARED_HOST_REF
+        )
+
+    assert exc.value.code == HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE
+    assert "omnigent-opencode@2" in str(exc.value)
+    assert "quarantined" in str(exc.value)
+    assert "omnigent_host_bootstrap_contract_missing" in str(exc.value)
+
+
+def test_distinct_shared_image_needs_its_own_opencode_verdict(monkeypatch):
+    # The OpenCode image verdict cannot admit a different shared image.
+    with pytest.raises(HarnessPlatformError) as exc:
+        _select_registered_opencode_host_class(
+            monkeypatch, _shared_opencode_state(), _OTHER_SHARED_HOST_REF
+        )
+    assert "compatibility evidence does not match" in str(exc.value)
+
+    shared_evidence = {
+        "status": "blocked",
+        "failureCode": "omnigent_host_bootstrap_contract_missing",
+        "serverImageRef": _SERVER_REF,
+        "hostImageRef": _OTHER_SHARED_HOST_REF,
+    }
+    with pytest.raises(HarnessPlatformError) as exc:
+        _select_registered_opencode_host_class(
+            monkeypatch,
+            _shared_opencode_state(shared_evidence=shared_evidence),
+            _OTHER_SHARED_HOST_REF,
+        )
+    assert "quarantined" in str(exc.value)
+
+    shared_evidence = {**shared_evidence, "status": "ready", "failureCode": None}
+    host_class = _select_registered_opencode_host_class(
+        monkeypatch,
+        _shared_opencode_state(shared_evidence=shared_evidence),
+        _OTHER_SHARED_HOST_REF,
+    )
+    assert host_class.ref == "omnigent-opencode@2"
+    assert host_class.imageRef == _OTHER_SHARED_HOST_REF
+
+
+def test_recorded_opencode_v1_plans_still_resolve_their_host_class(monkeypatch):
+    """Retained @1 plans and retries rehydrate their recorded host identity."""
+
+    from moonmind.omnigent.bootstrap import store
+
+    monkeypatch.setattr(store, "load_resolved_state", lambda: None)
+    implementation = SimpleNamespace(
+        implementation_ref=lambda: "omnigent-harness-implementation:sha256:" + "a" * 64
+    )
+    harness = SimpleNamespace(id="opencode-native", implementation=implementation)
+    recorded_host = "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:" + (
+        "a" * 64
+    )
+    host_class = OmnigentHostClassSelector(environment={}).select(
+        harness=harness,
+        omnigent_version="1.0.0",
+        integration_mode="native-server",
+        materializer_refs=["opencode-auth-json@1"],
+        requested_host_class_ref="omnigent-opencode@1",
+        host_image_ref=recorded_host,
+        omnigent_host_build_digest="sha256:" + "b" * 64,
+    )
+
+    assert host_class.ref == "omnigent-opencode@1"
+    assert host_class.imageRef == recorded_host
 
 
 @pytest.mark.parametrize(

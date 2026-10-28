@@ -1941,9 +1941,8 @@ def main() -> int:
         "--opencode-host-image",
         default="",
         help=(
-            "digest-pinned dedicated OpenCode host image; required for "
-            "workflow_chat mode because the OpenCode combination does not run "
-            "the Codex host image"
+            "optional digest-pinned OMNIGENT_OPENCODE_HOST_IMAGE_REF pin; "
+            "fresh OpenCode work runs the shared --host-image"
         ),
     )
     parser.add_argument(
@@ -1958,7 +1957,7 @@ def main() -> int:
     if opencode_host_image:
         if not _DIGEST_PINNED_IMAGE.fullmatch(opencode_host_image):
             print(
-                "live conformance failed: the dedicated OpenCode host image "
+                "live conformance failed: the OpenCode host image pin "
                 "must be pinned by immutable sha256 digest",
                 file=sys.stderr,
             )
@@ -1976,9 +1975,8 @@ def main() -> int:
         "OMNIGENT_HOST_IMAGE_TAG": "",
     })
     if "opencodeHost" in images:
-        # The dedicated OpenCode host image is pinned separately; without this
-        # the server would fall back to the deployment's configured tag and the
-        # run would qualify an image it never executed.
+        # An explicit OpenCode image-variable pin still reaches the server so
+        # bootstrap judges the image the operator chose.
         env["OMNIGENT_OPENCODE_HOST_IMAGE_REF"] = images["opencodeHost"]
         env["OMNIGENT_OPENCODE_HOST_IMAGE_TAG"] = ""
     runner = LiveRunner(output_dir=output_dir, env=env)
@@ -1986,15 +1984,6 @@ def main() -> int:
     if "workflow_chat" in selected and not args.source_commit.strip():
         print(
             "live conformance failed: workflow Chat mode requires --source-commit",
-            file=sys.stderr,
-        )
-        return 2
-    if "workflow_chat" in selected and not _DIGEST_PINNED_IMAGE.fullmatch(
-        images.get("opencodeHost", "")
-    ):
-        print(
-            "live conformance failed: workflow Chat mode requires a "
-            "digest-pinned --opencode-host-image",
             file=sys.stderr,
         )
         return 2

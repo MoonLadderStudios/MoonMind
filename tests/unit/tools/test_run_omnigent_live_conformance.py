@@ -1211,32 +1211,6 @@ def test_product_rejects_semantic_attestation_without_source_records(tmp_path, m
         raise AssertionError("semantic product attestation was accepted")
 
 
-def test_workflow_chat_mode_requires_a_pinned_opencode_host_image(
-    tmp_path, monkeypatch
-):
-    module = _module()
-    monkeypatch.delenv("GITHUB_SHA", raising=False)
-    monkeypatch.setattr(
-        module.sys,
-        "argv",
-        [
-            str(module.__file__),
-            "--mode",
-            "workflow_chat",
-            "--server-image",
-            "server@sha256:" + "1" * 64,
-            "--host-image",
-            "host@sha256:" + "2" * 64,
-            "--source-commit",
-            "commit-1",
-            "--output-dir",
-            str(tmp_path),
-        ],
-    )
-
-    assert module.main() == 2
-
-
 def test_opencode_host_image_must_be_digest_pinned(tmp_path, monkeypatch):
     module = _module()
     monkeypatch.setattr(
@@ -1308,6 +1282,58 @@ def test_pinned_opencode_host_image_reaches_the_server_environment(
     assert module.main() == 0
     assert captured["images"]["opencodeHost"] == opencode_ref
     assert captured["opencodeRef"] == opencode_ref
+
+
+def test_workflow_chat_mode_qualifies_opencode_on_the_shared_host_image(
+    tmp_path, monkeypatch
+):
+    """OpenCode runs omnigent-opencode@2, so no dedicated image is required."""
+
+    module = _module()
+    captured = {}
+
+    def capture(self, images, source_commit):
+        captured["images"] = dict(images)
+        captured["opencodeRef"] = self.env.get("OMNIGENT_OPENCODE_HOST_IMAGE_REF")
+
+    monkeypatch.setattr(module.LiveRunner, "workflow_chat", capture)
+    monkeypatch.setattr(module.LiveRunner, "cleanup", lambda self, mode: None)
+    monkeypatch.setattr(
+        module.LiveRunner,
+        "scan",
+        lambda self: {
+            channel: {"status": "passed", "evidenceRef": f"scan-{channel}.json"}
+            for channel in module.EVIDENCE_ENV
+        },
+    )
+    monkeypatch.setattr(module.LiveRunner, "_scan_publication_tree", lambda self: None)
+    monkeypatch.delenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", raising=False)
+    (tmp_path / "workflow-chat-report.json").write_text("{}", encoding="utf-8")
+    host_ref = "host@sha256:" + "2" * 64
+    monkeypatch.setattr(
+        module.sys,
+        "argv",
+        [
+            str(module.__file__),
+            "--mode",
+            "workflow_chat",
+            "--server-image",
+            "server@sha256:" + "1" * 64,
+            "--host-image",
+            host_ref,
+            "--source-commit",
+            "commit-1",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert module.main() == 0
+    assert captured["images"] == {
+        "server": "server@sha256:" + "1" * 64,
+        "host": host_ref,
+    }
+    assert captured["opencodeRef"] is None
 
 
 def test_action_keeps_one_log_per_caller(tmp_path, monkeypatch):

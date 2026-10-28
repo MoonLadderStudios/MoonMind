@@ -57,11 +57,23 @@ def _configure_ready_host_image_pair(monkeypatch: pytest.MonkeyPatch) -> dict[st
         import os
 
         host_ref = os.environ.get("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "")
-        shared_ref = os.environ.get("OMNIGENT_SHARED_HOST_IMAGE_REF", "")
+        # The default deployment resolves both variables to one shared image.
+        shared_ref = os.environ.get("OMNIGENT_SHARED_HOST_IMAGE_REF", "") or host_ref
         if not host_ref and not shared_ref:
             return None
+        server_ref = os.environ.get("OMNIGENT_IMAGE_REF", _SERVER_IMAGE_REF)
+
+        def ready(image_ref):
+            return {
+                "status": "ready",
+                "failureCode": None,
+                "serverImageRef": server_ref,
+                "hostImageRef": image_ref,
+                **provenance,
+            }
+
         return SimpleNamespace(
-            server_image_ref=os.environ.get("OMNIGENT_IMAGE_REF", _SERVER_IMAGE_REF),
+            server_image_ref=server_ref,
             opencode_host_image_ref=host_ref,
             shared_host_image_ref=shared_ref,
             details={
@@ -73,15 +85,13 @@ def _configure_ready_host_image_pair(monkeypatch: pytest.MonkeyPatch) -> dict[st
                     for image_ref in (host_ref, shared_ref)
                     if image_ref
                 },
-                "opencodeHostCompatibility": {
-                    "status": "ready",
-                    "failureCode": None,
-                    "serverImageRef": os.environ.get(
-                        "OMNIGENT_IMAGE_REF", _SERVER_IMAGE_REF
-                    ),
-                    "hostImageRef": host_ref,
-                    **provenance,
-                },
+                "opencodeHostCompatibility": ready(host_ref),
+                # Bootstrap judges a distinct shared image for OpenCode too.
+                **(
+                    {"sharedHostOpencodeCompatibility": ready(shared_ref)}
+                    if shared_ref != host_ref
+                    else {}
+                ),
             },
         )
 
@@ -2602,6 +2612,7 @@ async def test_create_plan_reports_bootstrap_quarantine_instead_of_invalid_diges
     state = SimpleNamespace(
         server_image_ref=_SERVER_IMAGE_REF,
         opencode_host_image_ref=host_ref,
+        shared_host_image_ref=host_ref,
         details={
             "opencodeHostCompatibility": {
                 "status": "blocked",
