@@ -450,16 +450,18 @@ def test_qualification_runtime_has_read_only_inputs_and_only_declared_writes(tmp
         tmp_path / "source",
         tmp_path / "output",
         "--version",
+        scratch=tmp_path / "scratch",
         entrypoint="opengrep",
     )
     assert "--read-only" in argv
     assert argv[argv.index("--network") + 1] == "none"
-    scratch = argv[argv.index("--tmpfs") + 1]
-    assert "exec" in scratch.split(":", 1)[1].split(",")
-    assert "noexec" not in scratch.split(":", 1)[1].split(",")
+    # A feed snapshot copy exceeds any memory-backed /tmp the job could afford.
+    assert "--tmpfs" not in argv
     mounts = [argv[i + 1] for i, a in enumerate(argv) if a == "--mount"]
-    assert all(m.endswith(",readonly") for m in mounts if "dst=/scan-output" not in m)
-    assert len([m for m in mounts if not m.endswith(",readonly")]) == 1
+    assert sorted(m for m in mounts if not m.endswith(",readonly")) == [
+        f"type=bind,src={tmp_path / 'output'},dst=/scan-output",
+        f"type=bind,src={tmp_path / 'scratch'},dst=/tmp",
+    ]
     assert not any("docker.sock" in arg or "--env" in arg for arg in argv)
 
 
