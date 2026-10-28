@@ -65,7 +65,7 @@ class _FakeBridgeSessionStore:
 @pytest.mark.asyncio
 async def test_probe_counts_embedded_sessions_and_leases() -> None:
     disposition = await probe_embedded_drain(
-        _FakeBridgeSessionStore(
+        _FakeDrainStoreWithCleanup(
             {HOST_PROTOCOL_MODE_EMBEDDED: 2, HOST_PROTOCOL_MODE_PROXY: 5},
             [{"id": "lease-a"}],
         )
@@ -83,7 +83,7 @@ async def test_probe_counts_embedded_sessions_and_leases() -> None:
 @pytest.mark.asyncio
 async def test_probe_reports_drained_only_when_counts_are_zero() -> None:
     disposition = await probe_embedded_drain(
-        _FakeBridgeSessionStore({HOST_PROTOCOL_MODE_PROXY: 3, "unknown": 1}, [])
+        _FakeDrainStoreWithCleanup({HOST_PROTOCOL_MODE_PROXY: 3, "unknown": 1}, [])
     )
 
     assert disposition["drained"] is True
@@ -216,11 +216,27 @@ async def test_probe_uses_uncapped_lease_total_and_reports_truncation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_probe_without_capability_readers_stays_backward_compatible() -> None:
+async def test_probe_without_cleanup_reader_never_reports_drained() -> None:
+    """Unobserved cleanup authority is a blocker, not an implicit zero."""
+
     disposition = await probe_embedded_drain(
         _FakeBridgeSessionStore({HOST_PROTOCOL_MODE_PROXY: 1}, [])
     )
 
-    assert disposition["drained"] is True
-    assert disposition["pendingCleanupHostLeases"] == 0
+    assert disposition["drained"] is False
+    assert disposition["blockers"] == ("pending_cleanup_host_leases:unobserved",)
+    assert disposition["pendingCleanupHostLeases"] is None
     assert disposition["leaseListTruncated"] is False
+
+
+class _FakeDrainStoreWithUnknownTotal(_FakeDrainStoreWithCleanup):
+    async def count_active_embedded_host_leases(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_probe_rejects_unknown_lease_total_instead_of_zero() -> None:
+    with pytest.raises(EmbeddedDrainError, match="lease count"):
+        await probe_embedded_drain(
+            _FakeDrainStoreWithUnknownTotal({HOST_PROTOCOL_MODE_PROXY: 1}, [])
+        )
