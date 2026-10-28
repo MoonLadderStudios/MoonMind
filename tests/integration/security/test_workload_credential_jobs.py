@@ -545,3 +545,46 @@ async def test_generic_secret_reference_has_no_slot_to_authorize_it(journey):
     )
     assert generic.status_code == 403
     assert await journey.jobs() == 0
+
+
+async def test_exact_replay_returns_the_admitted_job_after_its_grant_shortens(
+    journey, monkeypatch
+):
+    from api_service.services import container_jobs
+
+    spec = profile_spec(CLOUD)
+    first = await journey.submit(spec)
+    assert first.status_code == 200, first.text
+    job_id = first.json()["result"]["jobId"]
+    real = container_jobs.datetime
+
+    def later(offset):
+        class Later(real):
+            @classmethod
+            def now(cls, tz=None):
+                return real.now(tz) + offset
+
+        monkeypatch.setattr(container_jobs, "datetime", Later)
+
+    # The grant no longer covers a fresh 1200-second budget, but the admitted
+    # job is still the one an exact resubmission names.
+    later(timedelta(hours=1, minutes=45))
+    replay = await journey.submit(spec)
+    assert replay.status_code == 200, replay.text
+    result = replay.json()["result"]
+    assert result["jobId"] == job_id and result["replayed"] is True
+
+    # After the grant expires a completed job is still recovered by replay.
+    async with journey.sessions() as session:
+        record = await session.scalar(select(ContainerJobRecord))
+        record.state = "succeeded"
+        await session.commit()
+    later(timedelta(hours=3))
+    starts = journey.temporal.start_container_job.await_count
+    replay = await journey.submit(spec)
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["result"]["jobId"] == job_id
+    assert journey.temporal.start_container_job.await_count == starts
+    # New work under the expired grant is still refused.
+    other = await journey.submit({**spec, "timeoutSeconds": 1100})
+    assert other.status_code == 403

@@ -2493,9 +2493,7 @@ class DockerContainerJobBackend:
         source key is never rotated or deleted.
         """
 
-        source_value = await self._resolve_workload_secret(decision)
         try:
-            source = parse_aws_source(source_value)
             seconds = session_seconds(
                 decision,
                 now=now,
@@ -2505,6 +2503,9 @@ class DockerContainerJobBackend:
             raise ContainerJobBackendError(
                 ContainerJobFailureClass.CREDENTIAL_EXPIRED, str(exc)
             ) from exc
+        source_value = await self._resolve_workload_secret(decision)
+        try:
+            source = parse_aws_source(source_value)
         except ValueError as exc:
             raise ContainerJobBackendError(
                 ContainerJobFailureClass.CREDENTIAL_UNRESOLVED, str(exc)
@@ -2646,23 +2647,45 @@ class DockerContainerJobBackend:
         if not lease or not lease.get("sessions"):
             return
         now = datetime.now(timezone.utc)
-        if now >= datetime.fromisoformat(lease["budgetEndsAt"]):
+        budget_end = datetime.fromisoformat(lease["budgetEndsAt"])
+        if now >= budget_end:
             return
+
+        def expires(record) -> datetime | None:
+            if record.get("state") != "issued":
+                return None
+            return datetime.fromisoformat(record["expiresAt"])
+
+        # A session lasting through the job budget never needs renewal.
         due = {
             name
             for name, record in lease["sessions"].items()
-            if record.get("state") != "issued"
-            or datetime.fromisoformat(record["expiresAt"]) - now
-            < timedelta(seconds=_SESSION_RENEWAL_MARGIN_SECONDS)
+            if (expiry := expires(record)) is None
+            or (
+                expiry < budget_end
+                and expiry - now < timedelta(seconds=_SESSION_RENEWAL_MARGIN_SECONDS)
+            )
         }
         if not due:
             return
         for slot, decision in self._workload_decisions(request, now):
             if slot.name not in due:
                 continue
-            session = await self._issue_session(
-                request, storage, lease, slot, decision, now
-            )
+            try:
+                session = await self._issue_session(
+                    request, storage, lease, slot, decision, now
+                )
+            except ContainerJobBackendError as exc:
+                current = expires(lease["sessions"][slot.name])
+                if (
+                    exc.failure_class is ContainerJobFailureClass.CREDENTIAL_EXPIRED
+                    and current is not None
+                    and current > now
+                ):
+                    # The grant is too close to its end for another session;
+                    # the current one serves the job until it expires.
+                    continue
+                raise
             try:
                 await asyncio.to_thread(
                     attachments.replace_workload_credential_file,
@@ -3587,18 +3610,19 @@ class DockerContainerJobBackend:
 
     async def publish_evidence(self, request: ContainerJobActivityRequest):
         limit = self._settings.max_output_bytes
-        # The container has exited: read delivered values back only to redact
-        # them, then remove them before anything is published.
-        delivered = await self._delivered_values(request)
+        # The container has exited: take delivered values out of its mount,
+        # keeping them worker-only so this and any retried publication can
+        # redact them. Cleanup deletes them.
         storage = self._attachment_storage(request)
         if storage is not None:
             try:
                 await asyncio.to_thread(
-                    attachments.remove_workload_credentials, storage
+                    attachments.retire_workload_credentials, storage
                 )
             except OSError:
                 # Cleanup removes them again and reports a failure.
                 pass
+        delivered = await self._delivered_values(request)
         if request.container_ref is None:
             # ``container_ref`` is the only authority that a reconcile or create
             # Activity actually produced a container. A deterministic container

@@ -519,3 +519,99 @@ def test_outputs_are_redacted_and_archives_holding_a_value_are_withheld():
         is None
     )
     assert _without_delivered(b"not gzip", "application/gzip", values) is None
+
+
+@pytest.mark.asyncio
+async def test_publication_retry_still_redacts_renewed_and_earlier_session_values(
+    tmp_path,
+):
+    fixture = Fixture(tmp_path)
+    fixture.sts.lifetime = timedelta(seconds=120)
+    await fixture.backend.create_container(fixture.request)
+    request = fixture.request
+    request.container_ref = "job-container"
+    # Renewal replaces the mounted session; the container may still have
+    # written the first one.
+    await fixture.backend.observe_container(request)
+    assert len(fixture.sts.calls) == 2
+    leaked = (
+        f"{APP_VALUE} seed-session-token-1 seed-session-secret-1 "
+        "seed-session-token-2 ASIASEEDSESSION2"
+    )
+    fixture.logs = (leaked.encode(), leaked.encode())
+    (fixture.storage.outputs / "report.json").write_text(json.dumps({"e": leaked}))
+    request.terminal_state = "succeeded"
+    request.exit_code = 0
+
+    publish = fixture.publish
+    failures = [OSError("artifact store unavailable")]
+
+    async def flaky(*args):
+        if failures:
+            raise failures.pop()
+        return await publish(*args)
+
+    fixture.backend._publish = flaky
+    with pytest.raises(OSError):
+        await fixture.backend.publish_evidence(request)
+    # Nothing stays mounted for the exited container.
+    assert not (fixture.credential_root() / "files").exists()
+    assert not (fixture.credential_root() / "env").exists()
+    # The Activity retry publishes everything, still without a value.
+    result = await fixture.backend.publish_evidence(request)
+    assert result.logs_ref and result.artifacts_ref
+    for payload in fixture.published.values():
+        assert_no_seed(payload)
+
+    request.publication = AuxiliaryOutcome(state="succeeded")
+    assert (await fixture.backend.cleanup(request)).cleanup_succeeded is True
+    assert not fixture.credential_root().exists()
+
+
+def _rewrite_lease(fixture, *, budget_in, expires_in):
+    path = fixture.credential_root() / "lease.json"
+    lease = json.loads(path.read_text())
+    now = datetime.now(timezone.utc)
+    lease["budgetEndsAt"] = (now + budget_in).isoformat()
+    lease["sessions"]["cloud"]["expiresAt"] = (now + expires_in).isoformat()
+    path.write_text(json.dumps(lease))
+
+
+@pytest.mark.asyncio
+async def test_session_covering_the_job_or_outlasting_its_grant_is_kept(tmp_path):
+    fixture = Fixture(tmp_path)
+    await fixture.backend.create_container(fixture.request)
+    fixture.request.container_ref = "job-container"
+    calls = len(fixture.sts.calls)
+
+    # Near expiry, but the session already lasts through the job budget.
+    _rewrite_lease(
+        fixture, budget_in=timedelta(seconds=200), expires_in=timedelta(seconds=201)
+    )
+    assert (await fixture.backend.observe_container(fixture.request)).running
+    assert len(fixture.sts.calls) == calls
+
+    # The grant ends too soon for STS to issue another session: the current
+    # one keeps serving the job until it expires instead of failing early.
+    _rewrite_lease(
+        fixture, budget_in=timedelta(seconds=400), expires_in=timedelta(seconds=200)
+    )
+    request = fixture.request.model_copy(
+        update={
+            "workload_credentials": tuple(
+                item.model_copy(
+                    update={
+                        "expires_at": datetime.now(timezone.utc)
+                        + timedelta(seconds=250)
+                    }
+                )
+                for item in fixture.request.workload_credentials
+            )
+        }
+    )
+    secret_calls = len(fixture.secrets.calls)
+    assert (await fixture.backend.observe_container(request)).running
+    assert len(fixture.sts.calls) == calls
+    assert len(fixture.secrets.calls) == secret_calls
+    lease = json.loads((fixture.credential_root() / "lease.json").read_text())
+    assert lease["sessions"]["cloud"]["state"] == "issued"
