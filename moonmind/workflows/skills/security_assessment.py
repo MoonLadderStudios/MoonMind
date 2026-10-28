@@ -26,6 +26,8 @@ from moonmind.security.assessments import (
     compare_observations,
     content_key,
 )
+from moonmind.security.github_alerts import alert_observation, correlate_alerts
+from moonmind.security.image_assessments import ImageAssessmentSummary
 from moonmind.security.passive_repo_scan import (
     PASSIVE_SCAN_TOOL_REF,
     parse_scan_report_json,
@@ -274,6 +276,60 @@ def _scanner_observation(
     )
 
 
+def _image_observation(
+    request, summary: ImageAssessmentSummary, ref: str, created_at: datetime
+) -> Observation:
+    """Image and SBOM matches are reported as target coverage, apart from source."""
+    result, subject, execution = summary.result, summary.subject, summary.execution
+    if result is None or summary.admission.operation == "sbom-generate":
+        raise ValueError("SBOM generation is inventory, not a vulnerability result")
+    findings = result.findings
+    if any(not set(f.evidence_refs) <= {summary.native_ref} for f in findings):
+        raise ValueError("finding evidence differs from retained native records")
+    if any(f.asset not in request.scope.assets for f in findings):
+        raise ValueError("image finding outside admitted assessment scope")
+    complete = (
+        summary.coverage == "complete"
+        and not summary.limitations
+        and execution is not None
+        and not execution.limitations
+        and execution.state == "succeeded"
+        and subject is not None
+        and result.coverage == "complete"
+        and result.execution == "succeeded"
+        and subject.asset in result.examined_assets
+    )
+    assets = [a for a in result.examined_assets if a in request.scope.assets]
+    version = execution.version if execution else "unavailable"
+    return Observation(
+        scope=request.scope,
+        observed_at=created_at,
+        expires_at=created_at + timedelta(days=1),
+        findings=findings,
+        coverage=[
+            Coverage(
+                source="image",
+                tool="trivy",
+                assets=assets,
+                rule_ids=[],
+                all_rules=execution is not None,
+                # Feed snapshots are recorded below, not part of comparability:
+                # reassessment compares one inventory across vulnerability data.
+                config_ref=content_key(["image-vulnerabilities", version]),
+                status="complete" if complete and assets else "partial",
+            )
+        ],
+        provenance={
+            "imageSummary": ref,
+            "imageSubject": subject.asset if subject else "unavailable",
+            "imageNativeReport": summary.native_ref or "unavailable",
+            "imageFeedSnapshot": (execution.database_digest if execution else None)
+            or "unavailable",
+            "imageScannerVersion": version,
+        },
+    )
+
+
 class AssessmentExecution:
 
     def __init__(
@@ -337,6 +393,36 @@ class AssessmentExecution:
             return artifact.artifact_id, json.loads(body)
         return None
 
+    async def _import_github_alerts(
+        self, request: AssessmentRequest, observations: list, scan_key: str
+    ) -> dict:
+        from moonmind.workflows.adapters.github_service import GitHubService
+
+        native, usage = await GitHubService().read_security_alerts(
+            request.github_alerts, admitted_workflow_id=self.execution["workflow_id"]
+        )
+        # Sanitized native evidence is durable before any projection.
+        native_ref = await self.write(
+            _json(native), kind="security.github-alerts", key=scan_key
+        )
+        observed_at = datetime.fromisoformat(usage["completedAt"])
+        imported, projection = alert_observation(
+            request, native, native_ref, observed_at
+        )
+        projection["interval"] = {
+            "startedAt": usage["startedAt"],
+            "completedAt": usage["completedAt"],
+        }
+        projection["usage"] = {
+            key: usage[key] for key in ("requests", "items", "bytes")
+        }
+        projection["correlation"] = correlate_alerts(native, imported, observations)
+        observations.append(imported)
+        return {
+            "projection": projection,
+            "outcome": "complete" if imported.complete(observed_at) else "incomplete",
+        }
+
     async def execute(self, request: AssessmentRequest) -> ToolResult:
         now = datetime.now(UTC)
         refs = [*request.report_refs]
@@ -371,16 +457,22 @@ class AssessmentExecution:
             decisions = [
                 TriageDecision.model_validate(item) for item in json.loads(raw)
             ]
-        scan_key = content_key(
-            {
-                "scope": request.scope.model_dump(mode="json"),
-                "tools": request.tools,
-                "inputs": {
-                    ref: hashlib.sha256(body).hexdigest()
-                    for ref, (_, body) in inputs.items()
-                },
+        work_identity = {
+            "scope": request.scope.model_dump(mode="json"),
+            "tools": request.tools,
+            "inputs": {
+                ref: hashlib.sha256(body).hexdigest()
+                for ref, (_, body) in inputs.items()
+            },
+        }
+        if request.github_alerts is not None:
+            # Live alerts are reread by each execution; only this execution's
+            # retries reuse its saved import, with the same admitted request.
+            work_identity["githubAlerts"] = {
+                "request": request.github_alerts.model_dump(mode="json"),
+                "execution": self.execution,
             }
-        )
+        scan_key = content_key(work_identity)
         saved = await self.saved(kind="security.scan", key=scan_key)
         if saved:
             scan_ref, work = saved
@@ -389,6 +481,7 @@ class AssessmentExecution:
             observations = []
             outcomes = []
             scanner_summaries = []
+            github_alerts = None
             if (
                 baseline
                 and baseline["observation"]["provenance"].get("assessmentWork")
@@ -461,6 +554,44 @@ class AssessmentExecution:
                                     "verification": native_summary.verification,
                                 }
                             )
+                        elif payload.get("schemaVersion") == "image-assessment/v1":
+                            image_summary = ImageAssessmentSummary.model_validate(
+                                payload
+                            )
+                            if image_summary.native_ref:
+                                await self.read(image_summary.native_ref)
+                            observed_at = metadata.created_at
+                            if observed_at.tzinfo is None:
+                                observed_at = observed_at.replace(tzinfo=UTC)
+                            observation = _image_observation(
+                                request, image_summary, ref, observed_at
+                            )
+                            scanner_summaries.append(
+                                {
+                                    "scanner": "trivy",
+                                    "target": (
+                                        image_summary.subject.asset
+                                        if image_summary.subject
+                                        else "unavailable"
+                                    ),
+                                    "summaryRef": ref,
+                                    "nativeRefs": (
+                                        {"report": image_summary.native_ref}
+                                        if image_summary.native_ref
+                                        else {}
+                                    ),
+                                    "coverage": observation.coverage[0].status,
+                                    "execution": {
+                                        "report": image_summary.result.execution
+                                    },
+                                    "limitations": sorted(
+                                        set(image_summary.limitations)
+                                        | set(image_summary.result.limitations)
+                                    ),
+                                    "verification": image_summary.verification,
+                                    "interpretation": image_summary.interpretation,
+                                }
+                            )
                         elif payload.get("toolRef") == PASSIVE_SCAN_TOOL_REF:
                             observed_at = metadata.created_at
                             if observed_at.tzinfo is None:
@@ -482,6 +613,13 @@ class AssessmentExecution:
                         scan_diagnostics.append(
                             {"boundary": "retained-report", "error": type(exc).__name__}
                         )
+                if request.github_alerts is not None:
+                    github_alerts = await self._import_github_alerts(
+                        request, observations, scan_key
+                    )
+                    outcomes.append(github_alerts["outcome"])
+                    # The live import is observed after this execution began.
+                    now = datetime.now(UTC)
             coverage = [
                 row for observation in observations for row in observation.coverage
             ]
@@ -544,6 +682,8 @@ class AssessmentExecution:
                 "diagnostics": scan_diagnostics,
                 "scannerSummaries": scanner_summaries,
             }
+            if github_alerts is not None:
+                work["githubAlerts"] = github_alerts["projection"]
             scan_ref = await self.write(_json(work), kind="security.scan", key=scan_key)
         comparison = compare_observations(
             observation,
@@ -617,10 +757,33 @@ class AssessmentExecution:
             "reviewStatus": review_status,
             "scannerSummaries": work.get("scannerSummaries", []),
         }
+        github = work.get("githubAlerts")
+        if github is not None:
+            outputs["githubAlerts"] = {
+                "nativeRef": github["nativeRef"],
+                "subjectRevision": github["subjectRevision"],
+                "categories": {
+                    category: {
+                        key: row[key]
+                        for key in (
+                            "outcome",
+                            "coverage",
+                            "findings",
+                            "otherRevision",
+                            "closed",
+                            "outOfScope",
+                        )
+                    }
+                    for category, row in github["categories"].items()
+                },
+                "unverified": github["unverified"],
+            }
+        evidence = [scan_ref] + ([github["nativeRef"]] if github else [])
         try:
             summary = (
                 _summary(comparison)
                 + _scanner_summary(work.get("scannerSummaries", []))
+                + _github_summary(github)
                 + _review_summary(review, review_status)
             ).encode()
             summary_key = content_key(
@@ -646,7 +809,7 @@ class AssessmentExecution:
                 )
             for ref, link_type in (
                 (comparison_ref, "report.structured"),
-                (scan_ref, "report.evidence"),
+                *((ref, "report.evidence") for ref in evidence),
             ):
                 await self.service.link_artifact(
                     artifact_id=ref,
@@ -662,7 +825,7 @@ class AssessmentExecution:
             outputs["reportBundle"] = build_report_bundle_result(
                 primary_report_ref={"artifact_id": summary_ref},
                 structured_ref={"artifact_id": comparison_ref},
-                evidence_refs=[{"artifact_id": scan_ref}]
+                evidence_refs=[{"artifact_id": ref} for ref in evidence]
                 + ([{"artifact_id": request.review_ref}] if review_readable else []),
                 report_type="security_assessment",
                 report_scope=comparison["coverageStatus"],
@@ -705,14 +868,40 @@ def _scanner_summary(summaries: list[dict]) -> str:
     for summary in summaries:
         lines += [
             "",
-            f"Scanner: {summary['scanner']}. Coverage: {summary['coverage']}.",
+            f"Scanner: {summary['scanner']}"
+            + (f" on {summary['target']}" if summary.get("target") else "")
+            + f". Coverage: {summary['coverage']}.",
             f"Execution: {json.dumps(summary['execution'], sort_keys=True)}.",
             "Verification: not performed.",
             "Native evidence: " + ", ".join(summary["nativeRefs"].values()) + ".",
         ]
         if summary["limitations"]:
             lines.append("Limitations: " + ", ".join(summary["limitations"]) + ".")
+        if summary.get("interpretation"):
+            lines.append(summary["interpretation"])
     return "\n".join(lines) + ("\n" if lines else "")
+
+
+def _github_summary(github: dict | None) -> str:
+    if github is None:
+        return ""
+    lines = [
+        "",
+        f"GitHub alerts: {github['repository']} {github['ref'] or 'unresolved ref'} at "
+        f"{github['subjectRevision'] or 'an unavailable revision'}.",
+        "Imported upstream observations; MoonMind did not run these scanners.",
+    ]
+    for category, row in github["categories"].items():
+        lines.append(
+            f"- {category}: {row['outcome']}, coverage {row['coverage']}, "
+            f"{row['findings']} findings, {row['otherRevision']} only at another "
+            f"revision, {row['closed']} closed, {row['outOfScope']} outside scope."
+        )
+    lines += [
+        f"- Unverified {row['category']} ({row['outcome']}): {row['nextStep']}"
+        for row in github["unverified"]
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def _review_summary(review: SecurityReview | None, status: str) -> str:

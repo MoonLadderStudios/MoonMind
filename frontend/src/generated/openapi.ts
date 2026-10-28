@@ -5290,7 +5290,7 @@ export interface components {
             /** Repository */
             repository: string;
             /** Operations */
-            operations?: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request" | "issues")[];
+            operations?: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request" | "issues" | "security_read")[];
             /**
              * Revision
              * @default 1
@@ -6574,7 +6574,7 @@ export interface components {
             /** Token */
             token?: string | null;
             /** Allowedoperations */
-            allowedOperations?: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request" | "issues")[] | null;
+            allowedOperations?: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request" | "issues" | "security_read")[] | null;
         };
         /** ContainerJobAccepted */
         ContainerJobAccepted: {
@@ -6659,7 +6659,7 @@ export interface components {
          * ContainerJobFailureClass
          * @enum {string}
          */
-        ContainerJobFailureClass: "validation" | "authorization" | "workspace" | "image" | "image_not_found" | "image_pull_timeout" | "image_pull_auth_failed" | "image_build_not_configured" | "image_build_inputs_unavailable" | "image_build_timeout" | "image_build_failed" | "image_validation_failed" | "image_platform_mismatch" | "image_backend_unavailable" | "launch" | "execution" | "timeout" | "canceled" | "infrastructure" | "temporal_start" | "image_use_denied" | "credential_unresolved" | "repository_scope_mismatch" | "registry_auth_failed" | "credential_cleanup_failed" | "resource_limit_exceeded" | "gpu_request_invalid" | "gpu_vendor_unsupported" | "gpu_count_unsupported" | "gpu_backend_unsupported" | "gpu_runtime_unavailable" | "gpu_resource_unavailable";
+        ContainerJobFailureClass: "validation" | "authorization" | "workspace" | "image" | "image_not_found" | "image_pull_timeout" | "image_pull_auth_failed" | "image_build_not_configured" | "image_build_inputs_unavailable" | "image_build_timeout" | "image_build_failed" | "image_validation_failed" | "image_platform_mismatch" | "image_backend_unavailable" | "launch" | "execution" | "timeout" | "canceled" | "infrastructure" | "temporal_start" | "image_use_denied" | "credential_unresolved" | "repository_scope_mismatch" | "registry_auth_failed" | "credential_cleanup_failed" | "credential_expired" | "credential_issuance_failed" | "resource_limit_exceeded" | "gpu_request_invalid" | "gpu_vendor_unsupported" | "gpu_count_unsupported" | "gpu_backend_unsupported" | "gpu_runtime_unavailable" | "gpu_resource_unavailable";
         /** ContainerJobLogEntry */
         ContainerJobLogEntry: {
             /** Sequence */
@@ -6689,6 +6689,8 @@ export interface components {
         /** ContainerJobSpec */
         ContainerJobSpec: {
             repositoryScan?: components["schemas"]["RepositoryScan"] | null;
+            feedRefresh?: components["schemas"]["FeedRefresh"] | null;
+            imageAssessment?: components["schemas"]["ImageAssessment"] | null;
             workloadProfile?: components["schemas"]["WorkloadProfileSelection"] | null;
             /** Image */
             image?: string | null;
@@ -6739,7 +6741,7 @@ export interface components {
             outputs?: components["schemas"]["OutputDeclaration"][];
             /**
              * Inputattachments
-             * @description Read-only captured inputs mounted at /inputs/<name>. Declaring any replaces the live /workspace mount with job-owned writable /outputs (where declared outputs resolve) and /tmp.
+             * @description Read-only captured inputs mounted at /inputs/<name>. Declaring the list, even empty, replaces the live /workspace mount with job-owned writable /outputs (where declared outputs resolve) and /tmp.
              */
             inputAttachments?: components["schemas"]["InputAttachment"][] | null;
         };
@@ -9119,6 +9121,50 @@ export interface components {
             /** Artifactref */
             artifactRef: string;
         };
+        /**
+         * FeedRefresh
+         * @description Source-free acquisition of selected Trivy components into a snapshot.
+         *
+         *     Upstream locations are deployment code, not request fields. ``download``
+         *     reaches them through an admitted egress policy; ``import`` validates an
+         *     operator-supplied archive of a Trivy cache directory with no network.
+         */
+        FeedRefresh: {
+            /**
+             * Acquisition
+             * @default download
+             * @enum {string}
+             */
+            acquisition: "download" | "import";
+            /** Components */
+            components?: ("vulnerability" | "java" | "checks")[];
+            /** Feedcacheref */
+            feedCacheRef: string;
+            /** Egresspolicyref */
+            egressPolicyRef?: string | null;
+            /** Archiveartifactref */
+            archiveArtifactRef?: string | null;
+            /**
+             * Outputdirectory
+             * @default feed-refresh
+             */
+            outputDirectory: string;
+            /**
+             * Maxagehours
+             * @default 72
+             */
+            maxAgeHours: number;
+            /**
+             * Maxbytes
+             * @default 8589934592
+             */
+            maxBytes: number;
+            /**
+             * Timeoutseconds
+             * @default 1800
+             */
+            timeoutSeconds: number;
+        };
         /** GateReason */
         GateReason: {
             /** Code */
@@ -9229,7 +9275,7 @@ export interface components {
              *       "read"
              *     ]
              */
-            allowedOperations: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request" | "issues")[];
+            allowedOperations: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request" | "issues" | "security_read")[];
         };
         /** GitHubAppBeginResponse */
         GitHubAppBeginResponse: {
@@ -9417,6 +9463,73 @@ export interface components {
             serverImageRef: string;
             /** Hostimageref */
             hostImageRef: string;
+        };
+        /**
+         * ImageAssessment
+         * @description One Trivy operation on an image, image archive, SBOM or source snapshot.
+         *
+         *     A typed workload of its own, so target-image coverage is requested and
+         *     reported apart from source scanning. Registry targets are read from the
+         *     registry and archives or SBOMs from captured inputs, never through a
+         *     container daemon. ``targetCredentialRef`` authorizes the target registry
+         *     only; the scanner image is a deployment image source with its own pull
+         *     authority.
+         */
+        ImageAssessment: {
+            /**
+             * Operation
+             * @enum {string}
+             */
+            operation: "assess" | "sbom-generate" | "sbom-reassess";
+            /**
+             * Target
+             * @enum {string}
+             */
+            target: "registry" | "archive" | "sbom" | "source";
+            /** Imagereference */
+            imageReference?: string | null;
+            /** Platform */
+            platform?: string | null;
+            /** Inputartifactref */
+            inputArtifactRef?: string | null;
+            /** Egresspolicyref */
+            egressPolicyRef?: string | null;
+            /** Targetcredentialref */
+            targetCredentialRef?: string | null;
+            /** Databasecacheref */
+            databaseCacheRef?: string | null;
+            /** Databasedigest */
+            databaseDigest?: string | null;
+            /**
+             * Feedmaxagehours
+             * @default 72
+             */
+            feedMaxAgeHours: number;
+            /**
+             * Outputdirectory
+             * @default image-assessment
+             */
+            outputDirectory: string;
+            /**
+             * Maxinputbytes
+             * @default 2147483648
+             */
+            maxInputBytes: number;
+            /**
+             * Maxsbombytes
+             * @default 33554432
+             */
+            maxSbomBytes: number;
+            /**
+             * Maxreportbytes
+             * @default 8388608
+             */
+            maxReportBytes: number;
+            /**
+             * Timeoutseconds
+             * @default 900
+             */
+            timeoutSeconds: number;
         };
         /** ImageObservation */
         ImageObservation: {
@@ -10172,7 +10285,7 @@ export interface components {
              */
             token: string;
             /** Allowedoperations */
-            allowedOperations?: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request" | "issues")[];
+            allowedOperations?: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request" | "issues" | "security_read")[];
         };
         /**
          * PinArtifactRequest
@@ -12333,6 +12446,11 @@ export interface components {
             /** Databasedigest */
             databaseDigest?: string | null;
             /**
+             * Feedmaxagehours
+             * @default 72
+             */
+            feedMaxAgeHours: number;
+            /**
              * Maxfiles
              * @default 4096
              */
@@ -14008,6 +14126,18 @@ export interface components {
          */
         WorkflowRunStatus: "pending" | "running" | "succeeded" | "failed" | "no_work" | "cancelled" | "retrying";
         /**
+         * WorkloadCredentialSelection
+         * @description A requested reference for one profile credential slot; never a value.
+         */
+        WorkloadCredentialSelection: {
+            /** Slot */
+            slot: string;
+            /** Credentialref */
+            credentialRef: string;
+            /** Account */
+            account: string;
+        };
+        /**
          * WorkloadGpuRequest
          * @description Caller-supplied generic GPU resource request for one container.
          *
@@ -14043,6 +14173,7 @@ export interface components {
          *     Admission renders the profile's image, argv, environment, caches, network
          *     and outputs into the spec; the caller never supplies them directly.
          *     ``assessmentRef`` is stamped from a scoped session capability.
+         *     ``credentials`` request admitted references for the profile's slots.
          */
         WorkloadProfileSelection: {
             /** Profileref */
@@ -14057,6 +14188,8 @@ export interface components {
             configurationExceptions?: string[];
             /** Assessmentref */
             assessmentRef?: string | null;
+            /** Credentials */
+            credentials?: components["schemas"]["WorkloadCredentialSelection"][] | null;
         };
         /** WorkspaceDefaults */
         WorkspaceDefaults: {
