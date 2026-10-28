@@ -53,6 +53,19 @@ def _check_cancelled() -> None:
         raise asyncio.CancelledError()
 
 
+def _feed_intelligence(execution) -> dict[str, str]:
+    """Scanner version and the vulnerability/check data snapshot it read."""
+    if execution is None:
+        return {}
+    values = {"version": execution.version or "unavailable"}
+    snapshot = execution.feed.snapshot if execution.feed else None
+    if snapshot is not None:
+        values["feedSnapshot"] = snapshot.snapshot_id
+    elif execution.database_digest:
+        values["database"] = execution.database_digest
+    return values
+
+
 def observe_inventory(
     request: AssessmentRequest, inventory: Inventory, feed: AdvisoryFeed
 ) -> Observation:
@@ -105,6 +118,7 @@ def observe_inventory(
                 rule_ids=[rule.id for rule in feed.rules],
                 status=inventory.status,
                 config_ref=inventory.config_ref,
+                intelligence={"feedRevision": feed.revision},
             )
         ],
         provenance={
@@ -163,6 +177,7 @@ def _passive_observation(
                 rule_ids=["credential", "private_key", "authorization", "token"],
                 config_ref=content_key(native.to_payload()["config"]),
                 status="partial" if native.verdict == "incomplete" else "complete",
+                intelligence={"rules": content_key(native.to_payload()["config"])},
             )
         ],
         provenance={
@@ -259,6 +274,7 @@ def _scanner_observation(
                     ]
                 ),
                 status="complete" if complete else "partial",
+                intelligence=_feed_intelligence(summary.execution),
             )
         ],
         provenance={
@@ -318,6 +334,7 @@ def _image_observation(
                 # reassessment compares one inventory across vulnerability data.
                 config_ref=content_key(["image-vulnerabilities", version]),
                 status="complete" if complete and assets else "partial",
+                intelligence=_feed_intelligence(execution),
             )
         ],
         provenance={
@@ -378,6 +395,7 @@ def _web_observation(
                         else "partial"
                     )
                 ),
+                intelligence={"version": summary.execution.version or "unavailable"},
             )
         ],
         provenance={
@@ -437,6 +455,7 @@ def _cloud_observation(
                     ]
                 ),
                 status=status,
+                intelligence={"version": summary.execution.version or "unavailable"},
             )
         ],
         provenance={
@@ -1034,6 +1053,26 @@ def _summary(comparison: dict) -> str:
             *[f"- {key.replace('_', ' ')}: {value}" for key, value in counts.items()],
             "",
             "Absence describes comparable completed coverage only; it is not a confirmed fix.",
+            (
+                "Remediated verified requires a linked passing retest or the "
+                "source's own fixed state; closed upstream is a source decision, "
+                "not a fix."
+            ),
+            *(
+                [
+                    "Refreshed intelligence may explain new or absent findings: "
+                    + ", ".join(comparison["intelligenceChanges"])
+                    + "."
+                ]
+                if comparison.get("intelligenceChanges")
+                else []
+            ),
+            *[
+                f"- decision on {row['decision']['findingId'][:12]} requires review: "
+                + ", ".join(row["reviewReasons"]).replace("_", " ")
+                for row in comparison["decisions"]
+                if row["status"] == "review_required"
+            ],
             "Stale or partial evidence and expired decisions require review.",
             "Finding evidence, provenance and attributed decisions are retained in the structured report.",
             "",
