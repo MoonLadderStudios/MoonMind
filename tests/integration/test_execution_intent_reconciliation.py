@@ -94,7 +94,7 @@ class AdmittedInputConsumer:
 
 
 @pytest.mark.parametrize("loss", ["before", "lost-ack", "confirmation", "concurrent"])
-async def test_background_owner_recovers_one_admitted_start(sessions, monkeypatch, tmp_path, loss):
+async def test_background_owner_recovers_one_admitted_start(sessions, monkeypatch, loss):
     saved = await _api_context(sessions, monkeypatch)
     monkeypatch.setattr(settings.temporal, "namespace", "default")
     monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", True)
@@ -117,7 +117,6 @@ async def test_background_owner_recovers_one_admitted_start(sessions, monkeypatc
         return {"status": "success"}
 
     async with await WorkflowEnvironment.start_local(
-        download_dest_dir=str(tmp_path),
         search_attributes=[
             SearchAttributeKey.for_keyword("SessionStatus"),
             SearchAttributeKey.for_bool("IsDegraded"),
@@ -255,9 +254,8 @@ class CancellableAdmittedConsumer:
 
 
 @asynccontextmanager
-async def cancel_runtime(tmp_path):
+async def cancel_runtime():
     async with await WorkflowEnvironment.start_local(
-        download_dest_dir=str(tmp_path),
         search_attributes=[
             SearchAttributeKey.for_keyword("SessionStatus"),
             SearchAttributeKey.for_bool("IsDegraded"),
@@ -302,7 +300,7 @@ async def test_background_honors_cancel_without_starting_a_successor(
     monkeypatch.setattr(settings.temporal, "namespace", "default")
     monkeypatch.setattr(settings.temporal_dashboard, "temporal_workflow_editing_enabled", True)
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path / "managed-runtime"))
-    async with cancel_runtime(tmp_path) as (env, adapter, background):
+    async with cancel_runtime() as (env, adapter, background):
         actual_start, actual_describe = adapter.start_workflow, adapter.describe_workflow
 
         async def lost_start(**kwargs):
