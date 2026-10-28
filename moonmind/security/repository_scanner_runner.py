@@ -46,30 +46,33 @@ class BoundedProcesses:
         env: dict[str, str],
         capture: Path | None = None,
         errors: Path | None = None,
+        limit_file_size: bool = True,
     ) -> tuple[int | None, str]:
         """Return ``(exit_code, state)``; output goes only to private files."""
         if self.stopped():
             return None, "canceled" if self.canceled else "timed_out"
+        if limit_file_size:
+            # Set the file ceiling in a fresh interpreter before exec;
+            # preexec_fn can deadlock a caller that already has threads.
+            bootstrap = (
+                "import os,resource,sys; n=int(sys.argv[1]); "
+                "resource.setrlimit(resource.RLIMIT_FSIZE,(n,n)); "
+                "os.execvpe(sys.argv[2],sys.argv[2:],os.environ)"
+            )
+            argv = [
+                sys.executable,
+                "-I",
+                "-c",
+                bootstrap,
+                str(self.max_file_bytes),
+                *argv,
+            ]
         try:
             with capture.open("wb") if capture else open(os.devnull, "wb") as stdout, (
                 errors.open("wb") if errors else open(os.devnull, "wb")
             ) as stderr:
-                # Set the file ceiling in a fresh interpreter before exec;
-                # preexec_fn can deadlock a caller that already has threads.
-                bootstrap = (
-                    "import os,resource,sys; n=int(sys.argv[1]); "
-                    "resource.setrlimit(resource.RLIMIT_FSIZE,(n,n)); "
-                    "os.execvpe(sys.argv[2],sys.argv[2:],os.environ)"
-                )
                 child = subprocess.Popen(
-                    [
-                        sys.executable,
-                        "-I",
-                        "-c",
-                        bootstrap,
-                        str(self.max_file_bytes),
-                        *argv,
-                    ],
+                    argv,
                     cwd=cwd,
                     env=env,
                     stdin=subprocess.DEVNULL,
@@ -292,8 +295,14 @@ def run_scanner(
             "GIT_CONFIG_VALUE_1": "*",
         }
 
-        def execute(argv, *, capture: Path | None = None):
-            return processes.run(argv, cwd=stage, env=env, capture=capture)
+        def execute(argv, *, capture: Path | None = None, limit_file_size=True):
+            return processes.run(
+                argv,
+                cwd=stage,
+                env=env,
+                capture=capture,
+                limit_file_size=limit_file_size,
+            )
 
         metadata = ScannerExecution(
             inputDigest=content_key([]),
@@ -325,12 +334,16 @@ def run_scanner(
             if metadata.feed is not None and metadata.feed.snapshot is not None:
                 metadata.database_digest = metadata.feed.snapshot.snapshot_id
             version = root / "version"
+            # Opengrep's one-file release unpacks a runtime far larger than any
+            # report into $HOME/.cache on first use. This probe reads no input,
+            # so it unpacks without the report ceiling; the scan reuses it.
             execute(
                 [
                     scan.scanner,
                     "version" if scan.scanner == "gitleaks" else "--version",
                 ],
                 capture=version,
+                limit_file_size=False,
             )
             if version.exists():
                 match = re.search(
