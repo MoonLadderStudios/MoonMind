@@ -1,10 +1,12 @@
 """Deterministic stand-in for ``zap.sh -cmd -autorun`` at the binary boundary.
 
-It executes the Automation Framework plan the worker wrote: context include
-and exclude regexes, form users whose password is the ``${...}`` placeholder
-resolved from the environment, poll verification, requestor, OpenAPI import,
-spider, passive header checks, reflected-input active checks at the plan's
-strength, traditional-json-plus reports and HAR exports. Requests go through
+It executes the Automation Framework plan the worker wrote: the request
+guard script, context include and exclude regexes, form users whose password
+is the ``${...}`` placeholder resolved from the environment, poll
+verification, requestor, OpenAPI import, spider (posting forms when the plan
+allows), passive header checks, reflected-input active checks at the plan's
+strength, traditional-json-plus reports and HAR exports of the context, which
+omit refused requests as ZAP's do. Requests go through
 the upstream proxy given by ``-config``, exactly as the launch script passes
 it, no faster than its network rate-limit rule allows. ``FIXTURE_ZAP_FAULT``
 selects a failure: ``malformed`` output, a plan ``warning`` (exit 2), or
@@ -60,6 +62,29 @@ class Zap:
         self.alerts: dict[tuple, dict] = {}
         self.sites: list[str] = []
         self.polled = 0
+        self.guard = None
+        for job in plan["jobs"]:
+            if job["type"] == "script" and job["parameters"]["type"] == "httpsender":
+                # The guard's first line declares its admitted scope.
+                first = job["parameters"]["inline"].split("\n", 1)[0]
+                self.guard = json.loads(first.removeprefix("var SCOPE = ")[:-1])
+
+    def guarded(self, method: str, url: str) -> str:
+        """The URL the guard script sends a request to, as ZAP runs it."""
+        parts = urlsplit(url)
+        scope = self.guard
+        if scope is None or (parts.hostname or "") != scope["host"]:
+            return url
+        path = parts.path or "/"
+
+        def within(prefix):
+            return prefix == "/" or path == prefix or path.startswith(prefix + "/")
+
+        if not any(within(e) for e in scope["exclusions"]) and any(
+            within(r["path"]) and method in r["methods"] for r in scope["routes"]
+        ):
+            return url
+        return f"http://{scope['denied']}{path}"
 
     def in_scope(self, url: str) -> bool:
         return any(p.fullmatch(url) for p in self.include) and not any(
@@ -69,6 +94,7 @@ class Zap:
     def send(self, method: str, url: str, *, user=None, body: str = "") -> dict:
         if user is not None:
             self.ensure_session(user)
+        url = self.guarded(method, url)
         headers = {"host": urlsplit(url).netloc}
         if user is not None and user in self.sessions:
             headers["Cookie"] = self.sessions[user]
@@ -199,6 +225,11 @@ class Zap:
             seen.add(url)
             message = self.send("GET", url, user=user)
             response = message["response"]
+            if params.get("postForm"):
+                for action in re.findall(
+                    r'<form method="POST" action="([^"]+)"', response["content"]["text"]
+                ):
+                    self.send("POST", urljoin(url, action), user=user, body="q=1")
             links = re.findall(r'href="([^"]+)"', response["content"]["text"])
             links += [
                 h["value"]
@@ -257,8 +288,9 @@ class Zap:
             handle.write(text)
 
     def export(self, params: dict) -> None:
+        entries = [m for m in self.messages if self.in_scope(m["request"]["url"])]
         with open(local(params["fileName"]), "w") as handle:
-            json.dump({"log": {"version": "1.2", "entries": self.messages}}, handle)
+            json.dump({"log": {"version": "1.2", "entries": entries}}, handle)
 
     def run(self) -> int:
         for job in self.plan["jobs"]:

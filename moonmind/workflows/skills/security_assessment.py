@@ -353,7 +353,9 @@ def _web_observation(
                 assets=assets,
                 rule_ids=[],
                 all_rules=summary.status == "complete",
-                # Mode, identity and routes decide what absence can mean.
+                # Mode, identity, admitted routes and the routes actually
+                # tested decide what absence can mean: a finding on a route
+                # this crawl never reached was not reassessed.
                 config_ref=content_key(
                     [
                         "web",
@@ -362,6 +364,7 @@ def _web_observation(
                         identity,
                         [r.model_dump(mode="json") for r in admission.routes],
                         admission.exclusions,
+                        sorted(summary.coverage.tested_routes),
                     ]
                 ),
                 status=(

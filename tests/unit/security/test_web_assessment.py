@@ -19,6 +19,8 @@ from moonmind.schemas.container_job_models import (
 from moonmind.schemas.repository_scanner_models import WebAssessment
 from moonmind.security.egress_policy import parse_egress_policies
 from moonmind.security.web_assessments import (
+    DENIED_HOST,
+    GUARD_SCRIPT,
     PLAN_JOB_TYPES,
     SECRET_ENV,
     build_web_assessment_job,
@@ -112,6 +114,20 @@ def test_schema_rejects_unscoped_or_ambiguous_assessments(overrides):
         web(**overrides)
 
 
+def test_route_validation_is_linear_and_unchanged():
+    from moonmind.schemas.repository_scanner_models import web_route
+
+    assert [web_route(v) for v in ("/", "/a", "/a/", "/a/b!c/d")] == [
+        "/",
+        "/a",
+        "/a",
+        "/a/b!c/d",
+    ]
+    for invalid in ("", "a", "//", "/a//b", "/a?b", "/" + "!" * 400 + "?"):
+        with pytest.raises(ValueError):
+            web_route(invalid)
+
+
 def test_each_mode_requires_its_own_action_class():
     assert web().action_class == "web-passive"
     assert web(mode="api", apiDefinition=OPENAPI).action_class == "web-api"
@@ -147,6 +163,47 @@ def test_active_plan_uses_exactly_the_admitted_strength(strength):
     )
 
 
+def test_every_request_passes_the_admitted_route_and_method_guard():
+    assessment = web(mode="active", activeStrength="low", exclusions=["/logout"])
+    plan = build_web_assessment_plan(assessment)
+    # The guard is installed before any job sends a request.
+    guard = plan["jobs"][0]
+    assert (guard["type"], guard["parameters"]["type"]) == ("script", "httpsender")
+    assert guard["parameters"]["name"] == GUARD_SCRIPT
+    source = guard["parameters"]["inline"]
+    scope = json.loads(source.split("\n", 1)[0].removeprefix("var SCOPE = ")[:-1])
+    assert scope == {
+        "host": "app.example.test",
+        "routes": [
+            {"path": "/", "methods": ["GET"]},
+            {"path": "/login", "methods": ["GET", "POST"]},
+            {"path": "/api", "methods": ["GET", "POST"]},
+        ],
+        "exclusions": ["/logout"],
+        "denied": DENIED_HOST,
+    }
+    # A guard ZAP cannot load ends the plan; the reports still run.
+    assert plan["env"]["parameters"]["failOnError"] is True
+    assert all(
+        job.get("alwaysRun")
+        for job in plan["jobs"]
+        if job["type"] in {"report", "export"}
+    )
+
+
+@pytest.mark.parametrize("methods, posts", [(["GET"], False), (["GET", "POST"], True)])
+def test_active_crawl_posts_forms_only_where_a_route_admits_post(methods, posts):
+    plan = build_web_assessment_plan(
+        web(
+            mode="active",
+            activeStrength="low",
+            routes=[{"path": "/", "methods": methods}],
+        )
+    )
+    (spider,) = jobs(plan, "spider")
+    assert spider["parameters"]["postForm"] is posts
+
+
 def test_plan_runs_only_admitted_zap_jobs_without_templates():
     for assessment in (
         web(identity=FORM, discovery=["spider", "ajax-spider"]),
@@ -163,8 +220,11 @@ def test_plan_runs_only_admitted_zap_jobs_without_templates():
     ):
         plan = build_web_assessment_plan(assessment)
         assert {job["type"] for job in plan["jobs"]} <= PLAN_JOB_TYPES
+        # MoonMind's request guard is the only script.
+        (guard,) = jobs(plan, "script")
+        assert guard["parameters"]["name"] == GUARD_SCRIPT
         text = render_web_assessment_plan(assessment).decode().lower()
-        for forbidden in ("nuclei", "template-catalog", "script", "quickstart"):
+        for forbidden in ("nuclei", "template-catalog", "quickstart"):
             assert forbidden not in text
 
 
@@ -859,6 +919,28 @@ def test_missing_or_malformed_output_is_partial(files, limitation):
     assert summary.status == "partial" and limitation in summary.limitations
 
 
+@pytest.mark.parametrize(
+    "sanitize, body",
+    [
+        (sanitize_report, {"site": [None]}),
+        (sanitize_report, {"site": [{"alerts": [{"instances": [1]}]}]}),
+        (sanitize_report, {"site": [{"alerts": "none"}]}),
+        (sanitize_messages, {"log": []}),
+        (sanitize_messages, {"log": {"entries": [None]}}),
+        (sanitize_messages, {"log": {"entries": [{"request": []}]}}),
+        (sanitize_messages, {"log": {"entries": [{"request": {"headers": [0]}}]}}),
+        (
+            sanitize_messages,
+            {"log": {"entries": [{"request": {"postData": {"params": [None]}}}]}},
+        ),
+        (sanitize_messages, {"log": {"entries": [{"response": {"content": "x"}}]}}),
+    ],
+)
+def test_malformed_nested_evidence_is_a_bounded_diagnostic(sanitize, body):
+    with pytest.raises(WebEvidenceError, match="_malformed$"):
+        sanitize(json.dumps(body).encode(), [SECRET], LIMIT)
+
+
 def test_plan_errors_warnings_and_early_stops_are_partial():
     for extra, limitation in (
         ({"afPlanErrors": ["spider failed"]}, "zap_plan_errors"),
@@ -954,6 +1036,34 @@ def test_failed_or_unproven_authentication_is_partial_with_a_reason(responses, r
     assert summary.status == "partial"
 
 
+def test_session_lost_during_active_testing_is_partial():
+    signed_in = entry("/account", 200, text="<p>Signed in as alice</p>")
+    passive = har(entry("/account", 302), signed_in, *EVERY_ROUTE)
+    # Attacks on the route change its query and do not check the session.
+    attacked = entry("/account?q=%3Cscript%3E", 500)
+    expired = entry("/account", 302, headers=[("Location", "/login")])
+
+    def run(*active):
+        return summarize(
+            web(mode="active", activeStrength="low", identity=FORM),
+            passive_report=report(),
+            passive_messages=passive,
+            report=report(),
+            messages=har(
+                entry("/account", 302), signed_in, *EVERY_ROUTE, signed_in, *active
+            ),
+        )
+
+    kept = run(attacked, signed_in)
+    assert kept.coverage.authentication.status == "verified"
+    assert kept.status == "complete"
+    lost = run(signed_in, expired)
+    auth = lost.coverage.authentication
+    assert (auth.status, auth.anonymous_compared) == ("failed", True)
+    assert "session expired" in auth.reason
+    assert lost.status == "partial" and "authentication_failed" in lost.limitations
+
+
 PUBLIC = (200, "<p>Signed out</p>", [])
 SIGNED_IN_SVC = (200, "<p>Signed in as svc</p>", [])
 REJECTED = (401, "", [("WWW-Authenticate", "Bearer")])
@@ -1012,3 +1122,44 @@ def test_unsent_site_tree_nodes_are_not_unreachable_or_failed_logins():
     )
     assert folder.coverage.unreachable_routes == []
     assert folder.status == "complete"
+
+
+from moonmind.security.assessments import (  # noqa: E402
+    AssessmentRequest,
+    compare_observations,
+)
+from moonmind.workflows.skills.security_assessment import _web_observation  # noqa: E402
+
+NOW = datetime(2026, 10, 28, tzinfo=UTC)
+
+
+def _observe(*paths, findings=()):
+    summary = summarize(
+        web(routes=[{"path": "/", "methods": ["GET"]}]),
+        report=report(*findings),
+        messages=har(*(entry(path) for path in paths)),
+    )
+    assert summary.status == "complete"
+    request = AssessmentRequest(
+        scope={"assets": [ORIGIN]},
+        tools=["retained-report"],
+        reportRefs=["art_summary"],
+        credentialRefs=[],
+        networkRefs=[],
+        budget={"baseSeconds": 60, "maxSeconds": 120, "progressStallSeconds": 60},
+    )
+    return _web_observation(request, summary, "art_summary", NOW)
+
+
+@pytest.mark.parametrize(
+    "rescanned, state",
+    [(("/public",), "not_reassessed"), (("/admin", "/public"), "absent_comparable")],
+)
+def test_web_absence_is_comparable_only_over_the_same_tested_routes(rescanned, state):
+    baseline = compare_observations(
+        _observe("/admin", "/public", findings=[alert("10021", f"{ORIGIN}/admin")]),
+        None,
+        now=NOW,
+    )
+    result = compare_observations(_observe(*rescanned), baseline, now=NOW)
+    assert [row["state"] for row in result["findings"]] == [state]

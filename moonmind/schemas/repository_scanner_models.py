@@ -279,7 +279,9 @@ _ORIGIN = re.compile(
     r"^https?://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}"
     r"(?::[0-9]{1,5})?$"
 )
-_ROUTE = re.compile(r"^/(?:[A-Za-z0-9._~!$&'()*+,;=:@%-]+/?)*$")
+_SEGMENT = r"[A-Za-z0-9._~!$&'()*+,;=:@%-]+"
+# Segments are separated by exactly one slash, so matching is linear.
+_ROUTE = re.compile(rf"^/(?:{_SEGMENT}(?:/{_SEGMENT})*/?)?$")
 _NAME = r"^[a-z0-9][a-z0-9.-]{0,63}$"
 WEB_OUTPUT_FILES = {
     "report": "report.json",

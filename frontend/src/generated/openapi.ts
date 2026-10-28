@@ -4942,6 +4942,26 @@ export interface components {
             /** Bundledigest */
             bundleDigest?: string | null;
         };
+        /**
+         * ApiDefinition
+         * @description An authorized OpenAPI or GraphQL definition read from one artifact.
+         */
+        ApiDefinition: {
+            /**
+             * Format
+             * @enum {string}
+             */
+            format: "openapi" | "graphql";
+            /** Inputartifactref */
+            inputArtifactRef: string;
+            /** Endpointpath */
+            endpointPath?: string | null;
+            /**
+             * Maxbytes
+             * @default 2097152
+             */
+            maxBytes: number;
+        };
         /** ApprovalPolicy */
         ApprovalPolicy: {
             /** Actions */
@@ -6691,6 +6711,7 @@ export interface components {
             repositoryScan?: components["schemas"]["RepositoryScan"] | null;
             feedRefresh?: components["schemas"]["FeedRefresh"] | null;
             imageAssessment?: components["schemas"]["ImageAssessment"] | null;
+            webAssessment?: components["schemas"]["WebAssessment"] | null;
             workloadProfile?: components["schemas"]["WorkloadProfileSelection"] | null;
             /** Image */
             image?: string | null;
@@ -13891,6 +13912,117 @@ export interface components {
         /** VersionCreate */
         VersionCreate: {
             document: components["schemas"]["AgentProfileAuthoringDocument"];
+        };
+        /**
+         * WebAssessment
+         * @description One ZAP Automation Framework run against one admitted origin.
+         *
+         *     ``baseline`` crawls and checks passively; ``api`` imports an admitted
+         *     definition and checks passively; ``active`` adds the active scanner and
+         *     is the only mode that sends attack payloads. One job tests at most one
+         *     identity, so every observation is attributable to it.
+         */
+        WebAssessment: {
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "baseline" | "api" | "active";
+            /** Assessmentref */
+            assessmentRef?: string | null;
+            /** Origin */
+            origin: string;
+            /** Routes */
+            routes: components["schemas"]["WebRoute"][];
+            /** Startpaths */
+            startPaths?: string[];
+            /** Exclusions */
+            exclusions?: string[];
+            identity?: components["schemas"]["WebIdentity"] | null;
+            apiDefinition?: components["schemas"]["ApiDefinition"] | null;
+            /** Discovery */
+            discovery?: ("spider" | "ajax-spider")[];
+            /** Activestrength */
+            activeStrength?: ("low" | "medium" | "high") | null;
+            /** Egresspolicyref */
+            egressPolicyRef: string;
+            /**
+             * Maxrequestspersecond
+             * @default 10
+             */
+            maxRequestsPerSecond: number;
+            /**
+             * Maxdepth
+             * @default 5
+             */
+            maxDepth: number;
+            /**
+             * Maxchildren
+             * @default 50
+             */
+            maxChildren: number;
+            /**
+             * Outputdirectory
+             * @default web-assessment
+             */
+            outputDirectory: string;
+            /**
+             * Maxreportbytes
+             * @default 8388608
+             */
+            maxReportBytes: number;
+            /**
+             * Timeoutseconds
+             * @default 900
+             */
+            timeoutSeconds: number;
+        };
+        /**
+         * WebIdentity
+         * @description One admitted test identity; its secret arrives only at launch.
+         *
+         *     ``form`` posts ``username`` and the secret to ``loginPath``; ``bearer``
+         *     sends the secret as a bearer token to the admitted origin only. The
+         *     verification route must show ``loggedInMarker`` to the identity, and a
+         *     form identity's route must not show it anonymously, so authentication is
+         *     checked rather than assumed. A bearer token rides on every request, so
+         *     its marker must be specific to the identity, such as its account name.
+         */
+        WebIdentity: {
+            /** Name */
+            name: string;
+            /**
+             * Method
+             * @enum {string}
+             */
+            method: "form" | "bearer";
+            /** Credentialref */
+            credentialRef: string;
+            /** Verificationpath */
+            verificationPath: string;
+            /** Loggedinmarker */
+            loggedInMarker: string;
+            /** Loginpath */
+            loginPath?: string | null;
+            /** Username */
+            username?: string | null;
+            /**
+             * Usernamefield
+             * @default username
+             */
+            usernameField: string;
+            /**
+             * Passwordfield
+             * @default password
+             */
+            passwordField: string;
+        };
+        /** WebRoute */
+        WebRoute: {
+            /** Path */
+            path: string;
+            /** Methods */
+            methods?: ("GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS")[];
         };
         /**
          * WorkerOperationCommand

@@ -4404,16 +4404,18 @@ class DockerContainerJobBackend:
         """Sanitize ZAP's native evidence and publish it with its summary.
 
         Reads whatever exists, so a timeout or cancellation during active
-        testing still publishes the passive phase. The identity secret is
-        read once to scrub every copy, then removed with its directory.
+        testing still publishes the passive phase. The identity secret leaves
+        the container's mount but stays worker-only until cleanup, so this
+        and any retried publication scrub every copy.
         """
         storage = self._attachment_storage(request)
         secrets: list[str] = []
         if storage is not None:
-            secret = storage.credentials / "secret"
-            if secret.is_file() and not secret.is_symlink():
-                secrets.append(await asyncio.to_thread(secret.read_text))
-            await asyncio.to_thread(attachments.remove_credentials, storage)
+            secret = await asyncio.to_thread(
+                attachments.retire_credential, storage, "secret"
+            )
+            if secret:
+                secrets.append(secret)
         if self._publish is None:
             return []
         spec = request.request.spec

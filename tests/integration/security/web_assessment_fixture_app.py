@@ -5,7 +5,8 @@ upstream ZAP image. ``/search`` reflects input unescaped while ``/fixed/search``
 escapes it and sends hardening headers; ``/account`` needs a session for any
 role and ``/admin`` the admin role, either by login session or by the
 service's bearer token; ``/away`` redirects off the admitted
-origin; ``/openapi.json`` describes the API. The gateway forwards only to its
+origin; the home page's ``/feedback`` form records every post it receives;
+``/openapi.json`` describes the API. The gateway forwards only to its
 allowlisted hosts, like the scoped egress gateway, and refuses the rest.
 """
 
@@ -60,6 +61,7 @@ SPEC = {
 
 class App(BaseHTTPRequestHandler):
     sessions: dict[str, str] = {}
+    posted: list[str] = []
     server_version = "fixture"
     sys_version = ""
 
@@ -111,7 +113,8 @@ class App(BaseHTTPRequestHandler):
                 '<a href="/fixed/search?q=hello">fixed search</a> '
                 '<a href="/login">login</a> <a href="/account">account</a> '
                 '<a href="/admin">admin</a> <a href="/away">away</a> '
-                '<a href="/private/report">private</a>',
+                '<a href="/private/report">private</a>'
+                '<form method="POST" action="/feedback"><input name="q"></form>',
             )
         elif path == "/search":
             self._page("search", "<p>Results for " + query.get("q", "") + "</p>")
@@ -168,6 +171,7 @@ class App(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length") or 0)
         form = {k: v[0] for k, v in parse_qs(self.rfile.read(length).decode()).items()}
+        self.posted.append(urlsplit(self.path).path)
         if urlsplit(self.path).path != "/login":
             self._send(405, "")
             return
