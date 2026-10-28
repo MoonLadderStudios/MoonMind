@@ -556,13 +556,16 @@ def test_concurrent_refresh_and_reads_never_observe_partial_snapshots(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("racing", "relative"), [("stat", feeds.MANIFEST), ("lstat", "db/trivy.db")]
+    ("racing", "relative"), [("read_bytes", feeds.MANIFEST), ("open", "db/trivy.db")]
 )
 def test_retired_then_republished_snapshot_reads_as_absence(
     tmp_path, monkeypatch, racing, relative
 ):
     # A reader loses files to retention mid-read and a lagging writer then
-    # republishes identical content: that is absence, not corruption.
+    # republishes identical content: that is absence, not corruption. The
+    # race hooks the reads themselves: pathlib's stat helpers call each other
+    # differently across Python versions. Retention's rename is held so the
+    # republished directory cannot reuse the retired one's inode.
     root = tmp_path / "feeds"
     snapshot = publish(root)
     published = root / "snapshots" / snapshot.snapshot_id
@@ -573,7 +576,7 @@ def test_retired_then_republished_snapshot_reads_as_absence(
         if raced or self != published / relative:
             return real(self, *args, **kwargs)
         raced.append(self)
-        feeds._retire(root, published)
+        published.rename(root / "staging" / "retired")
         try:
             return real(self, *args, **kwargs)
         finally:
