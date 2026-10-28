@@ -447,8 +447,7 @@ class WebAssessment(Contract):
 
         def admitted(path: str, method: str = "GET") -> bool:
             return not any(route_within(path, e) for e in self.exclusions) and any(
-                route_within(path, r.path) and method in r.methods
-                for r in self.routes
+                route_within(path, r.path) and method in r.methods for r in self.routes
             )
 
         if not all(admitted(p) for p in self.start_paths):
@@ -465,8 +464,10 @@ class WebAssessment(Contract):
             raise ValueError("api mode reads an admitted API definition")
         if self.mode == "baseline" and api is not None:
             raise ValueError("baseline mode crawls; API definitions select api mode")
-        if api is not None and api.endpoint_path and not admitted(
-            api.endpoint_path, "POST"
+        if (
+            api is not None
+            and api.endpoint_path
+            and not admitted(api.endpoint_path, "POST")
         ):
             raise ValueError("GraphQL endpoint must accept admitted POST requests")
         if self.mode != "api" and not self.discovery:
