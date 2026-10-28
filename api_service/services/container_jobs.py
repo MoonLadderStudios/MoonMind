@@ -52,6 +52,7 @@ from moonmind.schemas.container_job_models import (
     OwnerIdentity,
     RegistryAuthorization,
     TerminalOutcome,
+    WorkloadCredentialAuthorization,
     require_explicit_resources,
 )
 from moonmind.security.container_job_capabilities import (
@@ -59,6 +60,10 @@ from moonmind.security.container_job_capabilities import (
     container_job_matches_capability,
 )
 from moonmind.security.operator_admission import OperatorAdmission
+from moonmind.security.workload_credentials import (
+    authorize_workload_credentials,
+    owner_principal,
+)
 from moonmind.security.workload_profiles import (
     resolve_profile_job,
     resolved_job_within_scope,
@@ -353,6 +358,20 @@ class ContainerJobService:
                 resolved_job_within_scope(request.spec, scope, profiles)
             except (PermissionError, ValueError) as exc:
                 raise ContainerJobScopeDeniedError(str(exc)) from exc
+
+        def authorize_credentials(at: datetime) -> list[dict]:
+            # Value-free; each decision is bound to the job once it exists.
+            try:
+                return authorize_workload_credentials(
+                    request.spec,
+                    scope,
+                    profiles,
+                    principal=owner_principal(owner),
+                    now=at,
+                )
+            except (PermissionError, ValueError) as exc:
+                raise ContainerJobScopeDeniedError(str(exc)) from exc
+
         await self._authorize_input_attachments(owner=owner, spec=request.spec)
         # Authorize private-image execution and credential use before creating
         # durable identity. Fails closed: a denied request never starts a
@@ -427,6 +446,7 @@ class ContainerJobService:
                     "container-job resources must be explicit for new jobs: "
                     f"{exc}"
                 ) from exc
+            credential_decisions = authorize_credentials(datetime.now(timezone.utc))
             record, replayed = await self.repository.create_or_replay(
                 owner=owner, request=request, authorization=authorization
             )
@@ -456,6 +476,15 @@ class ContainerJobService:
             return ContainerJobAccepted(
                 jobId=record.job_id, replayed=True, createdAt=record.created_at
             )
+        if existing is not None:
+            # A restart needs a grant covering a fresh budget; an exact replay
+            # of admitted live work is checked as of its admission.
+            admitted_at = record.created_at
+            if recovering_start_failure or admitted_at is None:
+                admitted_at = datetime.now(timezone.utc)
+            elif admitted_at.tzinfo is None:
+                admitted_at = admitted_at.replace(tzinfo=timezone.utc)
+            credential_decisions = authorize_credentials(admitted_at)
         if recovering_start_failure:
             record.state = ContainerJobState.QUEUED.value
             record.terminal_outcome_json = None
@@ -478,6 +507,15 @@ class ContainerJobService:
                     request=request,
                     registryAuthorization=authorization,
                     targetAuthorization=target_authorization,
+                    workloadCredentials=(
+                        tuple(
+                            WorkloadCredentialAuthorization.model_validate(
+                                {**item, "jobId": record.job_id}
+                            )
+                            for item in credential_decisions
+                        )
+                        or None
+                    ),
                 )
             )
         except Exception:

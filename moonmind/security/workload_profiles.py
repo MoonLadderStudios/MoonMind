@@ -14,12 +14,17 @@ trusted launch boundary and signed into the session's container-job
 capability. A scoped session can submit only profile jobs inside that scope;
 generic image, entrypoint and repository-scanner submissions are refused.
 Sessions without a scope keep their ordinary development flexibility.
+
+A profile declares credential slots (purpose, delivery, issuer); a scope's
+credential grants say which opaque references may fill them, for which
+account, profiles and lifetime. Requests name references, never values.
 """
 
 from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -169,6 +174,45 @@ class ProfileOutput(_Model):
     relative_path: str = Field(alias="relativePath", min_length=1, max_length=1000)
 
 
+#: Distinct workload credential uses. Private target-registry access is the
+#: separate ``imageAssessment.targetCredentialRef`` path; model credentials stay
+#: with Provider Profiles. A grant for one purpose never fills another's slot.
+CredentialPurpose = Literal["cloud_inventory", "application_auth"]
+#: Container directory of file-delivered workload credentials.
+WORKLOAD_CREDENTIALS_TARGET = "/run/moonmind-credentials"
+
+
+class ProfileCredential(_Model):
+    """One credential slot a profile's tool can consume.
+
+    ``static`` delivers the stored value; ``aws-sts`` exchanges the stored
+    source key for a short-lived session written as an AWS credentials file at
+    ``/run/moonmind-credentials/<name>``, which the worker names in
+    ``AWS_SHARED_CREDENTIALS_FILE``. Values never enter argv.
+    """
+
+    name: str = Field(pattern=_REF)
+    purpose: CredentialPurpose
+    delivery: Literal["env", "file"]
+    environment_name: str | None = Field(None, alias="environmentName")
+    issuer: Literal["static", "aws-sts"] = "static"
+
+    @model_validator(mode="after")
+    def _consistent(self) -> "ProfileCredential":
+        if (self.delivery == "env") != (self.environment_name is not None):
+            raise ValueError("env delivery, and only it, names an environment variable")
+        if self.environment_name is not None and not _ENV_NAME.fullmatch(
+            self.environment_name
+        ):
+            raise ValueError("credential environment names must be plain identifiers")
+        if (self.purpose == "cloud_inventory") != (self.issuer == "aws-sts"):
+            # Cloud inventory uses short-lived sessions, never a stored key.
+            raise ValueError("cloud inventory credentials, and only they, use aws-sts")
+        if self.issuer == "aws-sts" and self.delivery != "file":
+            raise ValueError("issued cloud sessions are delivered as files")
+        return self
+
+
 class WorkloadProfile(_Model):
     profile_ref: str = Field(alias="profileRef", pattern=_REF)
     image_source_ref: str = Field(alias="imageSourceRef", pattern=_REF)
@@ -182,6 +226,7 @@ class WorkloadProfile(_Model):
     network_mode: Literal["none", "bridge"] = Field("none", alias="networkMode")
     egress_policy_ref: str | None = Field(None, alias="egressPolicyRef", pattern=_REF)
     outputs: tuple[ProfileOutput, ...] = Field((), max_length=64)
+    credentials: tuple[ProfileCredential, ...] = Field((), max_length=8)
     max_cpu_millis: int = Field(alias="maxCpuMillis", ge=1, le=128000)
     max_memory_mib: int = Field(alias="maxMemoryMiB", ge=16, le=1048576)
     max_timeout_seconds: int = Field(alias="maxTimeoutSeconds", ge=1, le=86400)
@@ -199,7 +244,21 @@ class WorkloadProfile(_Model):
         if (self.network_mode == "bridge") != (self.egress_policy_ref is not None):
             # Docker bridge alone is not an egress boundary.
             raise ValueError("bridge networking requires an egress policy")
+        if len({item.name for item in self.credentials}) != len(self.credentials):
+            raise ValueError("profile credential names must be unique")
+        if sum(item.issuer == "aws-sts" for item in self.credentials) > 1:
+            # The worker points AWS_SHARED_CREDENTIALS_FILE at the one session.
+            raise ValueError("a profile declares at most one issued cloud session")
+        names = [i.environment_name for i in self.credentials if i.environment_name]
+        if len(set(names)) != len(names) or set(names) & set(self.environment):
+            raise ValueError("credential environment names must be distinct")
         return self
+
+    def credential(self, name: str) -> ProfileCredential:
+        for item in self.credentials:
+            if item.name == name:
+                return item
+        raise ValueError("workload credential slot is not declared by the profile")
 
     def mode(self, name: str) -> InvocationMode:
         for mode in self.modes:
@@ -293,6 +352,16 @@ def resolve_profile_job(spec, profiles):
         if name not in exceptions:
             raise ValueError("configuration exception is not defined by the profile")
         command.extend(exceptions[name].argv)
+    selected = selection.credentials or ()
+    if len({item.slot for item in selected}) != len(selected):
+        raise ValueError("workload credential slots must be unique")
+    credential_environment = []
+    for item in selected:
+        slot = profile.credential(item.slot)
+        if slot.delivery == "env":
+            credential_environment.append(
+                {"name": slot.environment_name, "secretRef": item.credential_ref}
+            )
     resources = spec.resources
     if (
         resources.gpu is not None
@@ -317,7 +386,8 @@ def resolve_profile_job(spec, profiles):
         "environment": [
             {"name": name, "value": value}
             for name, value in sorted(profile.environment.items())
-        ],
+        ]
+        + sorted(credential_environment, key=lambda item: item["name"]),
         "caches": [
             {"cacheRef": cache.cache_ref, "target": cache.target, "readOnly": True}
             for cache in profile.caches
@@ -379,6 +449,54 @@ class AssessmentTarget(_Model):
         return self
 
 
+_AWS_ACCOUNT = re.compile(r"^[0-9]{12}$")
+_ROLE_ARN = re.compile(r"^arn:aws:iam::([0-9]{12}):role/[A-Za-z0-9+=,.@_/-]{1,512}$")
+
+
+class CredentialGrant(_Model):
+    """Operator admission of one workload credential reference.
+
+    The reference may fill a slot of ``purpose`` in the listed profiles, for
+    ``account`` only, until ``expiresAt``. ``revision`` pins a
+    managed secret revision, so a rotated or revoked secret fails closed.
+    Cloud grants name the role to assume in that account; issued sessions are
+    limited to read-only inspection policies. Active or remediation access
+    needs a scope of its own and is not expressible here.
+    """
+
+    # Scope keys avoid "credential": step policies refuse such keys outright.
+    ref: str = Field(min_length=4, max_length=1024)
+    purpose: CredentialPurpose
+    account: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,254}$")
+    profile_refs: tuple[str, ...] = Field(
+        alias="profileRefs", min_length=1, max_length=32
+    )
+    expires_at: datetime = Field(alias="expiresAt")
+    revision: int | None = Field(None, ge=1)
+    role_arn: str | None = Field(None, alias="roleArn", max_length=600)
+    max_session_seconds: int = Field(3600, alias="maxSessionSeconds", ge=900, le=43200)
+    access_level: Literal["read_only"] = Field("read_only", alias="accessLevel")
+
+    @model_validator(mode="after")
+    def _bound(self) -> "CredentialGrant":
+        if "://" not in self.ref:
+            raise ValueError("credential grants name an opaque secret reference")
+        if self.expires_at.tzinfo is None:
+            raise ValueError("credential grant expiry must include a timezone")
+        if any(not re.fullmatch(_REF, item) for item in self.profile_refs):
+            raise ValueError("scope references must be explicit refs")
+        cloud = self.purpose == "cloud_inventory"
+        if cloud != (self.role_arn is not None):
+            raise ValueError("cloud inventory grants, and only they, name a role")
+        if cloud:
+            match = _ROLE_ARN.fullmatch(self.role_arn or "")
+            if not _AWS_ACCOUNT.fullmatch(self.account) or match is None:
+                raise ValueError("cloud grants name an AWS account and role ARN")
+            if match.group(1) != self.account:
+                raise ValueError("the granted role belongs to another account")
+        return self
+
+
 class AdmittedAssessmentScope(_Model):
     """Compact operator-admitted authority for one assessment's container jobs.
 
@@ -386,8 +504,8 @@ class AdmittedAssessmentScope(_Model):
     signed session capability; repository text and model output cannot alter
     it. ``maxJobs`` and ``maxJobSeconds`` bound new jobs; an exact replay of an
     already-admitted job consumes no budget. ``networkRefs`` names admitted
-    egress policies. Container Jobs cannot yet deliver secrets, so scoped jobs
-    carry no credentials at all.
+    egress policies. ``grants`` are the only workload credential references
+    its jobs may request.
     """
 
     assessment_ref: str = Field(alias="assessmentRef", pattern=_REF)
@@ -406,6 +524,7 @@ class AdmittedAssessmentScope(_Model):
     max_jobs: int = Field(alias="maxJobs", ge=1, le=1000)
     max_job_seconds: int = Field(alias="maxJobSeconds", ge=1, le=86400)
     evidence_intent: str = Field(alias="evidenceIntent", min_length=1, max_length=500)
+    grants: tuple[CredentialGrant, ...] = Field((), max_length=16)
 
     @field_validator("exclusions")
     @classmethod
@@ -474,18 +593,20 @@ def resolved_job_within_scope(spec, scope: AdmittedAssessmentScope, profiles) ->
         and spec.egress_policy_ref not in scope.network_refs
     ):
         raise PermissionError("workload network access is not admitted")
-    if spec.registry_credential_ref or any(
-        item.secret_ref for item in spec.environment
-    ):
-        raise PermissionError("scoped assessment jobs carry no credentials")
+    if spec.registry_credential_ref:
+        raise PermissionError("scoped assessment jobs cannot select pull credentials")
     if spec.timeout_seconds > scope.max_job_seconds:
         raise PermissionError("workload timeout exceeds the assessment budget")
 
 
 __all__ = [
+    "WORKLOAD_CREDENTIALS_TARGET",
     "WORKLOAD_PROFILES_ENV_KEY",
     "AdmittedAssessmentScope",
     "AssessmentTarget",
+    "CredentialGrant",
+    "CredentialPurpose",
+    "ProfileCredential",
     "WorkloadProfile",
     "parse_workload_profiles",
     "resolve_profile_job",
