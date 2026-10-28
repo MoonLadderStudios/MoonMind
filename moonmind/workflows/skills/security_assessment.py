@@ -839,6 +839,17 @@ class AssessmentExecution:
                             }
                         )
                     findings_by_id[finding.finding_id] = finding
+            closures = {}
+            for item in observations:
+                for finding_id, closure in item.upstream_closed.items():
+                    closures.setdefault(finding_id, set()).add(closure)
+            # A finding another source still reports, or that sources close
+            # differently, is not closed upstream.
+            upstream_closed = {
+                finding_id: next(iter(states))
+                for finding_id, states in closures.items()
+                if len(states) == 1 and finding_id not in findings_by_id
+            }
             if scan_diagnostics or not observations:
                 coverage.append(
                     Coverage(
@@ -858,6 +869,7 @@ class AssessmentExecution:
                 expires_at=min((item.expires_at for item in observations), default=now),
                 findings=list(findings_by_id.values()),
                 coverage=coverage,
+                upstream_closed=upstream_closed,
                 provenance={
                     **{f"input{index}": ref for index, ref in enumerate(refs)},
                     **{
