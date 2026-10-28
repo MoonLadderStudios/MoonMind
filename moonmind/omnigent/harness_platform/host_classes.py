@@ -302,9 +302,10 @@ DEFAULT_HOST_CLASS_TEMPLATES: tuple[HostClassTemplate, ...] = (
     # OpenCode share one digest-pinned neutral image. Separate classes keep
     # harness support exact: each declares only its own harness, runtime pack,
     # and materializers, so a shared image never conflates installed CLIs with
-    # supported runtimes. omnigent-opencode@1 remains the dedicated-image
-    # legacy row for historical reads; omnigent-opencode@2 is the shared-image
-    # generic row.
+    # supported runtimes. The registry still selects omnigent-opencode@1,
+    # whose image variable alone carries the bootstrap server/host
+    # compatibility quarantine; omnigent-opencode@2 is the shared-image row
+    # that replaces it once the shared image carries that quarantine.
     HostClassTemplate(
         host_class_id="omnigent-codex",
         version=1,
