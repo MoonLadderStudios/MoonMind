@@ -325,7 +325,7 @@ class WebRoute(Contract):
         default_factory=lambda: ["GET"], min_length=1, max_length=7
     )
 
-    _path = field_validator("path")(lambda value: web_route(value))
+    _path = field_validator("path")(web_route)
 
     @field_validator("methods")
     @classmethod
@@ -425,7 +425,7 @@ class WebAssessment(Contract):
     max_report_bytes: int = Field(MAX_REPORT_BYTES, ge=128, le=MAX_REPORT_BYTES)
     timeout_seconds: int = Field(900, ge=300, le=3600)
 
-    _origin = field_validator("origin")(lambda value: web_origin(value))
+    _origin = field_validator("origin")(web_origin)
 
     @field_validator("start_paths", "exclusions")
     @classmethod

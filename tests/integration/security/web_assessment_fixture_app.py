@@ -242,7 +242,5 @@ def start(app_host: str = "app.example.test", app_port: int = 0, gateway_port: i
 
 
 if __name__ == "__main__":
-    app_server, gateway_server = start(
-        app_port=int(sys.argv[1]), gateway_port=int(sys.argv[2])
-    )
+    start(app_port=int(sys.argv[1]), gateway_port=int(sys.argv[2]))
     threading.Event().wait()
