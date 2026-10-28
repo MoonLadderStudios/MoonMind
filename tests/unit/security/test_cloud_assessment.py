@@ -139,6 +139,19 @@ def test_admission_requires_an_explicit_bounded_selection(overrides):
         admission(**overrides)
 
 
+def test_admitted_selection_always_fits_the_job_command():
+    regions = [f"us-east-{n}" for n in range(1, 33)]
+    checks = [f"check_{n}" for n in range(200)]
+    for selected in (regions, ["us-east-1"]):
+        widest = admission(regions=selected, checks=checks[: 110 - len(selected)])
+        job = {**build_cloud_assessment_job(widest), **WORKSPACE}
+        assert len(ContainerJobSpec.model_validate(job).command) == 128
+        with pytest.raises(ValidationError):
+            admission(regions=selected, checks=checks[: 111 - len(selected)])
+    with pytest.raises(ValidationError, match="argv"):
+        admission(regions=regions, checks=checks[:100])
+
+
 def test_launch_is_read_only_prowler_with_admitted_selection_only():
     job = build_cloud_assessment_job(admission())
     argv = job["command"]
@@ -478,6 +491,15 @@ def test_output_limits_and_unadmitted_accounts_are_incomplete():
     other = summary(report=json.dumps(rows).encode())
     assert "unadmitted_account_results" in other.limitations
     assert other.outcome == "incomplete"
+
+
+def test_missing_log_cannot_establish_complete_collection():
+    passing = records("basic.ocsf.json", "PASS")
+    assert summary(report=passing, log=b"").outcome == "clean"
+    result = summary(report=passing, log=None)
+    assert (result.outcome, result.status) == ("incomplete", "partial")
+    assert "log_unavailable" in result.limitations
+    assert summary(report=None, log=None).outcome == "incomplete"
 
 
 def test_absent_configuration_answers_are_not_collection_gaps():

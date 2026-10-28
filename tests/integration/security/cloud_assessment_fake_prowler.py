@@ -59,67 +59,70 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     scenario = os.environ["FIXTURE_PROWLER_SCENARIO"]
-    log = open(args.log_file, "a")  # noqa: SIM115 - Prowler's FileHandler
-    os.makedirs(args.output_directory, exist_ok=True)
-    report = Path(args.output_directory) / f"{args.output_filename}.ocsf.json"
-    try:
-        identity = boto3.client("sts", region_name=args.region[0]).get_caller_identity()
-    except ClientError as exc:
-        code = exc.response["Error"]["Code"]
-        log.write(
-            _LOG.format(
-                level="ERROR",
-                module="aws_provider",
-                message=f"ClientError[1432]: An error occurred ({code}) when "
-                "calling the GetCallerIdentity operation: The security token "
-                "included in the request is expired",
+    # Created up front, as Prowler's FileHandler does, even when empty.
+    with open(args.log_file, "a") as log:
+        os.makedirs(args.output_directory, exist_ok=True)
+        report = Path(args.output_directory) / f"{args.output_filename}.ocsf.json"
+        try:
+            identity = boto3.client(
+                "sts", region_name=args.region[0]
+            ).get_caller_identity()
+        except ClientError as exc:
+            code = exc.response["Error"]["Code"]
+            log.write(
+                _LOG.format(
+                    level="ERROR",
+                    module="aws_provider",
+                    message=f"ClientError[1432]: An error occurred ({code}) when "
+                    "calling the GetCallerIdentity operation: The security token "
+                    "included in the request is expired",
+                )
             )
-        )
-        log.write(
-            _LOG.format(
-                level="CRITICAL",
-                module="provider",
-                message="AWSSessionTokenExpiredError[383]: The provided AWS "
-                "Session Token is expired",
+            log.write(
+                _LOG.format(
+                    level="CRITICAL",
+                    module="provider",
+                    message="AWSSessionTokenExpiredError[383]: The provided AWS "
+                    "Session Token is expired",
+                )
             )
-        )
-        return 1
-    account = identity["Account"]
+            return 1
+        account = identity["Account"]
 
-    def write(rows: list[dict], *, cut: int = 0) -> None:
-        for row in rows:
-            row["cloud"]["account"]["uid"] = account
-        body = json.dumps(rows, indent=1).encode()
-        report.write_bytes(body[:-cut] if cut else body)
+        def write(rows: list[dict], *, cut: int = 0) -> None:
+            for row in rows:
+                row["cloud"]["account"]["uid"] = account
+            body = json.dumps(rows, indent=1).encode()
+            report.write_bytes(body[:-cut] if cut else body)
 
-    if scenario == "findings":
-        write(records("basic.ocsf.json"))
-        log.write(recorded_log("basic-log.txt"))
-    elif scenario == "compliant":
-        write(records("basic.ocsf.json", "PASS"))
-        log.write(recorded_log("basic-log.txt"))
-    elif scenario == "partial":
-        write(records("deny.ocsf.json"))
-        log.write(recorded_log("deny-log.txt"))
-    elif scenario == "malformed":
-        report.write_bytes(b"Traceback (most recent call last):\n")
-        return 1
-    elif scenario == "canceled":
-        # Stopped while writing: complete records survive before the cut.
-        write(records("basic.ocsf.json"), cut=300)
-        return 143
-    elif scenario == "oversize":
-        rows = records("basic.ocsf.json", "PASS") * 400
-        write(rows)
-    elif scenario == "echo":
-        rows = records("basic.ocsf.json", "PASS")
-        rows[0]["status_detail"] = Path(
-            os.environ["AWS_SHARED_CREDENTIALS_FILE"]
-        ).read_text()
-        write(rows)
-    else:
-        raise SystemExit(f"unknown scenario {scenario}")
-    return 0
+        if scenario == "findings":
+            write(records("basic.ocsf.json"))
+            log.write(recorded_log("basic-log.txt"))
+        elif scenario == "compliant":
+            write(records("basic.ocsf.json", "PASS"))
+            log.write(recorded_log("basic-log.txt"))
+        elif scenario == "partial":
+            write(records("deny.ocsf.json"))
+            log.write(recorded_log("deny-log.txt"))
+        elif scenario == "malformed":
+            report.write_bytes(b"Traceback (most recent call last):\n")
+            return 1
+        elif scenario == "canceled":
+            # Stopped while writing: complete records survive before the cut.
+            write(records("basic.ocsf.json"), cut=300)
+            return 143
+        elif scenario == "oversize":
+            rows = records("basic.ocsf.json", "PASS") * 400
+            write(rows)
+        elif scenario == "echo":
+            rows = records("basic.ocsf.json", "PASS")
+            rows[0]["status_detail"] = Path(
+                os.environ["AWS_SHARED_CREDENTIALS_FILE"]
+            ).read_text()
+            write(rows)
+        else:
+            raise SystemExit(f"unknown scenario {scenario}")
+        return 0
 
 
 if __name__ == "__main__":
