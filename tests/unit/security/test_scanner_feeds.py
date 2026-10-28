@@ -555,6 +555,41 @@ def test_concurrent_refresh_and_reads_never_observe_partial_snapshots(tmp_path):
     assert len(list((root / "snapshots").iterdir())) <= 3
 
 
+@pytest.mark.parametrize(
+    ("racing", "relative"), [("read_bytes", feeds.MANIFEST), ("open", "db/trivy.db")]
+)
+def test_retired_then_republished_snapshot_reads_as_absence(
+    tmp_path, monkeypatch, racing, relative
+):
+    # A reader loses files to retention mid-read and a lagging writer then
+    # republishes identical content: that is absence, not corruption. The
+    # race hooks the reads themselves: pathlib's stat helpers call each other
+    # differently across Python versions. Retention's rename is held so the
+    # republished directory cannot reuse the retired one's inode.
+    root = tmp_path / "feeds"
+    snapshot = publish(root)
+    published = root / "snapshots" / snapshot.snapshot_id
+    real = getattr(Path, racing)
+    raced = []
+
+    def retire_and_republish(self, *args, **kwargs):
+        if raced or self != published / relative:
+            return real(self, *args, **kwargs)
+        raced.append(self)
+        published.rename(root / "staging" / "retired")
+        try:
+            return real(self, *args, **kwargs)
+        finally:
+            publish(root)
+
+    monkeypatch.setattr(Path, racing, retire_and_republish)
+    with pytest.raises(feeds.FeedSnapshotError) as error:
+        feeds.load_snapshot(root, snapshot.snapshot_id)
+    assert raced and error.value.code == "feed_snapshot_unavailable"
+    monkeypatch.undo()
+    assert feeds.load_snapshot(root, snapshot.snapshot_id) == snapshot
+
+
 # ----------------------------------------------------- imported archives
 
 

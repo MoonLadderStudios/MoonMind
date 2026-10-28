@@ -417,7 +417,11 @@ async def publish_once(
 
 
 def deliver_credential(
-    storage: JobAttachmentStorage, body: bytes, *, ownership_token: str
+    storage: JobAttachmentStorage,
+    body: bytes,
+    *,
+    ownership_token: str,
+    file_name: str = "config.json",
 ) -> None:
     """Write one worker-resolved credential file for the job's read-only mount.
 
@@ -432,7 +436,7 @@ def deliver_credential(
     _remove_tree(storage.credentials)
     storage.credentials.mkdir(mode=0o755)
     fd = os.open(
-        storage.credentials / "config.json",
+        storage.credentials / file_name,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
         0o600,
     )
@@ -445,6 +449,40 @@ def deliver_credential(
 
 def remove_credentials(storage: JobAttachmentStorage) -> None:
     _remove_tree(storage.credentials)
+
+
+def retire_credential(storage: JobAttachmentStorage, file_name: str) -> str | None:
+    """Take a delivered credential out of the job's mount; return its value.
+
+    Evidence can echo the value, and a publication retry rereads the
+    unsanitized outputs, so it stays worker-only beside the retired workload
+    values until cleanup removes them.
+    """
+
+    retired = storage.workload_credentials / "retired" / f"credential-{file_name}"
+    source = storage.credentials / file_name
+    if source.is_file() and not source.is_symlink():
+        root = storage.workload_credentials
+        if root.is_symlink():
+            root.unlink()
+        root.mkdir(mode=0o700, exist_ok=True)
+        os.replace(source, _retired(storage) / retired.name)
+    _remove_tree(storage.credentials)
+    if retired.is_file() and not retired.is_symlink():
+        return retired.read_text()
+    return None
+
+
+def write_plan(directory: Path, body: bytes) -> None:
+    """Replace a worker-rendered plan in the job's own output directory."""
+
+    directory.mkdir(parents=True, exist_ok=True)
+    # The image's non-root user writes its reports beside the plan.
+    os.chmod(directory, 0o777)
+    plan = directory / "plan.yaml"
+    if plan.is_symlink() or plan.exists():
+        plan.unlink()
+    _write_new(plan, body, 0o444)
 
 
 def _owned(storage: JobAttachmentStorage, ownership_token: str) -> None:

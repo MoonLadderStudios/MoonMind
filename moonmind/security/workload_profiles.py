@@ -11,9 +11,11 @@ cannot run under a profile label it no longer matches.
 
 An admitted assessment scope is resolved from operator authority at the
 trusted launch boundary and signed into the session's container-job
-capability. A scoped session can submit only profile jobs inside that scope;
-generic image, entrypoint and repository-scanner submissions are refused.
-Sessions without a scope keep their ordinary development flexibility.
+capability. A scoped session can submit only profile jobs and web
+assessments inside that scope; generic image, entrypoint and
+repository-scanner submissions are refused. Web assessments run only inside a
+scope, since reaching a target does not authorize acting on it. Other
+sessions keep their ordinary development flexibility.
 
 A profile declares credential slots (purpose, delivery, issuer); a scope's
 credential grants say which opaque references may fill them, for which
@@ -28,6 +30,13 @@ from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from moonmind.schemas.repository_scanner_models import (
+    WebRoute,
+    route_within,
+    web_origin,
+    web_route,
+)
 
 WORKLOAD_PROFILES_ENV_KEY = "MOONMIND_CONTAINER_BACKEND_WORKLOAD_PROFILES"
 
@@ -432,20 +441,47 @@ def validate_profile_launch(spec, profiles) -> None:
     resolve_profile_job(spec, profiles)
 
 
+#: The typed web workload's name in scope ``profileRefs`` and credential
+#: grants; it has no deployment profile of its own.
+WEB_ASSESSMENT_PROFILE_REF = "web-assessment"
+
+
 class AssessmentTarget(_Model):
+    """One admitted input path, input artifact or web origin.
+
+    A web origin carries the route prefixes and methods that may be tested
+    and the prefixes that may not; jobs stay within all of them.
+    """
+
     workspace_path: str | None = Field(None, alias="workspacePath", max_length=1000)
     artifact_ref: str | None = Field(
         None, alias="artifactRef", pattern=r"^art_[0-9A-Za-z]{1,64}$"
     )
+    web_origin: str | None = Field(None, alias="webOrigin", max_length=300)
+    web_routes: tuple[WebRoute, ...] = Field((), alias="webRoutes", max_length=64)
+    web_exclusions: tuple[str, ...] = Field((), alias="webExclusions", max_length=64)
 
     _normalized = field_validator("workspace_path")(
         lambda value: None if value is None else _relative_path(value)
     )
+    _origin = field_validator("web_origin")(
+        lambda value: None if value is None else web_origin(value)
+    )
+    _excluded = field_validator("web_exclusions")(
+        lambda value: tuple(web_route(item) for item in value)
+    )
 
     @model_validator(mode="after")
     def _exactly_one(self) -> "AssessmentTarget":
-        if (self.workspace_path is None) == (self.artifact_ref is None):
-            raise ValueError("exactly one of workspacePath or artifactRef is required")
+        named = [self.workspace_path, self.artifact_ref, self.web_origin]
+        if sum(item is not None for item in named) != 1:
+            raise ValueError(
+                "exactly one of workspacePath, artifactRef or webOrigin is required"
+            )
+        if (self.web_origin is not None) != bool(self.web_routes):
+            raise ValueError("web origins, and only they, admit routes")
+        if self.web_exclusions and self.web_origin is None:
+            raise ValueError("web exclusions belong to a web origin")
         return self
 
 
@@ -546,6 +582,12 @@ class AdmittedAssessmentScope(_Model):
 def selection_within_scope(spec, scope: AdmittedAssessmentScope) -> bool:
     """Request-level scope check shared by submission and persisted-job reads."""
 
+    if getattr(spec, "web_assessment", None) is not None:
+        try:
+            web_assessment_within_scope(spec, scope)
+        except PermissionError:
+            return False
+        return True
     selection = spec.workload_profile
     if (
         selection is None
@@ -577,9 +619,57 @@ def selection_within_scope(spec, scope: AdmittedAssessmentScope) -> bool:
     return True
 
 
+def web_assessment_within_scope(spec, scope: AdmittedAssessmentScope) -> None:
+    """Every origin, route, method, exclusion, limit and input is admitted.
+
+    Network permission is necessary but not sufficient: the mode's action
+    class must be admitted too, and the job may not reach past the routes,
+    methods and exclusions of its origin.
+    """
+
+    web = spec.web_assessment
+    if web.assessment_ref != scope.assessment_ref:
+        raise PermissionError("web assessment belongs to another assessment")
+    if WEB_ASSESSMENT_PROFILE_REF not in scope.profile_refs:
+        raise PermissionError("web assessments are not admitted in this scope")
+    if web.action_class not in scope.action_classes:
+        raise PermissionError("web assessment mode action class is not admitted")
+    if web.egress_policy_ref not in scope.network_refs:
+        raise PermissionError("web assessment network access is not admitted")
+    if spec.timeout_seconds > scope.max_job_seconds:
+        raise PermissionError("web assessment timeout exceeds the assessment budget")
+    targets = [t for t in scope.targets if t.web_origin == web.origin]
+    if not targets:
+        raise PermissionError("web origin is not an admitted target")
+    target = targets[0]
+
+    def admitted(path: str, method: str) -> bool:
+        return any(
+            route_within(path, r.path) and method in r.methods
+            for r in target.web_routes
+        )
+
+    for route in web.routes:
+        if not all(admitted(route.path, m) for m in route.methods):
+            raise PermissionError("web route or method is not admitted")
+        # The job must exclude at least what the scope excludes below it.
+        for excluded in target.web_exclusions:
+            if (
+                route_within(excluded, route.path) or route_within(route.path, excluded)
+            ) and not any(route_within(excluded, e) for e in web.exclusions):
+                raise PermissionError("web assessment omits an admitted exclusion")
+    api = web.api_definition
+    artifacts = {t.artifact_ref for t in scope.targets if t.artifact_ref}
+    if api is not None and api.input_artifact_ref not in artifacts:
+        raise PermissionError("API definition is not an admitted input")
+
+
 def resolved_job_within_scope(spec, scope: AdmittedAssessmentScope, profiles) -> None:
     """Admission check of the rendered launch content against the scope."""
 
+    if getattr(spec, "web_assessment", None) is not None:
+        web_assessment_within_scope(spec, scope)
+        return
     if not selection_within_scope(spec, scope):
         raise PermissionError("container job is outside the admitted assessment scope")
     profile = _profile(profiles, spec.workload_profile.profile_ref)
@@ -600,6 +690,7 @@ def resolved_job_within_scope(spec, scope: AdmittedAssessmentScope, profiles) ->
 
 
 __all__ = [
+    "WEB_ASSESSMENT_PROFILE_REF",
     "WORKLOAD_CREDENTIALS_TARGET",
     "WORKLOAD_PROFILES_ENV_KEY",
     "AdmittedAssessmentScope",
@@ -613,4 +704,5 @@ __all__ = [
     "resolved_job_within_scope",
     "selection_within_scope",
     "validate_profile_launch",
+    "web_assessment_within_scope",
 ]
