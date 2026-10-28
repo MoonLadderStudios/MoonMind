@@ -246,12 +246,17 @@ class ContainerJobRepository:
         spec = ContainerJobRecord.request_json["spec"]
         profile = spec["workloadProfile"]["assessmentRef"].as_string()
         web = spec["webAssessment"]["assessmentRef"].as_string()
+        cloud = spec["cloudAssessment"]["assessmentRef"].as_string()
         return int(
             await self._session.scalar(
                 select(func.count()).where(
                     ContainerJobRecord.owner_id == owner.principal_id,
                     ContainerJobRecord.owner_type == owner.principal_type,
-                    or_(profile == assessment_ref, web == assessment_ref),
+                    or_(
+                        profile == assessment_ref,
+                        web == assessment_ref,
+                        cloud == assessment_ref,
+                    ),
                 )
             )
             or 0
@@ -353,10 +358,14 @@ class ContainerJobService:
             update={"spec": resolve_profile_job(request.spec, profiles)}
         )
         scope = self._capability.assessment_scope if self._capability else None
-        if request.spec.web_assessment is not None and scope is None:
+        if scope is None and (
+            request.spec.web_assessment is not None
+            or request.spec.cloud_assessment is not None
+        ):
             # Reaching a target does not authorize acting on it.
             raise ContainerJobScopeDeniedError(
-                "web assessments run only inside an admitted assessment scope"
+                "web and cloud assessments run only inside an admitted "
+                "assessment scope"
             )
         if scope is not None:
             try:

@@ -11,11 +11,11 @@ cannot run under a profile label it no longer matches.
 
 An admitted assessment scope is resolved from operator authority at the
 trusted launch boundary and signed into the session's container-job
-capability. A scoped session can submit only profile jobs and web
+capability. A scoped session can submit only profile jobs and web and cloud
 assessments inside that scope; generic image, entrypoint and
-repository-scanner submissions are refused. Web assessments run only inside a
-scope, since reaching a target does not authorize acting on it. Other
-sessions keep their ordinary development flexibility.
+repository-scanner submissions are refused. Web and cloud assessments run
+only inside a scope, since reaching a target does not authorize acting on it.
+Other sessions keep their ordinary development flexibility.
 
 A profile declares credential slots (purpose, delivery, issuer); a scope's
 credential grants say which opaque references may fill them, for which
@@ -32,7 +32,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from moonmind.schemas.repository_scanner_models import (
+    CLOUD_ACTION_CLASS,
     WebRoute,
+    cloud_regions,
     route_within,
     web_origin,
     web_route,
@@ -441,16 +443,18 @@ def validate_profile_launch(spec, profiles) -> None:
     resolve_profile_job(spec, profiles)
 
 
-#: The typed web workload's name in scope ``profileRefs`` and credential
-#: grants; it has no deployment profile of its own.
+#: The typed web and cloud workloads' names in scope ``profileRefs`` and
+#: credential grants; they have no deployment profile of their own.
 WEB_ASSESSMENT_PROFILE_REF = "web-assessment"
+CLOUD_ASSESSMENT_PROFILE_REF = "cloud-posture"
 
 
 class AssessmentTarget(_Model):
-    """One admitted input path, input artifact or web origin.
+    """One admitted input path, input artifact, web origin or cloud account.
 
     A web origin carries the route prefixes and methods that may be tested
-    and the prefixes that may not; jobs stay within all of them.
+    and the prefixes that may not; jobs stay within all of them. A cloud
+    account carries its provider and the regions that may be assessed.
     """
 
     workspace_path: str | None = Field(None, alias="workspacePath", max_length=1000)
@@ -460,6 +464,11 @@ class AssessmentTarget(_Model):
     web_origin: str | None = Field(None, alias="webOrigin", max_length=300)
     web_routes: tuple[WebRoute, ...] = Field((), alias="webRoutes", max_length=64)
     web_exclusions: tuple[str, ...] = Field((), alias="webExclusions", max_length=64)
+    cloud_account: str | None = Field(
+        None, alias="cloudAccount", pattern=r"^[0-9]{12}$"
+    )
+    cloud_provider: Literal["aws"] | None = Field(None, alias="cloudProvider")
+    cloud_regions: tuple[str, ...] = Field((), alias="cloudRegions", max_length=32)
 
     _normalized = field_validator("workspace_path")(
         lambda value: None if value is None else _relative_path(value)
@@ -470,18 +479,34 @@ class AssessmentTarget(_Model):
     _excluded = field_validator("web_exclusions")(
         lambda value: tuple(web_route(item) for item in value)
     )
+    _regions = field_validator("cloud_regions")(
+        lambda value: tuple(cloud_regions(list(value)))
+    )
 
     @model_validator(mode="after")
     def _exactly_one(self) -> "AssessmentTarget":
-        named = [self.workspace_path, self.artifact_ref, self.web_origin]
+        named = [
+            self.workspace_path,
+            self.artifact_ref,
+            self.web_origin,
+            self.cloud_account,
+        ]
         if sum(item is not None for item in named) != 1:
             raise ValueError(
-                "exactly one of workspacePath, artifactRef or webOrigin is required"
+                "exactly one of workspacePath, artifactRef, webOrigin or "
+                "cloudAccount is required"
             )
         if (self.web_origin is not None) != bool(self.web_routes):
             raise ValueError("web origins, and only they, admit routes")
         if self.web_exclusions and self.web_origin is None:
             raise ValueError("web exclusions belong to a web origin")
+        cloud = self.cloud_account is not None
+        if cloud != (self.cloud_provider is not None) or cloud != bool(
+            self.cloud_regions
+        ):
+            raise ValueError(
+                "cloud accounts, and only they, name a provider and regions"
+            )
         return self
 
 
@@ -582,12 +607,17 @@ class AdmittedAssessmentScope(_Model):
 def selection_within_scope(spec, scope: AdmittedAssessmentScope) -> bool:
     """Request-level scope check shared by submission and persisted-job reads."""
 
-    if getattr(spec, "web_assessment", None) is not None:
-        try:
-            web_assessment_within_scope(spec, scope)
-        except PermissionError:
-            return False
-        return True
+    typed = {
+        "web_assessment": web_assessment_within_scope,
+        "cloud_assessment": cloud_assessment_within_scope,
+    }
+    for field, within in typed.items():
+        if getattr(spec, field, None) is not None:
+            try:
+                within(spec, scope)
+            except PermissionError:
+                return False
+            return True
     selection = spec.workload_profile
     if (
         selection is None
@@ -664,11 +694,43 @@ def web_assessment_within_scope(spec, scope: AdmittedAssessmentScope) -> None:
         raise PermissionError("API definition is not an admitted input")
 
 
+def cloud_assessment_within_scope(spec, scope: AdmittedAssessmentScope) -> None:
+    """Provider, account, regions, network and budget are all admitted.
+
+    The account's credential grant is checked separately; a grant alone does
+    not admit regions, and an admitted account alone does not admit access.
+    """
+
+    cloud = spec.cloud_assessment
+    if cloud.assessment_ref != scope.assessment_ref:
+        raise PermissionError("cloud assessment belongs to another assessment")
+    if CLOUD_ASSESSMENT_PROFILE_REF not in scope.profile_refs:
+        raise PermissionError("cloud assessments are not admitted in this scope")
+    if CLOUD_ACTION_CLASS not in scope.action_classes:
+        raise PermissionError("cloud posture action class is not admitted")
+    if cloud.egress_policy_ref not in scope.network_refs:
+        raise PermissionError("cloud assessment network access is not admitted")
+    if spec.timeout_seconds > scope.max_job_seconds:
+        raise PermissionError("cloud assessment timeout exceeds the assessment budget")
+    targets = [
+        t
+        for t in scope.targets
+        if t.cloud_account == cloud.account and t.cloud_provider == cloud.provider
+    ]
+    if not targets:
+        raise PermissionError("cloud account is not an admitted target")
+    if not set(cloud.regions) <= set(targets[0].cloud_regions):
+        raise PermissionError("cloud region is not admitted for this account")
+
+
 def resolved_job_within_scope(spec, scope: AdmittedAssessmentScope, profiles) -> None:
     """Admission check of the rendered launch content against the scope."""
 
     if getattr(spec, "web_assessment", None) is not None:
         web_assessment_within_scope(spec, scope)
+        return
+    if getattr(spec, "cloud_assessment", None) is not None:
+        cloud_assessment_within_scope(spec, scope)
         return
     if not selection_within_scope(spec, scope):
         raise PermissionError("container job is outside the admitted assessment scope")
@@ -690,6 +752,7 @@ def resolved_job_within_scope(spec, scope: AdmittedAssessmentScope, profiles) ->
 
 
 __all__ = [
+    "CLOUD_ASSESSMENT_PROFILE_REF",
     "WEB_ASSESSMENT_PROFILE_REF",
     "WORKLOAD_CREDENTIALS_TARGET",
     "WORKLOAD_PROFILES_ENV_KEY",
@@ -699,6 +762,7 @@ __all__ = [
     "CredentialPurpose",
     "ProfileCredential",
     "WorkloadProfile",
+    "cloud_assessment_within_scope",
     "parse_workload_profiles",
     "resolve_profile_job",
     "resolved_job_within_scope",

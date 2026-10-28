@@ -235,6 +235,13 @@ class ContainerBackendSettings:
                         raise ValueError(
                             "web assessment egress may reach only admitted targets"
                         )
+                if request.spec.cloud_assessment is not None:
+                    from moonmind.security.cloud_assessments import cloud_policy_admits
+
+                    if not cloud_policy_admits(policy, request.spec.cloud_assessment):
+                        raise ValueError(
+                            "cloud assessment egress may reach only provider APIs"
+                        )
                 return policy
         raise ValueError("egress policy is not deployment-authorized")
 

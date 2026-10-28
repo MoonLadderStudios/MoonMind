@@ -287,6 +287,36 @@ def container_image_assessment(
     _print_container_job_result(result)
 
 
+@container_app.command(
+    "cloud-assessment",
+    help="Run a read-only Prowler posture assessment of an admitted account.",
+)
+def container_cloud_assessment(
+    admission: Annotated[
+        Path, typer.Option("--admission", exists=True, dir_okay=False, readable=True)
+    ],
+    image_source: str = typer.Option("cloud-posture", "--image-source"),
+) -> None:
+    from moonmind.schemas.repository_scanner_models import CloudAssessment
+    from moonmind.security.cloud_assessments import build_cloud_assessment_job
+
+    try:
+        if admission.stat().st_size > 32 * 1024:
+            raise ValueError("cloud assessment admission exceeds the input bound")
+        assessment = CloudAssessment.model_validate_json(admission.read_bytes())
+        result = run_container_job(
+            build_cloud_assessment_job(assessment, image_source_ref=image_source)
+        )
+    except (ContainerJobCliError, ValueError, OSError) as exc:
+        typer.secho(
+            f"Invalid cloud assessment admission or container job unavailable: {exc}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    _print_container_job_result(result)
+
+
 @worker_app.command("doctor", help="Verify worker prerequisites.")
 def worker_doctor() -> None:
     # MoonLadderStudios/MoonMind#4192: the native Manifest/RAG ingestion

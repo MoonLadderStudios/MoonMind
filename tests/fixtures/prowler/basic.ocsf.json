@@ -1,0 +1,655 @@
+[
+ {
+  "message": "IAM password policy does not require minimum length of 14 characters.",
+  "metadata": {
+   "event_code": "iam_password_policy_minimum_length_14",
+   "product": {
+    "name": "Prowler",
+    "uid": "prowler",
+    "vendor_name": "Prowler",
+    "version": "5.46.0"
+   },
+   "profiles": [
+    "cloud",
+    "datetime"
+   ],
+   "tenant_uid": "",
+   "version": "1.5.0"
+  },
+  "severity_id": 3,
+  "severity": "Medium",
+  "status": "New",
+  "status_code": "FAIL",
+  "status_detail": "IAM password policy does not require minimum length of 14 characters.",
+  "status_id": 1,
+  "unmapped": {
+   "related_url": "",
+   "categories": [
+    "identity-access"
+   ],
+   "depends_on": [],
+   "related_to": [],
+   "additional_urls": [
+    "https://docs.aws.amazon.com/config/latest/developerguide/iam-password-policy.html",
+    "https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_passwords_account-policy.html",
+    "https://docs.aws.amazon.com/sdk-for-ruby/v3/api/Aws/IAM/Resource.html"
+   ],
+   "notes": "",
+   "compliance": {
+    "MITRE-ATTACK": [
+     "T1078",
+     "T1110"
+    ],
+    "KISA-ISMS-P-2023-korean": [
+     "2.5.4",
+     "2.10.2"
+    ]
+   },
+   "scan_id": "01a18256-d63c-74e8-a331-301bc1f281b1",
+   "provider_uid": "123456789012",
+   "provider": "aws"
+  },
+  "activity_name": "Create",
+  "activity_id": 1,
+  "finding_info": {
+   "analytic": {
+    "category": "iam",
+    "name": "IAM password policy requires passwords to be at least 14 characters long",
+    "type": "Rule",
+    "type_id": 1,
+    "uid": "iam_password_policy_minimum_length_14"
+   },
+   "created_time": 1793188091,
+   "created_time_dt": "2026-10-28T11:48:11.452326",
+   "desc": "**IAM password policy** is assessed for the **minimum password length** setting, confirming it meets `>= 14` characters for IAM console users.",
+   "attacks": [
+    {
+     "tactic": {
+      "name": "Defense Evasion"
+     },
+     "technique": {
+      "name": "Valid Accounts",
+      "src_url": "https://attack.mitre.org/techniques/T1078/",
+      "uid": "T1078"
+     }
+    }
+   ],
+   "title": "IAM password policy requires passwords to be at least 14 characters long",
+   "types": [
+    "Software and Configuration Checks/Industry and Regulatory Standards/CIS AWS Foundations Benchmark",
+    "Software and Configuration Checks/Industry and Regulatory Standards/AWS Foundational Security Best Practices"
+   ],
+   "uid": "prowler-aws-iam_password_policy_minimum_length_14-123456789012-us-east-1-123456789012"
+  },
+  "resources": [
+   {
+    "cloud_partition": "aws",
+    "region": "us-east-1",
+    "data": {
+     "details": ""
+    },
+    "group": {
+     "name": "iam"
+    },
+    "labels": [],
+    "name": "123456789012",
+    "type": "AwsIamPolicy",
+    "uid": "arn:aws:iam:us-east-1:123456789012:password-policy"
+   }
+  ],
+  "category_name": "Findings",
+  "category_uid": 2,
+  "class_name": "Detection Finding",
+  "class_uid": 2004,
+  "cloud": {
+   "account": {
+    "name": "",
+    "type": "AWS Account",
+    "type_id": 10,
+    "uid": "123456789012",
+    "labels": []
+   },
+   "org": {
+    "name": "",
+    "ou_uid": "",
+    "ou_name": "",
+    "uid": ""
+   },
+   "provider": "aws",
+   "region": "us-east-1"
+  },
+  "remediation": {
+   "desc": "Set the **minimum password length** to `>= 14` (prefer `16+`).\n- Require mixed character types and prevent reuse\n- Enforce **MFA** for all console users\n- Prefer SSO over local IAM users\n- Apply least privilege and monitor authentication events",
+   "references": [
+    "https://hub.prowler.com/check/iam_password_policy_minimum_length_14"
+   ]
+  },
+  "risk_details": "Low minimum length reduces entropy, easing **brute force** and **credential stuffing**. Compromised IAM users enable console access, unauthorized changes, and lateral movement, leading to data exposure (confidentiality) and tampering (integrity).",
+  "time": 1793188091,
+  "time_dt": "2026-10-28T11:48:11.452326",
+  "type_uid": 200401,
+  "type_name": "Detection Finding: Create"
+ },
+ {
+  "message": "Block Public Access is not configured for the S3 Bucket open-bucket.",
+  "metadata": {
+   "event_code": "s3_bucket_level_public_access_block",
+   "product": {
+    "name": "Prowler",
+    "uid": "prowler",
+    "vendor_name": "Prowler",
+    "version": "5.46.0"
+   },
+   "profiles": [
+    "cloud",
+    "datetime"
+   ],
+   "tenant_uid": "",
+   "version": "1.5.0"
+  },
+  "severity_id": 4,
+  "severity": "High",
+  "status": "New",
+  "status_code": "FAIL",
+  "status_detail": "Block Public Access is not configured for the S3 Bucket open-bucket.",
+  "status_id": 1,
+  "unmapped": {
+   "related_url": "",
+   "categories": [
+    "internet-exposed"
+   ],
+   "depends_on": [],
+   "related_to": [],
+   "additional_urls": [
+    "https://www.trendmicro.com/trendaivisiononecloudriskmanagement/knowledge-base/aws/S3/bucket-public-access-block.html",
+    "https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html"
+   ],
+   "notes": "",
+   "compliance": {
+    "NIST-CSF-2.0": [
+     "ac_3"
+    ],
+    "MITRE-ATTACK": [
+     "T1530"
+    ]
+   },
+   "scan_id": "01a18256-d63c-74e8-a331-301bc1f281b1",
+   "provider_uid": "123456789012",
+   "provider": "aws"
+  },
+  "activity_name": "Create",
+  "activity_id": 1,
+  "finding_info": {
+   "analytic": {
+    "category": "s3",
+    "name": "S3 bucket has Block Public Access with IgnorePublicAcls and RestrictPublicBuckets enabled at bucket or account level",
+    "type": "Rule",
+    "type_id": 1,
+    "uid": "s3_bucket_level_public_access_block"
+   },
+   "created_time": 1793188091,
+   "created_time_dt": "2026-10-28T11:48:11.452326",
+   "desc": "**Amazon S3 buckets** are evaluated for **Block Public Access** settings, ensuring `ignore_public_acls` and `restrict_public_buckets` are enabled at the bucket or account scope.\n\n*Account-wide protections, when present, are treated as effective for the bucket.*",
+   "attacks": [
+    {
+     "tactic": {
+      "name": "Collection"
+     },
+     "technique": {
+      "name": "Data from Cloud Storage",
+      "src_url": "https://attack.mitre.org/techniques/T1530/",
+      "uid": "T1530"
+     }
+    }
+   ],
+   "title": "S3 bucket has Block Public Access with IgnorePublicAcls and RestrictPublicBuckets enabled at bucket or account level",
+   "types": [
+    "Software and Configuration Checks/AWS Security Best Practices/Network Reachability",
+    "Software and Configuration Checks/Industry and Regulatory Standards/AWS Foundational Security Best Practices",
+    "Software and Configuration Checks/Industry and Regulatory Standards/CIS AWS Foundations Benchmark",
+    "Effects/Data Exposure"
+   ],
+   "uid": "prowler-aws-s3_bucket_level_public_access_block-123456789012-us-east-1-open-bucket"
+  },
+  "resources": [
+   {
+    "cloud_partition": "aws",
+    "region": "us-east-1",
+    "data": {
+     "details": ""
+    },
+    "group": {
+     "name": "s3"
+    },
+    "labels": [],
+    "name": "open-bucket",
+    "type": "AwsS3Bucket",
+    "uid": "arn:aws:s3:::open-bucket"
+   }
+  ],
+  "category_name": "Findings",
+  "category_uid": 2,
+  "class_name": "Detection Finding",
+  "class_uid": 2004,
+  "cloud": {
+   "account": {
+    "name": "",
+    "type": "AWS Account",
+    "type_id": 10,
+    "uid": "123456789012",
+    "labels": []
+   },
+   "org": {
+    "name": "",
+    "ou_uid": "",
+    "ou_name": "",
+    "uid": ""
+   },
+   "provider": "aws",
+   "region": "us-east-1"
+  },
+  "remediation": {
+   "desc": "Enable **Block Public Access** at account and bucket levels with `block_public_acls`, `ignore_public_acls`, `block_public_policy`, and `restrict_public_buckets` set to `true`. Apply **least privilege** and **defense in depth**. *If public access is required*, narrowly scope policies to fixed principals and conditions.",
+   "references": [
+    "https://hub.prowler.com/check/s3_bucket_level_public_access_block"
+   ]
+  },
+  "risk_details": "Absent **S3 Block Public Access**, public ACLs or broad policies can grant Internet or cross-account access.\n- Data disclosure (confidentiality)\n- Object overwrite or uploads (integrity)\n- Deletion or outages from misuse (availability)",
+  "time": 1793188091,
+  "time_dt": "2026-10-28T11:48:11.452326",
+  "type_uid": 200401,
+  "type_name": "Detection Finding: Create"
+ },
+ {
+  "message": "Block Public Access is configured for the S3 Bucket locked-bucket.",
+  "metadata": {
+   "event_code": "s3_bucket_level_public_access_block",
+   "product": {
+    "name": "Prowler",
+    "uid": "prowler",
+    "vendor_name": "Prowler",
+    "version": "5.46.0"
+   },
+   "profiles": [
+    "cloud",
+    "datetime"
+   ],
+   "tenant_uid": "",
+   "version": "1.5.0"
+  },
+  "severity_id": 4,
+  "severity": "High",
+  "status": "New",
+  "status_code": "PASS",
+  "status_detail": "Block Public Access is configured for the S3 Bucket locked-bucket.",
+  "status_id": 1,
+  "unmapped": {
+   "related_url": "",
+   "categories": [
+    "internet-exposed"
+   ],
+   "depends_on": [],
+   "related_to": [],
+   "additional_urls": [
+    "https://www.trendmicro.com/trendaivisiononecloudriskmanagement/knowledge-base/aws/S3/bucket-public-access-block.html",
+    "https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html"
+   ],
+   "notes": "",
+   "compliance": {
+    "NIST-CSF-2.0": [
+     "ac_3"
+    ],
+    "MITRE-ATTACK": [
+     "T1530"
+    ]
+   },
+   "scan_id": "01a18256-d63c-74e8-a331-301bc1f281b1",
+   "provider_uid": "123456789012",
+   "provider": "aws"
+  },
+  "activity_name": "Create",
+  "activity_id": 1,
+  "finding_info": {
+   "analytic": {
+    "category": "s3",
+    "name": "S3 bucket has Block Public Access with IgnorePublicAcls and RestrictPublicBuckets enabled at bucket or account level",
+    "type": "Rule",
+    "type_id": 1,
+    "uid": "s3_bucket_level_public_access_block"
+   },
+   "created_time": 1793188091,
+   "created_time_dt": "2026-10-28T11:48:11.452326",
+   "desc": "**Amazon S3 buckets** are evaluated for **Block Public Access** settings, ensuring `ignore_public_acls` and `restrict_public_buckets` are enabled at the bucket or account scope.\n\n*Account-wide protections, when present, are treated as effective for the bucket.*",
+   "attacks": [
+    {
+     "tactic": {
+      "name": "Collection"
+     },
+     "technique": {
+      "name": "Data from Cloud Storage",
+      "src_url": "https://attack.mitre.org/techniques/T1530/",
+      "uid": "T1530"
+     }
+    }
+   ],
+   "title": "S3 bucket has Block Public Access with IgnorePublicAcls and RestrictPublicBuckets enabled at bucket or account level",
+   "types": [
+    "Software and Configuration Checks/AWS Security Best Practices/Network Reachability",
+    "Software and Configuration Checks/Industry and Regulatory Standards/AWS Foundational Security Best Practices",
+    "Software and Configuration Checks/Industry and Regulatory Standards/CIS AWS Foundations Benchmark",
+    "Effects/Data Exposure"
+   ],
+   "uid": "prowler-aws-s3_bucket_level_public_access_block-123456789012-us-east-1-locked-bucket"
+  },
+  "resources": [
+   {
+    "cloud_partition": "aws",
+    "region": "us-east-1",
+    "data": {
+     "details": ""
+    },
+    "group": {
+     "name": "s3"
+    },
+    "labels": [],
+    "name": "locked-bucket",
+    "type": "AwsS3Bucket",
+    "uid": "arn:aws:s3:::locked-bucket"
+   }
+  ],
+  "category_name": "Findings",
+  "category_uid": 2,
+  "class_name": "Detection Finding",
+  "class_uid": 2004,
+  "cloud": {
+   "account": {
+    "name": "",
+    "type": "AWS Account",
+    "type_id": 10,
+    "uid": "123456789012",
+    "labels": []
+   },
+   "org": {
+    "name": "",
+    "ou_uid": "",
+    "ou_name": "",
+    "uid": ""
+   },
+   "provider": "aws",
+   "region": "us-east-1"
+  },
+  "remediation": {
+   "desc": "Enable **Block Public Access** at account and bucket levels with `block_public_acls`, `ignore_public_acls`, `block_public_policy`, and `restrict_public_buckets` set to `true`. Apply **least privilege** and **defense in depth**. *If public access is required*, narrowly scope policies to fixed principals and conditions.",
+   "references": [
+    "https://hub.prowler.com/check/s3_bucket_level_public_access_block"
+   ]
+  },
+  "risk_details": "Absent **S3 Block Public Access**, public ACLs or broad policies can grant Internet or cross-account access.\n- Data disclosure (confidentiality)\n- Object overwrite or uploads (integrity)\n- Deletion or outages from misuse (availability)",
+  "time": 1793188091,
+  "time_dt": "2026-10-28T11:48:11.452326",
+  "type_uid": 200401,
+  "type_name": "Detection Finding: Create"
+ },
+ {
+  "message": "S3 Bucket open-bucket has versioning disabled.",
+  "metadata": {
+   "event_code": "s3_bucket_object_versioning",
+   "product": {
+    "name": "Prowler",
+    "uid": "prowler",
+    "vendor_name": "Prowler",
+    "version": "5.46.0"
+   },
+   "profiles": [
+    "cloud",
+    "datetime"
+   ],
+   "tenant_uid": "",
+   "version": "1.5.0"
+  },
+  "severity_id": 3,
+  "severity": "Medium",
+  "status": "New",
+  "status_code": "FAIL",
+  "status_detail": "S3 Bucket open-bucket has versioning disabled.",
+  "status_id": 1,
+  "unmapped": {
+   "related_url": "",
+   "categories": [
+    "resilience"
+   ],
+   "depends_on": [],
+   "related_to": [],
+   "additional_urls": [
+    "https://docs.aws.amazon.com/AmazonS3/latest/dev-retired/Versioning.html"
+   ],
+   "notes": "",
+   "compliance": {
+    "MITRE-ATTACK": [
+     "T1485",
+     "T1486"
+    ],
+    "KISA-ISMS-P-2023-korean": [
+     "2.9.3",
+     "2.12.1"
+    ]
+   },
+   "scan_id": "01a18256-d63c-74e8-a331-301bc1f281b1",
+   "provider_uid": "123456789012",
+   "provider": "aws"
+  },
+  "activity_name": "Create",
+  "activity_id": 1,
+  "finding_info": {
+   "analytic": {
+    "category": "s3",
+    "name": "S3 bucket has object versioning enabled",
+    "type": "Rule",
+    "type_id": 1,
+    "uid": "s3_bucket_object_versioning"
+   },
+   "created_time": 1793188091,
+   "created_time_dt": "2026-10-28T11:48:11.452326",
+   "desc": "**Amazon S3 buckets** are evaluated for **object versioning** being `Enabled`, which maintains multiple versions of the same object key for historical state retention",
+   "attacks": [
+    {
+     "tactic": {
+      "name": "Impact"
+     },
+     "technique": {
+      "name": "Data Destruction",
+      "src_url": "https://attack.mitre.org/techniques/T1485/",
+      "uid": "T1485"
+     }
+    }
+   ],
+   "title": "S3 bucket has object versioning enabled",
+   "types": [
+    "Software and Configuration Checks/AWS Security Best Practices",
+    "Software and Configuration Checks/Industry and Regulatory Standards/AWS Foundational Security Best Practices",
+    "Software and Configuration Checks/Industry and Regulatory Standards/CIS AWS Foundations Benchmark",
+    "Effects/Data Destruction"
+   ],
+   "uid": "prowler-aws-s3_bucket_object_versioning-123456789012-us-east-1-open-bucket"
+  },
+  "resources": [
+   {
+    "cloud_partition": "aws",
+    "region": "us-east-1",
+    "data": {
+     "details": ""
+    },
+    "group": {
+     "name": "s3"
+    },
+    "labels": [],
+    "name": "open-bucket",
+    "type": "AwsS3Bucket",
+    "uid": "arn:aws:s3:::open-bucket"
+   }
+  ],
+  "category_name": "Findings",
+  "category_uid": 2,
+  "class_name": "Detection Finding",
+  "class_uid": 2004,
+  "cloud": {
+   "account": {
+    "name": "",
+    "type": "AWS Account",
+    "type_id": 10,
+    "uid": "123456789012",
+    "labels": []
+   },
+   "org": {
+    "name": "",
+    "ou_uid": "",
+    "ou_name": "",
+    "uid": ""
+   },
+   "provider": "aws",
+   "region": "us-east-1"
+  },
+  "remediation": {
+   "desc": "Enable **S3 versioning** for buckets holding important or shared data.\n- Enforce **least privilege** to limit delete/overwrite\n- Use **Object Lock** and/or **MFA Delete** for stronger protection\n- Apply **lifecycle rules** to manage noncurrent versions and costs\n- Layer with backups/replication for **defense in depth**",
+   "references": [
+    "https://hub.prowler.com/check/s3_bucket_object_versioning"
+   ]
+  },
+  "risk_details": "Without **versioning**, deletions and overwrites remove the only copy, undermining **availability** and **integrity**.\n- Compromised identities or buggy apps can mass-delete/corrupt data\n- No historical versions means limited rollback and irrecoverable loss",
+  "time": 1793188091,
+  "time_dt": "2026-10-28T11:48:11.452326",
+  "type_uid": 200401,
+  "type_name": "Detection Finding: Create"
+ },
+ {
+  "message": "S3 Bucket locked-bucket has versioning enabled.",
+  "metadata": {
+   "event_code": "s3_bucket_object_versioning",
+   "product": {
+    "name": "Prowler",
+    "uid": "prowler",
+    "vendor_name": "Prowler",
+    "version": "5.46.0"
+   },
+   "profiles": [
+    "cloud",
+    "datetime"
+   ],
+   "tenant_uid": "",
+   "version": "1.5.0"
+  },
+  "severity_id": 3,
+  "severity": "Medium",
+  "status": "New",
+  "status_code": "PASS",
+  "status_detail": "S3 Bucket locked-bucket has versioning enabled.",
+  "status_id": 1,
+  "unmapped": {
+   "related_url": "",
+   "categories": [
+    "resilience"
+   ],
+   "depends_on": [],
+   "related_to": [],
+   "additional_urls": [
+    "https://docs.aws.amazon.com/AmazonS3/latest/dev-retired/Versioning.html"
+   ],
+   "notes": "",
+   "compliance": {
+    "MITRE-ATTACK": [
+     "T1485",
+     "T1486"
+    ],
+    "KISA-ISMS-P-2023-korean": [
+     "2.9.3",
+     "2.12.1"
+    ]
+   },
+   "scan_id": "01a18256-d63c-74e8-a331-301bc1f281b1",
+   "provider_uid": "123456789012",
+   "provider": "aws"
+  },
+  "activity_name": "Create",
+  "activity_id": 1,
+  "finding_info": {
+   "analytic": {
+    "category": "s3",
+    "name": "S3 bucket has object versioning enabled",
+    "type": "Rule",
+    "type_id": 1,
+    "uid": "s3_bucket_object_versioning"
+   },
+   "created_time": 1793188091,
+   "created_time_dt": "2026-10-28T11:48:11.452326",
+   "desc": "**Amazon S3 buckets** are evaluated for **object versioning** being `Enabled`, which maintains multiple versions of the same object key for historical state retention",
+   "attacks": [
+    {
+     "tactic": {
+      "name": "Impact"
+     },
+     "technique": {
+      "name": "Data Destruction",
+      "src_url": "https://attack.mitre.org/techniques/T1485/",
+      "uid": "T1485"
+     }
+    }
+   ],
+   "title": "S3 bucket has object versioning enabled",
+   "types": [
+    "Software and Configuration Checks/AWS Security Best Practices",
+    "Software and Configuration Checks/Industry and Regulatory Standards/AWS Foundational Security Best Practices",
+    "Software and Configuration Checks/Industry and Regulatory Standards/CIS AWS Foundations Benchmark",
+    "Effects/Data Destruction"
+   ],
+   "uid": "prowler-aws-s3_bucket_object_versioning-123456789012-us-east-1-locked-bucket"
+  },
+  "resources": [
+   {
+    "cloud_partition": "aws",
+    "region": "us-east-1",
+    "data": {
+     "details": ""
+    },
+    "group": {
+     "name": "s3"
+    },
+    "labels": [],
+    "name": "locked-bucket",
+    "type": "AwsS3Bucket",
+    "uid": "arn:aws:s3:::locked-bucket"
+   }
+  ],
+  "category_name": "Findings",
+  "category_uid": 2,
+  "class_name": "Detection Finding",
+  "class_uid": 2004,
+  "cloud": {
+   "account": {
+    "name": "",
+    "type": "AWS Account",
+    "type_id": 10,
+    "uid": "123456789012",
+    "labels": []
+   },
+   "org": {
+    "name": "",
+    "ou_uid": "",
+    "ou_name": "",
+    "uid": ""
+   },
+   "provider": "aws",
+   "region": "us-east-1"
+  },
+  "remediation": {
+   "desc": "Enable **S3 versioning** for buckets holding important or shared data.\n- Enforce **least privilege** to limit delete/overwrite\n- Use **Object Lock** and/or **MFA Delete** for stronger protection\n- Apply **lifecycle rules** to manage noncurrent versions and costs\n- Layer with backups/replication for **defense in depth**",
+   "references": [
+    "https://hub.prowler.com/check/s3_bucket_object_versioning"
+   ]
+  },
+  "risk_details": "Without **versioning**, deletions and overwrites remove the only copy, undermining **availability** and **integrity**.\n- Compromised identities or buggy apps can mass-delete/corrupt data\n- No historical versions means limited rollback and irrecoverable loss",
+  "time": 1793188091,
+  "time_dt": "2026-10-28T11:48:11.452326",
+  "type_uid": 200401,
+  "type_name": "Detection Finding: Create"
+ }
+]
