@@ -410,6 +410,8 @@ print(Path('/usr/local/share/repository-security/inventory.json').read_text())
         # Scan a read-only image archive with the packaged Trivy: no Docker socket.
         archive = root / "image.tar"
         command("docker", "save", "--output", archive, image)
+        # Docker writes the archive owner-only; the scanner runs as UID 1000.
+        archive.chmod(0o644)
         invoke(
             container(
                 image,
