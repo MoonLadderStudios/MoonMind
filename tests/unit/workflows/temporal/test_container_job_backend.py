@@ -1654,9 +1654,15 @@ async def test_secret_ref_requires_job_authority(tmp_path) -> None:
         tmp_path,
         environment=[{"name": "API_TOKEN", "secretRef": "db://api-token"}],
     )
-    with pytest.raises(RuntimeError, match="secretRef is unsupported"):
+    # A reference without an admitted workload credential slot never resolves
+    # and never reaches a container.
+    with pytest.raises(
+        ContainerJobBackendError, match="no admitted credential slot"
+    ) as denied:
         await backend.create_container(request)
+    assert denied.value.failure_class is ContainerJobFailureClass.AUTHORIZATION
     resolver.assert_not_awaited()
+    assert not any(command[0] == "create" for command in commands)
 
 
 @pytest.mark.asyncio

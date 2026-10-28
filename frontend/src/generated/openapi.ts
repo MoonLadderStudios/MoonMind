@@ -6659,7 +6659,7 @@ export interface components {
          * ContainerJobFailureClass
          * @enum {string}
          */
-        ContainerJobFailureClass: "validation" | "authorization" | "workspace" | "image" | "image_not_found" | "image_pull_timeout" | "image_pull_auth_failed" | "image_build_not_configured" | "image_build_inputs_unavailable" | "image_build_timeout" | "image_build_failed" | "image_validation_failed" | "image_platform_mismatch" | "image_backend_unavailable" | "launch" | "execution" | "timeout" | "canceled" | "infrastructure" | "temporal_start" | "image_use_denied" | "credential_unresolved" | "repository_scope_mismatch" | "registry_auth_failed" | "credential_cleanup_failed" | "resource_limit_exceeded" | "gpu_request_invalid" | "gpu_vendor_unsupported" | "gpu_count_unsupported" | "gpu_backend_unsupported" | "gpu_runtime_unavailable" | "gpu_resource_unavailable";
+        ContainerJobFailureClass: "validation" | "authorization" | "workspace" | "image" | "image_not_found" | "image_pull_timeout" | "image_pull_auth_failed" | "image_build_not_configured" | "image_build_inputs_unavailable" | "image_build_timeout" | "image_build_failed" | "image_validation_failed" | "image_platform_mismatch" | "image_backend_unavailable" | "launch" | "execution" | "timeout" | "canceled" | "infrastructure" | "temporal_start" | "image_use_denied" | "credential_unresolved" | "repository_scope_mismatch" | "registry_auth_failed" | "credential_cleanup_failed" | "credential_expired" | "credential_issuance_failed" | "resource_limit_exceeded" | "gpu_request_invalid" | "gpu_vendor_unsupported" | "gpu_count_unsupported" | "gpu_backend_unsupported" | "gpu_runtime_unavailable" | "gpu_resource_unavailable";
         /** ContainerJobLogEntry */
         ContainerJobLogEntry: {
             /** Sequence */
@@ -14126,6 +14126,18 @@ export interface components {
          */
         WorkflowRunStatus: "pending" | "running" | "succeeded" | "failed" | "no_work" | "cancelled" | "retrying";
         /**
+         * WorkloadCredentialSelection
+         * @description A requested reference for one profile credential slot; never a value.
+         */
+        WorkloadCredentialSelection: {
+            /** Slot */
+            slot: string;
+            /** Credentialref */
+            credentialRef: string;
+            /** Account */
+            account: string;
+        };
+        /**
          * WorkloadGpuRequest
          * @description Caller-supplied generic GPU resource request for one container.
          *
@@ -14161,6 +14173,7 @@ export interface components {
          *     Admission renders the profile's image, argv, environment, caches, network
          *     and outputs into the spec; the caller never supplies them directly.
          *     ``assessmentRef`` is stamped from a scoped session capability.
+         *     ``credentials`` request admitted references for the profile's slots.
          */
         WorkloadProfileSelection: {
             /** Profileref */
@@ -14175,6 +14188,8 @@ export interface components {
             configurationExceptions?: string[];
             /** Assessmentref */
             assessmentRef?: string | null;
+            /** Credentials */
+            credentials?: components["schemas"]["WorkloadCredentialSelection"][] | null;
         };
         /** WorkspaceDefaults */
         WorkspaceDefaults: {

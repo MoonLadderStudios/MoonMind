@@ -144,6 +144,10 @@ class ContainerJobFailureClass(StrEnum):
     REPOSITORY_SCOPE_MISMATCH = "repository_scope_mismatch"
     REGISTRY_AUTH_FAILED = "registry_auth_failed"
     CREDENTIAL_CLEANUP_FAILED = "credential_cleanup_failed"
+    # Scoped workload credentials: an elapsed grant, or a session the issuer
+    # refused or could not renew.
+    CREDENTIAL_EXPIRED = "credential_expired"
+    CREDENTIAL_ISSUANCE_FAILED = "credential_issuance_failed"
     RESOURCE_LIMIT_EXCEEDED = "resource_limit_exceeded"
     # Generic accelerator/GPU resource outcomes (#3779). Every value describes a
     # resource-request decision the service made; none names a vendor product,
@@ -426,12 +430,28 @@ class InputAttachment(ContractModel):
         return self
 
 
+_REF_PATTERN = r"^[a-z0-9][a-z0-9.-]{0,127}$"
+
+
+class WorkloadCredentialSelection(ContractModel):
+    """A requested reference for one profile credential slot; never a value."""
+
+    slot: str = Field(pattern=_REF_PATTERN)
+    credential_ref: str = Field(alias="credentialRef", max_length=1024)
+    account: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,254}$")
+
+    _validate_credential_ref = field_validator("credential_ref")(
+        _opaque_secret_reference
+    )
+
+
 class WorkloadProfileSelection(ContractModel):
     """Caller choice within a deployment-declared workload profile.
 
     Admission renders the profile's image, argv, environment, caches, network
     and outputs into the spec; the caller never supplies them directly.
     ``assessmentRef`` is stamped from a scoped session capability.
+    ``credentials`` request admitted references for the profile's slots.
     """
 
     profile_ref: str = Field(alias="profileRef", pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$")
@@ -445,6 +465,8 @@ class WorkloadProfileSelection(ContractModel):
     assessment_ref: str | None = Field(
         None, alias="assessmentRef", pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$"
     )
+    # None keeps the serialized shape of profile jobs admitted before slots.
+    credentials: list[WorkloadCredentialSelection] | None = Field(None, max_length=8)
 
 
 class ContainerJobSpec(ContractModel):
@@ -716,6 +738,35 @@ class RegistryAuthorization(ContractModel):
     )
     message: str | None = Field(None, max_length=512)
 
+    _validate_credential_ref = field_validator("credential_ref")(
+        _opaque_secret_reference
+    )
+
+
+class WorkloadCredentialAuthorization(ContractModel):
+    """Value-free admission decision for one workload credential slot.
+
+    Admission derives it from the scoped session's grant and binds it to one
+    job, principal, assessment and profile. The worker checks it again, with
+    the secret's current revision, before resolving or issuing anything, so a
+    retry, sibling job or other assessment cannot adopt it.
+    """
+
+    job_id: str = Field(alias="jobId")
+    principal: str = Field(min_length=1, max_length=300)
+    assessment_ref: str = Field(alias="assessmentRef", pattern=_REF_PATTERN)
+    profile_ref: str = Field(alias="profileRef", pattern=_REF_PATTERN)
+    slot: str = Field(pattern=_REF_PATTERN)
+    purpose: Literal["cloud_inventory", "application_auth"]
+    credential_ref: str = Field(alias="credentialRef", max_length=1024)
+    account: str = Field(max_length=255)
+    expires_at: datetime = Field(alias="expiresAt")
+    credential_revision: int | None = Field(None, alias="credentialRevision", ge=1)
+    role_arn: str | None = Field(None, alias="roleArn", max_length=600)
+    max_session_seconds: int = Field(3600, alias="maxSessionSeconds", ge=900, le=43200)
+    access_level: Literal["read_only"] = Field("read_only", alias="accessLevel")
+
+    _valid_job_id = field_validator("job_id")(_validate_job_id)
     _validate_credential_ref = field_validator("credential_ref")(
         _opaque_secret_reference
     )
@@ -1160,6 +1211,10 @@ class ContainerJobWorkflowInput(TemporalContractModel):
     target_authorization: RegistryAuthorization | None = Field(
         None, alias="targetAuthorization"
     )
+    # None keeps histories started before workload credentials decodable.
+    workload_credentials: tuple[WorkloadCredentialAuthorization, ...] | None = Field(
+        None, alias="workloadCredentials", max_length=8
+    )
     observe_interval_seconds: int = Field(
         10, alias="observeIntervalSeconds", ge=1, le=300
     )
@@ -1236,6 +1291,10 @@ class ContainerJobActivityRequest(TemporalContractModel):
     # Image assessment target credential; separate from the job image's pull.
     target_authorization: RegistryAuthorization | None = Field(
         None, alias="targetAuthorization"
+    )
+    # None keeps histories started before workload credentials decodable.
+    workload_credentials: tuple[WorkloadCredentialAuthorization, ...] | None = Field(
+        None, alias="workloadCredentials", max_length=8
     )
     state: ContainerJobState | None = None
     resolved_workspace_ref: str | None = Field(
