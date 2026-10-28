@@ -479,11 +479,10 @@ def deliver_workload_credentials(
 
     _owned(storage, ownership_token)
     root = storage.workload_credentials
-    lease = load_workload_lease(storage)
-    _remove_tree(root)
-    root.mkdir(mode=0o700)
-    if lease is not None:
-        _write_json(root / "lease.json", lease)
+    if root.is_symlink():
+        root.unlink()
+    root.mkdir(mode=0o700, exist_ok=True)
+    retire_workload_credentials(storage)
     (root / "files").mkdir(mode=0o755)
     for name, body in files.items():
         _write_new(root / "files" / name, body, 0o444)
@@ -509,15 +508,53 @@ def replace_workload_credential_file(
         raise AttachmentStorageError("workload credentials were not delivered")
     pending = files / f".{name}.{uuid.uuid4().hex}"
     _write_new(pending, body, 0o444)
-    os.replace(pending, files / name)
+    current = files / name
+    if current.is_file() and not current.is_symlink():
+        # The container may already have written the replaced values.
+        os.link(current, _retired(storage) / uuid.uuid4().hex)
+    os.replace(pending, current)
+
+
+def _retired(storage: JobAttachmentStorage) -> Path:
+    retired = storage.workload_credentials / "retired"
+    if retired.is_symlink():
+        retired.unlink()
+    retired.mkdir(mode=0o700, exist_ok=True)
+    return retired
+
+
+def retire_workload_credentials(storage: JobAttachmentStorage) -> None:
+    """Take delivered values out of the job's reach, kept only for redaction.
+
+    Evidence can still hold any value a launch or renewal ever delivered, and
+    a publication retry must redact it again, so values stay worker-only
+    until cleanup removes them.
+    """
+
+    root = storage.workload_credentials
+    if root.is_symlink() or not root.is_dir():
+        return
+    files = root / "files"
+    delivered = [root / "env"]
+    if files.is_dir() and not files.is_symlink():
+        delivered.extend(files.iterdir())
+    for path in delivered:
+        if path.is_file() and not path.is_symlink():
+            os.replace(path, _retired(storage) / uuid.uuid4().hex)
+    _remove_tree(files)
+    (root / "env").unlink(missing_ok=True)
 
 
 def delivered_workload_values(storage: JobAttachmentStorage) -> list[str]:
-    """Delivered values, read back only to redact them from evidence."""
+    """Every value delivered to the job, read back only to redact evidence."""
 
     root = storage.workload_credentials
     bodies = []
-    for path in (root / "env", *sorted((root / "files").glob("[!.]*"))):
+    for path in (
+        root / "env",
+        *sorted((root / "files").glob("[!.]*")),
+        *sorted((root / "retired").glob("*")),
+    ):
         if path.is_file() and not path.is_symlink():
             bodies.append(path.read_text(errors="replace"))
     values = []
@@ -547,13 +584,14 @@ def write_workload_lease(
 
 
 def remove_workload_credentials(storage: JobAttachmentStorage) -> None:
-    """Delivered values go when the container exits; the lease record stays."""
+    """Delete every delivered and retired value; the lease record stays."""
 
     root = storage.workload_credentials
     if root.is_symlink():
         root.unlink()
         return
     _remove_tree(root / "files")
+    _remove_tree(root / "retired")
     (root / "env").unlink(missing_ok=True)
 
 
