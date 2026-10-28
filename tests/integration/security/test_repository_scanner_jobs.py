@@ -166,6 +166,7 @@ if scanner == "gitleaks":
 elif scanner == "opengrep":
  assert "--disable-nosem" in args and "--no-git-ignore" in args
  assert "--x-ignore-semgrepignore-files" in args
+ assert not [a for a in args if a.startswith("--metrics")]
  mode="scan"; output=pathlib.Path(args[args.index("--output")+1])
 else:
  assert "--config=" in args and "--ignorefile=" in args

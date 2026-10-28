@@ -147,7 +147,6 @@ def scanner_commands(
             str(report_root / "scan.json"),
             "--no-git-ignore",
             "--x-ignore-semgrepignore-files",
-            "--metrics=off",
             "--max-target-bytes",
             str(scan.max_input_bytes),
         ]

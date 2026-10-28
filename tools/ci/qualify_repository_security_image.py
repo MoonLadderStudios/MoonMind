@@ -197,7 +197,6 @@ print(Path('/usr/local/share/repository-security/inventory.json').read_text())
                     "scan",
                     "--config",
                     "/opt/moonmind-scanner-rules/opengrep.yml",
-                    "--metrics=off",
                     "--disable-version-check",
                     "--json",
                     "--output",

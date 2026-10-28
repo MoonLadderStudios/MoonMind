@@ -251,6 +251,29 @@ def test_explicit_inline_suppression_choice_is_recorded(tmp_path):
     assert scan.model_dump(by_alias=True)["allowInlineSuppressions"] is True
 
 
+def test_opengrep_command_omits_removed_metrics_option(tmp_path):
+    # Opengrep has no telemetry and rejects `--metrics` as an unknown option.
+    api = scanner_api()
+    from moonmind.security.repository_scanner_runner import scanner_commands
+
+    scan = api.RepositoryScan(
+        scanner="opengrep",
+        outputDirectory="artifacts/scan",
+        rules=[
+            {
+                "id": "source",
+                "path": "/opt/moonmind-scanner-rules/test.yaml",
+                "sha256": "a" * 64,
+                "license": "MIT",
+            }
+        ],
+    )
+    commands = scanner_commands(
+        scan, report_root=tmp_path, config=tmp_path / "config", cache=tmp_path
+    )
+    assert not [arg for arg in commands["scan"] if arg.startswith("--metrics")]
+
+
 def test_bounded_snapshot_does_not_follow_links_or_modify_source(tmp_path):
     api = scanner_api()
     from moonmind.security.repository_scanner_runner import _copy_inputs
