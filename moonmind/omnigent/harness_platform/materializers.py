@@ -200,7 +200,7 @@ _register_builtin(
     {
         "materializerId": "omnigent-provider-config",
         "version": 1,
-        "acceptedHarnessIds": ["pi-native"],
+        "acceptedHarnessIds": ["pi-native", "claude-native"],
         "acceptedAuthModels": ["omnigent-provider-config"],
         "supportedHostModes": ["on-demand", "static-connected"],
         "requiredSecretRoles": ["api_key"],
@@ -274,6 +274,145 @@ def materializer_ref_for_provider(runtime_id: str, provider_id: str) -> str:
             code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
         )
     return ref
+
+
+PROVIDER_CONFIG_MATERIALIZER_REF = "omnigent-provider-config@1"
+ANTHROPIC_DEFAULT_BASE_URL = "https://api.anthropic.com"
+_CLAUDE_KEY_ENV = frozenset({"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"})
+# Claude Code's per-tier model pins and the Omnigent provider-config ``models``
+# keys that set the same pins on the native Claude launch.
+_CLAUDE_TIER_MODEL_ENV = {
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "haiku",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL": "fable",
+}
+_CLAUDE_CARRIED_LITERAL_ENV = frozenset(
+    {"ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", *_CLAUDE_TIER_MODEL_ENV}
+)
+
+
+class ProviderConfigEndpoint(BaseModel):
+    """Secret-free endpoint an API-key Provider Profile declares.
+
+    The Omnigent provider config carries a key-authenticated provider as one
+    model family with a base URL, a static key, and model pins; Omnigent's
+    native Claude launch turns that into ``ANTHROPIC_BASE_URL``, a key helper
+    and per-tier model pins.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    family: str
+    secretRole: str = Field(alias="secretRole")
+    baseUrl: str = Field(alias="baseUrl")
+    defaultModel: str | None = Field(None, alias="defaultModel")
+    modelPins: dict[str, str] = Field(default_factory=dict, alias="modelPins")
+
+
+def _enum_value(raw: Any) -> str:
+    return str(getattr(raw, "value", raw) or "").strip()
+
+
+def _omnigent_egress_admits(url: str) -> bool:
+    from urllib.parse import urlsplit
+
+    from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
+
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower().rstrip(".")
+    if parts.scheme != "https" or not host or parts.port not in (None, 443):
+        return False
+    return any(
+        destination.dns_name is not None
+        and 443 in destination.ports
+        and (host == destination.dns_name or host.endswith(f".{destination.dns_name}"))
+        for destination in OMNIGENT_EGRESS_PROFILE.destinations
+    )
+
+
+def claude_provider_config_endpoint(
+    profile: Any,
+) -> tuple[ProviderConfigEndpoint | None, str]:
+    """Translate an API-key Claude Provider Profile into a provider config.
+
+    Returns the endpoint, or ``None`` with the reason the Profile's declared
+    launch environment cannot be carried exactly. Only an equivalent
+    translation moves a Profile off its direct launch; anything else keeps it
+    there with that reason.
+    """
+
+    if str(getattr(profile, "runtime_id", "") or "").strip() != "claude_code":
+        return None, "not a Claude Code Provider Profile"
+    if _enum_value(getattr(profile, "credential_source", None)) != "secret_ref":
+        return None, "not a SecretRef Provider Profile"
+    if getattr(profile, "file_templates", None) or getattr(
+        profile, "home_path_overrides", None
+    ):
+        return None, "file templates and home path overrides are direct-launch only"
+    secret_refs = dict(getattr(profile, "secret_refs", None) or {})
+    key_role = ""
+    literals: dict[str, str] = {}
+    for name, value in dict(getattr(profile, "env_template", None) or {}).items():
+        if isinstance(value, dict) and set(value) == {"from_secret_ref"}:
+            role = str(value["from_secret_ref"] or "").strip()
+            if name not in _CLAUDE_KEY_ENV or key_role:
+                return None, f"{name} cannot carry a secret on the shared path"
+            if not str(secret_refs.get(role) or "").strip():
+                return None, f"secret role {role!r} has no SecretRef"
+            key_role = role
+        elif isinstance(value, str) and value.strip() and "{{" not in value:
+            literals[name] = value.strip()
+        else:
+            return None, f"{name} is not a literal value"
+    if not key_role:
+        return None, "no ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN SecretRef"
+    uncarried = sorted(set(literals) - _CLAUDE_CARRIED_LITERAL_ENV)
+    if uncarried:
+        return None, f"launch environment {uncarried} has no provider-config field"
+    base_url = literals.get("ANTHROPIC_BASE_URL", ANTHROPIC_DEFAULT_BASE_URL)
+    base_url = base_url.rstrip("/")
+    if not _omnigent_egress_admits(base_url):
+        return None, "the Omnigent egress profile does not admit the endpoint"
+    return (
+        ProviderConfigEndpoint(
+            family="anthropic",
+            secretRole=key_role,
+            baseUrl=base_url,
+            defaultModel=literals.get("ANTHROPIC_MODEL"),
+            modelPins={
+                tier: literals[name]
+                for name, tier in _CLAUDE_TIER_MODEL_ENV.items()
+                if name in literals
+            },
+        ),
+        "",
+    )
+
+
+def materializer_ref_for_profile(profile: Any) -> str:
+    """Return the materializer for one Provider Profile's credential shape.
+
+    An OAuth Profile mounts its enrolled home; an API-key Claude Profile is
+    delivered as an Omnigent provider config when that is an exact
+    translation, and is otherwise refused here (it keeps its direct launch).
+    """
+
+    runtime_id = str(getattr(profile, "runtime_id", "") or "").strip()
+    if (
+        runtime_id == "claude_code"
+        and _enum_value(getattr(profile, "credential_source", None)) == "secret_ref"
+    ):
+        endpoint, reason = claude_provider_config_endpoint(profile)
+        if endpoint is None:
+            raise HarnessPlatformError(
+                f"API-key Claude Provider Profile cannot run on Omnigent: {reason}",
+                code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+            )
+        return PROVIDER_CONFIG_MATERIALIZER_REF
+    return materializer_ref_for_provider(
+        runtime_id, str(getattr(profile, "provider_id", "") or "").strip()
+    )
 
 
 def validate_binding_materializer(

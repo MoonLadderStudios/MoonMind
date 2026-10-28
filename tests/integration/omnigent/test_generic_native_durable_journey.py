@@ -43,6 +43,7 @@ from api_service.services.omnigent_agent_profile_service import (
 )
 from api_service.services.omnigent_policies import seed_bootstrap_policies
 from api_service.services.provider_profile_creation import (
+    provider_api_key_strategy,
     provider_profile_creation_capabilities,
 )
 from api_service.services.provider_profile_readiness import (
@@ -640,7 +641,6 @@ class NativeDocker(StaticCodexDocker):
                 assert volume in self.volumes
                 if input_bytes:
                     self.auth_json = json.loads(input_bytes)
-                    assert self.auth_json == {"openai": {"type": "api", "key": SECRET}}
                 if ".moonmind-generation" in " ".join(argv):
                     generation = argv[argv.index("--") + 1]
                     if "readonly" in mounts["/credential"]:
@@ -860,7 +860,7 @@ class AdmittedManager(HermeticProviderLeases):
         return Handle()
 
 
-async def _compile_plan(session_factory, harness, workflow_id):
+async def _compile_plan(session_factory, harness, workflow_id, *, api_key=False):
     # Reuse the durable Skill producer, then expose its immutable body through
     # the real deployment catalog. Admission must resolve and persist its own
     # exact manifest; no Skill resolver or runtime materializer is substituted.
@@ -868,7 +868,7 @@ async def _compile_plan(session_factory, harness, workflow_id):
         session_factory, workflow_id, "run"
     )
     profile_name = harness.removesuffix("-native")
-    oauth = harness != "opencode-native"
+    oauth = harness != "opencode-native" and not api_key
     runtime_id = {
         "codex": "codex_cli",
         "claude": "claude_code",
@@ -900,6 +900,18 @@ async def _compile_plan(session_factory, harness, workflow_id):
         secret_refs={
             role["role"]: "env://NATIVE_JOURNEY_KEY" for role in method["secret_roles"]
         },
+        # Guided API-key setup stores the strategy's key mapping, exactly as the
+        # Provider Profile API-key action writes it.
+        **(
+            {
+                "env_template": {
+                    strategy.env_key: {"from_secret_ref": strategy.secret_role}
+                    for strategy in [provider_api_key_strategy(runtime_id, provider_id)]
+                }
+            }
+            if api_key
+            else {}
+        ),
         credential_generation=3,
         max_parallel_runs=1,
         enabled=True,
@@ -934,6 +946,11 @@ async def _compile_plan(session_factory, harness, workflow_id):
             harness=harness, policy=f"{profile_name}-on-demand@1", provider_id=PROFILE
         )
         snapshot["document"]["skills"] = [_DURABLE_SKILL_NAME]
+        if api_key:
+            snapshot["document"]["providerRequirements"].update(
+                credentialSource=profile.credential_source.value,
+                materializationMode=profile.runtime_materialization_mode.value,
+            )
         parameters = {
             "targetRuntime": "omnigent",
             "publishMode": "none",
@@ -978,7 +995,10 @@ async def native_journey(
     monkeypatch.setattr(
         "moonmind.omnigent.execute._await_marked_turn_terminal", short_quiescence
     )
-    harness = request.param
+    # ``claude-native-api-key`` is the claude-native journey with an API-key
+    # Provider Profile created by the guided Profile surface.
+    api_key = request.param.endswith("-api-key")
+    harness = request.param.removesuffix("-api-key")
     # These are default-path journeys, independent of the test runner's rollout
     # configuration. Credential readiness and real plan authority stay intact.
     for key in (
@@ -1021,7 +1041,9 @@ async def native_journey(
         catalog = await DbHarnessCatalogRepository(session_factory).load(
             synchronized["catalogRef"]
         )
-        compiled = await _compile_plan(session_factory, harness, workflow_id)
+        compiled = await _compile_plan(
+            session_factory, harness, workflow_id, api_key=api_key
+        )
         # Verify the public HTTP enums survive discovery, alongside the real
         # deployment overlay's native OAuth/API-key admission contracts.
         observed = {row.id: row for row in catalog.snapshot.harnesses}
@@ -1175,6 +1197,7 @@ async def native_journey(
             session_factory=session_factory,
             worker_root=worker_root,
             harness=harness,
+            api_key=api_key,
         )
     finally:
         await running.runner.cleanup()
@@ -1185,6 +1208,7 @@ async def native_journey(
     [
         ("codex-native", "idle"),
         ("claude-native", "idle"),
+        ("claude-native-api-key", "idle"),
         ("opencode-native", "idle"),
         ("opencode-native", "failed"),
     ],
@@ -1285,7 +1309,31 @@ async def assert_native_turn_saved_and_cleaned(
         await gateway.read_text(binding.attestationRefs["cleanupAttestationRef"])
     )
     credential_cleanup = cleanup["results"]["credentials"][0]
-    if journey.harness == "opencode-native":
+    if getattr(journey, "api_key", False):
+        # The Profile's key reaches the host only as the read-only Omnigent
+        # provider config, and the run-owned volume is removed at cleanup.
+        assert handle["materializerRef"] == "omnigent-provider-config@1"
+        assert attachment["targetPath"] == "/home/app/.moonmind-provider-config"
+        assert attachment["accessMode"] == "read-only"
+        assert docker.launch_env["OMNIGENT_CONFIG_HOME"] == (
+            "/home/app/.moonmind-provider-config"
+        )
+        assert docker.auth_json == {
+            "providers": {
+                "moonmind": {
+                    "kind": "key",
+                    "default": ["anthropic", "pi"],
+                    "anthropic": {
+                        "base_url": "https://api.anthropic.com",
+                        "api_key": SECRET,
+                        "models": {"default": "model"},
+                    },
+                }
+            }
+        }
+        assert materialization["providerBaseUrl"] == "https://api.anthropic.com"
+        assert credential_cleanup["removed"] is True
+    elif journey.harness == "opencode-native":
         assert handle["materializerRef"] == "opencode-auth-json@1"
         assert attachment["targetPath"] == "/run/mm-credentials/opencode"
         assert attachment["accessMode"] == "read-only"

@@ -366,7 +366,13 @@ DEFAULT_HOST_CLASS_TEMPLATES: tuple[HostClassTemplate, ...] = (
         harness_ids=("claude-native",),
         image_env=OMNIGENT_SHARED_HOST_IMAGE_ENV,
         integration_modes=("native-server",),
-        materializer_refs=("claude-oauth-home@1", "none@1"),
+        # API-key Claude Profiles reach the native launch through the
+        # Omnigent provider config rather than an enrolled OAuth home.
+        materializer_refs=(
+            "claude-oauth-home@1",
+            "omnigent-provider-config@1",
+            "none@1",
+        ),
         runtime_pack_ref="claude-native-pack@1",
     ),
     HostClassTemplate(

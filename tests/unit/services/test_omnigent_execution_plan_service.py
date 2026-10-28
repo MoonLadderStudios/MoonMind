@@ -595,6 +595,88 @@ async def test_product_boundary_persists_secret_free_plan_and_exact_realizer(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("credential_source", "materialization_mode", "materializer"),
+    [
+        ("oauth_volume", "oauth_home", "claude-oauth-home@1"),
+        ("secret_ref", "api_key_env", "omnigent-provider-config@1"),
+    ],
+)
+async def test_claude_plan_binds_the_profiles_credential_materializer(
+    monkeypatch, credential_source, materialization_mode, materializer
+) -> None:
+    monkeypatch.setattr(service, "DbExecutionPlanStore", _PlanStore)
+    monkeypatch.setattr(
+        service,
+        "resolve_execution_evidence",
+        lambda plan_payload, **_kwargs: (
+            _protected_support_evidence(plan_payload),
+            "supported",
+        ),
+    )
+
+    async def resolve_policy(**_kwargs):
+        return _policy_snapshot(harness="claude-native", policy="claude-on-demand@1")
+
+    monkeypatch.setattr(service, "_resolve_runtime_policy_snapshot", resolve_policy)
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "true")
+    monkeypatch.setenv(
+        "OMNIGENT_SHARED_HOST_IMAGE_REF",
+        "ghcr.io/example/omnigent-host@sha256:" + "f" * 64,
+    )
+    snapshot = _snapshot(
+        harness="claude-native",
+        policy="claude-on-demand@1",
+        provider_id="claude-profile",
+    )
+    snapshot["document"]["providerRequirements"].update(
+        credentialSource=credential_source, materializationMode=materialization_mode
+    )
+    result = await service.compile_and_persist_execution_plan(
+        session_factory=object(),
+        artifact_service=_ArtifactService(),
+        principal="user-1",
+        workflow_id="mm:test-claude-credential-shape",
+        agent_profile_snapshot=snapshot,
+        provider_profile=SimpleNamespace(
+            profile_id="claude-profile",
+            runtime_id="claude_code",
+            provider_id="anthropic",
+            credential_source=credential_source,
+            runtime_materialization_mode=materialization_mode,
+            secret_refs={"anthropic_api_key": "env://ANTHROPIC_API_KEY"},
+            env_template=(
+                {"ANTHROPIC_API_KEY": {"from_secret_ref": "anthropic_api_key"}}
+                if credential_source == "secret_ref"
+                else {}
+            ),
+            file_templates=None,
+            home_path_overrides=None,
+        ),
+        initial_parameters={
+            "model": "example/model",
+            "targetRuntime": "omnigent",
+            "publishMode": "none",
+            "maxAttempts": 2,
+            "workflow": {"instructions": "Use durable refs only."},
+        },
+        authored_request_ref="art_request_1",
+        authored_request_digest="sha256:" + "1" * 64,
+        task_input_snapshot_ref="art_request_1",
+        task_input_snapshot_digest="sha256:" + "1" * 64,
+    )
+
+    payload = result.envelope.payload
+    assert payload.executionRealizerRef == "generic-omnigent-host@1"
+    assert payload.harnessId == "claude-native"
+    assert payload.credentialBindings["primary-model"].materializerRef == materializer
+    serialized = json.dumps(
+        result.envelope.model_dump(mode="json", by_alias=True), sort_keys=True
+    )
+    assert "env://ANTHROPIC_API_KEY" not in serialized
+
+
+@pytest.mark.asyncio
 async def test_product_boundary_uses_exact_arm64_architecture_for_support_identity(
     monkeypatch,
 ) -> None:
