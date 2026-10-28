@@ -274,6 +274,76 @@ def test_opengrep_command_omits_removed_metrics_option(tmp_path):
     assert not [arg for arg in commands["scan"] if arg.startswith("--metrics")]
 
 
+@pytest.mark.parametrize("report_bytes", [64, 8192])
+def test_opengrep_unpacks_its_runtime_while_reports_stay_bounded(
+    tmp_path, monkeypatch, report_bytes
+):
+    # Opengrep's one-file release unpacks a runtime far larger than any report
+    # into $HOME/.cache on first use; the report ceiling still bounds the scan.
+    import hashlib
+    import subprocess
+    import sys
+
+    api = scanner_api()
+    from moonmind.security.repository_scanner_runner import run_scanner
+
+    rules = tmp_path / "rules" / "source.yaml"
+    rules.parent.mkdir()
+    rules.write_text("rules: []\n")
+    scan = api.RepositoryScan(
+        scanner="opengrep",
+        outputDirectory="artifacts/scan",
+        maxReportBytes=4096,
+        rules=[
+            {
+                "id": "source",
+                "path": "/opt/moonmind-scanner-rules/source.yaml",
+                "sha256": hashlib.sha256(rules.read_bytes()).hexdigest(),
+                "license": "MIT",
+            }
+        ],
+    )
+    fixture = tmp_path / "opengrep-fixture"
+    fixture.write_text(
+        f"""#!{sys.executable}
+import json, os, pathlib, sys
+runtime = pathlib.Path(os.environ["HOME"], ".cache/opengrep/1.2.3/core")
+if not runtime.exists():
+    runtime.parent.mkdir(parents=True)
+    runtime.write_bytes(b"0" * 8192)
+if sys.argv[1:] == ["--version"]:
+    print("1.2.3"); raise SystemExit(0)
+report = {{"version": "1.2.3", "results": [], "errors": [], "paths": {{"scanned": ["app.py"]}}}}
+report["padding"] = "x" * {report_bytes}
+output = pathlib.Path(sys.argv[sys.argv.index("--output") + 1])
+output.write_text(json.dumps(report))
+"""
+    )
+    fixture.chmod(0o755)
+    original = subprocess.Popen
+
+    def popen(argv, *args, **kwargs):
+        argv = [str(fixture) if arg == "opengrep" else arg for arg in argv]
+        return original(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "app.py").write_text("print('clean')\n")
+    output = tmp_path / "output"
+    code = run_scanner(scan, source=source, output=output, rules_root=rules.parent)
+    execution = json.loads((output / "execution.json").read_text())
+    assert execution["version"] == "1.2.3"
+    if report_bytes < scan.max_report_bytes:
+        assert code == 0
+        assert execution["limitations"] == []
+        assert execution["exits"] == {"scan": 0}
+    else:
+        assert code == 2
+        assert execution["exits"]["scan"] != 0
+        assert not (output / "scan.json").exists()
+
+
 def test_bounded_snapshot_does_not_follow_links_or_modify_source(tmp_path):
     api = scanner_api()
     from moonmind.security.repository_scanner_runner import _copy_inputs
