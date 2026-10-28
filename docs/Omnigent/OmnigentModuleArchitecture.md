@@ -204,7 +204,10 @@ legacy surface that no row classifies.
   Each row records its owner, **retirement class**, surfaces, the source
   that still admits new work, the actual consumer it serves (journeys,
   explicit choices, retained histories), and the observable removal
-  condition. Direct Codex/Claude launch, the managed-runtime launcher and the
+  condition. A row that still admits new work also names the shared
+  lifecycle operation that would serve its consumer and the concrete outcome
+  that operation still lacks, so a path stays live for a named gap, not its
+  age. Direct Codex/Claude launch, the managed-runtime launcher and the
   direct Codex AgentSession each have a row.
 - `ARCHITECTURE_BOUNDARY_EXCEPTIONS` holds the boundary exemptions and names the
   row each one shelters.
@@ -267,6 +270,14 @@ deletion removes its row in the same change rather than leaving a stale entry.
 | Pi host image variable | `omnigent.legacy.pi_host_image_alias` | `active_product_path` |
 | `native_ui_compat.py` chat projection | `omnigent.legacy.native_ui_compat` | `active_product_path` |
 | Embedded host/runner transport admission | `omnigent.legacy.embedded_host_transport` | `new_admission_disabled` |
+
+The direct Codex/Claude launch, AgentSession, profile-bound and OAuth host
+rows stay live because the shared lifecycle still lacks API-key and
+custom-endpoint Codex/Claude Provider Profiles, the direct Claude CLI options,
+one session reused across a run's steps, static-connected Codex/Claude hosts,
+and OAuth credential maintenance and its host-lease janitor. Each row's
+`missingOutcome` names its own share; the Codex/Claude CLIs and Node stay in
+the application image until those rows are deleted.
 
 Three enforced-boundary exemptions are owned by rows above:
 `omnigent_catalog.py`'s in-handler readiness projection reading the materializer

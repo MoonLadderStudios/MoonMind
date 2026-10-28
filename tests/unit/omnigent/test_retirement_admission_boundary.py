@@ -231,6 +231,8 @@ def test_new_admission_disabled_rejects_the_trusted_planner_default(
         monkeypatch,
         retirement_class=RetirementClass.NEW_ADMISSION_DISABLED,
         new_admission_source="",
+        shared_operation="",
+        missing_outcome="",
     )
     with pytest.raises(HarnessPlatformError) as excinfo:
         compile_execution_plan(**codex_plan_inputs)
@@ -252,6 +254,8 @@ async def test_caller_realizer_cannot_bypass_the_retirement_state(
         monkeypatch,
         retirement_class=RetirementClass.NEW_ADMISSION_DISABLED,
         new_admission_source="",
+        shared_operation="",
+        missing_outcome="",
     )
     store = InMemoryExecutionPlanStore()
     codex_plan_inputs[field] = "generic-omnigent-host@1"
@@ -281,6 +285,8 @@ def test_disabled_admission_does_not_change_recorded_plans(
         monkeypatch,
         retirement_class=RetirementClass.NEW_ADMISSION_DISABLED,
         new_admission_source="",
+        shared_operation="",
+        missing_outcome="",
     )
     assert recorded.payload.executionRealizerRef == PROFILE_BOUND_REALIZER
     # The realizer stays registered and resolvable for the recorded plan even
