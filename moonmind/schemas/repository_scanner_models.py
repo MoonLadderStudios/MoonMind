@@ -502,6 +502,10 @@ CLOUD_ACTION_CLASS = "cloud-posture"
 CLOUD_REGION = re.compile(r"^[a-z]{2}(?:-[a-z]+)+-[0-9]{1,2}$")
 _CHECK = re.compile(r"^[a-z0-9][a-z0-9_]{0,127}$")
 _SERVICE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+#: A job command holds 128 argv entries and the rendered Prowler argv spends
+#: 18 on the provider, flags and outputs; the rest name regions and checks or
+#: services, so an admission never renders a job its command cannot hold.
+CLOUD_SELECTION_ARGV = 110
 
 
 def cloud_regions(values: list[str]) -> list[str]:
@@ -526,7 +530,7 @@ class CloudAssessment(Contract):
     account: str = Field(pattern=r"^[0-9]{12}$")
     credential_ref: str = Field(min_length=4, max_length=1024)
     regions: list[str] = Field(min_length=1, max_length=32)
-    checks: list[str] = Field(default_factory=list, max_length=512)
+    checks: list[str] = Field(default_factory=list, max_length=CLOUD_SELECTION_ARGV - 1)
     services: list[str] = Field(default_factory=list, max_length=64)
     egress_policy_ref: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$")
     max_retry_attempts: int = Field(3, ge=0, le=10)
@@ -567,6 +571,11 @@ class CloudAssessment(Contract):
                 raise ValueError("checks and services are Prowler identifiers")
             if len(set(values)) != len(values):
                 raise ValueError("duplicate check or service")
+        if len(self.regions) + len(self.checks or self.services) > CLOUD_SELECTION_ARGV:
+            raise ValueError(
+                f"regions plus checks or services exceed the {CLOUD_SELECTION_ARGV} "
+                "argv entries a job command can hold"
+            )
         return self
 
     def outputs(self) -> list[dict]:

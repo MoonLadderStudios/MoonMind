@@ -414,7 +414,7 @@ def parse_report(body: bytes) -> tuple[list[dict], str | None]:
     try:
         value = json.loads(text)
     except (ValueError, RecursionError):
-        value = None
+        pass
     else:
         if isinstance(value, list) and all(isinstance(v, dict) for v in value):
             return value, None
@@ -550,7 +550,9 @@ def summarize_cloud_assessment(
     """Classify one run from its native report, log and terminal state.
 
     ``report`` is ``None`` when Prowler wrote none: after a finished run that
-    means it had no results, otherwise nothing was assessed.
+    means it had no results, otherwise nothing was assessed. ``log`` is
+    ``None`` when no log could be read; Prowler records failed collections
+    only there, so its absence leaves collection unverified.
     """
     execution = interpret_exit(exit_code, terminal_state)
     gaps = list(limitations)
@@ -561,6 +563,8 @@ def summarize_cloud_assessment(
         records, problem = parse_report(report)
         if problem:
             gaps.append(problem)
+    if log is None:
+        gaps.append("log_unavailable")
     diagnostics = parse_log(log, assessment.checks) if log else []
     if len(diagnostics) > MAX_DIAGNOSTICS:
         diagnostics = diagnostics[:MAX_DIAGNOSTICS]
