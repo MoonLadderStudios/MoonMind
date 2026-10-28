@@ -29,6 +29,16 @@ from moonmind.security.container_services import (
     ServiceConnection,
     parse_service_connections,
 )
+from moonmind.security.egress_policy import (
+    EGRESS_POLICIES_ENV_KEY,
+    ScopedEgressPolicy,
+    parse_egress_policies,
+)
+from moonmind.security.workload_profiles import (
+    WORKLOAD_PROFILES_ENV_KEY,
+    WorkloadProfile,
+    parse_workload_profiles,
+)
 
 #: The only backend kind this deployment supports. A second backend kind
 #: (Podman, containerd, Kubernetes, endpoint pools) is explicitly out of scope.
@@ -191,6 +201,35 @@ class ContainerBackendSettings:
     image_sources: tuple[ImageSource, ...]
     cache_sources: tuple[CacheSource, ...]
     service_connections: tuple[ServiceConnection, ...] = ()
+    egress_policies: tuple[ScopedEgressPolicy, ...] = ()
+    workload_profiles: tuple[WorkloadProfile, ...] = ()
+
+    def authorize_egress(self, request) -> ScopedEgressPolicy | None:
+        if request.spec.egress_policy_ref is None:
+            return None
+        for policy in self.egress_policies:
+            if policy.policy_ref == request.spec.egress_policy_ref:
+                if (
+                    request.spec.image_source_ref not in policy.allowed_image_source_refs
+                    or request.source.workflow_id not in policy.allowed_workflow_ids
+                ):
+                    raise ValueError("egress policy is not authorized for this workflow and image")
+                if request.spec.feed_refresh is not None:
+                    from moonmind.security.scanner_feeds import feed_policy_admits
+
+                    if not feed_policy_admits(policy):
+                        raise ValueError(
+                            "feed refresh egress may reach only feed hosts"
+                        )
+                if request.spec.image_assessment is not None:
+                    from moonmind.security.image_assessments import image_policy_admits
+
+                    if not image_policy_admits(policy, request.spec.image_assessment):
+                        raise ValueError(
+                            "image assessment egress may reach only its registry"
+                        )
+                return policy
+        raise ValueError("egress policy is not deployment-authorized")
 
     def authorize_service(self, spec: ContainerJobSpec) -> ServiceConnection | None:
         if spec.service_ref is None:
@@ -600,4 +639,35 @@ def resolve_container_backend_settings(
         image_sources=tuple(image_sources),
         cache_sources=cache_sources,
         service_connections=parse_service_connections(source.get(SERVICE_CONNECTIONS_ENV_KEY)),
+        egress_policies=parse_egress_policies(source.get(EGRESS_POLICIES_ENV_KEY)),
+        workload_profiles=_workload_profiles(
+            source.get(WORKLOAD_PROFILES_ENV_KEY), image_sources, cache_sources
+        ),
     )
+
+
+def _workload_profiles(
+    raw: object,
+    image_sources: list[ImageSource],
+    cache_sources: tuple[CacheSource, ...],
+) -> tuple[WorkloadProfile, ...]:
+    try:
+        profiles = parse_workload_profiles(None if raw is None else str(raw))
+    except ValueError as exc:
+        raise ContainerBackendConfigError(str(exc)) from exc
+    image_refs = {item.source_ref for item in image_sources}
+    caches = {item.cache_ref: item for item in cache_sources}
+    for index, profile in enumerate(profiles):
+        # A profile names deployment-owned sources only; read-only rule and
+        # data caches keep an untrusted scan from poisoning later assessments.
+        if profile.image_source_ref not in image_refs or any(
+            cache.cache_ref not in caches
+            or not caches[cache.cache_ref].read_only
+            or caches[cache.cache_ref].target != cache.target
+            for cache in profile.caches
+        ):
+            raise ContainerBackendConfigError(
+                f"{WORKLOAD_PROFILES_ENV_KEY}[{index}] names an undeclared "
+                "image source or a writable/mismatched cache"
+            )
+    return profiles

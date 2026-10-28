@@ -7,14 +7,22 @@ import hashlib
 import hmac
 import json
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from moonmind.schemas.container_job_models import ContainerJobSubmitRequest, OwnerIdentity
 from moonmind.schemas.workspace_locator_models import ManagedWorkspaceLocator, SandboxWorkspaceLocator
+from moonmind.security.workload_profiles import (
+    AdmittedAssessmentScope,
+    selection_within_scope,
+)
 
 _AUDIENCE = "moonmind-container-jobs"
 _VERSION = 3
+# Scoped tokens use a separate version so a verifier that predates assessment
+# scopes rejects them instead of ignoring the restriction.
+_SCOPED_VERSION = 4
 
 
 class ContainerJobCapabilityError(ValueError):
@@ -37,6 +45,7 @@ class ContainerJobSessionCapability:
     workspace_relative_path: str
     workspace_read_only: bool
     expires_at: int
+    assessment_scope: AdmittedAssessmentScope | None = None
 
 
 def container_job_matches_capability(
@@ -57,6 +66,13 @@ def container_job_matches_capability(
             and workspace.workspace_id == capability.workspace_id
             and workspace.relative_path == capability.workspace_relative_path
         )
+    scope = capability.assessment_scope
+    profile = request.spec.workload_profile
+    if scope is not None:
+        if not selection_within_scope(request.spec, scope):
+            return False
+    elif profile is not None and profile.assessment_ref is not None:
+        return False
     source = request.source
     session_id = (
         source.managed_session_id if capability.source_kind == "managed_session"
@@ -71,6 +87,23 @@ def container_job_matches_capability(
         and session_id == capability.session_id
         and (not capability.workspace_read_only or request.spec.workspace_read_only)
     )
+
+
+def assessment_scope_from_policy(policy: Any) -> AdmittedAssessmentScope | None:
+    """Read the operator-admitted scope from a step's trusted skill policy.
+
+    A present but malformed scope fails closed instead of minting an
+    unrestricted capability.
+    """
+
+    if not isinstance(policy, Mapping) or "assessmentScope" not in policy:
+        return None
+    try:
+        return AdmittedAssessmentScope.model_validate(policy["assessmentScope"])
+    except (TypeError, ValueError) as exc:
+        raise ContainerJobCapabilityError(
+            "admitted assessment scope is invalid"
+        ) from exc
 
 
 def _encode(value: bytes) -> str:
@@ -108,6 +141,7 @@ def mint_container_job_session_capability(
     workspace_id: str | None = None,
     workspace_relative_path: str = "repo",
     workspace_read_only: bool = False,
+    assessment_scope: AdmittedAssessmentScope | None = None,
     lifetime_seconds: int,
     now: int | None = None,
 ) -> str:
@@ -137,7 +171,7 @@ def mint_container_job_session_capability(
     )
     payload = {
         "aud": _AUDIENCE,
-        "v": _VERSION,
+        "v": _VERSION if assessment_scope is None else _SCOPED_VERSION,
         "owner": owner.model_dump(mode="json", by_alias=True),
         "agentRunId": _required_text(agent_run_id, field="agentRunId"),
         "workflowId": _required_text(workflow_id, field="workflowId"),
@@ -155,6 +189,10 @@ def mint_container_job_session_capability(
         "iat": issued_at,
         "exp": issued_at + lifetime_seconds,
     }
+    if assessment_scope is not None:
+        payload["assessmentScope"] = assessment_scope.model_dump(
+            mode="json", by_alias=True
+        )
     encoded_payload = _encode(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     )
@@ -192,8 +230,23 @@ def verify_container_job_session_capability(
         raise ContainerJobCapabilityError("invalid container-job capability") from exc
     if not isinstance(payload, dict):
         raise ContainerJobCapabilityError("invalid container-job capability")
-    if payload.get("aud") != _AUDIENCE or payload.get("v") != _VERSION:
+    if payload.get("aud") != _AUDIENCE or payload.get("v") not in (
+        _VERSION,
+        _SCOPED_VERSION,
+    ):
         raise ContainerJobCapabilityError("unsupported container-job capability")
+    assessment_scope = None
+    if payload["v"] == _SCOPED_VERSION:
+        try:
+            assessment_scope = AdmittedAssessmentScope.model_validate(
+                payload["assessmentScope"]
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ContainerJobCapabilityError(
+                "invalid container-job capability assessment scope"
+            ) from exc
+    elif "assessmentScope" in payload:
+        raise ContainerJobCapabilityError("invalid container-job capability")
     try:
         expires_at = int(payload["exp"])
         owner = OwnerIdentity.model_validate(payload["owner"])
@@ -232,11 +285,13 @@ def verify_container_job_session_capability(
         ),
         workspace_read_only=workspace_read_only,
         expires_at=expires_at,
+        assessment_scope=assessment_scope,
     )
 
 
 __all__ = [
     "ContainerJobCapabilityError",
+    "assessment_scope_from_policy",
     "ContainerJobSessionCapability",
     "container_job_matches_capability",
     "mint_container_job_session_capability",

@@ -53,6 +53,80 @@ def pr_resolve_snapshot_module() -> dict[str, Any]:
         )
     )
 
+
+def test_snapshot_exposes_final_candidate_and_unintegrated_base_changes(
+    pr_resolve_snapshot_module, monkeypatch
+):
+    collect = pr_resolve_snapshot_module["fetch_candidate_changes"]
+    calls = []
+
+    def read(command, **kwargs):
+        calls.append((command, kwargs))
+        if "/files?" in command[2]:
+            return [
+                {
+                    "filename": ".github/workflows/release.yml",
+                    "status": "modified",
+                    "patch": "@@ -1 +0,0 @@\n-qualify-before-latest: true",
+                },
+                {
+                    "filename": "tests/test_release.py",
+                    "status": "removed",
+                    "patch": "@@ -1 +0,0 @@\n-assert qualified(candidate)",
+                },
+            ]
+        assert command[2].endswith("compare/candidate...main-tip")
+        return {
+            "merge_base_commit": {"sha": "original-base"},
+            "commits": [
+                {
+                    "sha": "main-tip",
+                    "commit": {"message": "Require release qualification"},
+                }
+            ],
+            "total_commits": 1,
+        }
+
+    monkeypatch.setitem(collect.__globals__, "run_command_optional", read)
+    result = collect(
+        "example/repository",
+        {
+            "number": 9,
+            "headRefOid": "candidate",
+            "baseRefOid": "main-tip",
+            "changedFiles": 2,
+        },
+    )
+    assert result["headSha"] == "candidate"
+    assert result["baseSha"] == "main-tip"
+    assert result["filesComplete"] is True
+    assert result["files"][1]["status"] == "removed"
+    assert "assert qualified(candidate)" in result["files"][1]["patch"]
+    assert result["baseChanges"]["mergeBaseSha"] == "original-base"
+    assert result["baseChanges"]["commits"][0]["sha"] == "main-tip"
+    assert calls[0][1]["paginated"] is True
+
+
+def test_snapshot_discloses_missing_diff_instead_of_claiming_clean_inventory(
+    pr_resolve_snapshot_module, monkeypatch
+):
+    collect = pr_resolve_snapshot_module["fetch_candidate_changes"]
+    monkeypatch.setitem(
+        collect.__globals__, "run_command_optional", lambda *_args, **_kwargs: None
+    )
+    result = collect(
+        "example/repository",
+        {
+            "number": 9,
+            "headRefOid": "new-head",
+            "baseRefOid": "new-base",
+            "changedFiles": 1,
+        },
+    )
+    assert result["filesComplete"] is False
+    assert result["error"] == "Changed-file inventory unavailable."
+
+
 @pytest.fixture
 def pr_resolve_finalize_module() -> dict[str, Any]:
     return _load_module(
@@ -1345,6 +1419,121 @@ def test_orchestrate_ci_running_uses_finalize_only_retry_path(
     assert sleeps == [60]
 
 
+def test_orchestrate_spent_budget_still_observes_running_ci_to_merge(
+    pr_resolve_orchestrate_module: dict[str, Any],
+) -> None:
+    run_orchestration = pr_resolve_orchestrate_module["run_orchestration"]
+
+    finalize_results = iter(
+        [
+            {"status": "blocked", "merge_outcome": "blocked", "reason": "ci_running"},
+            {"status": "blocked", "merge_outcome": "blocked", "reason": "ci_running"},
+            {"status": "merged", "merge_outcome": "merged", "reason": "ci_complete"},
+        ]
+    )
+    clock = iter([0.0])
+    full_calls: list[str] = []
+    sleeps: list[int] = []
+
+    result, exit_code = run_orchestration(
+        finalize_runner=lambda _attempt: next(finalize_results),
+        full_runner=lambda _attempt, _escalation, reason: (
+            full_calls.append(reason)
+            or {"status": "needs_remediation", "merge_outcome": "blocked"}
+        ),
+        sleep_fn=lambda seconds: sleeps.append(seconds),
+        monotonic_fn=lambda: next(clock, 1000.0),
+        finalize_max_retries=10,
+        fix_max_iterations=5,
+        base_sleep_seconds=15,
+        max_sleep_seconds=60,
+        max_elapsed_seconds=900,
+        merge_not_ready_grace_retries=1,
+    )
+
+    assert exit_code == 0
+    assert result["status"] == "merged"
+    assert full_calls == []
+    assert sleeps == [60, 60]
+
+
+def test_orchestrate_spent_budget_starts_no_new_remediation(
+    pr_resolve_orchestrate_module: dict[str, Any],
+) -> None:
+    run_orchestration = pr_resolve_orchestrate_module["run_orchestration"]
+
+    finalize_results = iter(
+        [
+            {"status": "blocked", "merge_outcome": "blocked", "reason": "ci_running"},
+            {"status": "blocked", "merge_outcome": "blocked", "reason": "ci_failures"},
+        ]
+    )
+    clock = iter([0.0])
+    full_calls: list[str] = []
+
+    result, exit_code = run_orchestration(
+        finalize_runner=lambda _attempt: next(finalize_results),
+        full_runner=lambda _attempt, _escalation, reason: (
+            full_calls.append(reason)
+            or {"status": "needs_remediation", "merge_outcome": "blocked"}
+        ),
+        sleep_fn=lambda _seconds: None,
+        monotonic_fn=lambda: next(clock, 1000.0),
+        finalize_max_retries=10,
+        fix_max_iterations=5,
+        base_sleep_seconds=15,
+        max_sleep_seconds=60,
+        max_elapsed_seconds=900,
+        merge_not_ready_grace_retries=1,
+    )
+
+    assert exit_code == 3
+    assert result["status"] == "attempts_exhausted"
+    assert result["final_reason"] == "timeout"
+    assert result["attempt_history"][-1]["reason"] == "ci_failures"
+    assert full_calls == []
+
+
+def test_orchestrate_spent_budget_watches_infrastructure_rerun_it_started(
+    pr_resolve_orchestrate_module: dict[str, Any],
+) -> None:
+    run_orchestration = pr_resolve_orchestrate_module["run_orchestration"]
+
+    finalize_results = iter(
+        [
+            {"status": "blocked", "merge_outcome": "blocked", "reason": "ci_running"},
+            {
+                "status": "blocked",
+                "merge_outcome": "blocked",
+                "reason": "ci_infra_transient",
+            },
+            {"status": "merged", "merge_outcome": "merged", "reason": "ci_complete"},
+        ]
+    )
+    clock = iter([0.0])
+    full_calls: list[str] = []
+
+    result, exit_code = run_orchestration(
+        finalize_runner=lambda _attempt: next(finalize_results),
+        full_runner=lambda _attempt, _escalation, reason: (
+            full_calls.append(reason)
+            or {"status": "needs_remediation", "merge_outcome": "blocked"}
+        ),
+        sleep_fn=lambda _seconds: None,
+        monotonic_fn=lambda: next(clock, 1000.0),
+        finalize_max_retries=10,
+        fix_max_iterations=5,
+        base_sleep_seconds=15,
+        max_sleep_seconds=60,
+        max_elapsed_seconds=900,
+        merge_not_ready_grace_retries=1,
+    )
+
+    assert exit_code == 0
+    assert result["status"] == "merged"
+    assert full_calls == []
+
+
 def test_orchestrate_returns_ci_wait_to_durable_owner_without_sleeping(
     pr_resolve_orchestrate_module,
     monkeypatch,
@@ -1700,7 +1889,7 @@ def test_orchestrate_main_uses_extended_finalize_wait_defaults(
     assert captured["min_attempts_before_exhausted"] == 5
     assert captured["base_sleep_seconds"] == 30
     assert captured["max_sleep_seconds"] == 120
-    assert captured["max_elapsed_seconds"] == 7200
+    assert captured["max_elapsed_seconds"] == 10800
 
 def test_contract_snapshot_refresh_failed_is_finalize_only_retry(
     pr_resolve_contract_module: dict[str, Any],

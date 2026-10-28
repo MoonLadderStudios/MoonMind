@@ -42,11 +42,10 @@ environments. A run-owned shell profile carries the non-sensitive correlation
 and file selectors for login shells and the projected `moonmind` executable,
 which the `docker` tool binding delivers even when `gh` is not required.
 
-The materialized workspace attachment owns repository access mode, and
-container-job capabilities bind it as `workspaceReadOnly`. The scoped API applies
-the signed restriction before persistence regardless of the caller's value, and
-the worker enforces it on bind and volume-subpath mounts, so a read-only
-repository stays read-only inside jobs; callers can only make access stricter.
+The materialized workspace attachment owns repository access mode, which
+container-job capabilities bind as `workspaceReadOnly`. The scoped API applies
+that signed restriction before persistence, and the worker enforces it on every
+workspace mount; callers can only make access stricter.
 Capability schema v3 requires this claim, and older capabilities fail closed
 (they need a fresh host lease or session) because they cannot say which access
 policy applies. Already admitted jobs keep their recorded behavior: an omitted
@@ -164,10 +163,10 @@ Omnigent / managed session / workflow / API client
                  +-- ephemeral owned workload container
 ```
 
-The API handles admission and public status/control but never runs a long pull
-or build in a request handler. Temporal owns state transitions, timeout,
-cancellation, retry, provisioning coordination, artifact publication, and
-cleanup. Only the trusted worker holds the Docker endpoint.
+The API admits requests and serves status/control without running pulls or
+builds. Temporal owns state transitions, timeout, cancellation, retry,
+provisioning coordination, publication, and cleanup. Only the trusted worker
+holds the Docker endpoint.
 
 Code: `api_service/services/container_jobs.py` (service),
 `api_service/api/routers/container_jobs.py` (HTTP),
@@ -320,13 +319,9 @@ A backend-neutral request looks approximately like this (full model in
 ```json
 {
   "image": "registry.example/image@sha256:...",
-  "imageSourceRef": null,
   "workspaceRef": { "kind": "managed_runtime", "runtimeId": "rt_...", "agentRunId": "conv_..." },
   "workdir": "/workspace",
   "command": ["program", "arg1"],
-  "entrypoint": [],
-  "environment": {},
-  "cacheMounts": [],
   "networkMode": "none",
   "resources": {
     "cpu": "4",
@@ -335,15 +330,13 @@ A backend-neutral request looks approximately like this (full model in
     "gpu": { "vendor": "nvidia", "count": "all", "capabilities": ["compute", "utility"] }
   },
   "timeoutSeconds": 3600,
-  "pullPolicy": "if-missing",
-  "registryCredentialRef": null,
-  "outputs": {}
+  "inputAttachments": [{ "name": "source", "workspacePath": "." }],
+  "outputs": [{ "name": "report", "relativePath": "report.json" }]
 }
 ```
 
-A request supplies either a permitted `image` or an approved `imageSourceRef`,
-which resolves to an immutable provisioning plan before execution. The caller
-does not provide a Docker endpoint, a host source path, build inputs, socket or
+A request supplies a permitted `image` or an approved `imageSourceRef`, which
+resolves to an immutable provisioning plan. The caller does not provide a Docker endpoint, a host source path, build inputs, socket or
 data-root mounts, privileged mode, host namespaces, arbitrary devices, or
 ownership-label overrides. MoonMind adds owner, workflow, run, step, session,
 expiration, idempotency, and resolved-image metadata.
@@ -377,6 +370,19 @@ following symlinks.
 glob prefixes, and has bounded entry and depth budgets plus the artifact-count
 limit. Budget exhaustion is recorded as truncation; unsafe paths fail
 publication with diagnostics rather than redirecting worker filesystem access.
+
+### 7.2 Input attachments and owned outputs
+
+`inputAttachments` names read-only inputs: a directory of the job's own
+`workspaceRef` (`workspacePath`) or an artifact its owner can read
+(`artifactRef`). The worker captures each once into job-owned storage, mounts it
+at `/inputs/<name>`, and records its identity and Git/link coverage in
+diagnostics. Capture opens each entry through its parent's descriptor without
+following links, because the working copy may change while it is read: links
+and entries replaced mid-capture are omitted and counted, never followed. Such a job, including one declaring an empty list (a source-free job), has no live `/workspace`; declared outputs resolve under
+job-owned `/outputs`, beside a job-owned `/tmp`. Retries reuse the capture and
+confirmed publications; cleanup keeps outputs that were never published,
+including declared outputs that collection rejected.
 
 ---
 
@@ -606,8 +612,7 @@ container job into a build job.
 
 Cancellation and timeout stop only the owned build or container and keep
 available evidence. A recurring reconciler removes only labeled job-scoped
-objects whose jobs are terminal or expired. There is no "prepare every optional
-image at startup" step.
+objects whose jobs are terminal or expired.
 
 ---
 
@@ -755,9 +760,9 @@ moonmind container run --spec /path/to/job.json --request-id stable-phase-id
 
 The CLI replaces any supplied workspace locator with the admitted
 managed-runtime identity and injects workflow, session, run, step, and
-idempotency correlation. The spec may name an approved `imageSourceRef` and
-`cacheRef` values but cannot choose endpoints, host paths, raw volume names, or
-registry credentials.
+idempotency correlation. The spec may name an approved `imageSourceRef`,
+`cacheRef` values, and `inputAttachments` but cannot choose endpoints, host
+paths, raw volume names, or registry credentials.
 
 The validated runtime profile decides workload capability:
 `workloadMode=container-jobs` enables the scoped endpoint, `no-docker`

@@ -9711,6 +9711,137 @@ def test_create_task_shaped_execution_accepts_scoped_fanout_bearer(
     assert service.create_execution.await_args.kwargs["owner_type"] == "user"
 
 
+_ASSESSMENT_SCOPE = {
+    "assessmentRef": "assessment-1",
+    "profileRefs": ["source-scan"],
+    "actionClasses": ["source-analysis"],
+    "targets": [{"workspacePath": "app"}],
+    "exclusions": ["app/vendor"],
+    "maxJobs": 2,
+    "maxJobSeconds": 600,
+    "evidenceIntent": "Source findings",
+}
+
+
+def _assessment_workflow_request(scope: Any) -> dict[str, Any]:
+    return {
+        "type": "workflow",
+        "payload": {
+            "repository": "MoonLadderStudios/MoonMind",
+            "assessmentScope": scope,
+            "workflow": {
+                "instructions": "Assess the admitted app routes.",
+                "runtime": {"mode": "codex"},
+            },
+        },
+    }
+
+
+def test_create_task_shaped_execution_forwards_operator_assessment_scope(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions", json=_assessment_workflow_request(_ASSESSMENT_SCOPE)
+    )
+
+    assert response.status_code == 201, response.text
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    # The run workflow reads only this run parameter as the operator's scope.
+    assert initial_parameters["assessmentScope"] == {
+        **_ASSESSMENT_SCOPE,
+        "configurationExceptions": [],
+        "networkRefs": [],
+        "grants": [],
+    }
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        {"assessmentRef": "assessment-1"},
+        {**_ASSESSMENT_SCOPE, "maxJobs": 0},
+        {**_ASSESSMENT_SCOPE, "credentialRefs": ["github"]},
+        "assessment-1",
+    ],
+)
+def test_create_execution_rejects_malformed_assessment_scope(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    scope: Any,
+) -> None:
+    test_client, service, _user = client
+
+    task_shaped = test_client.post(
+        "/api/executions", json=_assessment_workflow_request(scope)
+    )
+    direct = test_client.post(
+        "/api/executions",
+        json={
+            "workflowType": "MoonMind.UserWorkflow",
+            "planArtifactRef": "art_plan",
+            "initialParameters": {"assessmentScope": scope},
+        },
+    )
+
+    # Never a silently unscoped run.
+    for response in (task_shaped, direct):
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"]["code"] == "invalid_assessment_scope"
+    service.create_execution.assert_not_awaited()
+
+
+def test_execution_fanout_cannot_admit_an_assessment_scope(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, user = client
+    for dependency in tuple(test_client.app.dependency_overrides):
+        if getattr(dependency, "__name__", "") in {
+            "_current_user_fallback",
+            "_strict_current_user",
+            "_optional_current_user",
+            "get_instance_access",
+            "get_instance_access_optional",
+        }:
+            test_client.app.dependency_overrides[dependency] = lambda: None
+    service.describe_execution.return_value = SimpleNamespace(
+        workflow_id="mm:parent-task",
+        owner_id=user.id,
+        owner_type="user",
+        parameters={"targetRuntime": "codex"},
+        memo={},
+        search_attributes={},
+    )
+
+    response = test_client.post(
+        "/api/executions",
+        headers={
+            "Authorization": f"Bearer {_execution_fanout_token()}",
+            "X-MoonMind-Execution-Fanout": "v1",
+        },
+        json={
+            "type": "workflow",
+            "payload": {
+                "runtimeInheritance": "caller",
+                "repository": "MoonLadderStudios/MoonMind",
+                "assessmentScope": _ASSESSMENT_SCOPE,
+                "workflow": {
+                    "instructions": "Assess as a child.",
+                    "idempotencyKey": "parent:assess:1",
+                },
+            },
+        },
+    )
+
+    # A child run cannot claim or widen operator assessment authority.
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"]["code"] == "assessment_scope_denied"
+    service.create_execution.assert_not_awaited()
+
+
 def test_execution_fanout_cannot_author_recovery_or_profile_snapshots(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -18414,7 +18545,9 @@ def test_workflow_gate_actions_expose_distinct_capabilities_and_consumed_refs(
 
 
 def _publication_recovery_record() -> SimpleNamespace:
-    record = _build_execution_record(state=MoonMindWorkflowState.FAILED)
+    record = _build_execution_record(
+        state=MoonMindWorkflowState.FAILED, has_workflow_input_snapshot=False
+    )
     operation_key = publication_operation_key(
         source_workflow_id=record.workflow_id,
         source_run_id=record.run_id,
@@ -18513,11 +18646,15 @@ def test_retry_publication_starts_stable_linked_workflow_and_deduplicates(
     for call_args in adapter.start_workflow.await_args_list:
         assert call_args.kwargs["workflow_id"] == destination_id
         assert call_args.kwargs["workflow_type"] == "MoonMind.PublicationRecoveryV1"
-        assert call_args.kwargs["input_args"] == (
-            PublicationRecoveryContract.model_validate(contract_payload).model_dump(
-                by_alias=True, mode="json"
-            )
-        )
+        expected = PublicationRecoveryContract.model_validate(
+            contract_payload
+        ).model_dump(by_alias=True, mode="json")
+        actual = dict(call_args.kwargs["input_args"])
+        body = actual.pop("pullRequestBody")
+        expected.pop("pullRequestBody")
+        assert actual == expected
+        assert "workflow mm:wf-1, run run-2" in body
+        assert "Original task input was not retained" in body
         assert call_args.kwargs["memo"]["source_workflow_id"] == "mm:wf-1"
         assert call_args.kwargs["memo"]["publication_semantic_context"] == "accepted"
         assert call_args.kwargs["memo"][

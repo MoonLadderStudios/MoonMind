@@ -15,14 +15,19 @@ from unittest.mock import AsyncMock
 import pytest
 
 from api_service.services.container_jobs import ContainerJobService
+from moonmind.config.container_backend_settings import (
+    CACHE_SOURCES_ENV_KEY,
+    resolve_container_backend_settings,
+)
 from moonmind.schemas.container_job_models import (
     ContainerJobActivityRequest,
     ContainerJobSubmitRequest,
     OwnerIdentity,
 )
-from moonmind.security.assessments import content_key
 from moonmind.security.repository_scanner_runner import run_scanner
 from moonmind.security.repository_scanners import RepositoryScan, build_scanner_job
+from moonmind.security.scanner_feeds import publish_snapshot
+from moonmind.workflows.temporal.container_job_attachments import storage_for
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from tests.integration.security import test_recurring_assessments as recurring
 from tests.integration.security.test_recurring_assessments import invoke, put, read
@@ -222,51 +227,34 @@ async def test_repository_job_retains_sanitized_evidence_and_report(
             }
         ]
     db = tmp_path / "database"
-    db.mkdir()
-    (db / "fixture-db.json").write_text('{"CVE-EXAMPLE":"1.0"}')
     if scanner == "trivy":
+        # A refresh job's published snapshot, selected by content identity.
+        stage = db / "staging" / "fixture"
+        (stage / "db").mkdir(parents=True)
+        (db / "snapshots").mkdir()
+        (stage / "db" / "trivy.db").write_text('{"CVE-EXAMPLE":"1.0"}')
+        now = datetime.now(UTC).isoformat()
+        (stage / "db" / "metadata.json").write_text(
+            json.dumps({"Version": 2, "UpdatedAt": now, "DownloadedAt": now})
+        )
+        snapshot, _ = publish_snapshot(
+            db,
+            stage,
+            components=["vulnerability"],
+            acquisition="import",
+            upstreams={"vulnerability": "artifact:art_fixture"},
+            now=datetime.now(UTC),
+        )
         options.update(
-            databaseCacheRef="fixture-db",
-            databaseDigest=content_key(
-                [
-                    [
-                        "fixture-db.json",
-                        hashlib.sha256(
-                            (db / "fixture-db.json").read_bytes()
-                        ).hexdigest(),
-                    ]
-                ]
-            ),
+            databaseCacheRef="fixture-db", databaseDigest=snapshot.snapshot_id
         )
     scan = RepositoryScan(
         scanner=scanner, outputDirectory=f"artifacts/scan-{MARKER}", **options
     )
     install_fixture_process(tmp_path, scanner, monkeypatch)
-    code = run_scanner(
-        scan,
-        source=root,
-        output=root / scan.output_directory,
-        database=db,
-        rules_root=tmp_path / "rules",
-    )
-    assert before == {name: (root / name).read_bytes() for name in before}
-    execution = json.loads(
-        (root / scan.output_directory / "execution.json").read_bytes()
-    )
-    if scanner == "gitleaks":
-        assert (
-            "untracked.txt" in execution["untrackedFiles"]
-            if history != "missing"
-            else not execution["gitMetadata"]
-        )
-        assert execution["shallow"] is True if history == "shallow" else True
-    assert all(
-        MARKER.encode() not in p.read_bytes()
-        for p in (root / scan.output_directory).iterdir()
-    )
 
     # Admit through the production service, then drive the actual worker's
-    # process boundary and artifact ingestion using deterministic native data.
+    # launch, process boundary and artifact ingestion with deterministic data.
     workload = build_scanner_job(scan)
     workload.pop("imageSourceRef")
     workload["image"] = "python:3.13"
@@ -289,6 +277,8 @@ async def test_repository_job_retains_sanitized_evidence_and_report(
         return ref
 
     async def runner(argv):
+        if argv[0] == "inspect":
+            return 1, b"", b"no such container"
         timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         return 0, f"{timestamp} {MARKER}\n".encode(), b""
 
@@ -297,16 +287,53 @@ async def test_repository_job_retains_sanitized_evidence_and_report(
         ownershipToken=f"{accepted.job_id}:v1",
         request=submission,
         resolvedWorkspaceRef=str(root),
-        containerRef="fixture-container",
-        terminalState="succeeded" if code == 0 else "failed",
-        exitCode=code,
+        resolvedImageRef="sha256:" + "a" * 64,
     )
     backend = DockerContainerJobBackend(
         workspace_root=tmp_path,
         command_runner=runner,
         evidence_publisher=publish,
         log_spool_root=tmp_path / "live",
+        # The deployment declares the admitted read-only database cache.
+        settings=resolve_container_backend_settings(
+            {
+                CACHE_SOURCES_ENV_KEY: json.dumps(
+                    [
+                        {
+                            "cacheRef": "fixture-db",
+                            "volumeName": "fixture-db",
+                            "target": "/opt/moonmind-scanner-db",
+                            "readOnly": True,
+                        }
+                    ]
+                )
+            }
+        ),
     )
+    await backend.create_container(request)
+    storage = storage_for(tmp_path, accepted.job_id)
+    output = storage.outputs / scan.output_directory
+    code = run_scanner(
+        scan,
+        source=storage.inputs / "source",
+        output=output,
+        database=db,
+        rules_root=tmp_path / "rules",
+    )
+    assert before == {name: (root / name).read_bytes() for name in before}
+    assert not (root / scan.output_directory).exists()
+    execution = json.loads((output / "execution.json").read_bytes())
+    if scanner == "gitleaks":
+        assert (
+            "untracked.txt" in execution["untrackedFiles"]
+            if history != "missing"
+            else not execution["gitMetadata"]
+        )
+        assert execution["shallow"] is True if history == "shallow" else True
+    assert all(MARKER.encode() not in p.read_bytes() for p in output.iterdir())
+    request.container_ref = "fixture-container"
+    request.terminal_state = "succeeded" if code == 0 else "failed"
+    request.exit_code = code
     cursor = await backend._collect_live_logs(request, request.container_ref)
     assert cursor
     assert any((tmp_path / "live").rglob("*"))
@@ -425,6 +452,9 @@ async def retain_native_fixture(
     key,
     *,
     output_directory="artifacts/scan",
+    scan_options=None,
+    database=None,
+    settings=None,
 ):
     """Replace the detector process only; retain production admission and storage."""
     case = tmp_path / key
@@ -447,14 +477,9 @@ async def retain_native_fixture(
                 "license": "MIT",
             }
         ]
+    options.update(scan_options or {})
     scan = RepositoryScan(scanner=scanner, outputDirectory=output_directory, **options)
     install_fixture_process(case, scanner, monkeypatch, reports=reports)
-    code = run_scanner(
-        scan,
-        source=root,
-        output=root / scan.output_directory,
-        rules_root=case / "rules",
-    )
     workload = build_scanner_job(scan)
     workload.pop("imageSourceRef")
     workload.update(
@@ -478,6 +503,8 @@ async def retain_native_fixture(
         return ref
 
     async def runner(argv):
+        if argv[0] == "inspect":
+            return 1, b"", b"no such container"
         timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         return 0, f"{timestamp} {MARKER}\n".encode(), b""
 
@@ -486,16 +513,31 @@ async def retain_native_fixture(
         ownershipToken=f"{accepted.job_id}:v1",
         request=submission,
         resolvedWorkspaceRef=str(root),
-        containerRef="fixture-container",
-        terminalState="succeeded" if code == 0 else "failed",
-        exitCode=code,
+        resolvedImageRef="sha256:" + "a" * 64,
     )
     backend = DockerContainerJobBackend(
         workspace_root=tmp_path,
         command_runner=runner,
         evidence_publisher=publish,
         log_spool_root=case / "live",
+        **({"settings": settings} if settings else {}),
     )
+    # The production launch captures the source; the fixture scanner then
+    # runs against the paths the container sees as /inputs and /outputs.
+    await backend.create_container(request)
+    storage = storage_for(tmp_path, accepted.job_id)
+    code = run_scanner(
+        scan,
+        source=storage.inputs / "source",
+        output=storage.outputs / scan.output_directory,
+        rules_root=case / "rules",
+        **({"database": database} if database else {}),
+    )
+    # Reports never land in the examined source.
+    assert not (root / scan.output_directory).exists()
+    request.container_ref = "fixture-container"
+    request.terminal_state = "succeeded" if code == 0 else "failed"
+    request.exit_code = code
     await backend._collect_live_logs(request, request.container_ref)
     evidence = await backend.publish_evidence(request)
     assert all(
@@ -520,6 +562,47 @@ async def retain_native_fixture(
     )
     ref = published[f"{accepted.job_id}-output-summary.json"]
     return ref, await read(environment.service, ref)
+
+
+async def test_missing_feed_snapshot_reaches_report_as_incomplete_coverage(
+    environment, tmp_path, monkeypatch
+):
+    feeds = tmp_path / "feeds"
+    (feeds / "snapshots").mkdir(parents=True)
+    _, summary = await retain_native_fixture(
+        environment,
+        tmp_path,
+        monkeypatch,
+        "trivy",
+        {"scan": native("trivy")},
+        "issue-5041-absent-feed",
+        scan_options={
+            "trivyScanners": ["vuln", "misconfig"],
+            "databaseCacheRef": "fixture-db",
+            "databaseDigest": "e" * 64,
+        },
+        database=feeds,
+        settings=resolve_container_backend_settings(
+            {
+                CACHE_SOURCES_ENV_KEY: json.dumps(
+                    [
+                        {
+                            "cacheRef": "fixture-db",
+                            "volumeName": "scanner-feeds",
+                            "target": "/opt/moonmind-scanner-db",
+                            "readOnly": True,
+                        }
+                    ]
+                )
+            }
+        ),
+    )
+    assert summary["coverage"] == "partial"
+    assert "feed_snapshot_unavailable" in summary["limitations"]
+    # The runner's own record survives; missing data is never a clean result.
+    assert "missing_or_invalid_execution_evidence" not in summary["limitations"]
+    assert summary["execution"]["databaseDigest"] is None
+    assert all(not row["findings"] for row in summary["results"].values())
 
 
 def retained_assessment(ref, assets):

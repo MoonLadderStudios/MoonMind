@@ -239,9 +239,17 @@ def test_hermetic_job_reserves_bounded_setup_execution_and_reporting() -> None:
     assert proxy_step["if"] == "matrix.suite == 'hermetic'"
     proxy_minutes = int(proxy_step["timeout-minutes"])
     assert 0 < proxy_minutes <= 5
+    scoped_step = next(
+        step
+        for step in job["steps"][:run_index]
+        if step["name"] == "Verify real scoped egress connections and owned cleanup"
+    )
+    assert scoped_step["if"] == "matrix.suite == 'hermetic'"
+    scoped_minutes = int(scoped_step["timeout-minutes"])
+    assert 0 < scoped_minutes <= 5
     setup_minutes = 0
     for step in job["steps"][:run_index]:
-        if step is proxy_step:
+        if step is proxy_step or step is scoped_step:
             continue
         # Every setup phase must finish or time out before it can consume
         # the wrapper's cleanup and evidence-upload reserve.
@@ -273,7 +281,12 @@ def test_hermetic_job_reserves_bounded_setup_execution_and_reporting() -> None:
     # Include one minute for runner dispatch and post-action housekeeping;
     # the wrapper's complete cleanup budget is already inside its native step.
     assert (
-        setup_minutes + proxy_minutes + execution_minutes + reporting_minutes + 1
+        setup_minutes
+        + proxy_minutes
+        + scoped_minutes
+        + execution_minutes
+        + reporting_minutes
+        + 1
         <= _integration_row_timeout_minutes(job["timeout-minutes"], "hermetic")
     )
 
@@ -303,7 +316,7 @@ def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
             "controller-journey",
         )
     } == {
-        "hermetic": 55,
+        "hermetic": 60,
         "fresh-journey": 85,
         "upgrade-journey": 85,
         "controller-journey": 85,

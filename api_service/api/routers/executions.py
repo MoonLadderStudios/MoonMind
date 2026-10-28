@@ -227,6 +227,7 @@ from moonmind.schemas.temporal_models import (
     normalize_dependency_ids,
 )
 from moonmind.security.operator_admission import OperatorAdmission
+from moonmind.security.workload_profiles import AdmittedAssessmentScope
 from moonmind.services.control_stop_continuation import admit_control_stop_continuation
 from moonmind.services.skill_step_inputs import validate_skill_step_inputs
 from moonmind.statuses.compat import (
@@ -8086,6 +8087,38 @@ def _invalid_workflow_request(message: str) -> HTTPException:
     )
 
 
+def _admitted_assessment_scope_parameter(
+    value: Any,
+    *,
+    principal: ExecutionPrincipal | None,
+) -> dict[str, Any] | None:
+    """Validate the operator's assessment scope before it becomes run authority."""
+
+    if value is None:
+        return None
+    # Workflow and fan-out callers act inside a run's authority; only the
+    # operator admits an assessment, and a scoped run cannot fan out.
+    if principal is not None and principal.is_workflow_principal:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "assessment_scope_denied",
+                "message": "Only the operator can admit an assessment scope.",
+            },
+        )
+    try:
+        scope = AdmittedAssessmentScope.model_validate(value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_assessment_scope",
+                "message": "assessmentScope is not a valid admitted assessment scope.",
+            },
+        ) from exc
+    return scope.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
 def _validate_runtime_tier_intent_for_submit(
     runtime_payload: Mapping[str, Any] | None,
     *,
@@ -11543,6 +11576,13 @@ async def _create_execution_from_workflow_request(
             run_id_header=(principal_context or {}).get("run_id_header"),
             agent_run_id_header=(principal_context or {}).get("agent_run_id_header"),
         )
+    # Checked before any schedule or execution exists; a recurring definition
+    # stores this payload, so it keeps the normalized scope too.
+    assessment_scope = _admitted_assessment_scope_parameter(
+        payload.pop("assessmentScope", None), principal=principal
+    )
+    if assessment_scope is not None:
+        payload["assessmentScope"] = assessment_scope
     # The canonical identity is deterministic in the request ID. An idempotent
     # retry returns the already-admitted execution before inheritance, preset
     # expansion, Provider Profile loading, or the current runtime default can
@@ -12168,6 +12208,8 @@ async def _create_execution_from_workflow_request(
         initial_parameters["batchTarget"] = dict(payload["batchTarget"])
     if isinstance(payload.get("batchTargets"), list):
         initial_parameters["batchTargets"] = list(payload["batchTargets"])
+    if assessment_scope is not None:
+        initial_parameters["assessmentScope"] = assessment_scope
     # Built-in vector retrieval authoring retired (#4105): explicit `rag` /
     # `followUpRetrieval` requirements fail before scheduling with an
     # actionable validation result. Absent/empty/disabled values are stripped
@@ -14977,6 +15019,11 @@ async def create_execution(
             )
 
         request = CreateExecutionRequest.model_validate(payload)
+        # Rejected before a recurring definition or execution can store it.
+        assessment_scope = _admitted_assessment_scope_parameter(
+            request.initial_parameters.get("assessmentScope"),
+            principal=(principal_context or {}).get("verified_principal"),
+        )
 
         # --- Schedule routing ---
         route = await _resolve_schedule_routing(
@@ -15005,6 +15052,8 @@ async def create_execution(
             else None
         )
         initial_parameters = dict(request.initial_parameters)
+        if assessment_scope is not None:
+            initial_parameters["assessmentScope"] = assessment_scope
         # Preserve every authored runtime before canonicalization. The resolved
         # request below supplies its saved fallback to the existing raw guard.
         selects_omnigent = (
@@ -20417,6 +20466,87 @@ def _saved_work_publication_error(
     )
 
 
+async def _publication_recovery_review_body(
+    *,
+    artifact_service: Any,
+    principal: str,
+    source_workflow_id: str,
+    source_run_id: str,
+    body: str,
+    task_input_ref: str | None,
+    task_input_digest: str | None = None,
+) -> str:
+    """Freeze source task context in the existing publication decision.
+
+    Saved-work callers use the manifest's source attempt, never today's mutable
+    execution parameters or another run's memo. Raw-read policy remains owned
+    by the artifact service; recovery grants no extra access to task contents.
+    """
+    from moonmind.publish.sanitization import (
+        append_publication_task,
+        publication_task_instructions,
+    )
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactValidationError
+    from moonmind.workflows.executions.execution_contract import (
+        original_task_snapshot_parameters,
+    )
+
+    source = f"workflow {source_workflow_id}, run {source_run_id}"
+    if not task_input_ref:
+        provenance = (
+            "\n\nTask provenance: "
+            + redact_sensitive_text(source)
+            + (
+                ". Original task input was not retained for this capture; "
+                "its scope is not reconstructed from later remediation parameters."
+            )
+        )
+        return body if body.endswith(provenance) else body.rstrip() + provenance
+    artifact_id = _artifact_id_from_ref(task_input_ref)
+    if not artifact_id:
+        raise _saved_work_publication_error(
+            409,
+            "publication_task_input_unavailable",
+            "Original task input reference is invalid.",
+        )
+    try:
+        _artifact, raw = await artifact_service.read(
+            artifact_id=artifact_id, principal=principal
+        )
+        if (
+            task_input_digest
+            and "sha256:" + hashlib.sha256(raw).hexdigest() != task_input_digest
+        ):
+            raise ValueError("Original task digest mismatch")
+        snapshot = json.loads(raw)
+        if not isinstance(snapshot, Mapping):
+            raise ValueError("Unsupported original task input")
+        task = original_task_snapshot_parameters(snapshot).get("workflow")
+        if not isinstance(task, Mapping):
+            raise ValueError("Original task input is malformed")
+    except (TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError):
+        raise
+    except (
+        TemporalArtifactNotFoundError,
+        TemporalArtifactAuthorizationError,
+        TemporalArtifactStateError,
+        TemporalArtifactValidationError,
+        ValueError,
+        UnicodeDecodeError,
+    ) as exc:
+        raise _saved_work_publication_error(
+            409,
+            "publication_task_input_unavailable",
+            "Original task input could not be verified for publication.",
+        ) from exc
+    instructions = publication_task_instructions(task)
+    if not instructions:
+        instructions = "The original task is expressed by its saved Skill/inputs; consult the immutable task input."
+    return append_publication_task(
+        body, instructions=instructions, source=f"{source}; {task_input_ref}"
+    )
+
+
 def _require_publishable_saved_work_artifact(
     *,
     artifact: Any,
@@ -20537,7 +20667,7 @@ async def _admit_saved_work_publication(
         size_bytes=len(manifest_bytes),
     )
     try:
-        _manifest, publication_objects = parse_saved_work_publication_manifest(
+        manifest, publication_objects = parse_saved_work_publication_manifest(
             manifest_bytes
         )
         for publication_object in publication_objects:
@@ -20576,6 +20706,21 @@ async def _admit_saved_work_publication(
     if created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=UTC)
     default_title = f"Publish saved work from {canonical.workflow_id}"
+    source = manifest.get("source")
+    source = source if isinstance(source, Mapping) else {}
+    body = await _publication_recovery_review_body(
+        artifact_service=artifact_service,
+        principal=principal,
+        source_workflow_id=canonical.workflow_id,
+        source_run_id=source_run_id,
+        body=request.pullRequestBody
+        or (
+            f"Saved work `{saved_work_digest}` from `{canonical.workflow_id}`, "
+            "published without another model run."
+        ),
+        task_input_ref=source.get("taskInputSnapshotRef"),
+        task_input_digest=source.get("taskInputSnapshotDigest"),
+    )
     try:
         return SavedWorkPublicationContract(
             sourceWorkflowId=canonical.workflow_id,
@@ -20597,11 +20742,7 @@ async def _admit_saved_work_publication(
                 if destination.objective == "branch"
                 else request.pullRequestTitle or default_title
             ),
-            pullRequestBody=request.pullRequestBody
-            or (
-                f"Saved work `{saved_work_digest}` from `{canonical.workflow_id}`, "
-                "published without another model run."
-            ),
+            pullRequestBody=body,
             publicationIdempotencyKey=saved_work_publication_operation_key(
                 saved_work_digest=saved_work_digest,
                 destination=destination,
@@ -20753,6 +20894,26 @@ async def retry_execution_publication(
             },
         )
     destination_id = publication_recovery_workflow_id(contract)
+    original_input_ref = _workflow_input_snapshot_ref_from_memo(
+        dict(getattr(canonical, "memo", None) or {})
+    )
+    try:
+        body = await _publication_recovery_review_body(
+            artifact_service=artifact_service() if original_input_ref else None,
+            principal=_execution_principal(user),
+            source_workflow_id=contract.source_workflow_id,
+            source_run_id=contract.source_run_id,
+            body=contract.pull_request_body
+            or f"Publication-only recovery for source workflow {contract.source_workflow_id}.\n\nNo implementation or verification work was rerun.",
+            task_input_ref=original_input_ref,
+        )
+    except (
+        TemporalArtifactUnavailableError,
+        TemporalArtifactStorageAccessError,
+    ) as exc:
+        _raise_temporal_artifact_http(exc)
+        raise
+    contract = contract.model_copy(update={"pull_request_body": body})
     started = await adapter.start_workflow(
         workflow_type="MoonMind.PublicationRecoveryV1",
         workflow_id=destination_id,

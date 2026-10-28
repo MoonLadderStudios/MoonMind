@@ -28,9 +28,17 @@ class ExecutionFanoutCapabilityError(ValueError):
     """Raised when an execution fan-out capability is invalid or expired."""
 
 
+def step_policy_is_assessment_scoped(policy: Any) -> bool:
+    """Whether a step's trusted policy carries an admitted assessment scope."""
+
+    return isinstance(policy, Mapping) and "assessmentScope" in policy
+
+
 def require_execution_fanout_authorization(
     required_capabilities: Sequence[str] | None,
     authorization: Mapping[str, Any] | None,
+    *,
+    assessment_scoped: bool = False,
 ) -> bool:
     """Authorize minting from workflow-owned evidence, with a replay-only gap."""
 
@@ -40,6 +48,12 @@ def require_execution_fanout_authorization(
     }
     if EXECUTION_FANOUT_REQUIRED_CAPABILITY not in required:
         return False
+    # Child runs do not inherit the parent's assessment scope, so a scoped
+    # step's fan-out would start children with unscoped container-job authority.
+    if assessment_scoped:
+        raise ExecutionFanoutCapabilityError(
+            "execution fan-out is not available to an assessment-scoped step"
+        )
     # Already-scheduled activity payloads predate the typed authorization field
     # and retain their former launch semantics. Current workflows always write
     # an explicit authorized/denied decision.
@@ -199,5 +213,6 @@ __all__ = [
     "ExecutionFanoutSourceKind",
     "mint_execution_fanout_capability",
     "require_execution_fanout_authorization",
+    "step_policy_is_assessment_scoped",
     "verify_execution_fanout_capability",
 ]

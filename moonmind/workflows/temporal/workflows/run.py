@@ -121,6 +121,10 @@ with workflow.unsafe.imports_passed_through():
         redact_sensitive_text,
         scrub_github_tokens,
     )
+    from moonmind.publish.sanitization import (
+        append_publication_task,
+        publication_task_instructions,
+    )
     from moonmind.workflows.temporal.jira_agent_skills import (
         JIRA_AGENT_SKILLS,
         JIRA_BACKED_AGENT_SKILLS,
@@ -639,6 +643,7 @@ RUN_ISSUE_EVIDENCE_ELIGIBILITY_PATCH = "run-issue-evidence-eligibility-v1"
 # and the continuation owner's recorded next action; retained histories keep
 # the search-instruction title and generic draft summary they recorded.
 RUN_ISSUE_SOURCE_PUBLICATION_TEXT_PATCH = "run-issue-source-publication-text-v1"
+RUN_PUBLICATION_TASK_SCOPE_PATCH = "run-publication-task-scope-v1"
 _ISSUE_EVIDENCE_NEXT_ACTIONS = {
     "collect-evidence": "collect CI evidence for the same pull request head",
     "evidence-budget-exhausted": (
@@ -1496,6 +1501,9 @@ RUN_NATIVE_REPOSITORY_PLAN_VALIDATION_PATCH = "run-native-repository-plan-valida
 RUN_CONTAINER_JOB_DERIVED_IDEMPOTENCY_KEY_PATCH = (
     "run-container-job-derived-idempotency-key-v1"
 )
+# Operator-admitted assessment scope reaches only the trusted step policy that
+# launch boundaries sign into container-job capabilities.
+RUN_ASSESSMENT_SCOPE_AUTHORITY_PATCH = "run-assessment-scope-authority-v1"
 # Tool steps receive the run's runtime selection so issue search can check
 # provider capacity before claiming work. Replay-gated so histories that
 # recorded the old tool Activity arguments keep replaying them.
@@ -18416,6 +18424,22 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             or summary
             or "Automated changes by MoonMind."
         )
+        if self._patched_or_false_outside_workflow(RUN_PUBLICATION_TASK_SCOPE_PATCH):
+            if source_issue:
+                context = self._trusted_issue_context or {}
+                issue = context.get("issue")
+                issue = issue if isinstance(issue, Mapping) else {}
+                instructions = self._coerce_text(
+                    issue.get("body") or context.get("body"), flatten=False
+                )
+                source = source_issue["url"] or source_issue["ref"]
+            else:
+                instructions = publication_task_instructions(task_payload)
+                source = ""
+            if instructions:
+                body = append_publication_task(
+                    body, instructions=instructions, source=source
+                )
         unverified = self._moonspec_unverified_body_section()
         if unverified and self._patched_or_false_outside_workflow(RUN_UNVERIFIED_PR_COMMENT_PATCH):
             gate = self._publish_context["moonSpecGate"]
@@ -23646,6 +23670,26 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             if resolved_skillset_ref:
                 fanout_authorization["resolvedSkillsetRef"] = resolved_skillset_ref
             skill_source_policy["executionFanout"] = fanout_authorization
+        assessment_scope = (
+            workflow_parameters.get("assessmentScope")
+            if isinstance(workflow_parameters, Mapping)
+            else None
+        )
+        if assessment_scope is not None and self._workflow_patch_enabled(
+            RUN_ASSESSMENT_SCOPE_AUTHORITY_PATCH
+        ):
+            # Run parameters are the operator's admission; step inputs, Skills
+            # and model output cannot set or widen this scope.
+            skill_source_policy["assessmentScope"] = self._json_value(
+                assessment_scope, path="assessmentScope"
+            )
+            # Child runs do not inherit the scope, so fan-out would escape it.
+            skill_source_policy["executionFanout"] = {
+                "authorized": False,
+                "selectedSkill": str(selected_skill or "").strip().lower(),
+                "sourceKind": "assessment_scope",
+                "reasonCode": "assessment_scope_restricts_fanout",
+            }
         execution_ordinal = step_execution or 1
         context_workspace = self._step_execution_workspace(
             node_id,

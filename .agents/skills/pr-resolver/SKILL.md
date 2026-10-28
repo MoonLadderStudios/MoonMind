@@ -87,6 +87,14 @@ You are the master orchestrator for finishing Pull Requests. Use bounded retries
 
 The task is not complete until the target PR is merged or is proven already merged. A local fix, local commit, passing local test run, unresolved review reply, or unpushed branch is not a successful PR resolution.
 
+Before remediation and after conflict resolution, assess the snapshot's current
+PR body and `candidateChanges` against the admitted task. Inspect deleted tests,
+workflow/configuration changes, and base advances alongside the implementation;
+use the repository diff where patches or inventory are incomplete. A failing
+assertion can expose a lost supported outcome. Fix that loss through the normal
+review flow unless retiring or replacing it is authorized by the task. Legitimate
+cleanup, renames, replacements and evidence-backed no-code completion remain valid.
+
 The finalize helper's `phase: intermediate` receipt requests continuation of
 this Skill. It is never a terminal `manual_review` result. Resume the specified
 remediation using the same PR, saved snapshot, and cumulative budgets. Every
@@ -123,7 +131,7 @@ check. Under `finishMode=merge` the same state is a durable
 - inputs.finalizeMaxRetries (default 60)
 - inputs.finalizeBackoffSeconds (default 30)
 - inputs.finalizeMaxSleepSeconds (default 120)
-- inputs.finalizeMaxElapsedSeconds (default 7200)
+- inputs.finalizeMaxElapsedSeconds (default 10800; limits new remediation, see step 5)
 - Retryable/no-progress blockers use at least 5 finalize attempts before
   returning `attempts_exhausted`, unless a hard timeout, hard failure, or
   non-retryable blocker is reached first.
@@ -341,6 +349,11 @@ metadata flag.
 5. Enforce `maxIterations`, `finalizeMaxRetries`, and
    `finalizeMaxElapsedSeconds`. Retryable/no-progress states receive at least five
    finalize checks unless the elapsed-time limit or a hard failure is reached.
+   The elapsed limit stops new remediation, not observation of running CI: past
+   it, keep checking while the gate reports `ci_running` or `ci_infra_transient`
+   (CI it just reran; still bounded by `finalizeMaxRetries`), and merge if it opens. Slow CI can outlast the limit
+   on its own, and abandoning a pushed fix mid-run wastes it. Any other blocker
+   past the limit returns `attempts_exhausted` with reason `timeout`.
 6. Before reporting success, generate `artifacts/publish_result.json` from the
    final resolver result with the shared publish-evidence helper.
 

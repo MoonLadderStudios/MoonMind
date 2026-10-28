@@ -2453,6 +2453,19 @@ def _container_job_evidence_publisher(artifact_service: TemporalArtifactService)
     return publish
 
 
+def _container_job_artifact_reader(artifact_service: TemporalArtifactService):
+    async def read(request, artifact_id: str) -> bytes:
+        # Inputs are read with the job owner's own artifact authority, the
+        # same principal admission checked and evidence is published under.
+        principal = f"{request.owner.principal_type}:{request.owner.principal_id}"
+        _artifact, payload = await artifact_service.read(
+            artifact_id=artifact_id, principal=principal
+        )
+        return payload
+
+    return read
+
+
 def _container_job_projection_writer(backend_kind: str, backend_ref: str):
     """Build a projection writer bound to the deployment-selected backend."""
 
@@ -2542,16 +2555,36 @@ def _container_job_projection_writer(backend_kind: str, backend_ref: str):
 
 
 def _container_job_secret_resolver():
-    """Materialize an execution-time secret reference to plaintext.
+    """Resolve one admitted workload credential reference to plaintext.
 
-    Plaintext is returned only for injection into the container launch
-    environment and is never persisted or rendered into diagnostics/evidence.
+    A pinned managed-secret revision is enforced by the same authoritative
+    read, so a rotated or revoked secret fails closed. Plaintext goes only to
+    job-owned delivery and is never persisted or rendered into evidence.
     """
 
+    from moonmind.auth.secret_refs import (
+        SecretBackend,
+        SecretMissingError,
+        parse_secret_ref,
+    )
     from moonmind.workflows.adapters.secret_boundary import DatabaseSecretResolver
 
-    async def _resolve(secret_ref: str) -> str:
+    async def _resolve(secret_ref: str, credential_revision: int | None) -> str:
+        parsed = parse_secret_ref(secret_ref)
         async with get_async_session_context() as session:
+            if credential_revision is not None:
+                if parsed.backend != SecretBackend.DB_ENCRYPTED:
+                    raise SecretMissingError("only managed secrets carry revisions")
+                from api_service.services.secrets import SecretsService
+
+                value = await SecretsService.get_secret(
+                    session,
+                    parsed.locator,
+                    expected_credential_revision=credential_revision,
+                )
+                if value is None:
+                    raise SecretMissingError("admitted secret revision is not active")
+                return str(value)
             resolved = await DatabaseSecretResolver(session).resolve_secrets(
                 {"value": secret_ref}
             )
@@ -2890,6 +2923,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 backend_ref=container_backend_settings.default_backend_ref,
                 docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),
                 evidence_publisher=_container_job_evidence_publisher(artifact_service),
+                artifact_reader=_container_job_artifact_reader(artifact_service),
                 projection_writer=_container_job_projection_writer(
                     container_backend_settings.kind,
                     container_backend_settings.default_backend_ref,
