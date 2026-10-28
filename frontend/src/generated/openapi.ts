@@ -6398,6 +6398,53 @@ export interface components {
             version?: number | null;
         };
         /**
+         * CloudAssessment
+         * @description One read-only Prowler posture assessment of one admitted cloud account.
+         *
+         *     The job selects its regions and either explicit checks or services; it
+         *     never names remediation, export or notification options. The account's
+         *     credential is a ``cloud_inventory`` grant exchanged for a read-only
+         *     session, so one session must cover the whole budget.
+         */
+        CloudAssessment: {
+            /** Provider */
+            provider: string;
+            /** Assessmentref */
+            assessmentRef: string;
+            /** Account */
+            account: string;
+            /** Credentialref */
+            credentialRef: string;
+            /** Regions */
+            regions: string[];
+            /** Checks */
+            checks?: string[];
+            /** Services */
+            services?: string[];
+            /** Egresspolicyref */
+            egressPolicyRef: string;
+            /**
+             * Maxretryattempts
+             * @default 3
+             */
+            maxRetryAttempts: number;
+            /**
+             * Outputdirectory
+             * @default cloud-assessment
+             */
+            outputDirectory: string;
+            /**
+             * Maxreportbytes
+             * @default 8388608
+             */
+            maxReportBytes: number;
+            /**
+             * Timeoutseconds
+             * @default 1800
+             */
+            timeoutSeconds: number;
+        };
+        /**
          * CodexAuthVolumeStatus
          * @description Health states for persisted Codex authentication volumes.
          * @enum {string}
@@ -6712,6 +6759,7 @@ export interface components {
             feedRefresh?: components["schemas"]["FeedRefresh"] | null;
             imageAssessment?: components["schemas"]["ImageAssessment"] | null;
             webAssessment?: components["schemas"]["WebAssessment"] | null;
+            cloudAssessment?: components["schemas"]["CloudAssessment"] | null;
             workloadProfile?: components["schemas"]["WorkloadProfileSelection"] | null;
             /** Image */
             image?: string | null;
