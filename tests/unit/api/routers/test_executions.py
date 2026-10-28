@@ -9756,6 +9756,7 @@ def test_create_task_shaped_execution_forwards_operator_assessment_scope(
         **_ASSESSMENT_SCOPE,
         "configurationExceptions": [],
         "networkRefs": [],
+        "grants": [],
     }
 
 
