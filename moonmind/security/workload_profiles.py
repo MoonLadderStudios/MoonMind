@@ -655,8 +655,7 @@ def web_assessment_within_scope(spec, scope: AdmittedAssessmentScope) -> None:
         # The job must exclude at least what the scope excludes below it.
         for excluded in target.web_exclusions:
             if (
-                route_within(excluded, route.path)
-                or route_within(route.path, excluded)
+                route_within(excluded, route.path) or route_within(route.path, excluded)
             ) and not any(route_within(excluded, e) for e in web.exclusions):
                 raise PermissionError("web assessment omits an admitted exclusion")
     api = web.api_definition

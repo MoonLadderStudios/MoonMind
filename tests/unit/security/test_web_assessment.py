@@ -214,12 +214,21 @@ def test_job_runs_the_deployment_zap_image_through_scoped_egress():
     assert job.command[-2:] == ["/outputs/web-assessment", "-"]
     assert "zap.sh -cmd -autorun" in job.command[1]
     (attachment,) = job.input_attachments
-    assert (attachment.name, attachment.artifact_ref) == ("api-definition", "art_openapi")
+    assert (attachment.name, attachment.artifact_ref) == (
+        "api-definition",
+        "art_openapi",
+    )
     assert [o.relative_path for o in job.outputs] == [
         "web-assessment/report.json",
         "web-assessment/messages.har",
-        "web-assessment/passive-report.json",
-        "web-assessment/passive-messages.har",
+    ]
+    # Only active mode has a separate passive phase to keep.
+    active = build_web_assessment_job(web(mode="active", activeStrength="low"))
+    assert [o["name"] for o in active["outputs"]] == [
+        "report",
+        "messages",
+        "passive-report",
+        "passive-messages",
     ]
     # Secrets never travel in argv: the bearer argument names only the site.
     bearer = web(
@@ -515,9 +524,7 @@ def _activity(job: ContainerJobSpec, decisions) -> ContainerJobActivityRequest:
             spec=job.model_dump(by_alias=True, exclude_none=True),
         ),
         workloadCredentials=tuple(
-            WorkloadCredentialAuthorization.model_validate(
-                {**item, "jobId": job_id}
-            )
+            WorkloadCredentialAuthorization.model_validate({**item, "jobId": job_id})
             for item in decisions
         )
         or None,
@@ -557,9 +564,14 @@ def test_api_definition_must_describe_only_admitted_routes():
     api = web(mode="api", apiDefinition=OPENAPI)
     get = {"get": {"responses": {}}}
     check_api_definition(api, _openapi([{"url": "/"}], {"/api/items": get}))
-    check_api_definition(api, _openapi([{"url": ORIGIN + "/api"}], {"/items/{id}": get}))
+    check_api_definition(
+        api, _openapi([{"url": ORIGIN + "/api"}], {"/items/{id}": get})
+    )
     for body, code in (
-        (_openapi([{"url": "http://other.example.test"}], {"/api": get}), "out_of_scope"),
+        (
+            _openapi([{"url": "http://other.example.test"}], {"/api": get}),
+            "out_of_scope",
+        ),
         (_openapi([{"url": "/"}], {"/search": {"post": {}}}), "out_of_scope"),
         (_openapi([{"url": "/"}], {"/api": {"delete": {}}}), "out_of_scope"),
         (_openapi([{"url": "/"}], {"/logout": get}), "out_of_scope"),
@@ -636,9 +648,11 @@ def entry(path, status=200, *, method="GET", origin=ORIGIN, text="", headers=())
             ],
             "cookies": [{"name": "sid", "value": SECRET}],
             "postData": (
-                {"mimeType": "application/x-www-form-urlencoded",
-                 "text": f"username=alice&password={SECRET}",
-                 "params": [{"name": "password", "value": SECRET}]}
+                {
+                    "mimeType": "application/x-www-form-urlencoded",
+                    "text": f"username=alice&password={SECRET}",
+                    "params": [{"name": "password", "value": SECRET}],
+                }
                 if method == "POST"
                 else {"mimeType": "", "text": ""}
             ),
@@ -660,11 +674,13 @@ EVERY_ROUTE = (entry("/"), entry("/login"), entry("/api/items"))
 
 def summarize(assessment, *, exit_code=0, terminal="succeeded", **files):
     files = {
-        key: (sanitize_report if "report" in key else sanitize_messages)(
-            value, [SECRET], LIMIT
+        key: (
+            (sanitize_report if "report" in key else sanitize_messages)(
+                value, [SECRET], LIMIT
+            )
+            if value is not None
+            else None
         )
-        if value is not None
-        else None
         for key, value in files.items()
     }
     return summarize_web_assessment(
@@ -703,6 +719,7 @@ def test_complete_baseline_attributes_findings_and_redacts_secrets():
         messages=har(*EVERY_ROUTE),
     )
     assert summary.status == "complete" and summary.limitations == []
+    assert summary.execution.version == "2.17.0"
     assert summary.coverage.tested_routes == ["GET /", "GET /api/items", "GET /login"]
     assert summary.coverage.passive_checks and not summary.coverage.active_checks
     first = summary.findings[0]
@@ -759,7 +776,9 @@ def test_denied_redirects_and_unreachable_routes_cannot_report_clean():
     assert "redirect GET /away -> http://outside.example.test/" in (
         summary.coverage.denied_requests
     )
-    assert "off-origin GET http://outside.example.test" in summary.coverage.denied_requests
+    assert (
+        "off-origin GET http://outside.example.test" in summary.coverage.denied_requests
+    )
     assert summary.coverage.unreachable_routes == ["GET /gone"]
 
 
@@ -800,7 +819,10 @@ def test_plan_errors_warnings_and_early_stops_are_partial():
     for extra, limitation in (
         ({"afPlanErrors": ["spider failed"]}, "zap_plan_errors"),
         ({"afPlanWarns": ["no urls"]}, "zap_plan_warnings"),
-        ({"stoppingInsight": {"key": "insight.auth.failure"}}, "zap_stopped:insight.auth.failure"),
+        (
+            {"stoppingInsight": {"key": "insight.auth.failure"}},
+            "zap_stopped:insight.auth.failure",
+        ),
     ):
         summary = summarize(web(), report=report(**extra), messages=har(*EVERY_ROUTE))
         assert limitation in summary.limitations and summary.status == "partial"
@@ -850,7 +872,9 @@ def _identity_run(*responses, identity=FORM, challenge=None):
         for status, text, headers in responses
     ]
     if challenge:
-        verify.append(entry("/api/items", 401, headers=[("WWW-Authenticate", challenge)]))
+        verify.append(
+            entry("/api/items", 401, headers=[("WWW-Authenticate", challenge)])
+        )
     return summarize(
         web(identity=identity),
         report=report(),
@@ -894,3 +918,16 @@ def test_unsupported_login_challenges_and_inaccessible_routes_are_explicit():
     assert {"authentication_unsupported", "routes_inaccessible"} <= set(
         summary.limitations
     )
+
+
+def test_unsent_site_tree_nodes_are_not_unreachable_or_failed_logins():
+    # ZAP exports folder nodes and unsent placeholders with status 0.
+    summary = _identity_run(ANON, SIGNED_IN, SIGNED_IN, (0, "", []))
+    assert summary.coverage.authentication.status == "verified"
+    folder = summarize(
+        web(),
+        report=report(),
+        messages=har(*EVERY_ROUTE, entry("/api", 0), entry("/api/items/7", 200)),
+    )
+    assert folder.coverage.unreachable_routes == []
+    assert folder.status == "complete"

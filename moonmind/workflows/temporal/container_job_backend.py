@@ -4474,7 +4474,9 @@ class DockerContainerJobBackend:
                     )
                 )
                 continue
-            sanitize = sanitize_report if relative.endswith(".json") else sanitize_messages
+            sanitize = (
+                sanitize_report if relative.endswith(".json") else sanitize_messages
+            )
             try:
                 safe[name] = sanitize(payload, secrets, limit)
             except WebEvidenceError as exc:

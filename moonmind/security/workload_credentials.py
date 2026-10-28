@@ -140,7 +140,9 @@ def _authorize_web_identity(spec, scope, *, principal: str, now: datetime):
         raise PermissionError("workload credentials require an admitted assessment")
     grants = [g for g in scope.grants if g.ref == identity.credential_ref]
     if not grants:
-        raise PermissionError("credential reference is not admitted for this assessment")
+        raise PermissionError(
+            "credential reference is not admitted for this assessment"
+        )
     grants = [g for g in grants if g.purpose == "application_auth"]
     if not grants:
         raise PermissionError("credential reference is not admitted for this purpose")

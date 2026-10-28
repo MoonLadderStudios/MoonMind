@@ -11,6 +11,7 @@ identity's secret as a read-only file, so neither the plan nor argv holds it.
 from __future__ import annotations
 
 import json
+import re
 from typing import Literal, Sequence
 from urllib.parse import urljoin, urlsplit
 
@@ -153,7 +154,9 @@ def build_web_assessment_plan(assessment: WebAssessment) -> dict:
         # Anonymous first, then as the identity: authentication is checked
         # against the verification route rather than assumed.
         verify = [{"url": origin + identity.verification_path, "method": "GET"}]
-        jobs.append({"type": "requestor", "name": "verify-anonymous", "requests": verify})
+        jobs.append(
+            {"type": "requestor", "name": "verify-anonymous", "requests": verify}
+        )
         jobs.append(
             {
                 "type": "requestor",
@@ -380,7 +383,10 @@ def validate_web_assessment_job(spec) -> None:
     ):
         if getattr(spec, field) != expected:
             raise ValueError("web assessment workload differs from its admission")
-    for field, key in (("input_attachments", "inputAttachments"), ("outputs", "outputs")):
+    for field, key in (
+        ("input_attachments", "inputAttachments"),
+        ("outputs", "outputs"),
+    ):
         items = getattr(spec, field)
         model = type(items[0]) if items else None
         actual = [v.model_dump(by_alias=True) for v in items]
@@ -405,9 +411,7 @@ def web_policy_admits(policy, assessment: WebAssessment) -> bool:
     the application is the scope's action class, checked separately.
     """
     scheme, host, port = origin_endpoint(assessment)
-    return all(
-        d.purpose == "live-target" for d in policy.destinations
-    ) and any(
+    return all(d.purpose == "live-target" for d in policy.destinations) and any(
         (d.host, d.port, d.protocol) == (host, port, scheme)
         for d in policy.destinations
     )
@@ -565,7 +569,7 @@ def _load(body: bytes | None, kind: str):
     return value
 
 
-def _alerts(report: dict | None, origin: str) -> list[tuple[dict, dict]]:
+def _alerts(report: dict | None) -> list[tuple[dict, dict]]:
     if report is None:
         return []
     sites = report.get("site")
@@ -712,9 +716,14 @@ def summarize_web_assessment(
         limits.append("final_report_unavailable")
     if final_messages is None:
         limits.append("messages_unavailable")
+    native_version = (final_report or early_report or {}).get("@version")
+    if isinstance(native_version, str) and re.fullmatch(
+        r"[0-9][0-9A-Za-z.+-]{0,63}", native_version
+    ):
+        execution = execution.model_copy(update={"version": native_version})
     try:
-        final_alerts = _alerts(final_report, a.origin)
-        early_alerts = _alerts(early_report, a.origin)
+        final_alerts = _alerts(final_report)
+        early_alerts = _alerts(early_report)
     except WebEvidenceError as exc:
         limits.append(str(exc))
         final_alerts, early_alerts = [], []
@@ -732,7 +741,9 @@ def summarize_web_assessment(
         if isinstance(stopped, dict):
             stopped_early = True
             # ZAP ended the plan early, for example on authentication failures.
-            limits.append(f"zap_stopped:{_bounded(stopped.get('key'), 64) or 'unknown'}")
+            limits.append(
+                f"zap_stopped:{_bounded(stopped.get('key'), 64) or 'unknown'}"
+            )
     try:
         # The passive export holds every exchanged message, including the
         # anonymous and identity verification requests, in order.
@@ -776,6 +787,17 @@ def summarize_web_assessment(
                 denied.add(f"redirect {route} -> {target_origin}{target_path}")
             else:
                 discovered.add(f"GET {target_path}")
+    # ZAP also exports unsent site-tree nodes, such as folders above crawled
+    # pages; only a route with no answer at or below it is unreachable.
+    unreachable = {
+        route
+        for route in unreachable
+        if not any(
+            t.split(" ", 1)[0] == route.split(" ", 1)[0]
+            and route_within(t.split(" ", 1)[1], route.split(" ", 1)[1])
+            for t in tested
+        )
+    }
     if denied:
         limits.append("out_of_scope_requests_denied")
     if unreachable:
@@ -797,12 +819,16 @@ def summarize_web_assessment(
         try:
             # The first export holds the verification requests before any
             # attack traffic, in the order they were sent.
-            exchanged = _entries(early_messages if a.mode == "active" else final_messages)
+            exchanged = _entries(
+                early_messages if a.mode == "active" else final_messages
+            )
         except WebEvidenceError:
             exchanged = []
+        # Unsent site-tree nodes carry no response and prove nothing.
         verify_responses = [
             e.get("response") or {}
             for e in exchanged
+            if (e.get("response") or {}).get("status")
             if _split(str((e.get("request") or {}).get("url", "")))
             == (a.origin, identity.verification_path)
             and str((e.get("request") or {}).get("method", "GET")).upper() == "GET"
@@ -822,7 +848,12 @@ def summarize_web_assessment(
     alerts = early_alerts + [
         (alert, inst)
         for alert, inst in final_alerts
-        if (alert.get("pluginid"), inst.get("uri"), inst.get("method"), inst.get("param"))
+        if (
+            alert.get("pluginid"),
+            inst.get("uri"),
+            inst.get("method"),
+            inst.get("param"),
+        )
         not in passive_keys
     ]
     for index, (alert, inst) in enumerate(alerts):
@@ -832,8 +863,15 @@ def summarize_web_assessment(
             denied.add(f"finding outside scope {method} {origin}{path}")
             continue
         rule = str(alert.get("pluginid") or alert.get("alertRef") or "unknown")
-        key = (alert.get("pluginid"), inst.get("uri"), inst.get("method"), inst.get("param"))
-        phase = "active" if a.mode == "active" and key not in passive_keys else "passive"
+        key = (
+            alert.get("pluginid"),
+            inst.get("uri"),
+            inst.get("method"),
+            inst.get("param"),
+        )
+        phase = (
+            "active" if a.mode == "active" and key not in passive_keys else "passive"
+        )
         row = Finding(
             source="web",
             tool="zap",
@@ -958,3 +996,62 @@ def _authentication(identity, responses: list[dict], challenges: set[str]):
     if not all(answered(r) for r in rest[first + 1 :]):
         return result("failed", "session expired during the assessment", compared)
     return result("verified", None, compared)
+
+
+_HTTP_METHODS = ("get", "head", "post", "put", "patch", "delete", "options")
+
+
+def check_api_definition(assessment: WebAssessment, body: bytes) -> None:
+    """An authorized definition may only describe admitted routes.
+
+    Checked by the worker against the captured copy before ZAP imports it, so
+    a definition naming another server, path or method cannot widen the job.
+    """
+    api = assessment.api_definition
+    if api is None:
+        return
+    if len(body) > api.max_bytes:
+        raise WebEvidenceError("api_definition_exceeds_bound")
+    if api.format == "graphql":
+        try:
+            body.decode()
+        except UnicodeDecodeError as exc:
+            raise WebEvidenceError("api_definition_malformed") from exc
+        return
+    document = _load(body, "api_definition")
+    if "swagger" in document:
+        host = document.get("host")
+        schemes = document.get("schemes") or [urlsplit(assessment.origin).scheme]
+        if host is not None and any(
+            f"{scheme}://{host}".lower() != assessment.origin for scheme in schemes
+        ):
+            raise WebEvidenceError("api_definition_out_of_scope")
+        bases = [document.get("basePath") or "/"]
+    else:
+        servers = document.get("servers") or [{"url": "/"}]
+        if not isinstance(servers, list):
+            raise WebEvidenceError("api_definition_malformed")
+        bases = []
+        for server in servers:
+            url = str(server.get("url", "")) if isinstance(server, dict) else ""
+            if "{" in url:
+                raise WebEvidenceError("api_definition_out_of_scope")
+            origin, path = _split(urljoin(assessment.origin + "/", url))
+            if origin != assessment.origin:
+                raise WebEvidenceError("api_definition_out_of_scope")
+            bases.append(path)
+    paths = document.get("paths")
+    if not isinstance(paths, dict) or not paths:
+        raise WebEvidenceError("api_definition_malformed")
+    for base in bases:
+        for path, operations in paths.items():
+            if not isinstance(path, str) or not isinstance(operations, dict):
+                raise WebEvidenceError("api_definition_malformed")
+            # Templated segments stand for any value, so test the fixed prefix.
+            full = (base.rstrip("/") + "/" + path.lstrip("/")).split("{", 1)[0]
+            full = full.rstrip("/") or "/"
+            for method in _HTTP_METHODS:
+                if method in operations and not path_admitted(
+                    assessment, full, method.upper()
+                ):
+                    raise WebEvidenceError("api_definition_out_of_scope")

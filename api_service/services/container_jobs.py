@@ -243,15 +243,15 @@ class ContainerJobRepository:
     async def count_assessment_jobs(
         self, *, owner: OwnerIdentity, assessment_ref: str
     ) -> int:
-        assessment = ContainerJobRecord.request_json["spec"]["workloadProfile"][
-            "assessmentRef"
-        ].as_string()
+        spec = ContainerJobRecord.request_json["spec"]
+        profile = spec["workloadProfile"]["assessmentRef"].as_string()
+        web = spec["webAssessment"]["assessmentRef"].as_string()
         return int(
             await self._session.scalar(
                 select(func.count()).where(
                     ContainerJobRecord.owner_id == owner.principal_id,
                     ContainerJobRecord.owner_type == owner.principal_type,
-                    assessment == assessment_ref,
+                    or_(profile == assessment_ref, web == assessment_ref),
                 )
             )
             or 0
