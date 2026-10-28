@@ -31,7 +31,14 @@ def snapshot(root: Path, *, exclude_output=False):
 
 
 def container(
-    image, source, output, *args, entrypoint="python", mounts=(), network="none"
+    image,
+    source,
+    output,
+    *args,
+    scratch,
+    entrypoint="python",
+    mounts=(),
+    network="none",
 ):
     argv = [
         "docker",
@@ -45,13 +52,15 @@ def container(
         "--pids-limit=256",
         "--memory=2g",
         "--cpus=2",
-        "--tmpfs",
-        # Opengrep's official one-file release executes a child from its cache.
-        "/tmp:rw,nosuid,nodev,exec,size=1g,mode=1777",
         "--mount",
         f"type=bind,src={source},dst=/workspace,readonly",
         "--mount",
         f"type=bind,src={output},dst=/scan-output",
+        # Like a scanner job's owned scratch, /tmp is disk, not memory: the
+        # runner copies the admitted Trivy feed snapshot (over 1.5 GB) there,
+        # and Opengrep's one-file release executes its unpacked runtime from it.
+        "--mount",
+        f"type=bind,src={scratch},dst=/tmp",
         "--mount",
         f"type=bind,src={FIXTURES},dst=/opt/moonmind-scanner-rules,readonly",
     ]
@@ -141,6 +150,8 @@ def qualify(image: str, evidence: Path) -> dict:
         source.mkdir()
         output = source / "artifacts/scan"
         owned_directory(output)
+        scratch = root / "scratch"
+        owned_directory(scratch)
         argv = container(
             image,
             source,
@@ -163,6 +174,7 @@ Path('/tmp/allowed').write_text('private temporary data')
 Path('/scan-output/allowed').write_text('declared output')
 print(Path('/usr/local/share/repository-security/inventory.json').read_text())
 """,
+            scratch=scratch,
         )
         inventory = json.loads(invoke(argv, evidence / "isolation.json"))
         record["inventory"] = inventory
@@ -175,7 +187,9 @@ print(Path('/usr/local/share/repository-security/inventory.json').read_text())
             ("git", ["--version"]),
         ):
             text = invoke(
-                container(image, source, output, *args, entrypoint=tool),
+                container(
+                    image, source, output, *args, scratch=scratch, entrypoint=tool
+                ),
                 evidence / f"{tool}-version.json",
             )
             if (
@@ -221,7 +235,9 @@ print(Path('/usr/local/share/repository-security/inventory.json').read_text())
                 report = output / "report.json"
                 report.unlink(missing_ok=True)
                 invoke(
-                    container(image, source, output, *args, entrypoint=tool),
+                    container(
+                        image, source, output, *args, scratch=scratch, entrypoint=tool
+                    ),
                     evidence / f"{tool}-{kind}.json",
                     exits=(0, 1) if tool == "gitleaks" and finding else (0,),
                 )
@@ -235,7 +251,8 @@ print(Path('/usr/local/share/repository-security/inventory.json').read_text())
                 report.unlink()
             if snapshot(source, exclude_output=True) != before:
                 raise ImageError("scanner changed the read-only source")
-        # Acquire a separately identified database, never into an image layer.
+        # Publish a separately identified feed snapshot, never into an image
+        # layer, through the same entry point as a production feed refresh.
         cache = root / "database"
         owned_directory(cache)
         invoke(
@@ -243,26 +260,26 @@ print(Path('/usr/local/share/repository-security/inventory.json').read_text())
                 image,
                 source,
                 cache,
-                "image",
-                "--download-db-only",
-                "--cache-dir=/scan-output",
-                "--skip-version-check",
-                "--disable-telemetry",
-                entrypoint="trivy",
+                "-I",
+                "-m",
+                "moonmind.security.scanner_feeds",
+                json.dumps(
+                    {
+                        "feedCacheRef": "qualification-db",
+                        "egressPolicyRef": "qualification",
+                    }
+                ),
+                "/scan-output/feeds",
+                "/scan-output/refresh",
+                scratch=scratch,
                 network="bridge",
             ),
             evidence / "database-acquisition.json",
         )
-        database_records = snapshot(cache)
-        database_digest = hashlib.sha256(
-            json.dumps(database_records, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
-        (evidence / "database.json").write_text(
-            json.dumps(
-                {"contentDigest": database_digest, "files": database_records}, indent=2
-            )
-            + "\n"
-        )
+        shutil.copyfile(cache / "refresh/refresh.json", evidence / "database.json")
+        database_digest = json.loads((cache / "feeds/current.json").read_text())[
+            "snapshotId"
+        ]
         # Exercise the exact admitted Python invocation, not only binary flags.
         for finding in (True, False):
             kind = "finding" if finding else "clean"
@@ -340,21 +357,36 @@ print(Path('/usr/local/share/repository-security/inventory.json').read_text())
                         databaseCacheRef="qualification-db",
                         databaseDigest=database_digest,
                     )
-                    mounts = ((cache, "/opt/moonmind-scanner-db"),)
+                    mounts = ((cache / "feeds", "/opt/moonmind-scanner-db"),)
                 before = snapshot(source, exclude_output=True)
-                invoke(
-                    container(
-                        image,
-                        source,
-                        output,
-                        "-I",
-                        "-m",
-                        "moonmind.security.repository_scanner_runner",
-                        json.dumps(spec),
-                        mounts=mounts,
-                    ),
-                    evidence / f"runner-{tool}-{kind}.json",
-                )
+                try:
+                    invoke(
+                        container(
+                            image,
+                            source,
+                            output,
+                            "-I",
+                            "-m",
+                            "moonmind.security.repository_scanner_runner",
+                            json.dumps(spec),
+                            scratch=scratch,
+                            mounts=mounts,
+                        ),
+                        evidence / f"runner-{tool}-{kind}.json",
+                    )
+                except ImageError as error:
+                    # The runner's sanitized metadata names what was incomplete.
+                    execution = output / "execution.json"
+                    if not execution.exists():
+                        raise
+                    shutil.copyfile(
+                        execution, evidence / f"runner-{tool}-{kind}-execution.json"
+                    )
+                    metadata = json.loads(execution.read_text())
+                    raise ImageError(
+                        f"{error}\nlimitations={metadata.get('limitations')} "
+                        f"states={metadata.get('states')} exits={metadata.get('exits')}"
+                    ) from error
                 metadata = json.loads((output / "execution.json").read_text())
                 if metadata["limitations"] or any(
                     v != "succeeded" for v in metadata["states"].values()
@@ -393,6 +425,7 @@ print(Path('/usr/local/share/repository-security/inventory.json').read_text())
                 "--disable-telemetry",
                 "--offline-scan",
                 "--cache-dir=/tmp/cache",
+                scratch=scratch,
                 entrypoint="trivy",
                 mounts=((archive, "/input/image.tar"),),
             ),
