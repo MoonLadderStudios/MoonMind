@@ -296,6 +296,28 @@ def test_retest_contradicted_by_a_current_observation_requires_review():
     assert result["decisions"][0]["reviewReasons"] == ["retest_contradicted"]
 
 
+def test_invalidated_retest_never_verifies_later_absence():
+    previous = compare(report())
+    finding_id = previous["findings"][0]["findingId"]
+    retest = _decision(finding_id)
+    contradicted = compare(report(), previous, decisions=[retest])
+    # The contradiction stays with the unchanged decision on every later scan.
+    for _ in range(2):
+        contradicted = compare(report(findings=False), contradicted)
+        assert contradicted["findings"][0]["state"] == "absent_comparable"
+        assert contradicted["findings"][0]["verification"] is None
+        assert "retest_contradicted" in contradicted["decisions"][0]["reviewReasons"]
+    # A replacement retest is new evidence and can verify remediation.
+    renewed = _decision(finding_id, evidenceRefs=["art_retest2"])
+    result = compare(report(findings=False), contradicted, decisions=[renewed])
+    assert result["findings"][0]["state"] == "remediated_verified"
+
+    expired = _decision(finding_id, expiresAt=(NOW - timedelta(hours=1)).isoformat())
+    result = compare(report(findings=False), previous, decisions=[expired])
+    assert result["findings"][0]["state"] == "absent_comparable"
+    assert result["decisions"][0]["reviewReasons"] == ["expired"]
+
+
 @pytest.mark.parametrize(
     ("closure", "state", "verification"),
     [

@@ -73,6 +73,8 @@ def squid(policy, root: Path):
 
     Loopback stands in for the gateway's internal bridge and pinned answers:
     the destinations and their methods/ports are the admitted policy's own.
+    Yields a path under ``root`` that holds Squid's flushed access log once
+    the proxy stops, since its own directory is removed on exit.
     """
     binary = shutil.which("squid")
     assert binary, "test-runtime must supply the proxy fixture"
@@ -104,6 +106,7 @@ def squid(policy, root: Path):
             .replace(b"/tmp/moonmind-cache.log", str(path / "cache.log").encode())
         )
         errors = root / "proxy.stderr"
+        retained = root / "access.log"
         with errors.open("wb") as stderr:
             proxy = subprocess.Popen(
                 [binary, "-NYC", "-d", "1", "-f", str(conf)],
@@ -122,10 +125,12 @@ def squid(policy, root: Path):
                     except OSError:
                         assert time.monotonic() < deadline, errors.read_text()
                         time.sleep(0.1)
-                yield log
+                yield retained
             finally:
                 proxy.terminate()
                 proxy.wait(timeout=10)
+                if log.exists():
+                    shutil.copyfile(log, retained)
 
 
 async def test_web_assessment_reaches_only_its_admitted_origin(

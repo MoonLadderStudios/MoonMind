@@ -552,12 +552,27 @@ def compare_observations(
     for payload in decisions:
         decision = TriageDecision.model_validate(payload)
         all_decisions[decision.finding_id] = decision
-    retest_passed = {
+    passing_retests = {
         finding_id
         for finding_id, decision in all_decisions.items()
         if decision.disposition == "fix_retest"
         and decision.retest_outcome == "passed"
         and current.scope.equivalent(decision.scope)
+    }
+    # A contradiction stays with its unchanged decision; only a replacement
+    # retest, or one still within its validity, can verify later absence.
+    contradicted = {
+        finding_id
+        for finding_id in passing_retests
+        if (retained := previous_decisions.get(finding_id)) is not None
+        and retained.decision == all_decisions[finding_id]
+        and "retest_contradicted" in retained.review_reasons
+    }
+    retest_passed = {
+        finding_id
+        for finding_id in passing_retests - contradicted
+        if all_decisions[finding_id].expires_at is None
+        or now < all_decisions[finding_id].expires_at
     }
     compared = []
     for finding in current.findings:
@@ -653,14 +668,10 @@ def compare_observations(
                 reasons.append("intelligence_changed")
             elif prior.observation.provenance != current.provenance:
                 reasons.append("provenance_changed")
-        if (
-            finding_id in retest_passed
+        if finding_id in contradicted or (
+            finding_id in passing_retests
             and row is not None
-            and row.state
-            in {
-                "still_observed",
-                "new",
-            }
+            and row.state in {"still_observed", "new"}
         ):
             # The scanner still reports what the retest said was fixed.
             reasons.append("retest_contradicted")
