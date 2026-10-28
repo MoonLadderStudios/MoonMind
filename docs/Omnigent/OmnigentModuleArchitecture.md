@@ -259,6 +259,8 @@ deletion removes its row in the same change rather than leaving a stale entry.
 | --- | --- | --- |
 | Direct Codex launch strategy | `omnigent.legacy.direct_codex_launch` | `active_product_path` |
 | Direct Claude launch strategy | `omnigent.legacy.direct_claude_launch` | `active_product_path` |
+| `ManagedRuntimeLauncher` for the direct strategies | `omnigent.legacy.managed_runtime_launcher` | `active_product_path` |
+| Direct Codex `MoonMind.AgentSession`, session runtime and Docker controller | `omnigent.legacy.direct_agent_session` | `active_product_path` |
 | `codex-profile-bound@1` realizer | `omnigent.legacy.profile_bound_realizer` | `active_product_path` |
 | `profile_bound_execution.py` coordinator (and its default port selection) | `omnigent.legacy.profile_bound_execution` | `active_product_path` |
 | `oauth_host_runtime.py` launch, mount, credential-volume, and egress argument vectors | `omnigent.legacy.oauth_host_runtime` | `active_product_path` |
@@ -273,9 +275,9 @@ deletion removes its row in the same change rather than leaving a stale entry.
 
 The direct Codex/Claude launch, AgentSession, profile-bound and OAuth host
 rows stay live because the shared lifecycle still lacks API-key and
-custom-endpoint Codex/Claude Provider Profiles, the direct Claude CLI options,
-one session reused across a run's steps, static-connected Codex/Claude hosts,
-and OAuth credential maintenance and its host-lease janitor. Each row's
+custom-endpoint Codex/Claude Provider Profiles, Claude slash-command
+passthrough, one session reused across a run's steps, static-connected
+Codex/Claude hosts, and OAuth credential maintenance and its host-lease janitor. Each row's
 `missingOutcome` names its own share; the Codex/Claude CLIs and Node stay in
 the application image until those rows are deleted.
 
