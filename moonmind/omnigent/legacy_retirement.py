@@ -303,9 +303,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "through ``codex-profile-bound@1``, including replay of their "
             "recorded histories."
         ),
-        removalCondition=(
-            "The profile-bound realizer row is deleted."
-        ),
+        removalCondition="The profile-bound realizer row is deleted.",
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.oauth_host_runtime",
@@ -324,13 +322,14 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         ),
         consumer=(
             "Codex OAuth host launch, credential-volume mounts and egress "
-            "attestation for profile-bound executions, and OAuth enrollment "
-            "hosts."
+            "attestation for profile-bound executions and static bindings, "
+            "plus OAuth credential maintenance (draining bound hosts before "
+            "an OAuth mutation and revalidating a reconnected bound host)."
         ),
         removalCondition=(
-            "The profile-bound execution row is deleted and OAuth "
-            "enrollment and maintenance launch through the shared host "
-            "lifecycle."
+            "The profile-bound execution row is deleted and OAuth credential "
+            "maintenance drains and revalidates hosts through the shared "
+            "host lifecycle."
         ),
     ),
     LegacyPathRecord(
@@ -456,15 +455,17 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "get_opencode_host_image_ref"
         ),
         consumer=(
-            "Admitted ``omnigent-opencode@1`` plans and retries that replay "
-            "their recorded host image, and deployments that pin the "
-            "OpenCode host through this variable. Fresh OpenCode work "
-            "selects ``omnigent-opencode@2``."
+            "Fresh and admitted ``opencode-native`` work, which selects "
+            "``omnigent-opencode@1``: this is the only Host Class whose image "
+            "carries the bootstrap server/host compatibility quarantine. "
+            "Deployments that pin the OpenCode host use this variable."
         ),
         removalCondition=(
-            "No open plan or history records ``omnigent-opencode@1`` and "
-            "the variable completes its obsolete-configuration deprecation "
-            "window."
+            "The shared-image Host Class carries the same compatibility "
+            "quarantine, fresh OpenCode work selects "
+            "``omnigent-opencode@2``, no open plan or history records "
+            "``omnigent-opencode@1``, and the variable completes its "
+            "obsolete-configuration deprecation window."
         ),
     ),
     LegacyPathRecord(
@@ -484,9 +485,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "``pi-native`` execution, whose ``omnigent-pi@1`` Host Class "
             "still resolves this variable."
         ),
-        removalCondition=(
-            "Pi runs from the shared host image through a runtime pack."
-        ),
+        removalCondition="Pi runs from the shared host image through a runtime pack.",
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.native_ui_compat",

@@ -93,7 +93,8 @@ and the one-harness admission rule are owned by
 preserve independent support and rollout decisions.
 
 A representative OpenCode class remains (`omnigent-opencode@2` is the
-shared-image row; `@1` is the dedicated-image legacy row):
+shared-image row; registry selection still uses `@1`, see
+[`SharedHostImage.md`](./SharedHostImage.md) §3):
 
 ```yaml
 hostClassId: omnigent-opencode
