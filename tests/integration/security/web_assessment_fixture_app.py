@@ -3,7 +3,8 @@
 Standard library only, so it runs both beside the test process and inside the
 upstream ZAP image. ``/search`` reflects input unescaped while ``/fixed/search``
 escapes it and sends hardening headers; ``/account`` needs a session for any
-role and ``/admin`` the admin role; ``/away`` redirects off the admitted
+role and ``/admin`` the admin role, either by login session or by the
+service's bearer token; ``/away`` redirects off the admitted
 origin; ``/openapi.json`` describes the API. The gateway forwards only to its
 allowlisted hosts, like the scoped egress gateway, and refuses the rest.
 """
@@ -20,7 +21,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 PASSWORDS = {"alice": "alice-fixture-pass-5044", "root": "root-fixture-pass-5044"}
-ROLES = {"alice": "user", "root": "admin"}
+ROLES = {"alice": "user", "root": "admin", "svc": "user"}
+TOKENS = {"svc-fixture-token-5044": "svc"}
 HARDENED = {
     "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
     "X-Content-Type-Options": "nosniff",
@@ -65,6 +67,9 @@ class App(BaseHTTPRequestHandler):
         pass
 
     def _user(self):
+        scheme, _, token = (self.headers.get("Authorization") or "").partition(" ")
+        if scheme == "Bearer":
+            return TOKENS.get(token)
         for part in (self.headers.get("Cookie") or "").split(";"):
             name, _, value = part.strip().partition("=")
             if name == "sid" and value in self.sessions:

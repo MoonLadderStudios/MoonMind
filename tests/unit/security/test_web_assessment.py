@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 
 import pytest
 
@@ -57,6 +58,13 @@ FORM = {
     "loginPath": "/login",
     "username": "alice",
 }
+BEARER = {
+    "name": "svc",
+    "method": "bearer",
+    "credentialRef": "secret://web/svc",
+    "verificationPath": "/account",
+    "loggedInMarker": "Signed in as svc",
+}
 OPENAPI = {"format": "openapi", "inputArtifactRef": "art_openapi"}
 
 
@@ -91,6 +99,9 @@ def spec(assessment: WebAssessment, **overrides) -> dict:
         {"routes": [{"path": "/../etc"}]},
         {"identity": {**FORM, "credentialRef": "plain-secret-value"}},
         {"identity": {**FORM, "loggedInMarker": None}},
+        # A bearer header rides on every request, so only an identity-specific
+        # marker can prove the token authenticated.
+        {"identity": {**BEARER, "loggedInMarker": None}},
         {"identity": {**FORM, "verificationPath": "/logout"}},
         {"identity": {**FORM, "loginPath": "/"}},  # GET-only route
         {"discovery": []},
@@ -127,7 +138,6 @@ def test_active_plan_uses_exactly_the_admitted_strength(strength):
     (active,) = jobs(plan, "activeScan")
     assert active["policyDefinition"]["defaultStrength"] == strength.capitalize()
     assert active["parameters"]["threadPerHost"] == 1
-    assert active["parameters"]["delayInMs"] == 100  # 10 requests per second
     # Passive evidence is written before any attack payload is sent.
     kinds = [job["type"] for job in plan["jobs"]]
     first_report = kinds.index("report")
@@ -211,7 +221,7 @@ def test_job_runs_the_deployment_zap_image_through_scoped_egress():
     assert job.image_source_ref == "web-assessment"
     assert job.network_mode == "bridge" and job.egress_policy_ref == "web-target"
     assert job.environment == [] and job.caches == []
-    assert job.command[-2:] == ["/outputs/web-assessment", "-"]
+    assert job.command[-3:] == ["/outputs/web-assessment", "-", "10"]
     assert "zap.sh -cmd -autorun" in job.command[1]
     (attachment,) = job.input_attachments
     assert (attachment.name, attachment.artifact_ref) == (
@@ -231,17 +241,51 @@ def test_job_runs_the_deployment_zap_image_through_scoped_egress():
         "passive-messages",
     ]
     # Secrets never travel in argv: the bearer argument names only the site.
-    bearer = web(
-        identity={
-            "name": "svc",
-            "method": "bearer",
-            "credentialRef": "secret://web/svc",
-            "verificationPath": "/api",
-        }
-    )
+    bearer = web(identity={**BEARER, "verificationPath": "/api"})
     command = build_web_assessment_job(bearer)["command"]
-    assert command[-1] == "app.example.test:8080"
+    # ZAP matches the header site against the request's host name only.
+    assert command[-2] == "app.example.test"
     assert SECRET not in json.dumps(command)
+
+
+def _launch_arguments(tmp_path, assessment: WebAssessment, **env) -> list[str]:
+    """Run the rendered launch with a ``zap.sh`` that prints its arguments."""
+    (tmp_path / "zap.sh").write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+    (tmp_path / "zap.sh").chmod(0o755)
+    command = build_web_assessment_job(assessment)["command"]
+    result = subprocess.run(
+        ["sh", *command],
+        env={"PATH": f"{tmp_path}:/usr/bin:/bin", **env},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.splitlines()
+
+
+@pytest.mark.parametrize("mode", ["baseline", "api", "active"])
+def test_admitted_rate_limits_every_request_zap_sends(tmp_path, mode):
+    overrides = {
+        "baseline": {},
+        "api": {"apiDefinition": OPENAPI},
+        "active": {"activeStrength": "low"},
+    }[mode]
+    assessment = web(mode=mode, maxRequestsPerSecond=3, **overrides)
+    argv = _launch_arguments(
+        tmp_path, assessment, MOONMIND_EGRESS_PROXY="http://10.89.0.2:3128"
+    )
+    config = {argv[i + 1] for i in range(len(argv) - 1) if argv[i] == "-config"}
+    # ZAP's network rate limiter throttles crawling, imports, verification and
+    # attacks alike: one rule over every host at the admitted rate.
+    rule = "network.ratelimit.rules.rule(0)."
+    assert {
+        rule + "enabled=true",
+        rule + "regex=true",
+        rule + "matchStr=.*",
+        rule + "reqsPerSec=3",
+        "network.connection.httpProxy.host=10.89.0.2",
+    } <= config
+    assert argv[:3] == ["-cmd", "-autorun", "/outputs/web-assessment/plan.yaml"]
 
 
 @pytest.mark.parametrize(
@@ -908,6 +952,43 @@ def test_failed_or_unproven_authentication_is_partial_with_a_reason(responses, r
     auth = summary.coverage.authentication
     assert auth.status in {"failed", "not_attempted"} and reason in auth.reason
     assert summary.status == "partial"
+
+
+PUBLIC = (200, "<p>Signed out</p>", [])
+SIGNED_IN_SVC = (200, "<p>Signed in as svc</p>", [])
+REJECTED = (401, "", [("WWW-Authenticate", "Bearer")])
+
+
+def test_bearer_identity_is_verified_only_by_its_marker():
+    summary = _identity_run(SIGNED_IN_SVC, SIGNED_IN_SVC, identity=BEARER)
+    auth = summary.coverage.authentication
+    # The bearer header is on every request, so there is no anonymous one.
+    assert (auth.method, auth.status, auth.anonymous_compared) == (
+        "bearer",
+        "verified",
+        False,
+    )
+    assert summary.status == "complete"
+    assert all(f.identity == "svc" for f in summary.findings)
+
+
+@pytest.mark.parametrize(
+    "responses, reason",
+    [
+        # A verification route answering everyone proves nothing.
+        ((PUBLIC, PUBLIC), "did not answer for the identity"),
+        # An invalid or expired token.
+        ((REJECTED, REJECTED), "did not answer for the identity"),
+        ((SIGNED_IN_SVC, SIGNED_IN_SVC, REJECTED), "session expired"),
+    ],
+)
+def test_unproven_bearer_authentication_is_partial(responses, reason):
+    summary = _identity_run(*responses, identity=BEARER)
+    auth = summary.coverage.authentication
+    assert auth.status == "failed" and reason in auth.reason
+    assert not auth.anonymous_compared
+    assert summary.status == "partial"
+    assert "authentication_failed" in summary.limitations
 
 
 def test_unsupported_login_challenges_and_inaccessible_routes_are_explicit():

@@ -338,15 +338,17 @@ class WebIdentity(Contract):
 
     ``form`` posts ``username`` and the secret to ``loginPath``; ``bearer``
     sends the secret as a bearer token to the admitted origin only. The
-    verification route must answer for the identity and not for anonymous
-    use, so authentication is checked rather than assumed.
+    verification route must show ``loggedInMarker`` to the identity, and a
+    form identity's route must not show it anonymously, so authentication is
+    checked rather than assumed. A bearer token rides on every request, so
+    its marker must be specific to the identity, such as its account name.
     """
 
     name: str = Field(pattern=_NAME)
     method: Literal["form", "bearer"]
     credential_ref: str = Field(min_length=4, max_length=1024)
     verification_path: str
-    logged_in_marker: Text | None = Field(None, max_length=256)
+    logged_in_marker: Text = Field(max_length=256)
     login_path: str | None = None
     username: Text | None = Field(None, max_length=256)
     username_field: str = Field("username", pattern=r"^[A-Za-z0-9_.-]{1,64}$")
@@ -368,8 +370,6 @@ class WebIdentity(Contract):
         form = self.method == "form"
         if form != (self.login_path is not None and self.username is not None):
             raise ValueError("form identities, and only they, name a login and user")
-        if form and self.logged_in_marker is None:
-            raise ValueError("form identities need a logged-in marker to verify")
         return self
 
 

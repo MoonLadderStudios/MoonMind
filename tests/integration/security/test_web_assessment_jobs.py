@@ -4,12 +4,13 @@ ZAP is a deterministic stand-in at the binary boundary
 (``web_assessment_fake_zap``): it executes the plan the worker wrote, through
 the upstream proxy the production launch script derives from the egress
 environment, against the disposable fixture application with vulnerable and
-fixed routes, two roles and an OpenAPI definition. Scope admission, identity
+fixed routes, two login roles, a bearer-token service and an OpenAPI
+definition. Scope admission, identity
 grants, attachment capture, plan rendering, secret delivery, launch
 arguments, output collection, sanitization, the adapter, artifact storage and
 attachment cleanup are production code; no daemon socket, external target or
-paid service is involved. Real ZAP 2.17 runs of the same plans are recorded
-in the change's verification notes.
+paid service is involved. The stand-in honors the launch's rate-limit rule
+the way ZAP's network rate limiter does.
 """
 
 from __future__ import annotations
@@ -67,7 +68,7 @@ OWNER = OwnerIdentity(principalType="user", principalId="operator")
 HOST = "app.example.test"
 FAKE_ZAP = Path(__file__).with_name("web_assessment_fake_zap.py")
 GATEWAY = "gateway.example.test:3128"
-SECRETS = tuple(fixture.PASSWORDS.values())
+SECRETS = (*fixture.PASSWORDS.values(), *fixture.TOKENS)
 
 
 @pytest.fixture
@@ -151,7 +152,7 @@ def scope(
             "maxJobs": 20,
             "maxJobSeconds": 3600,
             "evidenceIntent": "web assessment journey",
-            "grants": [grant("alice"), grant("root")],
+            "grants": [grant("alice"), grant("root"), grant("svc")],
         }
     )
 
@@ -183,6 +184,16 @@ def identity(name):
         "loggedInMarker": f"Signed in as {name}",
         "loginPath": "/login",
         "username": name,
+    }
+
+
+def bearer(verification_path="/account"):
+    return {
+        "name": "svc",
+        "method": "bearer",
+        "credentialRef": "secret://web/svc",
+        "verificationPath": verification_path,
+        "loggedInMarker": "Signed in as svc",
     }
 
 
@@ -248,7 +259,10 @@ class Harness:
         )
         self.published: dict[str, bytes] = {}
         self.commands: list[tuple] = []
-        self.passwords = dict(fixture.PASSWORDS)
+        self.passwords = {
+            **fixture.PASSWORDS,
+            **{name: token for token, name in fixture.TOKENS.items()},
+        }
 
         def lease(backend, request):
             policy = backend._settings.authorize_egress(request.request)
@@ -381,7 +395,7 @@ class Harness:
                 name, _, value = create[i + 1].partition("=")
                 env[name] = value
         result = subprocess.run(
-            ["sh", "-c", script, argv[3], str(out), argv[5]],
+            ["sh", "-c", script, argv[3], str(out), *argv[5:]],
             env=env,
             capture_output=True,
             timeout=120,
@@ -513,6 +527,62 @@ async def test_failed_login_cannot_report_clean(
     assert summary["coverage"]["authentication"]["status"] == "failed"
     assert summary["status"] == "partial"
     assert "authentication_failed" in summary["limitations"]
+
+
+async def test_bearer_identity_is_verified_only_when_its_token_works(
+    environment, tmp_path, monkeypatch, target
+):
+    app, gateway = target
+    harness = Harness(environment, tmp_path, monkeypatch, app, gateway)
+    valid, create, _, _, resolved = await harness.run(
+        assessment(app, identity=bearer()), "svc"
+    )
+    assert resolved == ["secret://web/svc"]
+    auth = valid["coverage"]["authentication"]
+    # The token is on every request, so its marker is the only proof.
+    assert (auth["method"], auth["status"], auth["anonymousCompared"]) == (
+        "bearer",
+        "verified",
+        False,
+    )
+    assert "GET /account/settings" in valid["coverage"]["testedRoutes"]
+    assert all(f["identity"] == "svc" for f in valid["findings"])
+    assert not any(token in json.dumps(create) for token in fixture.TOKENS)
+
+    # An invalid or expired token, whether the verification route needs a
+    # session or answers everyone, cannot report authenticated coverage.
+    harness.passwords["svc"] = "expired-fixture-token"
+    for path, key in (("/account", "svc-expired"), ("/", "svc-public")):
+        summary, *_ = await harness.run(assessment(app, identity=bearer(path)), key)
+        auth = summary["coverage"]["authentication"]
+        assert auth["status"] == "failed", path
+        assert "did not answer for the identity" in auth["reason"]
+        assert summary["status"] == "partial"
+        assert "authentication_failed" in summary["limitations"]
+        assert "GET /account/settings" not in summary["coverage"]["testedRoutes"]
+    harness.assert_no_secret()
+
+
+async def test_admitted_rate_bounds_every_request_zap_sends(
+    environment, tmp_path, monkeypatch, target
+):
+    app, gateway = target
+    harness = Harness(environment, tmp_path, monkeypatch, app, gateway)
+    summary, _, _, accepted, _ = await harness.run(
+        assessment(app, identity=identity("alice"), maxRequestsPerSecond=5), "rate"
+    )
+    assert summary["coverage"]["testedRoutes"]
+    messages = json.loads(harness.published[f"{accepted.job_id}-output-messages.har"])
+    sent = sorted(
+        datetime.fromisoformat(entry["startedDateTime"])
+        for entry in messages["log"]["entries"]
+    )
+    # Login, verification and crawl requests alike: at most five a second.
+    assert len(sent) > 5
+    assert all(
+        later - earlier >= timedelta(seconds=1)
+        for earlier, later in zip(sent, sent[5:])
+    )
 
 
 async def test_off_origin_redirect_is_denied_and_recorded(
