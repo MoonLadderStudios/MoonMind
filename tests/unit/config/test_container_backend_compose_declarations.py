@@ -148,6 +148,23 @@ def test_compose_admits_upstream_zap_image_and_operator_override(service, overri
     assert source.pull_policy == "always"
 
 
+@pytest.mark.parametrize("service", _DECLARING_SERVICES)
+@pytest.mark.parametrize("override", [None, "registry.example/prowler:operator-choice"])
+def test_compose_admits_upstream_prowler_image_and_operator_override(service, override):
+    environment = _service_environment(service)
+    overrides = {"MOONMIND_CLOUD_POSTURE_IMAGE": override} if override else {}
+    settings = resolve_container_backend_settings(
+        {
+            IMAGE_SOURCES_ENV_KEY: _interpolate(
+                environment[IMAGE_SOURCES_ENV_KEY], overrides
+            )
+        }
+    )
+    source = settings.image_source("cloud-posture")
+    assert source.image == (override or "prowlercloud/prowler:stable")
+    assert source.pull_policy == "always"
+
+
 _TACTICS_CACHES = [
     {"cacheRef": "unreal-ccache", "target": "/home/ue4/.ccache", "readOnly": False},
     {

@@ -491,3 +491,99 @@ class WebAssessment(Contract):
             for name, file in WEB_OUTPUT_FILES.items()
             if self.mode == "active" or not name.startswith("passive-")
         ]
+
+
+#: Providers with a real adapter. Others are refused at admission with an
+#: explicit unsupported result rather than launched without coverage.
+CLOUD_PROVIDERS = ("aws",)
+#: The scope action class of read-only posture collection. Remediation is a
+#: separate operation this workload cannot express.
+CLOUD_ACTION_CLASS = "cloud-posture"
+CLOUD_REGION = re.compile(r"^[a-z]{2}(?:-[a-z]+)+-[0-9]{1,2}$")
+_CHECK = re.compile(r"^[a-z0-9][a-z0-9_]{0,127}$")
+_SERVICE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+#: A job command holds 128 argv entries and the rendered Prowler argv spends
+#: 18 on the provider, flags and outputs; the rest name regions and checks or
+#: services, so an admission never renders a job its command cannot hold.
+CLOUD_SELECTION_ARGV = 110
+
+
+def cloud_regions(values: list[str]) -> list[str]:
+    if any(not CLOUD_REGION.fullmatch(v) for v in values):
+        raise ValueError("cloud regions are provider region names")
+    if len(set(values)) != len(values):
+        raise ValueError("duplicate cloud region")
+    return values
+
+
+class CloudAssessment(Contract):
+    """One read-only Prowler posture assessment of one admitted cloud account.
+
+    The job selects its regions and either explicit checks or services; it
+    never names remediation, export or notification options. The account's
+    credential is a ``cloud_inventory`` grant exchanged for a read-only
+    session, so one session must cover the whole budget.
+    """
+
+    provider: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,31}$")
+    assessment_ref: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$")
+    account: str = Field(pattern=r"^[0-9]{12}$")
+    credential_ref: str = Field(min_length=4, max_length=1024)
+    regions: list[str] = Field(min_length=1, max_length=32)
+    checks: list[str] = Field(default_factory=list, max_length=CLOUD_SELECTION_ARGV - 1)
+    services: list[str] = Field(default_factory=list, max_length=64)
+    egress_policy_ref: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$")
+    max_retry_attempts: int = Field(3, ge=0, le=10)
+    output_directory: str = "cloud-assessment"
+    max_report_bytes: int = Field(MAX_REPORT_BYTES, ge=1024, le=MAX_REPORT_BYTES)
+    timeout_seconds: int = Field(1800, ge=300, le=43200)
+
+    @field_validator("provider")
+    @classmethod
+    def supported_provider(cls, value):
+        if value not in CLOUD_PROVIDERS:
+            raise ValueError(
+                f"cloud provider {value} is unsupported; supported: "
+                + ", ".join(CLOUD_PROVIDERS)
+            )
+        return value
+
+    _regions = field_validator("regions")(cloud_regions)
+
+    @field_validator("credential_ref")
+    @classmethod
+    def opaque_reference(cls, value):
+        if "://" not in value:
+            raise ValueError("secret references must use an opaque reference URI")
+        return value
+
+    @field_validator("output_directory")
+    @classmethod
+    def output_relative(cls, value):
+        return relative_path(value)
+
+    @model_validator(mode="after")
+    def explicit_selection(self):
+        if bool(self.checks) == bool(self.services):
+            raise ValueError("select either explicit checks or services")
+        for values, pattern in ((self.checks, _CHECK), (self.services, _SERVICE)):
+            if any(not pattern.fullmatch(v) for v in values):
+                raise ValueError("checks and services are Prowler identifiers")
+            if len(set(values)) != len(values):
+                raise ValueError("duplicate check or service")
+        if len(self.regions) + len(self.checks or self.services) > CLOUD_SELECTION_ARGV:
+            raise ValueError(
+                f"regions plus checks or services exceed the {CLOUD_SELECTION_ARGV} "
+                "argv entries a job command can hold"
+            )
+        return self
+
+    def outputs(self) -> list[dict]:
+        return [
+            {"name": name, "relativePath": f"{self.output_directory}/{file}"}
+            for name, file in CLOUD_OUTPUT_FILES.items()
+        ]
+
+
+#: Prowler's native JSON-OCSF report and its error log.
+CLOUD_OUTPUT_FILES = {"report": "prowler.ocsf.json", "log": "prowler.log"}

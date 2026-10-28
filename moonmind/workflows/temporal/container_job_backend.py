@@ -82,6 +82,7 @@ from moonmind.schemas.workspace_locator_models import (
     ManagedWorkspaceLocator,
     SandboxWorkspaceLocator,
 )
+from moonmind.security.cloud_assessments import CloudImage, summarize_cloud_assessment
 from moonmind.security.container_services import (
     SERVICE_DIGEST_LABEL,
     SERVICE_LABEL,
@@ -596,6 +597,7 @@ def _withholds_console(spec) -> bool:
         spec.repository_scan is not None
         or spec.image_assessment is not None
         or spec.web_assessment is not None
+        or spec.cloud_assessment is not None
     )
 
 
@@ -2866,6 +2868,7 @@ class DockerContainerJobBackend:
         )
         mounts.extend(await self._deliver_target_credential(request))
         mounts.extend(await self._prepare_web_assessment(request))
+        await self._prepare_cloud_assessment(request)
         credential_args = await self._deliver_workload_credentials(request)
         args = [
             "create",
@@ -3280,6 +3283,26 @@ class DockerContainerJobBackend:
                 storage, "credentials", WEB_CREDENTIAL_TARGET, read_only=True
             )
         ]
+
+    async def _prepare_cloud_assessment(
+        self, request: ContainerJobActivityRequest
+    ) -> None:
+        """Prowler opens its log file before creating its output directory."""
+
+        cloud = request.request.spec.cloud_assessment
+        if cloud is None:
+            return
+        storage = self._attachment_storage(request)
+        try:
+            await asyncio.to_thread(
+                attachments.prepare_output_directory,
+                storage.outputs / cloud.output_directory,
+            )
+        except OSError as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.WORKSPACE,
+                "cloud assessment output directory could not be prepared",
+            ) from exc
 
     def _output_root(self, request: ContainerJobActivityRequest) -> Path:
         storage = self._attachment_storage(request)
@@ -3940,6 +3963,8 @@ class DockerContainerJobBackend:
             return await self._collect_image_assessment_outputs(request)
         if request.request.spec.web_assessment is not None:
             return await self._collect_web_assessment_outputs(request)
+        if request.request.spec.cloud_assessment is not None:
+            return await self._collect_cloud_assessment_outputs(request, delivered)
         outputs = request.request.spec.outputs
         if not outputs or self._publish is None:
             return []
@@ -4520,6 +4545,132 @@ class DockerContainerJobBackend:
             summary.model_dump_json(by_alias=True).encode(),
             media_type="application/json",
             relative_path=f"{web.output_directory}/summary.json",
+        )
+        return manifest
+
+    async def _collect_cloud_assessment_outputs(
+        self, request: ContainerJobActivityRequest, delivered: Sequence[str]
+    ) -> list[ContainerJobArtifact]:
+        """Publish Prowler's native OCSF and log with a cloud-posture summary.
+
+        Reads whatever exists, so a timeout, cancellation or failed run still
+        publishes its usable records, classified as incomplete. Every
+        delivered session value is redacted, also on a publication retry.
+        """
+        if self._publish is None:
+            return []
+        spec = request.request.spec
+        cloud = spec.cloud_assessment
+        entries = await asyncio.to_thread(
+            self._build_output_entries, self._output_root(request), list(spec.outputs)
+        )
+        manifest: list[ContainerJobArtifact] = []
+        limitations: list[str] = []
+        bodies: dict[str, bytes | None] = {}
+        refs: dict[str, str | None] = {}
+        for entry in entries:
+            name, relative = entry["name"], entry["relative_path"]
+            payload = entry["payload"]
+            bodies[name] = refs[name] = None
+            if payload is None:
+                missing = entry["status"] == ArtifactCollectionStatus.MISSING
+                if not missing:
+                    limitations.append(f"{name}_exceeds_limit")
+                manifest.append(
+                    ContainerJobArtifact(
+                        name=name,
+                        relativePath=relative,
+                        collectionStatus=entry["status"],
+                        detail=(
+                            "Prowler did not produce this output."
+                            if missing
+                            else entry["detail"]
+                        ),
+                    )
+                )
+                continue
+            payload = _without_delivered(payload, None, delivered)
+            status = ArtifactCollectionStatus.COLLECTED
+            if name == "log":
+                # Free-text provider messages; only a bounded, redacted tail.
+                payload = redact_sensitive_text(
+                    payload.decode("utf-8", errors="replace")
+                ).encode("utf-8")
+                bodies[name] = payload
+                if len(payload) > cloud.max_report_bytes:
+                    payload = payload[-cloud.max_report_bytes :]
+                    status = ArtifactCollectionStatus.TRUNCATED
+                media_type = "text/plain"
+            elif len(payload) > cloud.max_report_bytes:
+                limitations.append("report_exceeds_limit")
+                manifest.append(
+                    ContainerJobArtifact(
+                        name=name,
+                        relativePath=relative,
+                        collectionStatus=ArtifactCollectionStatus.REJECTED,
+                        detail="Native report exceeds the admitted bound.",
+                    )
+                )
+                continue
+            else:
+                bodies[name] = payload
+                media_type = "application/json"
+            suffix = os.path.splitext(relative)[1]
+            refs[name] = await self._publish_artifact(
+                request, f"{request.job_id}-output-{name}{suffix}", payload
+            )
+            manifest.append(
+                ContainerJobArtifact(
+                    name=name,
+                    artifactRef=refs[name],
+                    sizeBytes=len(payload),
+                    sha256=hashlib.sha256(payload).hexdigest(),
+                    mediaType=media_type,
+                    relativePath=relative,
+                    collectionStatus=status,
+                )
+            )
+        observed = request.image_observation
+        summary = summarize_cloud_assessment(
+            cloud,
+            image=CloudImage(
+                sourceRef=spec.image_source_ref,
+                requestedReference=observed.requested_reference if observed else None,
+                resolvedRef=(
+                    observed.resolved_digest
+                    if observed and observed.resolved_digest
+                    else request.resolved_image_ref
+                ),
+            ),
+            report=bodies.get("report"),
+            log=bodies.get("log"),
+            exit_code=request.exit_code,
+            terminal_state=getattr(
+                request.terminal_state, "value", request.terminal_state or "failed"
+            ),
+            native_ref=refs.get("report"),
+            log_ref=refs.get("log"),
+            started_at=request.started_at.isoformat() if request.started_at else None,
+            finished_at=(
+                request.finished_at.isoformat() if request.finished_at else None
+            ),
+            limitations=limitations,
+        )
+        body = summary.model_dump_json(by_alias=True).encode()
+        relative = f"{cloud.output_directory}/summary.json"
+        ref = await self._publish_artifact(
+            request, f"{request.job_id}-output-summary.json", body
+        )
+        manifest.append(
+            ContainerJobArtifact(
+                name="summary",
+                artifactRef=ref,
+                sizeBytes=len(body),
+                sha256=hashlib.sha256(body).hexdigest(),
+                mediaType="application/json",
+                relativePath=relative,
+                collectionStatus=ArtifactCollectionStatus.COLLECTED,
+            )
         )
         return manifest
 

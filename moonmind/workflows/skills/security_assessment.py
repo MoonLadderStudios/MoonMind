@@ -26,6 +26,7 @@ from moonmind.security.assessments import (
     compare_observations,
     content_key,
 )
+from moonmind.security.cloud_assessments import CloudAssessmentSummary
 from moonmind.security.github_alerts import alert_observation, correlate_alerts
 from moonmind.security.image_assessments import ImageAssessmentSummary
 from moonmind.security.web_assessments import WebAssessmentSummary
@@ -389,6 +390,64 @@ def _web_observation(
     )
 
 
+def _cloud_observation(
+    request, summary: CloudAssessmentSummary, ref: str, created_at: datetime
+) -> Observation:
+    """Prowler findings as cloud coverage of one account's admitted selection.
+
+    The summary's own invariants already refuse a clean outcome over partial
+    coverage; this keeps its status rather than deriving a better one.
+    """
+    result, admission = summary.result, summary.admission
+    if any(not set(f.evidence_refs) <= {summary.native_ref} for f in result.findings):
+        raise ValueError("finding evidence differs from retained native records")
+    if any(f.asset not in request.scope.assets for f in result.findings):
+        raise ValueError("cloud finding outside admitted assessment scope")
+    assets = [a for a in result.examined_assets if a in request.scope.assets]
+    if summary.status == "complete" and assets:
+        status = "complete"
+    elif any(d.kind == "credentials_rejected" for d in summary.diagnostics):
+        status = "authentication_failed"
+    elif summary.outcome == "execution_failed":
+        status = "failed"
+    else:
+        status = "partial"
+    return Observation(
+        scope=request.scope,
+        observed_at=created_at,
+        expires_at=created_at + timedelta(days=1),
+        findings=result.findings,
+        coverage=[
+            Coverage(
+                source="cloud",
+                tool="prowler",
+                assets=assets,
+                rule_ids=summary.coverage.checks_with_results,
+                all_rules=status == "complete",
+                # Absence is comparable only for the same regions, checks or
+                # services and Prowler version.
+                config_ref=content_key(
+                    [
+                        "cloud",
+                        admission.provider,
+                        sorted(admission.regions),
+                        sorted(admission.checks),
+                        sorted(admission.services),
+                        summary.execution.version,
+                    ]
+                ),
+                status=status,
+            )
+        ],
+        provenance={
+            "cloudSummary": ref,
+            "cloudNativeReport": summary.native_ref or "unavailable",
+            "cloudAccount": f"{admission.provider}:{admission.account}",
+            "cloudOutcome": summary.outcome,
+        },
+    )
+
+
 class AssessmentExecution:
     def __init__(self, service: Any, *, principal: str, context: Mapping[str, Any]):
         self.service = service
@@ -677,6 +736,38 @@ class AssessmentExecution:
                                     "interpretation": web_summary.interpretation,
                                 }
                             )
+                        elif payload.get("schemaVersion") == "cloud-posture/v1":
+                            cloud_summary = CloudAssessmentSummary.model_validate(
+                                payload
+                            )
+                            if cloud_summary.native_ref:
+                                await self.read(cloud_summary.native_ref)
+                            observed_at = metadata.created_at
+                            if observed_at.tzinfo is None:
+                                observed_at = observed_at.replace(tzinfo=UTC)
+                            observation = _cloud_observation(
+                                request, cloud_summary, ref, observed_at
+                            )
+                            scanner_summaries.append(
+                                {
+                                    "scanner": "prowler",
+                                    "target": observation.provenance["cloudAccount"],
+                                    "summaryRef": ref,
+                                    "nativeRefs": (
+                                        {"report": cloud_summary.native_ref}
+                                        if cloud_summary.native_ref
+                                        else {}
+                                    ),
+                                    "coverage": observation.coverage[0].status,
+                                    "outcome": cloud_summary.outcome,
+                                    "execution": {
+                                        "report": cloud_summary.result.execution
+                                    },
+                                    "limitations": sorted(cloud_summary.limitations),
+                                    "verification": cloud_summary.verification,
+                                    "interpretation": cloud_summary.interpretation,
+                                }
+                            )
                         elif payload.get("toolRef") == PASSIVE_SCAN_TOOL_REF:
                             observed_at = metadata.created_at
                             if observed_at.tzinfo is None:
@@ -957,7 +1048,8 @@ def _scanner_summary(summaries: list[dict]) -> str:
             "",
             f"Scanner: {summary['scanner']}"
             + (f" on {summary['target']}" if summary.get("target") else "")
-            + f". Coverage: {summary['coverage']}.",
+            + f". Coverage: {summary['coverage']}."
+            + (f" Outcome: {summary['outcome']}." if summary.get("outcome") else ""),
             f"Execution: {json.dumps(summary['execution'], sort_keys=True)}.",
             "Verification: not performed.",
             "Native evidence: " + ", ".join(summary["nativeRefs"].values()) + ".",
