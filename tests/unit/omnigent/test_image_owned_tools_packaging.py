@@ -68,6 +68,29 @@ def test_shared_host_image_installs_moonmind_cli_without_broadening_docker() -> 
     assert "moonmind --help" in dockerfile
 
 
+def test_shared_host_provides_jq_without_workspace_or_network() -> None:
+    dockerfile = _dockerfile()
+    assert "apt-get install -y --no-install-recommends jq" in dockerfile
+    smoke = yaml.safe_load(WORKFLOW.read_text())
+    checks = smoke["jobs"]["build"]["steps"]
+    helper_check = next(
+        step["run"]
+        for step in checks
+        if step.get("name")
+        == "Verify image-owned helper tools without network or volumes"
+    )
+    commands = helper_check.replace("\\\n", " ").splitlines()
+    jq_commands = [command for command in commands if "jq -en" in command]
+    assert len(jq_commands) == 2
+    assert all("--network none --user 1000:1000" in command for command in jq_commands)
+    assert any("sh -c" in command for command in jq_commands)
+    assert any("bash -lc" in command for command in jq_commands)
+    for command in jq_commands:
+        arguments = shlex.split(command)
+        image_args = arguments[: arguments.index("${image}")]
+        assert "--volume" not in image_args and "-v" not in image_args
+
+
 def test_tools_profile_selects_python_with_portable_skill_dependencies(
     tmp_path,
 ) -> None:

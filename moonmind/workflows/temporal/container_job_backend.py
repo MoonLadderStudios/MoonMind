@@ -1424,6 +1424,13 @@ class DockerContainerJobBackend:
                     "'username:token' for that registry, or point the source at a "
                     "publicly readable image."
                 )
+            if failure is ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED:
+                detail += (
+                    " A registry denial does not establish that the repository or "
+                    "tag exists. Verify successful image publication and the exact "
+                    "reference, then the existing pull identity's permissions before "
+                    "changing credentials or image admission."
+                )
             raise ImageAcquisitionError(
                 detail,
                 failure_class=failure,

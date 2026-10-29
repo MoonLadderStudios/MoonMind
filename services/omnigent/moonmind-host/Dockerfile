@@ -59,6 +59,10 @@ SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 
 USER root
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends jq \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN [[ "${OMNIGENT_BUILD_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] \
     || { echo "OMNIGENT_BUILD_DIGEST must be an exact sha256 build identity" >&2; exit 1; }
 
@@ -162,7 +166,8 @@ RUN command -v codex && codex --version \
     && command -v opencode && opencode --version \
     && command -v gh && gh --version \
     && command -v moonmind && moonmind --help \
-    && bash -lc 'command -v gh && command -v moonmind'
+    && jq --version && jq -en '1 + 1 == 2' \
+    && bash -lc 'command -v gh && command -v moonmind && jq -en "1 + 1 == 2"'
 
 # Portable fan-out Skills use ordinary python3 and require the queue client's
 # HTTP dependency. Use the existing image environment in both shell forms;

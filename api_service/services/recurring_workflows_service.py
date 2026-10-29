@@ -2246,6 +2246,7 @@ class RecurringWorkflowsService:
         definition: RecurringWorkflowDefinition,
         *,
         request_id: UUID | None = None,
+        review_ready_owner: tuple[str, str] | None = None,
     ) -> RecurringWorkflowRun:
         request_id = request_id or uuid4()
         # Serialize product requests on the existing definition, including
@@ -2285,6 +2286,11 @@ class RecurringWorkflowsService:
                 definition_id=definition.id,
                 request_id=str(run.id),
                 scheduled_at=run.scheduled_for,
+                **(
+                    {"review_ready_owner": review_ready_owner}
+                    if review_ready_owner is not None
+                    else {}
+                ),
             )
             self._record_trigger_observation(run, observation)
         except Exception:
@@ -2314,6 +2320,56 @@ class RecurringWorkflowsService:
         definition.updated_at = datetime.now(UTC)
         await self._session.commit()
         return run
+
+    async def start_review_ready_successor(
+        self,
+        *,
+        definition_id: UUID,
+        workflow_id: str,
+        run_id: str,
+        ordinal: int,
+    ) -> dict[str, Any]:
+        """Journal one bounded successor; the original parent still owns its issue.
+
+        Only automatic GitHub searches use this path. Explicit issue targets and
+        other schedules retain their authored overlap behavior. The successor's
+        trusted loader still checks prerequisites and acquires its own claim.
+        """
+        from uuid import NAMESPACE_URL, uuid5
+
+        definition = await self.get_definition(definition_id)
+        parameters = (definition.target or {}).get("initialParameters") or {}
+        task = parameters.get("workflow") or parameters.get("task") or {}
+        steps = task.get("steps") or []
+        searches = [step.get("tool") for step in steps if isinstance(step, Mapping)]
+        is_search = any(
+            isinstance(tool, Mapping)
+            and tool.get("id") == "github.load_issue_preset_brief"
+            and "issueSearch" in (tool.get("inputs") or {})
+            for tool in searches
+        )
+        if not definition.enabled or not is_search:
+            return {"status": "not_applicable"}
+        if (
+            not workflow_id.startswith(f"mm:{definition_id}-")
+            or not run_id
+            or ordinal < 0
+        ):
+            raise RecurringWorkflowValidationError("invalid review-ready occurrence")
+        request_id = uuid5(
+            NAMESPACE_URL, f"moonmind:review-ready:{workflow_id}:{ordinal}"
+        )
+        run = await self.create_manual_run(
+            definition,
+            request_id=request_id,
+            review_ready_owner=(workflow_id, run_id),
+        )
+        return {
+            "status": run.outcome.value,
+            "requestId": str(run.id),
+            "workflowId": run.temporal_workflow_id,
+            "runId": run.temporal_run_id,
+        }
 
     async def reconcile_manual_runs(self, *, limit: int = 100) -> int:
         """Observe requests within a bounded budget, without uncertain resubmission."""
