@@ -1046,6 +1046,11 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "oauth_session.register_profile": ("artifacts", "oauth_session_register_profile"),
     # General-purpose repo operations (provider-agnostic)
     "github_issue.collect_evidence": ("integrations", "github_issue_collect_evidence"),
+    "recurring.review_ready_successor": (
+        "integrations",
+        "recurring_review_ready_successor",
+    ),
+    "recurring.admit_implementation": ("integrations", "recurring_admit_implementation"),
     "repo.create_pr": ("integrations", "repo_create_pr"),
     "repo.sync_pr_unverified_criteria": (
         "integrations",
@@ -4762,6 +4767,41 @@ class TemporalIntegrationActivities:
         artifact_service: TemporalArtifactService | None = None,
     ) -> None:
         self._artifact_service = artifact_service
+
+    async def recurring_admit_implementation(self, payload, /, **kwargs):
+        from uuid import UUID
+        from api_service.db.base import get_async_session_context
+        from api_service.services.recurring_workflows_service import (
+            RecurringWorkflowsService,
+        )
+
+        info = temporal_activity.info()
+        async with get_async_session_context() as session:
+            return await RecurringWorkflowsService(session).admit_issue_implementation(
+                definition_id=UUID(str(payload["definitionId"])),
+                workflow_id=info.workflow_id,
+                run_id=info.workflow_run_id,
+            )
+
+    async def recurring_review_ready_successor(self, payload, /, **kwargs):
+        from uuid import UUID
+
+        from api_service.db.base import get_async_session_context
+        from api_service.services.recurring_workflows_service import (
+            RecurringWorkflowsService,
+        )
+        from temporalio import activity
+
+        info = activity.info()
+        async with get_async_session_context() as session:
+            return await RecurringWorkflowsService(
+                session
+            ).start_review_ready_successor(
+                definition_id=UUID(str(payload["definitionId"])),
+                workflow_id=info.workflow_id,
+                run_id=info.workflow_run_id,
+                ordinal=int(payload.get("ordinal", 0)),
+            )
 
     async def github_issue_collect_evidence(self, payload, /, **kwargs):
         from moonmind.workflows.temporal.activities.github_issue_evidence import (
@@ -10057,6 +10097,34 @@ class TemporalAgentRuntimeActivities:
             ):
                 await _parent_artifact_read_scope()
             published_refs: dict[str, Any] = {}
+            # Only this owning publisher can advertise verified receipt bytes.
+            # Agent-written metadata must not forge durable evidence refs.
+            evidence_metadata = dict(result_dict.get("metadata") or {})
+            evidence_metadata.pop("stepEvidenceRef", None)
+            evidence_metadata.pop("stepEvidenceRefs", None)
+            result_dict["metadata"] = evidence_metadata
+            evidence_workspace = _result_workspace()
+            if evidence_workspace is not None:
+                from moonmind.workflows.temporal.step_evidence import (
+                    StepEvidenceError,
+                    publish_step_evidence,
+                )
+
+                try:
+                    step_evidence = await publish_step_evidence(
+                        workspace=evidence_workspace,
+                        service=self._artifact_service,
+                        principal="system:agent_runtime",
+                        execution_ref=_execution_ref("step.evidence"),
+                        link_parent=_link_verifier_artifact_to_parent,
+                    )
+                    published_refs.update(step_evidence)
+                    evidence_metadata.update(step_evidence)
+                except StepEvidenceError as exc:
+                    # Keep authored work and the primary outcome. The next
+                    # verifier receives no reusable refs from an invalid bundle.
+                    evidence_metadata["stepEvidenceError"] = str(exc)
+                    logger.warning("Step evidence was not published: %s", exc)
             if instruction_ref:
                 published_refs["inputInstructionsRef"] = await _write_reference_artifact(
                     link_type="input.instructions",
@@ -10735,6 +10803,10 @@ class TemporalAgentRuntimeActivities:
                     "inputRefs materialization requires a MoonMind-managed workspace"
                 )
             ownership = workspace.stat()
+            from moonmind.workflows.temporal.step_evidence import (
+                step_evidence_projection_options,
+            )
+
             await WorkspaceArtifactProjector(
                 self._artifact_service
             ).project_attachments(
@@ -10743,6 +10815,7 @@ class TemporalAgentRuntimeActivities:
                 workflow_id=request.correlation_id,
                 runtime_uid=ownership.st_uid,
                 runtime_gid=ownership.st_gid,
+                **step_evidence_projection_options(request.parameters),
             )
         remediation_evidence = await self._materialize_remediation_evidence_for_turn(
             request=request,
@@ -11268,6 +11341,13 @@ class TemporalAgentRuntimeActivities:
         parameters: Mapping[str, Any] | None,
         skill_materialization_metadata: Mapping[str, Any] | None = None,
     ) -> str:
+        from moonmind.workflows.temporal.step_evidence import (
+            append_step_evidence_instructions,
+        )
+
+        instructions = append_step_evidence_instructions(
+            instructions, parameters=parameters
+        )
         prepared = cls._append_selected_jira_tool_hint(
             instructions,
             parameters=parameters,

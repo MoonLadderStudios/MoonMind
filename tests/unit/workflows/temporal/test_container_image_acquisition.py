@@ -747,6 +747,7 @@ async def test_denied_job_image_in_a_declared_repository_names_a_working_remedy(
     message = str(error)
     assert GHCR_SOURCE_REF in message
     assert "read:packages" in message
+    assert message.index("image publication") < message.index("read:packages")
     # The deployment GitHub credential is the recorded default connection;
     # nothing reads a GITHUB_PAT variable any more (#4023).
     assert "repository-connection:git-default" in message
