@@ -294,45 +294,24 @@ def build_shared_host_image_inventory(
 
     ``observed_runtime_binaries`` must be probed from the exact ``image_ref``
     (name, version, and digest observed in the built image), not copied from
-    pack declarations. Each observed version must sit inside its runtime-pack
-    supported range so an arbitrary digest whose image lacks a runtime cannot
-    produce a passing inventory. Proves contents only, never launch or
-    credential readiness.
+    pack declarations. Every pack runtime must be observed, so an arbitrary
+    digest whose image lacks a runtime cannot produce a passing inventory; the
+    observed release is recorded as provenance. Proves contents only, never
+    launch or credential readiness.
     """
-
-    from moonmind.omnigent.harness_platform.runtime_packs import (
-        get_runtime_pack,
-        is_vendor_version_supported,
-    )
 
     if not observed_runtime_binaries:
         raise ValueError("observed_runtime_binaries required from the exact image")
-    pack_ref_by_runtime = {
-        "codex": "codex-native-pack@1",
-        "claude": "claude-native-pack@1",
-        "opencode": "opencode-native-pack@1",
-    }
+    pack_runtimes = ("codex", "claude", "opencode")
     binaries: list[dict[str, Any]] = []
     for item in observed_runtime_binaries:
         name = str(item.get("name") or "")
         version = str(item.get("version") or "")
-        pack_ref = pack_ref_by_runtime.get(name)
-        if pack_ref is None:
+        if name not in pack_runtimes:
             raise ValueError(f"unexpected observed runtime {name!r}")
-        pack = get_runtime_pack(pack_ref)
         if not version.strip():
             raise ValueError("runtime binary version required")
-        if not is_vendor_version_supported(pack, version):
-            raise HarnessPlatformError(
-                f"observed {name} version {version} outside pack range "
-                f"{pack.vendorRuntime.supportedRange}",
-                code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
-            )
-        entry: dict[str, Any] = {
-            "name": name,
-            "version": version,
-            "supportedRange": pack.vendorRuntime.supportedRange,
-        }
+        entry: dict[str, Any] = {"name": name, "version": version}
         if item.get("digest") is not None:
             entry["digest"] = str(item["digest"])
         binaries.append(entry)
@@ -632,16 +611,14 @@ def assert_runtime_readiness(
 ) -> None:
     """Prove exact runtime/auth readiness via pack-selected probes."""
 
-    from moonmind.omnigent.harness_platform.runtime_packs import (
-        get_runtime_pack,
-        is_vendor_version_supported,
-    )
+    from moonmind.omnigent.harness_platform.runtime_packs import get_runtime_pack
 
     pack = get_runtime_pack(row.runtimePackRef)
-    if not is_vendor_version_supported(pack, observed_vendor_version):
+    # The observed release is provenance; a runtime that reports none did not
+    # answer its version probe.
+    if not observed_vendor_version.strip():
         raise HarnessPlatformError(
-            f"vendor version {observed_vendor_version} outside pack range "
-            f"{pack.vendorRuntime.supportedRange}",
+            f"{pack.vendorRuntime.name} reported no version",
             code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
         )
     if pack.readiness.kind != "none" and pack.readiness.kind not in probe_kinds_passed:

@@ -101,7 +101,36 @@ async def test_claude_probe_failure_is_a_retryable_model_catalog_failure() -> No
             selected_model="claude-opus-5-5",
         )
 
-    assert exc_info.value.code == HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE
+    # A failed read is an unavailable observation, not proof the model is absent.
+    assert (
+        exc_info.value.code
+        == HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE
+    )
+    assert exc_info.value.transient is True
+
+
+@pytest.mark.asyncio
+async def test_claude_host_missing_the_served_rule_is_a_confirmed_incompatibility() -> (
+    None
+):
+    backend = ServedProbeBackend(
+        "",
+        code=97,
+        stderr="moonmind-attestation-substrate-unavailable: AttributeError: "
+        "module has no attribute 'claude_catalog_serves_model'\n",
+    )
+
+    with pytest.raises(HarnessPlatformError) as exc_info:
+        await confirm_exact_host_model(
+            backend=backend,
+            container_name="mm-host-1",
+            harness_id="claude-native",
+            model_options=_CLAUDE_OPTIONS,
+            selected_model="claude-opus-5-5",
+        )
+
+    assert exc_info.value.code == HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH
+    assert "claude_catalog_serves_model" in str(exc_info.value)
 
 
 @pytest.mark.asyncio

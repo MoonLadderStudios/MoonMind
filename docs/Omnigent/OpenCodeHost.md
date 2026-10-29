@@ -144,7 +144,6 @@ providerRuntimeId: opencode
 binary:
   command: opencode
   version: 1.18.11
-  supportedRange: ">=1.17.7,<1.19.0"
 credentialMaterializers:
   - opencode-auth-json@1
   - none@1
@@ -594,7 +593,7 @@ selected image digest matches the selected Host Class
 moonmind.omnigent.build_digest matches the pinned Host Class provenance
 omnigent --version reports a parseable release in both server and host
 command -v opencode succeeds
-opencode --version is within >=1.17.7,<1.19.0
+opencode --version reports a release (recorded as provenance, not a gate)
 selected runtime pack matches opencode-native
 host advertises the exact opencode-native implementation
 credential generation is the acquired generation
