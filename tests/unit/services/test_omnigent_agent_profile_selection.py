@@ -329,6 +329,9 @@ async def test_resolver_counts_active_managed_secrets_toward_launch_readiness(
             "volume_ref": None,
             "volume_mount_path": None,
             "secret_refs": {"openai_api_key": "db://team-codex-key"},
+            "env_template": {"OPENAI_API_KEY": {"from_secret_ref": "openai_api_key"}},
+            "file_templates": None,
+            "home_path_overrides": None,
         }
     )
     session.version.document["providerRequirements"].update(
@@ -372,6 +375,9 @@ async def test_resolver_rejects_secret_backed_profile_without_active_secret(
             "volume_ref": None,
             "volume_mount_path": None,
             "secret_refs": {"openai_api_key": "db://team-codex-key"},
+            "env_template": {"OPENAI_API_KEY": {"from_secret_ref": "openai_api_key"}},
+            "file_templates": None,
+            "home_path_overrides": None,
         }
     )
     session.version.document["providerRequirements"].update(

@@ -995,8 +995,8 @@ async def native_journey(
     monkeypatch.setattr(
         "moonmind.omnigent.execute._await_marked_turn_terminal", short_quiescence
     )
-    # ``claude-native-api-key`` is the claude-native journey with an API-key
-    # Provider Profile created by the guided Profile surface.
+    # ``<harness>-api-key`` is that harness's journey with an API-key Provider
+    # Profile created by the guided Profile surface.
     api_key = request.param.endswith("-api-key")
     harness = request.param.removesuffix("-api-key")
     # These are default-path journeys, independent of the test runner's rollout
@@ -1209,6 +1209,7 @@ async def native_journey(
         ("codex-native", "idle"),
         ("claude-native", "idle"),
         ("claude-native-api-key", "idle"),
+        ("codex-native-api-key", "idle"),
         ("opencode-native", "idle"),
         ("opencode-native", "failed"),
     ],
@@ -1318,20 +1319,24 @@ async def assert_native_turn_saved_and_cleaned(
         assert docker.launch_env["OMNIGENT_CONFIG_HOME"] == (
             "/home/app/.moonmind-provider-config"
         )
+        family, base_url = {
+            "claude-native": ("anthropic", "https://api.anthropic.com"),
+            "codex-native": ("openai", "https://api.openai.com/v1"),
+        }[journey.harness]
         assert docker.auth_json == {
             "providers": {
                 "moonmind": {
                     "kind": "key",
-                    "default": ["anthropic", "pi"],
-                    "anthropic": {
-                        "base_url": "https://api.anthropic.com",
+                    "default": [family, "pi"],
+                    family: {
+                        "base_url": base_url,
                         "api_key": SECRET,
                         "models": {"default": "model"},
                     },
                 }
             }
         }
-        assert materialization["providerBaseUrl"] == "https://api.anthropic.com"
+        assert materialization["providerBaseUrl"] == base_url
         assert credential_cleanup["removed"] is True
     elif journey.harness == "opencode-native":
         assert handle["materializerRef"] == "opencode-auth-json@1"

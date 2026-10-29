@@ -36,6 +36,7 @@ from api_service.services.omnigent_agent_bootstrap_service import (
     BOOTSTRAP_PROFILE_ID,
     CLAUDE_API_KEY_BUILTIN_PROFILE_ID,
     CLAUDE_BUILTIN_PROFILE_ID,
+    CODEX_API_KEY_BUILTIN_PROFILE_ID,
     OPENCODE_BUILTIN_PROFILE_ID,
     BootstrapDefaultConflictError,
     build_bootstrap_document,
@@ -250,8 +251,12 @@ async def test_seed_uses_builtin_codex_when_env_absent(session):
         )
         is True
     )
-    count = await session.scalar(select(func.count()).select_from(OmnigentAgentProfile))
-    assert count == 1
+    # The stock Codex agent backs the OAuth default and the managed API-key
+    # configuration.
+    assert set(await session.scalars(select(OmnigentAgentProfile.profile_id))) == {
+        BOOTSTRAP_PROFILE_ID,
+        CODEX_API_KEY_BUILTIN_PROFILE_ID,
+    }
     profile = await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID)
     assert profile is not None
     assert profile.state == "active"
@@ -502,6 +507,77 @@ async def test_api_key_claude_profiles_route_through_managed_api_key_configurati
             .where(
                 OmnigentAgentProfileVersion.profile_id
                 == CLAUDE_API_KEY_BUILTIN_PROFILE_ID
+            )
+        )
+        == 1
+    )
+
+
+def _api_key_codex_provider(profile_id: str, **env):
+    return SimpleNamespace(
+        profile_id=profile_id,
+        runtime_id="codex_cli",
+        provider_id="openai",
+        credential_source="secret_ref",
+        runtime_materialization_mode="api_key_env",
+        execution_configuration=None,
+        secret_refs={"openai_api_key": "env://OPENAI_API_KEY"},
+        env_template={"OPENAI_API_KEY": {"from_secret_ref": "openai_api_key"}, **env},
+        file_templates=None,
+        home_path_overrides=None,
+    )
+
+
+async def test_api_key_codex_profiles_route_through_managed_api_key_configuration(
+    session,
+):
+    api_key = _api_key_codex_provider("codex_openai_api")
+    # A deployment that has not reconciled the configuration yet keeps
+    # routing the Profile to its direct launch.
+    assert await profile_route_runtime(session, None, api_key) == "codex_cli"
+
+    inventory = _inventory("codex-native-ui")
+    assert await reconcile_bootstrap_agent_profile(session, env={}, inventory=inventory)
+    managed = await session.get(OmnigentAgentProfile, CODEX_API_KEY_BUILTIN_PROFILE_ID)
+    assert managed is not None
+    assert managed.default_for_runtime is False
+    version = await session.scalar(
+        select(OmnigentAgentProfileVersion).where(
+            OmnigentAgentProfileVersion.profile_id == CODEX_API_KEY_BUILTIN_PROFILE_ID,
+            OmnigentAgentProfileVersion.version == managed.active_version,
+        )
+    )
+    assert version.rollout_metadata["managedBuiltin"] == "codex-api-key"
+    assert version.rollout_metadata["origin"] == "builtin_codex"
+    assert version.document["harness"] == "codex-native"
+    assert version.document["source"]["upstreamId"] == "codex-native-ui"
+    assert version.document["providerRequirements"] == {
+        "credentialSource": "secret_ref",
+        "materializationMode": "api_key_env",
+        "providerIds": ["openai"],
+        "runtimeId": "codex_cli",
+    }
+
+    assert await profile_route_runtime(session, None, api_key) == "omnigent"
+    selection = await profile_execution_selection(session, api_key, None)
+    assert selection["profileId"] == CODEX_API_KEY_BUILTIN_PROFILE_ID
+    assert selection["harnessId"] == "codex-native"
+    # A Profile whose own config.toml or endpoint the provider config cannot
+    # carry stays direct.
+    untranslatable = _api_key_codex_provider(
+        "codex_custom_endpoint", OPENAI_BASE_URL="https://api.minimax.io/v1"
+    )
+    assert await profile_route_runtime(session, None, untranslatable) == "codex_cli"
+
+    # Reconciliation is idempotent.
+    assert await reconcile_bootstrap_agent_profile(session, env={}, inventory=inventory)
+    assert (
+        await session.scalar(
+            select(func.count())
+            .select_from(OmnigentAgentProfileVersion)
+            .where(
+                OmnigentAgentProfileVersion.profile_id
+                == CODEX_API_KEY_BUILTIN_PROFILE_ID
             )
         )
         == 1

@@ -174,7 +174,9 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         ),
         consumer=(
             "Explicit ``codex_cli`` managed-runtime selections and restored "
-            "direct defaults, their queued starts, retries and recovery, "
+            "direct defaults; Codex key Profiles the provider config cannot "
+            "carry, which ``profile_route_runtime`` routes here; their "
+            "queued starts, retries and recovery, "
             "workflow-scoped Codex AgentSession turns, and recorded "
             "direct-run histories that replay these activities."
         ),
@@ -190,12 +192,15 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "already the unset default."
         ),
         missingOutcome=(
-            "API-key and custom-endpoint Codex Provider Profiles (only "
-            "``codex-oauth-home@1`` exists, the shared OAuth packs "
-            "forbid ``OPENAI_API_KEY``/``OPENAI_BASE_URL``, and no managed "
-            "configuration accepts a ``secret_ref`` Profile), which "
-            "``profile_route_runtime`` routes here, and one session "
-            "reused across a run's steps (see the AgentSession row)."
+            "Codex key Profiles the Omnigent provider config cannot carry "
+            "exactly: the seeded MiniMax Profile brings its own "
+            "``config.toml`` provider (Chat Completions wire, retry and idle "
+            "tuning) through a file template, and some Profiles name an "
+            "endpoint the Omnigent egress profile does not admit. Exact "
+            "OpenAI API-key Profiles already "
+            "run through ``omnigent-provider-config@1`` "
+            "(``omnigent-codex-api-key``). Also one session reused across a "
+            "run's steps (see the AgentSession row)."
         ),
     ),
     LegacyPathRecord(
@@ -236,14 +241,18 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         missingOutcome=(
             "Custom-endpoint Claude key Profiles the Omnigent provider "
             "config cannot carry exactly: the seeded MiniMax ``env_bundle`` "
-            "Profile sets ``API_TIMEOUT_MS`` and "
-            "``CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC``, which have no "
-            "provider-config field, and its ``api.minimax.io`` endpoint "
-            "needs a deployment egress entry. Exact API-key Profiles already "
-            "run through ``omnigent-provider-config@1`` "
-            "(``omnigent-claude-api-key``). Also slash-command passthrough "
-            "(``execution_contract`` classifies ``omnigent`` as unable to "
-            "run slash commands)."
+            "Profile sets ``API_TIMEOUT_MS``, "
+            "``CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`` and "
+            "``ANTHROPIC_SMALL_FAST_MODEL``, and an Omnigent provider family "
+            "has no environment field (native Claude sets only the base URL, "
+            "key helper and tier pins). Exact API-key Profiles already run "
+            "through ``omnigent-provider-config@1`` "
+            "(``omnigent-claude-api-key``). Also slash-command passthrough: "
+            "native Claude delivers a leading ``/command`` to its terminal, "
+            "but ``execution_contract`` classifies by runtime id, and "
+            "``omnigent`` also serves Codex, whose app-server input has no "
+            "slash commands, and the generic path has no counterpart to the "
+            "direct strategies' runtime-command rendering."
         ),
     ),
     LegacyPathRecord(
