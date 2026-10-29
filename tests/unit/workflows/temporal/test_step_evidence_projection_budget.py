@@ -5,6 +5,7 @@ import json
 import os
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -85,8 +86,9 @@ def _continue(parent, monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case", ["two_maximum_file_counts", "aggregate_bytes"])
+@pytest.mark.parametrize("route", ["shared", "profile_bound"])
 async def test_publisher_continuation_materializer_keeps_whole_groups_within_total_budget(
-    tmp_path, monkeypatch, case
+    tmp_path, monkeypatch, case, route
 ):
     monkeypatch.setattr(module.workflow, "patched", lambda _: True)
     root, manifest, _ = candidate(tmp_path)
@@ -141,18 +143,73 @@ async def test_publisher_continuation_materializer_keeps_whole_groups_within_tot
             )
             > workspace_artifacts.MAX_TOTAL_BYTES
         )
-    fresh = tmp_path / "fresh-verifier"
-    fresh.mkdir()
-    evidence = await workspace_artifacts.WorkspaceArtifactProjector(
-        store
-    ).project_attachments(
-        fresh,
-        refs=tuple(request.input_refs),
-        workflow_id="parent",
-        runtime_uid=os.getuid(),
-        runtime_gid=os.getgid(),
-        **step_evidence_projection_options(request.parameters),
-    )
+    if route == "shared":
+        fresh = tmp_path / "fresh-verifier"
+        fresh.mkdir()
+        evidence = await workspace_artifacts.WorkspaceArtifactProjector(
+            store
+        ).project_attachments(
+            fresh,
+            refs=tuple(request.input_refs),
+            workflow_id="parent",
+            runtime_uid=os.getuid(),
+            runtime_gid=os.getgid(),
+            **step_evidence_projection_options(request.parameters),
+        )
+    else:
+        from moonmind.omnigent.profile_bound_execution import (
+            OmnigentProfileBoundExecutionCoordinator,
+        )
+        from tests.unit.omnigent.test_oauth_profile_lifecycle import (
+            _binding,
+            _egress_attestation,
+            _host_lease,
+            _runtime_for,
+        )
+
+        runtime = _runtime_for(tmp_path)
+        runtime._validate_effective_launch = MagicMock(
+            return_value={
+                "providerRuntime": "codex_cli",
+                "harness": "codex-native",
+                "hostMode": "on_demand_docker",
+                "mountClasses": ["workspace"],
+            }
+        )
+        runtime._prepare_skill_projection = AsyncMock(return_value=tmp_path / "skills")
+        runtime._attest_egress = AsyncMock(return_value=_egress_attestation())
+
+        class PreparedBeforeHostLaunch(Exception):
+            pass
+
+        runtime._attest_server_image = AsyncMock(side_effect=PreparedBeforeHostLaunch)
+        workspace_id = hashlib.sha256(b"parent:step-1").hexdigest()[:24]
+        fresh = tmp_path / "workspaces" / "temporal_sandbox" / workspace_id / "repo"
+
+        async def prepare():
+            # This is the same request/ref boundary used by the admitted
+            # codex-profile-bound realizer's coordinator. Only external host
+            # attestation/launch and Skill setup are stubbed; workspace
+            # authority, clone, byte projection and their limits are real.
+            with pytest.raises(PreparedBeforeHostLaunch):
+                await runtime.prepare_host(
+                    binding=_binding(),
+                    host_lease=_host_lease(),
+                    workspace_key="parent:step-1",
+                    workspace_locator={"kind": "sandbox", "workspaceId": workspace_id},
+                    current_workflow_id="parent",
+                    current_step_execution_id="step-1",
+                    repository_source=str(root),
+                    starting_branch="main",
+                    artifact_gateway=store,
+                    evidence_request=request,
+                    attachment_refs=OmnigentProfileBoundExecutionCoordinator._attachment_refs(
+                        request
+                    ),
+                )
+            return runtime._last_workspace_evidence["materialization"]["attachments"]
+
+        evidence = await prepare()
     visible = {item["ref"] for item in evidence}
     assert {"artifact://art_brief", "artifact://art_gate"} <= visible
     assert set(bundles[-1]) <= visible
@@ -163,6 +220,13 @@ async def test_publisher_continuation_materializer_keeps_whole_groups_within_tot
     for group in bundles:
         assert visible.intersection(group) in (set(), set(group))
     assert len(visible) < len(proposed)
+    if route == "profile_bound":
+        (fresh / "retained-candidate.txt").write_bytes(b"accepted local edit")
+        store.payloads["art_next"] = b"new ordinary input"
+        request.input_refs.append("artifact://art_next")
+        refreshed = await prepare()
+        assert "artifact://art_next" in {item["ref"] for item in refreshed}
+        assert (fresh / "retained-candidate.txt").read_bytes() == b"accepted local edit"
 
 
 def test_history_retention_drops_whole_bundles_not_individual_reports(monkeypatch):

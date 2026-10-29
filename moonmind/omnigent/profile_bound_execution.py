@@ -1669,12 +1669,12 @@ class OmnigentProfileBoundExecutionCoordinator:
                     or ""
                 ).strip()
                 or None,
-                # A remediation workspace is already materialized with its own
-                # inputs; only fresh normal runs project declared attachments
-                # through the owning-worker boundary.
+                # Keep the remediation owner's restored candidate. New receipt
+                # inputs still belong to this turn and must be projected.
                 attachment_refs=(
                     ()
                     if remediation_resolution is not None
+                    and not (request.parameters or {}).get("stepEvidenceBundles")
                     else self._attachment_refs(request)
                 ),
             )
@@ -1909,6 +1909,10 @@ class OmnigentProfileBoundExecutionCoordinator:
                                 "omnigentHostId": host_id,
                                 "bridgeSessionId": bridge.bridge_session_id,
                                 "effectiveLaunchRef": effective_launch["snapshotRef"],
+                                **(
+                                    {"materializedInputPaths": dict(preflight["materializedInputPaths"])}
+                                    if preflight.get("materializedInputPaths") else {}
+                                ),
                             },
                             harness=str(effective_launch["harness"]),
                             agent_name=str(effective_launch["agentName"]),
@@ -2318,6 +2322,10 @@ class OmnigentProfileBoundExecutionCoordinator:
                                     "effectiveLaunchRef": effective_launch[
                                         "snapshotRef"
                                     ],
+                                    **(
+                                        {"materializedInputPaths": dict(preflight["materializedInputPaths"])}
+                                        if preflight.get("materializedInputPaths") else {}
+                                    ),
                                 },
                                 harness=str(effective_launch["harness"]),
                                 agent_name=str(effective_launch["agentName"]),

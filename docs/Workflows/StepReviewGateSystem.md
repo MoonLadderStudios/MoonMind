@@ -272,6 +272,8 @@ ordinary brief/gate inputs mandatory and admits newest complete groups within
 its existing 64-reference and 256 MiB aggregate limits, using stored byte sizes.
 Omitted groups remain durable artifacts; they do not prevent verifier startup or
 turn a partial inventory into available proof.
+Shared-host and profile-bound Codex preparation use this materializer, including
+ready workspaces that retain candidate edits while refreshing evidence.
 Paths are relative to the Git checkout. The publisher accepts a checkout at the
 admitted workspace root or its immediate subdirectory; deeper layouts use the
 existing workspace locator's `relativePath`. Discovery checks at most 128 child

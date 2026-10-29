@@ -21,7 +21,9 @@ from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 from api_service.db.models import RecurringWorkflowDefinition
 from api_service.services.recurring_workflows_service import RecurringWorkflowsService
 from moonmind.workflows.temporal.client import TemporalClientAdapter
+from moonmind.workflows.temporal.remediation_loop import RemediationLoopState
 from moonmind.workflows.temporal.schedule_mapping import make_schedule_id
+from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from tests.unit.services.test_recurring_workflows_service import recurring_db
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
@@ -40,6 +42,7 @@ class _Root:
         self.phase = "waiting"
         self.ready = False
         self.done = False
+        self.continue_requested = False
 
     @workflow.signal
     def review_ready(self):
@@ -49,15 +52,29 @@ class _Root:
     def finish(self):
         self.done = True
 
+    @workflow.signal
+    def continue_implementation(self):
+        self.continue_requested = True
+
+    @workflow.query
+    def claim_identity(self) -> dict:
+        return self.lease
+
     @workflow.query
     def current_phase(self) -> str:
         return self.phase
 
     @workflow.run
     async def run(self, payload: dict):
+        self.lease = (payload.get("remediation_loop_continuation") or {}).get(
+            "trustedIssueContext", {}
+        ).get("issueClaimLease") or {
+            "owner": workflow.info().workflow_id,
+            "attemptId": "stable-claim-attempt",
+        }
         while True:
             result = await workflow.execute_activity(
-                "test.admit", payload, start_to_close_timeout=timedelta(seconds=10)
+                "test.admit", payload, start_to_close_timeout=timedelta(seconds=30)
             )
             if result["status"] == "admitted":
                 break
@@ -67,7 +84,24 @@ class _Root:
         await workflow.execute_activity(
             "test.implementation_started", start_to_close_timeout=timedelta(seconds=5)
         )
-        await workflow.wait_condition(lambda: self.ready or self.done)
+        await workflow.wait_condition(
+            lambda: self.ready or self.done or self.continue_requested
+        )
+        if self.continue_requested:
+            owner = MoonMindRunWorkflow()
+            owner._original_input_payload = payload
+            owner._remediation_loop_state = RemediationLoopState(
+                loopId="loop", phase="verification_pending", consumedBudgets={}
+            )
+            owner._trusted_issue_context = {
+                "trustedSource": "moonmind.github.get_issue",
+                "issueClaimLease": self.lease,
+            }
+            # Use the real remediation builder: it carries the original issue
+            # search and the same durable issue claim into the next run.
+            workflow.continue_as_new(
+                owner._build_remediation_loop_continue_as_new_input(ordered_nodes=[])
+            )
         child = None
         try:
             if self.ready:
@@ -96,18 +130,35 @@ class _Activities:
         self.sessions = sessions
         self.adapter = adapter
         self.started = []
+        self.defer_next = False
+        self.deferred_id = None
+        self.deferred = asyncio.Event()
+        self.release_deferred = asyncio.Event()
+        self.decisions = {}
 
     @activity.defn(name="test.admit")
     async def admit(self, payload: dict) -> dict:
         info = activity.info()
+        if (
+            self.defer_next
+            and self.deferred_id is None
+            and self.started
+            and info.workflow_id != self.started[0]
+        ):
+            self.deferred_id = info.workflow_id
+        if info.workflow_id == self.deferred_id and not self.release_deferred.is_set():
+            self.deferred.set()
+            await self.release_deferred.wait()
         async with self.sessions() as session:
-            return await RecurringWorkflowsService(
+            result = await RecurringWorkflowsService(
                 session, temporal_client_adapter=self.adapter
             ).admit_issue_implementation(
                 definition_id=UUID(payload["definitionId"]),
                 workflow_id=info.workflow_id,
                 run_id=info.workflow_run_id,
             )
+            self.decisions[info.workflow_id] = result["status"]
+            return result
 
     @activity.defn(name="test.implementation_started")
     async def implementation_started(self):
@@ -123,7 +174,10 @@ async def _eventually(predicate, timeout=10):
             await asyncio.sleep(0.05)
 
 
-async def test_untracked_successor_blocks_refill_and_next_cron_implementation(tmp_path):
+@pytest.mark.parametrize("case", ["normal", "incumbent_can", "initial_race"])
+async def test_untracked_successor_blocks_refill_and_next_cron_implementation(
+    tmp_path, case
+):
     # The time-skipping server has no Schedules API. This isolated real server
     # exercises the same DontTrackOverlapping behavior as deployment Temporal.
     async with recurring_db(tmp_path) as sessions:
@@ -132,6 +186,19 @@ async def test_untracked_successor_blocks_refill_and_next_cron_implementation(tm
             queue = "test-bounded-issues-" + str(definition_id)
             adapter = TemporalClientAdapter(client=env.client)
             payload = {"definitionId": str(definition_id)}
+            payload["initial_parameters"] = {
+                "system": {"recurrence": payload.copy()},
+                "task": {
+                    "steps": [
+                        {
+                            "tool": {
+                                "id": "github.load_issue_preset_brief",
+                                "inputs": {"issueSearch": {}},
+                            }
+                        }
+                    ]
+                },
+            }
             async with sessions() as session:
                 session.add(
                     RecurringWorkflowDefinition(
@@ -158,6 +225,7 @@ async def test_untracked_successor_blocks_refill_and_next_cron_implementation(tm
                 )
                 await session.commit()
             activities = _Activities(sessions, adapter)
+            activities.defer_next = case == "initial_race"
             async with Worker(
                 env.client,
                 task_queue=queue,
@@ -215,8 +283,12 @@ async def test_untracked_successor_blocks_refill_and_next_cron_implementation(tm
                     await asyncio.sleep(1.1)
                     result = await successor(first_id, first_run, 0)
                     assert result["status"] in {"enqueued", "pending_dispatch"}
-                    await _eventually(lambda: started(2))
-                    second_id = activities.started[1]
+                    if case == "initial_race":
+                        await asyncio.wait_for(activities.deferred.wait(), timeout=10)
+                        second_id = activities.deferred_id
+                    else:
+                        await _eventually(lambda: started(2))
+                        second_id = activities.started[1]
                     second = env.client.get_workflow_handle(second_id)
 
                     running = {
@@ -225,7 +297,7 @@ async def test_untracked_successor_blocks_refill_and_next_cron_implementation(tm
                     }
                     assert first_id in running
                     assert second_id not in running  # Reproduce the actual server trap.
-                    for ordinal in (1, 2):
+                    for ordinal in () if case == "initial_race" else (1, 2):
                         await asyncio.sleep(1.1)
                         assert (await successor(first_id, first_run, ordinal))[
                             "status"
@@ -247,13 +319,40 @@ async def test_untracked_successor_blocks_refill_and_next_cron_implementation(tm
                     third_id = await _eventually(next_cron)
                     third = env.client.get_workflow_handle(third_id)
                     await _eventually(lambda: phase(third, "waiting"))
+
+                    async def waiter_recorded():
+                        return activities.decisions.get(third_id) == "waiting"
+
+                    await _eventually(waiter_recorded)
                     await asyncio.sleep(1.1)
+                    if case == "initial_race":
+                        assert activities.started == [first_id]
+                        activities.release_deferred.set()
+                        await _eventually(lambda: started(2))
                     assert activities.started == [first_id, second_id]
+
+                    if case == "incumbent_can":
+                        original_run = (await second.describe()).run_id
+                        claim = await second.query(_Root.claim_identity)
+                        await second.signal(_Root.continue_implementation)
+
+                        async def continued():
+                            return (await second.describe()).run_id != original_run
+
+                        await _eventually(continued)
+                        await _eventually(lambda: phase(second, "implementing"))
+                        assert await second.query(_Root.claim_identity) == claim
+                        assert activities.started == [first_id, second_id, second_id]
 
                     await second.signal(_Root.review_ready)
                     await _eventually(lambda: phase(second, "review_ready"))
-                    await _eventually(lambda: started(3))
-                    assert activities.started == [first_id, second_id, third_id]
+                    expected = (
+                        [first_id, second_id]
+                        + ([second_id] if case == "incumbent_can" else [])
+                        + [third_id]
+                    )
+                    await _eventually(lambda: started(len(expected)))
+                    assert activities.started == expected
                 finally:
                     await schedule.delete()
                     async for execution in env.client.list_workflows():
