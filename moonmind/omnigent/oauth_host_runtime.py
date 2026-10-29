@@ -44,6 +44,7 @@ from moonmind.omnigent.host_services.registration import (
     HOST_REGISTRATION_ATTEMPTS,
     HOST_REGISTRATION_INTERVAL_SECONDS,
 )
+from moonmind.omnigent.host_services.upstream_probes import runner_env_statement
 from moonmind.omnigent.host_services.workspace import resolve_daemon_attachment_source
 from moonmind.omnigent.mounted_tool_preflight import (
     MountedToolPreflightError,
@@ -4043,18 +4044,12 @@ class OmnigentOAuthHostRuntime:
             )
 
         async def runner_runner(command: str) -> tuple[int, str, str]:
-            # Execute with the stock host's authoritative runner environment
-            # constructor.  Importing this function from the installed Omnigent
-            # build keeps the pre-session proof on the exact path that
-            # HostConnect._handle_launch uses immediately before Popen.
+            # Execute with the stock host's runner environment so the
+            # pre-session proof sees what a session will see.
             runner_probe = (
-                "import os, subprocess, sys; "
-                "from omnigent.host.connect import _build_runner_env; "
-                "env = _build_runner_env(os.environ, server_url=os.environ.get("
-                "'OMNIGENT_SERVER_URL', ''), runner_id='preflight', "
-                "binding_token='preflight', workspace='/workspaces/run', "
-                "parent_pid=os.getpid()); "
-                "result = subprocess.run(['bash', '-lc', sys.argv[1]], env=env, "
+                "import subprocess, sys; "
+                + runner_env_statement("preflight")
+                + "result = subprocess.run(['bash', '-lc', sys.argv[1]], env=env, "
                 "text=True); raise SystemExit(result.returncode)"
             )
             return await self._run(

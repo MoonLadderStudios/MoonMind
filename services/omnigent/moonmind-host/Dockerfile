@@ -19,7 +19,7 @@
 # runtime-pack descriptors in
 # moonmind/omnigent/harness_platform/runtime_packs.py and the OpenCode pin in
 # host_classes.py. Update image pins and pack descriptors in the same change;
-# exact-host attestation rejects a drifted runtime.
+# exact-host attestation records the observed release.
 
 ARG OMNIGENT_HOST_BASE_IMAGE
 ARG OMNIGENT_BUILD_DIGEST

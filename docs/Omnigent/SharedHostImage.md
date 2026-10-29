@@ -171,7 +171,7 @@ The packs drive two production boundaries:
 1. **Host Class selection.** Pack-backed Host Class templates carry `runtime_pack_ref`; the selector resolves the pack, proves it owns the requested harness, and compiles the vendor runtime dependencies from the pack. A pack/harness mismatch or an unknown pack fails selection.
 2. **Exact-host attestation.** `validate_runtime_pack_preflight` validates a launched container against its pack: the pack must own the attested harness, the attested vendor runtime version must sit inside the pack range, and the declared readiness and restricted-egress capabilities must be positively reported. The OpenCode preflight is this same descriptor-driven function with `opencode-native-pack@1`; there are no harness-specific attestation branches.
 
-Changing a vendor pin is a deployment change that must land in the image build args and the pack descriptors in the same change; exact-host attestation rejects a drifted runtime.
+Changing a vendor pin is a deployment change that lands in the image build args and the pack descriptors together. The launched host's observed vendor release is recorded as provenance; generic exact-host attestation rejects an absent runtime, not a different release.
 
 ## 3. Host Classes on the shared digest
 

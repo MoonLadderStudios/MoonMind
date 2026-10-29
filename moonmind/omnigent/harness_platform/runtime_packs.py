@@ -325,7 +325,7 @@ register_runtime_pack(
 # Vendor pins mirror ``services/omnigent/moonmind-host/Dockerfile`` and
 # ``host_classes.OPENCODE_PINNED_VERSION``. Updating a pin is a deployment
 # change that must land in the shared image build args and these descriptors
-# in the same change; exact-host attestation rejects a drifted runtime.
+# in the same change; exact-host attestation records the observed release.
 register_runtime_pack(
     _pack(
         pack_id="codex-native-pack",

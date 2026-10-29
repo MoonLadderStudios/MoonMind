@@ -116,7 +116,7 @@ def install_controlled_catalog() -> None:
         HarnessPlatformError,
         HarnessPlatformFailure,
     )
-    from moonmind.omnigent.host_services import attestation
+    from moonmind.omnigent.host_services import attestation, upstream_probes
 
     require_test_project()
     original_reader = attestation._read_exact_host_model_options
@@ -128,7 +128,7 @@ def install_controlled_catalog() -> None:
         # This literal advertises the controlled provider's supported model.
         # It never reads the request's selected model or upstream catalog.
         fixed_catalog = {"models": [{"id": ZEN_FREE_QUALIFIED}]}
-        probe = attestation._substrate_guarded_probe(
+        probe = upstream_probes.substrate_guarded_probe(
             "import json; print(json.dumps(" + repr(fixed_catalog) + "))"
         )
         code, stdout, stderr = await kwargs["backend"].run(
@@ -143,25 +143,25 @@ def install_controlled_catalog() -> None:
             timeout_seconds=45.0,
             check=False,
         )
-        attestation._raise_if_probe_substrate_unavailable(
+        upstream_probes.raise_if_probe_substrate_unavailable(
             code, stderr, boundary="Controlled first-run provider model catalog"
         )
         if code != 0:
             raise HarnessPlatformError(
                 "exact host controlled provider catalog probe failed",
-                code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
+                code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
             )
         try:
             payload = json.loads(stdout)
         except (TypeError, json.JSONDecodeError) as exc:
             raise HarnessPlatformError(
                 "exact host controlled provider catalog returned invalid JSON",
-                code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
+                code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
             ) from exc
         if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
             raise HarnessPlatformError(
                 "exact host controlled provider probe returned an invalid catalog",
-                code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
+                code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
             )
         return payload, "exact-host-controlled-first-run-provider"
 
