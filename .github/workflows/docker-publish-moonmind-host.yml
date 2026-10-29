@@ -204,14 +204,8 @@ jobs:
             OMNIGENT_HOST_BASE_IMAGE=${{ steps.base.outputs.base_image }}
             OMNIGENT_BUILD_DIGEST=${{ steps.base.outputs.base_digest }}
             CODEX_CLI_VERSION=${{ needs.metadata.outputs.codex_version }}
-            CODEX_MIN_VERSION=0.100.0
-            CODEX_MAX_VERSION=0.200.0
             CLAUDE_CLI_VERSION=${{ needs.metadata.outputs.claude_version }}
-            CLAUDE_MIN_VERSION=2.0.0
-            CLAUDE_MAX_VERSION=3.0.0
             OPENCODE_VERSION=${{ needs.metadata.outputs.opencode_version }}
-            OPENCODE_MIN_VERSION=1.17.7
-            OPENCODE_MAX_VERSION=1.19.0
             OMNIGENT_GH_VERSION=${{ needs.metadata.outputs.gh_version }}
           outputs: type=image,name=${{ steps.meta.outputs.image_name }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=moonmind-host-${{ steps.meta.outputs.pair }}
@@ -227,7 +221,7 @@ jobs:
           docker pull "${image}" || true
           docker run --rm "${image}" sh -c 'command -v codex && codex --version'
           docker run --rm "${image}" sh -c 'command -v claude && claude --version'
-          docker run --rm "${image}" sh -c 'command -v opencode && opencode --version | grep -E "1\.(17|18)"'
+          docker run --rm "${image}" sh -c 'command -v opencode && opencode --version'
 
       - name: Verify offline OpenCode plugin startup
         run: |

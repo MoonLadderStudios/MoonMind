@@ -144,7 +144,6 @@ providerRuntimeId: opencode
 binary:
   command: opencode
   version: 1.18.11
-  supportedRange: ">=1.17.7,<1.19.0"
 credentialMaterializers:
   - opencode-auth-json@1
   - none@1
