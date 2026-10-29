@@ -424,31 +424,29 @@ For example:
 
 ## 9.2 Authorization baseline
 
-Authorization is derived from:
-
-1. caller identity
-2. artifact linkage to an execution
-3. MoonMind authorization rules for viewing that execution
-4. optional explicit grants or service-role rules
-
-Baseline policy:
-
-* read/write metadata requires that the caller can view the linked execution, or owns the artifact, or has an explicit grant
-* blob access is issued only after metadata-level authorization succeeds
+Typed operator or execution admission governs metadata and bytes. Creator labels
+are provenance, not permission. Byte reads additionally enforce restricted-raw,
+quarantine and integrity policy. Retention and dependency records create no grants.
 
 ## 9.3 Service and worker access
 
-Every read requires `ArtifactAccessContext`: operator proof, verified execution admission, or a service reading its resources. Metadata, collections, previews, downloads, Skill delivery and restore share this boundary; creator labels confer no authority. Saved-work and Container Job admission persist exact approved raw rights before start. Retained saved-work runs recover only inputs recorded in their immutable API start/memo; retained create/write pairs recover producer links from that exact run’s completed creation before the write. These decoders drain older admissions without adopting payload identities. Canonical journal records admit their exact ordinary input refs for compaction. Quarantine always denies raw bytes.
+Every read requires `ArtifactAccessContext`, including metadata, previews, downloads,
+Skill delivery and restore. Saved-work and Container Job admission persist approved
+raw rights before start. Historical recovery uses immutable API start/memo inputs or
+that exact run's completed creation, never payload identities. Canonical journals
+admit their recorded ordinary inputs for compaction. Quarantine denies raw bytes.
 
 Execution inputs gain that linkage at trusted boundaries, never from agent-supplied owner strings:
 
-* Admission verifies the persisted plan and frozen inputs before reading the Skill manifest under its original scope. Canonical JSON digests preserve retained formatting. API admission commits input links before start; schedules admit before planning; step successors link refreshed inputs before returning their new binding. Temporal-started children admit during `plan.validate`, before workflow Skill reads or AgentRun launch. These boundaries use the Activity's actual namespace/workflow/run identity. Grants include Skill bodies and required strict evidence, in artifact-ID order to avoid reversed retention locks. Optional certificates receive no grants; owners and bytes stay unchanged.
+* Admission binds the exact persisted plan to its producer-verified dependency closure before granting input access. Historical decoding validates original snapshots and canonical Skill-manifest digests, never current definitions. API grants commit before start; schedules admit before planning; children and step successors admit before returning bindings or reading inputs. Activities use actual namespace/workflow/run identity. Unavailable optional evidence receives no grants; required inputs must remain usable. Ordered artifact locks serialize admission against deletion.
 * Session supervision and resolver preparation reuse existing execution grants. Resolver preparation verifies its exact Activity run's Temporal parent and namespace before reading the source plan, Agent Profile and inherited repository snapshots; new artifacts keep the caller's provenance. Session continuations bind the sealed intent and plan to the canonical session; commands check ownership, revision and fence before reading inputs.
-* `TemporalOmnigentArtifactGateway.read_admitted_input` re-verifies the plan on each call, rejects any ref outside that plan's input closure, and reads with the Step Execution's delegation. The gateway keeps no per-run state, so concurrent runs cannot borrow each other's delegation. Typed, retained-reference, and freshly planned dispatch all admit step-bound inputs before host resolution. Host launch resolution, native-chat bridge authorization, and generic-host/Codex Skill delivery read through it; `read_requested_skill_snapshot` serves the planner's pre-plan read of the request's own Skill set, linking that exact manifest to the Step Execution first because planning precedes admission and the plan admits it anyway, and `read_repository_access_snapshot` is limited to repository snapshots.
-* Workspace, checkpoint, attachment, Skill, and remediation readers carry the Step Execution's `workflow:<id>` from its workflow-built launch envelope. Parent handoffs verify the exact Activity execution's parent and namespace against Temporal, never provider-supplied identities or artifact creators. AgentRun publication links selected terminal evidence and publish receipts from that child's output artifacts to its verified parent. Parent Temporal UUIDs stay separate from semantic Step Execution run IDs; retained branch-turn identities must match that exact child run’s recorded launch and server parent. Missing or conflicting history grants no authority.
+* `TemporalOmnigentArtifactGateway.read_admitted_input` checks the plan and reads only its admitted inputs with Step Execution authority, without cross-run cached scope. Host launch, native chat and Skill delivery use this boundary. Pre-plan `read_requested_skill_snapshot` links only the request's selected manifest; `read_repository_access_snapshot` remains limited to repository snapshots.
+* Workspace, checkpoint, attachment, Skill and remediation readers use the workflow-built Step Execution identity. Parent handoffs verify the actual Activity parent and namespace against Temporal. Publication links selected child outputs and receipts to that verified parent. Temporal UUIDs remain separate from semantic Step Execution run IDs; retained branch turns must match their recorded launch and parent. Missing or conflicting history grants nothing.
 * Writers keep least privilege: managed runtime workers write stdout/stderr/diagnostics for runs they handle, and integration workers write provider snapshots linked to their execution.
 
-Verified readers retain their immutable input-closure, recorded Step and parent checks independently of artifact visibility. Parent-lookup failures use publication's existing bounded retry policy before writes. Readers never substitute artifact creator identities; authenticated artifact checks preserve the admitted operator's instance visibility.
+Visibility never replaces closure, Step or parent checks. Parent-lookup failures use
+publication's bounded retry policy before writes; creator identities are not substitutes
+for admitted authority.
 
 ## 9.4 Auditing
 
@@ -757,13 +755,33 @@ every link matches the changed class, measured from the latest link, never befor
 creation. Pins and live claims protect every artifact. Non-terminal bridge sessions
 also protect recovery journals; ordinary retention resumes when sessions end.
 
-Schedules commit definitions and retained grants before Temporal dispatch. The
-same row lock fences delayed dispatches; startup reconciliation repairs uncertain
-projections by saved ID. Dispatch errors mean saved/pending refresh, not recreate.
-Disabled schedules retain inputs. Bootstrap repairs incomplete lists from verified
-original manifests. Current Skill definitions retain content; unreferenced revisions
-expire normally. Retention and deletion share ordered artifact/alias locks without
-creating access grants or pins.
+Trusted plan, Skill and saved-work producers seal a flat dependency set with the
+owning transaction: logical IDs, original digests, requiredness and roles. Server-owned
+completion and request digests distinguish verified-empty, historical-unsealed and
+corrupt closures. Repeating the same direct request reuses its original closure;
+later child seals cannot redefine it. Admission, retention and recovery consume this
+proof rather than independently discovering nested references.
+
+Required dependencies remain protected for their root's intrinsic lifetime: expiry,
+pins, live claims, current definitions or active execution. Incoming edges alone do
+not extend lifetime, and historical plans do not retain everything forever. Missing
+optional evidence reports partial availability; unavailable required inputs stop
+admission/recovery. Integrity checks do not deliver restricted raw bytes or grant
+permission. Quarantine still prevents executable admission.
+
+Schedules save an explicit input root, including while disabled. Definition and
+closure commit before Temporal dispatch; the same row lock fences delayed dispatch,
+and startup reconciliation repairs uncertain projections by saved ID. Errors mean
+saved/pending refresh, not recreate. Backfill uses original verified snapshots,
+without changing the definition's optimistic version or resolving today's Skills.
+Current Skill pointers retain their revisions; obsolete unowned content remains
+reclaimable through the existing lifecycle and ordered artifact/alias locks.
+
+Before expiry selection, bounded lifecycle pages backfill retained saved-work roots
+from their original manifests and producer-run links. Failed seals roll back and
+remain observable. Until sealing succeeds, only already-linked artifacts from that
+exact namespace/workflow/original run receive temporary protection while the root
+is live. This guard creates no grants and ends when the root is sealed or retired.
 
 `ArtifactTransactionOwnership.CALLER` flushes without committing admission, retry
 or schedule transactions. `STANDALONE` commits independently. Start/reset follows

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import delete
 
 from api_service.db import models
 from moonmind.security.operator_admission import OperatorAdmission
@@ -135,10 +136,30 @@ async def test_saved_deployment_skill_keeps_its_frozen_content_after_skill_updat
             principal="user-1",
         )
         frozen_content_ref = skill.artifact_ref
+        definition_id = uuid4()
+        monkeypatch.setattr(
+            "api_service.services.recurring_workflows_service.uuid4",
+            lambda: definition_id,
+        )
         task = await _complete_artifact(
             artifacts,
             principal="user-1",
-            payload=b'{"instructions":"Use this admitted content."}',
+            payload=json.dumps(
+                {
+                    "snapshotVersion": "original-task-input/v1",
+                    "source": {"kind": "schedule", "definitionId": str(definition_id)},
+                    "target": {
+                        "workflowType": "MoonMind.UserWorkflow",
+                        "initialParameters": {
+                            "targetRuntime": "omnigent",
+                            "workflow": {
+                                "instructions": "Use this admitted content.",
+                                "skill": {"id": "retained-deployment-skill"},
+                            },
+                        },
+                    },
+                }
+            ).encode(),
             content_type="application/json",
         )
         frozen = await _compile_opencode_plan(
@@ -147,7 +168,7 @@ async def test_saved_deployment_skill_keeps_its_frozen_content_after_skill_updat
             launch_policy_ref="opencode-on-demand@1",
             plan_store=SessionExecutionPlanStore(session),
             session_factory=sessions,
-            workflow_id="mm-schedule:saved-deployment-skill",
+            workflow_id=f"mm-schedule:{definition_id}",
             task_input_snapshot_ref=task.artifact_id,
             task_input_snapshot_digest="sha256:" + task.sha256,
             extra_parameters={
@@ -202,6 +223,21 @@ async def test_saved_deployment_skill_keeps_its_frozen_content_after_skill_updat
             policy={},
             actor=OperatorAdmission(via="loopback"),
         )
+        if legacy_incomplete:
+            # Reproduce a pre-closure definition, not merely an obsolete JSON
+            # list on an already migrated root. Backfill must use original bytes.
+            root_id = definition.input_artifact_root_id
+            definition.input_artifact_root_id = None
+            root = await session.get(models.TemporalArtifact, root_id)
+            root.dependency_closure_version = None
+            root.dependency_closure_sha256 = None
+            root.dependency_request_sha256 = None
+            await session.execute(
+                delete(models.TemporalArtifactDependency).where(
+                    models.TemporalArtifactDependency.root_artifact_id == root_id
+                )
+            )
+            await session.commit()
         updated = await skills.update_skill_content(
             skill_slug="retained-deployment-skill",
             content="# Saved Skill\nDifferent content for future admissions.\n",
@@ -226,7 +262,17 @@ async def test_saved_deployment_skill_keeps_its_frozen_content_after_skill_updat
 
         # The saved plan names the original bytes after its current deployment
         # definition moves; the new revision is still current saved work too.
-        assert result.soft_deleted_count == 1
+        support_id = (
+            frozen.envelope.payload.admissionAuthority.supportEvidenceRef.removeprefix(
+                "artifact:"
+            )
+        )
+        # Reissuable support evidence is optional, unlike frozen Skill/input
+        # bytes. Both that certificate and the unrelated expired input may go.
+        assert result.soft_deleted_count == 2
+        assert (
+            await session.get(models.TemporalArtifact, support_id)
+        ).status is models.TemporalArtifactStatus.DELETED
         assert (
             await artifacts.read(
                 artifact_id=frozen_content_ref, access=access_for_test("user-1")

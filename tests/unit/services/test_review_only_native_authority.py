@@ -11,12 +11,13 @@ from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from tests.artifact_access import access_for_test
 from tests.unit.services.test_omnigent_execution_plan_service import (
     _ArtifactService,
+    _compiler_dependency_owner,  # noqa: F401 - pytest fixture import
     _policy_snapshot,
+    _snapshot,
 )
 from tests.unit.services.test_omnigent_execution_plan_service import (
     _ready_opencode_image_pair as _ready_opencode_image_pair,
 )
-from tests.unit.services.test_omnigent_execution_plan_service import _snapshot
 
 
 @pytest.mark.asyncio
