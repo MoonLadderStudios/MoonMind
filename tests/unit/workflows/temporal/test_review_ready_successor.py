@@ -32,6 +32,12 @@ def merge_parent(monkeypatch, *, enabled=True):
         "info",
         lambda: SimpleNamespace(workflow_id="parent", run_id="run"),
     )
+
+    async def wait_condition(predicate, **_kwargs):
+        while not predicate():
+            await asyncio.sleep(0)
+
+    monkeypatch.setattr(run_module.workflow, "wait_condition", wait_condition)
     return parent
 
 
@@ -130,6 +136,35 @@ async def test_successor_does_not_swallow_cancellation(monkeypatch):
     )
     with pytest.raises(CancelledError):
         await parent._maybe_admit_review_ready_successor()
+
+
+@pytest.mark.asyncio
+async def test_confirmed_successor_can_release_another_slot_after_out_of_order_completion(
+    monkeypatch,
+):
+    parent = merge_parent(monkeypatch)
+    parent._publish_context["implementationAvailability"] = {
+        "state": "review_ready",
+        "definitionId": "definition",
+    }
+    activity = AsyncMock(
+        side_effect=[
+            {"status": "enqueued"},
+            {"status": "skipped"},
+            {"status": "enqueued"},
+        ]
+    )
+    monkeypatch.setattr(run_module.workflow, "execute_activity", activity)
+    await parent._maybe_admit_review_ready_successor()
+    await parent._maybe_admit_review_ready_successor()
+    assert activity.await_count == 1
+    # Only the owner's five-minute observation cadence can look for another
+    # slot. The adapter refuses a third parent while the successor is active;
+    # if that successor finishes first, the original merge owner can fill it.
+    await parent._maybe_admit_review_ready_successor(allow_next_observation=True)
+    await parent._maybe_admit_review_ready_successor(allow_next_observation=True)
+    assert [call.args[1]["ordinal"] for call in activity.await_args_list] == [0, 1, 2]
+    assert parent._publish_context["implementationSuccessor"]["status"] == "enqueued"
 
 
 @pytest.mark.asyncio
