@@ -18,7 +18,6 @@ from moonmind.omnigent.harness_platform.runtime_packs import (
     RUNTIME_PACK_SCHEMA_VERSION,
     RuntimePackDescriptor,
     get_runtime_pack,
-    is_vendor_version_supported,
     pack_ref_for_harness,
     register_runtime_pack,
     runtime_dependencies_for_pack,
@@ -102,18 +101,17 @@ def test_pack_schema_and_credential_layout_contract():
     assert "ANTHROPIC_API_KEY" in opencode_forbidden
 
 
-def test_vendor_version_range_is_exclusive_upper():
-    opencode = get_runtime_pack("opencode-native-pack@1")
-    assert is_vendor_version_supported(opencode, "1.17.7")
-    assert is_vendor_version_supported(opencode, "1.18.11")
-    assert not is_vendor_version_supported(opencode, "1.19.0")
-    claude = get_runtime_pack("claude-native-pack@1")
-    assert is_vendor_version_supported(claude, "2.1.257")
-    assert not is_vendor_version_supported(claude, "3.0.0")
-    codex = get_runtime_pack("codex-native-pack@1")
-    assert is_vendor_version_supported(codex, "0.104.0")
-    assert is_vendor_version_supported(codex, "0.137.0")
-    assert not is_vendor_version_supported(codex, "0.200.0")
+def test_vendor_runtime_descriptor_carries_no_release_ceiling():
+    """Packs pin the image's vendor build; they do not gate other releases."""
+
+    for ref in (
+        "opencode-native-pack@1",
+        "claude-native-pack@1",
+        "codex-native-pack@1",
+    ):
+        vendor = get_runtime_pack(ref).vendorRuntime.model_dump(by_alias=True)
+        assert "supportedRange" not in vendor
+        assert vendor["pinnedVersion"]
 
 
 def test_pinned_codex_runtime_meets_native_harness_readiness_floor():

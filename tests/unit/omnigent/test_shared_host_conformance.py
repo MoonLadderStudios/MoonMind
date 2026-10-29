@@ -135,16 +135,34 @@ def test_shared_image_inventory_proves_contents_only():
         "claude-native",
         "opencode-native",
     }
-    # Observed versions must come from the exact image: an arbitrary digest
-    # with a drifted runtime cannot produce a passing inventory.
-    with pytest.raises(HarnessPlatformError):
+    # A different observed release is inventory provenance, not a rejection.
+    drifted = build_shared_host_image_inventory(
+        image_ref=_IMAGE,
+        architecture="linux/amd64",
+        observed_runtime_binaries=(
+            {"name": "codex", "version": "9.999.0"},
+            {"name": "claude", "version": "3.0.0"},
+            {"name": "opencode", "version": "1.19.0"},
+        ),
+        omnigent_build_digest=_BUILD,
+        sbom_ref="sbom:example-ref",
+        provenance_ref="provenance:example-ref",
+    )
+    assert {item["name"]: item["version"] for item in drifted.runtimeBinaries} == {
+        "codex": "9.999.0",
+        "claude": "3.0.0",
+        "opencode": "1.19.0",
+    }
+    assert all("supportedRange" not in item for item in drifted.runtimeBinaries)
+    # An arbitrary digest whose image lacks a runtime cannot produce a
+    # passing inventory.
+    with pytest.raises(ValueError):
         build_shared_host_image_inventory(
             image_ref=_IMAGE,
             architecture="linux/amd64",
             observed_runtime_binaries=(
-                {"name": "codex", "version": "9.999.0"},
+                {"name": "codex", "version": "0.159.0"},
                 {"name": "claude", "version": "2.1.281"},
-                {"name": "opencode", "version": "1.18.11"},
             ),
             omnigent_build_digest=_BUILD,
             sbom_ref="sbom:example-ref",
@@ -422,10 +440,21 @@ def test_runtime_readiness_uses_pack_selected_probes():
         unselected_credential_state_absent=True,
         credential_path_mode_ok=True,
     )
+    # A release outside the former pack range is ready when its probes pass.
+    assert_runtime_readiness(
+        row=row,
+        observed_vendor_version="0.200.0",
+        probe_kinds_passed=("vendor-version",),
+        required_env_present=(),
+        required_env_expected=(),
+        unselected_credential_state_absent=True,
+        credential_path_mode_ok=True,
+    )
+    # A runtime that reports no version did not run its readiness probe.
     with pytest.raises(HarnessPlatformError) as exc:
         assert_runtime_readiness(
             row=row,
-            observed_vendor_version="0.200.0",
+            observed_vendor_version="",
             probe_kinds_passed=("vendor-version",),
             required_env_present=(),
             required_env_expected=(),
