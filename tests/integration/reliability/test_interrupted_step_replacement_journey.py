@@ -309,6 +309,21 @@ class _ArtifactServiceProxy:
         return call
 
 
+class _ArtifactActivities(TemporalArtifactActivities):
+    """Keep composed checkpoint publication inside one real service session."""
+
+    def __init__(self, sessions) -> None:
+        super().__init__(_ArtifactServiceProxy(sessions))
+        self._sessions = sessions
+
+    async def step_checkpoint_create(self, request=None):
+        async with self._sessions() as session:
+            service = TemporalArtifactService(TemporalArtifactRepository(session))
+            return await TemporalArtifactActivities(service).step_checkpoint_create(
+                request
+            )
+
+
 class _InertDockerHosts:
     """Production workspace and cleanup owners around an inert agent container.
 
@@ -881,7 +896,6 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
         )
     docker = fleet.docker
     plan = fleet.plan
-    plan_ref = "artifact:journey-run-plan"
     launches: list[dict] = []
     successor_admissions: list[str] = []
     deliveries: list[tuple[str, int, str, str, str]] = []
@@ -988,6 +1002,7 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
             ).encode(),
             {"artifact_class": "omnigent.execution_plan"},
         )
+        plan_ref = "artifact:" + await put(json.dumps(_plan_document()).encode())
         task_input = b'{"task":"interrupted step journey"}'
         task_input_ref = "artifact:" + await put(task_input)
         artifacts = TemporalOmnigentArtifactGateway(sessions)
@@ -1061,7 +1076,7 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
             )
 
         proxy = _ArtifactServiceProxy(sessions)
-        artifact_activities = TemporalArtifactActivities(proxy)
+        artifact_activities = _ArtifactActivities(sessions)
         (agent_binding,) = bind(
             "agent_runtime",
             "agent_runtime_activities",
@@ -1436,6 +1451,93 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
         "restoredBytes": restored["bytes"],
         "completedBytes": (Path(launches[3]["workspace"]) / "progress.txt").read_text(),
     }
+
+
+@pytest.mark.parametrize("history_inputs", [False, True])
+async def test_checkpoint_activity_composes_one_durable_transaction(
+    tmp_path, monkeypatch, history_inputs
+):
+    """The journey adapter must not split or copy a per-method service proxy."""
+    from temporalio.testing import ActivityEnvironment
+
+    from moonmind.workflows.temporal.artifacts import ExecutionRef
+
+    info = SimpleNamespace(
+        namespace="default",
+        workflow_id="checkpoint-composition",
+        workflow_run_id="checkpoint-run",
+        activity_type="step_checkpoint.create_v2",
+    )
+    monkeypatch.setattr(activity, "info", lambda: info)
+    monkeypatch.setattr(
+        TemporalArtifactService,
+        "_build_store_from_settings",
+        staticmethod(lambda: LocalTemporalArtifactStore(tmp_path / "blobs")),
+    )
+    async with isolated_postgres([]) as sessions:
+        async with sessions.kw["bind"].begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        async with sessions() as session:
+            service = TemporalArtifactService(TemporalArtifactRepository(session))
+            artifact, _ = await service.create(
+                principal="system",
+                content_type="application/json",
+                link=ExecutionRef(
+                    namespace=info.namespace,
+                    workflow_id=info.workflow_id,
+                    run_id=info.workflow_run_id,
+                    link_type="input",
+                ),
+            )
+            await service.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal="system",
+                payload=b"{}",
+                content_type="application/json",
+            )
+            input_ref = artifact.artifact_id
+        result = await ActivityEnvironment().run(
+            _ArtifactActivities(sessions).step_checkpoint_create,
+            {
+                "identity": {
+                    "workflowId": info.workflow_id,
+                    "runId": info.workflow_run_id,
+                    "logicalStepId": "implement",
+                    "executionOrdinal": 1,
+                },
+                "boundary": "after_execution",
+                "taskInputSnapshotRef": (
+                    f"temporal://{info.workflow_id}/{info.workflow_run_id}/task-input"
+                    if history_inputs
+                    else input_ref
+                ),
+                "planRef": (
+                    f"temporal://{info.workflow_id}/{info.workflow_run_id}/plan"
+                    if history_inputs
+                    else input_ref
+                ),
+                "workspace": {
+                    "kind": "git_commit",
+                    "baseCommit": "abc",
+                    "headCommit": "def",
+                },
+                "createdAt": "2026-10-29T23:00:00Z",
+                "idempotencyKey": "checkpoint-composition",
+            }
+        )
+        # Reopen metadata and blob storage, as the cold successor does.
+        async with sessions() as session:
+            service = TemporalArtifactService(TemporalArtifactRepository(session))
+            artifact_id = result["checkpointRef"].removeprefix("artifact://")
+            proof = await service.verified_dependencies(
+                root_artifact_id=artifact_id,
+                access=access_for_test("workflow:" + info.workflow_id),
+            )
+            assert proof is not None
+            if history_inputs:
+                assert proof.dependencies == ()
+            else:
+                assert any(item.artifact_id == input_ref for item in proof.dependencies)
 
 
 async def test_update_restarts_only_the_interrupted_step_from_saved_bytes(

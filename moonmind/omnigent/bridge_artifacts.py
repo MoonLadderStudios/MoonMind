@@ -362,9 +362,22 @@ async def ensure_verified_execution_plan_dependencies(
         separators=(",", ":"),
         ensure_ascii=False,
     ).encode("utf-8")
-    proof_access = access._with_verified_inputs(
-        _artifact_ids(_execution_plan_input_refs(plan, binding))
-    )
+    refs = _execution_plan_input_refs(plan, binding, include_support_evidence=False)
+    admission = plan.payload.admissionAuthority
+    support_id = None
+    if admission is not None and admission.admissionMode == "strict":
+        try:
+            support_id = TemporalOmnigentArtifactGateway._artifact_id(
+                admission.supportEvidenceRef
+            )
+        except OmnigentArtifactError:
+            # An undecodable historical certificate names no artifact to retain
+            # or grant. The admission validator still decides whether ordinary
+            # reissue is allowed; required plan inputs remain strictly decoded.
+            pass
+        else:
+            refs.add(admission.supportEvidenceRef)
+    proof_access = access._with_verified_inputs(_artifact_ids(refs))
     root, body = await artifacts.read(artifact_id=root_id, access=proof_access)
     if (
         body != expected_body
@@ -383,7 +396,6 @@ async def ensure_verified_execution_plan_dependencies(
     )
     if existing is not None:
         return existing
-    refs = _execution_plan_input_refs(plan, binding)
     frozen_refs, attachments, input_access = await _frozen_planning_input_refs(
         repository,
         artifacts,
@@ -437,12 +449,6 @@ async def ensure_verified_execution_plan_dependencies(
     # The access context retains all execution restricted-byte policy.
     input_access = input_access._with_verified_inputs(ids)
     dependencies = []
-    admission = plan.payload.admissionAuthority
-    support_id = (
-        TemporalOmnigentArtifactGateway._artifact_id(admission.supportEvidenceRef)
-        if admission is not None and admission.admissionMode == "strict"
-        else None
-    )
     if support_id is not None:
         content_digests[support_id] = admission.supportEvidenceDigest.removeprefix(
             "sha256:"
@@ -613,7 +619,9 @@ async def _frozen_planning_input_refs(
     return refs, attachments, access._with_verified_inputs(_artifact_ids(refs))
 
 
-def _execution_plan_input_refs(plan, binding) -> set[str]:
+def _execution_plan_input_refs(
+    plan, binding, *, include_support_evidence: bool = True
+) -> set[str]:
     """Every artifact-backed input a verified plan admits for one execution."""
 
     authority = plan.payload.authority
@@ -631,7 +639,8 @@ def _execution_plan_input_refs(plan, binding) -> set[str]:
             plan.payload.effectiveLaunchSnapshotRef,
             (
                 plan.payload.admissionAuthority.supportEvidenceRef
-                if plan.payload.admissionAuthority is not None
+                if include_support_evidence
+                and plan.payload.admissionAuthority is not None
                 and plan.payload.admissionAuthority.admissionMode == "strict"
                 else None
             ),

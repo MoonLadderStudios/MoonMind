@@ -2565,7 +2565,6 @@ async def test_batch_github_fanout_preserves_checkout_authority_replay(
         record_repository_connections,
     )
     from tests.unit.services.test_omnigent_execution_plan_service import (
-        _ArtifactService,
         _compile_opencode_plan,
         _ready_opencode_image_pair,
     )
@@ -2596,11 +2595,37 @@ async def test_batch_github_fanout_preserves_checkout_authority_replay(
             github_repository_assignment(connection_ref, manifest["repository"])
         ],
     )
+    artifact_session = None
     try:
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
-        artifacts = _ArtifactService()
+        artifact_session = sessions()
+        artifacts = TemporalArtifactService(
+            TemporalArtifactRepository(artifact_session),
+            store=LocalTemporalArtifactStore(tmp_path / "replay-artifacts"),
+        )
+        from api_service.api.routers.executions import (
+            _build_original_workflow_input_snapshot_payload,
+        )
+
+        snapshot = _build_original_workflow_input_snapshot_payload(
+            source_kind="create",
+            payload={
+                "repository": normalized_repository,
+                "targetRuntime": "omnigent",
+                "workspace": execution_request.workspace_spec,
+            },
+            task_payload={"instructions": "Use durable refs only."},
+        )
+        snapshot_ref, snapshot_digest = (
+            await omnigent_execution_plan_service.persist_json_artifact(
+                artifact_service=artifacts,
+                principal="user-1",
+                artifact_class="original_task_input_snapshot",
+                payload=snapshot,
+            )
+        )
         compiled = await _compile_opencode_plan(
             monkeypatch,
             artifacts=artifacts,
@@ -2608,16 +2633,30 @@ async def test_batch_github_fanout_preserves_checkout_authority_replay(
             plan_store=DbExecutionPlanStore(sessions),
             session_factory=sessions,
             workflow_id=workflow_id,
+            task_input_snapshot_ref=snapshot_ref,
+            task_input_snapshot_digest=snapshot_digest,
             extra_parameters={
                 "repository": normalized_repository,
                 "workspace": execution_request.workspace_spec,
             },
         )
         plan = compiled.envelope
+        dependencies = await artifacts.verified_dependencies(
+            root_artifact_id=compiled.binding.plan_artifact_ref,
+            access=access_for_test("user-1"),
+        )
+        assert dependencies is not None
+        assert snapshot_ref in {
+            entry.artifact_id for entry in dependencies.dependencies
+        }
         assert plan.payload.credentialBindings["source"].connectionRef == connection_ref
 
         async def read_snapshot(ref, *, request):
-            return artifacts.payloads[ref.removeprefix("artifact:")]
+            _metadata, payload = await artifacts.read(
+                artifact_id=ref.removeprefix("artifact:"),
+                access=access_for_test("user-1"),
+            )
+            return payload
 
         credentials = OmnigentGithubCredentialService(
             SimpleNamespace(),
@@ -2650,6 +2689,8 @@ async def test_batch_github_fanout_preserves_checkout_authority_replay(
         assert clone_input == b"fixture-replay-token"
         assert "ambient-replay-token" not in repr(captured)
     finally:
+        if artifact_session is not None:
+            await artifact_session.close()
         await engine.dispose()
 
 

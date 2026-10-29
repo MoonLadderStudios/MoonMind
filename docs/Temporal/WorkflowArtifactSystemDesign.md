@@ -760,7 +760,8 @@ owning transaction: logical IDs, original digests, requiredness and roles. Serve
 completion and request digests distinguish verified-empty, historical-unsealed and
 corrupt closures. Repeating the same direct request reuses its original closure;
 later child seals cannot redefine it. Admission, retention and recovery consume this
-proof rather than independently discovering nested references.
+proof rather than rediscovering references. Canonical task/plan pointers into the
+checkpoint's own Temporal history remain history references, not artifact dependencies.
 
 Required dependencies remain protected for their root's intrinsic lifetime: expiry,
 pins, live claims, current definitions or active execution. Incoming edges alone do

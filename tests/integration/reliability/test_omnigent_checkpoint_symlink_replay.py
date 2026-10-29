@@ -105,6 +105,7 @@ async def test_next_step_restores_checkpoint_with_excluded_link_targets(
     )
     tables = [
         models.TemporalArtifact.__table__,
+        models.TemporalArtifactDependency.__table__,
         models.TemporalArtifactLink.__table__,
         models.TemporalArtifactPin.__table__,
         models.TemporalArtifactUseClaim.__table__,

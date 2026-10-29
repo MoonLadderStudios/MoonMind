@@ -930,9 +930,23 @@ def saved_work_artifact_dependencies(
         return dependencies
 
     if artifact_kind == "step_execution_checkpoint":
-        add(document.get("taskInputSnapshotRef"), None, "checkpoint.task")
-        # planDigest identifies the plan envelope, not the artifact's bytes.
-        add(document.get("planRef"), None, "checkpoint.plan")
+        # Canonical checkpoints may keep these compact inputs in their own
+        # Temporal history. They are not blobs governed by artifact retention.
+        source = document.get("source") or {}
+        workflow_id, run_id = source.get("workflowId"), source.get("runId")
+        for field, suffix, role in (
+            ("taskInputSnapshotRef", "task-input", "checkpoint.task"),
+            ("planRef", "plan", "checkpoint.plan"),
+        ):
+            ref = document.get(field)
+            if (
+                workflow_id
+                and run_id
+                and ref == f"temporal://{workflow_id}/{run_id}/{suffix}"
+            ):
+                continue
+            # planDigest identifies the envelope, not the artifact's bytes.
+            add(ref, None, role)
         for ref in document.get("preparedInputRefs") or []:
             add(ref, None, "checkpoint.prepared_input")
         workspace = document.get("workspace") or {}

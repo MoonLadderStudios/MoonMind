@@ -139,6 +139,7 @@ def _compiler_dependency_owner(monkeypatch):
         ) == plan.model_dump(mode="json", by_alias=True)
         assert access is not None
         artifacts.sealed_plan_binding = binding
+        return None
 
     monkeypatch.setattr(
         bridge_artifacts, "ensure_verified_execution_plan_dependencies", seal
