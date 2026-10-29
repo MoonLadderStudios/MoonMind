@@ -177,8 +177,6 @@ async def test_scheduled_image_update_reaches_dispatch_with_matching_authority(
             definition.id, definition.version
         ) as current:
             assert current is None
-            if current is not None:
-                await service._ensure_schedule_action_current(current)
         service._lock_definition_for_update.assert_awaited_once_with(definition.id)
         adapter.update_schedule.assert_not_awaited()
         session.commit.assert_awaited_once()

@@ -2775,6 +2775,8 @@ class RecurringWorkflowsService:
                                 await self._adapter.pause_schedule(definition_id=dfn.id)
                                 reconciled += 1
                         except ScheduleNotFoundError:
+                            # Already absent is correct for a disabled schedule;
+                            # reconciliation must not recreate it.
                             pass
                         continue
                     # #4644: the existing reconciler closes unsupported producers
