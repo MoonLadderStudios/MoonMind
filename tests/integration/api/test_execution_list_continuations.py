@@ -1,7 +1,6 @@
 """Exercise logical workflow listing against real Temporal continuation history."""
 
 import asyncio
-from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
@@ -22,6 +21,7 @@ from api_service.api.routers import executions
 from api_service.auth_providers import get_instance_access, get_instance_access_optional
 from api_service.db.base import get_async_session
 from api_service.db.models import Base
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.service import TemporalExecutionService
 from tests.helpers.temporal_visibility import register_deployment_search_attributes
@@ -50,7 +50,7 @@ async def test_list_filters_and_counts_follow_current_run_after_continuation(tmp
             await register_deployment_search_attributes(env)
             owner = str(uuid4())
             workflow_id = f"mm:{uuid4()}"
-            user = SimpleNamespace(id=owner, is_superuser=False)
+            user = OperatorAdmission(via="execution-list-continuations-test")
             service = TemporalExecutionService(
                 session, client_adapter=TemporalClientAdapter(env.client)
             )
