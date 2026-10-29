@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -16,6 +15,7 @@ from api_service.db import base as db_base
 from api_service.db.models import Base
 from api_service.main import app
 from moonmind.config.settings import settings
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal.client import WorkflowStartResult
 
 CURRENT_USER_DEP = get_instance_access
@@ -143,7 +143,7 @@ async def _create_monitored_execution(
 
 def _shared_client(shared_user_id):
     """Return an async ASGI context manager with auth override applied."""
-    user = SimpleNamespace(id=shared_user_id, is_superuser=False)
+    user = OperatorAdmission(via="execution-integrations-fixture")
     # Create/execution routes resolve through the optional boundary; the
     # strict boundary covers the rest. Override both explicitly (#4125).
     app.dependency_overrides[CURRENT_USER_DEP] = lambda: user
