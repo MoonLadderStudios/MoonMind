@@ -74,6 +74,8 @@ async def test_converted_artifact_attached_to_new_workflow(
             monkeypatch.setattr(ex, "_resolve_source_captured_evidence", AsyncMock(return_value=evidence))
 
             class WorkflowService:
+                namespace = "default"
+
                 async def describe_execution(self, workflow_id, **kwargs):
                     assert workflow_id == source.workflow_id
                     return source

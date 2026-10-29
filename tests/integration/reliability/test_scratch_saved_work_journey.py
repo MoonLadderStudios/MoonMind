@@ -30,9 +30,9 @@ from sqlalchemy import event
 from api_service.api.routers import executions
 from api_service.api.routers.temporal_artifacts import (
     _get_temporal_artifact_service,
-    _resolve_principal,
 )
 from api_service.api.routers.temporal_artifacts import router as artifact_router
+from api_service.auth_providers import get_artifact_access
 from api_service.services.omnigent_execution_plan_service import persist_json_artifact
 from moonmind.auth import bound_acquisition, github_credentials
 from moonmind.omnigent import production
@@ -360,14 +360,20 @@ async def test_scratch_output_is_saved_and_downloaded_after_host_loss(
             app = FastAPI()
             app.include_router(artifact_router)
             app.dependency_overrides[_get_temporal_artifact_service] = lambda: service
-            app.dependency_overrides[_resolve_principal] = lambda: operator
+            app.dependency_overrides[get_artifact_access] = lambda: access_for_test(
+                operator
+            )
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url="http://test"
             ) as client:
-                app.dependency_overrides[_resolve_principal] = lambda: "workflow:mm:unrelated"
+                app.dependency_overrides[get_artifact_access] = lambda: access_for_test(
+                    "workflow:mm:unrelated"
+                )
                 denied = await client.get(f"/api/artifacts/{archive_id}/download")
                 assert denied.status_code in {403, 404}, denied.text
-                app.dependency_overrides[_resolve_principal] = lambda: operator
+                app.dependency_overrides[get_artifact_access] = lambda: access_for_test(
+                    operator
+                )
                 response = await client.get(f"/api/artifacts/{archive_id}/download")
             assert response.status_code == 200, response.text
             assert (

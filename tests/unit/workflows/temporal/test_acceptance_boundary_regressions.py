@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -10,6 +11,7 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from temporalio import activity
+from temporalio.testing import ActivityEnvironment
 
 from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
 from moonmind.omnigent.workspace_artifacts import WorkspaceArtifactProjector
@@ -23,6 +25,7 @@ from moonmind.workflows.skills.acceptance_contract import acceptance_evidence
 from moonmind.workflows.skills.approval_policy import parse_step_gate_result
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
     LocalTemporalArtifactStore,
     TemporalArtifactActivities,
     TemporalArtifactAuthorizationError,
@@ -39,6 +42,9 @@ from tests.unit.workflows.skills.test_acceptance_source_binding import (  # noqa
 from tests.unit.workflows.temporal.test_remediation_context import temporal_db
 
 
+_sdk_activity_info = activity.info
+
+
 def _digest(value):
     raw = (
         value
@@ -48,6 +54,44 @@ def _digest(value):
         ).encode()
     )
     return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+async def _link_source_brief(service, artifact_id):
+    # Match the trusted issue loader's parent-owned source handoff. Creator
+    # provenance alone does not grant the verifier access to the original brief.
+    await service.link_artifact(
+        artifact_id=artifact_id,
+        principal="workflow:parent",
+        execution_ref={
+            "namespace": "default",
+            "workflow_id": "parent",
+            "run_id": "parent-run",
+            "link_type": "input.issue_brief_handoff",
+        },
+    )
+
+
+async def _read_as_parent(real_reads, request, monkeypatch):
+    environment = ActivityEnvironment()
+    environment.info = replace(
+        environment.info,
+        namespace="default",
+        workflow_namespace="default",
+        workflow_id="parent",
+        workflow_run_id="parent-run",
+    )
+
+    async def read():
+        assert (
+            ArtifactAccessContext.for_activity().execution_principal
+            == "workflow:parent"
+        )
+        assert "principal" not in request.model_dump()
+        return await real_reads.artifact_read(request)
+
+    with monkeypatch.context() as sdk_context:
+        sdk_context.setattr(activity, "info", _sdk_activity_info)
+        return await environment.run(read)
 
 
 def _request(**parameters):
@@ -152,6 +196,7 @@ async def test_published_full_report_is_readable_by_parent_only(
             b'{"issue_ref":"example/repo#1","description":"Observe live parity."}\n'
         )
         brief = await persist(source_bytes)
+        await _link_source_brief(service, brief.artifact_id)
         evidence_bytes = b'{"observed":"live parity"}\n'
         evidence = await persist(evidence_bytes)
         report = source_bound_report
@@ -260,8 +305,7 @@ async def test_published_full_report_is_readable_by_parent_only(
 
         async def dispatch(name, request, **kwargs):
             assert name == "artifact.read"
-            assert request.principal == "workflow:parent"
-            return await real_reads.artifact_read(request)
+            return await _read_as_parent(real_reads, request, monkeypatch)
 
         monkeypatch.setattr(run_module, "execute_typed_activity", dispatch)
         hydrated = await parent._hydrate_acceptance_result(
@@ -388,6 +432,7 @@ async def test_publisher_preserves_source_bound_unverified_evidence(
             payload=source_bytes,
             content_type="application/json",
         )
+        await _link_source_brief(service, brief.artifact_id)
         binding = source_bound_report["validatedRefs"]["acceptance"]
         binding["scope"]["sourceDigest"] = _digest(source_bytes)
         binding["sourceBinding"] = {"artifactRef": brief.artifact_id, "pointer": ""}
@@ -526,8 +571,7 @@ async def test_publisher_preserves_source_bound_unverified_evidence(
 
             async def dispatch(name, request, **kwargs):
                 assert name == "artifact.read"
-                assert request.principal == "workflow:parent"
-                return await real_reads.artifact_read(request)
+                return await _read_as_parent(real_reads, request, monkeypatch)
 
             monkeypatch.setattr(run_module, "execute_typed_activity", dispatch)
             hydrated = await parent._hydrate_acceptance_result(
