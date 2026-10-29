@@ -22299,6 +22299,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         lambda: self._cancel_requested, timeout=timedelta(seconds=30)
                     )
                 except asyncio.TimeoutError:
+                    # Expected timeout: recheck the durable admission slot.
                     pass
         finally:
             self._awaiting_external = False

@@ -11,7 +11,7 @@ from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
 
 class _Admission(MoonMindRunWorkflow):
-    def _execute_kwargs_for_route(self, _route):
+    def _execute_kwargs_for_route(self, route):
         return {
             "task_queue": workflow.info().task_queue,
             "start_to_close_timeout": timedelta(seconds=5),
