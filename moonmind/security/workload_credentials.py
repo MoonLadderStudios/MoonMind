@@ -18,7 +18,21 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Callable, Mapping, Protocol
 
-from moonmind.security.workload_profiles import AdmittedAssessmentScope, _profile
+from moonmind.security.workload_profiles import (
+    CLOUD_ASSESSMENT_PROFILE_REF,
+    WEB_ASSESSMENT_PROFILE_REF,
+    AdmittedAssessmentScope,
+    ProfileCredential,
+    _profile,
+)
+
+#: The one credential slot of a web assessment: its test identity's secret.
+WEB_IDENTITY_SLOT = "identity"
+#: The one credential slot of a cloud assessment: an issued read-only session
+#: for the admitted account, delivered like a profile's ``aws-sts`` slot.
+CLOUD_SESSION = ProfileCredential(
+    name="cloud", purpose="cloud_inventory", delivery="file", issuer="aws-sts"
+)
 
 #: Session policies attached to every issued audit session. A session's
 #: permissions are the intersection of the role's and these, so a broader role
@@ -50,6 +64,10 @@ def authorize_workload_credentials(
     ``secretRef`` entries are accepted only as a profile's rendered slots.
     """
 
+    if getattr(spec, "web_assessment", None) is not None:
+        return _authorize_web_identity(spec, scope, principal=principal, now=now)
+    if getattr(spec, "cloud_assessment", None) is not None:
+        return _authorize_cloud_session(spec, scope, principal=principal, now=now)
     selection = spec.workload_profile
     requested = list(selection.credentials or ()) if selection else []
     rendered = {item.credential_ref for item in requested}
@@ -115,6 +133,147 @@ def authorize_workload_credentials(
     return decisions
 
 
+def _authorize_web_identity(spec, scope, *, principal: str, now: datetime):
+    """A web identity's secret needs an ``application_auth`` grant for it.
+
+    The grant names the identity as its account and the web workload among
+    its profiles, and must outlast the whole job budget.
+    """
+
+    if any(item.secret_ref is not None for item in spec.environment):
+        raise PermissionError("web assessments take no environment secrets")
+    identity = spec.web_assessment.identity
+    if identity is None:
+        return []
+    if scope is None:
+        raise PermissionError("workload credentials require an admitted assessment")
+    grants = [g for g in scope.grants if g.ref == identity.credential_ref]
+    if not grants:
+        raise PermissionError(
+            "credential reference is not admitted for this assessment"
+        )
+    grants = [g for g in grants if g.purpose == "application_auth"]
+    if not grants:
+        raise PermissionError("credential reference is not admitted for this purpose")
+    grants = [g for g in grants if g.account == identity.name]
+    if not grants:
+        raise PermissionError("credential reference is not admitted for this identity")
+    grants = [g for g in grants if WEB_ASSESSMENT_PROFILE_REF in g.profile_refs]
+    if not grants:
+        raise PermissionError("credential reference is not admitted for web assessment")
+    deadline = now + timedelta(seconds=spec.timeout_seconds)
+    live = [g for g in grants if g.expires_at > now]
+    if not live:
+        raise PermissionError("credential grant has expired")
+    covering = [g for g in live if g.expires_at >= deadline]
+    if not covering:
+        raise PermissionError("credential grant expires before the job budget ends")
+    grant = covering[0]
+    return [
+        {
+            "principal": principal,
+            "assessmentRef": scope.assessment_ref,
+            "profileRef": WEB_ASSESSMENT_PROFILE_REF,
+            "slot": WEB_IDENTITY_SLOT,
+            "purpose": "application_auth",
+            "credentialRef": identity.credential_ref,
+            "account": identity.name,
+            "expiresAt": grant.expires_at,
+            "credentialRevision": grant.revision,
+            "maxSessionSeconds": grant.max_session_seconds,
+            "accessLevel": grant.access_level,
+        }
+    ]
+
+
+def _authorize_cloud_session(spec, scope, *, principal: str, now: datetime):
+    """A cloud assessment needs a ``cloud_inventory`` grant for its account.
+
+    Prowler reads its credentials once, so one issued session must cover the
+    whole budget: the grant's session maximum has to reach the job timeout.
+    """
+
+    cloud = spec.cloud_assessment
+    if scope is None:
+        raise PermissionError("workload credentials require an admitted assessment")
+    grants = [g for g in scope.grants if g.ref == cloud.credential_ref]
+    if not grants:
+        raise PermissionError(
+            "credential reference is not admitted for this assessment"
+        )
+    grants = [g for g in grants if g.purpose == "cloud_inventory"]
+    if not grants:
+        raise PermissionError("credential reference is not admitted for this purpose")
+    grants = [g for g in grants if g.account == cloud.account]
+    if not grants:
+        raise PermissionError("credential reference is not admitted for this account")
+    grants = [g for g in grants if CLOUD_ASSESSMENT_PROFILE_REF in g.profile_refs]
+    if not grants:
+        raise PermissionError(
+            "credential reference is not admitted for cloud assessment"
+        )
+    deadline = now + timedelta(seconds=spec.timeout_seconds)
+    live = [g for g in grants if g.expires_at > now]
+    if not live:
+        raise PermissionError("credential grant has expired")
+    covering = [g for g in live if g.expires_at >= deadline]
+    if not covering:
+        raise PermissionError("credential grant expires before the job budget ends")
+    covering = [g for g in covering if g.max_session_seconds >= spec.timeout_seconds]
+    if not covering:
+        raise PermissionError("one cloud session cannot cover the job budget")
+    grant = covering[0]
+    return [
+        {
+            "principal": principal,
+            "assessmentRef": scope.assessment_ref,
+            "profileRef": CLOUD_ASSESSMENT_PROFILE_REF,
+            "slot": CLOUD_SESSION.name,
+            "purpose": "cloud_inventory",
+            "credentialRef": cloud.credential_ref,
+            "account": cloud.account,
+            "expiresAt": grant.expires_at,
+            "credentialRevision": grant.revision,
+            "roleArn": grant.role_arn,
+            "maxSessionSeconds": grant.max_session_seconds,
+            "accessLevel": grant.access_level,
+        }
+    ]
+
+
+def web_identity_authorization(request, *, now: datetime):
+    """Worker recheck of a web identity decision; ``None`` without identity.
+
+    Raises ``PermissionError`` when the decision is missing or belongs to
+    another job, principal, assessment, identity or reference, and
+    ``TimeoutError`` once the grant has expired.
+    """
+
+    web = request.request.spec.web_assessment
+    decided = list(request.workload_credentials or ())
+    if web.identity is None:
+        if decided:
+            raise PermissionError("workload credential decisions do not match the job")
+        return None
+    if len(decided) != 1:
+        raise PermissionError("web identity was not authorized for this job")
+    (decision,) = decided
+    if (
+        decision.job_id != request.job_id
+        or decision.principal != owner_principal(request.owner)
+        or decision.assessment_ref != web.assessment_ref
+        or decision.profile_ref != WEB_ASSESSMENT_PROFILE_REF
+        or decision.slot != WEB_IDENTITY_SLOT
+        or decision.purpose != "application_auth"
+        or decision.credential_ref != web.identity.credential_ref
+        or decision.account != web.identity.name
+    ):
+        raise PermissionError("web identity was not authorized for this job")
+    if decision.expires_at <= now:
+        raise TimeoutError("workload credential grant has expired")
+    return decision
+
+
 def launch_authorizations(request, profiles, *, now: datetime):
     """Worker recheck; returns ``(slot, authorization)`` pairs to deliver.
 
@@ -124,6 +283,11 @@ def launch_authorizations(request, profiles, *, now: datetime):
     """
 
     spec = request.request.spec
+    if spec.web_assessment is not None:
+        # Delivered as the web identity's file; see web_identity_authorization.
+        return []
+    if spec.cloud_assessment is not None:
+        return [(CLOUD_SESSION, _cloud_decision(request, now=now))]
     selection = spec.workload_profile
     requested = list(selection.credentials or ()) if selection else []
     decided = list(request.workload_credentials or ())
@@ -155,6 +319,28 @@ def launch_authorizations(request, profiles, *, now: datetime):
             raise TimeoutError("workload credential grant has expired")
         pairs.append((slot, decision))
     return pairs
+
+
+def _cloud_decision(request, *, now: datetime):
+    cloud = request.request.spec.cloud_assessment
+    decided = list(request.workload_credentials or ())
+    if len(decided) != 1:
+        raise PermissionError("cloud session was not authorized for this job")
+    (decision,) = decided
+    if (
+        decision.job_id != request.job_id
+        or decision.principal != owner_principal(request.owner)
+        or decision.assessment_ref != cloud.assessment_ref
+        or decision.profile_ref != CLOUD_ASSESSMENT_PROFILE_REF
+        or decision.slot != CLOUD_SESSION.name
+        or decision.purpose != "cloud_inventory"
+        or decision.credential_ref != cloud.credential_ref
+        or decision.account != cloud.account
+    ):
+        raise PermissionError("cloud session was not authorized for this job")
+    if decision.expires_at <= now:
+        raise TimeoutError("workload credential grant has expired")
+    return decision
 
 
 def session_seconds(decision, *, now: datetime, budget_end: datetime) -> int:
@@ -290,6 +476,7 @@ class AwsStsSessionIssuer:
 
 
 __all__ = [
+    "CLOUD_SESSION",
     "MIN_SESSION_SECONDS",
     "READ_ONLY_POLICY_ARNS",
     "AwsStsSessionIssuer",

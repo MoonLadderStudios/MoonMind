@@ -201,8 +201,14 @@ legacy surface that no row classifies.
 
 - `RETIREMENT_INVENTORY` holds one row per retained legacy path that a
   new-admission boundary can select or that an architecture exemption names.
-  Each row records its owner, **retirement class**, surfaces, and the source
-  that still admits new work.
+  Each row records its owner, **retirement class**, surfaces, the source
+  that still admits new work, the actual consumer it serves (journeys,
+  explicit choices, retained histories), and the observable removal
+  condition. A row that still admits new work also names the shared
+  lifecycle operation that would serve its consumer and the concrete outcome
+  that operation still lacks, so a path stays live for a named gap, not its
+  age. Direct Codex/Claude launch, the managed-runtime launcher and the
+  direct Codex AgentSession each have a row.
 - `ARCHITECTURE_BOUNDARY_EXCEPTIONS` holds the boundary exemptions and names the
   row each one shelters.
 - `moonmind/omnigent/retirement_surfaces.py` derives the legacy surfaces the
@@ -253,6 +259,8 @@ deletion removes its row in the same change rather than leaving a stale entry.
 | --- | --- | --- |
 | Direct Codex launch strategy | `omnigent.legacy.direct_codex_launch` | `active_product_path` |
 | Direct Claude launch strategy | `omnigent.legacy.direct_claude_launch` | `active_product_path` |
+| `ManagedRuntimeLauncher` for the direct strategies | `omnigent.legacy.managed_runtime_launcher` | `active_product_path` |
+| Direct Codex `MoonMind.AgentSession`, session runtime and Docker controller | `omnigent.legacy.direct_agent_session` | `active_product_path` |
 | `codex-profile-bound@1` realizer | `omnigent.legacy.profile_bound_realizer` | `active_product_path` |
 | `profile_bound_execution.py` coordinator (and its default port selection) | `omnigent.legacy.profile_bound_execution` | `active_product_path` |
 | `oauth_host_runtime.py` launch, mount, credential-volume, and egress argument vectors | `omnigent.legacy.oauth_host_runtime` | `active_product_path` |
@@ -264,6 +272,20 @@ deletion removes its row in the same change rather than leaving a stale entry.
 | Pi host image variable | `omnigent.legacy.pi_host_image_alias` | `active_product_path` |
 | `native_ui_compat.py` chat projection | `omnigent.legacy.native_ui_compat` | `active_product_path` |
 | Embedded host/runner transport admission | `omnigent.legacy.embedded_host_transport` | `new_admission_disabled` |
+
+The direct Codex/Claude launch, AgentSession, profile-bound and OAuth host
+rows stay live because the shared lifecycle still lacks the Codex and Claude
+key Profiles the Omnigent provider config cannot carry exactly (the seeded
+MiniMax Profiles), Claude slash-command passthrough, one session reused across
+a run's steps, static-connected Codex/Claude hosts, and OAuth credential
+maintenance of profile-bound and static hosts with its host-lease janitor.
+API-key Codex and Claude Profiles that translate exactly already run on the
+shared lifecycle, and credential maintenance drains a Profile's generic hosts
+through the generic host janitor before mutating its OAuth home. The durable
+consumer inventory is checked first, so Profiles without generic consumers
+do not require an execution plane for credential maintenance. Each row's
+`missingOutcome` names its own share; the Codex/Claude CLIs and Node stay in
+the application image until those rows are deleted.
 
 Three enforced-boundary exemptions are owned by rows above:
 `omnigent_catalog.py`'s in-handler readiness projection reading the materializer

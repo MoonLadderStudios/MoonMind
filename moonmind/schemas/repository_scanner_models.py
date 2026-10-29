@@ -264,3 +264,326 @@ class ImageAssessment(Contract):
             {"name": name, "relativePath": f"{self.output_directory}/{name}.json"}
             for name in [native, "execution", "summary"]
         ]
+
+
+WebMode = Literal["baseline", "api", "active"]
+HttpMethod = Literal["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+#: The scope action class each mode needs. Network permission reaches the
+#: target; only these classes authorize what is done to the application.
+WEB_ACTION_CLASSES: dict[str, str] = {
+    "baseline": "web-passive",
+    "api": "web-api",
+    "active": "web-active",
+}
+_ORIGIN = re.compile(
+    r"^https?://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}"
+    r"(?::[0-9]{1,5})?$"
+)
+_SEGMENT = r"[A-Za-z0-9._~!$&'()*+,;=:@%-]+"
+# Segments are separated by exactly one slash, so matching is linear.
+_ROUTE = re.compile(rf"^/(?:{_SEGMENT}(?:/{_SEGMENT})*/?)?$")
+_NAME = r"^[a-z0-9][a-z0-9.-]{0,63}$"
+WEB_OUTPUT_FILES = {
+    "report": "report.json",
+    "messages": "messages.har",
+    "passive-report": "passive-report.json",
+    "passive-messages": "passive-messages.har",
+}
+
+
+def web_origin(value: str) -> str:
+    """``scheme://host[:port]`` with an exact DNS name, nothing else."""
+    value = value.lower()
+    if not _ORIGIN.fullmatch(value):
+        raise ValueError("web origins are scheme://host[:port] with a DNS name")
+    port = value.rpartition(":")[2]
+    if value.count(":") == 2 and not 1 <= int(port) <= 65535:
+        raise ValueError("web origin port is out of range")
+    return value
+
+
+def web_route(value: str) -> str:
+    """A normalized absolute path prefix without query, fragment or dot parts."""
+    if (
+        len(value) > 512
+        or not _ROUTE.fullmatch(value)
+        or any(part in {".", ".."} for part in value.split("/"))
+        or "//" in value
+    ):
+        raise ValueError("web routes are normalized absolute path prefixes")
+    return value.rstrip("/") or "/"
+
+
+def route_within(path: str, prefix: str) -> bool:
+    """Whether ``path`` is ``prefix`` or below it on a segment boundary."""
+    return prefix == "/" or path == prefix or path.startswith(prefix + "/")
+
+
+class WebRoute(Contract):
+    path: str
+    methods: list[HttpMethod] = Field(
+        default_factory=lambda: ["GET"], min_length=1, max_length=7
+    )
+
+    _path = field_validator("path")(web_route)
+
+    @field_validator("methods")
+    @classmethod
+    def unique_methods(cls, value):
+        if len(set(value)) != len(value):
+            raise ValueError("duplicate route method")
+        return value
+
+
+class WebIdentity(Contract):
+    """One admitted test identity; its secret arrives only at launch.
+
+    ``form`` posts ``username`` and the secret to ``loginPath``; ``bearer``
+    sends the secret as a bearer token to the admitted origin only. The
+    verification route must show ``loggedInMarker`` to the identity, and a
+    form identity's route must not show it anonymously, so authentication is
+    checked rather than assumed. A bearer token rides on every request, so
+    its marker must be specific to the identity, such as its account name.
+    """
+
+    name: str = Field(pattern=_NAME)
+    method: Literal["form", "bearer"]
+    credential_ref: str = Field(min_length=4, max_length=1024)
+    verification_path: str
+    logged_in_marker: Text = Field(max_length=256)
+    login_path: str | None = None
+    username: Text | None = Field(None, max_length=256)
+    username_field: str = Field("username", pattern=r"^[A-Za-z0-9_.-]{1,64}$")
+    password_field: str = Field("password", pattern=r"^[A-Za-z0-9_.-]{1,64}$")
+
+    _paths = field_validator("verification_path", "login_path")(
+        lambda value: None if value is None else web_route(value)
+    )
+
+    @field_validator("credential_ref")
+    @classmethod
+    def opaque_reference(cls, value):
+        if "://" not in value:
+            raise ValueError("secret references must use an opaque reference URI")
+        return value
+
+    @model_validator(mode="after")
+    def method_fields(self):
+        form = self.method == "form"
+        if form != (self.login_path is not None and self.username is not None):
+            raise ValueError("form identities, and only they, name a login and user")
+        return self
+
+
+class ApiDefinition(Contract):
+    """An authorized OpenAPI or GraphQL definition read from one artifact."""
+
+    format: Literal["openapi", "graphql"]
+    input_artifact_ref: str = Field(pattern=r"^art_[0-9A-Za-z]{1,64}$")
+    endpoint_path: str | None = None
+    max_bytes: int = Field(2 * 1024 * 1024, ge=64, le=16 * 1024 * 1024)
+
+    _endpoint = field_validator("endpoint_path")(
+        lambda value: None if value is None else web_route(value)
+    )
+
+    @model_validator(mode="after")
+    def endpoint(self):
+        if (self.format == "graphql") != (self.endpoint_path is not None):
+            raise ValueError("GraphQL definitions, and only they, name an endpoint")
+        return self
+
+
+class WebAssessment(Contract):
+    """One ZAP Automation Framework run against one admitted origin.
+
+    ``baseline`` crawls and checks passively; ``api`` imports an admitted
+    definition and checks passively; ``active`` adds the active scanner and
+    is the only mode that sends attack payloads. One job tests at most one
+    identity, so every observation is attributable to it.
+    """
+
+    mode: WebMode
+    assessment_ref: str | None = Field(None, pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$")
+    origin: str
+    routes: list[WebRoute] = Field(min_length=1, max_length=32)
+    start_paths: list[str] = Field(
+        default_factory=lambda: ["/"], min_length=1, max_length=16
+    )
+    exclusions: list[str] = Field(default_factory=list, max_length=64)
+    identity: WebIdentity | None = None
+    api_definition: ApiDefinition | None = None
+    discovery: list[Literal["spider", "ajax-spider"]] = Field(
+        default_factory=lambda: ["spider"], max_length=2
+    )
+    active_strength: Literal["low", "medium", "high"] | None = None
+    egress_policy_ref: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$")
+    max_requests_per_second: int = Field(10, ge=1, le=100)
+    max_depth: int = Field(5, ge=1, le=20)
+    max_children: int = Field(50, ge=1, le=1000)
+    output_directory: str = "web-assessment"
+    max_report_bytes: int = Field(MAX_REPORT_BYTES, ge=128, le=MAX_REPORT_BYTES)
+    timeout_seconds: int = Field(900, ge=300, le=3600)
+
+    _origin = field_validator("origin")(web_origin)
+
+    @field_validator("start_paths", "exclusions")
+    @classmethod
+    def routes_only(cls, values):
+        return [web_route(v) for v in values]
+
+    @field_validator("output_directory")
+    @classmethod
+    def output_relative(cls, value):
+        return relative_path(value)
+
+    @model_validator(mode="after")
+    def admitted_choices(self):
+        paths = [r.path for r in self.routes]
+        if len(set(paths)) != len(paths):
+            raise ValueError("duplicate web route")
+        if len(set(self.discovery)) != len(self.discovery):
+            raise ValueError("duplicate discovery method")
+        if "/" in self.exclusions:
+            raise ValueError("an exclusion cannot cover the whole origin")
+
+        def admitted(path: str, method: str = "GET") -> bool:
+            return not any(route_within(path, e) for e in self.exclusions) and any(
+                route_within(path, r.path) and method in r.methods for r in self.routes
+            )
+
+        if not all(admitted(p) for p in self.start_paths):
+            raise ValueError("start paths must be admitted, unexcluded GET routes")
+        if self.identity is not None:
+            if not admitted(self.identity.verification_path):
+                raise ValueError("identity verification must use an admitted route")
+            if self.identity.login_path and not admitted(
+                self.identity.login_path, "POST"
+            ):
+                raise ValueError("form login must POST to an admitted route")
+        api = self.api_definition
+        if (self.mode == "api") and api is None:
+            raise ValueError("api mode reads an admitted API definition")
+        if self.mode == "baseline" and api is not None:
+            raise ValueError("baseline mode crawls; API definitions select api mode")
+        if (
+            api is not None
+            and api.endpoint_path
+            and not admitted(api.endpoint_path, "POST")
+        ):
+            raise ValueError("GraphQL endpoint must accept admitted POST requests")
+        if self.mode != "api" and not self.discovery:
+            raise ValueError("crawling modes need a discovery method")
+        # Intensity is chosen explicitly and never inferred or upgraded.
+        if (self.mode == "active") != (self.active_strength is not None):
+            raise ValueError("active mode, and only it, sets an active strength")
+        return self
+
+    @property
+    def action_class(self) -> str:
+        return WEB_ACTION_CLASSES[self.mode]
+
+    def outputs(self) -> list[dict]:
+        # Active mode reports its passive phase first, so a timeout or
+        # cancellation during active testing still leaves checked evidence.
+        return [
+            {"name": name, "relativePath": f"{self.output_directory}/{file}"}
+            for name, file in WEB_OUTPUT_FILES.items()
+            if self.mode == "active" or not name.startswith("passive-")
+        ]
+
+
+#: Providers with a real adapter. Others are refused at admission with an
+#: explicit unsupported result rather than launched without coverage.
+CLOUD_PROVIDERS = ("aws",)
+#: The scope action class of read-only posture collection. Remediation is a
+#: separate operation this workload cannot express.
+CLOUD_ACTION_CLASS = "cloud-posture"
+CLOUD_REGION = re.compile(r"^[a-z]{2}(?:-[a-z]+)+-[0-9]{1,2}$")
+_CHECK = re.compile(r"^[a-z0-9][a-z0-9_]{0,127}$")
+_SERVICE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+#: A job command holds 128 argv entries and the rendered Prowler argv spends
+#: 18 on the provider, flags and outputs; the rest name regions and checks or
+#: services, so an admission never renders a job its command cannot hold.
+CLOUD_SELECTION_ARGV = 110
+
+
+def cloud_regions(values: list[str]) -> list[str]:
+    if any(not CLOUD_REGION.fullmatch(v) for v in values):
+        raise ValueError("cloud regions are provider region names")
+    if len(set(values)) != len(values):
+        raise ValueError("duplicate cloud region")
+    return values
+
+
+class CloudAssessment(Contract):
+    """One read-only Prowler posture assessment of one admitted cloud account.
+
+    The job selects its regions and either explicit checks or services; it
+    never names remediation, export or notification options. The account's
+    credential is a ``cloud_inventory`` grant exchanged for a read-only
+    session, so one session must cover the whole budget.
+    """
+
+    provider: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,31}$")
+    assessment_ref: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$")
+    account: str = Field(pattern=r"^[0-9]{12}$")
+    credential_ref: str = Field(min_length=4, max_length=1024)
+    regions: list[str] = Field(min_length=1, max_length=32)
+    checks: list[str] = Field(default_factory=list, max_length=CLOUD_SELECTION_ARGV - 1)
+    services: list[str] = Field(default_factory=list, max_length=64)
+    egress_policy_ref: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]{0,127}$")
+    max_retry_attempts: int = Field(3, ge=0, le=10)
+    output_directory: str = "cloud-assessment"
+    max_report_bytes: int = Field(MAX_REPORT_BYTES, ge=1024, le=MAX_REPORT_BYTES)
+    timeout_seconds: int = Field(1800, ge=300, le=43200)
+
+    @field_validator("provider")
+    @classmethod
+    def supported_provider(cls, value):
+        if value not in CLOUD_PROVIDERS:
+            raise ValueError(
+                f"cloud provider {value} is unsupported; supported: "
+                + ", ".join(CLOUD_PROVIDERS)
+            )
+        return value
+
+    _regions = field_validator("regions")(cloud_regions)
+
+    @field_validator("credential_ref")
+    @classmethod
+    def opaque_reference(cls, value):
+        if "://" not in value:
+            raise ValueError("secret references must use an opaque reference URI")
+        return value
+
+    @field_validator("output_directory")
+    @classmethod
+    def output_relative(cls, value):
+        return relative_path(value)
+
+    @model_validator(mode="after")
+    def explicit_selection(self):
+        if bool(self.checks) == bool(self.services):
+            raise ValueError("select either explicit checks or services")
+        for values, pattern in ((self.checks, _CHECK), (self.services, _SERVICE)):
+            if any(not pattern.fullmatch(v) for v in values):
+                raise ValueError("checks and services are Prowler identifiers")
+            if len(set(values)) != len(values):
+                raise ValueError("duplicate check or service")
+        if len(self.regions) + len(self.checks or self.services) > CLOUD_SELECTION_ARGV:
+            raise ValueError(
+                f"regions plus checks or services exceed the {CLOUD_SELECTION_ARGV} "
+                "argv entries a job command can hold"
+            )
+        return self
+
+    def outputs(self) -> list[dict]:
+        return [
+            {"name": name, "relativePath": f"{self.output_directory}/{file}"}
+            for name, file in CLOUD_OUTPUT_FILES.items()
+        ]
+
+
+#: Prowler's native JSON-OCSF report and its error log.
+CLOUD_OUTPUT_FILES = {"report": "prowler.ocsf.json", "log": "prowler.log"}

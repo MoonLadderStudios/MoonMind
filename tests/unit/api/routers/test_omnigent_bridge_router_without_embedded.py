@@ -174,6 +174,12 @@ class _EmptyStore:
     async def list_embedded_host_readiness(self):
         return []
 
+    async def count_active_embedded_host_leases(self):
+        return 0
+
+    async def cleanup_required_host_lease_refs(self):
+        return []
+
 
 import asyncio
 

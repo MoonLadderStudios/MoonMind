@@ -247,6 +247,48 @@ before this handoff retain their original inline instructions on replay.
 Both the full report and its remediation wrapper are linked to the admitted
 parent workflow, whose identity owns attachment reads. Unrelated, restricted,
 and quarantined artifacts remain rejected; this grants no general service access.
+
+Implementation and remediation steps may write `artifacts/step-evidence.json`:
+
+```json
+{
+  "schemaVersion": "step-evidence/v1",
+  "subject": {
+    "repository": "owner/repository",
+    "revision": "<Git HEAD>",
+    "contentDigest": "git-tree:<HEAD tree>"
+  },
+  "files": [{"path": "artifacts/checks.json", "sha256": "sha256:<file digest>"}]
+}
+```
+
+The owning artifact publisher checks the clean candidate, bounded regular files,
+digests, and outbound content before storing the original bytes. It adds durable
+`artifactRef` values to the inventory and links files to the proven Temporal
+parent. `stepEvidenceRefs` accompany later step attachments and remediation
+continuations, so fresh workspaces receive reports as well as their summaries.
+Inventories and reports travel as whole groups. The shared materializer keeps
+ordinary brief/gate inputs mandatory and admits newest complete groups within
+its existing 64-reference and 256 MiB aggregate limits, using stored byte sizes.
+Omitted groups remain durable artifacts; they do not prevent verifier startup or
+turn a partial inventory into available proof.
+Shared-host and profile-bound Codex preparation use this materializer, including
+ready workspaces that retain candidate edits while refreshing evidence.
+Paths are relative to the Git checkout. The publisher accepts a checkout at the
+admitted workspace root or its immediate subdirectory; deeper layouts use the
+existing workspace locator's `relativePath`. Discovery checks at most 128 child
+directories, rejects multiple inventories and never follows symlinks.
+The limit is 32 files, 8 MiB per file and 32 MiB total. A malformed inventory
+records `stepEvidenceError` without changing the implementation result.
+
+An inventory is transport, not acceptance or proof that a test ran. The verifier
+still inspects production code and applies the existing source, dependency,
+Content, workload and topology rules to each receipt. Failed checks and unavailable
+capability observations can travel with passing receipts; their controlling
+inputs determine when to repeat them. In particular, a registry denial may hide
+an unpublished image: inspect the original pull diagnostics and image publication
+before changing credentials or admission.
+
 Diagnostics must remain readable without another LLM invocation. Distinguish
 implementation failures, report defects, missing evidence, infrastructure failures,
 and real human decisions rather than displaying all as manual review.

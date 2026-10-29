@@ -10,7 +10,7 @@ import hashlib
 import json
 import re
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -18,11 +18,6 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
 )
-
-if TYPE_CHECKING:
-    from moonmind.omnigent.harness_platform.runtime_packs import (
-        RuntimePackDescriptor,
-    )
 
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _HOSTCLASS_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*@\d+$")
@@ -143,9 +138,7 @@ def validate_exact_host_attestation(
             code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
         )
     if attestation.hostImageRef != expectedImageRef:
-        # Rebuilt images change SHA/patch while keeping major.minor. Accept
-        # same-repository drift here; series compatibility was proven by the
-        # launch-time version gates and is re-checked below for vendors. A
+        # A rebuilt image changes its digest. Accept same-repository drift; a
         # foreign repository is never compatible drift.
         try:
             from moonmind.omnigent.host_image_drift import is_compatible_image_drift
@@ -226,30 +219,10 @@ def validate_exact_host_attestation(
                 f"required vendor runtime {name} missing",
                 code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
             )
-        # Vendor patch may evolve (1.18.11 -> 1.18.12); only major.minor
-        # steers compatibility. Exact-equality matching fails every vendor
-        # patch rebuild.
-        try:
-            from moonmind.omnigent.compatibility import vendor_versions_compatible
-
-            vendor_ok = bool(
-                vendor_versions_compatible(
-                    str(exp_dep.get("version") or ""), actual.version
-                )
-            )
-        except Exception:
-            vendor_ok = False
-        if not vendor_ok:
-            raise HarnessPlatformError(
-                f"vendor runtime {name} version mismatch",
-                code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
-            )
-        # A descriptor-driven runtime pack pins the vendor version identity;
-        # only an explicitly recorded expectation carries a digest to compare.
-        # Patch drift necessarily changes the vendor binary digest, so the
-        # digest pin is enforced only when the versions match exactly;
-        # series-compatible patch drift is already bounded by the version
-        # gate above.
+        # A different release is provenance, not incompatibility: required
+        # behavior is proven by capabilities and readiness, not version
+        # strings. The same release with different bytes is not the runtime
+        # the support evidence recorded.
         expected_digest = exp_dep.get("digest")
         versions_equal = str(exp_dep.get("version") or "") == actual.version
         if expected_digest and versions_equal and str(expected_digest) != actual.digest:
@@ -290,122 +263,3 @@ def validate_exact_host_attestation(
             "host not configured",
             code=HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NOT_READY,
         )
-
-
-# ---- Runtime-pack-driven exact-host preflight (issues #3827, #3831) ----
-
-
-def validate_runtime_pack_preflight(
-    attestation: HostHarnessAttestation,
-    *,
-    expectedRuntimePackRef: str,
-    expectedHostClassRef: str,
-    expectedImageRef: str,
-    expectedOmnigentBuildDigest: str,
-    expectedImplementation: dict[str, Any],
-    expectedHostId: str | None = None,
-    requiredCapabilities: list[str] | None = None,
-    expectedArchitecture: str | None = None,
-    currentHostLeaseGeneration: int | None = None,
-    attestationGeneration: int | None = None,
-    max_age_seconds: int = 600,
-    now: datetime | None = None,
-    require_restricted_egress: bool = True,
-    requiredSkillDeliveryRef: str | None = None,
-) -> RuntimePackDescriptor:
-    """Descriptor-driven exact-host preflight (issue #3827).
-
-    The trusted runtime pack — not a harness-specific branch — declares:
-
-    - which vendor runtime the exact host must report (name + version),
-    - the supported vendor range (exclusive upper bound),
-    - the readiness probe the caller executes inside the exact container.
-
-    The launched container must have been selected by a Host Class that binds
-    the same pack, so the attested vendor runtime identity is compared against
-    the pack rather than against harness-specific hard-coded expectations.
-    """
-
-    from moonmind.omnigent.harness_platform.runtime_packs import (
-        get_runtime_pack,
-        is_vendor_version_supported,
-    )
-
-    pack = get_runtime_pack(expectedRuntimePackRef)
-    if attestation.harnessId not in pack.harnessIds:
-        raise HarnessPlatformError(
-            f"runtime pack {pack.ref} does not own harness {attestation.harnessId}",
-            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
-        )
-    caps = list(requiredCapabilities or ["interrupt"])
-    if require_restricted_egress:
-        lower_caps = [str(cap).lower() for cap in caps]
-        if (
-            "restricted-egress" not in lower_caps
-            and "restrictedegress" not in lower_caps
-            and "restricted_egress" not in lower_caps
-        ):
-            caps.append("restricted-egress")
-    # The pack is the vendor-runtime authority for this exact host.
-    expectedVendorRuntimes: list[dict[str, Any]] = [
-        {"name": pack.vendorRuntime.name, "version": pack.vendorRuntime.pinnedVersion}
-    ]
-    validate_exact_host_attestation(
-        attestation=attestation,
-        expectedHostClassRef=expectedHostClassRef,
-        expectedImageRef=expectedImageRef,
-        expectedOmnigentBuildDigest=expectedOmnigentBuildDigest,
-        expectedHarnessId=attestation.harnessId,
-        expectedImplementation=expectedImplementation,
-        requiredCapabilities=caps,
-        expectedArchitecture=expectedArchitecture,
-        expectedHostId=expectedHostId,
-        max_age_seconds=max_age_seconds,
-        now=now,
-        currentHostLeaseGeneration=currentHostLeaseGeneration,
-        attestationGeneration=attestationGeneration,
-        expectedVendorRuntimes=expectedVendorRuntimes,
-    )
-    vendor = next(
-        (
-            dep
-            for dep in attestation.runtimeDependencies
-            if dep.name == pack.vendorRuntime.name
-        ),
-        None,
-    )
-    if vendor is None:
-        raise HarnessPlatformError(
-            f"{pack.vendorRuntime.name} binary missing from exact host",
-            code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
-        )
-    if not is_vendor_version_supported(pack, vendor.version):
-        raise HarnessPlatformError(
-            f"{pack.vendorRuntime.name} version {vendor.version} outside supported "
-            f"range {pack.vendorRuntime.supportedRange} (exclusive upper)",
-            code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
-        )
-    if requiredSkillDeliveryRef is not None:
-        if not requiredSkillDeliveryRef.startswith("skill-delivery:sha256:"):
-            raise HarnessPlatformError(
-                f"requiredSkillDeliveryRef must be skill-delivery:sha256: digest "
-                f"(got {requiredSkillDeliveryRef!r})",
-                code=HarnessPlatformFailure.OMNIGENT_SKILL_DELIVERY_MISMATCH,
-            )
-        if not attestation.capabilities.get("mountedSkills"):
-            raise HarnessPlatformError(
-                "required skill delivery but host does not advertise mountedSkills",
-                code=HarnessPlatformFailure.OMNIGENT_SKILL_DELIVERY_MISMATCH,
-            )
-        attested_ref = (
-            attestation.capabilities.get("skillDeliveryRef")
-            or attestation.capabilities.get("skill_delivery_ref")
-            or attestation.capabilities.get("skillDelivery")
-        )
-        if attested_ref is not None:
-            if str(attested_ref) != requiredSkillDeliveryRef:
-                raise HarnessPlatformError(
-                    "skill delivery ref mismatch",
-                    code=HarnessPlatformFailure.OMNIGENT_SKILL_DELIVERY_MISMATCH,
-                )
-    return pack

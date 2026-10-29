@@ -10,7 +10,6 @@ from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
 from moonmind.omnigent.compatibility import (
     image_repository,
     is_same_image_repository,
-    vendor_versions_compatible,
     versions_compatible,
 )
 from moonmind.omnigent.host_image_drift import (
@@ -504,22 +503,98 @@ def test_same_image_repository(first, second, same):
     assert is_compatible_image_drift(first, second) is same
 
 
+_RECORDED_OPENCODE = {
+    "name": "opencode",
+    "version": "1.18.11",
+    "digest": "sha256:" + "d" * 64,
+}
+
+
+def _vendor_attestation(runtime_dependencies, capabilities=None):
+    from datetime import UTC, datetime
+
+    from moonmind.omnigent.harness_platform.attestation import (
+        HostHarnessAttestation,
+    )
+
+    return HostHarnessAttestation.model_validate(
+        {
+            "hostId": "host_123",
+            "hostClassRef": "omnigent-native-standard@3",
+            "hostImageRef": "ghcr.io/example/omnigent-host@sha256:" + "a" * 64,
+            "omnigentVersion": "0.19.1",
+            "omnigentBuildDigest": "sha256:" + "b" * 64,
+            "harnessId": "opencode-native",
+            "harnessImplementation": {
+                "package": "omnigent",
+                "version": "0.19.1",
+                "digest": "sha256:" + "a" * 64,
+                "pluginEntryPoint": None,
+            },
+            "runtimeDependencies": runtime_dependencies,
+            "configured": True,
+            "capabilities": capabilities or {"interrupt": True},
+            "observedAt": datetime.now(UTC),
+        }
+    )
+
+
+def _validate_vendor(attestation):
+    from moonmind.omnigent.harness_platform.attestation import (
+        validate_exact_host_attestation,
+    )
+
+    validate_exact_host_attestation(
+        attestation,
+        expectedHostClassRef="omnigent-native-standard@3",
+        expectedImageRef="ghcr.io/example/omnigent-host@sha256:" + "a" * 64,
+        expectedOmnigentBuildDigest="sha256:" + "b" * 64,
+        expectedHarnessId="opencode-native",
+        expectedImplementation=dict(attestation.harnessImplementation),
+        expectedVendorRuntimes=[_RECORDED_OPENCODE],
+        requiredCapabilities=["interrupt"],
+    )
+
+
+@pytest.mark.parametrize("observed", ["1.18.12", "1.19.0", "2.0.0", "0.9.1"])
+def test_changed_vendor_release_alone_is_not_incompatibility(observed):
+    # Patch, minor, and major changes rebuild the binary, so its digest
+    # differs too; neither is evidence of a missing behavior.
+    _validate_vendor(
+        _vendor_attestation(
+            [{"name": "opencode", "version": observed, "digest": "sha256:" + "e" * 64}]
+        )
+    )
+
+
 @pytest.mark.parametrize(
-    ("pinned", "observed", "compatible"),
+    ("runtime_dependencies", "capabilities", "code"),
     [
-        ("1.18.11", "1.18.11", True),
-        ("1.18.11", "1.18.12", True),
-        ("1.18.11", "opencode version 1.18.12", True),
-        ("1.18.11", "1.19.0", False),
-        ("1.18.11", "2.18.11", False),
-        ("1.18.11", "", False),
-        ("", "1.18.11", False),
-        ("0.104.0", "0.104.5", True),
-        ("0.104.0", "0.105.0", False),
+        # Same release, but the runtime the support evidence named is absent.
+        ([], None, "OMNIGENT_VENDOR_RUNTIME_MISMATCH"),
+        # Same release string over different bytes is not the recorded runtime.
+        (
+            [{**_RECORDED_OPENCODE, "digest": "sha256:" + "e" * 64}],
+            None,
+            "OMNIGENT_VENDOR_RUNTIME_MISMATCH",
+        ),
+        # Same release missing a required behavior stays actionable.
+        (
+            [_RECORDED_OPENCODE],
+            {"interrupt": False},
+            "OMNIGENT_EXACT_HOST_CAPABILITY_MISMATCH",
+        ),
     ],
+    ids=["runtime-missing", "same-release-different-bytes", "behavior-missing"],
 )
-def test_vendor_patch_drift_is_compatible(pinned, observed, compatible):
-    assert vendor_versions_compatible(pinned, observed) is compatible
+def test_same_vendor_release_without_required_behavior_is_rejected(
+    runtime_dependencies, capabilities, code
+):
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+
+    with pytest.raises(HarnessPlatformError) as exc:
+        _validate_vendor(_vendor_attestation(runtime_dependencies, capabilities))
+    assert exc.value.code == code
 
 
 def test_compatible_deployed_fallback_prefers_qualified_same_repo():

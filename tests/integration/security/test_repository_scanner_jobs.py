@@ -167,6 +167,7 @@ if scanner == "gitleaks":
 elif scanner == "opengrep":
  assert "--disable-nosem" in args and "--no-git-ignore" in args
  assert "--x-ignore-semgrepignore-files" in args
+ assert not [a for a in args if a.startswith("--metrics")]
  mode="scan"; output=pathlib.Path(args[args.index("--output")+1])
 else:
  assert "--config=" in args and "--ignorefile=" in args
@@ -859,3 +860,91 @@ async def test_combined_gitleaks_findings_reach_report_with_partial_coverage(
         access=access_for_test("workflow:assessment"),
     )
     assert b"combined_finding_bound_exceeded" in markdown
+
+
+@pytest.mark.parametrize("case", ["repaired", "retested", "scope-shrank"])
+async def test_repaired_repository_is_verified_only_with_comparable_retest(
+    environment, tmp_path, monkeypatch, case
+):
+    """Vulnerable -> repaired: absence, a linked passing retest, or neither."""
+    assets = ["clean.py", "unexamined.py"]
+    vulnerable = [
+        {"check_id": "native-rule", "path": path, "start": {"line": 1}}
+        for path in assets
+    ]
+    baseline_ref, _ = await retain_native_fixture(
+        environment,
+        tmp_path,
+        monkeypatch,
+        "opengrep",
+        {"scan": {"results": vulnerable, "errors": [], "paths": {"scanned": assets}}},
+        "vulnerable",
+    )
+    baseline = await invoke(
+        environment.service, retained_assessment(baseline_ref, assets), key="vuln"
+    )
+    assert baseline["counts"]["new"] == 2
+    finding_ids = {
+        row["finding"]["asset"]: row["findingId"]
+        for row in (await read(environment.service, baseline["comparisonRef"]))[
+            "findings"
+        ]
+    }
+    # The repaired source reports nothing; a shrunk run examined one file only.
+    scanned = assets[:1] if case == "scope-shrank" else assets
+    ref, summary = await retain_native_fixture(
+        environment,
+        tmp_path,
+        monkeypatch,
+        "opengrep",
+        {"scan": {"results": [], "errors": [], "paths": {"scanned": scanned}}},
+        "repaired",
+        output_directory="artifacts/repaired",
+    )
+    assert not summary["results"]["scan"]["findings"]
+    request = {
+        **retained_assessment(ref, assets),
+        "baselineRef": baseline["comparisonRef"],
+    }
+    if case != "repaired":
+        request["decisionsRef"] = await put(
+            environment.service,
+            [
+                {
+                    "findingId": finding_ids["unexamined.py"],
+                    "disposition": "fix_retest",
+                    "reason": "Removed eval and reran the rule",
+                    "evidenceRefs": [ref],
+                    "author": "operator",
+                    "source": "security-remediate",
+                    "scope": {"assets": assets},
+                    "reviewAt": "2099-01-01T00:00:00+00:00",
+                    "reviewConditions": ["rule or scope change"],
+                    "retestOutcome": "passed",
+                }
+            ],
+        )
+    outputs = await invoke(environment.service, request, key=case)
+    assert not outputs["diagnostics"]
+    comparison = await read(environment.service, outputs["comparisonRef"])
+    states = {row["finding"]["asset"]: row["state"] for row in comparison["findings"]}
+    expected = {
+        "repaired": {
+            "clean.py": "absent_comparable",
+            "unexamined.py": "absent_comparable",
+        },
+        "retested": {
+            "clean.py": "absent_comparable",
+            "unexamined.py": "remediated_verified",
+        },
+        # Incomplete coverage supports no absence, and a retest cannot
+        # verify a fix the current run did not examine.
+        "scope-shrank": {
+            "clean.py": "not_reassessed",
+            "unexamined.py": "not_reassessed",
+        },
+    }[case]
+    assert states == expected
+    assert outputs["coverageStatus"] == (
+        "stale_or_partial" if case == "scope-shrank" else "complete"
+    )

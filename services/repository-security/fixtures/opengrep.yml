@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: MIT
+rules:
+  - id: moonmind-qualification-eval
+    pattern: eval($INPUT)
+    message: Synthetic unsafe evaluation fixture
+    languages: [python]
+    severity: ERROR

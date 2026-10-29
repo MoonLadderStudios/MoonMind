@@ -42,6 +42,7 @@ from moonmind.omnigent.host_services.registration import (
     HOST_REGISTRATION_ATTEMPTS,
     HOST_REGISTRATION_INTERVAL_SECONDS,
 )
+from moonmind.omnigent.host_services.upstream_probes import runner_env_statement
 from moonmind.omnigent.host_services.workspace import resolve_daemon_attachment_source
 from moonmind.omnigent.mounted_tool_preflight import (
     MountedToolPreflightError,
@@ -821,6 +822,15 @@ class OmnigentOAuthHostRuntime:
             host_lease=host_lease,
             expected_projection_reservation=github_projection_reservation,
         )
+        from moonmind.workflows.temporal.step_evidence import (
+            step_evidence_projection_options,
+        )
+
+        evidence_options = step_evidence_projection_options(
+            evidence_request.parameters
+            if evidence_request is not None and attachment_refs
+            else None
+        )
         workspace_source = await self._prepare_workspace(
             workspace_locator=workspace_locator,
             publication_git_identity=publication_git_identity,
@@ -836,6 +846,7 @@ class OmnigentOAuthHostRuntime:
             restore_input_refs=restore_input_refs,
             workspace_checkpoint_restore_ref=workspace_checkpoint_restore_ref,
             attachment_refs=attachment_refs,
+            **evidence_options,
             github_token=github_token,
             github_token_resolver=github_token_resolver,
             artifact_gateway=artifact_gateway,
@@ -1345,6 +1356,15 @@ class OmnigentOAuthHostRuntime:
             validated["mountedTools"] = mounted_tool_evidence
             validated["egressAttestation"] = result["egressAttestation"]
             validated["workspaceResolution"] = dict(self._last_workspace_evidence)
+            validated["materializedInputPaths"] = {
+                f"inputPath{index}": item["path"]
+                for index, item in enumerate(
+                    self._last_workspace_evidence.get("materialization", {}).get(
+                        "attachments", []
+                    ),
+                    start=1,
+                )
+            }
             validated["egressEvidenceRef"] = launch_ref
             validated["resolvedSkillsetRef"] = resolved_skillset_ref
             # These booleans are the bounded result of checks already completed
@@ -4044,18 +4064,12 @@ class OmnigentOAuthHostRuntime:
             )
 
         async def runner_runner(command: str) -> tuple[int, str, str]:
-            # Execute with the stock host's authoritative runner environment
-            # constructor.  Importing this function from the installed Omnigent
-            # build keeps the pre-session proof on the exact path that
-            # HostConnect._handle_launch uses immediately before Popen.
+            # Execute with the stock host's runner environment so the
+            # pre-session proof sees what a session will see.
             runner_probe = (
-                "import os, subprocess, sys; "
-                "from omnigent.host.connect import _build_runner_env; "
-                "env = _build_runner_env(os.environ, server_url=os.environ.get("
-                "'OMNIGENT_SERVER_URL', ''), runner_id='preflight', "
-                "binding_token='preflight', workspace='/workspaces/run', "
-                "parent_pid=os.getpid()); "
-                "result = subprocess.run(['bash', '-lc', sys.argv[1]], env=env, "
+                "import subprocess, sys; "
+                + runner_env_statement("preflight")
+                + "result = subprocess.run(['bash', '-lc', sys.argv[1]], env=env, "
                 "text=True); raise SystemExit(result.returncode)"
             )
             return await self._run(
@@ -4093,6 +4107,8 @@ class OmnigentOAuthHostRuntime:
         restore_input_refs: tuple[str, ...] = (),
         workspace_checkpoint_restore_ref: str | None = None,
         attachment_refs: tuple[str, ...] = (),
+        evidence_bundles: Any = None,
+        mandatory_refs: Any = None,
         github_token: str | None = None,
         github_token_resolver: Callable[[], Awaitable[str | None]] | None = None,
         artifact_gateway: Any | None = None,
@@ -4320,6 +4336,8 @@ class OmnigentOAuthHostRuntime:
                     attachment_refs=attachment_refs,
                     artifact_gateway=artifact_gateway,
                     workflow_id=current_workflow_id,
+                    evidence_bundles=evidence_bundles,
+                    mandatory_refs=mandatory_refs,
                 )
                 if attachment_evidence:
                     materialization["attachments"] = attachment_evidence
@@ -4336,6 +4354,17 @@ class OmnigentOAuthHostRuntime:
                 # owning caller can persist it without re-deriving authority state.
                 exc.workspace_denial_evidence = denial  # type: ignore[attr-defined]
                 raise
+        elif evidence_bundles is not None:
+            # Ready repository state does not project a new verifier's inputs.
+            # Reconcile only its bounded evidence, retaining candidate edits.
+            materialization["attachments"] = await self._materialize_attachments(
+                workspace,
+                attachment_refs=attachment_refs,
+                artifact_gateway=artifact_gateway,
+                workflow_id=current_workflow_id,
+                evidence_bundles=evidence_bundles,
+                mandatory_refs=mandatory_refs,
+            )
         # 6. Final containment-checked resolution; the directory must now exist.
         workspace = resolve_sandbox_workspace_locator(
             locator,
@@ -4675,6 +4704,8 @@ class OmnigentOAuthHostRuntime:
         attachment_refs: tuple[str, ...],
         artifact_gateway: Any | None,
         workflow_id: str,
+        evidence_bundles: Any = None,
+        mandatory_refs: Any = None,
     ) -> list[dict[str, Any]]:
         """Materialize declared input attachments into the workspace.
 
@@ -4686,6 +4717,28 @@ class OmnigentOAuthHostRuntime:
         attachment can never be conflated with a filesystem path.
         """
 
+        if evidence_bundles is not None:
+            from moonmind.omnigent.workspace_artifacts import (
+                WorkspaceArtifactProjectionError,
+                WorkspaceArtifactProjector,
+            )
+
+            try:
+                return await WorkspaceArtifactProjector(
+                    self._as_artifact_service(artifact_gateway)
+                ).project_attachments(
+                    workspace,
+                    refs=attachment_refs,
+                    workflow_id=workflow_id,
+                    # prepare_host aligns the entire admitted tree with the
+                    # runtime UID only after preparation finishes.
+                    runtime_uid=os.getuid(),
+                    runtime_gid=os.getgid(),
+                    evidence_bundles=evidence_bundles,
+                    mandatory_refs=mandatory_refs,
+                )
+            except WorkspaceArtifactProjectionError as exc:
+                raise OmnigentOAuthHostError(str(exc), code=exc.code) from exc
         self._exclude_materialized_attachments(workspace)
         return await self._materialize_input_bundle(
             workspace,

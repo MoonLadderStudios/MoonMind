@@ -26,7 +26,6 @@ from api_service.services.omnigent_policies import (
     bootstrap_document,
     bootstrap_policies_ready,
     configured_bootstrap_image_refs,
-    configured_opencode_bootstrap_image_ref,
     resolve_bootstrap_image_ref,
     resolve_live_server_image_ref,
     seed_bootstrap_policies,
@@ -707,12 +706,11 @@ async def test_bootstrap_policies_activate_with_resolved_latest_images(
             await seed_bootstrap_policies(session, env={}, image_resolver=resolver)
             == []
         )
-        # Only the server and OpenCode inputs are acquired; the upstream host
-        # image is never pulled because no policy launches it.
-        assert len(resolution_calls) == 4
-        assert not any(
-            "omnigent-ai/omnigent-host" in image_ref for image_ref in resolution_calls
-        )
+        # Only the server input is acquired: every policy launches the shared
+        # host the deployment image leg already resolved, so neither the
+        # upstream host nor the OpenCode image variable is pulled here.
+        assert len(resolution_calls) == 2
+        assert all("omnigent-server" in image_ref for image_ref in resolution_calls)
 
 
 @pytest.mark.asyncio
@@ -884,6 +882,8 @@ async def test_dynamic_opencode_child_resolves_bootstrapped_policy(
         "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "4" * 64
     )
     resolved_opencode_host = {"image": first_opencode_host_digest}
+    # OpenCode policies launch the shared host image the deployment installs.
+    deployment_shared_host_follows(monkeypatch, resolved_opencode_host, key="image")
 
     async def resolver(image_ref: str) -> str:
         if "host-moonmind" in image_ref:
@@ -927,9 +927,11 @@ async def test_dynamic_opencode_child_resolves_bootstrapped_policy(
 
 
 @pytest.mark.asyncio
-async def test_unavailable_opencode_image_does_not_withhold_codex_policies(
+async def test_opencode_policies_launch_the_shared_image_without_the_opencode_variable(
     tmp_path, monkeypatch
 ):
+    """Fresh OpenCode work selects omnigent-opencode@2 on the shared image."""
+
     monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
     server_digest = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
     shared_host_digest = (
@@ -950,12 +952,13 @@ async def test_unavailable_opencode_image_does_not_withhold_codex_policies(
             "codex-static",
             "codex-on-demand",
             "claude-on-demand",
+            "omnigent-on-demand",
+            "opencode-on-demand",
         }
-        assert await OmnigentPolicyService(session).resolve_runtime_snapshot(
-            "codex-on-demand@1"
+        snapshot = await OmnigentPolicyService(session).resolve_runtime_snapshot(
+            "opencode-on-demand@1"
         )
-        assert await session.get(OmnigentPolicy, "opencode-on-demand") is None
-        assert await bootstrap_policies_ready(session) is False
+        assert snapshot["boundaries"]["host"]["hostImageRef"] == shared_host_digest
 
 
 @pytest.mark.asyncio
@@ -1466,6 +1469,8 @@ async def test_fresh_bootstrap_policies_carry_no_retrieval_authority(
     server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
     host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
 
+    deployment_shared_host_follows(monkeypatch, {"host": host})
+
     async def resolver(image_ref: str) -> str:
         return host if "host" in image_ref else server
 
@@ -1729,16 +1734,3 @@ async def test_bootstrap_seed_cuts_over_legacy_stock_agent_identity(
         )
         assert binding.launch_policy_ref == "codex-on-demand@2"
         assert binding.effective_launch_snapshot_json is None
-
-
-def test_explicit_opencode_bootstrap_pin_remains_authoritative():
-    pin = "registry.test/custom-opencode@sha256:" + "a" * 64
-    assert (
-        configured_opencode_bootstrap_image_ref(
-            {
-                "OMNIGENT_OPENCODE_HOST_IMAGE_REF": pin,
-                "OMNIGENT_OPENCODE_HOST_IMAGE": "ghcr.io/moonladderstudios/omnigent-host-moonmind",
-            }
-        )
-        == pin
-    )

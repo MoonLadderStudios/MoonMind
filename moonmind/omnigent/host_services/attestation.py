@@ -23,6 +23,7 @@ from moonmind.omnigent.host_services.github_credentials import (
     github_host_from_endpoint,
     github_repository_from_request,
 )
+from moonmind.omnigent.host_services import upstream_probes
 from moonmind.omnigent.host_services.mounted_tools import classify_tool_attachment
 from moonmind.omnigent.mounted_tool_preflight import (
     MountedToolPreflightError,
@@ -37,23 +38,6 @@ from moonmind.security.egress import (
 )
 from moonmind.workflows.adapters.omnigent_client import OmnigentClientError
 
-# Resolve the upstream package layout inside the admitted image. Both 0.12 and
-# 0.13 hosts can be digest-pinned by existing plans. Select before importing:
-# a broken helper or dependency in the selected layout must fail attestation,
-# never trigger an import-error fallback to a different implementation.
-_OPENCODE_APP_SERVER_IMPORT = (
-    "import importlib, importlib.util; "
-    "opencode_app_server = importlib.import_module("
-    "'omnigent.harnesses.opencode_native.app_server' "
-    "if importlib.util.find_spec('omnigent.harnesses') is not None "
-    "else 'omnigent.opencode_native_app_server'); "
-)
-# Reserved exit status meaning "the attestation helper itself is unavailable in
-# the host image". The wrapper pairs it with the marker line below; only that
-# pair is remapped, so a probed command that happens to exit 97 keeps its own
-# authoritative contract status.
-_PROBE_SUBSTRATE_UNAVAILABLE_EXIT_CODE = 97
-_PROBE_SUBSTRATE_UNAVAILABLE_MARKER = "moonmind-attestation-substrate-unavailable"
 _MODEL_ATTESTATION_MAX_ATTEMPTS = 3
 
 # Each Skill-projection invariant reports which one failed. A bare
@@ -111,55 +95,6 @@ def _skill_projection_probe_message(
     # Carry its own diagnostics rather than a sentence that names none.
     raw = (stderr or stdout).strip()[:256]
     return f"{message}: {raw}" if raw else message
-
-
-def _substrate_guarded_probe(body: str) -> str:
-    """Wrap one line of in-host probe statements so helper drift fails typed.
-
-    A missing module, renamed helper, or changed helper signature exits with
-    the reserved status and a marker line naming the exception. The probed
-    command's own exit status still propagates unchanged.
-    """
-
-    return (
-        "import sys\n"
-        "try:\n"
-        f"    {body}\n"
-        "except (ImportError, AttributeError, TypeError) as exc:\n"
-        f"    sys.stderr.write({_PROBE_SUBSTRATE_UNAVAILABLE_MARKER!r} + ': ' "
-        "+ type(exc).__name__ + ': ' + str(exc) + '\\n')\n"
-        f"    raise SystemExit({_PROBE_SUBSTRATE_UNAVAILABLE_EXIT_CODE})\n"
-    )
-
-
-def _raise_if_probe_substrate_unavailable(
-    code: int, stderr: str, *, boundary: str
-) -> None:
-    """Translate the reserved probe status into an actionable build mismatch."""
-
-    if code != _PROBE_SUBSTRATE_UNAVAILABLE_EXIT_CODE:
-        return
-    marker_line = next(
-        (
-            line
-            for line in stderr.splitlines()
-            if line.startswith(_PROBE_SUBSTRATE_UNAVAILABLE_MARKER)
-        ),
-        None,
-    )
-    if marker_line is None:
-        # The reserved status without the wrapper's marker is the probed
-        # command's own exit status: authoritative contract evidence, not a
-        # substrate fault.
-        return
-    detail = marker_line[len(_PROBE_SUBSTRATE_UNAVAILABLE_MARKER) :].lstrip(": ")
-    detail = detail.strip()[:200]
-    message = f"{boundary} attestation helper is unavailable in the exact host image"
-    if detail:
-        message = f"{message}: {detail}"
-    raise HarnessPlatformError(
-        message, code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH
-    )
 
 
 # A mounted-tool version probe attests the delivered build: that the pinned
@@ -221,84 +156,36 @@ async def _read_exact_host_model_options(
 ) -> tuple[Any, str]:
     """Read model options from the exact host through its supported substrate.
 
-    Omnigent's host tunnel does not expose pre-launch model options for
-    ``opencode-native``. The upstream package does expose one portable catalog
-    helper, and the selected host already owns the exact image, environment,
-    egress policy, and materialized credential that helper must inspect. Run
-    that helper inside the host instead of turning the tunnel's honest
-    unsupported-harness response into a generic HTTP 502.
+    The host tunnel answers every harness except ``opencode-native``, whose
+    catalog comes from the retained in-host probe rather than turning the
+    tunnel's honest unsupported-harness response into a generic HTTP 502.
     """
 
-    if harness_id != "opencode-native":
-        try:
-            model_options = await client.get_host_model_options(
-                omnigent_host_id, harness_id
-            )
-        except OmnigentClientError as exc:
-            status = exc.status_code
-            transient = exc.failure_class == "integration_error" and (
-                status is None or status in {408, 429} or 500 <= status < 600
-            )
-            if not transient:
-                raise
-            # Normalize at the catalog boundary so the same bounded policy
-            # owns CLI and tunnel read recovery. Auth/input failures retain
-            # their original authority; provider diagnostics stay private.
-            raise HarnessPlatformError(
-                "exact host model catalog tunnel read failed",
-                code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
-            ) from exc
-        return model_options, "omnigent-host-tunnel"
-
-    probe = _substrate_guarded_probe(
-        "import json; " + _OPENCODE_APP_SERVER_IMPORT + "print(json.dumps({'models': "
-        "opencode_app_server.list_opencode_cli_model_options()}))"
-    )
-    code, stdout, stderr = await backend.run(
-        [
-            "docker",
-            "exec",
-            container_name,
-            "/opt/venv/bin/python",
-            "-c",
-            probe,
-        ],
-        timeout_seconds=45.0,
-        check=False,
-    )
-    _raise_if_probe_substrate_unavailable(
-        code, stderr, boundary="OpenCode model catalog"
-    )
-    if code != 0:
-        # Provider CLI diagnostics can include credential-sensitive context.
-        # Exact-host evidence needs only the typed failure, never raw output.
-        raise HarnessPlatformError(
-            "exact host OpenCode model catalog probe failed",
-            code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
+    if harness_id == "opencode-native":
+        payload = await upstream_probes.read_opencode_model_options(
+            backend=backend, container_name=container_name
         )
+        return payload, "exact-host-opencode-cli"
     try:
-        payload = json.loads(stdout)
-    except (TypeError, json.JSONDecodeError) as exc:
-        raise HarnessPlatformError(
-            "exact host OpenCode model catalog probe returned invalid JSON",
-            code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
-        ) from exc
-    if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
-        raise HarnessPlatformError(
-            "exact host OpenCode model catalog probe returned an invalid catalog",
-            code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
+        model_options = await client.get_host_model_options(
+            omnigent_host_id, harness_id
         )
-    return payload, "exact-host-opencode-cli"
-
-
-_CLAUDE_NATIVE_IMPORT = (
-    "import importlib, importlib.util; "
-    "claude_native = importlib.import_module("
-    "'omnigent.harnesses.claude_native.main' "
-    "if importlib.util.find_spec('omnigent.harnesses') is not None "
-    "and importlib.util.find_spec('omnigent.harnesses.claude_native') is not None "
-    "else 'omnigent.claude_native'); "
-)
+    except OmnigentClientError as exc:
+        status = exc.status_code
+        transient = exc.failure_class == "integration_error" and (
+            status is None or status in {408, 429} or 500 <= status < 600
+        )
+        if not transient:
+            raise
+        # Normalize at the catalog boundary so the same bounded policy
+        # owns CLI and tunnel read recovery. Auth/input failures retain
+        # their original authority; provider diagnostics stay private.
+        raise HarnessPlatformError(
+            "exact host model catalog tunnel read failed",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
+            transient=True,
+        ) from exc
+    return model_options, "omnigent-host-tunnel"
 
 
 async def confirm_exact_host_model(
@@ -348,129 +235,12 @@ async def confirm_exact_host_model(
         return available, True
     if not selected_model.lower().startswith("claude-"):
         return available, False
-    probe = _substrate_guarded_probe(
-        "import json, sys; " + _CLAUDE_NATIVE_IMPORT + "rows = json.loads(sys.argv[1]); "
-        "config = claude_native.resolve_native_claude_config(spec=None); "
-        "print('served' if claude_native.claude_catalog_serves_model("
-        "rows, sys.argv[2], config) else 'unserved')"
+    return available, await upstream_probes.claude_serves_model(
+        backend=backend,
+        container_name=container_name,
+        rows=rows,
+        selected_model=selected_model,
     )
-    code, stdout, stderr = await backend.run(
-        [
-            "docker",
-            "exec",
-            container_name,
-            "/opt/venv/bin/python",
-            "-c",
-            probe,
-            json.dumps(rows),
-            selected_model,
-        ],
-        timeout_seconds=45.0,
-        check=False,
-    )
-    _raise_if_probe_substrate_unavailable(
-        code, stderr, boundary="Claude model catalog"
-    )
-    if code != 0:
-        raise HarnessPlatformError(
-            "exact host Claude model catalog probe failed",
-            code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
-        )
-    return available, stdout.strip() == "served"
-
-
-async def _run_exact_host_runner_command(
-    *,
-    backend: DockerCommandBackend,
-    container_name: str,
-    argv: list[str],
-    timeout_seconds: float = 30.0,
-) -> tuple[int, str, str]:
-    """Execute a probe through the stock host's runner environment builder."""
-
-    runner_probe = _substrate_guarded_probe(
-        "import os, subprocess, sys; "
-        "from omnigent.host.connect import _build_runner_env; "
-        "env = _build_runner_env(os.environ, "
-        "server_url=os.environ.get('OMNIGENT_SERVER_URL', ''), "
-        "runner_id='moonmind-attestation', "
-        "binding_token='moonmind-attestation', "
-        "workspace='/workspaces/run', parent_pid=os.getpid()); "
-        "result = subprocess.run(sys.argv[1:], env=env, text=True, "
-        "capture_output=True); "
-        "sys.stdout.write(result.stdout); sys.stderr.write(result.stderr); "
-        "raise SystemExit(result.returncode)"
-    )
-    code, stdout, stderr = await backend.run(
-        [
-            "docker",
-            "exec",
-            container_name,
-            "/opt/venv/bin/python",
-            "-c",
-            runner_probe,
-            *argv,
-        ],
-        timeout_seconds=timeout_seconds,
-        check=False,
-    )
-    _raise_if_probe_substrate_unavailable(code, stderr, boundary="runner environment")
-    return code, stdout, stderr
-
-
-async def _run_exact_host_opencode_command(
-    *,
-    backend: DockerCommandBackend,
-    container_name: str,
-    argv: list[str],
-    timeout_seconds: float = 30.0,
-) -> tuple[int, str, str]:
-    """Execute through the runner, OpenCode filter, and MoonMind context shim."""
-
-    filtered_child_probe = _substrate_guarded_probe(
-        "import subprocess, sys; from pathlib import Path; "
-        + _OPENCODE_APP_SERVER_IMPORT
-        + "env = opencode_app_server.filtered_server_env("
-        "bridge_dir=Path('/tmp/moonmind-opencode-attestation'), "
-        "auth_secret='moonmind-attestation'); "
-        "result = subprocess.run("
-        "['/home/app/.omnigent/moonmind/bin/moonmind-context', "
-        "*sys.argv[1:]], "
-        "env=env, text=True, capture_output=True); "
-        "sys.stdout.write(result.stdout); sys.stderr.write(result.stderr); "
-        "raise SystemExit(result.returncode)"
-    )
-    opencode_probe = _substrate_guarded_probe(
-        "import os, subprocess, sys; "
-        "from omnigent.host.connect import _build_runner_env; "
-        "runner_env = _build_runner_env(os.environ, "
-        "server_url=os.environ.get('OMNIGENT_SERVER_URL', ''), "
-        "runner_id='moonmind-attestation', "
-        "binding_token='moonmind-attestation', "
-        "workspace='/workspaces/run', parent_pid=os.getpid()); "
-        f"child = {filtered_child_probe!r}; "
-        "result = subprocess.run([sys.executable, '-c', child, *sys.argv[1:]], "
-        "env=runner_env, text=True, "
-        "capture_output=True); sys.stdout.write(result.stdout); "
-        "sys.stderr.write(result.stderr); raise SystemExit(result.returncode)"
-    )
-    code, stdout, stderr = await backend.run(
-        [
-            "docker",
-            "exec",
-            container_name,
-            "/opt/venv/bin/python",
-            "-c",
-            opencode_probe,
-            *argv,
-        ],
-        timeout_seconds=timeout_seconds,
-        check=False,
-    )
-    _raise_if_probe_substrate_unavailable(
-        code, stderr, boundary="OpenCode shell environment"
-    )
-    return code, stdout, stderr
 
 
 def _assert_exact_omnigent_build(
@@ -649,10 +419,7 @@ class DockerOmnigentHostAttestor:
             host_class.omnigentVersion,
             omnigent_version.strip()[:200],
         )
-        from moonmind.omnigent.compatibility import (
-            vendor_versions_compatible,
-            versions_compatible,
-        )
+        from moonmind.omnigent.compatibility import versions_compatible
 
         if not versions_compatible(host_class.omnigentVersion, omnigent_version):
             raise HarnessPlatformError(
@@ -724,24 +491,23 @@ class DockerOmnigentHostAttestor:
             if item.harnessId == plan.payload.harnessId
             and item.implementationRef == plan.payload.harnessImplementationRef
         )
+        declared_runtime_versions: dict[str, str] = {}
         for dependency in selected_entry.runtimeDependencies:
             name = str(dependency.get("name") or "").strip()
-            version = str(dependency.get("version") or "").strip()
             if not name:
                 continue
+            # The declared runtime must be installed and runnable. Its release
+            # number is provenance: the runner, Skill, model, and login probes
+            # below prove the behavior this harness needs, and a different
+            # release alone cannot show that behavior is missing.
             _code, observed, _err = await self._backend.run(
                 ["docker", "exec", launch_result["containerName"], name, "--version"],
                 failure_code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
             )
-            # Patch may evolve (1.18.11 -> 1.18.12); only major.minor steers
-            # compatibility. Exact-substring matching fails every vendor patch
-            # update even when the image is functionally identical.
-            if version and not vendor_versions_compatible(version, observed):
-                raise HarnessPlatformError(
-                    f"host {name} version does not match the Host Class",
-                    code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
-                )
             runtime_versions[name] = observed.strip()[:256]
+            declared_runtime_versions[name] = str(
+                dependency.get("version") or ""
+            ).strip()
         mounts = container.get("Mounts") or []
         workspace_mount_evidence = _attest_workspace_mount(
             mounts, spec.workspaceAttachment
@@ -794,7 +560,7 @@ class DockerOmnigentHostAttestor:
                 f"resolved Skill projection is missing or unreadable at {skill_target}",
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
             )
-        code, out, err = await _run_exact_host_runner_command(
+        code, out, err = await upstream_probes.run_runner_command(
             backend=self._backend,
             container_name=launch_result["containerName"],
             argv=[
@@ -814,7 +580,7 @@ class DockerOmnigentHostAttestor:
                 code=HarnessPlatformFailure.OMNIGENT_SKILL_SNAPSHOT_UNAVAILABLE,
             )
         if plan.payload.harnessId == "opencode-native":
-            code, out, err = await _run_exact_host_opencode_command(
+            code, out, err = await upstream_probes.run_opencode_shell_command(
                 backend=self._backend,
                 container_name=launch_result["containerName"],
                 argv=[
@@ -1112,14 +878,14 @@ class DockerOmnigentHostAttestor:
                 )
 
             async def runner_runner(command: str):
-                return await _run_exact_host_runner_command(
+                return await upstream_probes.run_runner_command(
                     backend=self._backend,
                     container_name=launch_result["containerName"],
                     argv=["/bin/sh", "-ceu", command],
                 )
 
             async def opencode_runner(command: str):
-                return await _run_exact_host_opencode_command(
+                return await upstream_probes.run_opencode_shell_command(
                     backend=self._backend,
                     container_name=launch_result["containerName"],
                     argv=["/bin/sh", "-ceu", command],
@@ -1354,8 +1120,7 @@ class DockerOmnigentHostAttestor:
                 attachment_identity=launch_result["containerName"],
                 # The container was created from the effective image
                 # (drift-resolved above), so egress must prove the running
-                # workload matches what actually launched. Series qualification
-                # of that effective image was proven by the version gates.
+                # workload matches what actually launched.
                 expected_image_ref=inspect_ref,
             )
         except (RuntimeError, ValueError) as exc:
@@ -1407,7 +1172,10 @@ class DockerOmnigentHostAttestor:
                     availableModels=available_models, source=model_options_source
                 )
             except HarnessPlatformError as exc:
-                if exc.code != HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE:
+                if (
+                    exc.code
+                    != HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE
+                ):
                     raise
                 # Do not retain raw provider CLI diagnostics in evidence.
                 observation["errorCode"] = exc.code
@@ -1429,25 +1197,36 @@ class DockerOmnigentHostAttestor:
             )
 
         if not model_evidence["attempts"][-1]["selectedModelPresent"]:
-            # Show exact observed suffix variants as choices, never aliases.
-            # Keep the last successful observation if a later probe failed.
-            related = [
-                model
-                for model in model_evidence.get("availableModels", [])
-                if model.startswith(selected_model + "-")
-            ][:3]
-            selection_hint = (
-                ". Related IDs reported by this host: "
-                + ", ".join(repr(model) for model in related)
-                + ". Select an exact model ID explicitly."
-                if related
-                else ""
-            )
-            failure = HarnessPlatformError(
-                f"selected model {selected_model} could not be confirmed on the exact host "
-                f"after {_MODEL_ATTESTATION_MAX_ATTEMPTS} catalog reads{selection_hint}",
-                code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
-            )
+            if "source" not in model_evidence:
+                # No read completed, so absence was never observed. Keep the
+                # unavailable cause instead of asking for another model.
+                failure = HarnessPlatformError(
+                    f"model catalog for {selected_model} could not be read on the "
+                    f"exact host in {_MODEL_ATTESTATION_MAX_ATTEMPTS} attempts",
+                    code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
+                    transient=True,
+                )
+            else:
+                # Show exact observed suffix variants as choices, never aliases.
+                # Keep the last successful observation if a later probe failed.
+                related = [
+                    model
+                    for model in model_evidence.get("availableModels", [])
+                    if model.startswith(selected_model + "-")
+                ][:3]
+                selection_hint = (
+                    ". Related IDs reported by this host: "
+                    + ", ".join(repr(model) for model in related)
+                    + ". Select an exact model ID explicitly."
+                    if related
+                    else ""
+                )
+                failure = HarnessPlatformError(
+                    f"selected model {selected_model} could not be confirmed on the "
+                    f"exact host after {_MODEL_ATTESTATION_MAX_ATTEMPTS} catalog "
+                    f"reads{selection_hint}",
+                    code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
+                )
             try:
                 await write_model_evidence()
             except Exception:  # noqa: BLE001 - preserve primary validation failure
@@ -1482,6 +1261,7 @@ class DockerOmnigentHostAttestor:
             "harnessId": plan.payload.harnessId,
             "harnessImplementationRef": plan.payload.harnessImplementationRef,
             "runtimeVersions": runtime_versions,
+            "declaredRuntimeVersions": declared_runtime_versions,
             "credentialGenerations": {
                 item["providerProfileRef"]: item["credentialGeneration"]
                 for item in credential_handles

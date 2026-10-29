@@ -43,6 +43,7 @@ from api_service.services.omnigent_agent_profile_service import (
 )
 from api_service.services.omnigent_policies import seed_bootstrap_policies
 from api_service.services.provider_profile_creation import (
+    provider_api_key_strategy,
     provider_profile_creation_capabilities,
 )
 from api_service.services.provider_profile_readiness import (
@@ -594,6 +595,7 @@ class NativeDocker(StaticCodexDocker):
         self.script = ""
         self.network_ref = ""
         self.launch_image = ""
+        self.fail_host_removal = False
 
     async def command(self, argv, *, input_bytes=None, **_kwargs):
         code, out, err = await self._command(list(argv), input_bytes=input_bytes)
@@ -641,7 +643,6 @@ class NativeDocker(StaticCodexDocker):
                 assert volume in self.volumes
                 if input_bytes:
                     self.auth_json = json.loads(input_bytes)
-                    assert self.auth_json == {"openai": {"type": "api", "key": SECRET}}
                 if ".moonmind-generation" in " ".join(argv):
                     generation = argv[argv.index("--") + 1]
                     if "readonly" in mounts["/credential"]:
@@ -682,6 +683,8 @@ class NativeDocker(StaticCodexDocker):
             return 0, "", ""
         if argv[:2] == ["docker", "rm"]:
             assert argv[-1] == self.container_name
+            if self.fail_host_removal:
+                return 1, "", "controlled daemon failure"
             self.server.host_alive = self.container_running = False
             self.events.append(("host_remove", self.container_name))
             return 0, "", ""
@@ -861,7 +864,7 @@ class AdmittedManager(HermeticProviderLeases):
         return Handle()
 
 
-async def _compile_plan(session_factory, harness, workflow_id):
+async def _compile_plan(session_factory, harness, workflow_id, *, api_key=False):
     # Reuse the durable Skill producer, then expose its immutable body through
     # the real deployment catalog. Admission must resolve and persist its own
     # exact manifest; no Skill resolver or runtime materializer is substituted.
@@ -869,7 +872,7 @@ async def _compile_plan(session_factory, harness, workflow_id):
         session_factory, workflow_id, "run"
     )
     profile_name = harness.removesuffix("-native")
-    oauth = harness != "opencode-native"
+    oauth = harness != "opencode-native" and not api_key
     runtime_id = {
         "codex": "codex_cli",
         "claude": "claude_code",
@@ -901,6 +904,18 @@ async def _compile_plan(session_factory, harness, workflow_id):
         secret_refs={
             role["role"]: "env://NATIVE_JOURNEY_KEY" for role in method["secret_roles"]
         },
+        # Guided API-key setup stores the strategy's key mapping, exactly as the
+        # Provider Profile API-key action writes it.
+        **(
+            {
+                "env_template": {
+                    strategy.env_key: {"from_secret_ref": strategy.secret_role}
+                    for strategy in [provider_api_key_strategy(runtime_id, provider_id)]
+                }
+            }
+            if api_key
+            else {}
+        ),
         credential_generation=3,
         max_parallel_runs=1,
         enabled=True,
@@ -936,6 +951,11 @@ async def _compile_plan(session_factory, harness, workflow_id):
             harness=harness, policy=f"{profile_name}-on-demand@1", provider_id=PROFILE
         )
         snapshot["document"]["skills"] = [_DURABLE_SKILL_NAME]
+        if api_key:
+            snapshot["document"]["providerRequirements"].update(
+                credentialSource=profile.credential_source.value,
+                materializationMode=profile.runtime_materialization_mode.value,
+            )
         parameters = {
             "targetRuntime": "omnigent",
             "publishMode": "none",
@@ -981,7 +1001,10 @@ async def native_journey(
     monkeypatch.setattr(
         "moonmind.omnigent.execute._await_marked_turn_terminal", short_quiescence
     )
-    harness = request.param
+    # ``<harness>-api-key`` is that harness's journey with an API-key Provider
+    # Profile created by the guided Profile surface.
+    api_key = request.param.endswith("-api-key")
+    harness = request.param.removesuffix("-api-key")
     # These are default-path journeys, independent of the test runner's rollout
     # configuration. Credential readiness and real plan authority stay intact.
     for key in (
@@ -1024,7 +1047,9 @@ async def native_journey(
         catalog = await DbHarnessCatalogRepository(session_factory).load(
             synchronized["catalogRef"]
         )
-        compiled = await _compile_plan(session_factory, harness, workflow_id)
+        compiled = await _compile_plan(
+            session_factory, harness, workflow_id, api_key=api_key
+        )
         # Verify the public HTTP enums survive discovery, alongside the real
         # deployment overlay's native OAuth/API-key admission contracts.
         observed = {row.id: row for row in catalog.snapshot.harnesses}
@@ -1178,6 +1203,7 @@ async def native_journey(
             session_factory=session_factory,
             worker_root=worker_root,
             harness=harness,
+            api_key=api_key,
         )
     finally:
         await running.runner.cleanup()
@@ -1188,6 +1214,10 @@ async def native_journey(
     [
         ("codex-native", "idle"),
         ("claude-native", "idle"),
+        ("claude-native-api-key", "idle"),
+        ("claude-native-api-key", "failed"),
+        ("codex-native-api-key", "idle"),
+        ("codex-native-api-key", "failed"),
         ("opencode-native", "idle"),
         ("opencode-native", "failed"),
     ],
@@ -1244,7 +1274,12 @@ async def assert_native_turn_saved_and_cleaned(
     assert created["agent_id"] == journey.harness + "-agent"
     assert created["model_override"] == server.model
     assert created["terminal_launch_args"] == (
-        ["--permission-mode", "bypassPermissions"]
+        [
+            "--permission-mode",
+            "bypassPermissions",
+            "--disallowedTools",
+            "ScheduleWakeup",
+        ]
         if journey.harness == "claude-native"
         else []
     )
@@ -1283,7 +1318,35 @@ async def assert_native_turn_saved_and_cleaned(
         await gateway.read_text(binding.attestationRefs["cleanupAttestationRef"])
     )
     credential_cleanup = cleanup["results"]["credentials"][0]
-    if journey.harness == "opencode-native":
+    if getattr(journey, "api_key", False):
+        # The Profile's key reaches the host only as the read-only Omnigent
+        # provider config, and the run-owned volume is removed at cleanup.
+        assert handle["materializerRef"] == "omnigent-provider-config@1"
+        assert attachment["targetPath"] == "/home/app/.moonmind-provider-config"
+        assert attachment["accessMode"] == "read-only"
+        assert docker.launch_env["OMNIGENT_CONFIG_HOME"] == (
+            "/home/app/.moonmind-provider-config"
+        )
+        family, base_url = {
+            "claude-native": ("anthropic", "https://api.anthropic.com"),
+            "codex-native": ("openai", "https://api.openai.com/v1"),
+        }[journey.harness]
+        assert docker.auth_json == {
+            "providers": {
+                "moonmind": {
+                    "kind": "key",
+                    "default": [family, "pi"],
+                    family: {
+                        "base_url": base_url,
+                        "api_key": SECRET,
+                        "models": {"default": "model"},
+                    },
+                }
+            }
+        }
+        assert materialization["providerBaseUrl"] == base_url
+        assert credential_cleanup["removed"] is True
+    elif journey.harness == "opencode-native":
         assert handle["materializerRef"] == "opencode-auth-json@1"
         assert attachment["targetPath"] == "/run/mm-credentials/opencode"
         assert attachment["accessMode"] == "read-only"
@@ -1360,3 +1423,255 @@ async def assert_native_turn_saved_and_cleaned(
         and len(manager.inspections) == 1
     )
     return result
+
+
+@pytest.mark.parametrize(
+    "native_journey", ["claude-native-api-key", "codex-native-api-key"], indirect=True
+)
+async def test_api_key_route_cancellation_cleans_owned_host_and_provider_config(
+    native_journey, monkeypatch
+):
+    """An explicit cancel mid-turn still removes the run-scoped key config."""
+    journey = native_journey
+    server, docker = journey.server, journey.docker
+    monkeypatch.setattr(
+        "moonmind.omnigent.activity_ownership.delivery_was_revoked", lambda: False
+    )
+    execution = asyncio.create_task(
+        journey.realizer.execute(journey.request, journey.plan)
+    )
+
+    async def cancel_running_turn():
+        execution.cancel()
+
+    server.on_first_message = cancel_running_turn
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(execution, 30)
+
+    assert len(server.session_ids) == 1 and docker.create_count == 1
+    assert ("host_remove", docker.container_name) in journey.events
+    assert not server.host_alive
+    # Only the deployment-owned OAuth volume survives; the provider config
+    # volume holding the key was owned by this attempt and is gone.
+    assert docker.volumes == {"journey_oauth": {}}
+    assert any(kind == "volume_remove" for kind, _ref in journey.events)
+    binding = await journey.services.runtime_binding_store.get(
+        stable_binding_id(
+            execution_plan_ref=journey.plan.planRef,
+            idempotency_key=journey.request.idempotency_key,
+        )
+    )
+    assert binding.state is RuntimeBindingState.cleaned
+    handle = next(iter(binding.credentialRuntimeHandles.values()))
+    assert handle["materializerRef"] == "omnigent-provider-config@1"
+    cleanup = json.loads(
+        await journey.gateway.read_text(
+            binding.attestationRefs["cleanupAttestationRef"]
+        )
+    )
+    assert cleanup["results"]["credentials"][0]["removed"] is True
+    host_lease = await journey.services.host_lease_repository.get(binding.hostLeaseRef)
+    assert host_lease.status == "cleaned"
+    # The workflow owns the provider grant; cancellation does not release it
+    # from inside the Activity, and the key never reaches a recorded command.
+    async with journey.session_factory() as session:
+        provider_lease = await session.get(
+            ProviderProfileSlotLease, journey.provider_lease_id
+        )
+        assert provider_lease.lease_state == "held"
+    assert SECRET not in json.dumps(docker.commands)
+    assert SECRET not in json.dumps(binding.model_dump(mode="json"))
+
+
+@pytest.mark.parametrize(
+    "native_journey", ["claude-native-api-key", "codex-native-api-key"], indirect=True
+)
+async def test_api_key_successor_restores_saved_work_with_fresh_provider_config(
+    native_journey, monkeypatch
+):
+    """The restarted step resumes from the interrupted attempt's verified save.
+
+    The interrupted attempt's host, workspace and run-scoped provider config
+    are gone. The successor attempt of the same logical step rematerializes the
+    key config from its Profile, restores the saved bytes from artifact
+    storage, and leaves the interrupted attempt's completed effects alone.
+    """
+    journey = native_journey
+    request, plan, realizer = journey.request, journey.plan, journey.realizer
+    server, docker = journey.server, journey.docker
+    interrupted = await assert_native_turn_saved_and_cleaned(journey, "failed")
+    saved = interrupted.metadata["savedWorkspaceCheckpoint"]
+    predecessor_config = docker.auth_json
+    predecessor_workspace = server.workspace
+    predecessor_binding_id = stable_binding_id(
+        execution_plan_ref=plan.planRef, idempotency_key=request.idempotency_key
+    )
+    predecessor_binding = await journey.services.runtime_binding_store.get(
+        predecessor_binding_id
+    )
+    created_volumes = [
+        argv[-1]
+        for argv in docker.commands
+        if argv[:3] == ("docker", "volume", "create")
+        and argv[-1].startswith("mm-omnigent-credential-")
+    ]
+    assert len(created_volumes) == 1
+
+    # The Run workflow hands the successor the same plan and the verified save
+    # as workspaceCheckpointRestoreRef (run.py interrupted-step carry).
+    workflow_id = request.step_execution.workflow_id
+    step_id = workflow_id + ":run:implement:execution:2"
+    payload = request.model_dump(by_alias=True, mode="json", exclude_none=True)
+    payload["idempotencyKey"] = "native-turn-2"
+    payload["stepExecution"].update(executionOrdinal=2, stepExecutionId=step_id)
+    payload["workspaceSpec"] = {
+        "workspaceCheckpointRestoreRef": saved["archiveRef"],
+        "workspaceLocator": {
+            "kind": "sandbox",
+            "workspaceId": hashlib.sha256(
+                f"{workflow_id}:{step_id}".encode()
+            ).hexdigest()[:24],
+            "relativePath": "repo",
+        },
+    }
+    # A restarted step runs in a new AgentRun child, so its credential
+    # runtime identity is distinct from the interrupted attempt's.
+    payload["admittedProviderCapacity"].update(
+        stepExecutionId=step_id,
+        idempotencyKey="native-turn-2",
+        agentRunRunId="agent-run-2",
+    )
+    successor = AgentExecutionRequest.model_validate(payload)
+    journey.manager.request = successor
+    await journey.gateway.admit_execution_plan_inputs(request=successor, plan=plan)
+
+    restored = {}
+    observed_command = docker.command
+
+    async def observe_launch(argv, **kwargs):
+        if list(argv[:2]) == ["docker", "create"]:
+            workspace = Path(_mounts(list(argv))["/workspaces/run"]["src"])
+            report = workspace / RESULT_PATH
+            restored["bytes"] = report.read_bytes() if report.exists() else None
+        return await observed_command(argv, **kwargs)
+
+    monkeypatch.setattr(docker_backend, "run_runtime_command", observe_launch)
+    monkeypatch.setattr(credential_materializers, "run_runtime_command", observe_launch)
+    server.terminal_status, server.status = "idle", "idle"
+    server.items, server.events = [], []
+    docker.auth_json = None
+
+    result = await realizer.execute(successor, plan)
+
+    assert result.failure_class is None, result
+    # Saved work came from artifact storage: the interrupted attempt's worker
+    # root was deleted before the successor launched.
+    assert restored == {"bytes": GENERATED}
+    assert server.workspace != predecessor_workspace
+    assert len(server.session_ids) == 2 and docker.create_count == 2
+    messages = [event for event in server.events if event.get("type") == "message"]
+    assert len(messages) == 1
+    # The key config was materialized again into a new run-scoped volume and
+    # removed with the successor's host.
+    created_volumes = [
+        argv[-1]
+        for argv in docker.commands
+        if argv[:3] == ("docker", "volume", "create")
+        and argv[-1].startswith("mm-omnigent-credential-")
+    ]
+    assert len(created_volumes) == 2 and created_volumes[0] != created_volumes[1]
+    assert docker.auth_json == predecessor_config
+    assert docker.volumes == {"journey_oauth": {}}
+    binding = await journey.services.runtime_binding_store.get(
+        stable_binding_id(
+            execution_plan_ref=plan.planRef, idempotency_key=successor.idempotency_key
+        )
+    )
+    assert binding.state is RuntimeBindingState.cleaned
+    assert binding.hostLeaseRef != predecessor_binding.hostLeaseRef
+    handle = next(iter(binding.credentialRuntimeHandles.values()))
+    assert handle["materializerRef"] == "omnigent-provider-config@1"
+    assert SECRET not in json.dumps(binding.model_dump(mode="json"))
+    # The interrupted attempt's recorded outcome is untouched, and redelivering
+    # it neither launches a host nor repeats its turn.
+    assert (
+        await journey.services.runtime_binding_store.get(predecessor_binding_id)
+    ) == predecessor_binding
+    journey.manager.request = request
+    replay = await realizer.execute(request, plan)
+    assert replay.metadata["savedWorkspaceCheckpoint"] == saved
+    assert replay.failure_class == interrupted.failure_class
+    assert len(server.session_ids) == 2 and docker.create_count == 2
+
+
+@pytest.mark.parametrize("owner_closed", [True, False])
+@pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
+async def test_credential_maintenance_drains_generic_host_mounting_oauth_home(
+    native_journey, owner_closed
+):
+    """OAuth maintenance releases a generic host left holding the OAuth home.
+
+    The turn completes but its host removal fails, so the binding stays
+    cleanup-pending with the Profile's OAuth volume mounted read-write.
+    Credential maintenance releases it through the generic realizer's own
+    reconciliation once its workflow has closed, and refuses to proceed while
+    that workflow is still open.
+    """
+    from moonmind.omnigent.generic_host_janitor import GenericOmnigentHostJanitor
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+
+    journey = native_journey
+    services, docker, server = journey.services, journey.docker, journey.server
+    docker.fail_host_removal = True
+    result = await journey.realizer.execute(journey.request, journey.plan)
+    assert result.failure_class is None, result
+    binding_id = stable_binding_id(
+        execution_plan_ref=journey.plan.planRef,
+        idempotency_key=journey.request.idempotency_key,
+    )
+    binding = await services.runtime_binding_store.get(binding_id)
+    assert binding.state is not RuntimeBindingState.cleaned
+    host_lease = await services.host_lease_repository.get(binding.hostLeaseRef)
+    assert host_lease.status != "cleaned"
+    assert server.host_alive
+    assert docker.mounts["/home/app/.codex"]["src"] == "journey_oauth"
+    assert "readonly" not in docker.mounts["/home/app/.codex"]
+
+    docker.fail_host_removal = False
+    owners = []
+
+    async def owner_has_closed(candidate):
+        owners.append(candidate.bindingId)
+        return owner_closed
+
+    janitor = GenericOmnigentHostJanitor(
+        host_leases=services.host_lease_repository,
+        runtime_bindings=services.runtime_binding_store,
+        realizer=services.generic_realizer,
+        owner_has_closed=owner_has_closed,
+    )
+    # Another Profile's maintenance leaves this binding alone.
+    assert await janitor.drain_profile("another-profile") == {"drained": 0}
+    assert owners == []
+    if not owner_closed:
+        with pytest.raises(HarnessPlatformError, match=binding_id):
+            await janitor.drain_profile(PROFILE)
+        assert server.host_alive
+        assert (
+            await services.host_lease_repository.get(binding.hostLeaseRef)
+        ).status != "cleaned"
+        return
+    assert await janitor.drain_profile(PROFILE) == {"drained": 1}
+    assert owners == [binding_id]
+    assert not server.host_alive
+    assert ("host_remove", docker.container_name) in journey.events
+    assert (
+        await services.host_lease_repository.get(binding.hostLeaseRef)
+    ).status == "cleaned"
+    assert (
+        await services.runtime_binding_store.get(binding_id)
+    ).state is RuntimeBindingState.cleaned
+    # The Profile-owned OAuth home is preserved for the maintenance itself.
+    assert "journey_oauth" in docker.volumes
+    # A repeated maintenance attempt finds nothing left to drain.
+    assert await janitor.drain_profile(PROFILE) == {"drained": 0}

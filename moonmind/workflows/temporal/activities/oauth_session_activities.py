@@ -122,7 +122,7 @@ async def _create_oauth_validation_binding(
 async def oauth_session_prepare_credential_maintenance(
     request: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Drain stale profile-bound sessions/hosts before mutating OAuth state."""
+    """Drain the Profile's generic and profile-bound hosts before mutating OAuth state."""
 
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
@@ -143,10 +143,11 @@ async def oauth_session_prepare_credential_maintenance(
     profile_id = str(request.get("profile_id") or "").strip()
     if not profile_id:
         raise ValueError("profile_id is required")
+    generic_drained = await _drain_generic_profile_hosts(profile_id)
     repository = OmnigentOAuthHostRepository(async_session_maker)
     binding = await repository.get_binding_for_profile(profile_id)
     if binding is None:
-        return {"profile_id": profile_id, "drained": 0}
+        return {"profile_id": profile_id, "drained": generic_drained}
     leases = await repository.list_active_host_leases_for_profile(profile_id)
     async with pooled_http_client() as http_client:
         client = OmnigentHttpClient(
@@ -179,7 +180,38 @@ async def oauth_session_prepare_credential_maintenance(
                 await runtime.stop_host(binding=binding, host_lease=host_lease)
             await repository.mark_host_lease_stopped(host_lease.lease_id)
             drained += 1
-    return {"profile_id": profile_id, "drained": drained}
+    return {"profile_id": profile_id, "drained": drained + generic_drained}
+
+
+async def _drain_generic_profile_hosts(profile_id: str) -> int:
+    """Release generic hosts that may still mount the Profile's OAuth home."""
+
+    from api_service.db.base import async_session_maker
+    from moonmind.omnigent.generic_host_janitor import (
+        GenericOmnigentHostJanitor,
+        list_profile_host_consumers,
+    )
+    from moonmind.omnigent.host_leases import DbOmnigentHostLeaseRepository
+    from moonmind.omnigent.production import build_generic_omnigent_execution_services
+    from moonmind.omnigent.runtime_bindings import DbRuntimeBindingStore
+
+    # Direct-runtime Profiles do not need an execution plane merely to log in.
+    # Read the durable inventory first; errors still block credential mutation.
+    if not await list_profile_host_consumers(
+        profile_id,
+        runtime_bindings=DbRuntimeBindingStore(async_session_maker),
+        host_leases=DbOmnigentHostLeaseRepository(async_session_maker),
+    ):
+        return 0
+    services = build_generic_omnigent_execution_services(
+        session_factory=async_session_maker
+    )
+    result = await GenericOmnigentHostJanitor(
+        host_leases=services.host_lease_repository,
+        runtime_bindings=services.runtime_binding_store,
+        realizer=services.generic_realizer,
+    ).drain_profile(profile_id)
+    return int(result["drained"])
 
 
 @activity.defn(name="oauth_session.revalidate_bound_host")

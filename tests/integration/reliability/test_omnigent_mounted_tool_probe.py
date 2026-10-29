@@ -207,13 +207,13 @@ async def test_declared_tool_probe_reaches_exact_host(
     # Other attestation services are independent of mounted tools. Preserve the
     # full attestor ordering and evidence publication while isolating those seams.
     monkeypatch.setattr(
-        attestation,
-        "_run_exact_host_runner_command",
+        attestation.upstream_probes,
+        "run_runner_command",
         AsyncMock(return_value=(0, "", "")),
     )
     monkeypatch.setattr(
-        attestation,
-        "_run_exact_host_opencode_command",
+        attestation.upstream_probes,
+        "run_opencode_shell_command",
         AsyncMock(return_value=(0, "", "")),
     )
     monkeypatch.setattr(

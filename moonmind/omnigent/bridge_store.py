@@ -46,6 +46,9 @@ from moonmind.omnigent.control_plane.identities import (
 from moonmind.omnigent.control_plane.repositories import OmnigentControlPlaneStore
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.utils.logging import redact_sensitive_payload
+from moonmind.workflows.adapters.omnigent_agent_adapter import (
+    CLAUDE_DISALLOWED_TOOLS_DEFAULTS_KEY,
+)
 from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 # Traceability: MM-1152 created the canonical store; MM-1156 moved the
@@ -95,9 +98,13 @@ def _journal_artifact_service(session: AsyncSession) -> Any:
 # Pin worker-derived workflow launch defaults before any provider side effect.
 # Missing metadata is ambiguous across older workers: reconcile any provider
 # effect before selecting defaults for an attempt without a saved decision.
+# The permission default yields to an authored permission choice. The tool deny
+# does not: a workflow step ends with its turn, so nothing owns a deferred
+# ``ScheduleWakeup`` continuation (the direct Claude strategy denies it too).
 WORKFLOW_LAUNCH_DEFAULTS_KEY = "workflowLaunchDefaults"
 WORKFLOW_LAUNCH_DEFAULTS = {
     "claude-native": ["--permission-mode", "bypassPermissions"],
+    CLAUDE_DISALLOWED_TOOLS_DEFAULTS_KEY: ["ScheduleWakeup"],
 }
 
 

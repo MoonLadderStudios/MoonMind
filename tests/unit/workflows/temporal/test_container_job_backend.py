@@ -46,6 +46,9 @@ from moonmind.workflows.temporal.container_job_backend import (
     DockerContainerJobBackend,
     FilesystemCapacityAdmissionLock,
 )
+from moonmind.workflows.temporal.container_image_acquisition import (
+    ImageAcquisitionError,
+)
 
 JOB_ID = "container-job:0123456789abcdef0123456789abcdef"
 
@@ -194,6 +197,54 @@ async def test_readiness_fails_when_disabled_or_unreachable(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_pull_denial_preserves_diagnostics_without_assuming_image_exists(
+    tmp_path,
+):
+    raw = b"Error response from daemon: denied: requested access to the resource is denied"
+    reports = []
+
+    async def runner(_args):
+        return 1, b"", raw
+
+    async def publish(_request, _name, data):
+        reports.append(data)
+        return "artifact://pull-diagnostics"
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=runner,
+        evidence_publisher=publish,
+    )
+    with pytest.raises(ImageAcquisitionError) as caught:
+        await backend._pull_image(_request(tmp_path), "ghcr.io/org/unpublished:1")
+    assert caught.value.failure_class == ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED
+    assert caught.value.diagnostics_ref == "artifact://pull-diagnostics"
+    assert raw in reports[0]
+    assert "publication" in str(caught.value)
+    assert "permissions" in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_authenticated_denial_does_not_claim_anonymous_pull_or_missing_credentials(tmp_path):
+    async def runner(_args):
+        return 1, b"", b"denied: requested access to the resource is denied"
+    backend = DockerContainerJobBackend(workspace_root=tmp_path, command_runner=runner)
+    with pytest.raises(ImageAcquisitionError) as caught:
+        await backend._pull_image(
+            _request(tmp_path),
+            "ghcr.io/org/unpublished:1",
+            image_source_ref="render",
+            direct_reference=True,
+            auth_dir=tmp_path / "auth",
+        )
+    message = str(caught.value)
+    assert caught.value.failure_class == ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED
+    assert "anonymous" not in message
+    assert "no deployment GitHub credential" not in message
+    assert "publication" in message
+
+
+@pytest.mark.asyncio
 async def test_readiness_passes_when_endpoint_reachable(tmp_path) -> None:
     commands: list[tuple[str, ...]] = []
     backend = DockerContainerJobBackend(
@@ -282,6 +333,58 @@ async def test_historical_activity_preserves_workspace_access_at_launch(
     created = next(command for command in commands if command[0] == "create")
     mount = created[created.index("--mount") + 1]
     assert mount.endswith(",readonly") is bool(read_only)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_database", [False, True])
+async def test_scanner_writes_only_job_owned_outputs_and_scratch(
+    tmp_path, with_database
+):
+    from moonmind.security.repository_scanners import RepositoryScan, build_scanner_job
+
+    (tmp_path / "art_workspace").mkdir()
+    scan = RepositoryScan(
+        scanner="trivy",
+        outputDirectory="artifacts/trivy",
+        trivyScanners=["vuln"] if with_database else ["misconfig"],
+        databaseCacheRef="scanner-db" if with_database else None,
+        databaseDigest="a" * 64 if with_database else None,
+    )
+    commands = []
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=_recording_runner(commands)
+    )
+    backend._settings = resolve_container_backend_settings(
+        {
+            CACHE_SOURCES_ENV_KEY: json.dumps(
+                [
+                    {
+                        "cacheRef": "scanner-db",
+                        "volumeName": "scanner-db",
+                        "target": "/opt/moonmind-scanner-db",
+                        "readOnly": True,
+                    }
+                ]
+            )
+        }
+    )
+    await backend.create_container(
+        _request(tmp_path, image=None, **build_scanner_job(scan))
+    )
+    created = next(command for command in commands if command[0] == "create")
+    assert "--read-only" in created
+    # Docker refuses a tmpfs over the job-owned /tmp mount.
+    assert "--tmpfs" not in created
+    mounts = [created[i + 1] for i, arg in enumerate(created) if arg == "--mount"]
+    writable = sorted(
+        m.split("dst=", 1)[1].split(",", 1)[0]
+        for m in mounts
+        if not m.endswith(",readonly")
+    )
+    assert writable == ["/outputs", "/tmp"]
+    # Opengrep's packaged release executes a child extracted into /tmp.
+    assert not any("noexec" in m for m in mounts)
+    assert next(m for m in mounts if "dst=/inputs/source" in m).endswith(",readonly")
 
 
 @pytest.mark.asyncio

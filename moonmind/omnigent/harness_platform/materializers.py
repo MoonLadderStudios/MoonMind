@@ -26,10 +26,6 @@ OPENCODE_AUTH_UID = 1000
 OPENCODE_AUTH_GID = 1000
 OPENCODE_PROVIDER_KEY = "opencode-go"
 OPENCODE_BUILTIN_PROVIDER_KEY = "opencode"
-OPENCODE_SUPPORTED_VERSION_RANGE = (  # inclusive lower, exclusive upper
-    "1.17.7",
-    "1.19.0",
-)
 FORBIDDEN_AMBIENT_ENV_KEYS = (
     "OPENCODE_AUTH_CONTENT",
     "OPENCODE_CONFIG",
@@ -200,7 +196,7 @@ _register_builtin(
     {
         "materializerId": "omnigent-provider-config",
         "version": 1,
-        "acceptedHarnessIds": ["pi-native"],
+        "acceptedHarnessIds": ["pi-native", "claude-native", "codex-native"],
         "acceptedAuthModels": ["omnigent-provider-config"],
         "supportedHostModes": ["on-demand", "static-connected"],
         "requiredSecretRoles": ["api_key"],
@@ -274,6 +270,237 @@ def materializer_ref_for_provider(runtime_id: str, provider_id: str) -> str:
             code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
         )
     return ref
+
+
+PROVIDER_CONFIG_MATERIALIZER_REF = "omnigent-provider-config@1"
+ANTHROPIC_DEFAULT_BASE_URL = "https://api.anthropic.com"
+OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1"
+_CLAUDE_KEY_ENV = frozenset({"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"})
+# Claude Code's per-tier model pins and the Omnigent provider-config ``models``
+# keys that set the same pins on the native Claude launch.
+_CLAUDE_TIER_MODEL_ENV = {
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "haiku",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL": "fable",
+}
+_CLAUDE_CARRIED_LITERAL_ENV = frozenset(
+    {"ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", *_CLAUDE_TIER_MODEL_ENV}
+)
+_CODEX_KEY_ENV = frozenset({"OPENAI_API_KEY"})
+_CODEX_CARRIED_LITERAL_ENV = frozenset({"OPENAI_BASE_URL"})
+
+
+class ProviderConfigEndpoint(BaseModel):
+    """Secret-free endpoint an API-key Provider Profile declares.
+
+    The Omnigent provider config carries a key-authenticated provider as one
+    model family with a base URL, a static key, and model pins. Omnigent's
+    native Claude launch turns that into ``ANTHROPIC_BASE_URL``, a key helper
+    and per-tier model pins; its native Codex launch turns an ``openai``
+    family into a ``model_provider`` override (base URL, bearer auth command,
+    Responses wire).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    family: str
+    secretRole: str = Field(alias="secretRole")
+    baseUrl: str = Field(alias="baseUrl")
+    defaultModel: str | None = Field(None, alias="defaultModel")
+    modelPins: dict[str, str] = Field(default_factory=dict, alias="modelPins")
+
+
+def _enum_value(raw: Any) -> str:
+    return str(getattr(raw, "value", raw) or "").strip()
+
+
+def _omnigent_egress_admits(url: str) -> bool:
+    from urllib.parse import urlsplit
+
+    from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
+
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower().rstrip(".")
+        port = parts.port
+    except ValueError:
+        return False
+    if parts.scheme != "https" or not host or port not in (None, 443):
+        return False
+    return any(
+        destination.dns_name is not None
+        and 443 in destination.ports
+        and (host == destination.dns_name or host.endswith(f".{destination.dns_name}"))
+        for destination in OMNIGENT_EGRESS_PROFILE.destinations
+    )
+
+
+def _declared_key_launch(
+    profile: Any,
+    *,
+    runtime_id: str,
+    harness_label: str,
+    key_env: frozenset[str],
+    carried_literal_env: frozenset[str],
+) -> tuple[str, dict[str, str], str]:
+    """Split an API-key Profile's launch environment into key role and literals.
+
+    Returns ``(key_role, literals, "")`` when the declared environment is one
+    key SecretRef plus literals the provider config has a field for, or
+    ``("", {}, reason)`` naming why it cannot be carried exactly.
+    """
+
+    if str(getattr(profile, "runtime_id", "") or "").strip() != runtime_id:
+        return "", {}, f"not a {harness_label} Provider Profile"
+    if _enum_value(getattr(profile, "credential_source", None)) != "secret_ref":
+        return "", {}, "not a SecretRef Provider Profile"
+    if getattr(profile, "file_templates", None) or getattr(
+        profile, "home_path_overrides", None
+    ):
+        return "", {}, "file templates and home path overrides are direct-launch only"
+    secret_refs = dict(getattr(profile, "secret_refs", None) or {})
+    key_role = ""
+    literals: dict[str, str] = {}
+    for name, value in dict(getattr(profile, "env_template", None) or {}).items():
+        if isinstance(value, dict) and set(value) == {"from_secret_ref"}:
+            role = str(value["from_secret_ref"] or "").strip()
+            if name not in key_env or key_role:
+                return "", {}, f"{name} cannot carry a secret on the shared path"
+            if not str(secret_refs.get(role) or "").strip():
+                return "", {}, f"secret role {role!r} has no SecretRef"
+            key_role = role
+        elif isinstance(value, str) and value.strip() and "{{" not in value:
+            literals[name] = value.strip()
+        else:
+            return "", {}, f"{name} is not a literal value"
+    if not key_role:
+        return "", {}, f"no {' or '.join(sorted(key_env))} SecretRef"
+    uncarried = sorted(set(literals) - carried_literal_env)
+    if uncarried:
+        return "", {}, f"launch environment {uncarried} has no provider-config field"
+    return key_role, literals, ""
+
+
+def claude_provider_config_endpoint(
+    profile: Any,
+) -> tuple[ProviderConfigEndpoint | None, str]:
+    """Translate an API-key Claude Provider Profile into a provider config.
+
+    Returns the endpoint, or ``None`` with the reason the Profile's declared
+    launch environment cannot be carried exactly. Only an equivalent
+    translation moves a Profile off its direct launch; anything else keeps it
+    there with that reason.
+    """
+
+    key_role, literals, reason = _declared_key_launch(
+        profile,
+        runtime_id="claude_code",
+        harness_label="Claude Code",
+        key_env=_CLAUDE_KEY_ENV,
+        carried_literal_env=_CLAUDE_CARRIED_LITERAL_ENV,
+    )
+    if not key_role:
+        return None, reason
+    base_url = literals.get("ANTHROPIC_BASE_URL", ANTHROPIC_DEFAULT_BASE_URL)
+    base_url = base_url.rstrip("/")
+    if not _omnigent_egress_admits(base_url):
+        return None, "the Omnigent egress profile does not admit the endpoint"
+    return (
+        ProviderConfigEndpoint(
+            family="anthropic",
+            secretRole=key_role,
+            baseUrl=base_url,
+            defaultModel=literals.get("ANTHROPIC_MODEL"),
+            modelPins={
+                tier: literals[name]
+                for name, tier in _CLAUDE_TIER_MODEL_ENV.items()
+                if name in literals
+            },
+        ),
+        "",
+    )
+
+
+def codex_provider_config_endpoint(
+    profile: Any,
+) -> tuple[ProviderConfigEndpoint | None, str]:
+    """Translate an API-key Codex Provider Profile into a provider config.
+
+    The direct Codex launch reads ``OPENAI_API_KEY`` and, for a custom
+    endpoint, ``OPENAI_BASE_URL`` on Codex's built-in Responses provider; an
+    ``openai`` provider-config family carries both. A Profile that brings its
+    own ``config.toml`` (a custom ``model_provider``, wire or retry tuning)
+    keeps its direct launch with the reason.
+    """
+
+    key_role, literals, reason = _declared_key_launch(
+        profile,
+        runtime_id="codex_cli",
+        harness_label="Codex CLI",
+        key_env=_CODEX_KEY_ENV,
+        carried_literal_env=_CODEX_CARRIED_LITERAL_ENV,
+    )
+    if not key_role:
+        return None, reason
+    base_url = literals.get("OPENAI_BASE_URL", OPENAI_DEFAULT_BASE_URL).rstrip("/")
+    if not _omnigent_egress_admits(base_url):
+        return None, "the Omnigent egress profile does not admit the endpoint"
+    return (
+        ProviderConfigEndpoint(family="openai", secretRole=key_role, baseUrl=base_url),
+        "",
+    )
+
+
+_PROVIDER_CONFIG_TRANSLATIONS = {
+    "claude_code": claude_provider_config_endpoint,
+    "codex_cli": codex_provider_config_endpoint,
+}
+
+
+def is_api_key_launch_profile(profile: Any) -> bool:
+    """Whether a Codex or Claude Profile authenticates with a declared key."""
+
+    return (
+        str(getattr(profile, "runtime_id", "") or "").strip()
+        in _PROVIDER_CONFIG_TRANSLATIONS
+        and _enum_value(getattr(profile, "credential_source", None)) == "secret_ref"
+    )
+
+
+def provider_config_endpoint(
+    profile: Any,
+) -> tuple[ProviderConfigEndpoint | None, str]:
+    """Translate an API-key Codex or Claude Profile into a provider config."""
+
+    translate = _PROVIDER_CONFIG_TRANSLATIONS.get(
+        str(getattr(profile, "runtime_id", "") or "").strip()
+    )
+    if translate is None:
+        return None, "no provider-config translation for this runtime"
+    return translate(profile)
+
+
+def materializer_ref_for_profile(profile: Any) -> str:
+    """Return the materializer for one Provider Profile's credential shape.
+
+    An OAuth Profile mounts its enrolled home; an API-key Codex or Claude
+    Profile is delivered as an Omnigent provider config when that is an exact
+    translation, and is otherwise refused here (it keeps its direct launch).
+    """
+
+    if is_api_key_launch_profile(profile):
+        endpoint, reason = provider_config_endpoint(profile)
+        if endpoint is None:
+            raise HarnessPlatformError(
+                f"API-key Provider Profile cannot run on Omnigent: {reason}",
+                code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+            )
+        return PROVIDER_CONFIG_MATERIALIZER_REF
+    return materializer_ref_for_provider(
+        str(getattr(profile, "runtime_id", "") or "").strip(),
+        str(getattr(profile, "provider_id", "") or "").strip(),
+    )
 
 
 def validate_binding_materializer(

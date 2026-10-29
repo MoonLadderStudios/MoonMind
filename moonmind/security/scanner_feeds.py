@@ -286,10 +286,11 @@ def load_snapshot(
     path = _snapshots(root) / snapshot_id
     if path.is_symlink() or not path.is_dir():
         raise FeedSnapshotError("feed_snapshot_unavailable")
+    identity = _identity(path)
     try:
         raw = _metadata(path / MANIFEST)
     except FeedSnapshotError:
-        if not path.is_dir():
+        if _identity(path) != identity:
             raise FeedSnapshotError("feed_snapshot_unavailable") from None
         raise
     if raw.get("schemaVersion") != SNAPSHOT_SCHEMA:
@@ -302,20 +303,35 @@ def load_snapshot(
         raise FeedSnapshotError("feed_snapshot_corrupt")
     if verify:
         _verify(
-            path, snapshot_id, path, exclude=frozenset({MANIFEST}), max_bytes=max_bytes
+            path,
+            snapshot_id,
+            path,
+            identity,
+            exclude=frozenset({MANIFEST}),
+            max_bytes=max_bytes,
         )
     return snapshot
 
 
-def _verify(tree: Path, expected: str, published: Path, **kwargs) -> None:
+def _identity(path: Path) -> tuple[int, int, int] | None:
+    try:
+        info = path.stat()
+    except OSError:
+        return None
+    return info.st_dev, info.st_ino, info.st_ctime_ns
+
+
+def _verify(tree: Path, expected: str, published: Path, identity, **kwargs) -> None:
     try:
         digest = tree_digest(tree, **kwargs)
     except (OSError, FeedSnapshotError):
         digest = None
     if digest == expected:
         return
-    # Retention renames a snapshot away whole; a reader racing it sees absence.
-    if not published.is_dir():
+    # Retention renames a snapshot away whole, and a later writer may publish
+    # the same content again as a new directory: a reader racing either sees
+    # absence, not corruption.
+    if _identity(published) != identity:
         raise FeedSnapshotError("feed_snapshot_unavailable")
     raise FeedSnapshotError("feed_snapshot_corrupt")
 
@@ -326,6 +342,7 @@ def copy_snapshot(root: Path, snapshot: FeedSnapshot, destination: Path) -> None
     The copy, not the shared source, is verified: it is what the scan reads.
     """
     source = _snapshots(root) / snapshot.snapshot_id
+    identity = _identity(source)
     try:
         for component in snapshot.components:
             shutil.copytree(
@@ -337,7 +354,7 @@ def copy_snapshot(root: Path, snapshot: FeedSnapshot, destination: Path) -> None
     except OSError as exc:
         # Retention retired it mid-copy: absence, never partial content.
         raise FeedSnapshotError("feed_snapshot_unavailable") from exc
-    _verify(destination, snapshot.snapshot_id, source)
+    _verify(destination, snapshot.snapshot_id, source, identity)
 
 
 def current_snapshot(root: Path) -> FeedSnapshot:
@@ -755,6 +772,39 @@ def build_feed_refresh_job(
                 "readOnly": False,
             }
         ],
+    }
+
+
+def expand_feed_refresh_job(value):
+    """Fill a typed refresh request with its canonical job, for every entry.
+
+    A schedule or other caller names only ``feedRefresh`` (and resources);
+    supplied fields win, so any divergence still fails validation below.
+    """
+    if not isinstance(value, dict):
+        return value
+    raw = value.get("feedRefresh", value.get("feed_refresh"))
+    if raw is None:
+        return value
+    try:
+        refresh = FeedRefresh.model_validate(raw)
+    except ValueError:
+        return value
+    source = value.get("imageSourceRef", value.get("image_source_ref"))
+    canonical = build_feed_refresh_job(
+        refresh,
+        **({"image_source_ref": source} if isinstance(source, str) else {}),
+    )
+    if "image" in value:
+        canonical.pop("imageSourceRef")
+    # Field names and aliases both count as supplied (populate_by_name).
+    supplied = {
+        head + "".join(part.title() for part in rest)
+        for head, *rest in (str(key).split("_") for key in value)
+    }
+    return {
+        **{key: item for key, item in canonical.items() if key not in supplied},
+        **value,
     }
 
 

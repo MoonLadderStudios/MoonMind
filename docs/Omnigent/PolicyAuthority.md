@@ -92,15 +92,13 @@ Startup seeds `omnigent-codex@1`, `codex-static@1`, and
 `codex-on-demand@1` as explicit Codex policies. When OpenCode support is
 enabled, startup also seeds `omnigent-on-demand@1` and
 `opencode-on-demand@1` with the qualified OpenCode harness, provider, and host
-image authority. Stock image tags are acquired and resolved during seeding;
-only repository digests are projected into immutable active versions. Each
-host-image family seeds independently, so an unavailable optional harness does
-not withhold another runtime's valid authority. OpenCode policies reuse the
-exact host digest already qualified by deployment image reconciliation. Codex
-and Claude policies use the deployment-resolved shared host image
-(`OMNIGENT_SHARED_HOST_IMAGE_REF`), which owns the MoonMind tools under
-`/opt/moonmind-tools`; the upstream `omnigent-host` image does not carry them,
-so bootstrap versions any bootstrap-owned Codex default still pinned to it.
+image authority. The stock server tag is acquired and resolved during seeding;
+only repository digests are projected into immutable active versions. Codex,
+Claude, and OpenCode (`omnigent-opencode@2`) policies use the
+deployment-resolved shared host image (`OMNIGENT_SHARED_HOST_IMAGE_REF`), which
+owns the MoonMind tools under `/opt/moonmind-tools`; the upstream
+`omnigent-host` image does not carry them, so bootstrap versions any
+bootstrap-owned default still pinned to another host family.
 A version's image refs name the image family and record the images current
 when it was written: fresh admission, including each schedule-started
 occurrence, binds the installed same-repository server and host images to the

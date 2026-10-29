@@ -199,8 +199,9 @@ def test_embedded_readiness_reports_retirement_not_new_capacity(
 class _RetryCapableStore:
     """Store stand-in with an already-admitted idempotency-key row."""
 
-    def __init__(self, *, admitted: bool = True) -> None:
+    def __init__(self, *, admitted: bool = True, status: str = "active") -> None:
         self._admitted = admitted
+        self._status = status
 
     async def active_host_protocol_modes(self, *, exclude_idempotency_key=None):
         return {}
@@ -209,7 +210,11 @@ class _RetryCapableStore:
         if self._admitted and idempotency_key == "idem-1":
             from types import SimpleNamespace
 
-            return SimpleNamespace(omnigent_session_id="sess-77")
+            return SimpleNamespace(
+                omnigent_session_id="sess-77",
+                status=self._status,
+                metadata_={"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+            )
         return None
 
 
@@ -239,6 +244,33 @@ def test_embedded_retry_with_admitted_key_reconciles_instead_of_rejecting() -> N
     # The retry reconciled the recorded row: nothing was newly admitted.
     assert facade.created == []
     assert facade.attached == ["sess-77"]
+
+
+def test_embedded_retry_of_terminal_row_cannot_redispatch_runner() -> None:
+    """A late retry after its row went terminal is refused like new admission.
+
+    The embedded drain counts only non-terminal embedded rows, so letting this
+    retry reattach would re-dispatch a runner after drain reported ``drained``.
+    """
+    app = FastAPI()
+    app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
+    facade = _FakeEmbeddedFacade()
+    app.dependency_overrides[get_instance_access] = _mock_user
+    app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
+    app.dependency_overrides[_require_bridge_enabled] = _embedded_config
+    app.dependency_overrides[_get_bridge_proxy] = lambda: None
+    app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
+    app.dependency_overrides[_get_bridge_store] = lambda: _RetryCapableStore(
+        status="completed"
+    )
+    app.dependency_overrides[_get_launch_default_agent_selection] = lambda: None
+
+    response = TestClient(app).post(_CREATE_PATH, json=_create_body())
+
+    assert response.status_code == 410
+    assert response.json()["detail"]["code"] == "omnigent_embedded_transport_retired"
+    assert facade.created == []
+    assert facade.attached == []
 
 
 def test_new_embedded_admission_rejected_before_proxy_or_facade_errors() -> None:

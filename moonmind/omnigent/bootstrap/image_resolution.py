@@ -624,6 +624,25 @@ async def resolve_omnigent_images(
         # legacy alias or a mutable tag) must not be silently replaced.
         shared_ref = opencode_ref
 
+    # The shared host also serves OpenCode through omnigent-opencode@2. When it
+    # is not the OpenCode host judged above, judge it the same way so its own
+    # verdict, never the other image's, admits or quarantines that class.
+    shared_verdict: _OpenCodeHostVerdict | None = None
+    if shared_ref and shared_ref != opencode_ref:
+        shared_verdict = next(
+            (verdict for verdict in verdicts if verdict.image_ref == shared_ref),
+            None,
+        )
+        if shared_verdict is None:
+            shared_verdict = await _evaluate_opencode_host(
+                shared_ref,
+                server_ref=server_ref,
+                server_image_digest=server_image_digest,
+                server_version=server_version,
+                configured_build_digest=configured_build_digest,
+            )
+            verdicts.append(shared_verdict)
+
     # Catalog/plan authority always identifies the actual server image. The
     # optional operator host-build pin remains a separate admission constraint.
     omnigent_build_digest = server_image_digest
@@ -705,6 +724,24 @@ async def resolve_omnigent_images(
                     pending_host.pending_payload() if pending_host else None
                 ),
             },
+            **(
+                {
+                    "sharedHostOpencodeCompatibility": {
+                        "status": (
+                            "blocked" if shared_verdict.failure_code else "ready"
+                        ),
+                        "failureCode": shared_verdict.failure_code,
+                        "serverImageRef": server_ref,
+                        "hostImageRef": shared_ref,
+                        "serverBuildDigest": server_image_digest,
+                        "hostBuildDigest": shared_verdict.build_digest,
+                        "serverVersion": server_version,
+                        "hostVersion": shared_verdict.version,
+                    }
+                }
+                if shared_verdict is not None
+                else {}
+            ),
         },
     )
     return state

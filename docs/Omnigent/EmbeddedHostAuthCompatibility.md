@@ -13,7 +13,10 @@
 > mode is the supported topology. The live drain disposition (active embedded
 > sessions and host leases with blocker names, no identities or credentials)
 > is reported by `GET /embedded-transport-drain`; transport removal stays
-> gated on that probe reporting drained. The remainder of this document is the
+> gated on that probe reporting drained. A create retry that reuses an
+> admitted idempotency key reattaches only a non-terminal embedded row, which
+> the probe counts, so a drained report also rules out a retry re-dispatching
+> a runner. The remainder of this document is the
 > historical reference for those retained sessions and their evidence — it is
 > not an offer of new embedded capacity. The native Workflow Chat `embedded=1`
 > presentation option is unrelated and stays supported.

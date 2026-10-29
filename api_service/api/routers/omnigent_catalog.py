@@ -1763,7 +1763,7 @@ async def get_omnigent_execution_readiness(
         get_launch_policy,
     )
     from moonmind.omnigent.harness_platform.materializers import (
-        materializer_ref_for_provider,
+        materializer_ref_for_profile,
     )
     from moonmind.omnigent.runtime_provider_rollout import RuntimeProviderPathClass
     from moonmind.workflows.executions.runtime_target_selection import (
@@ -1907,9 +1907,7 @@ async def get_omnigent_execution_readiness(
             ):
                 continue
             try:
-                materializer = materializer_ref_for_provider(
-                    provider.runtime_id, provider.provider_id
-                )
+                materializer = materializer_ref_for_profile(provider)
                 if harness is None or catalog is None:
                     continue
                 policy_refs = profile.allowedLaunchPolicyRefs

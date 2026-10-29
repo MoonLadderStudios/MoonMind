@@ -69,6 +69,14 @@ INTEGRATION_LANE_EXACT = {
     "tools/single_user_journey_browser.mjs": JOURNEY_LANES,
     "tools/single_user_journey_provider.py": ("fresh-journey", "upgrade-journey"),
     "tools/single_user_journey_cutover.py": ("upgrade-journey",),
+    # Assessment admission across API, MCP, CLI, and security.assess: the
+    # scoped-capability journeys in tests/integration/security/ are hermetic.
+    "api_service/services/container_jobs.py": ("hermetic",),
+    "api_service/api/routers/container_jobs.py": ("hermetic",),
+    "api_service/api/routers/mcp_tools.py": ("hermetic",),
+    "moonmind/container_job_cli.py": ("hermetic",),
+    "moonmind/mcp/container_job_tool_registry.py": ("hermetic",),
+    "moonmind/workflows/skills/security_assessment.py": ("hermetic",),
 }
 OWNERSHIP_FULL_EXACT = {
     "tools/verify_test_shard_ownership.py",

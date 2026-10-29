@@ -87,6 +87,7 @@ async def test_worker_mounts_captured_source_read_only_and_owned_output(
     assert not any("dst=/workspace" in m for m in mounts)
     assert next(m for m in mounts if "dst=/inputs/source" in m).endswith(",readonly")
     assert not next(m for m in mounts if "dst=/outputs" in m).endswith(",readonly")
+    assert "--read-only" in argv
     assert argv[-6:-3] == ("-I", "-m", "moonmind.security.repository_scanner_runner")
     assert argv[-2:] == ("/inputs/source", "/outputs/artifacts/scan")
 
@@ -113,6 +114,8 @@ async def test_admitted_legacy_scanner_job_keeps_its_nested_output_mount(tmp_pat
     mounts = [argv[i + 1] for i, item in enumerate(argv) if item == "--mount"]
     assert next(m for m in mounts if "dst=/workspace" in m).endswith(",readonly")
     assert not next(m for m in mounts if "dst=/scan-output" in m).endswith(",readonly")
+    # Draining legacy jobs have no job-owned /tmp, so their root stays writable.
+    assert "--read-only" not in argv
 
 
 @pytest.mark.parametrize(

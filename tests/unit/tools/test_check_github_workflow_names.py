@@ -33,6 +33,9 @@ def test_current_workflows_have_stable_names() -> None:
         "codex-conformance-canary.yml": "Provider / Codex Conformance Canary",
         "docker-publish.yml": "Release / Build App Image",
         "docker-publish-moonmind-host.yml": "Release / Build omnigent-host-moonmind Image",
+        "docker-publish-repository-security.yml": (
+            "Release / Repository Security Image"
+        ),
         "omnigent-concurrency-qualification.yml": (
             "Provider / Omnigent Concurrency Qualification"
         ),
@@ -44,6 +47,7 @@ def test_current_workflows_have_stable_names() -> None:
         "omnigent-upstream-pin-updater.yml": "Omnigent Upstream Pin Updater",
         "promote-ghcr-stable.yml": "Release / Promote Stable",
         "pytest-unit-tests.yml": "CI / Test Suite",
+        "upstream-assessment-images.yml": "Qualify / Upstream Assessment Images",
     }
 
     files = check_github_workflow_names.workflow_files(

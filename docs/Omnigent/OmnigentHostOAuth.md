@@ -487,7 +487,7 @@ Before session or runner work begins, the exact host must prove:
 - Omnigent version matches the catalog authority
 - selected harness implementation matches the plan
 - selected runtime-pack ref is present and supported
-- vendor CLI version matches the declared dependency
+- each declared vendor CLI runs; its observed version is recorded, not matched
 - credential attachments match the selected materializer
 - credential generation matches the acquired generation
 - owner, mode, and target paths are correct
