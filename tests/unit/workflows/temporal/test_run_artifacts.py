@@ -3297,8 +3297,17 @@ async def test_run_execution_stage_publish_mode_pr_uses_publish_overrides(
             "output_refs": [],
         }
 
+    async def fake_start_child_workflow(workflow_type, args, **kwargs):
+        assert workflow_type == "MoonMind.MergeAutomation"
+        completed = asyncio.get_running_loop().create_future()
+        completed.set_result(
+            await fake_execute_child_workflow(workflow_type, args, **kwargs)
+        )
+        return completed
+
     monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
     monkeypatch.setattr(run_workflow_module.workflow, "execute_child_workflow", fake_execute_child_workflow)
+    monkeypatch.setattr(run_workflow_module.workflow, "start_child_workflow", fake_start_child_workflow)
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
         run_workflow_module.workflow,

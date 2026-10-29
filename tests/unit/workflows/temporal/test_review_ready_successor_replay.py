@@ -80,13 +80,13 @@ class _NewFixture:
 class _MergeChild:
     @workflow.run
     async def run(self, _payload: dict) -> dict:
-        await workflow.sleep(1)
+        await workflow.sleep(601)
         return {"status": "merged"}
 
 
 @activity.defn(name="recurring.review_ready_successor")
 async def _successor(_payload: dict) -> dict:
-    return {"status": "enqueued"}
+    return {"status": "skipped" if _payload["ordinal"] == 1 else "enqueued"}
 
 
 @pytest.mark.asyncio
@@ -108,7 +108,16 @@ async def test_pre_and_post_handoff_histories_replay():
                     impl.run, id=queue, task_queue=queue
                 )
                 assert await handle.result() == "merged"
-                histories.append(await handle.fetch_history())
+                history = await handle.fetch_history()
+                admissions = [
+                    event
+                    for event in history.events
+                    if event.HasField("activity_task_scheduled_event_attributes")
+                    and event.activity_task_scheduled_event_attributes.activity_type.name
+                    == "recurring.review_ready_successor"
+                ]
+                assert len(admissions) == (0 if label == "old" else 3)
+                histories.append(history)
     replayer = Replayer(
         workflows=[_NewFixture], workflow_runner=UnsandboxedWorkflowRunner()
     )

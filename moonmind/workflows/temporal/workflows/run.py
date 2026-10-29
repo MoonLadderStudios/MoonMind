@@ -22100,13 +22100,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 await self._maybe_admit_review_ready_successor()
                 while not child.done() and (
                     self._publish_context.get("implementationSuccessor") or {}
-                ).get("status") not in {"enqueued", "not_applicable", "dispatch_error"}:
+                ).get("status") not in {"not_applicable", "dispatch_error"}:
                     try:
                         await workflow.wait_condition(
                             child.done, timeout=timedelta(minutes=5)
                         )
                     except asyncio.TimeoutError:
-                        await self._maybe_admit_review_ready_successor()
+                        await self._maybe_admit_review_ready_successor(
+                            allow_next_observation=True
+                        )
             return await child
 
         try:
@@ -22210,7 +22212,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         ):
             raise ValueError(reason or "merge automation failed")
 
-    async def _maybe_admit_review_ready_successor(self) -> None:
+    async def _maybe_admit_review_ready_successor(
+        self, *, allow_next_observation: bool = False
+    ) -> None:
         availability = self._publish_context.get("implementationAvailability")
         if (
             self._cancel_requested
@@ -22220,11 +22224,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return
         observed = self._publish_context.get("implementationSuccessor") or {}
         status = observed.get("status")
-        # Response loss retains the same journal identity. Only a confirmed
-        # Skip (no external start) permits a later admission observation.
-        if status in {"enqueued", "not_applicable", "dispatch_error"}:
+        # Response loss retains the same journal identity. A confirmed start
+        # or Skip completes that request; the next timed observation rechecks
+        # the two-parent bound, including successors that finish out of order.
+        if status in {"not_applicable", "dispatch_error"} or (
+            status == "enqueued" and not allow_next_observation
+        ):
             return
-        ordinal = int(observed.get("ordinal", 0)) + (status == "skipped")
+        ordinal = int(observed.get("ordinal", 0)) + (status in {"skipped", "enqueued"})
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
             "recurring.review_ready_successor"
         )
