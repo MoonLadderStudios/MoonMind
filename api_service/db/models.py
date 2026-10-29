@@ -375,6 +375,11 @@ class RecurringWorkflowRun(Base):
     terminal_observed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True,
     )
+    implementation_admitted_at: Mapped[Optional[datetime]] = mapped_column(
+        # This occurrence keeps its admission across run/worker replacement;
+        # a registered waiter has no admission yet.
+        DateTime(timezone=True), nullable=True,
+    )
     message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

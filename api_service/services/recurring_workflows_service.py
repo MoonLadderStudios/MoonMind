@@ -2407,7 +2407,9 @@ class RecurringWorkflowsService:
             if observed["state"] != "terminal"
         }, unknown
 
-    async def _register_recurring_issue_owner(self, definition, observed) -> None:
+    async def _register_recurring_issue_owner(
+        self, definition, observed, *, admitted=False
+    ):
         from uuid import NAMESPACE_URL, uuid5
 
         workflow_id = observed["workflowId"]
@@ -2420,6 +2422,7 @@ class RecurringWorkflowsService:
                         RecurringWorkflowRun.temporal_workflow_id == workflow_id,
                         RecurringWorkflowRun.terminal_observed_at.is_(None),
                     )
+                    .order_by(RecurringWorkflowRun.scheduled_for, RecurringWorkflowRun.id)
                     .limit(1)
                 )
             )
@@ -2427,24 +2430,27 @@ class RecurringWorkflowsService:
             .first()
         )
         if existing is not None:
-            return
-        self._session.add(
-            RecurringWorkflowRun(
-                id=uuid5(
-                    NAMESPACE_URL,
-                    "moonmind:occurrence-owner:" + workflow_id + ":" + observed["runId"],
-                ),
-                definition_id=definition.id,
-                scheduled_for=observed["startedAt"],
-                trigger=RecurringWorkflowRunTrigger.SCHEDULE,
-                outcome=RecurringWorkflowRunOutcome.ENQUEUED,
-                temporal_workflow_id=workflow_id,
-                temporal_run_id=observed["runId"],
-                dispatch_attempts=1,
-                dispatch_after=None,
-                message="Execution registered for bounded issue admission.",
-            )
+            if admitted and existing.implementation_admitted_at is None:
+                existing.implementation_admitted_at = datetime.now(UTC)
+            return existing
+        record = RecurringWorkflowRun(
+            id=uuid5(
+                NAMESPACE_URL,
+                "moonmind:occurrence-owner:" + workflow_id + ":" + observed["runId"],
+            ),
+            definition_id=definition.id,
+            scheduled_for=observed["startedAt"],
+            trigger=RecurringWorkflowRunTrigger.SCHEDULE,
+            outcome=RecurringWorkflowRunOutcome.ENQUEUED,
+            temporal_workflow_id=workflow_id,
+            temporal_run_id=observed["runId"],
+            dispatch_attempts=1,
+            dispatch_after=None,
+            message="Execution registered for bounded issue admission.",
+            implementation_admitted_at=datetime.now(UTC) if admitted else None,
         )
+        self._session.add(record)
+        return record
 
     async def admit_issue_implementation(
         self, *, definition_id: UUID, workflow_id: str, run_id: str
@@ -2462,18 +2468,62 @@ class RecurringWorkflowsService:
             )
         await self._lock_issue_definition(definition)
         owners, unknown = await self._recurring_issue_owners(definition)
+        owners[workflow_id] = observed
+        current = await self._register_recurring_issue_owner(definition, observed)
+        # A verified live merge child proves this owner already implemented.
+        # Its original admission may predate the new fresh-occurrence gate.
+        for identity, state in owners.items():
+            if state.get("reviewReady") and state.get("root"):
+                await self._register_recurring_issue_owner(definition, state, admitted=True)
+        rows = (
+            (
+                await self._session.execute(
+                    select(RecurringWorkflowRun).where(
+                        RecurringWorkflowRun.definition_id == definition_id,
+                        RecurringWorkflowRun.terminal_observed_at.is_(None),
+                        RecurringWorkflowRun.temporal_workflow_id.in_(list(owners)),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        admitted_owners = {
+            row.temporal_workflow_id
+            for row in rows
+            if row.implementation_admitted_at is not None
+        }
+
+        def order(value, identity):
+            moment = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+            return moment.astimezone(UTC), str(identity)
+
+        priorities = {}
+        for row in rows:
+            identity = row.temporal_workflow_id
+            priority = order(row.scheduled_for, identity)
+            priorities[identity] = min(priority, priorities.get(identity, priority))
+        for identity, state in owners.items():
+            # Native starts can be visible before their first Activity. Their
+            # observed start precedes a later registration, never its waiter.
+            priorities.setdefault(identity, order(state["startedAt"], identity))
+        waiters = set(owners) - admitted_owners
+        first_waiter = min(waiters, key=priorities.__getitem__) if waiters else None
         others = {
             identity: state for identity, state in owners.items() if identity != workflow_id
         }
-        # A native occurrence can be queued while an untracked successor is
-        # active. Register at most two owners, and admit at most one implementer.
-        if not unknown and len(others) < 2:
-            await self._register_recurring_issue_owner(definition, observed)
-        admitted = (
+        # Admission is a durable fact for this unique workflow occurrence,
+        # including Continue-As-New. Waiters never revoke an incumbent's slot.
+        admitted = workflow_id in admitted_owners
+        if not admitted and (
             not unknown
-            and len(others) < 2
-            and all(state.get("reviewReady") for state in others.values())
-        )
+            and len(admitted_owners) < 2
+            and all(owners[identity].get("reviewReady") for identity in admitted_owners)
+            and all(state.get("root") for state in owners.values())
+            and first_waiter == workflow_id
+        ):
+            current.implementation_admitted_at = datetime.now(UTC)
+            admitted = True
         await self._session.commit()
         return {
             "status": "admitted" if admitted else "waiting",
@@ -2524,7 +2574,7 @@ class RecurringWorkflowsService:
                 "status": "skipped",
                 "reason": "No independent implementation slot is available.",
             }
-        await self._register_recurring_issue_owner(definition, observed)
+        await self._register_recurring_issue_owner(definition, observed, admitted=True)
         run = await self.create_manual_run(
             definition, request_id=request_id, review_ready_owner=(workflow_id, run_id)
         )

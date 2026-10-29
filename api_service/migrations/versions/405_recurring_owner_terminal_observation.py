@@ -1,4 +1,4 @@
-"""Retain terminal observations for durable recurring implementation owners."""
+"""Retain durable admission and terminal observations for recurring owners."""
 
 import sqlalchemy as sa
 from alembic import op
@@ -14,6 +14,12 @@ def upgrade() -> None:
         "recurring_workflow_runs",
         sa.Column("terminal_observed_at", sa.DateTime(timezone=True), nullable=True),
     )
+    op.add_column(
+        "recurring_workflow_runs",
+        sa.Column(
+            "implementation_admitted_at", sa.DateTime(timezone=True), nullable=True
+        ),
+    )
     op.create_index(
         "ix_recurring_runs_definition_terminal",
         "recurring_workflow_runs",
@@ -26,3 +32,4 @@ def downgrade() -> None:
         "ix_recurring_runs_definition_terminal", table_name="recurring_workflow_runs"
     )
     op.drop_column("recurring_workflow_runs", "terminal_observed_at")
+    op.drop_column("recurring_workflow_runs", "implementation_admitted_at")
