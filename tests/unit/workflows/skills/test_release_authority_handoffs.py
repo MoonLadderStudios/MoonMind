@@ -6,6 +6,13 @@ import pytest
 from moonmind.release_identity import build_release
 from moonmind.workflows.skills import deployment_release as release
 from moonmind.workflows.skills.deployment_surface import operator_urls
+from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
+
+
+def _standalone_artifact_service(repository, *, transaction_ownership):
+    assert repository is None  # Deployment execution is replaced in these tests.
+    assert transaction_ownership is ArtifactTransactionOwnership.STANDALONE
+    return None
 
 
 @pytest.mark.parametrize(
@@ -492,7 +499,7 @@ async def test_release_never_recreates_its_own_transport_or_stateful_substrate(
 
     monkeypatch.setattr(db_base, "get_async_session_context", session_context)
     monkeypatch.setattr(artifacts, "TemporalArtifactRepository", lambda session: None)
-    monkeypatch.setattr(artifacts, "TemporalArtifactService", lambda repository: None)
+    monkeypatch.setattr(artifacts, "TemporalArtifactService", _standalone_artifact_service)
     observed = {}
 
     async def execute(self, inputs, context):
@@ -574,7 +581,7 @@ async def test_release_selects_omnigent_inside_the_main_compose_pass(
 
     monkeypatch.setattr(db_base, "get_async_session_context", session_context)
     monkeypatch.setattr(artifacts, "TemporalArtifactRepository", lambda session: None)
-    monkeypatch.setattr(artifacts, "TemporalArtifactService", lambda repository: None)
+    monkeypatch.setattr(artifacts, "TemporalArtifactService", _standalone_artifact_service)
     order = []
     token = "ghp_" + "a" * 36
 

@@ -54,6 +54,7 @@ from moonmind.security.scanner_feeds import publish_snapshot
 from moonmind.workflows.temporal import worker_runtime
 from moonmind.workflows.temporal.artifacts import (
     ArtifactAccessContext,
+    ArtifactTransactionOwnership,
     TemporalArtifactService,
 )
 from moonmind.workflows.temporal.container_job_attachments import storage_for
@@ -356,12 +357,17 @@ class Harness:
         monkeypatch.setattr(
             worker_runtime, "get_async_session_context", environment.sessions
         )
+
+        def artifact_factory(repo, *, transaction_ownership):
+            assert transaction_ownership is ArtifactTransactionOwnership.STANDALONE
+            return TemporalArtifactService(
+                repo,
+                store=environment.service._store,
+                transaction_ownership=transaction_ownership,
+            )
+
         monkeypatch.setattr(
-            worker_runtime,
-            "TemporalArtifactService",
-            lambda repo: TemporalArtifactService(
-                repo, store=environment.service._store
-            ),
+            worker_runtime, "TemporalArtifactService", artifact_factory
         )
         self.published: dict[str, bytes] = {}
         self.commands: list[tuple] = []

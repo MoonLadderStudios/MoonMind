@@ -26,6 +26,10 @@ from moonmind.omnigent.host_services.github_credentials import (
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.activities import omnigent_activities as children
 from moonmind.workflows.temporal.activities import omnigent_session_activities as reader
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactTransactionOwnership,
+    TemporalArtifactService,
+)
 from tests.artifact_access import access_for_test
 from tests.helpers.repository_connections import (
     github_pat_connection,
@@ -332,8 +336,17 @@ async def test_merge_resolver_child_activity_readmits_mixed_parent_without_calle
             )
         )
         await session.commit()
+    class BoundArtifactService(TemporalArtifactService):
+        def __new__(cls, repository, *, transaction_ownership):
+            assert transaction_ownership is ArtifactTransactionOwnership.CALLER
+            # Keep the shared in-memory transport while recording child metadata
+            # in the same real admission session as its plan and catalog.
+            artifacts._db_session = repository._session
+            return artifacts
+
     monkeypatch.setattr(
-        children, "_OnDemandTemporalArtifactService", lambda _factory: artifacts
+        "moonmind.workflows.temporal.artifacts.TemporalArtifactService",
+        BoundArtifactService,
     )
     from moonmind.workflows.temporal.workflows import merge_automation
     from moonmind.workflows.temporal.workflows.merge_gate import (

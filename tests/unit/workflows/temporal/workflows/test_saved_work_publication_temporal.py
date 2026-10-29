@@ -515,7 +515,9 @@ async def test_recorded_v1_admission_recovers_protected_inputs_without_operator_
             monkeypatch.setattr(
                 worker_runtime,
                 "TemporalArtifactService",
-                lambda repo: TemporalArtifactService(repo, store=state.service._store),
+                lambda repo, **kwargs: TemporalArtifactService(
+                    repo, store=state.service._store, **kwargs
+                ),
             )
             state.runtime._artifact_service = worker_runtime._ArtifactServiceProxy()
         async with await WorkflowEnvironment.start_time_skipping(
