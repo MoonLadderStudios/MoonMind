@@ -30,8 +30,12 @@ with workflow.unsafe.imports_passed_through():
         AUTO_RUNTIME_SENTINEL,
         AgentExecutionRequest,
         AgentRunResult,
+        AttemptRecoveryDecision,
         ExecutionBudget,
         OmnigentExecutionPlanBinding,
+        decide_attempt_recovery,
+        recorded_attempt_budget,
+        remaining_execution_allowance_seconds,
         resolve_execution_budget,
     )
     from moonmind.omnigent.stock_agents import (
@@ -1190,6 +1194,11 @@ RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH = (
 # ceiling the interrupted attempts left, and an exhausted ceiling stops instead
 # of starting another attempt. Older histories keep a fresh budget per attempt.
 RUN_INTERRUPTED_STEP_DEADLINE_PATCH = "run-interrupted-step-deadline-v1"
+# MoonLadderStudios/MoonMind#4986: a Step retry charges the execution the
+# AgentRun attempt recorded (not its capacity, cooldown or pause waits) and asks
+# the same recovery owner, which honors the attempt's binding stop. Older
+# histories charge the child's wall-clock and decide locally.
+RUN_STEP_BUDGET_OWNER_PATCH = "run-step-budget-owner-v1"
 # MoonMind#4627: an interrupted Omnigent Step's successor is a fresh attempt.
 # It is admitted again on the installed runtime from the workflow's frozen
 # inputs, keeping the recorded request intent; a refused admission keeps the
@@ -1956,6 +1965,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._provider_profile_projection_dirty = False
 
         self._active_agent_child_workflow_id: Optional[str] = None
+        # Recovery decisions for agent Step retries, keyed by logical Step.
+        self._step_recovery_decisions: dict[str, list[dict[str, Any]]] = {}
         self._active_agent_id: Optional[str] = None
         # MoonLadderStudios/MoonMind#1088: accepted typed AgentRun progress
         # projections keyed by child workflow ID. Each entry is the single
@@ -3020,6 +3031,70 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._step_execution_launch_block_key(logical_step_id, attempt)
             in self._fresh_source_step_execution_attempts
         )
+
+    def _decide_step_retry(
+        self,
+        execution_result: Any,
+        *,
+        budget: ExecutionBudget,
+        consumed_seconds: float,
+        wall_clock_seconds: float,
+    ) -> tuple[AttemptRecoveryDecision, float]:
+        """Ask the attempt recovery owner whether this Step may retry.
+
+        The Step charges what the AgentRun attempt recorded as execution, so
+        its capacity, cooldown and pause waits are excluded here exactly as
+        they were inside the attempt. A child that recorded no ledger is
+        charged its wall-clock. A binding stop the attempt's owner already
+        made (uncertain effect, non-retryable failure, spent allowance) is
+        final: the Step does not re-attempt it.
+        """
+
+        outputs = self._get_from_result(execution_result, "outputs")
+        outputs = outputs if isinstance(outputs, Mapping) else {}
+        recorded_seconds, binding_stop = recorded_attempt_budget(outputs)
+        attempt_seconds = (
+            wall_clock_seconds if recorded_seconds is None else recorded_seconds
+        )
+        if binding_stop is not None:
+            return binding_stop, attempt_seconds
+        canonical = outputs.get("agentResult")
+        canonical = canonical if isinstance(canonical, Mapping) else {}
+        return (
+            decide_attempt_recovery(
+                proposed_action="successor",
+                proposed_reason="step_retry",
+                retry_disposition=str(canonical.get("retryDisposition") or "unknown"),
+                execution_state=str(canonical.get("executionState") or "unknown"),
+                remaining_budget_seconds=remaining_execution_allowance_seconds(
+                    allowance_seconds=budget.max_seconds,
+                    consumed_seconds=consumed_seconds + attempt_seconds,
+                ),
+            ),
+            attempt_seconds,
+        )
+
+    def _record_step_recovery(
+        self,
+        logical_step_id: str,
+        decision: AttemptRecoveryDecision,
+        *,
+        budget: ExecutionBudget,
+        consumed_seconds: float,
+    ) -> dict[str, Any]:
+        """Record one Step retry decision and return its manifest budget."""
+
+        recorded = decision.to_metadata(consumed_seconds=consumed_seconds)
+        decisions = self._step_recovery_decisions.setdefault(logical_step_id, [])
+        decisions.append(recorded)
+        del decisions[:-16]
+        return {
+            "stepExecutionBudget": {
+                "maxSeconds": budget.max_seconds,
+                "consumedExecutionSeconds": recorded["consumedExecutionSeconds"],
+                "recoveryDecision": dict(recorded),
+            }
+        }
 
     @staticmethod
     def _remaining_interrupted_step_timeout_policy(
@@ -14568,27 +14643,63 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 failure_message == "execution_error"
                                 and tool_type == "agent_runtime"
                             )
+                        step_recovery_budget: dict[str, Any] | None = None
                         if (
                             retryable
                             and system_retries < 3
                             and interrupted_step_budget is not None
                             and agent_attempt_started_at is not None
                         ):
-                            interrupted_step_consumed_seconds += max(
+                            attempt_seconds = max(
                                 0.0,
                                 (
                                     workflow.now() - agent_attempt_started_at
                                 ).total_seconds(),
                             )
                             agent_attempt_started_at = None
-                            if (
+                            step_recovery: AttemptRecoveryDecision | None = None
+                            if workflow.patched(RUN_STEP_BUDGET_OWNER_PATCH):
+                                step_recovery, attempt_seconds = (
+                                    self._decide_step_retry(
+                                        execution_result,
+                                        budget=interrupted_step_budget,
+                                        consumed_seconds=(
+                                            interrupted_step_consumed_seconds
+                                        ),
+                                        wall_clock_seconds=attempt_seconds,
+                                    )
+                                )
+                            interrupted_step_consumed_seconds += attempt_seconds
+                            if step_recovery is not None:
+                                step_recovery_budget = self._record_step_recovery(
+                                    node_id,
+                                    step_recovery,
+                                    budget=interrupted_step_budget,
+                                    consumed_seconds=(
+                                        interrupted_step_consumed_seconds
+                                    ),
+                                )
+                                stop_reason = (
+                                    None
+                                    if step_recovery.action == "successor"
+                                    else step_recovery.reason
+                                )
+                            elif (
                                 interrupted_step_consumed_seconds
                                 >= interrupted_step_budget.max_seconds
                             ):
+                                stop_reason = "execution_budget_exhausted"
+                            else:
+                                stop_reason = None
+                            if stop_reason is not None:
                                 retryable = False
                                 budget_note = (
                                     "the Step's execution budget was exhausted "
                                     "across interrupted attempts"
+                                    if interrupted_step_consumed_seconds
+                                    >= interrupted_step_budget.max_seconds
+                                    else "the attempt's recovery owner stopped "
+                                    f"it ({stop_reason})"
                                 )
                                 step_failure_summary = (
                                     f"{step_failure_summary}; {budget_note}"
@@ -14612,6 +14723,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 reason=attempt_reason,
                                 status="failed",
                                 terminal_disposition="retryable",
+                                budget=step_recovery_budget,
                             )
                             system_retries += 1
                             self._get_logger().info(

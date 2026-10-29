@@ -5,7 +5,7 @@ import logging
 import os
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 from temporalio import workflow, activity
@@ -43,11 +43,14 @@ with workflow.unsafe.imports_passed_through():
         AgentRunHandle,
         AgentRunResult,
         AgentRunStatus as AgentRunStatusModel,
+        AttemptRecoveryDecision,
         ExecutionBudget,
         ExecutionBudgetVerdict,
         MANAGED_RUNTIME_PROFILE_TIER_POLICY_VERSION,
         ProfileSelector,
+        decide_attempt_recovery,
         evaluate_execution_budget,
+        remaining_execution_allowance_seconds,
         resolve_execution_budget,
         _MAX_SUMMARY_CHARS,
     )
@@ -295,96 +298,77 @@ _OMNIGENT_RECONCILIATION_REQUIRED_ERROR_TYPES = frozenset(
 PROFILE_BOUND_RETRY_MINIMUM_SECONDS = 60
 
 
+def bounded_start_to_close_seconds(
+    *,
+    allowance_seconds: float,
+    consumed_seconds: float,
+    minimum_seconds: int = 1,
+    maximum_seconds: int | None = None,
+) -> int | None:
+    """StartToClose for a blocking lane that may spend only what remains.
+
+    The one derivation for execution Activities that run for the attempt's
+    whole remaining allowance (the integration execute lane and its
+    profile-bound retry). ``None`` means the allowance is spent and the caller
+    must not start the work. ``minimum_seconds`` above one second is a
+    floor that grants time beyond the allowance; only
+    :func:`profile_bound_retry_start_to_close_seconds` keeps one, for
+    retained histories.
+    """
+
+    try:
+        allowance = int(allowance_seconds)
+    except (TypeError, ValueError):
+        allowance = int(minimum_seconds)
+    try:
+        consumed = float(consumed_seconds)
+    except (TypeError, ValueError):
+        consumed = 0.0
+    remaining = remaining_execution_allowance_seconds(
+        allowance_seconds=allowance,
+        consumed_seconds=int(max(0.0, consumed)),
+    )
+    if remaining <= 0:
+        return None
+    seconds = max(int(minimum_seconds), int(remaining))
+    if maximum_seconds is not None:
+        seconds = min(seconds, int(maximum_seconds))
+    return seconds
+
+
 def profile_bound_retry_start_to_close_seconds(
     *,
     first_stc_seconds: int,
     elapsed_seconds: float,
     minimum_seconds: int = PROFILE_BOUND_RETRY_MINIMUM_SECONDS,
 ) -> int | None:
-    """Return the StartToClose budget for the second profile-bound attempt.
+    """History-only adapter: the profile-bound retry with its 60s floor.
 
-    MoonLadderStudios/MoonMind#4226: the retry inherits the parent's
-    remaining ScheduleToClose budget instead of a fresh full window, so a
-    dead first attempt cannot cost another full 6h. The result is clamped
-    to at least ``minimum_seconds`` while budget remains. When the first
-    attempt already consumed the whole budget (``remaining <= 0``), this
-    returns ``None`` so the caller propagates the original failure instead
-    of launching a probe after the lane's execution authority expired.
+    MoonLadderStudios/MoonMind#4226 sized the retry from the remaining
+    budget but kept a floor that grants up to a minute after the allowance
+    is nearly spent. Histories before ``agent-run-step-budget-owner-v1``
+    replay that floor; new histories use :func:`bounded_start_to_close_seconds`
+    without one. ``None`` still means the first attempt consumed the whole
+    budget, so the original failure propagates.
     """
 
-    try:
-        first = int(first_stc_seconds)
-    except (TypeError, ValueError):
-        first = int(minimum_seconds)
-    try:
-        elapsed = float(elapsed_seconds)
-    except (TypeError, ValueError):
-        elapsed = 0.0
-    if elapsed < 0:
-        elapsed = 0.0
-    remaining = first - int(elapsed)
-    if remaining <= 0:
-        return None
-    return max(int(minimum_seconds), remaining)
+    return bounded_start_to_close_seconds(
+        allowance_seconds=first_stc_seconds,
+        consumed_seconds=elapsed_seconds,
+        minimum_seconds=minimum_seconds,
+    )
 
 
 # One execution budget per logical step attempt, and one owner for recovery
 # decisions (MoonLadderStudios/MoonMind#4986). Cooldown re-entry, pause and
 # automatic successors resume the attempt's execution clock with the time it
-# already consumed instead of a fresh allowance, and every successor or
-# cooldown re-entry is selected by :func:`decide_attempt_recovery` and recorded
-# on the result. Retained histories keep their recorded clock resets.
+# already consumed instead of a fresh allowance, and every successor, cooldown
+# re-entry or no-progress reobservation is selected by
+# :func:`decide_attempt_recovery` and recorded on the result. Blocking lanes
+# get no floor beyond the allowance. Retained histories keep their recorded
+# clock resets, floors and local cooldown retry count.
 AGENT_RUN_STEP_BUDGET_OWNER_PATCH_ID = "agent-run-step-budget-owner-v1"
 _MAX_RECORDED_RECOVERY_DECISIONS = 16
-
-AttemptRecoveryAction = Literal["successor", "cooldown", "terminal_stop"]
-
-
-@dataclass(frozen=True)
-class AttemptRecoveryDecision:
-    """The recovery the owner selected for one failed execution attempt."""
-
-    action: AttemptRecoveryAction
-    reason: str
-
-    def to_metadata(self, *, consumed_seconds: float) -> dict[str, Any]:
-        return {
-            "action": self.action,
-            "reason": self.reason,
-            "consumedExecutionSeconds": max(0, int(consumed_seconds)),
-        }
-
-
-def decide_attempt_recovery(
-    *,
-    proposed_action: Literal["successor", "cooldown"] | None,
-    proposed_reason: str,
-    retry_disposition: str,
-    execution_state: str,
-    remaining_budget_seconds: float,
-) -> AttemptRecoveryDecision:
-    """Select the single recovery an execution attempt may take.
-
-    Adapters, providers and successor builders only *propose* a recovery from
-    the typed result (#4984 outcome fields). This is the one place that admits
-    it. An uncertain effect is never repeated before its reconciliation owner
-    resolves it, a ``no_retry`` failure (auth rejection, permission denial,
-    invalid user choice) is never re-attempted, and a successor or cooldown
-    re-entry is never admitted once the attempt's execution allowance is
-    spent: after expiry only saving and confirmation may run.
-    """
-
-    if proposed_action is None:
-        return AttemptRecoveryDecision("terminal_stop", proposed_reason)
-    if execution_state == "delivery_unknown":
-        return AttemptRecoveryDecision(
-            "terminal_stop", "uncertain_effect_requires_reconciliation"
-        )
-    if retry_disposition == "no_retry":
-        return AttemptRecoveryDecision("terminal_stop", "non_retryable_failure")
-    if remaining_budget_seconds <= 0:
-        return AttemptRecoveryDecision("terminal_stop", "execution_budget_exhausted")
-    return AttemptRecoveryDecision(proposed_action, proposed_reason)
 
 
 def budget_bounded_activity_timeouts(
@@ -2591,9 +2575,10 @@ class MoonMindAgentRun:
         self,
         *,
         result: AgentRunResult | None,
-        proposed_action: Literal["successor", "cooldown"] | None,
+        proposed_action: Literal["successor", "cooldown", "reobserve"] | None,
         proposed_reason: str,
         remaining_budget_seconds: float,
+        attempts_remaining: int | None = None,
     ) -> AttemptRecoveryDecision:
         """Ask the recovery owner, and record its decision on this attempt."""
 
@@ -2607,6 +2592,7 @@ class MoonMindAgentRun:
                 result.execution_state if result is not None else "unknown"
             ),
             remaining_budget_seconds=remaining_budget_seconds,
+            attempts_remaining=attempts_remaining,
         )
         self._record_attempt_recovery_decision(decision)
         return decision
@@ -4528,8 +4514,18 @@ class MoonMindAgentRun:
         uses_codex_session_adapter: bool,
         use_managed_status_activity: bool,
         remaining_budget_seconds: float | None,
+        execution_deadline: datetime | None = None,
     ) -> AgentRunStatusModel:
+        """Read canonical status within the allowance the caller names.
+
+        A read that times out once ``execution_deadline`` has passed ends the
+        attempt with the normal budget result, the way a result fetch at the
+        deadline does, instead of failing the workflow.
+        """
+
         if uses_codex_session_adapter:
+            # An in-workflow read of recorded session state: it schedules no
+            # Activity, so it has no timeout to bound and spends no allowance.
             return await adapter.status(self.run_id)
         if use_managed_status_activity:
             schedule_to_close_override = (
@@ -4537,19 +4533,35 @@ class MoonMindAgentRun:
                     remaining_budget_seconds=remaining_budget_seconds,
                 )
             )
-            status_payload = await self._execute_routed_activity(
-                "agent_runtime.status",
-                AgentRuntimeStatusInput(
-                    runId=str(self.run_id or ""),
-                    agentId=request.agent_id,
-                ),
-                cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                **(
-                    {"schedule_to_close_timeout": schedule_to_close_override}
-                    if schedule_to_close_override is not None
-                    else {}
-                ),
-            )
+            try:
+                status_payload = await self._execute_routed_activity(
+                    "agent_runtime.status",
+                    AgentRuntimeStatusInput(
+                        runId=str(self.run_id or ""),
+                        agentId=request.agent_id,
+                    ),
+                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                    **(
+                        {"schedule_to_close_timeout": schedule_to_close_override}
+                        if schedule_to_close_override is not None
+                        else {}
+                    ),
+                )
+            except ActivityError as exc:
+                if (
+                    self._step_budget_owner_enabled
+                    and execution_deadline is not None
+                    and isinstance(exc.cause, TemporalTimeoutError)
+                    and workflow.now() >= execution_deadline
+                ):
+                    self._get_logger().warning(
+                        "Status polling exhausted the remaining execution budget: %s",
+                        exc,
+                    )
+                    raise asyncio.TimeoutError(
+                        "Status polling exhausted the remaining execution budget"
+                    ) from exc
+                raise
             return self._coerce_managed_status_payload(
                 status_payload=status_payload,
                 run_id=str(self.run_id or ""),
@@ -4629,6 +4641,18 @@ class MoonMindAgentRun:
             )
             remaining = min(remaining_grace, remaining_overall)
             if remaining <= 0:
+                if self._step_budget_owner_enabled:
+                    # Reobserving (status read, cancel and reconcile) is a
+                    # recovery choice too: the owner admits it only while
+                    # the attempt's allowance remains, and records it.
+                    reobserve = self._decide_attempt_recovery(
+                        result=None,
+                        proposed_action="reobserve",
+                        proposed_reason="no_progress_deadline",
+                        remaining_budget_seconds=remaining_overall,
+                    )
+                    if reobserve.action != "reobserve":
+                        return None
                 if (
                     use_managed_status_activity
                     and not uses_codex_session_adapter
@@ -4646,6 +4670,8 @@ class MoonMindAgentRun:
                         uses_codex_session_adapter=uses_codex_session_adapter,
                         use_managed_status_activity=use_managed_status_activity,
                         remaining_budget_seconds=remaining_overall,
+                        execution_deadline=overall_start
+                        + timedelta(seconds=timeout_seconds),
                     )
                     if status_obj.status in _TERMINAL_RUN_STATUSES:
                         remaining_fetch_budget = None
@@ -4715,6 +4741,7 @@ class MoonMindAgentRun:
                 uses_codex_session_adapter=uses_codex_session_adapter,
                 use_managed_status_activity=use_managed_status_activity,
                 remaining_budget_seconds=remaining_status_budget,
+                execution_deadline=overall_start + timedelta(seconds=timeout_seconds),
             )
 
     async def _cancel_managed_no_progress_and_fetch_cooldown_result(
@@ -4822,6 +4849,9 @@ class MoonMindAgentRun:
                 uses_codex_session_adapter=uses_codex_session_adapter,
                 use_managed_status_activity=use_managed_status_activity,
                 remaining_budget_seconds=remaining_status_budget,
+                execution_deadline=(
+                    recovery_deadline if bounded_expiry_recovery else None
+                ),
             )
             self.run_status = status_obj.status
             if status_obj.status in _TERMINAL_RUN_STATUSES:
@@ -6081,10 +6111,16 @@ class MoonMindAgentRun:
                 cause = getattr(cause, "cause", None)
             budget_start = getattr(exc, "_omnigent_capacity_admitted_at", lane_start)
             elapsed = (workflow.now() - budget_start).total_seconds()
-            retry_stc = profile_bound_retry_start_to_close_seconds(
-                first_stc_seconds=stc_seconds,
-                elapsed_seconds=elapsed,
-            )
+            if self._step_budget_owner_enabled:
+                retry_stc = bounded_start_to_close_seconds(
+                    allowance_seconds=stc_seconds,
+                    consumed_seconds=elapsed,
+                )
+            else:
+                retry_stc = profile_bound_retry_start_to_close_seconds(
+                    first_stc_seconds=stc_seconds,
+                    elapsed_seconds=elapsed,
+                )
             decision = decide_attempt_recovery(
                 proposed_action="successor",
                 proposed_reason="profile_bound_single_retry",
@@ -8785,16 +8821,25 @@ class MoonMindAgentRun:
                             # default. Only a lane that can actually observe
                             # progress may spend the extension, so this one stops
                             # at the base window the workflow enforces.
-                            stc_seconds = min(
-                                max(
-                                    int(
-                                        timeout_seconds
-                                        - self._consumed_execution_seconds
-                                    ),
-                                    60,
-                                ),
-                                86400,
-                            )
+                            if self._step_budget_owner_enabled:
+                                stc_seconds = bounded_start_to_close_seconds(
+                                    allowance_seconds=timeout_seconds,
+                                    consumed_seconds=self._consumed_execution_seconds,
+                                    maximum_seconds=86400,
+                                )
+                                if stc_seconds is None:
+                                    # The pre-dispatch verdict already ends a
+                                    # spent attempt; never start this lane on
+                                    # a floor beyond the allowance.
+                                    raise ApplicationError(
+                                        "Execution budget was spent before "
+                                        "the execution lane started.",
+                                        type="ExecutionBudgetExhausted",
+                                        non_retryable=True,
+                                    )
+                            else:
+                                # History-only: the recorded 60s floor.
+                                stc_seconds = min(max(int(timeout_seconds), 60), 86400)
                             act_name = f"integration.{validated_id}.execute"
                             if (
                                 recorded_plan_realizer
@@ -9002,6 +9047,12 @@ class MoonMindAgentRun:
                                 uses_codex_session_adapter=uses_codex_session_adapter,
                                 use_managed_status_activity=use_managed_status_activity,
                                 remaining_budget_seconds=remaining_status_budget,
+                                execution_deadline=(
+                                    None
+                                    if remaining_status_budget is None
+                                    else workflow.now()
+                                    + timedelta(seconds=remaining_status_budget)
+                                ),
                             )
 
                         self.run_status = status_obj.status
@@ -9323,6 +9374,7 @@ class MoonMindAgentRun:
                 )
                 if (
                     provider_retry_budget_enabled
+                    and not self._step_budget_owner_enabled
                     and request.agent_kind == "managed"
                     and manager_handle
                     and requires_provider_cooldown
@@ -9330,19 +9382,14 @@ class MoonMindAgentRun:
                     and self._provider_cooldown_retry_attempts
                     >= _MAX_PROVIDER_COOLDOWN_RETRY_ATTEMPTS
                 ):
+                    # History-only: the retry count decided exhaustion
+                    # locally before the recovery owner existed.
                     self.final_result = (
                         self._provider_cooldown_retry_exhausted_result(
                             self.final_result
                         )
                     )
                     requires_provider_cooldown = False
-                    if self._step_budget_owner_enabled:
-                        recovery_decision = self._decide_attempt_recovery(
-                            result=self.final_result,
-                            proposed_action=None,
-                            proposed_reason="provider_cooldown_retry_exhausted",
-                            remaining_budget_seconds=_budget_remaining_seconds(),
-                        )
 
                 if (
                     requires_provider_cooldown
@@ -9389,7 +9436,23 @@ class MoonMindAgentRun:
                                 else "no_recovery_proposed"
                             ),
                             remaining_budget_seconds=_budget_remaining_seconds(),
+                            attempts_remaining=(
+                                _MAX_PROVIDER_COOLDOWN_RETRY_ATTEMPTS
+                                - self._provider_cooldown_retry_attempts
+                                if cooldown_proposed and provider_retry_budget_enabled
+                                else None
+                            ),
                         )
+                        if (
+                            recovery_decision.reason
+                            == "provider_cooldown_retry_exhausted"
+                            and self.final_result is not None
+                        ):
+                            self.final_result = (
+                                self._provider_cooldown_retry_exhausted_result(
+                                    self.final_result
+                                )
+                            )
                         if recovery_decision.action != "cooldown":
                             requires_provider_cooldown = False
 
@@ -9599,6 +9662,12 @@ class MoonMindAgentRun:
 
         except asyncio.TimeoutError:
             self.run_status = RunStatus.timed_out
+            if self._step_budget_owner_enabled:
+                # The read that hit the deadline ran until it; record that
+                # execution instead of the allowance banked before it began.
+                self._consumed_execution_seconds = max(
+                    0.0, (workflow.now() - overall_start).total_seconds()
+                )
             if request.agent_kind == "managed" and hasattr(request, "execution_profile_ref") and request.execution_profile_ref:
                 try:
                     runtime_mapping = {"claude": "claude_code", "codex": "codex_cli"}

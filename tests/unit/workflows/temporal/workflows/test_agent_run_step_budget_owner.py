@@ -29,8 +29,14 @@ from moonmind.workflows.temporal.workflows.agent_run import (
     MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
     MoonMindAgentRun,
     RunStatus,
+    bounded_start_to_close_seconds,
     budget_bounded_activity_timeouts,
     decide_attempt_recovery,
+    profile_bound_retry_start_to_close_seconds,
+)
+from moonmind.schemas.agent_runtime_models import (
+    AgentRunStatus,
+    recorded_attempt_budget,
 )
 from tests.integration.services.temporal.workflows import test_agent_run as harness
 
@@ -277,6 +283,10 @@ class _Journey:
         self.publish_kwargs: list[dict] = []
         self.slot_requests = 0
         self.first_segment_seconds = _FIRST_SEGMENT_SECONDS
+        # Capacity queueing before the first launch, and a pause the operator
+        # holds before dispatch; neither is execution.
+        self.first_slot_wait_seconds = 0.0
+        self.pause_seconds = 0.0
 
         info = type(
             "WorkflowInfo",
@@ -313,6 +323,10 @@ class _Journey:
         async def wait_condition(condition, timeout=None):
             if condition():
                 return True
+            if timeout is None and self.run._paused and self.pause_seconds:
+                self.clock.advance(self.pause_seconds)
+                self.run._paused = False
+                return True
             if timeout is None:
                 raise AssertionError("unbounded wait in a scripted journey")
             self.clock.advance(timeout.total_seconds())
@@ -327,6 +341,8 @@ class _Journey:
             if journey.slot_requests > 1:
                 # Cooldown or capacity queueing is not execution.
                 journey.clock.advance(_COOLDOWN_WAIT_SECONDS)
+            else:
+                journey.clock.advance(journey.first_slot_wait_seconds)
             journey.run.slot_assigned_event.set()
             return journey.manager
 
@@ -684,3 +700,540 @@ async def test_cooldown_reentry_on_real_temporal_keeps_the_cumulative_budget(
     second_segment = (published_at - launches[1]).total_seconds()
     assert second_segment < budget - first_segment + 15
     assert result.metadata["consumedExecutionSeconds"] <= budget + 15
+
+
+# ---------------------------------------------------------------------------
+# One derivation for blocking lanes, and the owner's remaining decisions
+# ---------------------------------------------------------------------------
+
+
+def test_blocking_lanes_get_only_the_remaining_allowance():
+    """No floor buys execution time beyond what the attempt has left."""
+
+    assert (
+        bounded_start_to_close_seconds(allowance_seconds=300, consumed_seconds=295) == 5
+    )
+    assert (
+        bounded_start_to_close_seconds(allowance_seconds=300, consumed_seconds=300)
+        is None
+    )
+    assert (
+        bounded_start_to_close_seconds(
+            allowance_seconds=10**6, consumed_seconds=0, maximum_seconds=86400
+        )
+        == 86400
+    )
+    # Retained histories replay the recorded 60s floor.
+    assert (
+        profile_bound_retry_start_to_close_seconds(
+            first_stc_seconds=300, elapsed_seconds=295
+        )
+        == 60
+    )
+    assert (
+        profile_bound_retry_start_to_close_seconds(
+            first_stc_seconds=300, elapsed_seconds=300
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("remaining,expected", [(1, "cooldown"), (0, "terminal_stop")])
+def test_bounded_cooldown_count_is_decided_by_the_owner(remaining, expected):
+    decision = decide_attempt_recovery(
+        proposed_action="cooldown",
+        proposed_reason="provider_cooldown",
+        retry_disposition="wait",
+        execution_state="failed",
+        remaining_budget_seconds=600,
+        attempts_remaining=remaining,
+    )
+
+    assert decision.action == expected
+    if expected == "terminal_stop":
+        assert decision.reason == "provider_cooldown_retry_exhausted"
+
+
+def test_recorded_attempt_budget_names_only_binding_stops():
+    assert recorded_attempt_budget(None) == (None, None)
+    consumed, stop = recorded_attempt_budget(
+        {
+            "consumedExecutionSeconds": 42,
+            "recoveryDecisions": [
+                {"action": "cooldown", "reason": "provider_cooldown"},
+                {"action": "terminal_stop", "reason": "non_retryable_failure"},
+            ],
+        }
+    )
+    assert consumed == 42.0
+    assert (stop.action, stop.reason) == ("terminal_stop", "non_retryable_failure")
+    # A stop the owner made only because nothing was proposed leaves the
+    # Step's own retry to the parent.
+    assert recorded_attempt_budget(
+        {
+            "consumedExecutionSeconds": 7,
+            "recoveryDecisions": [
+                {"action": "terminal_stop", "reason": "no_recovery_proposed"}
+            ],
+        }
+    ) == (7.0, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("budget,expected", [(600, "reobserve"), (5, "terminal_stop")])
+async def test_no_progress_reobservation_is_one_owner_decision(
+    monkeypatch, budget, expected
+):
+    clock = _Clock()
+    monkeypatch.setattr(agent_run_module.workflow, "now", clock.now)
+    monkeypatch.setattr(agent_run_module.workflow, "patched", lambda _id: True)
+
+    async def wait(_predicate, *, timeout):
+        clock.advance(timeout.total_seconds())
+        raise TimeoutError
+
+    monkeypatch.setattr(agent_run_module.workflow, "wait_condition", wait)
+    run = MoonMindAgentRun()
+    run._step_budget_owner_enabled = True
+    polls: list[float] = []
+
+    async def poll(**kwargs):
+        polls.append(kwargs["remaining_budget_seconds"])
+        return AgentRunStatus(
+            runId="run", agentKind="managed", agentId="claude_code", status="running"
+        )
+
+    async def cancel_and_fetch(**_kwargs):
+        return None
+
+    run._poll_managed_status = poll
+    run._cancel_managed_no_progress_and_fetch_cooldown_result = cancel_and_fetch
+
+    await run._reconcile_managed_no_progress(
+        request=AgentExecutionRequest(
+            agentKind="managed",
+            agentId="claude_code",
+            correlationId="corr",
+            idempotencyKey="idem",
+        ),
+        adapter=object(),
+        uses_codex_session_adapter=False,
+        use_managed_status_activity=True,
+        resiliency_policy={"noProgressGraceSeconds": 30},
+        poll_interval=10,
+        initial_status=AgentRunStatus(
+            runId="run", agentKind="managed", agentId="claude_code", status="running"
+        ),
+        overall_start=_START,
+        timeout_seconds=budget,
+    )
+
+    assert [
+        (item["action"], item["reason"]) for item in run._attempt_recovery_decisions
+    ] == [
+        (
+            expected,
+            (
+                "no_progress_deadline"
+                if expected == "reobserve"
+                else "execution_budget_exhausted"
+            ),
+        )
+    ]
+    if expected == "terminal_stop":
+        # A spent allowance reobserves nothing.
+        assert all(remaining > 0 for remaining in polls)
+
+
+# ---------------------------------------------------------------------------
+# Documented accounting of waits that are not execution (AC3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_capacity_wait_before_launch_is_not_charged(monkeypatch):
+    journey = _Journey(monkeypatch)
+    journey.first_slot_wait_seconds = 5000
+    journey.fetch_results = [{**_PROCESS_LOST, "retryRecommendation": "reauthenticate"}]
+
+    result = await journey.execute()
+
+    assert (journey.launches[0] - _START).total_seconds() >= 5000
+    # The first segment ran its full scripted length inside the allowance.
+    assert result.metadata["consumedExecutionSeconds"] <= _BUDGET_SECONDS
+    assert result.metadata.get("reason") != "timed_out"
+
+
+@pytest.mark.asyncio
+async def test_pause_before_dispatch_is_not_charged(monkeypatch):
+    journey = _Journey(monkeypatch)
+    journey.pause_seconds = 5000
+    journey.run._paused = True
+    journey.fetch_results = [_RATE_LIMITED]
+
+    result = await journey.execute()
+
+    assert (journey.launches[0] - _START).total_seconds() >= 5000
+    assert len(journey.launches) == 2
+    # Paused time bought nothing and cost nothing: both segments together
+    # spent exactly the one allowance.
+    assert journey.second_segment_seconds() <= (
+        _BUDGET_SECONDS - _FIRST_SEGMENT_SECONDS
+    )
+    assert result.metadata["consumedExecutionSeconds"] == _BUDGET_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_cooldown_retry_count_ends_through_the_owner(monkeypatch):
+    journey = _Journey(monkeypatch)
+    journey.first_segment_seconds = 50
+    journey.fetch_results = [_RATE_LIMITED] * 4
+
+    result = await journey.execute(
+        {
+            "timeout_seconds": 10000,
+            "max_timeout_seconds": 10000,
+            "progress_stall_seconds": 10000,
+        }
+    )
+
+    assert len(journey.launches) == 4
+    assert result.metadata["providerCooldownRetry"]["exhausted"] is True
+    assert [
+        (item["action"], item["reason"])
+        for item in result.metadata["recoveryDecisions"]
+    ] == [("cooldown", "provider_cooldown")] * 3 + [
+        ("terminal_stop", "provider_cooldown_retry_exhausted")
+    ]
+    # Three cooldown waits were excluded; only execution was charged.
+    assert result.metadata["consumedExecutionSeconds"] < 4 * 60
+
+
+# ---------------------------------------------------------------------------
+# Real registered Temporal workflow: deadline crossings and lost acks
+# ---------------------------------------------------------------------------
+
+
+def _quiet_policy(request, **_options):
+    return {
+        "runtime": request.agent_id,
+        "noProgressTimeoutSeconds": 3600,
+        "noProgressGraceSeconds": 0,
+        "stuckAction": "request_intervention",
+        "retryPolicy": "test_step_budget_owner",
+    }
+
+
+def _managed_request(budget: int) -> AgentExecutionRequest:
+    return AgentExecutionRequest(
+        agentKind="managed",
+        agentId="claude_code",
+        executionProfileRef="default-managed",
+        correlationId="corr-4986",
+        idempotencyKey="idem-4986",
+        timeoutPolicy={
+            "timeout_seconds": budget,
+            "max_timeout_seconds": budget,
+            "progress_stall_seconds": budget,
+        },
+    )
+
+
+async def run_agent_run_on_temporal(
+    monkeypatch,
+    *,
+    workflow_id: str,
+    request: AgentExecutionRequest,
+    activities: list,
+    cancel_activity=None,
+    cancel_after_launch: list | None = None,
+):
+    """Run the registered AgentRun on a time-skipping server.
+
+    Returns ``(result_or_error, history)``; the history is replayed by a fresh
+    Replayer, which is what a replacement worker does after a restart.
+    """
+
+    monkeypatch.setattr(
+        agent_run_module.MoonMindAgentRun,
+        "_resiliency_policy_for_request",
+        staticmethod(_quiet_policy),
+    )
+    async with (
+        await WorkflowEnvironment.start_time_skipping() as env,
+        Worker(
+            env.client,
+            task_queue=f"{workflow_id}-workflow",
+            workflows=[
+                agent_run_module.MoonMindAgentRun,
+                harness.MockProviderProfileManager,
+            ],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ),
+        Worker(
+            env.client,
+            task_queue="mm.activity.artifacts",
+            activities=[
+                harness.mock_provider_profile_list,
+                harness.mock_provider_profile_ensure_manager,
+                harness.mock_provider_profile_reset_manager,
+                harness.mock_provider_profile_manager_state,
+            ],
+        ),
+        Worker(
+            env.client,
+            task_queue="mm.activity.agent_runtime",
+            activities=[harness.mock_agent_runtime_build_launch_context, *activities],
+        ),
+        Worker(
+            env.client,
+            task_queue=agent_run_module.DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                "agent_runtime.cancel"
+            ).task_queue,
+            activities=[cancel_activity or harness.mock_cancel],
+        ),
+    ):
+        await env.client.start_workflow(
+            harness.MockProviderProfileManager.run,
+            {"runtime_id": "claude_code"},
+            id="provider-profile-manager:claude_code",
+            task_queue=f"{workflow_id}-workflow",
+        )
+        handle = await env.client.start_workflow(
+            agent_run_module.MoonMindAgentRun.run,
+            request,
+            id=workflow_id,
+            task_queue=f"{workflow_id}-workflow",
+        )
+        if cancel_after_launch is not None:
+            for _ in range(200):
+                if cancel_after_launch:
+                    break
+                await asyncio.sleep(0.05)
+            await handle.cancel()
+        try:
+            outcome = await asyncio.wait_for(handle.result(), timeout=60)
+        except Exception as exc:  # cancellation surfaces as a failure
+            outcome = exc
+        history = await handle.fetch_history()
+
+    await Replayer(
+        workflows=[agent_run_module.MoonMindAgentRun],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(history)
+    return outcome, history
+
+
+@pytest.mark.asyncio
+async def test_deadline_crossed_during_status_polling_on_real_temporal(monkeypatch):
+    """A status read that hangs at the deadline gets only the remainder.
+
+    It ends the attempt with the normal budget result instead of failing the
+    workflow or extending the run by a fresh status allowance.
+    """
+
+    budget = 60
+    launches: list[datetime] = []
+    status_calls: list[tuple[datetime, timedelta | None]] = []
+    published: list[AgentRunResult] = []
+
+    @activity.defn(name="agent_runtime.launch")
+    async def launch(_request: dict) -> dict:
+        launches.append(activity.info().current_attempt_scheduled_time)
+        return {"container_id": "c", "status": "running", "agent_id": "claude_code"}
+
+    @activity.defn(name="agent_runtime.status")
+    async def status(request: dict) -> dict:
+        info = activity.info()
+        status_calls.append(
+            (info.current_attempt_scheduled_time, info.schedule_to_close_timeout)
+        )
+        segment = (info.current_attempt_scheduled_time - launches[-1]).total_seconds()
+        if segment >= 35 and segment < budget:
+            await asyncio.sleep(3600)  # the runtime stops answering
+        return {
+            "runId": request.get("runId") or "managed-run",
+            "agentKind": "managed",
+            "agentId": "claude_code",
+            "status": "running",
+            "metadata": {"lastLogOffset": str(segment)},
+        }
+
+    @activity.defn(name="agent_runtime.fetch_result")
+    async def fetch_result(_request: dict) -> dict:
+        raise AssertionError("a running attempt is never fetched")
+
+    @activity.defn(name="agent_runtime.publish_artifacts")
+    async def publish(result: AgentRunResult) -> AgentRunResult:
+        published.append(result)
+        return result
+
+    result, _history = await run_agent_run_on_temporal(
+        monkeypatch,
+        workflow_id="test-step-budget-status-crossing",
+        request=_managed_request(budget),
+        activities=[launch, status, fetch_result, publish],
+    )
+
+    assert isinstance(result, AgentRunResult), result
+    assert len(launches) == 1
+    assert result.metadata["reason"] == "timed_out"
+    deadline = launches[0] + timedelta(seconds=budget)
+    hung = [
+        (at, stc)
+        for at, stc in status_calls
+        if (at - launches[0]).total_seconds() >= 35
+    ]
+    assert hung, status_calls
+    for scheduled_at, schedule_to_close in hung:
+        # The in-flight read was granted only the remainder, not a fresh
+        # status window.
+        assert schedule_to_close is not None
+        assert scheduled_at + schedule_to_close <= deadline + timedelta(seconds=1)
+    assert budget - 2 <= result.metadata["consumedExecutionSeconds"] <= budget + 1
+    assert published and published[-1].summary == result.summary
+
+
+@pytest.mark.asyncio
+async def test_saving_crosses_the_deadline_without_repeating_effects(monkeypatch):
+    """Lost acknowledgements at launch and at saving repeat no effect.
+
+    Both deliveries carry the identical request, the effect is confirmed once,
+    the owner records one decision, and saving after the deadline runs under
+    its own bounded allowance without turning the result into a timeout.
+    """
+
+    budget = 120
+    launch_deliveries: list[str] = []
+    launch_effects: dict[str, datetime] = {}
+    save_deliveries: list[tuple[datetime, timedelta | None]] = []
+    save_effects: dict[str, AgentRunResult] = {}
+    first_launch: list[datetime] = []
+
+    @activity.defn(name="agent_runtime.launch")
+    async def launch(request: dict) -> dict:
+        key = repr(sorted(request.items()))
+        launch_deliveries.append(key)
+        if key not in launch_effects:
+            launch_effects[key] = activity.info().current_attempt_scheduled_time
+            first_launch.append(launch_effects[key])
+            # Started, but the acknowledgement never reaches the server.
+            raise RuntimeError("launch acknowledgement lost")
+        return {"container_id": "c", "status": "running", "agent_id": "claude_code"}
+
+    @activity.defn(name="agent_runtime.status")
+    async def status(request: dict) -> dict:
+        at = activity.info().current_attempt_scheduled_time
+        segment = (at - first_launch[0]).total_seconds()
+        return {
+            "runId": request.get("runId") or "managed-run",
+            "agentKind": "managed",
+            "agentId": "claude_code",
+            "status": "failed" if segment >= 105 else "running",
+            "metadata": {"lastLogOffset": str(segment)},
+        }
+
+    @activity.defn(name="agent_runtime.fetch_result")
+    async def fetch_result(_request: dict) -> dict:
+        return {**_PROCESS_LOST, "retryRecommendation": "reauthenticate"}
+
+    @activity.defn(name="agent_runtime.publish_artifacts")
+    async def publish(result: AgentRunResult) -> AgentRunResult:
+        info = activity.info()
+        save_deliveries.append(
+            (info.current_attempt_scheduled_time, info.schedule_to_close_timeout)
+        )
+        key = info.workflow_id
+        if key not in save_effects:
+            save_effects[key] = result
+            # Saving runs past the execution deadline (real time passes while
+            # an Activity runs), then its acknowledgement is lost.
+            await asyncio.sleep(16)
+            raise RuntimeError("save acknowledgement lost")
+        return save_effects[key]
+
+    result, _history = await run_agent_run_on_temporal(
+        monkeypatch,
+        workflow_id="test-step-budget-saving-crossing",
+        request=_managed_request(budget),
+        activities=[launch, status, fetch_result, publish],
+    )
+
+    assert isinstance(result, AgentRunResult), result
+    # One launch effect and one save effect, each delivered twice with the
+    # identical request.
+    assert len(launch_effects) == 1 and len(launch_deliveries) == 2
+    assert len(set(launch_deliveries)) == 1
+    assert len(save_effects) == 1 and len(save_deliveries) == 2
+    # Saving crossed the execution deadline under its own catalog allowance.
+    deadline = first_launch[0] + timedelta(seconds=budget)
+    assert save_deliveries[-1][0] >= deadline
+    route = agent_run_module.DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+        "agent_runtime.publish_artifacts"
+    )
+    assert save_deliveries[0][1] == timedelta(
+        seconds=route.timeouts.schedule_to_close_seconds
+    )
+    # The saved result is the attempt's own, not a timeout manufactured by
+    # the time saving took, and it received no fresh execution allowance.
+    assert result.provider_error_code == MANAGED_PROCESS_LOST_DURING_RECONCILIATION
+    assert result.metadata.get("reason") != "timed_out"
+    assert result.metadata["consumedExecutionSeconds"] <= budget
+    assert [
+        (item["action"], item["reason"])
+        for item in result.metadata["recoveryDecisions"]
+    ] == [("terminal_stop", "non_retryable_failure")]
+
+
+@pytest.mark.asyncio
+async def test_cancellation_starts_no_successor_on_real_temporal(monkeypatch):
+    launches: list[datetime] = []
+    cancels: list[dict] = []
+
+    @activity.defn(name="agent_runtime.launch")
+    async def launch(_request: dict) -> dict:
+        launches.append(activity.info().current_attempt_scheduled_time)
+        return {"container_id": "c", "status": "running", "agent_id": "claude_code"}
+
+    @activity.defn(name="agent_runtime.status")
+    async def status(request: dict) -> dict:
+        return {
+            "runId": request.get("runId") or "managed-run",
+            "agentKind": "managed",
+            "agentId": "claude_code",
+            "status": "running",
+            "metadata": {"lastLogOffset": str(len(launches))},
+        }
+
+    @activity.defn(name="agent_runtime.fetch_result")
+    async def fetch_result(_request: dict) -> dict:
+        raise AssertionError("a cancelled attempt is never fetched")
+
+    @activity.defn(name="agent_runtime.publish_artifacts")
+    async def publish(result: AgentRunResult) -> AgentRunResult:
+        return result
+
+    @activity.defn(name="agent_runtime.cancel")
+    async def cancel(request: dict) -> dict:
+        cancels.append(dict(request))
+        return {
+            "runId": "managed-run",
+            "agentKind": "managed",
+            "agentId": "claude_code",
+            "status": "canceled",
+        }
+
+    outcome, history = await run_agent_run_on_temporal(
+        monkeypatch,
+        workflow_id="test-step-budget-cancellation",
+        request=_managed_request(600),
+        activities=[launch, status, fetch_result, publish],
+        cancel_activity=cancel,
+        cancel_after_launch=launches,
+    )
+
+    assert not isinstance(outcome, AgentRunResult)
+    assert len(launches) == 1
+    assert len(cancels) == 1
+    events = [event.WhichOneof("attributes") for event in history.events]
+    assert events[-1] == "workflow_execution_canceled_event_attributes"

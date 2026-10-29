@@ -762,10 +762,9 @@ observation, so a wider stall window would erase the base window), and the base
 window is bound by the same absolute cap as the ceiling.
 
 **Mode travels with the numbers.** A history that predates progress-awareness
-publishes its flat decision, not just its base window. Otherwise a re-resolving
-callee (every launch and retry) could derive a ceiling the workflow never
-granted, and the supervisor would keep a process running after the workflow had
-timed out and released its provider slot.
+publishes its flat decision, or a re-resolving callee could derive a ceiling the
+workflow never granted and keep a process running after the workflow released
+its provider slot.
 
 **Elapsed wall-clock alone is not evidence that a run is stuck.** A run ends for
 budget only when the base window has elapsed with no progress observed within
@@ -780,22 +779,23 @@ samples CPU/workspace activity and the workflow checks fresh canonical status.
 
 **One allowance per attempt.** Execution and automatic recovery (cooldown
 re-entry, process-loss successor, terminal-contract continuation, profile-bound
-retry) share one cumulative allowance; slot, capacity and cooldown waits and
-pause before dispatch stop the clock without resetting it. Status, cancel and
-fetch Activities during execution derive their timeouts from the remaining
-allowance in one place; a fetch timeout at the deadline yields the normal budget
-result with its original diagnostics. Confirming an already-terminal run and
-saving its result keep their catalog-bounded timeouts, even after expiry, and
-start no task work. MoonMind.Run step retries charge failed attempts against
-the step's hard ceiling (§16.1); a rerun gets its own allowance.
+retry) share one cumulative allowance; slot, capacity, cooldown and pause waits
+stop the clock without resetting it. Status, cancel and fetch timeouts and
+blocking execution lanes get only the remaining allowance, with no floor. A
+fetch timeout at the deadline yields the normal budget result. Confirming an
+already-terminal run and saving its result keep their catalog-bounded timeouts
+after expiry and start no task work.
 
-**One recovery owner.** Adapters, providers and successor builders only propose
-recovery; the AgentRun workflow admits at most one per result (cooldown,
-successor or terminal stop). It never repeats a `delivery_unknown` effect,
-never re-attempts a `no_retry` failure (auth rejection, permission denial,
-invalid choice) and admits nothing once the allowance is spent. Results record
-`recoveryDecisions` and `consumedExecutionSeconds`. The hard ceiling ends
-execution without further reconciliation.
+**One recovery owner.** Adapters, providers, successor builders and the
+MoonMind.Run Step retry only propose; one decision function admits at most one
+recovery per result (cooldown, successor, no-progress reobservation or terminal
+stop). It never repeats a `delivery_unknown` effect or re-attempts a `no_retry`
+failure (auth rejection, permission denial, invalid choice), and admits nothing
+once the allowance or a bounded retry count is spent. Results record
+`recoveryDecisions` and `consumedExecutionSeconds`. A Step retry charges that
+consumption (wall-clock when absent) against the Step's hard ceiling, passes
+the successor the remainder, honors the attempt's stop, and records its
+decision in the attempt manifest. A rerun gets its own allowance.
 
 ### Progress evidence
 
@@ -814,10 +814,9 @@ watchdog uses the same observation, so the two cannot disagree.
 Resources that must outlive the run, such as credential lifetimes and broker
 sockets, are sized from the ceiling plus a bounded allowance for launch
 preparation, never from the base window. An Activity `ScheduleToClose` is sized
-from the ceiling only when the workflow can re-evaluate the budget while the
-Activity runs. When the workflow is blocked on one long Activity and cannot
-observe progress, `ScheduleToClose` is sized from the base window, or a run that
-never progresses could hold its provider slot for the full ceiling.
+from the ceiling only when the workflow can re-evaluate the budget meanwhile; a
+blocking Activity is sized from the base window, or a run that never progresses
+could hold its provider slot for the full ceiling.
 
 ---
 
