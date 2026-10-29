@@ -1171,3 +1171,61 @@ async def test_stop_auth_runner_without_container_is_idempotent(
         "stopped": False,
         "reason": "no_container",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("open_owner", [False, True])
+async def test_credential_maintenance_drains_generic_hosts_without_legacy_binding(
+    monkeypatch: pytest.MonkeyPatch, open_owner: bool
+) -> None:
+    """Generic hosts are drained even when no profile-bound OAuth binding exists.
+
+    The drain itself runs through the production generic realizer in
+    ``test_credential_maintenance_drains_generic_host_mounting_oauth_home``.
+    """
+    from moonmind.omnigent import generic_host_janitor, oauth_hosts, production
+    from moonmind.omnigent import settings as omnigent_settings
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+
+    services = SimpleNamespace(
+        host_lease_repository=object(),
+        runtime_binding_store=object(),
+        generic_realizer=object(),
+    )
+    drained: list[tuple[object, str]] = []
+
+    async def drain_profile(janitor, profile_ref):
+        drained.append((janitor._realizer, profile_ref))
+        if open_owner:
+            raise HarnessPlatformError(
+                "generic hosts of an open workflow still hold this Provider Profile",
+                code="OMNIGENT_RUNTIME_BINDING_CONFLICT",
+            )
+        return {"drained": 2}
+
+    async def no_binding(_self, _profile_id):
+        return None
+
+    monkeypatch.setattr(omnigent_settings, "generic_host_enabled", lambda: True)
+    monkeypatch.setattr(
+        production,
+        "build_generic_omnigent_execution_services",
+        lambda **_kwargs: services,
+    )
+    monkeypatch.setattr(
+        generic_host_janitor.GenericOmnigentHostJanitor, "drain_profile", drain_profile
+    )
+    monkeypatch.setattr(
+        oauth_hosts.OmnigentOAuthHostRepository, "get_binding_for_profile", no_binding
+    )
+
+    call = oauth_session_activities.oauth_session_prepare_credential_maintenance(
+        {"profile_id": "codex_openai_oauth"}
+    )
+    if open_owner:
+        # Maintenance fails closed; the OAuth workflow reports the drain failure.
+        with pytest.raises(HarnessPlatformError, match="open workflow"):
+            await call
+    else:
+        assert await call == {"profile_id": "codex_openai_oauth", "drained": 2}
+    assert drained == [(services.generic_realizer, "codex_openai_oauth")]
