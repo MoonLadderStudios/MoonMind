@@ -187,11 +187,21 @@ async def _drain_generic_profile_hosts(profile_id: str) -> int:
     """Release generic hosts that may still mount the Profile's OAuth home."""
 
     from api_service.db.base import async_session_maker
-    from moonmind.omnigent.generic_host_janitor import GenericOmnigentHostJanitor
+    from moonmind.omnigent.generic_host_janitor import (
+        GenericOmnigentHostJanitor,
+        list_profile_host_consumers,
+    )
+    from moonmind.omnigent.host_leases import DbOmnigentHostLeaseRepository
     from moonmind.omnigent.production import build_generic_omnigent_execution_services
-    from moonmind.omnigent.settings import generic_host_enabled
+    from moonmind.omnigent.runtime_bindings import DbRuntimeBindingStore
 
-    if not generic_host_enabled():
+    # Direct-runtime Profiles do not need an execution plane merely to log in.
+    # Read the durable inventory first; errors still block credential mutation.
+    if not await list_profile_host_consumers(
+        profile_id,
+        runtime_bindings=DbRuntimeBindingStore(async_session_maker),
+        host_leases=DbOmnigentHostLeaseRepository(async_session_maker),
+    ):
         return 0
     services = build_generic_omnigent_execution_services(
         session_factory=async_session_maker

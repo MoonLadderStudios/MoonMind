@@ -34,6 +34,30 @@ async def temporal_owner_has_closed(binding):
     return execution.status not in (None, WorkflowExecutionStatus.RUNNING)
 
 
+async def list_profile_host_consumers(
+    provider_profile_ref: str, *, runtime_bindings: Any, host_leases: Any
+) -> list[Any]:
+    """Read durable hosts that can still mount this Profile's credential home."""
+    bindings = await runtime_bindings.list_recoverable(
+        stale_before=datetime.now(UTC) + timedelta(days=1)
+    )
+    consumers = []
+    for binding in bindings:
+        if (
+            not any(
+                isinstance(lease, dict)
+                and lease.get("providerProfileRef") == provider_profile_ref
+                for lease in binding.providerLeases.values()
+            )
+            or not binding.hostLeaseRef
+        ):
+            continue
+        host_lease = await host_leases.get(binding.hostLeaseRef)
+        if host_lease is not None and host_lease.status != "cleaned":
+            consumers.append(binding)
+    return consumers
+
+
 class GenericOmnigentHostJanitor:
 
     def __init__(
@@ -147,24 +171,14 @@ class GenericOmnigentHostJanitor:
             HarnessPlatformFailure,
         )
 
-        # Every binding that is not cleaned, whatever its heartbeat age.
-        bindings = await self._runtime_bindings.list_recoverable(
-            stale_before=datetime.now(UTC) + timedelta(days=1)
+        bindings = await list_profile_host_consumers(
+            provider_profile_ref,
+            runtime_bindings=self._runtime_bindings,
+            host_leases=self._host_leases,
         )
         drained = 0
         open_owners: list[str] = []
         for binding in bindings:
-            if not any(
-                isinstance(lease, dict)
-                and lease.get("providerProfileRef") == provider_profile_ref
-                for lease in binding.providerLeases.values()
-            ):
-                continue
-            if not binding.hostLeaseRef:
-                continue
-            host_lease = await self._host_leases.get(binding.hostLeaseRef)
-            if host_lease is None or host_lease.status == "cleaned":
-                continue
             if await self._owner_has_closed(binding) is not True:
                 open_owners.append(binding.bindingId)
                 continue
@@ -179,4 +193,4 @@ class GenericOmnigentHostJanitor:
         return {"drained": drained}
 
 
-__all__ = ["GenericOmnigentHostJanitor"]
+__all__ = ["GenericOmnigentHostJanitor", "list_profile_host_consumers"]

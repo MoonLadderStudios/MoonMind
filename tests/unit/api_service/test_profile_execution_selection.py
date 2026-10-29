@@ -681,3 +681,45 @@ def test_untranslatable_api_key_codex_profile_keeps_direct_route(env):
 
     assert not configuration_accepts_profile(stock_api_key[1].document, api_key)
     assert profile_has_native_inventory_route(api_key, [stock_api_key])
+
+
+@pytest.mark.parametrize(
+    "runtime,provider_id,key_env,key_role,harness",
+    [
+        ("codex_cli", "openai", "OPENAI_API_KEY", "openai_api_key", "codex-native"),
+        (
+            "claude_code",
+            "anthropic",
+            "ANTHROPIC_API_KEY",
+            "anthropic_api_key",
+            "claude-native",
+        ),
+    ],
+)
+def test_v2_configuration_uses_profile_credential_materializer(
+    runtime, provider_id, key_env, key_role, harness
+):
+    api_profile = provider(
+        runtime_id=runtime,
+        provider_id=provider_id,
+        credential_source="secret_ref",
+        runtime_materialization_mode="api_key_env",
+        secret_refs={key_role: f"env://{key_env}"},
+        env_template={key_env: {"from_secret_ref": key_role}},
+        file_templates=None,
+        home_path_overrides=None,
+    )
+    document = {
+        "schemaVersion": "moonmind.omnigent-agent-profile.v2",
+        "harness": {"id": harness},
+        "credentialSlots": [
+            {
+                "acceptedProviderIds": [provider_id],
+                "acceptedAuthModels": ["omnigent-provider-config"],
+            }
+        ],
+    }
+    assert configuration_accepts_profile(document, api_profile)
+    api_profile.credential_source = "oauth_volume"
+    api_profile.runtime_materialization_mode = "oauth_home"
+    assert not configuration_accepts_profile(document, api_profile)

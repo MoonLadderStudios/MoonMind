@@ -502,3 +502,16 @@ async def test_sibling_attempt_credentials_are_isolated(tmp_path, runtime_id):
         assert sibling.removed is True and docker.volumes == set()
     finally:
         await engine.dispose()
+
+
+@pytest.mark.parametrize("url", ["https://api.openai.com:abc/v1", "https://[broken/v1"])
+def test_malformed_endpoint_stays_incompatible_instead_of_crashing_inventory(url):
+    profile = _api_key_profile(
+        env_template={
+            "OPENAI_API_KEY": {"from_secret_ref": "openai_api_key"},
+            "OPENAI_BASE_URL": url,
+        }
+    )
+    endpoint, reason = codex_provider_config_endpoint(profile)
+    assert endpoint is None
+    assert "egress" in reason
