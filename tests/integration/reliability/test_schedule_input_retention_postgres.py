@@ -15,6 +15,7 @@ from api_service.services.recurring_workflows_service import (
     RecurringWorkflowsService,
     RecurringWorkflowValidationError,
 )
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
@@ -104,7 +105,7 @@ async def write_schedule(
         return await service.update_definition(
             definition,
             target=payload,
-            actor=SimpleNamespace(id="operator"),
+            actor=OperatorAdmission(via="loopback"),
         )
     return await service.create_definition(
         name="Retained schedule",
@@ -118,7 +119,7 @@ async def write_schedule(
         owner_user_id=None,
         target=payload,
         policy={},
-        actor=SimpleNamespace(id="operator"),
+        actor=OperatorAdmission(via="loopback"),
     )
 
 
