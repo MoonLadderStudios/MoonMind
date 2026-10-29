@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import posixpath
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal, Mapping, NoReturn, get_args
 
@@ -275,6 +276,120 @@ def evaluate_execution_budget(
     if idle_progress_seconds < budget.progress_stall_seconds:
         return "continue"
     return "expired_no_progress"
+
+
+def remaining_execution_allowance_seconds(
+    *,
+    allowance_seconds: float,
+    consumed_seconds: float,
+) -> float:
+    """What an attempt may still spend; zero or less means it is spent.
+
+    The one derivation every live execution boundary uses: Activity timeouts,
+    blocking execution lanes, retries within a lane and the parent step's
+    retry ledger all subtract the same consumed allowance, so none of them can
+    grant a fresh one.
+    """
+
+    return float(allowance_seconds) - max(0.0, float(consumed_seconds))
+
+
+AttemptRecoveryAction = Literal["successor", "cooldown", "reobserve", "terminal_stop"]
+
+#: Stops that bind every recovery level. A parent step retry must not re-attempt
+#: what the attempt's recovery owner refused for one of these reasons.
+BINDING_RECOVERY_STOP_REASONS = frozenset(
+    {
+        "uncertain_effect_requires_reconciliation",
+        "non_retryable_failure",
+        "execution_budget_exhausted",
+    }
+)
+
+
+@dataclass(frozen=True)
+class AttemptRecoveryDecision:
+    """The recovery the owner selected for one failed execution attempt."""
+
+    action: AttemptRecoveryAction
+    reason: str
+
+    def to_metadata(self, *, consumed_seconds: float) -> dict[str, Any]:
+        return {
+            "action": self.action,
+            "reason": self.reason,
+            "consumedExecutionSeconds": max(0, int(consumed_seconds)),
+        }
+
+
+def decide_attempt_recovery(
+    *,
+    proposed_action: Literal["successor", "cooldown", "reobserve"] | None,
+    proposed_reason: str,
+    retry_disposition: str,
+    execution_state: str,
+    remaining_budget_seconds: float,
+    attempts_remaining: int | None = None,
+) -> AttemptRecoveryDecision:
+    """Select the single recovery an execution attempt may take.
+
+    Adapters, providers, successor builders and the parent step retry only
+    *propose* a recovery from the typed result. This is the one place that
+    admits it. An uncertain effect is never repeated before its reconciliation
+    owner resolves it, a ``no_retry`` failure (auth rejection, permission
+    denial, invalid user choice) is never re-attempted, nothing is admitted
+    once the execution allowance is spent (after expiry only saving and
+    confirmation may run), and a bounded recovery stops when
+    ``attempts_remaining`` reaches zero.
+    """
+
+    if proposed_action is None:
+        return AttemptRecoveryDecision("terminal_stop", proposed_reason)
+    if execution_state == "delivery_unknown":
+        return AttemptRecoveryDecision(
+            "terminal_stop", "uncertain_effect_requires_reconciliation"
+        )
+    if retry_disposition == "no_retry":
+        return AttemptRecoveryDecision("terminal_stop", "non_retryable_failure")
+    if remaining_budget_seconds <= 0:
+        return AttemptRecoveryDecision("terminal_stop", "execution_budget_exhausted")
+    if attempts_remaining is not None and attempts_remaining <= 0:
+        return AttemptRecoveryDecision(
+            "terminal_stop", f"{proposed_reason}_retry_exhausted"
+        )
+    return AttemptRecoveryDecision(proposed_action, proposed_reason)
+
+
+def recorded_attempt_budget(
+    metadata: Mapping[str, Any] | None,
+) -> tuple[float | None, AttemptRecoveryDecision | None]:
+    """Read an attempt's recorded consumption and binding recovery stop.
+
+    Returns ``(consumed_seconds, binding_stop)``. ``consumed_seconds`` is
+    ``None`` when the attempt recorded no ledger (a history before the
+    step-budget owner), so the caller keeps its own measurement.
+    ``binding_stop`` is the owner's last decision when it refused recovery
+    for a reason in :data:`BINDING_RECOVERY_STOP_REASONS`.
+    """
+
+    if not isinstance(metadata, Mapping):
+        return None, None
+    consumed: float | None = None
+    raw = metadata.get("consumedExecutionSeconds")
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool) and raw >= 0:
+        consumed = float(raw)
+    binding: AttemptRecoveryDecision | None = None
+    decisions = metadata.get("recoveryDecisions")
+    if isinstance(decisions, list) and decisions:
+        last = decisions[-1]
+        if (
+            isinstance(last, Mapping)
+            and last.get("action") == "terminal_stop"
+            and last.get("reason") in BINDING_RECOVERY_STOP_REASONS
+        ):
+            binding = AttemptRecoveryDecision("terminal_stop", str(last["reason"]))
+    return consumed, binding
+
 
 AgentRunState = Literal[
     "queued",
