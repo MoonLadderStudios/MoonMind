@@ -491,19 +491,138 @@ class RecurringWorkflowsService:
         self._adapter = temporal_client_adapter or TemporalClientAdapter()
         self._artifact_service = artifact_service
 
-    async def _retain_target_artifacts(self, target: Mapping[str, Any]) -> None:
+    async def _retain_target_artifacts(
+        self,
+        target: Mapping[str, Any],
+        *,
+        definition_id: UUID | None = None,
+        access: ArtifactAccessContext | None = None,
+    ) -> str | None:
+        """Publish one verified root with the caller-owned schedule revision."""
+        from api_service.services.omnigent_execution_plan_service import (
+            persist_json_artifact,
+        )
+        from moonmind.omnigent.bridge_artifacts import (
+            ensure_verified_execution_plan_dependencies,
+        )
+        from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
+        from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
         from moonmind.workflows.temporal.artifacts import (
+            ArtifactDependency,
+            ArtifactTransactionOwnership,
             TemporalArtifactError,
             TemporalArtifactRepository,
+            TemporalArtifactService,
             schedule_input_artifact_ids,
         )
 
-        if not schedule_input_artifact_ids(target):
-            return
+        binding_payload = (target.get("initialParameters") or {}).get(
+            "omnigentExecutionPlan"
+        )
+        ids = schedule_input_artifact_ids(target)
+        if not isinstance(binding_payload, Mapping) and not ids:
+            return None
+        repository = TemporalArtifactRepository(self._session)
+        artifacts = self._artifact_service or TemporalArtifactService(
+            repository,
+            transaction_ownership=ArtifactTransactionOwnership.CALLER,
+        )
+        if isinstance(artifacts, TemporalArtifactService):
+            if artifacts._repository._session is not self._session:
+                raise RecurringWorkflowValidationError(
+                    "schedule artifacts must share the definition transaction"
+                )
+            # Preserve the injected storage/configuration without allowing its
+            # standalone convenience methods to commit the schedule owner.
+            artifacts = copy.copy(artifacts)
+            artifacts._transaction_ownership = ArtifactTransactionOwnership.CALLER
         try:
-            await TemporalArtifactRepository(self._session).retain_schedule_inputs(
-                target
+            if isinstance(binding_payload, Mapping):
+                binding = OmnigentExecutionPlanBinding.model_validate(binding_payload)
+                plan = await SessionExecutionPlanStore(self._session).load(
+                    binding.plan_ref
+                )
+                if plan is None:
+                    raise RecurringWorkflowValidationError(
+                        "saved schedule execution plan is unavailable"
+                    )
+                if access is None:
+                    if definition_id is None:
+                        raise RecurringWorkflowValidationError(
+                            "saved schedule dependency verification requires its identity"
+                        )
+                    await self._scheduled_task_provenance(binding)
+                    access = await frozen_execution_artifact_access(
+                        self._session,
+                        binding,
+                        workflow_id=f"mm-schedule:{definition_id}",
+                    )
+                await ensure_verified_execution_plan_dependencies(
+                    artifacts=artifacts,
+                    repository=repository,
+                    plan=plan,
+                    binding=binding,
+                    access=access,
+                    planning_parameters=(
+                        {
+                            "system": {
+                                "recurrence": {"definitionId": str(definition_id)}
+                            },
+                            **{
+                                key: target[key]
+                                for key in ("inputArtifactRef", "planArtifactRef")
+                                if key in target
+                            },
+                        }
+                        if definition_id is not None
+                        else None
+                    ),
+                )
+                return binding.plan_artifact_ref.removeprefix(
+                    "artifact://"
+                ).removeprefix("artifact:")
+
+            if access is None:
+                if definition_id is None:
+                    raise RecurringWorkflowValidationError(
+                        "saved schedule dependency verification requires its identity"
+                    )
+                access = ArtifactAccessContext.for_execution(
+                    f"mm-schedule:{definition_id}",
+                    principal="service:recurring-workflows",
+                )
+            dependencies = []
+            for artifact_id in sorted(ids):
+                artifact, _body = await artifacts.read(
+                    artifact_id=artifact_id, access=access
+                )
+                dependencies.append(
+                    ArtifactDependency(
+                        artifact_id, artifact.sha256, True, "input.schedule"
+                    )
+                )
+            # Non-plan targets have one producer-owned manifest, not a second
+            # list independently interpreted by admission and garbage collection.
+            root_id, _digest = await persist_json_artifact(
+                artifact_service=artifacts,
+                principal=access.principal,
+                artifact_class="schedule.input_manifest",
+                payload={
+                    "schemaVersion": "v1",
+                    "inputs": [
+                        {"artifactId": entry.artifact_id, "sha256": entry.sha256}
+                        for entry in dependencies
+                    ],
+                },
             )
+            await artifacts.record_verified_dependencies(
+                root_artifact_id=root_id,
+                dependencies=dependencies,
+                # This fresh root was created by this producer in the same
+                # transaction. Children retain the original caller scope.
+                access=access._with_verified_inputs({root_id}),
+            )
+            return root_id
         except TemporalArtifactError as exc:
             raise RecurringWorkflowValidationError(
                 f"Cannot retain schedule input: {exc}"
@@ -562,82 +681,18 @@ class RecurringWorkflowsService:
     async def _retain_frozen_schedule_skill_inputs(
         self, definition: RecurringWorkflowDefinition
     ) -> bool:
-        """Repair old closure lists from their original immutable Skill manifest."""
-        from moonmind.omnigent.bridge_artifacts import (
-            _skill_content_ids,
-            _skill_manifest_id,
-        )
-        from moonmind.omnigent.harness_platform.execution_plan import (
-            verify_execution_plan_envelope,
-        )
-        from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
-        from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
-        from moonmind.workflows.temporal.artifacts import (
-            ArtifactTransactionOwnership,
-            TemporalArtifactRepository,
-            TemporalArtifactService,
-            schedule_input_artifact_ids,
-        )
-
-        target = copy.deepcopy(definition.target or {})
-        binding_payload = (target.get("initialParameters") or {}).get(
-            "omnigentExecutionPlan"
-        )
-        if not isinstance(binding_payload, Mapping):
+        """Backfill a retained definition from its original verified inputs."""
+        if definition.input_artifact_root_id is not None:
             return False
-        binding = OmnigentExecutionPlanBinding.model_validate(binding_payload)
-        plan = await SessionExecutionPlanStore(self._session).load(binding.plan_ref)
-        if plan is None:
-            raise RecurringWorkflowValidationError(
-                "saved schedule execution plan is unavailable for input retention"
-            )
-        plan = verify_execution_plan_envelope(
-            plan.model_dump(mode="json", by_alias=True)
+        root_id = await self._retain_target_artifacts(
+            definition.target or {},
+            definition_id=definition.id,
         )
-        authority = plan.payload.authority
-        if (
-            binding.plan_digest != "sha256:" + plan.planRef.rsplit(":", 1)[-1]
-            or authority is None
-            or binding.task_input_snapshot_ref != authority.taskInputSnapshotRef
-            or binding.task_input_snapshot_digest != authority.taskInputSnapshotDigest
-        ):
-            raise RecurringWorkflowValidationError(
-                "saved schedule execution plan conflicts with its frozen input authority"
-            )
-        manifest_id = _skill_manifest_id(plan)
-        if manifest_id is None:
+        if root_id is None:
             return False
-        manifest_digest = plan.payload.resolvedSkills.get("resolvedSkillSetDigest")
-        if not manifest_digest:
-            raise RecurringWorkflowValidationError(
-                "saved schedule Skill manifest lacks its frozen digest"
-            )
-        await self._scheduled_task_provenance(binding)
-        artifacts = self._artifact_service or TemporalArtifactService(
-            TemporalArtifactRepository(self._session),
-            transaction_ownership=ArtifactTransactionOwnership.CALLER,
-        )
-        content_ids = await _skill_content_ids(
-            artifacts,
-            manifest_id,
-            expected_digest=manifest_digest,
-            access=await frozen_execution_artifact_access(
-                self._session, binding, workflow_id=f"mm-schedule:{definition.id}"
-            ),
-        )
-        missing_ids = content_ids - schedule_input_artifact_ids(target)
-        if not missing_ids:
-            return False
-        recorded_refs = target.get("omnigentAuthorityArtifactRefs") or []
-        if not isinstance(recorded_refs, list):
-            raise RecurringWorkflowValidationError(
-                "saved schedule authority artifact references must be an array"
-            )
-        target["omnigentAuthorityArtifactRefs"] = [*recorded_refs, *sorted(missing_ids)]
-        await self._retain_target_artifacts(target)
-        definition.target = target
-        definition.updated_at = datetime.now(UTC)
-        definition.version = int(definition.version or 0) + 1
+        # Migration enriches retained authority without changing the authored
+        # target or its optimistic-concurrency revision.
+        definition.input_artifact_root_id = root_id
         await self._session.flush()
         return True
 
@@ -1093,7 +1148,10 @@ class RecurringWorkflowsService:
             previous=previous,
             snapshot=target["agentProfileSnapshot"],
         )
-        await self._retain_target_artifacts(target)
+        definition.input_artifact_root_id = await self._retain_target_artifacts(
+            target,
+            definition_id=definition.id,
+        )
         definition.target = target
         definition.updated_at = datetime.now(UTC)
         definition.version = int(definition.version or 0) + 1
@@ -1138,7 +1196,10 @@ class RecurringWorkflowsService:
                 previous=advanced_from,
                 snapshot=admitted["agentProfileSnapshot"],
             )
-        await self._retain_target_artifacts(admitted)
+        definition.input_artifact_root_id = await self._retain_target_artifacts(
+            admitted,
+            definition_id=definition.id,
+        )
         definition.target = admitted
         definition.updated_at = datetime.now(UTC)
         definition.version = int(definition.version or 0) + 1
@@ -1448,7 +1509,10 @@ class RecurringWorkflowsService:
             current_binding.task_input_snapshot_ref,
             *persisted_plan.artifact_refs,
         ]
-        await self._retain_target_artifacts(target)
+        definition.input_artifact_root_id = await self._retain_target_artifacts(
+            target,
+            definition_id=definition.id,
+        )
         definition.target = target
         definition.updated_at = datetime.now(UTC)
         definition.version = int(definition.version or 0) + 1
@@ -1490,35 +1554,36 @@ class RecurringWorkflowsService:
         """
 
         batch_size = max(1, int(limit))
-        definition_ids: list[UUID] = []
-        last_definition_id: UUID | None = None
-        while True:
-            statement = select(RecurringWorkflowDefinition.id).where(
-                RecurringWorkflowDefinition.temporal_schedule_id.is_not(None),
-            )
-            if last_definition_id is not None:
-                statement = statement.where(
-                    RecurringWorkflowDefinition.id > last_definition_id
+        async def definition_ids():
+            last_definition_id: UUID | None = None
+            while True:
+                statement = select(RecurringWorkflowDefinition.id).where(
+                    RecurringWorkflowDefinition.temporal_schedule_id.is_not(None),
                 )
-            batch = list(
-                (
-                    await self._session.execute(
-                        statement.order_by(RecurringWorkflowDefinition.id).limit(
-                            batch_size
-                        )
+                if last_definition_id is not None:
+                    statement = statement.where(
+                        RecurringWorkflowDefinition.id > last_definition_id
                     )
-                ).scalars()
-            )
-            if not batch:
-                break
-            definition_ids.extend(batch)
-            last_definition_id = batch[-1]
-            if len(batch) < batch_size:
-                break
+                batch = list(
+                    (
+                        await self._session.execute(
+                            statement.order_by(RecurringWorkflowDefinition.id).limit(
+                                batch_size
+                            )
+                        )
+                    ).scalars()
+                )
+                if not batch:
+                    break
+                for definition_id in batch:
+                    yield definition_id
+                last_definition_id = batch[-1]
+                if len(batch) < batch_size:
+                    break
 
         refreshed = 0
         failed: list[str] = []
-        for definition_id in definition_ids:
+        async for definition_id in definition_ids():
             try:
                 definition = await self._lock_definition_for_update(definition_id)
                 if await self._retain_frozen_schedule_skill_inputs(definition):
@@ -1938,7 +2003,13 @@ class RecurringWorkflowsService:
         )
         if admitted_target is not None:
             target_payload = admitted_target
-        await self._retain_target_artifacts(target_payload)
+        input_root_id = await self._retain_target_artifacts(
+            target_payload,
+            definition_id=definition_id,
+            access=(
+                ArtifactAccessContext.for_operator(actor) if actor is not None else None
+            ),
+        )
         definition = RecurringWorkflowDefinition(
             id=definition_id,
             name=name_text,
@@ -1952,6 +2023,7 @@ class RecurringWorkflowsService:
             scope_type=scope,
             scope_ref=_clean_text(scope_ref, field_name="scopeRef"),
             target=target_payload,
+            input_artifact_root_id=input_root_id,
             policy=policy_payload,
             temporal_schedule_id=f"mm-schedule:{definition_id}",
             created_at=now,
@@ -2126,7 +2198,15 @@ class RecurringWorkflowsService:
             normalized_target is not None and normalized_target != definition.target
         )
         if normalized_target is not None:
-            await self._retain_target_artifacts(normalized_target)
+            definition.input_artifact_root_id = await self._retain_target_artifacts(
+                normalized_target,
+                definition_id=definition.id,
+                access=(
+                    ArtifactAccessContext.for_operator(actor)
+                    if actor is not None
+                    else None
+                ),
+            )
             definition.target = normalized_target
 
         policy_obj = None

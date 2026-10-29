@@ -866,8 +866,12 @@ async def recover_recorded_saved_work_inputs(
     info = activity.info()
     root_id = saved_work_artifact_id(contract.saved_work_ref)
     links = await service._repository.list_links(root_id)
+    activity_namespace = getattr(info, "workflow_namespace", None) or getattr(
+        info, "namespace", None
+    )
     if any(
-        link.workflow_id == info.workflow_id
+        link.namespace == activity_namespace
+        and link.workflow_id == info.workflow_id
         and link.link_type in {"input.artifact.admitted", "input.artifact.raw"}
         for link in links
     ):
@@ -878,7 +882,8 @@ async def recover_recorded_saved_work_inputs(
         # permission to recreate an intentionally revoked or corrupted grant.
         denied()
     if not any(
-        link.workflow_id == contract.source_workflow_id
+        link.namespace == namespace
+        and link.workflow_id == contract.source_workflow_id
         and link.run_id == contract.source_run_id
         for link in links
     ):
@@ -900,6 +905,49 @@ async def recover_recorded_saved_work_inputs(
         raise TemporalArtifactStateError("recorded publication manifest bytes changed")
     _, objects = parse_saved_work_publication_manifest(body)
     ids = [root_id, *(saved_work_artifact_id(obj.ref) for obj in objects)]
+    proof = await service.dependency_proof(root_artifact_id=root_id, access=root_access)
+    if proof is not None:
+        # The sealed producer proof preserves nested required inputs. The old
+        # receipt is not permission to adopt another execution's artifacts.
+        for entry in proof:
+            if not entry.required:
+                continue
+            child_links = await service._repository.list_links(entry.artifact_id)
+            if not any(
+                link.namespace == namespace
+                and link.workflow_id == contract.source_workflow_id
+                and link.run_id == contract.source_run_id
+                for link in child_links
+            ):
+                denied()
+            if entry.artifact_id not in ids:
+                # Producer metadata proof does not attest raw access in the old
+                # API receipt. Newly discovered descendants must independently
+                # be raw-readable by the original execution before delegation.
+                child = await service._repository.get_artifact(entry.artifact_id)
+                if getattr(
+                    child.redaction_level, "value", child.redaction_level
+                ) == "restricted" and not any(
+                    link.namespace == namespace
+                    and link.workflow_id == contract.source_workflow_id
+                    and link.link_type == "input.artifact.raw"
+                    for link in child_links
+                ):
+                    denied()
+                await service.read(
+                    artifact_id=entry.artifact_id,
+                    access=ArtifactAccessContext.for_execution(
+                        contract.source_workflow_id,
+                        principal="service:saved-work-publication",
+                    ),
+                )
+            ids.append(entry.artifact_id)
+        await service.verified_dependencies(
+            root_artifact_id=root_id,
+            access=access._with_recorded_publication_inputs(ids),
+        )
+    # Only unsealed retained admissions use the historical output decoder as
+    # the whole closure. Completed seals never fall back after corruption.
     for obj in objects:
         artifact = await service._repository.get_artifact(
             saved_work_artifact_id(obj.ref)

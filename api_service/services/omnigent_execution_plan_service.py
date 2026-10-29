@@ -516,6 +516,7 @@ async def _resolve_and_persist_skills(
     task_input_snapshot_digest: str,
     initial_parameters: Mapping[str, Any],
     db_session: Any | None = None,
+    access: ArtifactAccessContext,
 ) -> tuple[AgentResolvedSkillSet, str, str, tuple[str, ...]]:
     """Resolve once at admission and persist exact content plus its manifest."""
 
@@ -546,6 +547,7 @@ async def _resolve_and_persist_skills(
     )
 
     content_refs: list[str] = []
+    created_refs: list[str] = []
     persisted_entries = []
     for skill in resolved.skills:
         if skill.content_ref:
@@ -579,6 +581,7 @@ async def _resolve_and_persist_skills(
             metadata={"skill_name": skill.skill_name},
         )
         content_refs.append(content_ref)
+        created_refs.append(content_ref)
         persisted_entries.append(
             skill.model_copy(
                 update={
@@ -595,6 +598,23 @@ async def _resolve_and_persist_skills(
         principal=principal,
         artifact_class="omnigent.resolved_skill_set",
         payload=manifest_payload,
+    )
+    from moonmind.workflows.temporal.artifacts import ArtifactDependency
+
+    await artifact_service.record_verified_dependencies(
+        root_artifact_id=manifest_ref,
+        dependencies=tuple(
+            ArtifactDependency(
+                artifact_id=str(skill.content_ref)
+                .removeprefix("artifact://")
+                .removeprefix("artifact:"),
+                sha256=skill.content_digest.removeprefix("sha256:"),
+                required=True,
+                role="input.skill_content",
+            )
+            for skill in persisted_entries
+        ),
+        access=access._with_verified_inputs((manifest_ref, *created_refs)),
     )
     resolved = resolved.model_copy(update={"manifest_ref": manifest_ref})
     return resolved, manifest_ref, manifest_digest, tuple(content_refs)
@@ -1721,6 +1741,7 @@ async def compile_and_persist_execution_plan(
         workflow_id=workflow_id,
         task_input_snapshot_digest=task_input_snapshot_digest,
         initial_parameters=initial_parameters,
+        access=access,
     )
     skill_delivery_ref = _digest_ref(
         "skill-delivery",
@@ -2157,6 +2178,16 @@ async def compile_and_persist_execution_plan(
         taskInputSnapshotRef=task_input_snapshot_ref,
         taskInputSnapshotDigest=task_input_snapshot_digest,
     )
+    from moonmind.omnigent.bridge_artifacts import (
+        ensure_verified_execution_plan_dependencies,
+    )
+
+    await ensure_verified_execution_plan_dependencies(
+        artifacts=artifact_service,
+        plan=persisted,
+        binding=binding,
+        access=access,
+    )
     frozen_rollout = persisted.payload.runtimeProviderRollout
     _evidence_refs: tuple[str, ...] = ()
     if support_evidence is not None:
@@ -2241,9 +2272,28 @@ async def frozen_execution_artifact_access(
         or authority.taskInputSnapshotDigest != binding.task_input_snapshot_digest
     ):
         raise ValueError("persisted plan conflicts with original task-input authority")
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactRepository
+
+    repository = TemporalArtifactRepository(db_session)
+    root_id = binding.plan_artifact_ref.removeprefix("artifact://").removeprefix(
+        "artifact:"
+    )
+    root = await repository.get_artifact(root_id)
+    if root.sha256 != json_artifact_digest(
+        plan.model_dump(mode="json", by_alias=True)
+    ).removeprefix("sha256:"):
+        raise ValueError(
+            "persisted plan artifact conflicts with original input authority"
+        )
+    dependencies = await repository.get_verified_dependencies(root_id)
+    ids = (
+        {root_id, *(entry.artifact_id for entry in dependencies)}
+        if dependencies is not None
+        else _artifact_ids(_execution_plan_input_refs(plan, binding))
+    )
     return ArtifactAccessContext.for_execution(
         workflow_id, principal="service:execution-plan"
-    )._with_verified_inputs(_artifact_ids(_execution_plan_input_refs(plan, binding)))
+    )._with_verified_inputs(ids)
 
 
 async def compile_frozen_execution_plan(

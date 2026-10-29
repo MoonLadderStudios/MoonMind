@@ -210,25 +210,47 @@ async def link_verified_execution_plan_inputs_in_session(
         planning_parameters=planning_parameters,
         access=access._with_verified_inputs(_artifact_ids(refs)),
     )
-    refs.update(frozen_refs)
-    linked_ids = _artifact_ids(refs)
-    manifest_id = _skill_manifest_id(plan)
-    if manifest_id is not None:
-        manifest_digest = plan.payload.resolvedSkills.get("resolvedSkillSetDigest")
-        if not manifest_digest:
-            raise OmnigentArtifactError("admitted Skill manifest lacks its digest")
-        # Resolve the complete immutable closure before taking any grant
-        # locks. Use the proven original input scope, or an already admitted
-        # execution, rather than creating a manifest grant to discover it.
-        linked_ids.update(
-            await _skill_content_ids(
-                service,
-                manifest_id,
-                workflow_id=workflow_id,
-                access=input_access,
-                expected_digest=manifest_digest,
-            )
+    if binding is not None:
+        closure = await ensure_verified_execution_plan_dependencies(
+            artifacts=service,
+            repository=repository,
+            plan=plan,
+            binding=binding,
+            access=input_access,
+            planning_parameters=planning_parameters,
         )
+        linked_ids = {entry.artifact_id for entry in closure.dependencies}
+        linked_ids.add(
+            TemporalOmnigentArtifactGateway._artifact_id(binding.plan_artifact_ref)
+        )
+        manifest_id = _skill_manifest_id(plan)
+        if manifest_id is not None:
+            manifest = await repository.get_artifact(manifest_id)
+            await service._assert_artifact_raw_access(
+                manifest, access=ArtifactAccessContext.for_execution(workflow_id)
+            )
+        # Labels never expand the sealed input set or restore unavailable evidence.
+        attachments = {
+            key: value for key, value in attachments.items() if key in linked_ids
+        }
+    else:
+        # Parameter-selected historical plans have no artifact-root binding yet.
+        refs.update(frozen_refs)
+        linked_ids = _artifact_ids(refs)
+        manifest_id = _skill_manifest_id(plan)
+        if manifest_id is not None:
+            manifest_digest = plan.payload.resolvedSkills.get("resolvedSkillSetDigest")
+            if not manifest_digest:
+                raise OmnigentArtifactError("admitted Skill manifest lacks its digest")
+            linked_ids.update(
+                await _skill_content_ids(
+                    service,
+                    manifest_id,
+                    workflow_id=workflow_id,
+                    access=input_access,
+                    expected_digest=manifest_digest,
+                )
+            )
 
     async def link(artifact_id: str) -> None:
         await _link_execution_input(
@@ -298,6 +320,171 @@ async def _link_execution_input(
     )
 
 
+async def ensure_verified_execution_plan_dependencies(
+    *,
+    artifacts,
+    plan,
+    binding,
+    access: ArtifactAccessContext,
+    repository=None,
+    planning_parameters: Mapping[str, Any] | None = None,
+):
+    """Seal original plan inputs once; completed closures never use legacy decoding.
+
+    The caller supplies the already verified immutable plan/binding, not mutable
+    current Skill definitions or workflow projections. This is also the bounded
+    historical decoder used by schedule migration and original-start recovery.
+    """
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        verify_execution_plan_envelope,
+    )
+    from moonmind.workflows.temporal.artifacts import (
+        ArtifactDependency,
+        TemporalArtifactNotFoundError,
+        TemporalArtifactStateError,
+    )
+
+    plan = verify_execution_plan_envelope(
+        plan.model_dump(mode="json", by_alias=True)
+        if hasattr(plan, "model_dump")
+        else plan
+    )
+    if (
+        binding is None
+        or binding.plan_ref != plan.planRef
+        or (binding.plan_digest != "sha256:" + plan.planRef.rsplit(":", 1)[-1])
+    ):
+        raise OmnigentArtifactError("dependency closure requires verified plan binding")
+    root_id = TemporalOmnigentArtifactGateway._artifact_id(binding.plan_artifact_ref)
+    expected_body = json.dumps(
+        plan.model_dump(mode="json", by_alias=True),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    proof_access = access._with_verified_inputs(
+        _artifact_ids(_execution_plan_input_refs(plan, binding))
+    )
+    root, body = await artifacts.read(artifact_id=root_id, access=proof_access)
+    if (
+        body != expected_body
+        or root.sha256 != hashlib.sha256(expected_body).hexdigest()
+    ):
+        raise OmnigentArtifactError(
+            "plan artifact pointer conflicts with verified execution authority"
+        )
+    sealed = await artifacts.dependency_proof(root_artifact_id=root_id, access=proof_access)
+    if sealed is not None:
+        proof_access = proof_access._with_verified_inputs(
+            entry.artifact_id for entry in sealed
+        )
+    existing = await artifacts.verified_dependencies(
+        root_artifact_id=root_id, access=proof_access
+    )
+    if existing is not None:
+        return existing
+    refs = _execution_plan_input_refs(plan, binding)
+    frozen_refs, attachments, input_access = await _frozen_planning_input_refs(
+        repository,
+        artifacts,
+        plan=plan,
+        binding=binding,
+        planning_parameters=planning_parameters,
+        access=proof_access,
+    )
+    refs.update(frozen_refs)
+    manifest_id = _skill_manifest_id(plan)
+    content_digests = {}
+    if manifest_id is not None:
+        manifest_digest = plan.payload.resolvedSkills.get("resolvedSkillSetDigest")
+        if not manifest_digest:
+            raise OmnigentArtifactError("admitted Skill manifest lacks its digest")
+        content_digests = await _skill_content_digests(
+            artifacts,
+            manifest_id,
+            access=input_access,
+            expected_digest=manifest_digest,
+        )
+        refs.update(content_digests)
+    for ref, digest in (
+        (binding.task_input_snapshot_ref, binding.task_input_snapshot_digest),
+        (plan.payload.policySnapshotRef, plan.payload.policySnapshotDigest),
+        (
+            plan.payload.effectiveLaunchSnapshotRef,
+            plan.payload.effectiveLaunchSnapshotDigest,
+        ),
+        *(
+            (
+                entry["artifactRef"],
+                entry["snapshotRef"].removeprefix("repository-access-snapshot:"),
+            )
+            for entry in plan.payload.resolvedTools.get("repositoryAccess", {}).values()
+        ),
+    ):
+        if ref and digest and _artifact_ids({ref}):
+            artifact_id = TemporalOmnigentArtifactGateway._artifact_id(ref)
+            digest = digest.removeprefix("sha256:")
+            if (
+                artifact_id in content_digests
+                and content_digests[artifact_id] != digest
+            ):
+                raise OmnigentArtifactError(
+                    "execution input has conflicting original digests"
+                )
+            content_digests[artifact_id] = digest
+    ids = _artifact_ids(refs) - {root_id}
+    # These IDs came only from verified immutable plan/snapshot/Skill bytes.
+    # The access context retains all execution restricted-byte policy.
+    input_access = input_access._with_verified_inputs(ids)
+    dependencies = []
+    admission = plan.payload.admissionAuthority
+    support_id = (
+        TemporalOmnigentArtifactGateway._artifact_id(admission.supportEvidenceRef)
+        if admission is not None and admission.admissionMode == "strict"
+        else None
+    )
+    if support_id is not None:
+        content_digests[support_id] = admission.supportEvidenceDigest.removeprefix(
+            "sha256:"
+        )
+    for artifact_id in sorted(ids):
+        try:
+            artifact, _links, _pinned, _policy = await artifacts.get_metadata(
+                artifact_id=artifact_id, access=input_access
+            )
+        except (TemporalArtifactNotFoundError, TemporalArtifactStateError):
+            if artifact_id != support_id:
+                raise
+            dependencies.append(
+                ArtifactDependency(
+                    artifact_id=artifact_id,
+                    sha256=admission.supportEvidenceDigest.removeprefix("sha256:"),
+                    required=False,
+                    role="evidence.support",
+                )
+            )
+            continue
+        # The closure owner verifies exact storage bytes internally without
+        # granting restricted raw content to the prospective execution.
+        dependencies.append(
+            ArtifactDependency(
+                artifact_id=artifact_id,
+                sha256=content_digests.get(artifact_id, artifact.sha256),
+                required=artifact_id != support_id,
+                role=(
+                    "input.attachment"
+                    if artifact_id in attachments
+                    else "input.execution_plan"
+                ),
+            )
+        )
+    return await artifacts.record_verified_dependencies(
+        root_artifact_id=root_id,
+        dependencies=dependencies,
+        access=input_access,
+    )
+
+
 async def _frozen_planning_input_refs(
     repository,
     service,
@@ -329,7 +516,16 @@ async def _frozen_planning_input_refs(
         snapshot_ref = authority.taskInputSnapshotRef
         snapshot_digest = authority.taskInputSnapshotDigest
     snapshot_id = TemporalOmnigentArtifactGateway._artifact_id(snapshot_ref)
-    snapshot_artifact = await repository.get_artifact(snapshot_id)
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactError
+
+    try:
+        snapshot_artifact, body = await service.read(
+            artifact_id=snapshot_id, access=access._with_verified_inputs((snapshot_id,))
+        )
+    except TemporalArtifactError as exc:
+        raise OmnigentArtifactError(
+            f"frozen task-input snapshot cannot be read: {exc}"
+        ) from exc
     expected_digest = snapshot_digest.removeprefix("sha256:")
     if snapshot_artifact.sha256 != expected_digest:
         raise OmnigentArtifactError("frozen task-input snapshot authority mismatch")
@@ -340,10 +536,6 @@ async def _frozen_planning_input_refs(
         from moonmind.workflows.temporal.artifacts import TemporalArtifactStateError
 
         raise TemporalArtifactStateError("frozen task-input snapshot is not readable")
-    _, body = await service.read(
-        artifact_id=snapshot_id,
-        access=access._with_verified_inputs((snapshot_id,)),
-    )
     if hashlib.sha256(body).hexdigest() != expected_digest:
         raise OmnigentArtifactError("frozen task-input snapshot digest mismatch")
     try:
@@ -478,7 +670,7 @@ def _skill_manifest_id(plan, *, strict: bool = True) -> str | None:
     return next(iter(ids), None)
 
 
-async def _skill_content_ids(
+async def _skill_content_digests(
     service,
     manifest_id: str,
     *,
@@ -513,13 +705,29 @@ async def _skill_content_ids(
         ).encode("utf-8")
         if "sha256:" + hashlib.sha256(canonical).hexdigest() != expected_digest:
             raise OmnigentArtifactError("admitted Skill manifest digest mismatch")
-    return _artifact_ids(
-        {
-            str(skill.get("content_ref") or "")
-            for skill in skills
-            if isinstance(skill, dict)
-        }
-    )
+    digests = {}
+    for skill in skills:
+        if not isinstance(skill, dict) or not skill.get("content_ref"):
+            continue
+        artifact_id = TemporalOmnigentArtifactGateway._artifact_id(
+            str(skill["content_ref"])
+        )
+        digest = str(skill.get("content_digest") or "").removeprefix("sha256:")
+        if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+            raise OmnigentArtifactError(
+                "admitted Skill content lacks immutable digest evidence"
+            )
+        if artifact_id in digests and digests[artifact_id] != digest:
+            raise OmnigentArtifactError(
+                "admitted Skill content has conflicting digests"
+            )
+        digests[artifact_id] = digest
+    return digests
+
+
+async def _skill_content_ids(service, manifest_id, **kwargs):
+    """Historical reference adapter for callers not yet carrying a sealed root."""
+    return set(await _skill_content_digests(service, manifest_id, **kwargs))
 
 
 @dataclass(slots=True)
@@ -731,7 +939,10 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
         link_type: str,
         content_type: str = "application/octet-stream",
     ) -> str:
-        from moonmind.schemas.saved_work_models import saved_work_artifact_metadata
+        from moonmind.schemas.saved_work_models import (
+            saved_work_artifact_dependencies,
+            saved_work_artifact_metadata,
+        )
         from moonmind.workflows.temporal.artifacts import (
             TemporalArtifactRepository,
             TemporalArtifactService,
@@ -740,34 +951,70 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
         saved_metadata = {}
         if (
             name == "saved_work_manifest"
-            and content_type == "application/vnd.moonmind.saved-work-manifest+json;version=1"
+            and content_type
+            == "application/vnd.moonmind.saved-work-manifest+json;version=1"
         ):
             saved_metadata = {
                 "artifact_kind": "saved_work_manifest",
                 **saved_work_artifact_metadata("saved_work_manifest", payload),
             }
         checkpoint_kind = (
-            name if link_type == "evidence.recovery" and name in {
-                "checkpoint_archive", "checkpoint_manifest", "checkpoint_history",
-                "checkpoint_index", "checkpoint_patch", "step_execution_checkpoint",
-            } else None
+            name
+            if link_type == "evidence.recovery"
+            and name
+            in {
+                "checkpoint_archive",
+                "checkpoint_manifest",
+                "checkpoint_history",
+                "checkpoint_index",
+                "checkpoint_patch",
+                "step_execution_checkpoint",
+            }
+            else None
         )
         digest = hashlib.sha256(payload).hexdigest()
-        execution_link = self._execution_link(
-            request, name=name, link_type=link_type
-        )
+        execution_link = self._execution_link(request, name=name, link_type=link_type)
         async with self._session_factory() as session:
             service = TemporalArtifactService(
                 TemporalArtifactRepository(session),
-                transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
+                transaction_ownership=(
+                    ArtifactTransactionOwnership.CALLER
+                    if saved_metadata or checkpoint_kind
+                    else ArtifactTransactionOwnership.STANDALONE
+                ),
             )
             if saved_metadata or checkpoint_kind:
                 if execution_link is None:
-                    raise OmnigentArtifactError("Saved work requires execution ownership")
+                    raise OmnigentArtifactError(
+                        "Saved work requires execution ownership"
+                    )
+
                 # Content-addressed storage alone still allocates logical rows.
                 # Reconcile this execution's accepted object before creating
                 # another row after a lost acknowledgement. Lookup/read errors
                 # remain failures, never permission to duplicate an output.
+                async def seal(root_id):
+                    from moonmind.workflows.temporal.artifacts import ArtifactDependency
+
+                    access = ArtifactAccessContext.for_execution(
+                        execution_link.workflow_id, principal=self._principal
+                    )
+                    entries = saved_work_artifact_dependencies(
+                        "saved_work_manifest" if saved_metadata else checkpoint_kind,
+                        payload,
+                    )
+                    for entry in entries:
+                        if entry["required"] and entry["sha256"] is None:
+                            metadata, *_ = await service.get_metadata(
+                                artifact_id=entry["artifact_id"], access=access
+                            )
+                            entry["sha256"] = metadata.sha256
+                    await service.record_verified_dependencies(
+                        root_artifact_id=root_id,
+                        dependencies=[ArtifactDependency(**entry) for entry in entries],
+                        access=access,
+                    )
+
                 existing = await service.list_for_execution(
                     namespace=execution_link.namespace,
                     workflow_id=execution_link.workflow_id,
@@ -780,12 +1027,17 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
                     metadata = candidate.metadata_json or {}
                     same_kind = (
                         metadata.get("artifact_kind") == "saved_work_manifest"
-                        if saved_metadata else metadata.get("name") == name
+                        if saved_metadata
+                        else metadata.get("name") == name
                     )
                     if (
-                        same_kind and candidate.content_type == content_type
+                        same_kind
+                        and candidate.content_type == content_type
                         and candidate.sha256 == digest
-                        and str(getattr(candidate.status, "value", candidate.status)).lower() == "complete"
+                        and str(
+                            getattr(candidate.status, "value", candidate.status)
+                        ).lower()
+                        == "complete"
                     ):
                         _artifact, restored = await service.read(
                             artifact_id=candidate.artifact_id,
@@ -793,7 +1045,11 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
                             or ArtifactAccessContext.for_service(self._principal),
                         )
                         if restored != payload:
-                            raise OmnigentArtifactError("Remote checkpoint differs from the saved candidate")
+                            raise OmnigentArtifactError(
+                                "Remote checkpoint differs from the saved candidate"
+                            )
+                        await seal(candidate.artifact_id)
+                        await session.commit()
                         return f"artifact:{candidate.artifact_id}"
                 # Stable part refs keep the index byte-identical when a save
                 # resumes after its link committed but its acknowledgement was
@@ -801,10 +1057,16 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
                 # A saved-work index is an output only after its immutable
                 # bytes are remotely readable. Interrupted uploads/readback
                 # remain unlinked and cannot become a falsely complete save.
-                completed, _reused = await service.put_content_addressed_payload_complete(
-                    principal=self._principal, payload=payload,
-                    content_type=content_type, scope=checkpoint_kind or "saved_work_manifest",
-                    metadata_json=saved_metadata or {
+                (
+                    completed,
+                    _reused,
+                ) = await service.put_content_addressed_payload_complete(
+                    principal=self._principal,
+                    payload=payload,
+                    content_type=content_type,
+                    scope=checkpoint_kind or "saved_work_manifest",
+                    metadata_json=saved_metadata
+                    or {
                         "artifact_type": "omnigent.generic_host_evidence",
                         "name": _safe_artifact_name(name),
                         "link_type": link_type,
@@ -816,11 +1078,17 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
                     or ArtifactAccessContext.for_service(self._principal),
                 )
                 if restored != payload:
-                    raise OmnigentArtifactError("Remote checkpoint differs from the saved candidate")
+                    raise OmnigentArtifactError(
+                        "Remote checkpoint differs from the saved candidate"
+                    )
                 await service.link_artifact(
-                    artifact_id=completed.artifact_id, principal=self._principal,
+                    artifact_id=completed.artifact_id,
+                    principal=self._principal,
                     execution_ref=execution_link,
                 )
+                # A failed seal rolls back this unpublished link and its grants.
+                await seal(completed.artifact_id)
+                await session.commit()
                 return f"artifact:{completed.artifact_id}"
             artifact, _upload = await service.create(
                 principal=self._principal,

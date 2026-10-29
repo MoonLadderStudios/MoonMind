@@ -983,7 +983,11 @@ async def _compile_plan(session_factory, harness, workflow_id, *, api_key=False)
             authored_request_digest=input_digest,
             task_input_snapshot_ref=input_ref,
             task_input_snapshot_digest=input_digest,
-            access=access_for_test("system"),
+            # The durable Skill producer linked these exact inputs to this
+            # workflow. A provenance-only system label is not read authority.
+            access=access_for_test(
+                "system", admitted_principal=f"workflow:{workflow_id}"
+            ),
         )
 
 

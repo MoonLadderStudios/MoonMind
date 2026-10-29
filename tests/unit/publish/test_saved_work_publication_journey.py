@@ -307,6 +307,7 @@ class Journey:
         access = access or access_for_test(OPERATOR)
         _checked, artifact_ids = await _admit_saved_work_publication(
             canonical=SimpleNamespace(
+                namespace="default",
                 workflow_id=self.saved.workflow_id,
                 run_id=self.saved.run_id,
                 created_at=datetime.fromisoformat(contract["commit"]["timestamp"]),
@@ -1401,7 +1402,9 @@ async def test_retention_sweep_between_prepare_and_push_keeps_the_claimed_closur
 
         assert result["outcome"] == "published"
         assert claimed == [closure]
-        assert sweeps[0].skipped_in_use_count == len(closure)
+        # Required descendants are excluded before expiry enumeration by the
+        # sealed root closure. Remaining candidates still honor use claims.
+        assert 0 < sweeps[0].skipped_in_use_count <= len(closure)
         for artifact_id in closure:
             row = await state.service._repository.get_artifact(artifact_id)
             assert row.status is db_models.TemporalArtifactStatus.COMPLETE

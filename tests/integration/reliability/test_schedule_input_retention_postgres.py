@@ -3,7 +3,7 @@
 import asyncio
 import hashlib
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -15,9 +15,10 @@ from api_service.services.recurring_workflows_service import (
     RecurringWorkflowsService,
     RecurringWorkflowValidationError,
 )
-from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.config.settings import settings
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactTransactionOwnership,
     TemporalArtifactRepository,
     TemporalArtifactStateError,
 )
@@ -30,8 +31,10 @@ from tests.unit.workflows.temporal.test_saved_work_retention_4017 import (
 from tests.unit.workflows.temporal.test_schedule_input_retention import (
     FUTURE,
     PAST,
-    expired_input,
     save_schedule,
+)
+from tests.unit.workflows.temporal.test_schedule_input_retention import (
+    expired_input as _expired_input,
 )
 
 pytestmark = [
@@ -47,6 +50,8 @@ async def context(tmp_path):
         model.__table__
         for model in (
             models.TemporalArtifact,
+            models.TemporalArtifactDependency,
+            models.TemporalExecutionCanonicalRecord,
             models.TemporalArtifactLink,
             models.TemporalArtifactPin,
             models.TemporalArtifactUseClaim,
@@ -69,13 +74,21 @@ async def context(tmp_path):
         yield sessions
 
 
+async def expired_input(service):
+    # Valid at admission time, expired at the collector's explicit FUTURE clock.
+    artifact = await _expired_input(service)
+    artifact.expires_at = datetime.now(UTC) + timedelta(days=1)
+    await service._repository.commit()
+    return artifact
+
+
 def adapter(**overrides):
     return SimpleNamespace(
         create_schedule=AsyncMock(),
         update_schedule=AsyncMock(),
         pause_schedule=AsyncMock(),
         unpause_schedule=AsyncMock(),
-        **overrides
+        **overrides,
     )
 
 
@@ -87,6 +100,23 @@ def target(artifact_id):
     }
 
 
+def observe_writer_claim(monkeypatch, artifact_id, acquired):
+    # CALLER reads acquire a use-claim FK lock before producer sealing locks.
+    # Observe that real first lock, not only the later FOR UPDATE facade.
+    original = TemporalArtifactRepository.acquire_use_claim
+
+    async def observe(repository, **kwargs):
+        result = await original(repository, **kwargs)
+        if (
+            repository._session.info.get("retention_race_role") == "writer"
+            and kwargs["artifact_id"] == artifact_id
+        ):
+            acquired.set()
+        return result
+
+    monkeypatch.setattr(TemporalArtifactRepository, "acquire_use_claim", observe)
+
+
 async def write_schedule(
     session, artifact_id, temporal, tmp_path, *, definition_id=None, plan_id=None
 ):
@@ -96,7 +126,9 @@ async def write_schedule(
     service = RecurringWorkflowsService(
         session,
         temporal_client_adapter=temporal,
-        artifact_service=_service(session, tmp_path),
+        artifact_service=_service(
+            session, tmp_path, transaction_ownership=ArtifactTransactionOwnership.CALLER
+        ),
     )
     if definition_id is not None:
         definition = await session.get(
@@ -166,10 +198,11 @@ async def test_schedule_write_wins_lock_before_expiry_sweep(
 
         retain = RecurringWorkflowsService._retain_target_artifacts
 
-        async def pause_before_commit(service, target):
-            await retain(service, target)
+        async def pause_before_commit(service, target, **kwargs):
+            root_id = await retain(service, target, **kwargs)
             admitted.set()
             await release.wait()
+            return root_id
 
         monkeypatch.setattr(
             RecurringWorkflowsService, "_retain_target_artifacts", pause_before_commit
@@ -232,8 +265,13 @@ async def test_schedule_write_wins_lock_before_expiry_sweep(
                 )
             )[1]
             if replacing:
-                # The RPC-time sweep collected the released old input. A
-                # subsequent sweep is idempotent, not a second deletion.
+                # Replacement retires both the old producer root and its input.
+                # The next bounded page collects the remaining retired row.
+                assert (
+                    await _service(reader, tmp_path).sweep_lifecycle(
+                        principal="service:sweeper", now=FUTURE
+                    )
+                ).soft_deleted_count == 1
                 assert (
                     await _service(reader, tmp_path).sweep_lifecycle(
                         principal="service:sweeper", now=FUTURE
@@ -265,8 +303,8 @@ async def test_expiry_sweep_wins_lock_and_schedule_cannot_save_deleted_input(
             service = _service(collector, tmp_path)
             real_lock = service._repository.get_artifact_for_update
 
-            async def pause_after_lock(target_id):
-                result = await real_lock(target_id)
+            async def pause_after_lock(target_id, **kwargs):
+                result = await real_lock(target_id, **kwargs)
                 locked.set()
                 await release.wait()
                 return result
@@ -372,7 +410,7 @@ async def test_multi_input_schedule_and_expiry_page_do_not_deadlock(
             artifacts = [await expired_input(service) for _ in range(2)]
             first_id, second_id = sorted(item.artifact_id for item in artifacts)
             for artifact in artifacts:
-                artifact.expires_at = PAST + (
+                artifact.expires_at = (FUTURE - timedelta(days=1)) + (
                     timedelta(hours=1)
                     if artifact.artifact_id == first_id
                     else timedelta()
@@ -380,9 +418,10 @@ async def test_multi_input_schedule_and_expiry_page_do_not_deadlock(
             await session.commit()
         collector_has_second, writer_has_first = asyncio.Event(), asyncio.Event()
         original_lock = TemporalArtifactRepository.get_artifact_for_update
+        observe_writer_claim(monkeypatch, first_id, writer_has_first)
 
-        async def interleaved_lock(repository, artifact_id):
-            artifact = await original_lock(repository, artifact_id)
+        async def interleaved_lock(repository, artifact_id, **kwargs):
+            artifact = await original_lock(repository, artifact_id, **kwargs)
             role = repository._session.info.get("retention_race_role")
             if role == "collector" and artifact_id == second_id:
                 collector_has_second.set()
@@ -461,6 +500,7 @@ async def test_shared_blob_hard_sweep_and_multi_input_schedule_do_not_deadlock(
         collector_has_second, writer_has_first = asyncio.Event(), asyncio.Event()
         original_group = TemporalArtifactRepository.lock_storage_references
         original_lock = TemporalArtifactRepository.get_artifact_for_update
+        observe_writer_claim(monkeypatch, first_id, writer_has_first)
 
         async def interleaved_group(repository, **kwargs):
             await original_group(repository, **kwargs)
@@ -471,8 +511,8 @@ async def test_shared_blob_hard_sweep_and_multi_input_schedule_do_not_deadlock(
                 collector_has_second.set()
                 await writer_has_first.wait()
 
-        async def observe_writer_lock(repository, artifact_id):
-            artifact = await original_lock(repository, artifact_id)
+        async def observe_writer_lock(repository, artifact_id, **kwargs):
+            artifact = await original_lock(repository, artifact_id, **kwargs)
             if (
                 repository._session.info.get("retention_race_role") == "writer"
                 and artifact_id == first_id
@@ -533,6 +573,7 @@ async def test_explicit_shared_delete_and_schedule_admission_do_not_deadlock(
         group_requested = asyncio.Event()
         original_group = TemporalArtifactRepository.lock_storage_references
         original_lock = TemporalArtifactRepository.get_artifact_for_update
+        observe_writer_claim(monkeypatch, first_id, writer_has_first)
 
         async def interleaved_group(repository, **kwargs):
             if repository._session.info.get("retention_race_role") == "deleter":
@@ -541,8 +582,8 @@ async def test_explicit_shared_delete_and_schedule_admission_do_not_deadlock(
                 await writer_has_first.wait()
             await original_group(repository, **kwargs)
 
-        async def interleaved_lock(repository, artifact_id):
-            artifact = await original_lock(repository, artifact_id)
+        async def interleaved_lock(repository, artifact_id, **kwargs):
+            artifact = await original_lock(repository, artifact_id, **kwargs)
             role = repository._session.info.get("retention_race_role")
             if role == "deleter" and artifact_id == deleted_id:
                 deleter_ready.set()

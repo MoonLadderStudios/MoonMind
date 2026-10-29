@@ -223,6 +223,11 @@ This keeps the recurring schedule page focused on controlling the cadence and re
 - Validation failures leave the saved definition unchanged. A Temporal synchronization error can follow a committed edit: show the saved/pending error and refresh the definition rather than treating the edit as rolled back.
 - If delete is unavailable because runtime config omits `sources.schedules.delete`, do not render the delete action.
 - If the schedule is disabled, the page should show it as paused/disabled rather than failed.
+- A saved schedule's explicit artifact root retains its required frozen inputs even
+  while disabled. Replacing a definition releases only its own obsolete references.
+  Background backfill validates original snapshots without advancing the edit
+  version or silently resolving current Skills; unavailable required inputs remain
+  an actionable failure rather than a rewritten schedule.
 - If `lastDispatchStatus` or `lastDispatchError` indicates failure, the page should show an attention state but still allow edit, run now, and available destructive actions when authorized.
 
 ---

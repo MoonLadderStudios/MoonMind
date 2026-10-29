@@ -127,6 +127,49 @@ async def recurring_db(tmp_path: Path):
         await engine.dispose()
 
 
+def _mock_compiler_dependency_owner(monkeypatch):
+    """Pair synthetic compiler metadata with an explicit publication double.
+
+    These scheduling units intentionally do not create plan envelopes/bytes.
+    Actual store records still use the real dependency owner; its production
+    boundary is exercised in compiler, schedule-root and PostgreSQL tests.
+    """
+    current = RecurringWorkflowsService._retain_target_artifacts
+    if getattr(current, "_synthetic_schedule_owner", False):
+        return
+
+    async def retain(self, target, **kwargs):
+        from moonmind.workflows.temporal.artifacts import (
+            TemporalArtifactRepository,
+            schedule_input_artifact_ids,
+        )
+
+        binding = (target.get("initialParameters") or {}).get("omnigentExecutionPlan")
+        refs = schedule_input_artifact_ids(target)
+        if isinstance(binding, dict) and refs:
+            rows = [await self._session.get(TemporalArtifact, ref) for ref in refs]
+            if all(
+                row is not None
+                and row.storage_key == f"schedule-fixture/{row.artifact_id}"
+                for row in rows
+            ):
+                await TemporalArtifactRepository(self._session).retain_schedule_inputs(
+                    target
+                )
+                root_id = binding["planArtifactRef"].removeprefix("artifact:")
+                assert root_id in refs
+                return root_id
+        return await current(self, target, **kwargs)
+
+    retain._synthetic_schedule_owner = True
+    monkeypatch.setattr(RecurringWorkflowsService, "_retain_target_artifacts", retain)
+
+
+@pytest.fixture(autouse=True)
+def _synthetic_compiler_dependencies(monkeypatch):
+    _mock_compiler_dependency_owner(monkeypatch)
+
+
 @pytest.fixture(autouse=True)
 def _managed_default_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep runtime-less fixtures on a plan-free managed default.
@@ -678,6 +721,7 @@ async def test_create_definition_leaves_a_default_managed_runtime_plan_free(
 def _mm3935_plan_admission(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     """Substitute default Agent Profile resolution and plan compilation only."""
 
+    _mock_compiler_dependency_owner(monkeypatch)
     snapshot = {
         "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
         "profileId": "omnigent-bootstrap-default",
@@ -3106,6 +3150,14 @@ def _pinned_schedule_service(
         for artifact_id in ("art_plan", "art_task_input", "art_skills")
     }
 
+    from api_service.services.omnigent_execution_plan_service import (
+        json_artifact_digest,
+    )
+
+    artifacts["art_plan"].sha256 = json_artifact_digest(
+        _schedule_plan("1").model_dump(mode="json", by_alias=True)
+    ).removeprefix("sha256:")
+
     async def execute(statement):
         artifact_id = statement.compile().params.get("artifact_id_1")
         return SimpleNamespace(
@@ -3132,6 +3184,15 @@ def _pinned_schedule_service(
 
     session.get = AsyncMock(side_effect=get_record)
     service = RecurringWorkflowsService(session, artifact_service=object())
+    # This compiler double does not publish bytes. Keep its publication boundary
+    # explicit while the real persisted-plan authority checks remain exercised.
+    async def retain_compiled(target, **_kwargs):
+        binding = target["initialParameters"]["omnigentExecutionPlan"]
+        assert binding["planArtifactRef"] == "artifact:art_plan"
+        return "art_plan"
+
+    service._retain_target_artifacts = retain_compiled
+
     definition = SimpleNamespace(
         id=uuid4(),
         owner_user_id=None,

@@ -119,6 +119,7 @@ async def test_saved_candidate_is_readable_after_worker_and_workspace_loss(
     tables = [
         models.TemporalArtifact.__table__,
         models.TemporalArtifactLink.__table__,
+        models.TemporalArtifactDependency.__table__,
         models.TemporalArtifactPin.__table__,
         models.TemporalArtifactUseClaim.__table__,
         models.TemporalArtifactDeletionIntent.__table__,
