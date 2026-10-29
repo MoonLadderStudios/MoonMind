@@ -20,6 +20,8 @@ from api_service.api.routers import executions as ex
 from api_service.auth_providers import instance_operator_principal
 from api_service.db.models import (
     MoonMindWorkflowState,
+    TemporalArtifact,
+    TemporalArtifactStatus,
     TemporalExecutionCanonicalRecord,
     TemporalExecutionOwnerType,
     TemporalExecutionRecord,
@@ -42,6 +44,7 @@ async def _database():
         await connection.run_sync(
             lambda sync: WorkflowLinkedContinuationRecord.__table__.create(sync)
         )
+        await connection.run_sync(lambda sync: TemporalArtifact.__table__.create(sync))
     return engine, async_sessionmaker(engine, expire_on_commit=False)
 
 
@@ -86,6 +89,8 @@ async def _seed_canonical(
 
 class _FakeService:
     """Minimal stand-in that records the ordinary create-path invocation."""
+
+    namespace = "default"
 
     def __init__(self, *, fail_times: int = 0) -> None:
         self.create_calls: list[dict] = []
@@ -147,6 +152,21 @@ def _patch_collaborators(
         return "art_snapshot"
 
     async def _materialize(*, session, user, refs, access):  # noqa: ANN001
+        for attachment in materialized_attachments or []:
+            session.add(TemporalArtifact(
+                artifact_id=attachment["artifactId"],
+                storage_key=attachment["artifactId"],
+                status=TemporalArtifactStatus.COMPLETE,
+                created_by_principal="operator",
+                sha256="a" * 64,
+                size_bytes=attachment["sizeBytes"],
+                content_type=attachment["contentType"],
+                metadata_json={
+                    "artifact_class": "linked_continuation_source_evidence",
+                    "source_ref": refs[0],
+                },
+            ))
+        await session.flush()
         return list(materialized_attachments or [])
 
     async def _attach(*, session, record, attachment_refs):  # noqa: ANN001
@@ -614,6 +634,7 @@ async def test_append_linked_continuations_surfaces_source_side_view(
         await connection.run_sync(
             lambda sync: WorkflowLinkedContinuationRecord.__table__.create(sync)
         )
+        await connection.run_sync(lambda sync: TemporalArtifact.__table__.create(sync))
         await connection.run_sync(
             lambda sync: TemporalExecutionRecord.__table__.create(sync)
         )
@@ -881,3 +902,108 @@ def test_build_related_runs_surfaces_continuation_source() -> None:
     assert len(continued) == 1
     assert continued[0].workflow_id == "mm:source"
     assert continued[0].run_id == "run-1"
+
+
+@pytest.mark.asyncio
+async def test_copy_receipt_precedes_dispatch_and_survives_failed_create(monkeypatch):
+    from sqlalchemy import select
+    from api_service.services.linked_continuation import EVIDENCE_COPY_ADMISSION
+
+    engine, sessions = await _database()
+    user = OperatorAdmission(via="loopback")
+    await _seed_canonical(sessions, owner_id="operator")
+    attachment = {
+        "artifactId": "art_copy_receipt",
+        "filename": "final.json",
+        "contentType": "application/json",
+        "sizeBytes": 12,
+    }
+    _patch_collaborators(monkeypatch, materialized_attachments=[attachment])
+    materialize = ex._materialize_continuation_source_attachments
+    copies = []
+
+    async def counted_materialize(**kwargs):
+        copies.append(kwargs["refs"])
+        return await materialize(**kwargs)
+
+    monkeypatch.setattr(
+        ex, "_materialize_continuation_source_attachments", counted_materialize
+    )
+    service = _FakeService(fail_times=1)
+    service.namespace = "destination-namespace"
+    payload = _payload(
+        selectedSourceArtifactRefs=["art_final"],
+        initialParameters={
+            "continuationSource": {
+                EVIDENCE_COPY_ADMISSION: {"copies": [{"artifactId": "art_forged"}]}
+            }
+        },
+    )
+    try:
+        with pytest.raises(HTTPException, match="transient create failure"):
+            async with sessions() as session:
+                await ex.continue_in_new_workflow(
+                    "mm:source",
+                    payload,
+                    service,
+                    session,
+                    user,
+                    None,
+                    access=ArtifactAccessContext.for_operator(user),
+                )
+        async with sessions() as session:
+            receipt = (
+                await session.execute(select(WorkflowLinkedContinuationRecord))
+            ).scalar_one()
+            proof = receipt.pinned_source_refs[EVIDENCE_COPY_ADMISSION]
+            assert receipt.reserved_at is None
+            assert proof["namespace"] == "destination-namespace"
+            assert proof["copies"][0]["artifactId"] == attachment["artifactId"]
+            assert proof["copies"][0]["sha256"] == "a" * 64
+            assert proof["copies"][0]["sourceRef"] == "art_final"
+            result = await ex.continue_in_new_workflow(
+                "mm:source",
+                payload,
+                service,
+                session,
+                user,
+                None,
+                access=ArtifactAccessContext.for_operator(user),
+            )
+            await session.refresh(receipt)
+            assert receipt.pinned_source_refs[EVIDENCE_COPY_ADMISSION] == proof
+        assert result.created
+        assert copies == [["art_final"]]
+        assert (
+            service.create_calls[0]["_workflow_id"]
+            == service.create_calls[1]["_workflow_id"]
+        )
+        for call in service.create_calls:
+            assert (
+                EVIDENCE_COPY_ADMISSION
+                not in call["initial_parameters"]["continuationSource"]
+            )
+            assert call["initial_parameters"]["workflow"]["inputAttachments"] == [
+                attachment
+            ]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_continuation_rejects_missing_destination_namespace():
+    service = _FakeService()
+    service.namespace = ""
+    user = OperatorAdmission(via="loopback")
+    with pytest.raises(HTTPException) as rejected:
+        await ex.continue_in_new_workflow(
+            "mm:source",
+            _payload(),
+            service,
+            None,
+            user,
+            None,
+            access=ArtifactAccessContext.for_operator(user),
+        )
+    assert rejected.value.status_code == 503
+    assert service.create_calls == []

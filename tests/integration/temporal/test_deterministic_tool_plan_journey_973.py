@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import AsyncExitStack, asynccontextmanager
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -153,10 +154,33 @@ def _bindings(service: TemporalArtifactService) -> dict[str, Any]:
     }
 
 
-async def _admit(bindings: dict[str, Any], parameters: dict[str, Any], principal: str):
+def _activity_environment(workflow_id: str = "document-journey"):
     env = ActivityEnvironment()
+    env.info = replace(
+        env.info,
+        workflow_id=workflow_id,
+        workflow_run_id="run-973",
+        namespace="default",
+    )
+    return env
+
+
+async def _admit(bindings: dict[str, Any], parameters: dict[str, Any], principal: str):
+    env = _activity_environment()
     generated = await env.run(
-        bindings["plan.generate"], {"principal": principal, "parameters": parameters}
+        bindings["plan.generate"],
+        {
+            "principal": principal,
+            "parameters": parameters,
+            # Match the real workflow's plan admission link. Producer labels
+            # alone do not grant artifact access to an execution.
+            "execution_ref": {
+                "namespace": "default",
+                "workflow_id": "document-journey",
+                "run_id": "run-973",
+                "link_type": "plan",
+            },
+        },
     )
     plan_bytes = await env.run(
         bindings["artifact.read"],
@@ -167,6 +191,12 @@ async def _admit(bindings: dict[str, Any], parameters: dict[str, Any], principal
         bindings["plan.validate"],
         {
             "principal": principal,
+            "execution_ref": {
+                "namespace": "default",
+                "workflow_id": "document-journey",
+                "run_id": "run-973",
+                "link_type": "plan.validated",
+            },
             "plan_ref": generated.plan_ref.artifact_id,
             "registry_snapshot_ref": plan["metadata"]["registry_snapshot"][
                 "artifact_ref"
@@ -179,7 +209,7 @@ async def _admit(bindings: dict[str, Any], parameters: dict[str, Any], principal
 def _workflow_engine(monkeypatch, bindings, *, agent_result=None):
     calls = []
     children = []
-    env = ActivityEnvironment()
+    env = _activity_environment()
     monkeypatch.setattr(
         run_module.workflow, "patched", lambda name: name in _JOURNEY_PATCHES
     )
@@ -295,8 +325,11 @@ async def test_registered_document_discovery_business_failure_records_failed_ste
         assert workflow._step_ledger_rows[0]["status"] == "failed"
 
 
+@pytest.mark.parametrize(
+    "claimed_principal", ["workflow:another-execution", "workflow:document-journey"]
+)
 async def test_registered_dispatch_cannot_read_another_execution_registry(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, claimed_principal: str
 ):
     from moonmind.workflows.temporal.artifacts import TemporalArtifactAuthorizationError
 
@@ -307,10 +340,10 @@ async def test_registered_dispatch_cannot_read_another_execution_registry(
             bindings, _parameters(tmp_path, mixed=False), "workflow:document-journey"
         )
         with pytest.raises(ApplicationError) as raised:
-            await ActivityEnvironment().run(
+            await _activity_environment("another-execution").run(
                 bindings["mm.tool.execute"],
                 {
-                    "principal": "workflow:another-execution",
+                    "principal": claimed_principal,
                     "registry_snapshot_ref": plan["metadata"]["registry_snapshot"][
                         "artifact_ref"
                     ],
@@ -518,7 +551,7 @@ async def test_registered_dispatch_rejects_invalid_resolved_input_nonretryably(
         with pytest.raises(
             ApplicationError, match="discover.inputs/directory"
         ) as failure:
-            await ActivityEnvironment().run(
+            await _activity_environment().run(
                 bindings["mm.tool.execute"],
                 {
                     "principal": "workflow:document-journey",

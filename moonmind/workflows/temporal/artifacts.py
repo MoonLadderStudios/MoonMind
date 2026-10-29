@@ -1317,6 +1317,20 @@ class TemporalArtifactRepository:
         self._session = session
 
     @_artifact_authority_boundary
+    async def continuation_attachment_admission(self, workflow_id: str):
+        """Load the existing destination and continuation receipt as one owner."""
+        canonical = await self._session.get(
+            db_models.TemporalExecutionCanonicalRecord, workflow_id
+        )
+        result = await self._session.execute(
+            select(db_models.WorkflowLinkedContinuationRecord).where(
+                db_models.WorkflowLinkedContinuationRecord.destination_workflow_id
+                == workflow_id
+            )
+        )
+        return canonical, result.scalar_one_or_none()
+
+    @_artifact_authority_boundary
     async def commit(self) -> None:
         await self._session.commit()
 
@@ -4363,6 +4377,111 @@ class TemporalArtifactService:
             identity=identity,
         )
 
+    async def readmit_continuation_attachment(
+        self,
+        *,
+        artifact_id: str,
+        execution: ExecutionRef,
+        access: ArtifactAccessContext,
+    ) -> None:
+        """Restore a lost link only from the pre-dispatch copied-evidence receipt.
+
+        Old receipts without copy admission keep existing links, but cannot mint
+        replacement grants from mutable parameters or caller-supplied provenance.
+        """
+        from temporalio import activity
+
+        from api_service.services.linked_continuation import (
+            LinkedContinuationConflict,
+            compute_request_digest,
+            evidence_copy_admission,
+        )
+
+        from moonmind.workflows.temporal.service import TemporalExecutionService
+
+        access = ArtifactAccessContext.require(access)
+        info = activity.info()
+        namespace = getattr(info, "workflow_namespace", None) or info.namespace
+        if (
+            execution.link_type != "input.attachment"
+            or execution.workflow_id != info.workflow_id
+            or execution.run_id != info.workflow_run_id
+            or execution.namespace != namespace
+            or access.execution_principal != f"workflow:{info.workflow_id}"
+        ):
+            raise TemporalArtifactAuthorizationError(
+                "continuation evidence link target is not the active execution"
+            )
+        canonical, receipt = await self._repository.continuation_attachment_admission(
+            info.workflow_id
+        )
+        if canonical is None or receipt is None or canonical.namespace != namespace:
+            raise TemporalArtifactAuthorizationError(
+                "continuation evidence has no destination admission"
+            )
+        expected_key = "continue:" + compute_request_digest(
+            {
+                "sourceWorkflowId": receipt.source_workflow_id,
+                "sourceRunId": receipt.source_run_id,
+                "idempotencyKey": receipt.idempotency_key,
+            }
+        )
+        pending = (
+            receipt.reserved_at is None
+            and receipt.destination_run_id is None
+            and TemporalExecutionService.has_pending_start_attempt(canonical)
+        )
+        if (
+            receipt.relationship_type != "linked_continuation"
+            or receipt.destination_workflow_id != info.workflow_id
+            or canonical.create_idempotency_key != expected_key
+            or (
+                receipt.destination_run_id
+                and receipt.destination_run_id != info.workflow_run_id
+            )
+            or (canonical.run_id != info.workflow_run_id and not pending)
+        ):
+            raise TemporalArtifactAuthorizationError(
+                "continuation evidence conflicts with destination admission"
+            )
+        try:
+            copies = evidence_copy_admission(receipt, namespace=namespace)
+        except LinkedContinuationConflict as exc:
+            raise TemporalArtifactAuthorizationError(str(exc)) from exc
+        proof = next(
+            (entry for entry in copies if entry["artifactId"] == artifact_id), None
+        )
+        if proof is None:
+            raise TemporalArtifactAuthorizationError(
+                "artifact is not a recorded continuation evidence copy"
+            )
+        artifact = await self._repository.get_artifact(artifact_id)
+        metadata = artifact.metadata_json or {}
+        if (
+            artifact.status is not db_models.TemporalArtifactStatus.COMPLETE
+            or artifact.hard_deleted_at is not None
+            or metadata.get("artifact_class") != "linked_continuation_source_evidence"
+            or metadata.get("source_ref") != proof["sourceRef"]
+            or artifact.sha256 != proof["sha256"]
+            or artifact.size_bytes != proof["sizeBytes"]
+            or artifact.content_type != proof["contentType"]
+        ):
+            raise TemporalArtifactAuthorizationError(
+                "continuation evidence copy no longer matches its admission"
+            )
+        # The exact receipt admits ordinary bytes, never a raw/recovery bypass.
+        # Reading also checks quarantine and availability before restoring links.
+        _, body = await self.read(
+            artifact_id=artifact_id, access=access._with_verified_inputs((artifact_id,))
+        )
+        if (
+            len(body) != proof["sizeBytes"]
+            or hashlib.sha256(body).hexdigest() != proof["sha256"]
+        ):
+            raise TemporalArtifactAuthorizationError(
+                "continuation evidence bytes conflict with admitted digest"
+            )
+
     async def get_metadata(
         self,
         *,
@@ -6712,7 +6831,15 @@ class TemporalArtifactActivities:
             raise TemporalArtifactAuthorizationError(
                 "artifact link target is outside the active execution"
             )
-        await self._service.get_metadata(artifact_id=artifact_id, access=access)
+        try:
+            await self._service.get_metadata(artifact_id=artifact_id, access=access)
+        except TemporalArtifactAuthorizationError:
+            await self._service.readmit_continuation_attachment(
+                artifact_id=artifact_id,
+                execution=execution,
+                access=access,
+            )
+            principal = access.execution_principal
         link = await self._service.link_artifact(
             artifact_id=artifact_id,
             principal=principal,

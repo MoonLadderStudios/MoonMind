@@ -864,6 +864,11 @@ async def reconcile_pending_execution_intents(
 class TemporalExecutionService:
     """Canonical execution store for Temporal workflows."""
 
+    @property
+    def namespace(self) -> str:
+        """The destination namespace owned by this execution service."""
+        return self._namespace
+
     def __init__(
         self,
         session: AsyncSession,
@@ -3174,6 +3179,25 @@ class TemporalExecutionService:
             await self._create_start_unconfirmed(
                 record, dict(intent), "history_absence_ambiguous"
             )
+
+    @staticmethod
+    def has_pending_start_attempt(record: TemporalExecutionCanonicalRecord) -> bool:
+        """Whether durable admission proves an attempted, unacknowledged Start."""
+        intent = (record.memo or {}).get(_CREATE_START_MEMO_KEY)
+        if (
+            not isinstance(intent, Mapping)
+            or TemporalExecutionService._create_start_stopped(record, intent)
+            or intent.get("runId")
+            or not isinstance(intent.get("taskQueue"), str)
+            or not intent["taskQueue"].strip()
+            or not isinstance(intent.get("firstRequestedAt"), str)
+        ):
+            return False
+        try:
+            attempted = datetime.fromisoformat(intent["firstRequestedAt"])
+        except ValueError:
+            return False
+        return attempted.tzinfo is not None
 
     @staticmethod
     def _create_start_stopped(

@@ -55,6 +55,8 @@ The public `/api/agent-runs` path comes from the `agent_runs` router's `prefix="
 
 The terminal continuation route leaves the source execution unchanged. It is not an ordinary chat message, not retry from a step, and not proof that the deferred chat-instruction feature is enabled.
 
+Before dispatch, the continuation reservation records the exact copied evidence IDs, hashes and sizes. Retries reuse those copies. If an input link is lost, the destination Activity can restore only a matching recorded copy, with normal quarantine and raw-read restrictions still enforced. Existing linked evidence remains readable. An older reservation without copy admission cannot reconstruct a lost grant from workflow parameters: restore its existing input links or submit a new continuation.
+
 Continuation eligibility uses the canonical terminal domain states, including
 `no_commit`. Scheduled
 executions may have no API-created source row: continuation reads its exact
