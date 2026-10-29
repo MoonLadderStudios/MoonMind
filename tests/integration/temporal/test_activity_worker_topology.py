@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from temporalio.testing import ActivityEnvironment
 
 from api_service.db.models import Base
 from moonmind.workflows.agent_skills.agent_skills_activities import AgentSkillsActivities
@@ -96,6 +98,21 @@ def _planner(_inputs, _parameters, _snapshot):
         "edges": [],
     }
 
+
+async def _invoke(binding, payload):
+    environment = ActivityEnvironment()
+    environment.info = replace(
+        environment.info,
+        namespace="moonmind",
+        workflow_namespace="moonmind",
+        workflow_id="wf-plan",
+        workflow_run_id="run-plan",
+        task_queue=binding.task_queue,
+        activity_type=binding.activity_type,
+    )
+    return await environment.run(binding.handler, payload)
+
+
 async def test_activity_worker_topology_routes_one_activity_per_family(
     tmp_path: Path,
 ) -> None:
@@ -136,8 +153,9 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                     review_activities=TemporalReviewActivities(),
                 )
             }
-            artifact_ref, _upload = await artifact_bindings["artifact.create"].handler(
-                {"principal": "user-1", "content_type": "text/plain"}
+            artifact_ref, _upload = await _invoke(
+                artifact_bindings["artifact.create"],
+                {"principal": "user-1", "content_type": "text/plain"},
             )
             assert (
                 artifact_bindings["artifact.create"].task_queue
@@ -170,6 +188,12 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
             registry_artifact, _upload = await service.create(
                 principal="user-1",
                 content_type="application/json",
+                link=ExecutionRef(
+                    namespace="moonmind",
+                    workflow_id="wf-plan",
+                    run_id="run-plan",
+                    link_type="input.registry",
+                ),
             )
             await service.write_complete(
                 artifact_id=registry_artifact.artifact_id,
@@ -180,6 +204,12 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
             inputs_artifact, _upload = await service.create(
                 principal="user-1",
                 content_type="application/json",
+                link=ExecutionRef(
+                    namespace="moonmind",
+                    workflow_id="wf-plan",
+                    run_id="run-plan",
+                    link_type="input.plan",
+                ),
             )
             await service.write_complete(
                 artifact_id=inputs_artifact.artifact_id,
@@ -187,18 +217,21 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                 payload=(json.dumps({"goal": "run tests"}) + "\n").encode("utf-8"),
                 content_type="application/json",
             )
-            plan_result = await llm_bindings["plan.generate"].handler(
+            plan_result = await _invoke(
+                llm_bindings["plan.generate"],
                 {
                     "principal": "user-1",
                     "inputs_ref": inputs_artifact.artifact_id,
                     "registry_snapshot_ref": registry_artifact.artifact_id,
-                    "execution_ref": ExecutionRef(
-                        namespace="moonmind",
-                        workflow_id="wf-plan",
-                        run_id="run-plan",
-                        link_type="output.primary",
+                    "execution_ref": asdict(
+                        ExecutionRef(
+                            namespace="moonmind",
+                            workflow_id="wf-plan",
+                            run_id="run-plan",
+                            link_type="output.primary",
+                        )
                     ),
-                }
+                },
             )
             assert llm_bindings["plan.generate"].task_queue == "mm.activity.llm"
             assert plan_result.plan_ref.artifact_id.startswith("art_")
@@ -226,12 +259,13 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
             }
             workspace = tmp_path / "workspaces" / "temporal_sandbox" / "workspace"
             workspace.mkdir(parents=True, exist_ok=True)
-            sandbox_result = await sandbox_bindings["sandbox.run_command"].handler(
+            sandbox_result = await _invoke(
+                sandbox_bindings["sandbox.run_command"],
                 {
                     "workspace_ref": workspace,
                     "cmd": "printf 'sandbox ok'",
                     "principal": "user-1",
-                }
+                },
             )
             assert (
                 sandbox_bindings["sandbox.run_command"].task_queue
