@@ -177,12 +177,16 @@ Changing a vendor pin is a deployment change that lands in the image build args 
 
 ```text
 omnigent-codex@1     codex-native     + codex-native-pack@1     + codex-oauth-home@1, none@1
-omnigent-claude@1    claude-native    + claude-native-pack@1    + claude-oauth-home@1, none@1
+omnigent-claude@1    claude-native    + claude-native-pack@1    + claude-oauth-home@1, omnigent-provider-config@1, none@1
 omnigent-opencode@2  opencode-native  + opencode-native-pack@1  + opencode-auth-json@1, none@1
 ```
 
-(`omnigent-opencode@1` remains the dedicated-image legacy row for historical
-reads; `@2` is the shared-image row.)
+(Fresh OpenCode work selects `omnigent-opencode@2`. It carries the same
+bootstrap server/host compatibility quarantine as the OpenCode image: Host
+Class selection requires a ready OpenCode verdict for the exact shared digest
+and server. `omnigent-opencode@1` resolves only plans that recorded it and
+explicit requests; see the `omnigent.legacy.opencode_host_image_alias`
+retirement row.)
 
 Separate classes reference the same `OMNIGENT_SHARED_HOST_IMAGE_REF` digest without conflating harness support. Each class declares only its own harness, runtime pack, and materializers, so a shared image never authorizes every installed runtime. One-harness admission is enforced at selection (the pack must own the harness, the materializers must be allowlisted) and again at planning (the Host Class must declare the plan's harness implementation).
 
@@ -193,6 +197,7 @@ Separate classes reference the same `OMNIGENT_SHARED_HOST_IMAGE_REF` digest with
 | `opencode-auth-json@1` | run | Keyed OpenCode Go route: per-run volume, destroyed on cleanup |
 | `codex-oauth-home@1` | profile | Enrollment-owned OAuth home volume attached read-write; generation-marker fenced; detached but preserved on cleanup |
 | `claude-oauth-home@1` | profile | Same profile-owned contract for the Claude enrollment home |
+| `omnigent-provider-config@1` | run | API-key Codex and Claude route: a per-run read-only volume holding the Omnigent provider config, with its key, endpoint and model pins. Omnigent turns it into Claude Code's base URL, key helper and model pins, or into a Codex `model_provider` override. Each attempt gets its own volume, destroyed on cleanup |
 | `none@1` | none | Credentialless OpenCode Zen creates no auth state or dummy secret; its real Provider Profile still governs routing and capacity |
 | `host-owned-auth@1` | host | No runtime state copied or deleted; only supported static-host combinations may use this authority |
 

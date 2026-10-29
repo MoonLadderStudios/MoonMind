@@ -259,6 +259,32 @@ async def resolve_omnigent_target(
     )
 
 
+# Workflow launch-default entry whose tools every workflow Claude launch denies.
+CLAUDE_DISALLOWED_TOOLS_DEFAULTS_KEY = "claude-native:disallowedTools"
+
+
+def _merge_disallowed_tools(args: list[str], tools: list[str]) -> None:
+    """Add ``tools`` to the comma-separated ``--disallowedTools`` value.
+
+    Merges into an authored flag (either spelling) so it is not overridden,
+    matching how the Omnigent Claude harness merges its own denies.
+    """
+
+    if not tools:
+        return
+    for index, arg in enumerate(args):
+        if arg.startswith("--disallowedTools="):
+            flag, value = arg.split("=", 1)
+            existing = [tool for tool in value.split(",") if tool]
+            args[index] = f"{flag}={','.join(dict.fromkeys([*existing, *tools]))}"
+            return
+        if arg == "--disallowedTools" and index + 1 < len(args):
+            existing = [tool for tool in args[index + 1].split(",") if tool]
+            args[index + 1] = ",".join(dict.fromkeys([*existing, *tools]))
+            return
+    args.extend(["--disallowedTools", ",".join(tools)])
+
+
 def build_omnigent_session_create_payload(
     *,
     request: AgentExecutionRequest,
@@ -273,11 +299,18 @@ def build_omnigent_session_create_payload(
     # Validation has already preserved/rejected the authored string array. Only
     # workflow execution supplies its durable defaults; interactive API callers
     # and pre-upgrade workflow rows retain their original arguments.
-    if selection.agent.harness_override == "claude-native" and not any(
-        arg.split("=", 1)[0] in {"--permission-mode", "--dangerously-skip-permissions"}
-        for arg in terminal_launch_args
-    ):
-        terminal_launch_args.extend((launch_defaults or {}).get("claude-native", []))
+    if selection.agent.harness_override == "claude-native":
+        defaults = launch_defaults or {}
+        if not any(
+            arg.split("=", 1)[0]
+            in {"--permission-mode", "--dangerously-skip-permissions"}
+            for arg in terminal_launch_args
+        ):
+            terminal_launch_args.extend(defaults.get("claude-native", []))
+        _merge_disallowed_tools(
+            terminal_launch_args,
+            defaults.get(CLAUDE_DISALLOWED_TOOLS_DEFAULTS_KEY, []),
+        )
     title = (
         session.title
         or _clean((request.parameters or {}).get("title"))

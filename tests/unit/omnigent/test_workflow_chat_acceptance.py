@@ -752,6 +752,10 @@ def test_every_claimed_combination_appears_in_the_protected_matrix() -> None:
     opencode = inventory["opencode-through-generic-omnigent-host"]
     assert opencode.execution_realizer_ref == "generic-omnigent-host@1"
     assert opencode.launch_policy_ref == "opencode-on-demand@1"
+    # Fresh OpenCode work selects the shared-image Host Class, so acceptance is
+    # earned on the shared host digest, not a dedicated OpenCode image.
+    assert opencode.host_class_ref == "omnigent-opencode@2"
+    assert opencode.host_image_key == "host"
     host_modes = {
         combination.host_mode
         for combination in inventory.values()
@@ -1889,13 +1893,15 @@ def test_credential_materializer_must_match_the_combination(tmp_path: Path) -> N
         _validate(manifest, tmp_path)
 
 
-def test_opencode_combination_pins_its_own_host_image(tmp_path: Path) -> None:
+def test_opencode_combination_pins_the_shared_host_image(tmp_path: Path) -> None:
     manifest = build_workflow_chat_acceptance_manifest(
         _matrix(tmp_path), evidence_root=tmp_path
     )
-    manifest["combinations"][OPENCODE_COMBINATION]["hostImageRef"] = manifest[
-        "images"
-    ]["host"]
+    # omnigent-opencode@2 runs the shared host, so a dedicated OpenCode image
+    # digest cannot qualify the combination.
+    manifest["combinations"][OPENCODE_COMBINATION]["hostImageRef"] = IMAGES[
+        "opencodeHost"
+    ]
 
     with pytest.raises(ConformanceContractError, match="host image digest"):
         _validate(manifest, tmp_path)

@@ -969,9 +969,11 @@ def _ready_opencode_host_pair(monkeypatch: pytest.MonkeyPatch) -> None:
         host_ref = os.environ.get("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "")
         if not host_ref:
             return None
+        # The default deployment resolves both variables to one shared image.
         return SimpleNamespace(
             server_image_ref=os.environ.get("OMNIGENT_IMAGE_REF", ""),
             opencode_host_image_ref=host_ref,
+            shared_host_image_ref=host_ref,
             details={
                 "opencodeHostCompatibility": {
                     "status": "ready",

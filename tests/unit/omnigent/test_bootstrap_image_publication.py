@@ -1209,6 +1209,10 @@ async def test_no_bootstrap_ready_host_quarantines_the_fresh_candidate(
     # Both candidates were judged and failed the bootstrap probe.
     assert set(observed["version_probes"]) >= {ADMITTED_HOST, NEWER_HOST}
     assert observed["probes"] == [NEWER_HOST, ADMITTED_HOST]
+    # The retained shared host reuses its verdict from that same judgment.
+    shared = resolved.details["sharedHostOpencodeCompatibility"]
+    assert shared["hostImageRef"] == ADMITTED_HOST
+    assert shared["status"] == "blocked"
 
 
 @pytest.mark.asyncio
@@ -1234,9 +1238,12 @@ async def test_explicit_operator_pin_is_quarantined_never_replaced(
     assert compatibility["failureCode"] == "omnigent_host_bootstrap_contract_missing"
     assert compatibility["pendingHost"] is None
     # The explicit OpenCode image is not substituted. The separately selected
-    # shared image still receives its own provenance probe.
-    assert ADMITTED_HOST not in observed["probes"]
+    # shared image is judged on its own, since omnigent-opencode@2 runs it.
+    assert observed["probes"] == [NEWER_HOST, ADMITTED_HOST]
     assert ADMITTED_HOST in resolved.details["hostImageProvenance"]
+    shared = resolved.details["sharedHostOpencodeCompatibility"]
+    assert shared["hostImageRef"] == ADMITTED_HOST
+    assert shared["status"] == "ready"
 
 
 @pytest.mark.asyncio
@@ -1503,6 +1510,65 @@ async def test_explicit_shared_choice_does_not_follow_opencode_fallback(
     resolved = await image_resolution.resolve_omnigent_images(configuration)
     assert resolved.opencode_host_image_ref == ADMITTED_HOST
     assert resolved.shared_host_image_ref == NEWER_HOST
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shared_bootstrap_fails", [True, False])
+async def test_distinct_shared_host_carries_its_own_opencode_verdict(
+    monkeypatch, shared_bootstrap_fails
+):
+    """omnigent-opencode@2 launches the shared image, so it is judged too."""
+
+    observed = _install_paired_runtime_fakes(
+        monkeypatch,
+        server_build=RUNNING_SERVER_BUILD,
+        server_version="0.12.0",
+        fresh_host=ADMITTED_HOST,
+        shared_host=NEWER_HOST,
+        previous=_admitted_previous(),
+        bootstrap_fail_hosts=(
+            frozenset({NEWER_HOST}) if shared_bootstrap_fails else frozenset()
+        ),
+    )
+    resolved = await image_resolution.resolve_omnigent_images(
+        {"OMNIGENT_SHARED_HOST_IMAGE_REF": NEWER_HOST}
+    )
+
+    assert resolved.opencode_host_image_ref == ADMITTED_HOST
+    assert resolved.shared_host_image_ref == NEWER_HOST
+    assert NEWER_HOST in observed["probes"]
+    shared = resolved.details["sharedHostOpencodeCompatibility"]
+    assert shared["hostImageRef"] == NEWER_HOST
+    assert shared["serverImageRef"] == SERVER_REF
+    assert shared["hostBuildDigest"] == NEWER_SERVER_BUILD
+    if shared_bootstrap_fails:
+        assert shared["status"] == "blocked"
+        assert shared["failureCode"] == "omnigent_host_bootstrap_contract_missing"
+    else:
+        assert shared["status"] == "ready"
+        assert shared["failureCode"] is None
+    # The OpenCode image verdict is unchanged by the shared image's verdict.
+    assert resolved.details["opencodeHostCompatibility"]["hostImageRef"] == (
+        ADMITTED_HOST
+    )
+    assert resolved.details["opencodeHostCompatibility"]["status"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_aligned_shared_host_reuses_the_opencode_verdict(monkeypatch):
+    observed = _install_paired_runtime_fakes(
+        monkeypatch,
+        server_build=RUNNING_SERVER_BUILD,
+        server_version="0.12.0",
+        fresh_host=ADMITTED_HOST,
+        shared_host=ADMITTED_HOST,
+        previous=_admitted_previous(),
+    )
+    resolved = await image_resolution.resolve_omnigent_images({})
+
+    assert resolved.shared_host_image_ref == ADMITTED_HOST
+    assert "sharedHostOpencodeCompatibility" not in resolved.details
+    assert observed["probes"].count(ADMITTED_HOST) == 1
 
 
 @pytest.mark.asyncio

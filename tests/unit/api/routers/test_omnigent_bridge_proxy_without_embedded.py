@@ -110,7 +110,9 @@ else:
 from moonmind.omnigent.embedded_drain import summarize_embedded_drain
 
 disposition = summarize_embedded_drain(
-    active_embedded_sessions=0, active_embedded_leases=0
+    active_embedded_sessions=0,
+    active_embedded_leases=0,
+    pending_cleanup_host_leases=0,
 )
 assert disposition["drained"] is True
 print("proxy-without-embedded-modules: OK")

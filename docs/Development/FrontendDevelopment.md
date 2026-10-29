@@ -143,7 +143,6 @@ python3 tools/run_omnigent_live_conformance.py \
   --mode workflow_chat \
   --server-image "${OMNIGENT_CONFORMANCE_SERVER_IMAGE:?qualified server digest required}" \
   --host-image "${OMNIGENT_CONFORMANCE_HOST_IMAGE:?qualified host digest required}" \
-  --opencode-host-image "${OMNIGENT_CONFORMANCE_OPENCODE_HOST_IMAGE:?qualified OpenCode host digest required}" \
   --source-commit "$(git rev-parse HEAD)" \
   --output-dir artifacts/omnigent-conformance/live/workflow_chat
 ```

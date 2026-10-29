@@ -33,6 +33,7 @@ def _set_ready_opencode_image_pair(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda: SimpleNamespace(
             server_image_ref=server_ref,
             opencode_host_image_ref=host_ref,
+            shared_host_image_ref=host_ref,
             details={
                 "hostImageProvenance": {
                     host_ref: {
@@ -510,7 +511,7 @@ async def test_generic_readiness_requires_both_feature_gates_and_real_launch_dat
     )
     enabled_target = enabled.execution_targets[0]
     assert enabled_target.available is True
-    assert enabled_target.compatible_host_classes == ["omnigent-opencode@1"]
+    assert enabled_target.compatible_host_classes == ["omnigent-opencode@2"]
     assert enabled_target.models == ["opencode-go/test-model"]
     assert enabled_target.rollout_target_id == "opencode.generic-omnigent"
     assert enabled_target.rollout_state == "new_work_default"

@@ -61,6 +61,8 @@ from moonmind.omnigent.harness_platform.host_classes import (
 )
 from moonmind.omnigent.harness_platform.materializers import (
     get_materializer,
+    is_api_key_launch_profile,
+    materializer_ref_for_profile,
     materializer_ref_for_provider,
 )
 from moonmind.omnigent.harness_platform.planner import (
@@ -1430,10 +1432,17 @@ async def compile_and_persist_execution_plan(
         getattr(provider_profile, "runtime_id", None) or ""
     ).strip()
     provider_id = str(getattr(provider_profile, "provider_id", None) or "").strip()
-    if harness_id == "opencode-native":
-        materializer_ref = materializer_ref_for_provider(
-            provider_runtime_id,
-            provider_id,
+    api_key_profile = harness_id in {
+        "claude-native",
+        "codex-native",
+    } and is_api_key_launch_profile(provider_profile)
+    if harness_id == "opencode-native" or api_key_profile:
+        # The registry names the harness's OAuth materializer; these Profiles
+        # carry their own credential shape instead.
+        materializer_ref = (
+            materializer_ref_for_profile(provider_profile)
+            if api_key_profile
+            else materializer_ref_for_provider(provider_runtime_id, provider_id)
         )
         materializer = get_materializer(materializer_ref)
         auth_models = list(materializer.acceptedAuthModels)

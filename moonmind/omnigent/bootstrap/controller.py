@@ -1554,6 +1554,11 @@ class BootstrapController:
             )
         selector_env = {
             "OMNIGENT_OPENCODE_HOST_IMAGE_REF": resolved_image,
+            # Fresh OpenCode work selects the shared-image Host Class, so
+            # qualification must judge the same image that work launches.
+            "OMNIGENT_SHARED_HOST_IMAGE_REF": str(
+                getattr(resolved, "shared_host_image_ref", None) or ""
+            ).strip(),
             "OMNIGENT_IMAGE_REF": getattr(resolved, "server_image_ref", "")
             or getattr(resolved, "serverImageRef", "")
             or "",

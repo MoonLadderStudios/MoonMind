@@ -519,3 +519,207 @@ def test_cloud_removal_preserves_retained_profile_requirements(runtime_id):
         select_execution_configuration(retained, [(row, version)])["providerProfileRef"]
         == retained.profile_id
     )
+
+
+def _claude_api_key_provider(**env):
+    return provider(
+        profile_id="claude_anthropic_api",
+        runtime_id="claude_code",
+        provider_id="anthropic",
+        credential_source="secret_ref",
+        runtime_materialization_mode="api_key_env",
+        secret_refs={"anthropic_api_key": "env://ANTHROPIC_API_KEY"},
+        env_template={
+            "ANTHROPIC_API_KEY": {"from_secret_ref": "anthropic_api_key"},
+            **env,
+        },
+        file_templates=None,
+        home_path_overrides=None,
+    )
+
+
+def _claude_api_key_configuration(name, *, managed=True):
+    row, version = _claude_configuration(
+        name,
+        rollout_metadata={"managedBuiltin": "claude-api-key"} if managed else None,
+    )
+    version.document["providerRequirements"].update(
+        credentialSource="secret_ref", materializationMode="api_key_env"
+    )
+    return row, version
+
+
+def test_api_key_claude_profile_moves_to_managed_api_key_configuration():
+    stock_oauth = _claude_configuration(
+        "omnigent-claude-default", rollout_metadata={"managedBuiltin": "claude"}
+    )
+    stock_api_key = _claude_api_key_configuration("omnigent-claude-api-key")
+    api_key = _claude_api_key_provider()
+
+    # Before the managed API-key configuration exists (an older deployment or
+    # an unqualified Claude host) the Profile keeps its direct route.
+    assert profile_has_native_inventory_route(api_key, [stock_oauth])
+    # With it, new work is admitted through the shared lifecycle instead.
+    assert not profile_has_native_inventory_route(api_key, [stock_oauth, stock_api_key])
+    assert (
+        select_execution_configuration(api_key, [stock_oauth, stock_api_key])[
+            "profileId"
+        ]
+        == "omnigent-claude-api-key"
+    )
+    # The two managed shapes stay disjoint for OAuth Profiles.
+    assert (
+        select_execution_configuration(
+            _claude_provider(), [stock_oauth, stock_api_key]
+        )["profileId"]
+        == "omnigent-claude-default"
+    )
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"API_TIMEOUT_MS": "3000000"},
+        {"ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic"},
+        {"ANTHROPIC_MODEL": "{{model}}"},
+    ],
+)
+def test_untranslatable_api_key_claude_profile_keeps_direct_route(env):
+    stock_api_key = _claude_api_key_configuration("omnigent-claude-api-key")
+    api_key = _claude_api_key_provider(**env)
+
+    assert not configuration_accepts_profile(stock_api_key[1].document, api_key)
+    assert profile_has_native_inventory_route(api_key, [stock_api_key])
+
+
+def test_authored_api_key_claude_configuration_wins_over_managed_fallback():
+    stock_api_key = _claude_api_key_configuration("omnigent-claude-api-key")
+    authored = _claude_api_key_configuration("claude-api-team", managed=False)
+
+    assert (
+        select_execution_configuration(
+            _claude_api_key_provider(), [stock_api_key, authored]
+        )["profileId"]
+        == "claude-api-team"
+    )
+
+
+def _codex_api_key_provider(**env):
+    return provider(
+        profile_id="codex_openai_api",
+        runtime_id="codex_cli",
+        provider_id="openai",
+        credential_source="secret_ref",
+        runtime_materialization_mode="api_key_env",
+        secret_refs={"openai_api_key": "env://OPENAI_API_KEY"},
+        env_template={
+            "OPENAI_API_KEY": {"from_secret_ref": "openai_api_key"},
+            **env,
+        },
+        file_templates=None,
+        home_path_overrides=None,
+    )
+
+
+def _codex_configuration(name, *, credential_source, rollout_metadata=None):
+    row, version = configuration(name, providers=["openai"])
+    version.document["harness"] = "codex-native"
+    version.document["providerRequirements"].update(
+        runtimeId="codex_cli",
+        credentialSource=credential_source,
+        materializationMode=(
+            "api_key_env" if credential_source == "secret_ref" else "oauth_home"
+        ),
+    )
+    version.created_by = None
+    version.rollout_metadata = rollout_metadata
+    return row, version
+
+
+def test_api_key_codex_profile_moves_to_managed_api_key_configuration():
+    bootstrap = _codex_configuration(
+        "omnigent-bootstrap-default", credential_source="oauth_volume"
+    )
+    bootstrap[0].default_for_runtime = True
+    stock_api_key = _codex_configuration(
+        "omnigent-codex-api-key",
+        credential_source="secret_ref",
+        rollout_metadata={"managedBuiltin": "codex-api-key"},
+    )
+    api_key = _codex_api_key_provider()
+
+    # Before the managed API-key configuration exists the Profile keeps its
+    # direct route; with it, new work is admitted through the shared lifecycle.
+    assert profile_has_native_inventory_route(api_key, [bootstrap])
+    assert not profile_has_native_inventory_route(api_key, [bootstrap, stock_api_key])
+    assert (
+        select_execution_configuration(api_key, [bootstrap, stock_api_key])["profileId"]
+        == "omnigent-codex-api-key"
+    )
+    # An authored Codex API-key configuration wins over the managed fallback.
+    authored = _codex_configuration("codex-api-team", credential_source="secret_ref")
+    assert (
+        select_execution_configuration(api_key, [stock_api_key, authored])["profileId"]
+        == "codex-api-team"
+    )
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"OPENAI_BASE_URL": "https://api.minimax.io/v1"},
+        {"OPENAI_ORG_ID": "org-example"},
+    ],
+)
+def test_untranslatable_api_key_codex_profile_keeps_direct_route(env):
+    stock_api_key = _codex_configuration(
+        "omnigent-codex-api-key",
+        credential_source="secret_ref",
+        rollout_metadata={"managedBuiltin": "codex-api-key"},
+    )
+    api_key = _codex_api_key_provider(**env)
+
+    assert not configuration_accepts_profile(stock_api_key[1].document, api_key)
+    assert profile_has_native_inventory_route(api_key, [stock_api_key])
+
+
+@pytest.mark.parametrize(
+    "runtime,provider_id,key_env,key_role,harness",
+    [
+        ("codex_cli", "openai", "OPENAI_API_KEY", "openai_api_key", "codex-native"),
+        (
+            "claude_code",
+            "anthropic",
+            "ANTHROPIC_API_KEY",
+            "anthropic_api_key",
+            "claude-native",
+        ),
+    ],
+)
+def test_v2_configuration_uses_profile_credential_materializer(
+    runtime, provider_id, key_env, key_role, harness
+):
+    api_profile = provider(
+        runtime_id=runtime,
+        provider_id=provider_id,
+        credential_source="secret_ref",
+        runtime_materialization_mode="api_key_env",
+        secret_refs={key_role: f"env://{key_env}"},
+        env_template={key_env: {"from_secret_ref": key_role}},
+        file_templates=None,
+        home_path_overrides=None,
+    )
+    document = {
+        "schemaVersion": "moonmind.omnigent-agent-profile.v2",
+        "harness": {"id": harness},
+        "credentialSlots": [
+            {
+                "acceptedProviderIds": [provider_id],
+                "acceptedAuthModels": ["omnigent-provider-config"],
+            }
+        ],
+    }
+    assert configuration_accepts_profile(document, api_profile)
+    api_profile.credential_source = "oauth_volume"
+    api_profile.runtime_materialization_mode = "oauth_home"
+    assert not configuration_accepts_profile(document, api_profile)

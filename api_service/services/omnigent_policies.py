@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import platform
@@ -63,7 +62,6 @@ logger = logging.getLogger(__name__)
 _DIGEST_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 _SERVER_IMAGE_REPOSITORY = "ghcr.io/omnigent-ai/omnigent-server"
 _HOST_IMAGE_REPOSITORY = "ghcr.io/omnigent-ai/omnigent-host"
-_OPENCODE_HOST_IMAGE_REPOSITORY = "ghcr.io/moonladderstudios/omnigent-host-moonmind"
 _IMAGE_INSPECT_FORMAT = '{{.Id}}\t{{join .RepoDigests ","}}'
 ImageResolver = Callable[[str], Awaitable[str | None]]
 LiveServerImageResolver = Callable[[str], Awaitable[str | None]]
@@ -78,7 +76,6 @@ class _BootstrapPolicyDefinition:
     harness: str
     agent_identities: tuple[str, ...]
     compatible_providers: tuple[str, ...]
-    host_image_kind: str
     requires_opencode: bool = False
     requires_claude: bool = False
 
@@ -92,7 +89,6 @@ _BOOTSTRAP_POLICY_DEFINITIONS = (
         harness="codex-native",
         agent_identities=(CODEX_STOCK_AGENT_NAME,),
         compatible_providers=("codex",),
-        host_image_kind="shared",
     ),
     _BootstrapPolicyDefinition(
         policy_id="codex-static",
@@ -102,7 +98,6 @@ _BOOTSTRAP_POLICY_DEFINITIONS = (
         harness="codex-native",
         agent_identities=(CODEX_STOCK_AGENT_NAME,),
         compatible_providers=("codex",),
-        host_image_kind="shared",
     ),
     _BootstrapPolicyDefinition(
         policy_id="codex-on-demand",
@@ -112,7 +107,6 @@ _BOOTSTRAP_POLICY_DEFINITIONS = (
         harness="codex-native",
         agent_identities=(CODEX_STOCK_AGENT_NAME,),
         compatible_providers=("codex",),
-        host_image_kind="shared",
     ),
     _BootstrapPolicyDefinition(
         policy_id="claude-on-demand",
@@ -122,7 +116,6 @@ _BOOTSTRAP_POLICY_DEFINITIONS = (
         harness="claude-native",
         agent_identities=(CLAUDE_STOCK_AGENT_NAME,),
         compatible_providers=("anthropic",),
-        host_image_kind="shared",
         requires_claude=True,
     ),
     _BootstrapPolicyDefinition(
@@ -133,7 +126,6 @@ _BOOTSTRAP_POLICY_DEFINITIONS = (
         harness="opencode-native",
         agent_identities=("opencode",),
         compatible_providers=("opencode-go", "opencode"),
-        host_image_kind="opencode",
         requires_opencode=True,
     ),
     _BootstrapPolicyDefinition(
@@ -144,7 +136,6 @@ _BOOTSTRAP_POLICY_DEFINITIONS = (
         harness="opencode-native",
         agent_identities=("opencode",),
         compatible_providers=("opencode-go", "opencode"),
-        host_image_kind="opencode",
         requires_opencode=True,
     ),
 )
@@ -924,21 +915,6 @@ def configured_bootstrap_image_refs(
     )
 
 
-def configured_opencode_bootstrap_image_ref(
-    env: Mapping[str, str] | None = None,
-) -> str:
-    """Return the operator-facing OpenCode host image input."""
-
-    source = os.environ if env is None else env
-    return _configured_image_ref(
-        env=source,
-        ref_variable="OMNIGENT_OPENCODE_HOST_IMAGE_REF",
-        repository_variable="OMNIGENT_OPENCODE_HOST_IMAGE",
-        tag_variable="OMNIGENT_OPENCODE_HOST_IMAGE_TAG",
-        default_repository=_OPENCODE_HOST_IMAGE_REPOSITORY,
-    )
-
-
 def _repository_digest(image_ref: str, inspect_output: bytes) -> str | None:
     """Select the exact repository digest that matches ``image_ref``."""
 
@@ -1089,24 +1065,6 @@ async def resolve_live_server_image_ref(image_ref: str) -> str | None:
         )
     except OSError:
         return None
-
-
-async def resolve_bootstrap_image_refs(
-    *,
-    env: Mapping[str, str] | None = None,
-    image_resolver: ImageResolver = resolve_bootstrap_image_ref,
-) -> tuple[str | None, str | None]:
-    server_input, _legacy_host_input = configured_bootstrap_image_refs(env)
-    opencode_host_input = configured_opencode_bootstrap_image_ref(env)
-    server_image, opencode_host_image = await asyncio.gather(
-        image_resolver(server_input),
-        (
-            image_resolver(opencode_host_input)
-            if opencode_support_enabled(env=env)
-            else asyncio.sleep(0, result=None)
-        ),
-    )
-    return server_image, opencode_host_image
 
 
 def resolved_shared_bootstrap_image_ref(
@@ -1375,7 +1333,7 @@ async def _reconcile_bootstrap_authority(
     *,
     service: OmnigentPolicyService,
     server_image: str | None,
-    host_images: Mapping[str, str | None],
+    host_image: str | None,
     definitions: tuple[_BootstrapPolicyDefinition, ...],
     live_server_image_resolver: LiveServerImageResolver,
 ) -> list[str]:
@@ -1396,7 +1354,6 @@ async def _reconcile_bootstrap_authority(
     live_server_image: str | None = None
     for definition in definitions:
         policy_id = definition.policy_id
-        host_image = host_images.get(definition.host_image_kind)
         resolved_images_valid = bool(
             _DIGEST_IMAGE.fullmatch(server_image or "")
             and _DIGEST_IMAGE.fullmatch(host_image or "")
@@ -1747,31 +1704,27 @@ async def seed_bootstrap_policies(
             reconciliation_required = True
             break
     seeded: list[str] = []
-    server_image, opencode_host_image = await resolve_bootstrap_image_refs(
-        env=env, image_resolver=image_resolver
-    )
-    # Codex and Claude launch the shared host image: it owns the MoonMind tools
-    # (``/opt/moonmind-tools``) that host launches require, which the upstream
-    # ``omnigent-host`` image does not carry.
-    host_images = {
-        "shared": resolved_shared_bootstrap_image_ref(env),
-        "opencode": opencode_host_image,
-    }
-    resolvable_definitions = tuple(
-        definition
-        for definition in definitions
+    server_input, _legacy_host_input = configured_bootstrap_image_refs(env)
+    server_image = await image_resolver(server_input)
+    # Codex, Claude and OpenCode (omnigent-opencode@2) launch the shared host
+    # image: it owns the MoonMind tools (``/opt/moonmind-tools``) that host
+    # launches require, which the upstream ``omnigent-host`` image does not
+    # carry.
+    host_image = resolved_shared_bootstrap_image_ref(env)
+    resolvable_definitions = (
+        definitions
         if _DIGEST_IMAGE.fullmatch(server_image or "")
-        and _DIGEST_IMAGE.fullmatch(host_images.get(definition.host_image_kind) or "")
+        and _DIGEST_IMAGE.fullmatch(host_image or "")
+        else ()
     )
-    # Image families fail independently. An unavailable optional harness image
-    # keeps that family unready without withholding valid Codex authority (and
-    # vice versa). Placeholder drafts are never persisted.
+    # Placeholder drafts are never persisted: without both resolved images no
+    # family is seeded, and existing versions are only reconciled.
     if not resolvable_definitions:
         return await _reconcile_bootstrap_authority(
             session,
             service=service,
             server_image=server_image,
-            host_images=host_images,
+            host_image=host_image,
             definitions=definitions,
             live_server_image_resolver=live_server_image_resolver,
         )
@@ -1780,7 +1733,7 @@ async def seed_bootstrap_policies(
             session,
             service=service,
             server_image=server_image,
-            host_images=host_images,
+            host_image=host_image,
             definitions=definitions,
             live_server_image_resolver=live_server_image_resolver,
         )
@@ -1790,7 +1743,7 @@ async def seed_bootstrap_policies(
             host_mode=definition.host_mode,
             execution_profile_ref=definition.profile_ref,
             server_image_ref=server_image,
-            host_image_ref=host_images[definition.host_image_kind],
+            host_image_ref=host_image,
             harness=definition.harness,
             agent_identities=definition.agent_identities,
             compatible_providers=definition.compatible_providers,
@@ -1946,7 +1899,7 @@ async def seed_bootstrap_policies(
         session,
         service=service,
         server_image=server_image,
-        host_images=host_images,
+        host_image=host_image,
         definitions=definitions,
         live_server_image_resolver=live_server_image_resolver,
     )
@@ -1959,11 +1912,9 @@ async def bootstrap_policies_ready(session: AsyncSession) -> bool:
 
     service = OmnigentPolicyService(session)
     definitions = _bootstrap_policy_definitions()
-    # Codex and Claude launch only the shared host image; their defaults are
-    # not launchable until the deployment has resolved it.
-    if any(
-        definition.host_image_kind == "shared" for definition in definitions
-    ) and not resolved_shared_bootstrap_image_ref():
+    # Every bootstrap policy launches the shared host image; their defaults
+    # are not launchable until the deployment has resolved it.
+    if definitions and not resolved_shared_bootstrap_image_ref():
         return False
     for definition in definitions:
         policy_id = definition.policy_id

@@ -79,15 +79,85 @@ def _compatibility_pair_detail(compatibility: Mapping[str, Any]) -> str:
     )
 
 
-def _require_image_ref(environment: Mapping[str, str], key: str) -> str:
-    state = None
-    if key == OMNIGENT_OPENCODE_HOST_IMAGE_ENV:
-        try:
-            from moonmind.omnigent.bootstrap.store import load_resolved_state
+def _require_opencode_host_compatibility(
+    environment: Mapping[str, str],
+    state: Any,
+    image_ref: str,
+    *,
+    evidence_keys: tuple[str, ...] = (
+        "opencodeHostCompatibility",
+        "sharedHostOpencodeCompatibility",
+    ),
+) -> None:
+    """Quarantine an OpenCode host image the bootstrap did not qualify.
 
-            state = load_resolved_state()
-        except Exception:
-            state = None
+    Bootstrap judges the OpenCode host against the running server (build
+    identity, version probes and the networkless plugin-closure probe). The
+    verdict for the OpenCode image variable is ``opencodeHostCompatibility``;
+    a shared host image that differs from it is judged separately as
+    ``sharedHostOpencodeCompatibility``. Only a verdict recorded for this
+    exact host and server pair may admit it.
+    """
+
+    details = getattr(state, "details", None)
+    if not isinstance(details, Mapping):
+        details = {}
+    selected_server_ref = str(
+        environment.get("OMNIGENT_IMAGE_REF")
+        or getattr(state, "server_image_ref", "")
+        or ""
+    ).strip()
+    compatibility = next(
+        (
+            candidate
+            for candidate in (details.get(key) for key in evidence_keys)
+            if isinstance(candidate, Mapping)
+            and candidate.get("hostImageRef") == image_ref
+        ),
+        None,
+    )
+    evidence_matches = (
+        state is not None
+        and compatibility is not None
+        and getattr(state, "server_image_ref", None) == selected_server_ref
+        and compatibility.get("serverImageRef") == selected_server_ref
+    )
+    if not evidence_matches:
+        raise HarnessPlatformError(
+            "OpenCode Host Class compatibility evidence does not match the "
+            "selected Omnigent server and host image refs",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+        )
+    if compatibility.get("status") == "blocked":
+        failure_code = str(
+            compatibility.get("failureCode") or "omnigent_server_host_incompatible"
+        )
+        raise HarnessPlatformError(
+            "OpenCode Host Class is quarantined because the resolved "
+            "Omnigent server and host images are incompatible "
+            f"({failure_code}): {_compatibility_pair_detail(compatibility)}",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+        )
+    if compatibility.get("status") != "ready":
+        raise HarnessPlatformError(
+            "OpenCode Host Class compatibility evidence is not ready",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+        )
+
+
+def _resolved_state_or_none() -> Any:
+    try:
+        from moonmind.omnigent.bootstrap.store import load_resolved_state
+
+        return load_resolved_state()
+    except Exception:
+        return None
+
+
+def _require_image_ref(environment: Mapping[str, str], key: str) -> str:
+    state = (
+        _resolved_state_or_none() if key == OMNIGENT_OPENCODE_HOST_IMAGE_ENV else None
+    )
     raw = str(environment.get(key) or "").strip()
     if key == OMNIGENT_SHARED_HOST_IMAGE_ENV and raw and "@" not in raw:
         # The deployment may receive a mutable bootstrap tag, then persist the
@@ -109,46 +179,18 @@ def _require_image_ref(environment: Mapping[str, str], key: str) -> str:
             code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
         )
     if key == OMNIGENT_OPENCODE_HOST_IMAGE_ENV:
-        details = getattr(state, "details", None)
-        compatibility = (
-            details.get("opencodeHostCompatibility")
-            if isinstance(details, Mapping)
-            else None
-        )
-        selected_server_ref = str(
-            environment.get("OMNIGENT_IMAGE_REF")
-            or getattr(state, "server_image_ref", "")
-            or ""
-        ).strip()
-        evidence_matches = (
-            state is not None
-            and isinstance(compatibility, Mapping)
-            and getattr(state, "server_image_ref", None) == selected_server_ref
-            and getattr(state, "opencode_host_image_ref", None) == raw
-            and compatibility.get("serverImageRef") == selected_server_ref
-            and compatibility.get("hostImageRef") == raw
-        )
-        if not evidence_matches:
+        if getattr(state, "opencode_host_image_ref", None) != raw:
             raise HarnessPlatformError(
                 "OpenCode Host Class compatibility evidence does not match the "
                 "selected Omnigent server and host image refs",
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
             )
-        if compatibility.get("status") == "blocked":
-            failure_code = str(
-                compatibility.get("failureCode") or "omnigent_server_host_incompatible"
-            )
-            raise HarnessPlatformError(
-                "OpenCode Host Class is quarantined because the resolved "
-                "Omnigent server and host images are incompatible "
-                f"({failure_code}): {_compatibility_pair_detail(compatibility)}",
-                code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
-            )
-        if compatibility.get("status") != "ready":
-            raise HarnessPlatformError(
-                "OpenCode Host Class compatibility evidence is not ready",
-                code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
-            )
+        _require_opencode_host_compatibility(
+            environment,
+            state,
+            raw,
+            evidence_keys=("opencodeHostCompatibility",),
+        )
     return raw
 
 
@@ -267,6 +309,9 @@ class HostClassTemplate:
     architectures: tuple[str, ...] = ("linux/amd64", "linux/arm64")
     runtime_dependencies: tuple[dict[str, Any], ...] = ()
     runtime_pack_ref: str | None = None
+    # The OpenCode harness needs its plugin closure and a server/host pair
+    # the bootstrap judged compatible, whichever image variable serves it.
+    requires_opencode_qualification: bool = False
 
     @property
     def ref(self) -> str:
@@ -284,6 +329,7 @@ DEFAULT_HOST_CLASS_TEMPLATES: tuple[HostClassTemplate, ...] = (
         runtime_dependencies=(
             {"name": "opencode", "version": OPENCODE_PINNED_VERSION},
         ),
+        requires_opencode_qualification=True,
     ),
     HostClassTemplate(
         host_class_id="omnigent-pi",
@@ -301,16 +347,22 @@ DEFAULT_HOST_CLASS_TEMPLATES: tuple[HostClassTemplate, ...] = (
     # OpenCode share one digest-pinned neutral image. Separate classes keep
     # harness support exact: each declares only its own harness, runtime pack,
     # and materializers, so a shared image never conflates installed CLIs with
-    # supported runtimes. omnigent-opencode@1 remains the dedicated-image
-    # legacy row for historical reads; omnigent-opencode@2 is the shared-image
-    # generic row.
+    # supported runtimes. Fresh OpenCode work selects omnigent-opencode@2;
+    # @1 resolves only plans that recorded it. Both carry the bootstrap
+    # server/host compatibility quarantine.
     HostClassTemplate(
         host_class_id="omnigent-codex",
         version=1,
         harness_ids=("codex-native",),
         image_env=OMNIGENT_SHARED_HOST_IMAGE_ENV,
         integration_modes=("native-server",),
-        materializer_refs=("codex-oauth-home@1", "none@1"),
+        # API-key Codex Profiles reach the native launch through the Omnigent
+        # provider config rather than an enrolled OAuth home.
+        materializer_refs=(
+            "codex-oauth-home@1",
+            "omnigent-provider-config@1",
+            "none@1",
+        ),
         runtime_pack_ref="codex-native-pack@1",
     ),
     HostClassTemplate(
@@ -319,7 +371,13 @@ DEFAULT_HOST_CLASS_TEMPLATES: tuple[HostClassTemplate, ...] = (
         harness_ids=("claude-native",),
         image_env=OMNIGENT_SHARED_HOST_IMAGE_ENV,
         integration_modes=("native-server",),
-        materializer_refs=("claude-oauth-home@1", "none@1"),
+        # API-key Claude Profiles reach the native launch through the
+        # Omnigent provider config rather than an enrolled OAuth home.
+        materializer_refs=(
+            "claude-oauth-home@1",
+            "omnigent-provider-config@1",
+            "none@1",
+        ),
         runtime_pack_ref="claude-native-pack@1",
     ),
     HostClassTemplate(
@@ -330,6 +388,7 @@ DEFAULT_HOST_CLASS_TEMPLATES: tuple[HostClassTemplate, ...] = (
         integration_modes=("native-server",),
         materializer_refs=("opencode-auth-json@1", "none@1"),
         runtime_pack_ref="opencode-native-pack@1",
+        requires_opencode_qualification=True,
     ),
 )
 
@@ -388,11 +447,17 @@ class OmnigentHostClassSelector:
             if harness.id not in template.harness_ids:
                 continue
             try:
-                image_ref = (
-                    host_image_ref
-                    if recorded_host
-                    else _require_image_ref(environment, template.image_env)
-                )
+                if recorded_host:
+                    image_ref = host_image_ref
+                else:
+                    image_ref = _require_image_ref(environment, template.image_env)
+                    if (
+                        template.requires_opencode_qualification
+                        and template.image_env != OMNIGENT_OPENCODE_HOST_IMAGE_ENV
+                    ):
+                        _require_opencode_host_compatibility(
+                            environment, _resolved_state_or_none(), image_ref
+                        )
             except HarnessPlatformError as exc:
                 # Image validation also checks release compatibility and
                 # bootstrap qualification. Preserve that actionable cause;
