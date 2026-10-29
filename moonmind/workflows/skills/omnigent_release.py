@@ -39,8 +39,7 @@ OMNIGENT_RELEASE_ENV_KEYS = (
 # Record key inside the desired-state JSON sidecar.
 OMNIGENT_RELEASE_RECORD_KEY = "omnigentRelease"
 
-# Host kinds in the release record, keyed to match the bootstrap policy
-# definitions (`host_image_kind`).
+# Host image kinds recorded in the release record.
 OMNIGENT_RELEASE_HOST_KINDS = ("codex", "opencode", "shared", "pi")
 
 # Mutable operator image inputs. The worker's process environment may contain

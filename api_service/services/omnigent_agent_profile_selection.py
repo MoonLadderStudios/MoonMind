@@ -113,15 +113,13 @@ def _provider_materializer_error(
     from moonmind.omnigent.harness_platform.host_classes import get_launch_policy
     from moonmind.omnigent.harness_platform.materializers import (
         get_materializer,
-        materializer_ref_for_provider,
+        materializer_ref_for_profile,
         validate_binding_materializer,
     )
 
     harness_selection = document.get("harness") or {}
     try:
-        materializer_ref = materializer_ref_for_provider(
-            profile.runtime_id, profile.provider_id
-        )
+        materializer_ref = materializer_ref_for_profile(profile)
         materializer_auth_models = set(
             get_materializer(materializer_ref).acceptedAuthModels
         )
@@ -555,10 +553,17 @@ async def resolve_agent_profile_snapshot(
         compatible_provider = await session.scalar(provider_query.limit(1))
     if compatible_provider is not None:
         from api_service.services.profile_execution_selection import (
+            configuration_accepts_profile,
             profile_runtime_supported,
         )
 
         if not profile_runtime_supported(compatible_provider.runtime_id):
+            compatible_provider = None
+        elif not is_v2 and not configuration_accepts_profile(
+            document, compatible_provider
+        ):
+            # The credential-shape match above is necessary, not sufficient:
+            # an API-key Profile also needs an exact provider-config form.
             compatible_provider = None
     if compatible_provider is None:
         raise HTTPException(
@@ -856,6 +861,16 @@ async def resolve_default_agent_profile_snapshot(
                 item
                 for item in candidates
                 if _provider_materializer_error(document, item) is None
+            ]
+        else:
+            from api_service.services.profile_execution_selection import (
+                configuration_accepts_profile,
+            )
+
+            candidates = [
+                item
+                for item in candidates
+                if configuration_accepts_profile(document, item)
             ]
         candidate_statuses = await _managed_secret_statuses_for_profiles(
             session=session, rows=candidates

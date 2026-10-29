@@ -18,9 +18,13 @@ Workflow, schedule, checkpoint-branch, and remediation authoring pair **Harness*
 | Selected account Profile | Corresponding Omnigent harness | Credential materializer |
 | --- | --- | --- |
 | Codex OAuth, `codex_cli` / `openai` | `codex-native` | `codex-oauth-home@1` |
+| Codex API key, `codex_cli` / `openai` | `codex-native` | `omnigent-provider-config@1` |
 | Claude Code OAuth, `claude_code` / `anthropic` | `claude-native` | `claude-oauth-home@1` |
+| Claude Code API key, `claude_code` / `anthropic` | `claude-native` | `omnigent-provider-config@1` |
 | Keyed OpenCode Go | `opencode-native` | `opencode-auth-json@1` |
 | Credentialless OpenCode Zen | `opencode-native` | `none@1` |
+
+An API-key Codex or Claude Profile uses `omnigent-provider-config@1` only when that config can carry its launch environment exactly: no file templates or home overrides, and one key SecretRef plus literals the config has a field for. For Claude that is `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`, an optional `ANTHROPIC_BASE_URL`, and optional `ANTHROPIC_MODEL` and per-tier model pins. For Codex it is `OPENAI_API_KEY` and an optional `OPENAI_BASE_URL`, which Omnigent's native Codex launch routes over the Responses wire. The endpoint must be one the Omnigent egress profile admits. The managed `omnigent-claude-api-key` and `omnigent-codex-api-key` configurations accept such Profiles. Any other key Profile stays on its direct route: the seeded MiniMax Claude Profile sets `API_TIMEOUT_MS`, and an Omnigent provider family has no environment field; the seeded MiniMax Codex Profile brings its own `config.toml` provider on the Chat Completions wire, which Codex 0.137 and later refuse and Omnigent coerces to `responses`. Routing is decided when work is admitted, so work queued before an upgrade keeps its recorded route.
 
 These are compatibility relationships, not a blanket support claim. The selected configuration, materializer, Host Class, launch policy, model and exact support evidence still have to admit the execution. A shared upstream provider name alone cannot establish harness or backend compatibility.
 

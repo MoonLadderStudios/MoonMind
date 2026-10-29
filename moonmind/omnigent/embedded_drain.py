@@ -54,6 +54,15 @@ _RETAINED_MODE_KEY = "hostProtocolMode"
 _RETAINED_LAUNCH_KEY = "embedded_runner_launch"
 _RETAINED_LIFECYCLE_KEY = "embedded_runner_lifecycle"
 _RETAINED_CLEANUP_AUTHORITY_KEY = "egress_cleanup_authority"
+# Terminal bridge session statuses, owned canonically by
+# ``moonmind.omnigent.bridge_store._TERMINAL_STATUSES``; a unit test pins them
+# equal for the same import-isolation reason as the keys above.
+_TERMINAL_SESSION_STATUSES = frozenset({"completed", "failed", "canceled", "timed_out"})
+
+# Create retries that reuse an admitted idempotency key reconcile only a row
+# that the drain still counts as an active embedded session, so a drained
+# deployment cannot have its runner re-dispatched by a late retry.
+EMBEDDED_RETRY_DISPOSITION = "reconcile_only_counted_active_embedded_rows"
 
 # Launch modules that must stay importable until the drain disposition below
 # reports drained; they are then deleted together with the embedded transport
@@ -104,12 +113,33 @@ def decode_embedded_retained_session(metadata: Mapping[str, Any]) -> dict[str, A
     }
 
 
+def embedded_retry_may_reconcile(
+    *, status: str | None, metadata: Mapping[str, Any] | None
+) -> bool:
+    """Return whether an admitted-key create retry may reattach its row.
+
+    Only a non-terminal row recorded in embedded mode qualifies. That is
+    exactly the set :meth:`OmnigentBridgeSessionStore.active_host_protocol_modes`
+    counts as ``active_embedded_sessions``, so every row a retry can reach
+    keeps the drain blocked, and a ``drained`` disposition proves no retry can
+    recreate a runner or host consumer. Terminal, unrecorded, or other-mode
+    rows are refused like new admission.
+    """
+
+    if str(status or "").strip().lower() in _TERMINAL_SESSION_STATUSES:
+        return False
+    if not isinstance(metadata, Mapping):
+        return False
+    mode = str(metadata.get(_RETAINED_MODE_KEY) or "").strip()
+    return mode == HOST_PROTOCOL_MODE_EMBEDDED
+
+
 def summarize_embedded_drain(
     *,
     active_embedded_sessions: int,
     active_embedded_leases: int,
+    pending_cleanup_host_leases: int | None,
     historical_decoding_available: bool = True,
-    pending_cleanup_host_leases: int = 0,
     lease_list_truncated: bool = False,
 ) -> dict[str, Any]:
     """Aggregate durable embedded counts into a bounded drain disposition.
@@ -117,8 +147,12 @@ def summarize_embedded_drain(
     ``drained`` is true only when no active embedded session, no active
     embedded host lease, and no pending janitor cleanup authority remains
     *and* read-only historical decoding is available for the retained rows.
+    Admitted-key create retries reach only rows counted as active embedded
+    sessions (``retryDisposition``; see :func:`embedded_retry_may_reconcile`),
+    so a drained result also means no retry can recreate a consumer.
     Every other shape names its blockers; missing evidence is a blocker,
-    never an implicit drain.
+    never an implicit drain. ``pending_cleanup_host_leases`` is ``None`` when
+    the store could not observe cleanup authority, which blocks drain.
 
     ``active_embedded_leases`` must be the uncapped durable total (the
     bounded readiness list is capped for payload safety, so it cannot serve
@@ -132,6 +166,8 @@ def summarize_embedded_drain(
         ("active_embedded_leases", active_embedded_leases),
         ("pending_cleanup_host_leases", pending_cleanup_host_leases),
     ):
+        if value is None and name == "pending_cleanup_host_leases":
+            continue
         if not isinstance(value, int) or isinstance(value, bool):
             raise EmbeddedDrainError(f"{name} must be an int, got {value!r}")
         if value < 0:
@@ -141,7 +177,9 @@ def summarize_embedded_drain(
         blockers.append(f"active_embedded_sessions:{active_embedded_sessions}")
     if active_embedded_leases > 0:
         blockers.append(f"active_embedded_leases:{active_embedded_leases}")
-    if pending_cleanup_host_leases > 0:
+    if pending_cleanup_host_leases is None:
+        blockers.append("pending_cleanup_host_leases:unobserved")
+    elif pending_cleanup_host_leases > 0:
         blockers.append(
             f"pending_cleanup_host_leases:{pending_cleanup_host_leases}"
         )
@@ -155,6 +193,7 @@ def summarize_embedded_drain(
         "pendingCleanupHostLeases": pending_cleanup_host_leases,
         "leaseListTruncated": bool(lease_list_truncated),
         "historicalDecodingAvailable": bool(historical_decoding_available),
+        "retryDisposition": EMBEDDED_RETRY_DISPOSITION,
         "retirementPathId": EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID,
         "contractVersion": EMBEDDED_DRAIN_CONTRACT_VERSION,
     }
@@ -163,8 +202,10 @@ def summarize_embedded_drain(
 __all__ = [
     "EMBEDDED_DRAIN_CONTRACT_VERSION",
     "EMBEDDED_LAUNCH_MODULES",
+    "EMBEDDED_RETRY_DISPOSITION",
     "EmbeddedDrainError",
     "decode_embedded_retained_session",
+    "embedded_retry_may_reconcile",
     "probe_embedded_drain",
     "summarize_embedded_drain",
 ]
@@ -193,7 +234,9 @@ async def probe_embedded_drain(store: Any) -> dict[str, Any]:
     list length is used and the observation is reported as untruncated.
     Terminal sessions that still carry janitor cleanup authority are
     invisible to both readers above, so their refs are counted separately:
-    the probe reports ``drained`` only when that set is empty.
+    the probe reports ``drained`` only when that set is observed and empty.
+    A store without that reader, or a lease total it cannot report, blocks
+    drain rather than counting as zero.
 
     A store failure propagates instead of implying drain: missing evidence
     is a blocker, never an implicit drain, and the caller observes the
@@ -216,7 +259,9 @@ async def probe_embedded_drain(store: Any) -> dict[str, Any]:
     if callable(count_reader):
         raw_total = await count_reader()
         try:
-            active_leases = int(raw_total or 0)
+            if raw_total is None:
+                raise TypeError("unobserved")
+            active_leases = int(raw_total)
         except (TypeError, ValueError) as exc:
             raise EmbeddedDrainError(
                 "active embedded lease count must be an int, "
@@ -237,7 +282,7 @@ async def probe_embedded_drain(store: Any) -> dict[str, Any]:
                 f"collection, got {type(pending_cleanup_refs).__name__}"
             ) from exc
     else:
-        pending_cleanup = 0
+        pending_cleanup = None
     try:
         active_sessions = int(modes.get(HOST_PROTOCOL_MODE_EMBEDDED, 0) or 0)
     except (TypeError, ValueError) as exc:

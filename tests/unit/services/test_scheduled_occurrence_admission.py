@@ -623,7 +623,7 @@ async def test_resolver_child_successor_binds_the_installed_runtime_with_its_aut
 
         # An update replaced the host and server while the resolver Step ran.
         monkeypatch.setenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", _REPO + "8" * 64)
-        monkeypatch.setenv("OMNIGENT_IMAGE_REF", _SERVER + "9" * 64)
+        _install(monkeypatch, host=_REPO + "8" * 64, server=_SERVER + "9" * 64)
         monkeypatch.setattr(
             omnigent_activities.activity,
             "info",

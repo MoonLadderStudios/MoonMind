@@ -956,6 +956,9 @@ async def test_raw_configured_profile_keeps_omnigent_product_boundary(
         changes={"workflow.default_runtime": "claude_code"},
     )
     profile = await context.session.get(ManagedAgentProviderProfile, "saved-codex_cli")
+    # An API-key Codex Profile leaves its direct route only when its key
+    # translates exactly, as the guided API-key action stores it.
+    profile.env_template = {"OPENAI_API_KEY": {"from_secret_ref": "provider_api_key"}}
     if configuration == "pinned-missing":
         profile.execution_configuration = {
             "profileId": "selected-configuration",

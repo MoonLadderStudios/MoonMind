@@ -41,6 +41,8 @@ def _record(**overrides: object) -> LegacyPathRecord:
         "surfaces": (
             "python:moonmind.omnigent.bridge_store:OmnigentBridgeSessionStore",
         ),
+        "consumer": "Fixture consumer.",
+        "removalCondition": "Fixture removal condition.",
     }
     payload.update(overrides)
     return LegacyPathRecord(**payload)  # type: ignore[arg-type]
@@ -57,6 +59,61 @@ def test_record_rejects_admission_source_on_a_closed_class() -> None:
 def test_record_requires_admission_source_while_it_still_admits() -> None:
     with pytest.raises(ValueError, match="must be named"):
         _record(retirementClass=RetirementClass.ACTIVE_PRODUCT_PATH)
+
+
+@pytest.mark.parametrize("field", ["consumer", "removalCondition"])
+def test_record_requires_its_consumer_and_removal_condition(field: str) -> None:
+    with pytest.raises(ValueError, match="must name"):
+        _record(**{field: "  "})
+
+
+def test_every_retained_row_names_its_consumer_and_removal_condition() -> None:
+    missing = sorted(
+        path.path_id
+        for path in RETIREMENT_INVENTORY
+        if not path.consumer.strip() or not path.removal_condition.strip()
+    )
+    assert missing == []
+
+
+@pytest.mark.parametrize("field", ["sharedOperation", "missingOutcome"])
+def test_a_path_that_still_admits_must_map_to_a_shared_operation(
+    field: str,
+) -> None:
+    mapped = {"sharedOperation": "Shared op.", "missingOutcome": "Gap."}
+    mapped[field] = " "
+    with pytest.raises(ValueError, match="still admits new work must name"):
+        _record(
+            retirementClass=RetirementClass.ACTIVE_PRODUCT_PATH,
+            newAdmissionSource="moonmind.omnigent.execute:run_omnigent_execution",
+            **mapped,
+        )
+
+
+@pytest.mark.parametrize("field", ["sharedOperation", "missingOutcome"])
+def test_a_closed_path_names_no_shared_lifecycle_gap(field: str) -> None:
+    with pytest.raises(ValueError, match="only such a path may"):
+        _record(**{field: "Something."})
+
+
+@pytest.mark.parametrize(
+    "surface",
+    [
+        "python:moonmind.workflows.temporal.runtime.launcher:ManagedRuntimeLauncher",
+        "python:moonmind.workflows.temporal.workflows.agent_session:MoonMindAgentSessionWorkflow",
+        "python:moonmind.workflows.temporal.runtime.codex_session_runtime:CodexManagedSessionRuntime",
+    ],
+)
+def test_direct_launcher_and_agent_session_owners_are_inventoried(
+    surface: str,
+) -> None:
+    from moonmind.omnigent.legacy_retirement import retirement_record_for_surface
+
+    record = retirement_record_for_surface(surface)
+    assert record is not None, surface
+    assert record.admits_new_work
+    assert record.consumer.strip()
+    assert record.removal_condition.strip()
 
 
 def test_a_class_either_admits_new_work_or_refuses_it() -> None:

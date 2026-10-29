@@ -33,7 +33,7 @@ OpenCode currently uses:
 opencode-native
 + generic-omnigent-host@1
 + none@1 (OpenCode Zen) or opencode-auth-json@1 (OpenCode Go)
-+ omnigent-opencode@1
++ omnigent-opencode@2
 + ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:<digest>
 ```
 
@@ -92,8 +92,9 @@ and the one-harness admission rule are owned by
 [`SharedHostImage.md`](./SharedHostImage.md) §3; separate Host Classes
 preserve independent support and rollout decisions.
 
-A representative OpenCode class remains (`omnigent-opencode@2` is the
-shared-image row; `@1` is the dedicated-image legacy row):
+Fresh OpenCode work selects the shared-image row `omnigent-opencode@2`.
+`@1` resolves only plans and retries that recorded it, or an explicit
+`omnigent.hostClassRef` request (see [`SharedHostImage.md`](./SharedHostImage.md) §3):
 
 ```yaml
 hostClassId: omnigent-opencode
@@ -552,7 +553,7 @@ credentialSlots:
     acceptedProviderIds:
       - opencode
       - opencode-go
-hostClassRef: omnigent-opencode@1
+hostClassRef: omnigent-opencode@2
 runtimePackRef: opencode-native-pack@1
 launchPolicyRef: omnigent-on-demand@1
 executionRealizerRef: generic-omnigent-host@1
@@ -656,7 +657,10 @@ case where no candidate passes qualification. An explicit
 quarantined and never silently replaced. When the shared
 host coordinates resolve to the same image the OpenCode path judged, the
 shared ref follows the admitted digest so Codex and Claude Host Classes use
-the same qualified image.
+the same qualified image. A shared image that differs (for example an
+explicit `OMNIGENT_SHARED_HOST_IMAGE_REF`) receives its own verdict,
+`sharedHostOpencodeCompatibility`, because `omnigent-opencode@2` launches it;
+only a ready verdict for that exact server/host pair admits the class.
 
 `OMNIGENT_BUILD_DIGEST` optionally pins the host build label. Server catalog and plan provenance always use the resolved server image digest; the host pin never masks a server version change. Each selected host image retains its own observed build label and executable version.
 
@@ -755,8 +759,8 @@ new MoonMind revision does not silently switch an old deployment to another
 image. The selected image must pass bootstrap admission and exact-host
 qualification before new plans can use it.
 
-The OpenCode Host Class retains `omnigent-opencode@1`; its resolved image and
-qualification evidence bind the exact immutable digest. Updates and rollbacks
+The OpenCode Host Class's resolved image and qualification evidence bind the
+exact immutable digest; plans that recorded `omnigent-opencode@1` keep it. Updates and rollbacks
 change future selection. They do not rewrite an admitted execution plan or
 silently use another digest for an in-flight run.
 

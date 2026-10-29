@@ -34,6 +34,30 @@ async def temporal_owner_has_closed(binding):
     return execution.status not in (None, WorkflowExecutionStatus.RUNNING)
 
 
+async def list_profile_host_consumers(
+    provider_profile_ref: str, *, runtime_bindings: Any, host_leases: Any
+) -> list[Any]:
+    """Read durable hosts that can still mount this Profile's credential home."""
+    bindings = await runtime_bindings.list_recoverable(
+        stale_before=datetime.now(UTC) + timedelta(days=1)
+    )
+    consumers = []
+    for binding in bindings:
+        if (
+            not any(
+                isinstance(lease, dict)
+                and lease.get("providerProfileRef") == provider_profile_ref
+                for lease in binding.providerLeases.values()
+            )
+            or not binding.hostLeaseRef
+        ):
+            continue
+        host_lease = await host_leases.get(binding.hostLeaseRef)
+        if host_lease is not None and host_lease.status != "cleaned":
+            consumers.append(binding)
+    return consumers
+
+
 class GenericOmnigentHostJanitor:
 
     def __init__(
@@ -132,5 +156,41 @@ class GenericOmnigentHostJanitor:
             "failures": failures,
         }
 
+    async def drain_profile(self, provider_profile_ref: str) -> dict[str, Any]:
+        """Release generic hosts still bound to one Provider Profile.
 
-__all__ = ["GenericOmnigentHostJanitor"]
+        Credential maintenance calls this while holding the Profile's exclusive
+        maintenance lease, so no execution can admit new work for it. A binding
+        whose host lease is not cleaned can still mount the Profile's credential
+        home read-write. Ordinary reconciliation releases it once its owning
+        workflow has closed. An open owner keeps its lifecycle, so maintenance
+        fails closed rather than mutating a home that host may still write.
+        """
+        from moonmind.omnigent.harness_platform.failures import (
+            HarnessPlatformError,
+            HarnessPlatformFailure,
+        )
+
+        bindings = await list_profile_host_consumers(
+            provider_profile_ref,
+            runtime_bindings=self._runtime_bindings,
+            host_leases=self._host_leases,
+        )
+        drained = 0
+        open_owners: list[str] = []
+        for binding in bindings:
+            if await self._owner_has_closed(binding) is not True:
+                open_owners.append(binding.bindingId)
+                continue
+            await self._realizer.reconcile(binding.executionPlanRef, binding.bindingId)
+            drained += 1
+        if open_owners:
+            raise HarnessPlatformError(
+                "generic hosts of an open workflow still hold this Provider "
+                "Profile: " + ", ".join(open_owners),
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+        return {"drained": drained}
+
+
+__all__ = ["GenericOmnigentHostJanitor", "list_profile_host_consumers"]

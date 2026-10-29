@@ -6465,3 +6465,81 @@ async def test_opencode_successful_retry_clears_revalidation_latch(
     assert persisted is not None
     assert persisted.auth_state is ProviderProfileAuthState.CONNECTED
     assert REVALIDATION_FAILURE_KEY not in (persisted.command_behavior or {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replace_launch_fields", [False, True])
+async def test_update_api_key_profile_can_pin_effective_launch_configuration(
+    client_app: AsyncClient,
+    _module_db,
+    replace_launch_fields: bool,
+) -> None:
+    _override_current_user()
+    profile_id = f"api-pin-{uuid4().hex}"
+    config_id = f"{profile_id}-config"
+    pin = {"profileId": config_id, "version": 1, "digest": "sha256:" + "a" * 64}
+    launch = {
+        "secret_refs": {"openai_api_key": "env://OPENAI_API_KEY"},
+        "env_template": {"OPENAI_API_KEY": {"from_secret_ref": "openai_api_key"}},
+    }
+    async with db_base.async_session_maker() as session:
+        session.add(
+            OmnigentAgentProfile(
+                profile_id=config_id,
+                display_name=config_id,
+                visibility="shared",
+                state="active",
+                active_version=1,
+            )
+        )
+        session.add(
+            OmnigentAgentProfileVersion(
+                profile_id=config_id,
+                version=1,
+                digest=pin["digest"],
+                validation_result={"ready": True},
+                document={
+                    "providerRequirements": {
+                        "runtimeId": "codex_cli",
+                        "providerIds": ["openai"],
+                        "credentialSource": "secret_ref",
+                        "materializationMode": "api_key_env",
+                    }
+                },
+            )
+        )
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                enabled=False,
+                **({} if replace_launch_fields else launch),
+            )
+        )
+        await session.commit()
+    async with client_app as client:
+        response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={
+                "execution_configuration": pin,
+                **(launch if replace_launch_fields else {}),
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["execution_configuration"] == pin
+        rejected = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"secret_refs": {}},
+        )
+    assert rejected.status_code == 409
+    assert (
+        rejected.json()["detail"]["code"] == "profile_execution_configuration_required"
+    )
+    async with db_base.async_session_maker() as session:
+        stored = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert stored.execution_configuration == pin
+        assert stored.secret_refs == launch["secret_refs"]
+        assert stored.env_template == launch["env_template"]

@@ -105,6 +105,16 @@ def configuration_accepts_profile(document: Mapping[str, Any], provider: Any) ->
         expected = _expected_harness_for_runtime(getattr(provider, "runtime_id", None))
         if harness_id and expected and harness_id != expected:
             return False
+    from moonmind.omnigent.harness_platform.materializers import (
+        is_api_key_launch_profile,
+        provider_config_endpoint,
+    )
+
+    if is_api_key_launch_profile(provider):
+        # An API-key Codex or Claude Profile leaves its direct launch only
+        # when the Omnigent provider config carries its key, endpoint and
+        # model pins exactly; otherwise its direct route keeps serving it.
+        return provider_config_endpoint(provider)[0] is not None
     return True
 
 
@@ -146,23 +156,27 @@ async def profile_route_runtime(session: Any, user: Any, provider: Any) -> str:
     return "omnigent"
 
 
-def _is_managed_claude_fallback(
-    row: Any, version: Any, builtin_profile_id: str
-) -> bool:
+def _is_managed_fallback(row: Any, version: Any) -> bool:
     """Mirror the bootstrap reconciler's managed-stock ownership check.
 
-    The stock Claude configuration is a fallback only while its active
-    version is still managed (reconciliation-owned, carrying the
-    managedBuiltin marker). An operator-edited active version is an authored
-    configuration: it stays a candidate (or forces explicit selection)
-    instead of being silently discarded from ambiguity.
+    The stock Claude configurations (OAuth and API key) and the stock Codex
+    API-key configuration are fallbacks only while their active version is
+    still managed (reconciliation-owned, carrying the managedBuiltin marker).
+    An operator-edited active version is an authored configuration: it stays
+    a candidate (or forces explicit selection) instead of being silently
+    discarded from ambiguity.
     """
-    if getattr(row, "profile_id", None) != builtin_profile_id:
+    from api_service.services.omnigent_agent_bootstrap_service import (
+        MANAGED_BUILTIN_MARKERS,
+    )
+
+    marker = MANAGED_BUILTIN_MARKERS.get(getattr(row, "profile_id", None))
+    if marker is None:
         return False
     if getattr(version, "created_by", None) is not None:
         return False
     metadata = getattr(version, "rollout_metadata", None) or {}
-    return isinstance(metadata, Mapping) and metadata.get("managedBuiltin") == "claude"
+    return isinstance(metadata, Mapping) and metadata.get("managedBuiltin") == marker
 
 
 async def load_execution_configurations(
@@ -231,17 +245,11 @@ def select_execution_configuration(
         ]
         if preferred:
             candidates = preferred
-        elif str(getattr(provider, "runtime_id", "")) == "claude_code":
-            from api_service.services.omnigent_agent_bootstrap_service import (
-                CLAUDE_BUILTIN_PROFILE_ID,
-            )
-
+        else:
             authored_candidates = [
                 (row, version)
                 for row, version in candidates
-                if not _is_managed_claude_fallback(
-                    row, version, CLAUDE_BUILTIN_PROFILE_ID
-                )
+                if not _is_managed_fallback(row, version)
             ]
             if authored_candidates:
                 # The managed stock configuration is a fallback, not a reason

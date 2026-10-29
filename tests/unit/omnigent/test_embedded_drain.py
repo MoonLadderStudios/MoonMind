@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from moonmind.omnigent import embedded_drain
 from moonmind.omnigent.bridge_config import (
     EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID,
     HOST_PROTOCOL_MODE_EMBEDDED,
@@ -148,6 +150,42 @@ def test_retained_keys_match_their_canonical_owners() -> None:
     assert bridge_store.EMBEDDED_LAUNCH_KEY == "embedded_runner_launch"
     assert bridge_store.EMBEDDED_LIFECYCLE_KEY == "embedded_runner_lifecycle"
     assert EGRESS_CLEANUP_AUTHORITY_KEY == "egress_cleanup_authority"
+    assert embedded_drain._TERMINAL_SESSION_STATUSES == bridge_store._TERMINAL_STATUSES
+
+
+# ---------------------------------------------------------- retry disposition
+
+
+@pytest.mark.parametrize(
+    ("status", "metadata", "expected"),
+    [
+        ("active", {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED}, True),
+        ("declared", {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED}, True),
+        ("completed", {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED}, False),
+        ("failed", {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED}, False),
+        ("canceled", {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED}, False),
+        ("timed_out", {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED}, False),
+        ("active", {"hostProtocolMode": HOST_PROTOCOL_MODE_PROXY}, False),
+        ("active", {}, False),
+        ("active", None, False),
+    ],
+)
+def test_retry_reconciles_only_rows_the_drain_counts(
+    status: str, metadata: Any, expected: bool
+) -> None:
+    assert (
+        embedded_drain.embedded_retry_may_reconcile(status=status, metadata=metadata)
+        is expected
+    )
+
+
+def test_drain_summary_names_its_retry_disposition() -> None:
+    disposition = summarize_embedded_drain(
+        active_embedded_sessions=0,
+        active_embedded_leases=0,
+        pending_cleanup_host_leases=0,
+    )
+    assert disposition["retryDisposition"] == embedded_drain.EMBEDDED_RETRY_DISPOSITION
 
 
 # ---------------------------------------------------------- drain summary
@@ -157,6 +195,7 @@ def test_summarize_reports_drained_only_when_fully_drained() -> None:
     disposition = summarize_embedded_drain(
         active_embedded_sessions=0,
         active_embedded_leases=0,
+        pending_cleanup_host_leases=0,
         historical_decoding_available=True,
     )
 
@@ -172,6 +211,7 @@ def test_summarize_names_every_blocker_and_never_implies_drain() -> None:
     disposition = summarize_embedded_drain(
         active_embedded_sessions=2,
         active_embedded_leases=1,
+        pending_cleanup_host_leases=0,
         historical_decoding_available=False,
     )
 
@@ -183,7 +223,9 @@ def test_summarize_names_every_blocker_and_never_implies_drain() -> None:
     )
 
     leases_only = summarize_embedded_drain(
-        active_embedded_sessions=0, active_embedded_leases=3
+        active_embedded_sessions=0,
+        active_embedded_leases=3,
+        pending_cleanup_host_leases=0,
     )
     assert leases_only["drained"] is False
     assert leases_only["blockers"] == ("active_embedded_leases:3",)
@@ -191,9 +233,29 @@ def test_summarize_names_every_blocker_and_never_implies_drain() -> None:
 
 def test_summarize_rejects_malformed_counts() -> None:
     with pytest.raises(EmbeddedDrainError):
-        summarize_embedded_drain(active_embedded_sessions=-1, active_embedded_leases=0)
+        summarize_embedded_drain(
+            active_embedded_sessions=-1,
+            active_embedded_leases=0,
+            pending_cleanup_host_leases=0,
+        )
     with pytest.raises(EmbeddedDrainError):
-        summarize_embedded_drain(active_embedded_sessions=True, active_embedded_leases=0)  # type: ignore[arg-type]
+        summarize_embedded_drain(
+            active_embedded_sessions=True,  # type: ignore[arg-type]
+            active_embedded_leases=0,
+            pending_cleanup_host_leases=0,
+        )
+
+
+def test_summarize_treats_unobserved_cleanup_as_a_blocker() -> None:
+    disposition = summarize_embedded_drain(
+        active_embedded_sessions=0,
+        active_embedded_leases=0,
+        pending_cleanup_host_leases=None,
+    )
+
+    assert disposition["drained"] is False
+    assert disposition["blockers"] == ("pending_cleanup_host_leases:unobserved",)
+    assert disposition["pendingCleanupHostLeases"] is None
 
 
 # ---------------------------------------------------------- import boundary

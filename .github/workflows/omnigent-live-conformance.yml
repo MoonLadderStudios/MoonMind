@@ -14,7 +14,7 @@ on:
         required: false
         type: string
       opencode_host_image:
-        description: "Optional digest-pinned dedicated OpenCode host image override"
+        description: "Optional digest-pinned OpenCode image-variable pin (OpenCode runs the shared host image)"
         required: false
         type: string
 
@@ -79,12 +79,11 @@ jobs:
             echo "::error::The Omnigent host image must be configured by immutable digest"
             exit 1
           fi
-          # The OpenCode combination runs the dedicated OpenCode host image, so
-          # workflow_chat cannot be qualified by the Codex host digest alone.
-          # Any configured value must be digest-pinned in every mode.
-          if [[ "${{ matrix.mode }}" == "workflow_chat" || -n "$opencode_host_image" ]]; then
+          # OpenCode runs the shared host image through omnigent-opencode@2.
+          # An optional OpenCode image-variable pin must still be digest-pinned.
+          if [[ -n "$opencode_host_image" ]]; then
             if [[ ! "$opencode_host_image" =~ @sha256:[0-9a-fA-F]{64}$ ]]; then
-              echo "::error::The dedicated OpenCode host image must be configured by immutable digest"
+              echo "::error::The OpenCode host image pin must be configured by immutable digest"
               exit 1
             fi
           fi
