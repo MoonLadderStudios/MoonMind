@@ -35,9 +35,22 @@ from tests.artifact_access import access_for_test
 @pytest.mark.asyncio
 async def test_prepare_child_execution_plan_recompiles_child_skill_authority(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
 ) -> None:
     from api_service.services import omnigent_execution_plan_service
     from moonmind.workflows.temporal.activities import omnigent_session_activities
+    from moonmind.workflows.temporal.artifacts import (
+        ArtifactTransactionOwnership,
+        LocalTemporalArtifactStore,
+        TemporalArtifactService,
+    )
+
+    store = LocalTemporalArtifactStore(tmp_path / "artifacts")
+    monkeypatch.setattr(
+        TemporalArtifactService,
+        "_build_store_from_settings",
+        staticmethod(lambda: store),
+    )
 
     parent_binding = {
         "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
@@ -82,9 +95,11 @@ async def test_prepare_child_execution_plan_recompiles_child_skill_authority(
 
     async def fake_persist_json_artifact(**kwargs):
         observed["taskSnapshot"] = kwargs["payload"]
+        observed["artifactService"] = kwargs["artifact_service"]
         return "art-child-task", "sha256:" + "d" * 64
 
     async def fake_compile_and_persist_execution_plan(**kwargs):
+        kwargs["db_session"].commit.assert_not_awaited()
         observed["compile"] = kwargs
         return SimpleNamespace(
             binding=child_binding,
@@ -92,6 +107,8 @@ async def test_prepare_child_execution_plan_recompiles_child_skill_authority(
         )
 
     class FakeDbSession:
+        commit = AsyncMock()
+
         async def get(self, model, record_id):
             if model.__name__ == "TemporalExecutionCanonicalRecord":
                 assert record_id == "mm:parent"
@@ -184,6 +201,14 @@ async def test_prepare_child_execution_plan_recompiles_child_skill_authority(
         "startingBranch": "main",
         "targetBranch": "feature",
     }
+    compiled_artifacts = observed["compile"]["artifact_service"]
+    assert compiled_artifacts is observed["artifactService"]
+    assert compiled_artifacts._store is store
+    assert (
+        compiled_artifacts._transaction_ownership is ArtifactTransactionOwnership.CALLER
+    )
+    assert compiled_artifacts._repository._session is observed["compile"]["db_session"]
+    FakeDbSession.commit.assert_awaited_once()
     assert observed["compile"]["workflow_id"] == "resolver:child:1"
     assert observed["compile"]["provider_profile"] is provider_profile
     compiled_parameters = observed["compile"]["initial_parameters"]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Iterable, Mapping
@@ -524,6 +525,40 @@ class RecurringWorkflowsService:
             )
         return definition
 
+    @asynccontextmanager
+    async def _dispatch_committed_definition(
+        self, definition_id: UUID, expected_version: int | None = None,
+    ):
+        """Fence external projection of already committed desired state.
+
+        This separate transaction owns only the existing definition row lock,
+        never admission artifacts. An older dispatcher cannot overwrite a newer
+        saved edit. Ambiguous external effects still use schedule reconciliation.
+        """
+        failure: BaseException | None = None
+        try:
+            try:
+                definition = await self._lock_definition_for_update(definition_id)
+            except RecurringWorkflowNotFoundError:
+                definition = None
+            yield (
+                definition if definition is not None and (
+                    expected_version is None or definition.version == expected_version
+                ) else None
+            )
+        except BaseException as exc:
+            failure = exc
+            raise
+        finally:
+            try:
+                await self._session.commit()
+            except BaseException as cleanup_error:
+                if failure is None:
+                    raise
+                failure.add_note(
+                    f"Schedule dispatch transaction cleanup failed: {type(cleanup_error).__name__}"
+                )
+
     async def _retain_frozen_schedule_skill_inputs(
         self, definition: RecurringWorkflowDefinition
     ) -> bool:
@@ -538,14 +573,13 @@ class RecurringWorkflowsService:
         from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
         from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
         from moonmind.workflows.temporal.artifacts import (
+            ArtifactTransactionOwnership,
             TemporalArtifactRepository,
             TemporalArtifactService,
             schedule_input_artifact_ids,
         )
 
-        previous_version = definition.version
-        previous_target = copy.deepcopy(definition.target)
-        target = dict(previous_target or {})
+        target = copy.deepcopy(definition.target or {})
         binding_payload = (target.get("initialParameters") or {}).get(
             "omnigentExecutionPlan"
         )
@@ -580,7 +614,8 @@ class RecurringWorkflowsService:
             )
         await self._scheduled_task_provenance(binding)
         artifacts = self._artifact_service or TemporalArtifactService(
-            TemporalArtifactRepository(self._session)
+            TemporalArtifactRepository(self._session),
+            transaction_ownership=ArtifactTransactionOwnership.CALLER,
         )
         content_ids = await _skill_content_ids(
             artifacts,
@@ -590,16 +625,6 @@ class RecurringWorkflowsService:
                 self._session, binding, workflow_id=f"mm-schedule:{definition.id}"
             ),
         )
-        # Artifact reads record bounded consumer use and may commit. Reacquire
-        # the existing schedule fence before publishing any repair.
-        await self._session.refresh(definition, with_for_update=True)
-        if (
-            definition.version != previous_version
-            or definition.target != previous_target
-        ):
-            raise RecurringWorkflowConflictError(
-                "schedule changed during input retention repair; retry its current revision"
-            )
         missing_ids = content_ids - schedule_input_artifact_ids(target)
         if not missing_ids:
             return False
@@ -1095,8 +1120,6 @@ class RecurringWorkflowsService:
 
         if target.get("workflowType") not in _SUPPORTED_RECURRING_WORKFLOW_TYPES:
             return False
-        previous_version = definition.version
-        previous_target = definition.target
         # Single-user (#4351): the deployment refresh admits with the
         # instance's system principal, as for the other refresh paths.
         admitted = await self._admit_omnigent_schedule_target(
@@ -1109,16 +1132,6 @@ class RecurringWorkflowsService:
         )
         if admitted is None:
             return False
-        # Artifact persistence may commit its session. Reacquire the schedule
-        # fence before publishing the admitted target.
-        await self._session.refresh(definition, with_for_update=True)
-        if (
-            definition.version != previous_version
-            or definition.target != previous_target
-        ):
-            raise RecurringWorkflowConflictError(
-                "schedule changed during deployment refresh; retry from its current revision"
-            )
         if advanced_from is not None:
             await self._advance_schedule_usage(
                 definition,
@@ -1269,7 +1282,6 @@ class RecurringWorkflowsService:
     ) -> bool:
         """Atomically advance time-limited admission evidence for a schedule."""
 
-        previous_version = definition.version
         previous_target = definition.target
 
         from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
@@ -1368,19 +1380,8 @@ class RecurringWorkflowsService:
         ):
             return False
 
-        # Artifact persistence may commit its session. Reacquire the schedule
-        # fence before publishing usage and definition authority together.
-        await self._session.refresh(definition, with_for_update=True)
-        if (
-            definition.version != previous_version
-            or definition.target != previous_target
-        ):
-            raise RecurringWorkflowConflictError(
-                "schedule changed during deployment refresh; retry from its current revision"
-            )
-        # Compilation persists artifacts with commits, so its profile and
-        # policy reads no longer fence a concurrent bootstrap cutover. Lock
-        # fresh authority rows until the schedule action has been published.
+        # Fence mutable profile/policy authority through publication of the
+        # desired database revision; artifact compilation shares this transaction.
         if snapshot.get("document", {}).get("schemaVersion") == "moonmind.omnigent-agent-profile.v2":
             from api_service.services.omnigent_policies import OmnigentPolicyService
 
@@ -1527,11 +1528,14 @@ class RecurringWorkflowsService:
                     definition = await self._lock_definition_for_update(definition_id)
                 if not await self._refresh_managed_bootstrap_target(definition):
                     continue
-                # Update Temporal before committing the corresponding DB
-                # authority. A crash between the two is repaired idempotently:
-                # the next pass observes the current action and commits the DB.
-                await self._ensure_schedule_action_current(definition)
+                # Desired authority must be visible before Temporal consumers.
+                # Existing schedule reconciliation repairs uncertain dispatch.
                 await self._session.commit()
+                async with self._dispatch_committed_definition(
+                    definition.id, definition.version
+                ) as current:
+                    if current is not None:
+                        await self._ensure_schedule_action_current(current)
                 refreshed += 1
             except Exception as exc:
                 await self._session.rollback()
@@ -1559,12 +1563,14 @@ class RecurringWorkflowsService:
     ) -> None:
         async def read_input_artifact(ref: str) -> Any:
             from moonmind.workflows.temporal.artifacts import (
+                ArtifactTransactionOwnership,
                 TemporalArtifactRepository,
                 TemporalArtifactService,
             )
 
             service = self._artifact_service or TemporalArtifactService(
-                TemporalArtifactRepository(self._session)
+                TemporalArtifactRepository(self._session),
+                transaction_ownership=ArtifactTransactionOwnership.CALLER,
             )
             try:
                 _artifact, body = await service.read(
@@ -1726,6 +1732,7 @@ class RecurringWorkflowsService:
         )
         from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
         from moonmind.workflows.temporal.artifacts import (
+            ArtifactTransactionOwnership,
             TemporalArtifactRepository,
             TemporalArtifactService,
         )
@@ -1781,7 +1788,8 @@ class RecurringWorkflowsService:
             )
         principal = str(getattr(actor, "id", "") or "system")
         artifact_service = self._artifact_service or TemporalArtifactService(
-            TemporalArtifactRepository(self._session)
+            TemporalArtifactRepository(self._session),
+            transaction_ownership=ArtifactTransactionOwnership.CALLER,
         )
         task_snapshot = {
             "snapshotVersion": "original-task-input/v1",
@@ -1920,9 +1928,8 @@ class RecurringWorkflowsService:
         )
 
         definition_id = uuid4()
-        # Admit before the definition joins the session: artifact persistence
-        # commits the shared session, so a later plan or Temporal failure
-        # could otherwise leave a committed definition without a schedule.
+        # Admission artifacts, retained inputs and the desired definition share
+        # this operation's transaction. Temporal sees them only after commit.
         admitted_target = await self._admit_omnigent_schedule_target(
             definition_id=definition_id,
             target=target_payload,
@@ -1964,30 +1971,36 @@ class RecurringWorkflowsService:
             target_payload=definition.target,
         )
 
-        try:
-            await self._adapter.create_schedule(
-                definition_id=definition_id,
-                cron_expression=cron_normalized,
-                timezone=timezone_name,
-                overlap_mode=policy_obj.overlap_mode,
-                catchup_mode=policy_obj.catchup_mode,
-                jitter_seconds=policy_obj.jitter_seconds,
-                enabled=bool(enabled),
-                note=name_text,
-                workflow_type=workflow_type,
-                workflow_input=workflow_input,
-                **await self._workflow_start_metadata(
-                    definition_id=definition_id,
-                    owner_user_id=owner_user_id,
-                    workflow_input=workflow_input,
-                ),
-            )
-        except Exception as exc:
-            logger.error(f"Failed to create temporal schedule for {definition_id}: {exc}")
-            raise RecurringWorkflowValidationError(f"Failed to create schedule: {exc}")
-
+        start_metadata = await self._workflow_start_metadata(
+            definition_id=definition_id,
+            owner_user_id=owner_user_id,
+            workflow_input=workflow_input,
+        )
         await self._session.refresh(definition)
         await self._session.commit()
+        async with self._dispatch_committed_definition(definition_id, 1) as current:
+            if current is None:
+                return definition
+            try:
+                await self._adapter.create_schedule(
+                    definition_id=definition_id,
+                    cron_expression=cron_normalized,
+                    timezone=timezone_name,
+                    overlap_mode=policy_obj.overlap_mode,
+                    catchup_mode=policy_obj.catchup_mode,
+                    jitter_seconds=policy_obj.jitter_seconds,
+                    enabled=bool(enabled),
+                    note=name_text,
+                    workflow_type=workflow_type,
+                    workflow_input=workflow_input,
+                    **start_metadata,
+                )
+            except Exception as exc:
+                logger.error(f"Failed to create temporal schedule for {definition_id}: {exc}")
+                raise RecurringWorkflowValidationError(
+                    f"Schedule {definition_id} was saved, but Temporal synchronization "
+                    f"is pending: {exc}. Refresh this definition rather than creating another."
+                ) from exc
         return definition
 
     async def update_definition(
@@ -2077,8 +2090,6 @@ class RecurringWorkflowsService:
                 # or omits the runtime under an Omnigent default, is admitted
                 # by the same plan owner as creation instead of storing a
                 # plan-less target for the retained session supervisor.
-                locked_version = definition.version
-                locked_target = definition.target
                 admitted_target = await self._admit_omnigent_schedule_target(
                     definition_id=definition.id,
                     target=normalized_target,
@@ -2086,17 +2097,6 @@ class RecurringWorkflowsService:
                     actor=actor,
                 )
                 if admitted_target is not None:
-                    # Artifact persistence may commit its session. Reacquire
-                    # the schedule fence before applying the edit.
-                    await self._session.refresh(definition, with_for_update=True)
-                    if (
-                        definition.version != locked_version
-                        or definition.target != locked_target
-                    ):
-                        raise RecurringWorkflowConflictError(
-                            "recurring workflow changed since it was loaded; "
-                            "refresh and retry"
-                        )
                     normalized_target = admitted_target
 
         changed_schedule = False
@@ -2151,43 +2151,11 @@ class RecurringWorkflowsService:
                 after=basis,
             )
 
-        try:
-            if enabled is False:
-                try:
-                    await self._adapter.pause_schedule(definition_id=definition.id)
-                except ScheduleNotFoundError:
-                    logger.info(
-                        "Retired schedule already absent for %s; continuing disable",
-                        definition.id,
-                    )
-                # MoonLadderStudios/MoonMind#4188: explicit disable of a
-                # stored retired ManifestIngest definition must persist
-                # without rebuilding the retired workflow bundle. Pausing
-                # above stops new runs; skip update_schedule so the
-                # disable commits instead of raising.
-                try:
-                    _disable_target = (
-                        dict(definition.target)
-                        if isinstance(definition.target, Mapping)
-                        else {}
-                    )
-                    _disable_workflow_type = str(
-                        _disable_target.get("workflowType")
-                        or _disable_target.get("workflow_type")
-                        or ""
-                    ).strip()
-                except Exception:
-                    _disable_workflow_type = ""
-                if _disable_workflow_type == "MoonMind.ManifestIngest":
-                    definition.updated_at = now
-                    definition.version = int(definition.version or 0) + 1
-                    await self._session.flush()
-                    await self._session.refresh(definition)
-                    await self._session.commit()
-                    return definition
-            elif enabled is True:
-                await self._adapter.unpause_schedule(definition_id=definition.id)
-
+        retired_disable = enabled is False and str(
+            (definition.target or {}).get("workflowType")
+            or (definition.target or {}).get("workflow_type") or ""
+        ).strip() == "MoonMind.ManifestIngest"
+        if not retired_disable:
             action_update: dict[str, Any] = {}
             if replace_action:
                 workflow_type, workflow_input = self._workflow_bundle_for_definition(
@@ -2211,26 +2179,48 @@ class RecurringWorkflowsService:
                     "memo": {PROVIDER_PROFILE_MEMO_KEY: summary},
                     "search_attributes": {PROVIDER_PROFILE_SEARCH_ATTRIBUTE: search_value},
                 }
-            await self._adapter.update_schedule(
-                definition_id=definition.id,
-                cron_expression=cron_normalized,
-                timezone=timezone,
-                overlap_mode=policy_obj.overlap_mode if policy_obj else None,
-                catchup_mode=policy_obj.catchup_mode if policy_obj else None,
-                jitter_seconds=policy_obj.jitter_seconds if policy_obj else None,
-                enabled=enabled,
-                note=name if name is not None else None,
-                **action_update,
-            )
-        except Exception as exc:
-            logger.error(f"Failed to update temporal schedule for {definition.id}: {exc}")
-            raise RecurringWorkflowValidationError(f"Failed to update schedule: {exc}")
-
         definition.updated_at = now
         definition.version = int(definition.version or 0) + 1
         await self._session.flush()
         await self._session.refresh(definition)
         await self._session.commit()
+
+        async with self._dispatch_committed_definition(
+            definition.id, definition.version
+        ) as current:
+            if current is None:
+                return definition
+            try:
+                if enabled is False:
+                    try:
+                        await self._adapter.pause_schedule(definition_id=definition.id)
+                    except ScheduleNotFoundError:
+                        logger.info(
+                            "Retired schedule already absent for %s; continuing disable",
+                            definition.id,
+                        )
+                    if retired_disable:
+                        return definition
+                elif enabled is True:
+                    await self._adapter.unpause_schedule(definition_id=definition.id)
+
+                await self._adapter.update_schedule(
+                    definition_id=definition.id,
+                    cron_expression=cron_normalized,
+                    timezone=timezone,
+                    overlap_mode=policy_obj.overlap_mode if policy_obj else None,
+                    catchup_mode=policy_obj.catchup_mode if policy_obj else None,
+                    jitter_seconds=policy_obj.jitter_seconds if policy_obj else None,
+                    enabled=enabled,
+                    note=name if name is not None else None,
+                    **action_update,
+                )
+            except Exception as exc:
+                logger.error(f"Failed to update temporal schedule for {definition.id}: {exc}")
+                raise RecurringWorkflowValidationError(
+                    f"Schedule {definition.id} was saved, but Temporal synchronization "
+                    f"is pending: {exc}. Refresh this definition before retrying."
+                ) from exc
         return definition
 
     @staticmethod
@@ -2751,156 +2741,186 @@ class RecurringWorkflowsService:
 
     async def reconcile_schedules(self, limit: int = 100) -> int:
         """Sweep db and reconcile temporal schedules where temporal_schedule_id is present."""
-        stmt = select(RecurringWorkflowDefinition).where(
-            RecurringWorkflowDefinition.enabled == True,
-            RecurringWorkflowDefinition.temporal_schedule_id.is_not(None)
-        ).limit(limit)
+        # Page the existing reconciliation sweep so disabled definitions cannot
+        # starve later records. A disabled saved definition is still durable
+        # desired state when its pause acknowledgement was lost.
+        batch_size = max(1, int(limit))
+        definition_ids: list[UUID] = []
+        cursor: UUID | None = None
+        while True:
+            statement = select(RecurringWorkflowDefinition.id).where(
+                RecurringWorkflowDefinition.temporal_schedule_id.is_not(None)
+            )
+            if cursor is not None:
+                statement = statement.where(RecurringWorkflowDefinition.id > cursor)
+            batch = list((await self._session.execute(
+                statement.order_by(RecurringWorkflowDefinition.id).limit(batch_size)
+            )).scalars())
+            definition_ids.extend(batch)
+            if len(batch) < batch_size:
+                break
+            cursor = batch[-1]
 
-        result = await self._session.execute(stmt)
-        definitions = result.scalars().all()
         reconciled = 0
-
-        for dfn in definitions:
-            try:
-                # #4644: the existing reconciler closes unsupported producers
-                # without deleting their saved targets or recreating schedules.
+        for definition_id in definition_ids:
+            async with self._dispatch_committed_definition(definition_id) as dfn:
+                if dfn is None:
+                    continue
                 try:
-                    _normalize_target(
-                        dfn.target if isinstance(dfn.target, Mapping) else {}
-                    )
-                except RecurringWorkflowValidationError as exc:
+                    if not dfn.enabled:
+                        try:
+                            description = await self._adapter.describe_schedule(definition_id=dfn.id)
+                            state = _object_value(_object_value(description, "schedule"), "state")
+                            if _object_value(state, "paused") is not True:
+                                await self._adapter.pause_schedule(definition_id=dfn.id)
+                                reconciled += 1
+                        except ScheduleNotFoundError:
+                            # Already absent is correct for a disabled schedule;
+                            # reconciliation must not recreate it.
+                            pass
+                        continue
+                    # #4644: the existing reconciler closes unsupported producers
+                    # without deleting their saved targets or recreating schedules.
                     try:
-                        await self._adapter.pause_schedule(definition_id=dfn.id)
-                    except ScheduleNotFoundError:
-                        logger.info(
-                            "Unsupported schedule already absent for %s", dfn.id
+                        _normalize_target(
+                            dfn.target if isinstance(dfn.target, Mapping) else {}
                         )
-                    except ScheduleAdapterError as pause_error:
+                    except RecurringWorkflowValidationError as exc:
+                        dfn.enabled = False
+                        await self._session.commit()
+                        dfn = await self._lock_definition_for_update(definition_id)
+                        if dfn.enabled:
+                            continue
+                        try:
+                            await self._adapter.pause_schedule(definition_id=dfn.id)
+                        except ScheduleNotFoundError:
+                            logger.info(
+                                "Unsupported schedule already absent for %s", dfn.id
+                            )
+                        except ScheduleAdapterError as pause_error:
+                            logger.warning(
+                                "Failed to pause unsupported schedule for %s: %s",
+                                dfn.id,
+                                pause_error,
+                            )
+                            continue
+                        logger.warning("Paused unsupported schedule %s: %s", dfn.id, exc)
+                        reconciled += 1
+                        continue
+
+                    policy_src = dfn.policy if isinstance(dfn.policy, Mapping) else None
+                    try:
+                        policy_obj = _normalize_policy(
+                            policy_src,
+                            global_max_backfill=_DEFAULT_SCHEDULER_MAX_BACKFILL,
+                        )
+                    except RecurringWorkflowValidationError as exc:
                         logger.warning(
-                            "Failed to pause unsupported schedule for %s: %s",
-                            dfn.id,
-                            pause_error,
+                            "Skipping reconcile for %s: invalid policy: %s", dfn.id, exc
                         )
                         continue
-                    dfn.enabled = False
-                    await self._session.commit()
-                    logger.warning("Paused unsupported schedule %s: %s", dfn.id, exc)
-                    reconciled += 1
-                    continue
 
-                policy_src = dfn.policy if isinstance(dfn.policy, Mapping) else None
-                try:
-                    policy_obj = _normalize_policy(
-                        policy_src,
-                        global_max_backfill=_DEFAULT_SCHEDULER_MAX_BACKFILL,
+                    try:
+                        desc = await self._adapter.describe_schedule(definition_id=dfn.id)
+                    except ScheduleNotFoundError:
+                        await self._recreate_temporal_schedule(dfn, policy_obj)
+                        reconciled += 1
+                        continue
+                    except ScheduleOperationError as exc:
+                        logger.warning("describe_schedule failed for %s: %s", dfn.id, exc)
+                        continue
+
+                    sched = getattr(desc, "schedule", None)
+                    if sched is None:
+                        logger.warning(
+                            "Reconcile: missing schedule on description for %s", dfn.id
+                        )
+                        continue
+
+                    spec = sched.spec
+                    pol = sched.policy
+                    st = sched.state
+
+                    temporal_cron = (
+                        str(spec.cron_expressions[0]).strip()
+                        if spec and spec.cron_expressions
+                        else ""
                     )
-                except RecurringWorkflowValidationError as exc:
-                    logger.warning(
-                        "Skipping reconcile for %s: invalid policy: %s", dfn.id, exc
+                    temporal_tz = (spec.time_zone_name or "UTC") if spec else "UTC"
+                    temporal_jitter = (
+                        int(spec.jitter.total_seconds())
+                        if spec and getattr(spec, "jitter", None)
+                        else 0
                     )
-                    continue
 
-                try:
-                    desc = await self._adapter.describe_schedule(definition_id=dfn.id)
-                except ScheduleNotFoundError:
-                    await self._recreate_temporal_schedule(dfn, policy_obj)
-                    reconciled += 1
-                    continue
-                except ScheduleOperationError as exc:
-                    logger.warning("describe_schedule failed for %s: %s", dfn.id, exc)
-                    continue
+                    overlap_src = pol.overlap if pol else None
+                    temporal_overlap = _overlap_mode_from_temporal(overlap_src)
 
-                sched = getattr(desc, "schedule", None)
-                if sched is None:
-                    logger.warning(
-                        "Reconcile: missing schedule on description for %s", dfn.id
+                    catchup_td = pol.catchup_window if pol else None
+                    temporal_catchup = _catchup_mode_from_temporal_window(catchup_td)
+
+                    temporal_enabled = not (st.paused if st else False)
+                    temporal_note = (st.note or "") if st else ""
+
+                    db_cron = str(dfn.cron or "").strip()
+                    db_tz = str(dfn.timezone or "UTC")
+
+                    mismatch = (
+                        temporal_cron != db_cron
+                        or temporal_tz != db_tz
+                        or temporal_overlap != policy_obj.overlap_mode
+                        or temporal_catchup != policy_obj.catchup_mode
+                        or temporal_jitter != policy_obj.jitter_seconds
+                        or temporal_enabled != bool(dfn.enabled)
+                        or temporal_note.strip() != (dfn.name or "").strip()
                     )
-                    continue
 
-                spec = sched.spec
-                pol = sched.policy
-                st = sched.state
-
-                temporal_cron = (
-                    str(spec.cron_expressions[0]).strip()
-                    if spec and spec.cron_expressions
-                    else ""
-                )
-                temporal_tz = (spec.time_zone_name or "UTC") if spec else "UTC"
-                temporal_jitter = (
-                    int(spec.jitter.total_seconds())
-                    if spec and getattr(spec, "jitter", None)
-                    else 0
-                )
-
-                overlap_src = pol.overlap if pol else None
-                temporal_overlap = _overlap_mode_from_temporal(overlap_src)
-
-                catchup_td = pol.catchup_window if pol else None
-                temporal_catchup = _catchup_mode_from_temporal_window(catchup_td)
-
-                temporal_enabled = not (st.paused if st else False)
-                temporal_note = (st.note or "") if st else ""
-
-                db_cron = str(dfn.cron or "").strip()
-                db_tz = str(dfn.timezone or "UTC")
-
-                mismatch = (
-                    temporal_cron != db_cron
-                    or temporal_tz != db_tz
-                    or temporal_overlap != policy_obj.overlap_mode
-                    or temporal_catchup != policy_obj.catchup_mode
-                    or temporal_jitter != policy_obj.jitter_seconds
-                    or temporal_enabled != bool(dfn.enabled)
-                    or temporal_note.strip() != (dfn.name or "").strip()
-                )
-
-                if mismatch:
-                    logger.info("Reconcile updating schedule metadata for %s", dfn.id)
-                workflow_type, workflow_input = self._workflow_bundle_for_definition(
-                    dfn
-                )
-                action = getattr(sched, "action", None)
-                action_mismatch = self._schedule_action_mismatch(
-                    action=action,
-                    definition_id=dfn.id,
-                    workflow_type=workflow_type,
-                    workflow_input=workflow_input,
-                )
-
-                if mismatch or action_mismatch:
-                    logger.info("Reconcile updating schedule for %s", dfn.id)
-                    note = (dfn.name or "") if mismatch else None
-                    await self._adapter.update_schedule(
+                    if mismatch:
+                        logger.info("Reconcile updating schedule metadata for %s", dfn.id)
+                    workflow_type, workflow_input = self._workflow_bundle_for_definition(
+                        dfn
+                    )
+                    action = getattr(sched, "action", None)
+                    action_mismatch = self._schedule_action_mismatch(
+                        action=action,
                         definition_id=dfn.id,
-                        preserve_existing_admission=True,
-                        cron_expression=dfn.cron if mismatch else None,
-                        timezone=dfn.timezone if mismatch else None,
-                        overlap_mode=policy_obj.overlap_mode if mismatch else None,
-                        catchup_mode=policy_obj.catchup_mode if mismatch else None,
-                        jitter_seconds=policy_obj.jitter_seconds if mismatch else None,
-                        enabled=bool(dfn.enabled) if mismatch else None,
-                        note=note,
-                        workflow_type=workflow_type if action_mismatch else None,
-                        workflow_input=workflow_input if action_mismatch else None,
-                        **(
-                            await self._workflow_start_metadata(
-                                definition_id=dfn.id,
-                                owner_user_id=dfn.owner_user_id,
-                                workflow_input=workflow_input,
-                            )
-                            if action_mismatch
-                            else {}
-                        ),
+                        workflow_type=workflow_type,
+                        workflow_input=workflow_input,
                     )
-                    reconciled += 1
 
-            except ScheduleAdapterError as exc:
-                logger.warning("Reconciliation adapter error for %s: %s", dfn.id, exc)
-            except Exception as exc:
-                logger.exception(
-                    "Unexpected reconciliation error for %s: %s", dfn.id, exc
-                )
+                    if mismatch or action_mismatch:
+                        logger.info("Reconcile updating schedule for %s", dfn.id)
+                        note = (dfn.name or "") if mismatch else None
+                        await self._adapter.update_schedule(
+                            definition_id=dfn.id,
+                            preserve_existing_admission=True,
+                            cron_expression=dfn.cron if mismatch else None,
+                            timezone=dfn.timezone if mismatch else None,
+                            overlap_mode=policy_obj.overlap_mode if mismatch else None,
+                            catchup_mode=policy_obj.catchup_mode if mismatch else None,
+                            jitter_seconds=policy_obj.jitter_seconds if mismatch else None,
+                            enabled=bool(dfn.enabled) if mismatch else None,
+                            note=note,
+                            workflow_type=workflow_type if action_mismatch else None,
+                            workflow_input=workflow_input if action_mismatch else None,
+                            **(
+                                await self._workflow_start_metadata(
+                                    definition_id=dfn.id,
+                                    owner_user_id=dfn.owner_user_id,
+                                    workflow_input=workflow_input,
+                                )
+                                if action_mismatch
+                                else {}
+                            ),
+                        )
+                        reconciled += 1
+
+                except ScheduleAdapterError as exc:
+                    logger.warning("Reconciliation adapter error for %s: %s", dfn.id, exc)
+                except Exception as exc:
+                    logger.exception(
+                        "Unexpected reconciliation error for %s: %s", dfn.id, exc
+                    )
 
         return reconciled
 

@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.api.routers import mcp_tools
 from api_service.services.container_jobs import ContainerJobService
 from moonmind import container_job_cli
+from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
 from moonmind.schemas.container_job_models import (
     ContainerJobAccepted,
     ContainerJobLogPage,
@@ -83,7 +84,11 @@ def machine_route(request, monkeypatch):
     service.logs.return_value = ContainerJobLogPage(jobId=_JOB_ID, entries=[])
     service_factory = Mock(return_value=service)
     monkeypatch.setattr(mcp_tools, "ContainerJobService", service_factory)
-    monkeypatch.setattr(mcp_tools, "get_temporal_artifact_service", lambda _: None)
+    def artifact_service(_session, *, transaction_ownership):
+        assert transaction_ownership is ArtifactTransactionOwnership.CALLER
+        return None
+
+    monkeypatch.setattr(mcp_tools, "get_temporal_artifact_service", artifact_service)
     monkeypatch.setattr(mcp_tools, "container_jobs_ready", lambda: True)
     monkeypatch.setattr(mcp_tools.settings.security, "JWT_SECRET_KEY", _SECRET)
     monkeypatch.setenv("AUTH_PROVIDER", "disabled")

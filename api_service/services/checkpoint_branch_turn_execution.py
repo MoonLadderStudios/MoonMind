@@ -64,6 +64,7 @@ from moonmind.workflows import (
     get_temporal_artifact_service,
 )
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactTransactionOwnership,
     ArtifactAccessContext,
     LocalTemporalArtifactStore,
     TemporalArtifactService,
@@ -76,6 +77,8 @@ _STEP_EXECUTION_ID_MAX_LENGTH = 255
 
 def get_checkpoint_branch_artifact_service(
     session: AsyncSession,
+    *,
+    transaction_ownership: ArtifactTransactionOwnership = ArtifactTransactionOwnership.STANDALONE,
 ) -> TemporalArtifactService:
     """Use hermetic local storage in the repository's explicit test mode."""
 
@@ -83,8 +86,11 @@ def get_checkpoint_branch_artifact_service(
         return TemporalArtifactService(
             get_temporal_artifact_repository(session),
             store=LocalTemporalArtifactStore(settings.workflow.temporal_artifact_root),
+            transaction_ownership=transaction_ownership,
         )
-    return get_temporal_artifact_service(session)
+    return get_temporal_artifact_service(
+        session, transaction_ownership=transaction_ownership
+    )
 
 
 class CheckpointBranchTurnLaunchError(ValueError):

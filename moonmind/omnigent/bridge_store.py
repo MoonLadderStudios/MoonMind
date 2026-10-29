@@ -49,7 +49,10 @@ from moonmind.utils.logging import redact_sensitive_payload
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
     CLAUDE_DISALLOWED_TOOLS_DEFAULTS_KEY,
 )
-from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    ArtifactTransactionOwnership,
+)
 
 # Traceability: MM-1152 created the canonical store; MM-1156 moved the
 # first-message idempotency state machine onto it from the superseded mapping.
@@ -92,7 +95,10 @@ def _journal_artifact_service(session: AsyncSession) -> Any:
         TemporalArtifactService,
     )
 
-    return TemporalArtifactService(TemporalArtifactRepository(session))
+    return TemporalArtifactService(
+        TemporalArtifactRepository(session),
+        transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
+    )
 
 
 # Pin worker-derived workflow launch defaults before any provider side effect.

@@ -58,7 +58,10 @@ from moonmind.statuses.compat import (
     canonicalize_workflow_state_alias,
     normalize_no_commit_finish_summary,
 )
-from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    ArtifactTransactionOwnership,
+)
 from moonmind.workflows.temporal.hard_switch_cutover import RENAMED_USER_WORKFLOW_TYPE
 from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
@@ -4439,9 +4442,14 @@ async def test_request_rerun_rejects_incomplete_skill_snapshot_at_shared_boundar
                 )
             )
         )
+
+        def artifact_factory(_repository, *, transaction_ownership):
+            assert transaction_ownership is ArtifactTransactionOwnership.CALLER
+            return artifact_service
+
         monkeypatch.setattr(
             "moonmind.workflows.temporal.service.TemporalArtifactService",
-            lambda _repository: artifact_service,
+            artifact_factory,
         )
         service.validate_exact_rerun_execution_plan = AsyncMock()
         mock_client_adapter.update_workflow.reset_mock()
@@ -4509,9 +4517,14 @@ async def test_create_fresh_rerun_rejects_incomplete_skill_snapshot(
                 )
             )
         )
+
+        def artifact_factory(_repository, *, transaction_ownership):
+            assert transaction_ownership is ArtifactTransactionOwnership.CALLER
+            return artifact_service
+
         monkeypatch.setattr(
             "moonmind.workflows.temporal.service.TemporalArtifactService",
-            lambda _repository: artifact_service,
+            artifact_factory,
         )
         service.validate_exact_rerun_execution_plan = AsyncMock()
         mock_client_adapter.start_workflow.reset_mock()

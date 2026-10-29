@@ -49,6 +49,7 @@ from pydantic import BaseModel, ValidationError
 from temporalio import activity as temporal_activity
 from temporalio import exceptions as temporal_exceptions
 
+from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
 from moonmind.auth.env_shaping import _should_filter_base_env_var
 from moonmind.config.settings import settings
 from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
@@ -8644,7 +8645,9 @@ class TemporalAgentRuntimeActivities:
             # authority, as on the HTTP and MCP submission paths.
             accepted = await ContainerJobService(
                 session,
-                artifacts=get_temporal_artifact_service(session),
+                artifacts=get_temporal_artifact_service(
+                    session, transaction_ownership=ArtifactTransactionOwnership.CALLER
+                ),
                 artifact_access=ArtifactAccessContext.for_activity(),
             ).submit(owner=owner, request=request)
             await session.commit()

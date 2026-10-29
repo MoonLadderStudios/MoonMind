@@ -15,7 +15,10 @@ from temporalio import activity
 from moonmind.omnigent.control_plane import metrics as control_plane_metrics
 from moonmind.omnigent.harness_platform.credential_bindings import model_bindings_of
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
-from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    ArtifactTransactionOwnership,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +48,8 @@ class _OnDemandTemporalArtifactService:
 
         async with self._session_factory() as artifact_session:
             service = TemporalArtifactService(
-                TemporalArtifactRepository(artifact_session)
+                TemporalArtifactRepository(artifact_session),
+                transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
             )
             return await getattr(service, method)(**kwargs)
 
@@ -244,14 +248,22 @@ async def omnigent_prepare_child_execution_plan_activity(
         "source": {"kind": "merge_automation_resolver_child"},
         "target": {"initialParameters": canonical_snapshot_parameters},
     }
-    artifact_service = _OnDemandTemporalArtifactService(async_session_maker)
-    input_snapshot_ref, input_snapshot_digest = await persist_json_artifact(
-        artifact_service=artifact_service,
-        principal=principal,
-        artifact_class="original_task_input_snapshot",
-        payload=task_snapshot,
+    from moonmind.workflows.temporal.artifacts import (
+        TemporalArtifactRepository,
+        TemporalArtifactService,
     )
+
     async with async_session_maker() as db_session:
+        artifact_service = TemporalArtifactService(
+            TemporalArtifactRepository(db_session),
+            transaction_ownership=ArtifactTransactionOwnership.CALLER,
+        )
+        input_snapshot_ref, input_snapshot_digest = await persist_json_artifact(
+            artifact_service=artifact_service,
+            principal=principal,
+            artifact_class="original_task_input_snapshot",
+            payload=task_snapshot,
+        )
         provider_profile = await db_session.get(
             ManagedAgentProviderProfile,
             provider_profile_ref,
@@ -275,6 +287,9 @@ async def omnigent_prepare_child_execution_plan_activity(
             parent_artifact_access=access,
             access=access,
         )
+        # The child producer returns only a durable complete plan/snapshot.
+        # Failed compilation rolls back its entire prepared artifact set.
+        await db_session.commit()
     initial_parameters["omnigentExecutionPlan"] = child_plan.binding.model_dump(
         mode="json", by_alias=True, exclude_none=True
     )
@@ -318,6 +333,10 @@ async def omnigent_admit_scheduled_occurrence_plan_activity(
 ) -> dict[str, Any]:
     """Bind one Temporal-started schedule occurrence to the installed runtime."""
 
+    from moonmind.workflows.temporal.artifacts import (
+        TemporalArtifactRepository,
+        TemporalArtifactService,
+    )
     from api_service.db.base import async_session_maker
     from api_service.services.recurring_workflows_service import (
         RecurringWorkflowsService,
@@ -337,7 +356,10 @@ async def omnigent_admit_scheduled_occurrence_plan_activity(
     async with async_session_maker() as db_session:
         admitted = await RecurringWorkflowsService(
             db_session,
-            artifact_service=_OnDemandTemporalArtifactService(async_session_maker),
+            artifact_service=TemporalArtifactService(
+                TemporalArtifactRepository(db_session),
+                transaction_ownership=ArtifactTransactionOwnership.CALLER,
+            ),
         ).admit_occurrence_execution_plan(
             workflow_id=workflow_id,
             initial_parameters=initial_parameters,
@@ -364,6 +386,10 @@ async def omnigent_admit_step_successor_plan_activity(
     otherwise the recorded plan stays.
     """
 
+    from moonmind.workflows.temporal.artifacts import (
+        TemporalArtifactRepository,
+        TemporalArtifactService,
+    )
     from api_service.db.base import async_session_maker
     from api_service.services.omnigent_execution_plan_service import (
         readmit_frozen_execution_plan,
@@ -383,7 +409,10 @@ async def omnigent_admit_step_successor_plan_activity(
     async with async_session_maker() as db_session:
         admitted = await readmit_frozen_execution_plan(
             db_session=db_session,
-            artifact_service=_OnDemandTemporalArtifactService(async_session_maker),
+            artifact_service=TemporalArtifactService(
+                TemporalArtifactRepository(db_session),
+                transaction_ownership=ArtifactTransactionOwnership.CALLER,
+            ),
             workflow_id=workflow_id,
             initial_parameters=initial_parameters,
             subject="Interrupted Step successor of",

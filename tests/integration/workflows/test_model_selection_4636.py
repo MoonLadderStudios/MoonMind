@@ -36,6 +36,7 @@ from moonmind.workflows.executions.execution_contract import (
 from moonmind.workflows.executions.model_resolver import resolve_model_effort
 from moonmind.workflows.temporal.artifacts import (
     ArtifactAccessContext,
+    ArtifactTransactionOwnership,
     LocalTemporalArtifactStore,
 )
 from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
@@ -572,11 +573,12 @@ async def test_4636_saved_artifact_step_reset_reaches_snapshot_preview_and_launc
         assert kwargs["access"] is access
         return SimpleNamespace(), store.read_bytes("issue-4636/input.json")
 
-    monkeypatch.setattr(
-        executions,
-        "get_temporal_artifact_service",
-        lambda _session: SimpleNamespace(read=read_artifact),
-    )
+    def artifact_service(session, *, transaction_ownership):
+        assert session is None  # This transport-only case has no database.
+        assert transaction_ownership is ArtifactTransactionOwnership.CALLER
+        return SimpleNamespace(read=read_artifact)
+
+    monkeypatch.setattr(executions, "get_temporal_artifact_service", artifact_service)
     _payload, restored = (
         await executions._snapshot_source_payload_from_parameters_and_artifact(
             session=None,

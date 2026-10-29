@@ -77,6 +77,7 @@ from moonmind.workflows.temporal.activity_catalog import (
     get_workflow_task_queue,
 )
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactTransactionOwnership,
     ExecutionRef,
     LocalTemporalArtifactStore,
     TemporalArtifactService,
@@ -737,10 +738,15 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
         await connection.run_sync(Base.metadata.create_all)
     store = LocalTemporalArtifactStore(tmp_path / "public-owner-artifacts")
 
-    def artifact_service(session: AsyncSession) -> TemporalArtifactService:
+    def artifact_service(
+        session: AsyncSession,
+        *,
+        transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
+    ) -> TemporalArtifactService:
         return TemporalArtifactService(
             get_temporal_artifact_repository(session),
             store=store,
+            transaction_ownership=transaction_ownership,
         )
 
     for target in (

@@ -13,7 +13,10 @@ from moonmind.schemas.container_job_models import (
 )
 from moonmind.security import repository_scanner_runner
 from moonmind.security.repository_scanners import RepositoryScan, build_scanner_job
-from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    ArtifactTransactionOwnership,
+)
 
 OWNER = OwnerIdentity(principalType="user", principalId="operator")
 
@@ -159,8 +162,9 @@ async def test_temporal_submission_admits_artifacts_with_the_artifact_store(
     async def session_context():
         yield session
 
-    def artifact_service(bound):
+    def artifact_service(bound, *, transaction_ownership):
         assert bound is session
+        assert transaction_ownership is ArtifactTransactionOwnership.CALLER
         return store
 
     async def submit(self, *, owner, request):

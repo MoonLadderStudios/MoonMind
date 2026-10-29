@@ -36,6 +36,11 @@ from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from moonmind.workflows.agent_skills.agent_skills_activities import (
     AgentSkillsActivities,
 )
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactTransactionOwnership,
+    TemporalArtifactRepository,
+    TemporalArtifactService,
+)
 from tests.artifact_access import access_for_test
 from tests.integration.security.test_recurring_assessments import (
     environment as _artifact_environment,
@@ -439,8 +444,16 @@ async def test_scoped_job_journey_reproduces_logic_and_retests_authorized_fix(
         mcp_tools.settings.security, "JWT_SECRET_KEY", "fixture-signing-secret"
     )
     monkeypatch.setattr(mcp_tools, "container_jobs_ready", lambda: True)
+    def artifact_service(session, *, transaction_ownership):
+        assert transaction_ownership is ArtifactTransactionOwnership.CALLER
+        return TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=service._store,
+            transaction_ownership=transaction_ownership,
+        )
+
     monkeypatch.setattr(
-        mcp_tools, "get_temporal_artifact_service", lambda _session: service
+        mcp_tools, "get_temporal_artifact_service", artifact_service
     )
     token = mint_container_job_session_capability(
         secret="fixture-signing-secret",

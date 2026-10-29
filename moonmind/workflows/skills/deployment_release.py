@@ -1167,6 +1167,7 @@ async def _run_job_body(request_file):
         _execution_ref_from_context,
     )
     from moonmind.workflows.temporal.artifacts import (
+        ArtifactTransactionOwnership,
         TemporalArtifactRepository,
         TemporalArtifactService,
     )
@@ -1286,7 +1287,8 @@ async def _run_job_body(request_file):
                     excluded_services=excluded,
                     evidence_writer=TemporalDeploymentEvidenceWriter(
                         artifact_service=TemporalArtifactService(
-                            TemporalArtifactRepository(session)
+                            TemporalArtifactRepository(session),
+                            transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
                         ),
                         principal=str(
                             context.get("deployment_evidence_principal")

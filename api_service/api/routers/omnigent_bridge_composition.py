@@ -54,6 +54,7 @@ from moonmind.omnigent.settings import (
 )
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactTransactionOwnership,
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
@@ -279,7 +280,10 @@ async def bridge_artifact_service() -> AsyncIterator[TemporalArtifactService]:
     """Open the artifact service the bridge reads embedded evidence through."""
 
     async with async_session_maker() as session:
-        yield TemporalArtifactService(TemporalArtifactRepository(session))
+        yield TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
+        )
 
 
 async def resolve_default_bridge_policy_snapshot() -> dict[str, Any]:

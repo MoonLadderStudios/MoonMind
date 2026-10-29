@@ -135,8 +135,8 @@ async def test_operator_creates_child_from_parent_without_identity_headers(
             monkeypatch.setattr(
                 executions,
                 "get_temporal_artifact_service",
-                lambda db: TemporalArtifactService(
-                    TemporalArtifactRepository(db), store=artifact_store
+                lambda db, **kwargs: TemporalArtifactService(
+                    TemporalArtifactRepository(db), store=artifact_store, **kwargs
                 ),
             )
             transport = httpx.ASGITransport(app, client=("127.0.0.1", 43210))

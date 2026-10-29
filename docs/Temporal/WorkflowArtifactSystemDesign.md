@@ -747,34 +747,39 @@ durable metadata. A lifecycle failure marks that maintenance run
 degraded and is retried by the next schedule rather than overwriting successful
 workspace cleanup evidence.
 
-Each sweep pages through expiry, deletion intents, and tombstones for up to
-40 minutes while progress continues. Soft and hard deletions commit per candidate
-to release locks; metadata purge commits bounded pages. Heartbeats continue
-during pending operations and between candidates. A stalled page ends the pass;
-unresolved intents report a backlog for the next hourly pass.
+Each sweep pages through expiry, pending uploads, deletion intents and tombstones
+for up to 40 minutes. Deletions commit per candidate to release locks; metadata
+purges commit bounded pages. Heartbeats continue during operations. Unresolved
+work remains observable for the next hourly pass.
 
-Retention class is assigned when an artifact is created or linked. When the
-mapping shortens a link type's class, a migration applies the new class to
-existing rows whose every link carries that type, so previously written
-evidence does not keep its longer expiry. As with linking, the new expiry
-counts from the latest such link, never earlier than creation. Such migrations
-only change expiry; the sweep still enforces every protection before deleting.
+Retention is assigned on creation/linking. Migrations shorten expiry only when
+every link matches the changed class, measured from the latest link, never before
+creation. Pins and live claims protect every artifact. Non-terminal bridge sessions
+also protect recovery journals; ordinary retention resumes when sessions end.
 
-Saved schedules, including disabled definitions, retain admitted inputs and frozen
-Skill bodies after edits. Bootstrap repairs incomplete lists from the verified
-original manifest before refresh. Current Skill definitions retain their content;
-unreferenced revisions expire normally. Retention and deletion share globally
-ordered artifact/alias locks, without access grants or pins.
+Schedules commit definitions and retained grants before Temporal dispatch. The
+same row lock fences delayed dispatches; startup reconciliation repairs uncertain
+projections by saved ID. Dispatch errors mean saved/pending refresh, not recreate.
+Disabled schedules retain inputs. Bootstrap repairs incomplete lists from verified
+original manifests. Current Skill definitions retain content; unreferenced revisions
+expire normally. Retention and deletion share ordered artifact/alias locks without
+creating access grants or pins.
 
-Current raw and normalized journals referenced by non-terminal Omnigent bridge
-sessions remain recovery data. Their ordinary retention resumes when the
-session ends. Pins and live use claims protect all artifact classes.
+`ArtifactTransactionOwnership.CALLER` flushes without committing admission, retry
+or schedule transactions. `STANDALONE` commits independently. Start/reset follows
+durable grants. Caller reads release observation-only savepoints before artifact
+locks. Streams, signed downloads and physical deletion require standalone ownership.
+Committed TTL claims survive caller rollback. Cleanup preserves primary errors
+and cancellation; transaction-control failures propagate.
 
-Read-use observations use savepoints; caller-owned reads release only their
-observation. Independent reads commit observations; streams and signed URLs retain
-TTL claims. Connection and transaction-control failures propagate. Cleanup faults
-attach a safe diagnostic to the serving error or cancellation, preserving its
-cause and TTL protection.
+Caller writes persist reserved `_moonmind/pending-writes/` markers containing target
+identity and timestamp, never payload or authority. S3 credentials need prefix LIST
+and marker read/write/delete access. Cancellation drains writes before releasing
+database key fences. After 24 hours, lifecycle reconciles under the same fence:
+committed/shared references preserve bytes, settled orphans are deleted, uncertain
+cleanup retains tracking. Bounded scans pass invalid markers without trusting their
+targets. Trusted caller payloads use bounded single PUTs; public upload limits and
+standalone multipart behavior remain unchanged.
 
 Known database connection failures return `artifact_authority_unavailable`;
 storage timeouts return `artifact_storage_unavailable` (HTTP 503, `Retry-After: 5`).
@@ -798,10 +803,9 @@ reclamation preserves exact payload references owned by append-only control-plan
 observations. Pins and use claims protect the original snapshots without freezing
 the event index on an older prefix.
 
-Each journal flush adds a raw and normalized pair with their links (four rows,
-whatever the chunk size) and supersedes the previous pair. An idle stream
-flushes after every event because that is the journal's durability guarantee,
-so superseded pairs are the main source of tombstones; purge bounds them.
+Each journal flush durably adds a raw/normalized pair and links, superseding the
+previous pair. Even idle streams flush every event; bounded purge reclaims the
+resulting tombstones.
 
 Deletion must be idempotent.
 

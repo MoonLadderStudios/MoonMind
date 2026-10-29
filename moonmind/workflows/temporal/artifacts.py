@@ -15,6 +15,7 @@ import time
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
+from enum import Enum
 from io import BytesIO
 from pathlib import Path
 from typing import (
@@ -36,6 +37,7 @@ if TYPE_CHECKING:
     )
 
 import boto3
+from botocore.config import Config as S3ClientConfig
 from botocore.exceptions import ClientError
 from botocore.exceptions import ConnectionError as S3ConnectionError
 from botocore.exceptions import ReadTimeoutError
@@ -60,7 +62,6 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.exc import TimeoutError as SQLTimeoutError
 from sqlalchemy.ext.asyncio import (
-    AsyncConnection,
     AsyncSession,
     AsyncSessionTransaction,
 )
@@ -729,6 +730,31 @@ def build_artifact_ref(artifact: db_models.TemporalArtifact) -> ArtifactRef:
         encryption=artifact.encryption.value,
     )
 
+_PENDING_WRITE_PREFIX = "_moonmind/pending-writes/"
+_PENDING_WRITE_SETTLE = timedelta(hours=24)
+_TRUSTED_PUT_MAX_BYTES = 5 * 1024**3
+
+
+async def _settled_storage_call(operation):
+    """Do not let cancellation release DB fencing before a thread finishes."""
+    future = asyncio.get_running_loop().run_in_executor(None, operation)
+    try:
+        return await asyncio.shield(future)
+    except asyncio.CancelledError as primary:
+        while not future.done():
+            try:
+                await asyncio.shield(future)
+            except asyncio.CancelledError:
+                continue
+            except Exception:  # noqa: BLE001 - drain the original cancelled operation
+                break
+        try:
+            future.result()
+        except BaseException as cleanup:  # noqa: BLE001
+            primary.add_note(f"Storage operation ended with {type(cleanup).__name__}")
+        raise
+
+
 class TemporalArtifactStore:
     """Storage adapter contract for artifact bytes."""
 
@@ -773,6 +799,80 @@ class TemporalArtifactStore:
             f"{safe_namespace}/blobs/{safe_scope}/sha256/"
             f"{digest[:2]}/{digest}"
         )
+
+    def pending_write_keys(self, *, limit: int, after: str | None = None) -> list[str]:
+        """List one bounded oldest-first page for the existing lifecycle owner."""
+        return []
+
+    def pending_writes_exist(self) -> bool:
+        return bool(self.pending_write_keys(limit=1))
+
+    supports_pending_writes = False
+
+    def record_pending_write(self, *, artifact_id: str, storage_key: str) -> str:
+        if not self.supports_pending_writes:
+            raise TemporalArtifactValidationError(
+                "Storage cannot recover caller-owned uploads"
+            )
+        marker = {
+            "version": 1,
+            "artifactId": artifact_id,
+            "storageKey": storage_key,
+            "createdAt": datetime.now(UTC).isoformat(),
+        }
+        payload = json.dumps(marker, sort_keys=True, separators=(",", ":")).encode()
+        key = (
+            _PENDING_WRITE_PREFIX
+            + datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
+            + "-"
+            + hashlib.sha256(payload).hexdigest()
+            + ".json"
+        )
+        self.write_bytes(key, payload, content_type="application/json")
+        return key
+
+    def read_pending_write(self, key: str) -> dict[str, Any]:
+        if not key.startswith(_PENDING_WRITE_PREFIX) or not key.endswith(".json"):
+            raise TemporalArtifactValidationError("Invalid pending-write marker key")
+        chunks = []
+        size = 0
+        for chunk in self.read_chunks(key, chunk_size=4096):
+            size += len(chunk)
+            if size > 4096:
+                raise TemporalArtifactValidationError(
+                    "Pending-write marker exceeds bound"
+                )
+            chunks.append(chunk)
+        payload = b"".join(chunks)
+        if hashlib.sha256(payload).hexdigest() != key[-69:-5]:
+            raise TemporalArtifactValidationError(
+                "Invalid pending-write marker identity"
+            )
+        marker = json.loads(payload)
+        artifact_id = marker.get("artifactId", "")
+        target = marker.get("storageKey", "")
+        path = Path(target)
+        if (
+            marker.get("version") != 1
+            or not re.fullmatch(r"art_[a-zA-Z0-9_-]+", artifact_id)
+            or path.is_absolute()
+            or ".." in path.parts
+            or target.startswith(_PENDING_WRITE_PREFIX)
+            or not (
+                re.fullmatch(
+                    r".+/artifacts/\d{4}/\d{2}/\d{2}/" + re.escape(artifact_id), target
+                )
+                or re.fullmatch(
+                    r".+/blobs/[a-z0-9][a-z0-9._-]{0,63}/sha256/[a-f0-9]{2}/[a-f0-9]{64}",
+                    target,
+                )
+            )
+        ):
+            raise TemporalArtifactValidationError("Invalid pending-write target")
+        created = datetime.fromisoformat(marker["createdAt"])
+        if created.tzinfo is None:
+            raise TemporalArtifactValidationError("Invalid pending-write timestamp")
+        return marker
 
     def object_matches(
         self,
@@ -939,8 +1039,51 @@ class LocalTemporalArtifactStore(TemporalArtifactStore):
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, destination)
+            directory = destination.parent
+            while directory.is_relative_to(self.root.resolve()):
+                directory_fd = os.open(directory, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+                if directory == self.root.resolve():
+                    break
+                directory = directory.parent
         finally:
             temporary.unlink(missing_ok=True)
+
+    supports_pending_writes = True
+
+    def pending_write_keys(self, *, limit: int, after: str | None = None) -> list[str]:
+        directory = self.resolve_storage_key(_PENDING_WRITE_PREFIX)
+        if not directory.exists():
+            return []
+        if after is not None and getattr(self, "_pending_write_scan_exhausted", False):
+            return []
+        iterator = getattr(self, "_pending_write_scan", None)
+        if iterator is None:
+            self._pending_write_scan_exhausted = False
+            iterator = os.scandir(directory)
+            self._pending_write_scan = iterator
+        keys = []
+        for _ in range(max(1, limit)):
+            entry = next(iterator, None)
+            if entry is None:
+                iterator.close()
+                self._pending_write_scan = None
+                self._pending_write_scan_exhausted = True
+                break
+            # Include malformed entries in the bounded page, without trusting
+            # them as target paths. Validation reports them, then scanning moves on.
+            keys.append(_PENDING_WRITE_PREFIX + entry.name)
+        return keys
+
+    def pending_writes_exist(self) -> bool:
+        directory = self.resolve_storage_key(_PENDING_WRITE_PREFIX)
+        if not directory.exists():
+            return False
+        with os.scandir(directory) as entries:
+            return next(entries, None) is not None
 
     def read_bytes(self, storage_key: str) -> bytes:
         return self.resolve_storage_key(storage_key).read_bytes()
@@ -1020,6 +1163,32 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
             client = boto3.client(**self._client_kwargs)
             self._client_local.client = client
         return client
+
+    @property
+    def _write_client(self):
+        client = getattr(self._client_local, "write_client", None)
+        if client is None:
+            client = boto3.client(
+                **self._client_kwargs,
+                config=S3ClientConfig(
+                    connect_timeout=10,
+                    read_timeout=60,
+                    retries={"total_max_attempts": 3, "mode": "standard"},
+                ),
+            )
+            self._client_local.write_client = client
+        return client
+
+    supports_pending_writes = True
+
+    def pending_write_keys(self, *, limit: int, after: str | None = None) -> list[str]:
+        response = self._client.list_objects_v2(
+            Bucket=self._bucket,
+            Prefix=_PENDING_WRITE_PREFIX,
+            MaxKeys=min(1000, max(1, limit)),
+            **({"StartAfter": after} if after else {}),
+        )
+        return [entry["Key"] for entry in response.get("Contents", [])]
 
     @property
     def backend(self) -> db_models.TemporalArtifactStorageBackend:
@@ -1112,7 +1281,7 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
         }
         if content_type:
             kwargs["ContentType"] = content_type
-        self._client.put_object(**kwargs)
+        self._write_client.put_object(**kwargs)
 
     def read_bytes(self, storage_key: str) -> bytes:
         response = self._client.get_object(Bucket=self._bucket, Key=storage_key)
@@ -1351,8 +1520,13 @@ class TemporalArtifactRepository:
         try:
             # SQLAlchemy otherwise emits SAVEPOINT lazily on the first query.
             await self._session.connection()
-        except BaseException:
-            await savepoint.rollback()
+        except BaseException as primary:
+            try:
+                await savepoint.rollback()
+            except BaseException as cleanup:
+                primary.add_note(
+                    f"Artifact observation rollback also failed: {type(cleanup).__name__}"
+                )
             raise
         outer = self._session.get_transaction()
         assert outer is not None
@@ -1427,6 +1601,37 @@ class TemporalArtifactRepository:
             raise _missing_artifact_error(artifact_id)
         return artifact
 
+    async def fence_storage_key(
+        self, *, storage_backend, storage_key: str, wait: bool = True
+    ) -> bool:
+        """Fence even a new key whose artifact insert is still uncommitted."""
+        dialect = self._session.get_bind().dialect.name
+        if dialect == "postgresql":
+            token = int.from_bytes(
+                hashlib.sha256(
+                    (str(storage_backend) + "\0" + storage_key).encode()
+                ).digest()[:8],
+                "big",
+                signed=True,
+            )
+            function = (
+                func.pg_advisory_xact_lock if wait else func.pg_try_advisory_xact_lock
+            )
+            result = await self._session.scalar(select(function(token)))
+            return True if wait else bool(result)
+        if dialect == "sqlite":
+            # SQLite's SELECT FOR UPDATE is a no-op. A zero-row UPDATE still
+            # takes its database writer lock, without changing application data.
+            await self._session.execute(
+                update(db_models.TemporalArtifact)
+                .where(db_models.TemporalArtifact.artifact_id == "")
+                .values(artifact_id="")
+            )
+            return True
+        raise TemporalArtifactValidationError(
+            "Artifact storage fencing requires PostgreSQL or SQLite"
+        )
+
     @_artifact_authority_boundary
     async def lock_storage_references(
         self,
@@ -1435,6 +1640,10 @@ class TemporalArtifactRepository:
         storage_key: str,
     ) -> None:
         """Serialize final-blob deletion across logical references."""
+
+        await self.fence_storage_key(
+            storage_backend=storage_backend, storage_key=storage_key
+        )
 
         stmt = (
             select(db_models.TemporalArtifact.artifact_id)
@@ -2430,6 +2639,13 @@ class TemporalArtifactRepository:
         return list(result.scalars().all())
 
 
+class ArtifactTransactionOwnership(str, Enum):
+    """The application chooses who makes artifact mutations durable."""
+
+    CALLER = "caller"
+    STANDALONE = "standalone"
+
+
 class TemporalArtifactService:
     """Service implementing Temporal artifact semantics for local/dev runtime."""
 
@@ -2437,6 +2653,7 @@ class TemporalArtifactService:
         self,
         repository: TemporalArtifactRepository,
         *,
+        transaction_ownership: ArtifactTransactionOwnership = ArtifactTransactionOwnership.STANDALONE,
         store: TemporalArtifactStore | None = None,
         default_namespace: str | None = None,
         presign_ttl_seconds: int | None = None,
@@ -2445,6 +2662,9 @@ class TemporalArtifactService:
         lifecycle_purge_after_seconds: int | None = None,
     ) -> None:
         self._repository = repository
+        self._transaction_ownership = ArtifactTransactionOwnership(
+            transaction_ownership
+        )
         self._store: TemporalArtifactStore = store or self._build_store_from_settings()
         self._default_namespace = (
             default_namespace
@@ -2479,6 +2699,19 @@ class TemporalArtifactService:
             hard_delete_after=timedelta(seconds=max(0, int(hard_delete_after_seconds))),
             purge_after=timedelta(seconds=max(0, int(purge_after_seconds))),
         )
+
+    async def _finish_mutation(self) -> None:
+        """Flush borrowed work; only a standalone owner may publish it."""
+        if self._transaction_ownership is ArtifactTransactionOwnership.CALLER:
+            await self._repository.flush()
+        else:
+            await self._repository.commit()
+
+    def _require_standalone_use(self) -> None:
+        if self._transaction_ownership is ArtifactTransactionOwnership.CALLER:
+            raise TemporalArtifactValidationError(
+                "This artifact operation requires a standalone transaction owner"
+            )
 
     @staticmethod
     def _build_store_from_settings() -> TemporalArtifactStore:
@@ -3024,6 +3257,7 @@ class TemporalArtifactService:
         recorded. A use request therefore either holds protection before GC
         selects the dependency or receives an explicit terminal state.
         """
+        self._require_standalone_use()
         access = ArtifactAccessContext.require(access)
         artifact = await self._repository.get_artifact_for_update(artifact_id)
         await self._assert_saved_work_read_access(
@@ -3066,7 +3300,7 @@ class TemporalArtifactService:
             expires_at=reference_now
             + timedelta(seconds=max(60, int(ttl_seconds))),
         )
-        await self._repository.commit()
+        await self._finish_mutation()
         return claim
 
     async def release_saved_work_use(
@@ -3082,7 +3316,7 @@ class TemporalArtifactService:
             owner_principal=principal,
             request_id=request_id,
         )
-        await self._repository.commit()
+        await self._finish_mutation()
         return released
 
     async def release_saved_work_operation_uses(
@@ -3096,7 +3330,7 @@ class TemporalArtifactService:
             owner_principal=principal,
             request_id=request_id,
         )
-        await self._repository.commit()
+        await self._finish_mutation()
         return released
 
     @staticmethod
@@ -3143,7 +3377,13 @@ class TemporalArtifactService:
                 + timedelta(seconds=max(60, int(ttl_seconds))),
             )
         except BaseException as exc:
-            await savepoint.rollback()
+            try:
+                await savepoint.rollback()
+            except BaseException as cleanup:
+                exc.add_note(
+                    f"Artifact observation rollback also failed: {type(cleanup).__name__}"
+                )
+                raise exc
             database_error = exc.__cause__ if (
                 isinstance(exc, TemporalArtifactUnavailableError) and exc.dependency == "authority"
             ) else exc
@@ -3173,6 +3413,7 @@ class TemporalArtifactService:
         ttl_seconds: int,
     ) -> str | None:
         """Commit TTL protection for independently owned or bearer reads."""
+        self._require_standalone_use()
         observation = await self._begin_consumer_use(
             artifact_id=artifact_id,
             principal=principal,
@@ -3184,7 +3425,7 @@ class TemporalArtifactService:
             return None
         savepoint, request_id = observation
         await savepoint.commit()
-        await self._repository.commit()
+        await self._finish_mutation()
         return request_id
 
     async def _release_observed_use(
@@ -3211,7 +3452,13 @@ class TemporalArtifactService:
                 request_id=request_id,
             )
         except BaseException as exc:
-            await savepoint.rollback()
+            try:
+                await savepoint.rollback()
+            except BaseException as cleanup:
+                exc.add_note(
+                    f"Artifact observation rollback also failed: {type(cleanup).__name__}"
+                )
+                raise exc
             database_error = exc.__cause__ if (
                 isinstance(exc, TemporalArtifactUnavailableError) and exc.dependency == "authority"
             ) else exc
@@ -3228,7 +3475,7 @@ class TemporalArtifactService:
             )
             return
         await savepoint.commit()
-        await self._repository.commit()
+        await self._finish_mutation()
 
     @asynccontextmanager
     async def _bounded_consumer_use(
@@ -3240,12 +3487,11 @@ class TemporalArtifactService:
         ttl_seconds: int,
     ) -> AsyncIterator[None]:
         """Release observation without replacing an existing serving failure."""
-        bind = getattr(getattr(self._repository, "_session", None), "bind", None)
-        if isinstance(bind, AsyncConnection) and bind.in_transaction():
-            # A nested Session.commit releases its savepoint, not the caller's
-            # transaction. Keep this read's FK protection in its own savepoint
-            # and release it when the read completes, before another input is
-            # locked. Rolling it back must not discard caller-owned writes.
+        if self._transaction_ownership is ArtifactTransactionOwnership.CALLER:
+            # Only the optional claim and storage read run inside this savepoint.
+            # Caller changes are flushed before it begins. Rolling it back releases
+            # the claim's FK lock before the next input is locked, without rolling
+            # back caller mutations or relying on a nested Session's commit mode.
             observation = await self._begin_consumer_use(
                 artifact_id=artifact_id,
                 principal=principal,
@@ -3377,7 +3623,7 @@ class TemporalArtifactService:
 
         metadata["preview_artifact_id"] = preview_artifact.artifact_id
         artifact.metadata_json = metadata
-        await self._repository.commit()
+        await self._finish_mutation()
 
     async def create_for_activity(self, *, principal: str, **kwargs: Any):
         """Create under actual Activity scope and retain its producer raw right."""
@@ -3422,7 +3668,7 @@ class TemporalArtifactService:
                     link_type=_DELEGATED_RAW_LINK_TYPE,
                 ),
             )
-            await self._repository.commit()
+            await self._finish_mutation()
         return artifact, upload
 
     async def _recover_activity_creation(self, artifact_id: str) -> None:
@@ -3527,7 +3773,7 @@ class TemporalArtifactService:
                     link_type=link_type,
                 ),
             )
-        await self._repository.commit()
+        await self._finish_mutation()
 
     async def write_for_activity(self, **kwargs: Any) -> db_models.TemporalArtifact:
         """Bind completion to the current producer, including retained creates."""
@@ -3624,7 +3870,11 @@ class TemporalArtifactService:
         upload_url: str | None = None
         required_headers: dict[str, str] = {}
 
-        if declared_size is not None and declared_size > self._direct_upload_max_bytes:
+        if (
+            declared_size is not None
+            and declared_size > self._direct_upload_max_bytes
+            and self._transaction_ownership is ArtifactTransactionOwnership.STANDALONE
+        ):
             if not self._store.supports_multipart:
                 raise TemporalArtifactValidationError(
                     "artifact exceeds max bytes "
@@ -3679,7 +3929,7 @@ class TemporalArtifactService:
             mode.value,
             self._store.backend.value,
         )
-        await self._repository.commit()
+        await self._finish_mutation()
         return artifact, upload_descriptor
 
     async def put_content_addressed_payload_complete(
@@ -3758,7 +4008,7 @@ class TemporalArtifactService:
         artifact.status = db_models.TemporalArtifactStatus.COMPLETE
         artifact.upload_id = None
         artifact.upload_expires_at = None
-        await self._repository.commit()
+        await self._finish_mutation()
         await self._create_preview_if_required(
             artifact=artifact,
             principal=principal,
@@ -3781,8 +4031,15 @@ class TemporalArtifactService:
         principal: str,
         payload: bytes,
         content_type: str | None = None,
+        _trusted_in_process: bool = False,
     ) -> db_models.TemporalArtifact:
         artifact = await self._repository.get_artifact(artifact_id)
+        if self._transaction_ownership is ArtifactTransactionOwnership.CALLER:
+            await self._repository.lock_storage_references(
+                storage_backend=artifact.storage_backend,
+                storage_key=artifact.storage_key,
+            )
+            artifact = await self._repository.get_artifact_for_update(artifact_id)
         self._assert_mutation_access(artifact, principal=principal)
 
         if artifact.status is db_models.TemporalArtifactStatus.DELETED:
@@ -3810,7 +4067,13 @@ class TemporalArtifactService:
             raise TemporalArtifactStateError(
                 "artifact expects multipart completion; use /complete with parts"
             )
-        if len(payload) > self._direct_upload_max_bytes:
+        max_bytes = (
+            _TRUSTED_PUT_MAX_BYTES
+            if _trusted_in_process
+            and self._transaction_ownership is ArtifactTransactionOwnership.CALLER
+            else self._direct_upload_max_bytes
+        )
+        if len(payload) > max_bytes:
             raise TemporalArtifactValidationError(
                 f"artifact exceeds max bytes ({self._direct_upload_max_bytes})"
             )
@@ -3818,10 +4081,10 @@ class TemporalArtifactService:
         digest, actual_size = self._compute_digest_and_size(payload)
         if (
             artifact.upload_mode is db_models.TemporalArtifactUploadMode.SINGLE_PUT
-            and actual_size > self._direct_upload_max_bytes
+            and actual_size > max_bytes
         ):
             artifact.status = db_models.TemporalArtifactStatus.FAILED
-            await self._repository.commit()
+            await self._finish_mutation()
             raise TemporalArtifactValidationError(
                 f"artifact exceeds max bytes ({self._direct_upload_max_bytes})"
             )
@@ -3833,7 +4096,7 @@ class TemporalArtifactService:
             )
         except TemporalArtifactValidationError:
             artifact.status = db_models.TemporalArtifactStatus.FAILED
-            await self._repository.commit()
+            await self._finish_mutation()
             raise
         if _requires_image_payload_validation(
             content_type=content_type or artifact.content_type,
@@ -3846,12 +4109,20 @@ class TemporalArtifactService:
                 )
             except TemporalArtifactValidationError:
                 artifact.status = db_models.TemporalArtifactStatus.FAILED
-                await self._repository.commit()
+                await self._finish_mutation()
                 raise
 
         try:
-            await asyncio.get_running_loop().run_in_executor(
-                None,
+            if self._transaction_ownership is ArtifactTransactionOwnership.CALLER:
+                # Storage-owned intent survives the surrounding admission rollback.
+                # It carries no payload or access grant. Only lifecycle reconciles it
+                # after observing the committed outcome under the same key fence.
+                await _settled_storage_call(
+                    lambda: self._store.record_pending_write(
+                        artifact_id=artifact.artifact_id, storage_key=artifact.storage_key
+                    )
+                )
+            await _settled_storage_call(
                 lambda: self._store.write_bytes(
                     artifact.storage_key,
                     payload,
@@ -3866,7 +4137,7 @@ class TemporalArtifactService:
         artifact.status = db_models.TemporalArtifactStatus.COMPLETE
         artifact.upload_id = None
         artifact.upload_expires_at = None
-        await self._repository.commit()
+        await self._finish_mutation()
 
         await self._create_preview_if_required(
             artifact=artifact,
@@ -3906,6 +4177,7 @@ class TemporalArtifactService:
                 principal=principal,
                 payload=payload,
                 content_type=content_type,
+                _trusted_in_process=True,
             )
         if artifact.status is db_models.TemporalArtifactStatus.COMPLETE:
             digest, actual_size = self._compute_digest_and_size(payload)
@@ -3921,6 +4193,7 @@ class TemporalArtifactService:
             return artifact
         if artifact.status is db_models.TemporalArtifactStatus.DELETED:
             raise TemporalArtifactStateError("artifact is deleted")
+        self._require_standalone_use()
         if not artifact.upload_id:
             raise TemporalArtifactStateError("multipart upload session is missing")
         if not payload:
@@ -3962,7 +4235,7 @@ class TemporalArtifactService:
                     abort_exc,
                 )
             artifact.status = db_models.TemporalArtifactStatus.FAILED
-            await self._repository.commit()
+            await self._finish_mutation()
             raise
 
         return await self.complete(
@@ -4047,6 +4320,7 @@ class TemporalArtifactService:
 
         payload: bytes
         if artifact.upload_mode is db_models.TemporalArtifactUploadMode.MULTIPART:
+            self._require_standalone_use()
             if not artifact.upload_id:
                 raise TemporalArtifactStateError("multipart upload session is missing")
             normalized_parts = self._normalize_parts(parts)
@@ -4065,7 +4339,7 @@ class TemporalArtifactService:
                 )
             except Exception:
                 artifact.status = db_models.TemporalArtifactStatus.FAILED
-                await self._repository.commit()
+                await self._finish_mutation()
                 raise
             payload = await asyncio.get_running_loop().run_in_executor(
                 None, self._store.read_bytes, artifact.storage_key
@@ -4079,7 +4353,7 @@ class TemporalArtifactService:
             and actual_size > self._direct_upload_max_bytes
         ):
             artifact.status = db_models.TemporalArtifactStatus.FAILED
-            await self._repository.commit()
+            await self._finish_mutation()
             raise TemporalArtifactValidationError(
                 f"artifact exceeds max bytes ({self._direct_upload_max_bytes})"
             )
@@ -4091,7 +4365,7 @@ class TemporalArtifactService:
             )
         except TemporalArtifactValidationError:
             artifact.status = db_models.TemporalArtifactStatus.FAILED
-            await self._repository.commit()
+            await self._finish_mutation()
             raise
         if _requires_image_payload_validation(
             content_type=artifact.content_type,
@@ -4104,7 +4378,7 @@ class TemporalArtifactService:
                 )
             except TemporalArtifactValidationError:
                 artifact.status = db_models.TemporalArtifactStatus.FAILED
-                await self._repository.commit()
+                await self._finish_mutation()
                 raise
 
         artifact.sha256 = digest
@@ -4112,7 +4386,7 @@ class TemporalArtifactService:
         artifact.status = db_models.TemporalArtifactStatus.COMPLETE
         artifact.upload_id = None
         artifact.upload_expires_at = None
-        await self._repository.commit()
+        await self._finish_mutation()
 
         await self._create_preview_if_required(
             artifact=artifact,
@@ -4682,7 +4956,7 @@ class TemporalArtifactService:
                     label="Admitted workflow input",
                 ),
             )
-        await self._repository.commit()
+        await self._finish_mutation()
 
     async def link_artifact(
         self,
@@ -4734,7 +5008,7 @@ class TemporalArtifactService:
             derived = _derive_retention(None, link.link_type)
             artifact.retention_class = derived
             artifact.expires_at = _expires_at_for_retention(derived, datetime.now(UTC))
-        await self._repository.commit()
+        await self._finish_mutation()
         logger.info(
             "Temporal artifact link operation principal=%s artifact_id=%s",
             principal,
@@ -4801,7 +5075,7 @@ class TemporalArtifactService:
         )
         artifact.retention_class = db_models.TemporalArtifactRetentionClass.PINNED
         artifact.expires_at = None
-        await self._repository.commit()
+        await self._finish_mutation()
         return pin
 
     async def unpin(
@@ -4822,7 +5096,7 @@ class TemporalArtifactService:
                 artifact.retention_class,
                 datetime.now(UTC),
             )
-        await self._repository.commit()
+        await self._finish_mutation()
 
     async def soft_delete(
         self,
@@ -4877,7 +5151,7 @@ class TemporalArtifactService:
         artifact.status = db_models.TemporalArtifactStatus.DELETED
         artifact.deleted_at = reference_now
         await self._repository.unpin_artifact(artifact.artifact_id)
-        await self._repository.commit()
+        await self._finish_mutation()
         logger.info(
             "Temporal artifact soft_delete principal=%s artifact_id=%s",
             principal,
@@ -4951,6 +5225,76 @@ class TemporalArtifactService:
             artifact_id=artifact.artifact_id, error=None
         )
 
+    async def _reconcile_pending_writes(
+        self, *, now: datetime, limit: int
+    ) -> tuple[int, bool]:
+        """Use the existing lifecycle budget to retire settled upload intents."""
+        self._pending_write_page_advanced = False
+        if getattr(self, "_pending_write_draining", False) and getattr(
+            self, "_pending_write_scan_complete", False
+        ):
+            return 0, bool(
+                await _settled_storage_call(self._store.pending_writes_exist)
+            )
+        keys = await _settled_storage_call(
+            lambda: self._store.pending_write_keys(
+                limit=limit, after=getattr(self, "_pending_write_cursor", None)
+            )
+        )
+        self._pending_write_cursor = keys[-1] if keys else None
+        self._pending_write_page_advanced = bool(keys)
+        if not keys:
+            self._pending_write_scan_complete = True
+        reconciled = 0
+        pending = len(keys) >= limit
+        for key in keys:
+            try:
+                marker = await _settled_storage_call(
+                    lambda key=key: self._store.read_pending_write(key)
+                )
+                if (
+                    datetime.fromisoformat(marker["createdAt"]) + _PENDING_WRITE_SETTLE
+                    > now
+                ):
+                    pending = True
+                    continue
+                target = marker["storageKey"]
+                if not await self._repository.fence_storage_key(
+                    storage_backend=self._store.backend, storage_key=target, wait=False
+                ):
+                    pending = True
+                    continue
+                if not await self._repository.has_live_storage_reference(
+                    storage_backend=self._store.backend, storage_key=target
+                ):
+                    # Absent metadata after the writer fence is the rolled-back
+                    # case. A sibling COMPLETE or PENDING row owns shared bytes.
+                    await _settled_storage_call(
+                        lambda target=target: self._store.delete(target)
+                    )
+                    if await _settled_storage_call(
+                        lambda target=target: self._store.object_exists(target)
+                    ):
+                        pending = True
+                        continue
+                await _settled_storage_call(lambda key=key: self._store.delete(key))
+                reconciled += 1
+            except Exception:  # Preserve marker and continue bounded reconciliation.
+                pending = True
+                logger.warning(
+                    "Pending artifact upload reconciliation unavailable key=%s",
+                    key,
+                    exc_info=True,
+                )
+            finally:
+                # This method runs only under the standalone lifecycle owner.
+                # Never accumulate key locks across candidates in opposite order.
+                await self._repository.commit()
+        pending = pending or bool(
+            await _settled_storage_call(lambda: self._store.pending_writes_exist())
+        )
+        return reconciled, pending
+
     async def reconcile_deletion_intents(
         self,
         *,
@@ -4958,6 +5302,7 @@ class TemporalArtifactService:
         limit: int = 500,
     ) -> int:
         """Converge persisted deletion intents after failures/restarts."""
+        self._require_standalone_use()
         reconciled, _examined = await self._reconcile_deletion_intent_page(
             principal=principal, limit=limit
         )
@@ -5008,7 +5353,7 @@ class TemporalArtifactService:
                 continue
             await self._repository.clear_deletion_intent(artifact.artifact_id)
             reconciled += 1
-        await self._repository.commit()
+        await self._finish_mutation()
         return reconciled, len(intents)
 
     async def hard_delete(
@@ -5017,6 +5362,7 @@ class TemporalArtifactService:
         artifact_id: str,
         principal: str,
     ) -> db_models.TemporalArtifact:
+        self._require_standalone_use()
         artifact = await self._repository.get_artifact(artifact_id)
         self._assert_mutation_access(artifact, principal=principal)
         # Storage identities are immutable. Lock the whole group before its
@@ -5068,7 +5414,7 @@ class TemporalArtifactService:
             await self._repository.record_deletion_intent(
                 artifact_id=artifact.artifact_id, principal=principal
             )
-            await self._repository.commit()
+            await self._finish_mutation()
             # Re-acquire after the publish commit and recheck: a creator
             # that committed a new live reference just before our publish
             # must keep the bytes.
@@ -5078,13 +5424,13 @@ class TemporalArtifactService:
                 storage_key=artifact.storage_key,
             ):
                 await self._repository.clear_deletion_intent(artifact.artifact_id)
-                await self._repository.commit()
+                await self._finish_mutation()
                 return artifact
             await self._delete_object_recoverably(
                 artifact=artifact, principal=principal
             )
         await self._repository.clear_deletion_intent(artifact.artifact_id)
-        await self._repository.commit()
+        await self._finish_mutation()
         logger.info(
             "Temporal artifact hard_delete principal=%s artifact_id=%s",
             principal,
@@ -5166,7 +5512,7 @@ class TemporalArtifactService:
         counts["purged"], counts["links"] = await self._repository.purge_artifacts(
             purge_ids
         )
-        await self._repository.commit()
+        await self._finish_mutation()
         return counts
 
     async def sweep_lifecycle(
@@ -5182,6 +5528,7 @@ class TemporalArtifactService:
 
         ``on_progress`` runs before each candidate to report work within a page.
         """
+        self._require_standalone_use()
         sweep_now = now or datetime.now(UTC)
         lifecycle_run_id = run_id or str(uuid4())
         page_size = max(1, int(limit))
@@ -5200,7 +5547,7 @@ class TemporalArtifactService:
             )
             if artifact.status is db_models.TemporalArtifactStatus.DELETED:
                 artifact.last_lifecycle_run_id = lifecycle_run_id
-                await self._repository.commit()
+                await self._finish_mutation()
                 continue
             # Recheck protection at the sweep boundary: expiry eligibility
             # alone never removes content under a live claim or operator pin.
@@ -5217,12 +5564,12 @@ class TemporalArtifactService:
             ):
                 skipped_in_use += 1
                 artifact.last_lifecycle_run_id = lifecycle_run_id
-                await self._repository.commit()
+                await self._finish_mutation()
                 continue
             if await self._repository.get_pin(artifact.artifact_id) is not None:
                 skipped_in_use += 1
                 artifact.last_lifecycle_run_id = lifecycle_run_id
-                await self._repository.commit()
+                await self._finish_mutation()
                 continue
             artifact.status = db_models.TemporalArtifactStatus.DELETED
             artifact.deleted_at = sweep_now
@@ -5230,7 +5577,7 @@ class TemporalArtifactService:
             artifact.last_lifecycle_run_id = lifecycle_run_id
             # Do not carry expiry-order locks into the next candidate: a
             # schedule admits several inputs in artifact-ID order.
-            await self._repository.commit()
+            await self._finish_mutation()
 
         cutoff = sweep_now - self._lifecycle.hard_delete_after
         hard_candidates = await self._repository.list_deleted_for_hard_delete(
@@ -5257,7 +5604,7 @@ class TemporalArtifactService:
             ):
                 skipped_in_use += 1
                 artifact.last_lifecycle_run_id = lifecycle_run_id
-                await self._repository.commit()
+                await self._finish_mutation()
                 continue
             artifact.hard_deleted_at = sweep_now
             artifact.tombstoned_at = sweep_now
@@ -5275,7 +5622,7 @@ class TemporalArtifactService:
                 await self._repository.record_deletion_intent(
                     artifact_id=artifact.artifact_id, principal=principal
                 )
-                await self._repository.commit()
+                await self._finish_mutation()
                 # Re-acquire under row lock and recheck: a creator that
                 # committed a new live reference just before our publish
                 # must keep the bytes.
@@ -5287,7 +5634,7 @@ class TemporalArtifactService:
                     storage_key=artifact.storage_key,
                 ):
                     await self._repository.clear_deletion_intent(artifact.artifact_id)
-                    await self._repository.commit()
+                    await self._finish_mutation()
                     hard_deleted += 1
                     continue
                 try:
@@ -5297,15 +5644,18 @@ class TemporalArtifactService:
                 except TemporalArtifactStateError:
                     # Intent persisted; reconciliation converges later. The
                     # tombstone row stays truthful about the pending delete.
-                    await self._repository.commit()
+                    await self._finish_mutation()
                     continue
                 await self._repository.clear_deletion_intent(artifact.artifact_id)
-                await self._repository.commit()
+                await self._finish_mutation()
             hard_deleted += 1
             # Shared-live and protected outcomes must release their alias
             # group too; no later candidate may reverse that lock order.
-            await self._repository.commit()
+            await self._finish_mutation()
 
+        upload_reconciled, pending_uploads = await self._reconcile_pending_writes(
+            now=sweep_now, limit=page_size
+        )
         reconciled, intent_count = await self._reconcile_deletion_intent_page(
             principal=principal, limit=page_size, on_progress=on_progress
         )
@@ -5318,7 +5668,7 @@ class TemporalArtifactService:
         # A short intent page can still contain failed or uncommitted deletes.
         # Only report drainage after reconciliation leaves no pending intent.
         pending_intents = await self._repository.list_pending_deletion_intents(limit=1)
-        await self._repository.commit()
+        await self._finish_mutation()
         logger.info(
             "Temporal artifact sweep_lifecycle principal=%s run_id=%s "
             "soft_deleted=%s hard_deleted=%s reconciled=%s purge_candidates=%s "
@@ -5342,10 +5692,11 @@ class TemporalArtifactService:
             soft_deleted_count=soft_deleted,
             hard_deleted_count=hard_deleted,
             skipped_in_use_count=skipped_in_use,
-            reconciled_deletion_count=reconciled,
+            reconciled_deletion_count=reconciled + upload_reconciled,
             pruned_claim_count=pruned,
             hard_delete_candidate_count=len(hard_candidates),
             drained=not pending_intents
+            and not pending_uploads
             and all(
                 count < page_size
                 for count in (
@@ -5385,50 +5736,60 @@ class TemporalArtifactService:
         lifecycle_run_id = run_id or str(uuid4())
         deadline = time.monotonic() + max(0.0, time_budget.total_seconds())
         pages: list[LifecycleSweepSummary] = []
-        while True:
-            page = await self.sweep_lifecycle(
-                principal=principal,
+        self._pending_write_draining = True
+        self._pending_write_scan_complete = False
+        try:
+            while True:
+                page = await self.sweep_lifecycle(
+                    principal=principal,
+                    run_id=lifecycle_run_id,
+                    now=now,
+                    limit=limit,
+                    on_progress=on_progress,
+                )
+                pages.append(page)
+                if on_page is not None:
+                    on_page(page)
+                # Store errors are not progress: an outage hands at most one page
+                # of tombstones to reconciliation per pass.
+                progressed = (
+                    page.soft_deleted_count
+                    + page.hard_deleted_count
+                    + page.reconciled_deletion_count
+                    + page.purged_count
+                    + page.purge_unconfirmed_count
+                    > 0
+                )
+                progressed = progressed or getattr(
+                    self, "_pending_write_page_advanced", False
+                )
+                if page.drained or not progressed or time.monotonic() >= deadline:
+                    break
+            return LifecycleSweepSummary(
                 run_id=lifecycle_run_id,
-                now=now,
-                limit=limit,
-                on_progress=on_progress,
+                expired_candidate_count=sum(p.expired_candidate_count for p in pages),
+                soft_deleted_count=sum(p.soft_deleted_count for p in pages),
+                hard_deleted_count=sum(p.hard_deleted_count for p in pages),
+                skipped_in_use_count=sum(p.skipped_in_use_count for p in pages),
+                reconciled_deletion_count=sum(
+                    p.reconciled_deletion_count for p in pages
+                ),
+                pruned_claim_count=sum(p.pruned_claim_count for p in pages),
+                hard_delete_candidate_count=sum(
+                    p.hard_delete_candidate_count for p in pages
+                ),
+                pages=len(pages),
+                drained=pages[-1].drained,
+                purge_candidate_count=sum(p.purge_candidate_count for p in pages),
+                purged_count=sum(p.purged_count for p in pages),
+                purged_link_count=sum(p.purged_link_count for p in pages),
+                # Every page recounts the same withheld rows; the last is current.
+                purge_protected_count=pages[-1].purge_protected_count,
+                purge_unconfirmed_count=sum(p.purge_unconfirmed_count for p in pages),
+                purge_error_count=sum(p.purge_error_count for p in pages),
             )
-            pages.append(page)
-            if on_page is not None:
-                on_page(page)
-            # Store errors are not progress: an outage hands at most one page
-            # of tombstones to reconciliation per pass.
-            progressed = (
-                page.soft_deleted_count
-                + page.hard_deleted_count
-                + page.reconciled_deletion_count
-                + page.purged_count
-                + page.purge_unconfirmed_count
-                > 0
-            )
-            if page.drained or not progressed or time.monotonic() >= deadline:
-                break
-        return LifecycleSweepSummary(
-            run_id=lifecycle_run_id,
-            expired_candidate_count=sum(p.expired_candidate_count for p in pages),
-            soft_deleted_count=sum(p.soft_deleted_count for p in pages),
-            hard_deleted_count=sum(p.hard_deleted_count for p in pages),
-            skipped_in_use_count=sum(p.skipped_in_use_count for p in pages),
-            reconciled_deletion_count=sum(p.reconciled_deletion_count for p in pages),
-            pruned_claim_count=sum(p.pruned_claim_count for p in pages),
-            hard_delete_candidate_count=sum(
-                p.hard_delete_candidate_count for p in pages
-            ),
-            pages=len(pages),
-            drained=pages[-1].drained,
-            purge_candidate_count=sum(p.purge_candidate_count for p in pages),
-            purged_count=sum(p.purged_count for p in pages),
-            purged_link_count=sum(p.purged_link_count for p in pages),
-            # Every page recounts the same withheld rows; the last is current.
-            purge_protected_count=pages[-1].purge_protected_count,
-            purge_unconfirmed_count=sum(p.purge_unconfirmed_count for p in pages),
-            purge_error_count=sum(p.purge_error_count for p in pages),
-        )
+        finally:
+            self._pending_write_draining = False
 
     async def compute_preview(
         self,

@@ -664,8 +664,9 @@ async def test_exact_branch_report_finishes_pending_verification(
         mock_client_adapter.describe_workflow.return_value = None
         monkeypatch.setattr(
             "api_service.api.routers.executions.get_temporal_artifact_service",
-            lambda db: TemporalArtifactService(
+            lambda db, *, transaction_ownership: TemporalArtifactService(
                 TemporalArtifactRepository(db),
+                transaction_ownership=transaction_ownership,
                 store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
             ),
         )

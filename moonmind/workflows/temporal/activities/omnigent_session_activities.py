@@ -57,7 +57,10 @@ from moonmind.schemas.omnigent_session_models import (
     OmnigentSessionTerminalResult,
     OmnigentSessionWorkflowInput,
 )
-from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    ArtifactTransactionOwnership,
+)
 
 _ARTIFACT_PRINCIPAL = "service:omnigent_session_supervisor"
 _MAX_EVENT_BATCH = 100
@@ -122,7 +125,10 @@ async def _write_json_artifact(
 
     body = _json_bytes(payload)
     async with async_session_maker() as session:
-        service = TemporalArtifactService(TemporalArtifactRepository(session))
+        service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
+        )
         artifact, _upload = await service.create(
             principal=_ARTIFACT_PRINCIPAL,
             content_type="application/json",
@@ -163,7 +169,10 @@ async def _read_json_artifact(
     )
 
     async with async_session_maker() as session:
-        service = TemporalArtifactService(TemporalArtifactRepository(session))
+        service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
+        )
         _artifact, body = await service.read(
             artifact_id=_artifact_id(ref),
             access=access,

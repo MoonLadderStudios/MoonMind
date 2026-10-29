@@ -546,8 +546,8 @@ async def test_tool_session_control_persists_and_resumes_exact_ui_verification(
         # without a caller invoking continuation or repeating the control.
         monkeypatch.setattr(
             "moonmind.workflows.get_temporal_artifact_service",
-            lambda db: TemporalArtifactService(
-                TemporalArtifactRepository(db), store=artifacts._store
+            lambda db, **kwargs: TemporalArtifactService(
+                TemporalArtifactRepository(db), store=artifacts._store, **kwargs
             ),
         )
         await _confirm(store, kind)
