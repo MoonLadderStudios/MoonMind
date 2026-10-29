@@ -2,10 +2,14 @@
 
 import hashlib
 import json
+from dataclasses import replace
 
 import pytest
+from temporalio.testing import ActivityEnvironment
 
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    ExecutionRef,
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
     TemporalArtifactService,
@@ -259,6 +263,11 @@ async def test_published_pr_real_bytes_verifier_and_durable_owner_complete_same_
                 principal="workflow:issue-owner",
                 content_type="application/json",
                 metadata_json={"name": name},
+                # Match artifact.create's SDK-owned publication link.
+                link=ExecutionRef(
+                    namespace="moonmind", workflow_id="issue-owner",
+                    run_id="run-1", link_type="output.artifact",
+                ),
             )
             await store.write_complete(
                 artifact_id=artifact.artifact_id,
@@ -272,15 +281,30 @@ async def test_published_pr_real_bytes_verifier_and_durable_owner_complete_same_
         report_reads = []
 
         async def read_report(name, request, **_kwargs):
-            assert (
-                name == "artifact.read" and request.principal == "workflow:issue-owner"
-            )
+            assert name == "artifact.read"
+            assert "principal" not in request.model_dump()
             report_reads.append(request.artifact_ref)
-            _, body = await store.read(
-                artifact_id=str(request.artifact_ref).removeprefix("artifact://"),
-                access=access_for_test(request.principal),
+            environment = ActivityEnvironment()
+            environment.info = replace(
+                environment.info,
+                namespace="moonmind",
+                workflow_namespace="moonmind",
+                workflow_id="issue-owner",
+                workflow_run_id="run-1",
             )
-            return body
+
+            async def read():
+                assert (
+                    ArtifactAccessContext.for_activity().execution_principal
+                    == "workflow:issue-owner"
+                )
+                _, body = await store.read(
+                    artifact_id=str(request.artifact_ref).removeprefix("artifact://"),
+                    access=ArtifactAccessContext.for_activity(),
+                )
+                return body
+
+            return await environment.run(read)
 
         monkeypatch.setattr(run_module, "execute_typed_activity", read_report)
 

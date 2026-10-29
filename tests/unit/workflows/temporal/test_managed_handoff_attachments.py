@@ -19,6 +19,7 @@ from moonmind.workflows.temporal.activity_runtime import (
 from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
     LocalTemporalArtifactStore,
+    TemporalArtifactAuthorizationError,
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
@@ -186,8 +187,8 @@ async def test_managed_turn_stages_exact_brief_and_preserves_candidate(
             )
             ref = await _write_json_artifact(
                 service,
-                # Permit metadata reads so the unrelated-link case exercises
-                # workflow isolation even when the reader owns the artifact.
+                # Creator provenance must not authorize metadata reads when
+                # the artifact is linked only to an unrelated workflow.
                 principal="workflow:parent-workflow",
                 payload=brief,
                 execution_ref=ExecutionRef(
@@ -214,10 +215,13 @@ async def test_managed_turn_stages_exact_brief_and_preserves_candidate(
             if linked_workflow != "parent-workflow":
                 with pytest.raises(
                     WorkspaceArtifactProjectionError,
-                    match="not linked to the current workflow family",
+                    match="source artifact metadata is unavailable",
                 ) as denied:
                     await activities.agent_runtime_prepare_turn_instructions(payload)
                 assert denied.value.code == "WORKSPACE_AUTHORITY_MISMATCH"
+                assert isinstance(
+                    denied.value.__cause__, TemporalArtifactAuthorizationError
+                )
                 assert not list(workspace.glob(".moonmind/attachments/*"))
             else:
                 # Cold launch metadata and subsequent turns use the same owner;
