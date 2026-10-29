@@ -267,6 +267,11 @@ digests, and outbound content before storing the original bytes. It adds durable
 `artifactRef` values to the inventory and links files to the proven Temporal
 parent. `stepEvidenceRefs` accompany later step attachments and remediation
 continuations, so fresh workspaces receive reports as well as their summaries.
+Inventories and reports travel as whole groups. The shared materializer keeps
+ordinary brief/gate inputs mandatory and admits newest complete groups within
+its existing 64-reference and 256 MiB aggregate limits, using stored byte sizes.
+Omitted groups remain durable artifacts; they do not prevent verifier startup or
+turn a partial inventory into available proof.
 Paths are relative to the Git checkout. The publisher accepts a checkout at the
 admitted workspace root or its immediate subdirectory; deeper layouts use the
 existing workspace locator's `relativePath`. Discovery checks at most 128 child

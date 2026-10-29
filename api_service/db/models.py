@@ -317,6 +317,11 @@ class RecurringWorkflowRun(Base):
             "outcome",
             "dispatch_after",
         ),
+        Index(
+            "ix_recurring_runs_definition_terminal",
+            "definition_id",
+            "terminal_observed_at",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -365,6 +370,11 @@ class RecurringWorkflowRun(Base):
         String(128), nullable=True
     )
     temporal_run_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Preserve the dispatch outcome when a direct terminal observation retires
+    # a known owner from bounded implementation admission.
+    terminal_observed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
     message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

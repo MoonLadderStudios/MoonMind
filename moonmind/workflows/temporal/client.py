@@ -1680,9 +1680,15 @@ class TemporalClientAdapter:
                 not description.schedule.state.paused
                 and description.schedule.policy.overlap == ScheduleOverlapPolicy.SKIP
                 and owner_id.startswith(f"mm:{definition_id}-")
-                and len(actions) == 1
-                and actions[0].workflow_id == owner_id
             )
+            # ALLOW_ALL successors are deliberately absent from this list on
+            # Temporal 1.29.1. The recurring service owns the durable bound;
+            # this read only adds a conservative check for native owners.
+            for action in actions:
+                if action.workflow_id != owner_id:
+                    other = await client.get_workflow_handle(action.workflow_id).describe()
+                    if other.status == WorkflowExecutionStatus.RUNNING:
+                        eligible = False
             if eligible:
                 parent = await client.get_workflow_handle(
                     owner_id, run_id=owner_run
@@ -1768,6 +1774,59 @@ class TemporalClientAdapter:
             )
         except Exception:
             return ScheduleTriggerResult()
+
+    async def recurring_issue_owner(self, workflow_id: str) -> dict[str, Any]:
+        """Observe a durable owner directly, including untracked ALLOW_ALL starts.
+
+        Follow the current run of this unique occurrence ID across continuation.
+        A transport error is unknown ownership, never evidence of a free slot.
+        """
+        from temporalio.client import WorkflowExecutionStatus
+
+        client = await self.get_client()
+        try:
+            description = await client.get_workflow_handle(workflow_id).describe()
+        except Exception as exc:
+            if _is_rpc_status(exc, "NOT_FOUND"):
+                return {"state": "terminal", "workflowId": workflow_id}
+            raise
+        if description.status != WorkflowExecutionStatus.RUNNING:
+            return {"state": "terminal", "workflowId": workflow_id}
+        result = {
+            "state": "running",
+            "workflowId": workflow_id,
+            "runId": description.run_id,
+            "startedAt": description.start_time,
+            "root": description.parent_id is None
+            and description.workflow_type == "MoonMind.UserWorkflow",
+            "reviewReady": False,
+        }
+        memo = await description.memo()
+        marker = memo.get("implementationAvailability") or {}
+        if (
+            isinstance(marker, dict)
+            and marker.get("state") == "review_ready"
+            and marker.get("mergeWorkflowId")
+        ):
+            try:
+                merge = await client.get_workflow_handle(
+                    marker["mergeWorkflowId"]
+                ).describe()
+            except Exception as exc:
+                if _is_rpc_status(exc, "NOT_FOUND"):
+                    return result
+                raise
+            result["reviewReady"] = (
+                merge.status == WorkflowExecutionStatus.RUNNING
+                and merge.workflow_type == "MoonMind.MergeAutomation"
+                and merge.parent_id == workflow_id
+                and merge.parent_run_id == description.run_id
+            )
+        return result
+
+    async def recurring_native_owner_ids(self, definition_id: Any) -> list[str]:
+        _, description = await self._get_schedule_handle(definition_id)
+        return [action.workflow_id for action in description.info.running_actions]
 
     async def delete_schedule(self, *, definition_id: Any) -> None:
         """Delete a Temporal Schedule.

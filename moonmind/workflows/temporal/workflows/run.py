@@ -4459,6 +4459,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 continuation["assessmentContext"]["stepEvidenceRefs"] = list(
                     self._assessment_context.get("stepEvidenceRefs") or []
                 )
+                continuation["assessmentContext"]["stepEvidenceBundles"] = [
+                    list(bundle) for bundle in self._assessment_context.get("stepEvidenceBundles") or []
+                ]
             trusted_issue = self._trusted_issue_context or {}
             compact_issue = {
                 key: trusted_issue[key]
@@ -10524,6 +10527,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         input_refs: Sequence[str],
         *,
         agent_kind: str,
+        include_step_evidence: bool = True,
     ) -> list[str]:
         """Declare durable prior-step artifacts as fresh-workspace attachments."""
 
@@ -10536,7 +10540,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._assessment_context.get("assessmentArtifactRef")
             or self._assessment_context.get("assessment_artifact_ref")
         ]
-        if self._patched_or_false_outside_workflow("run-step-evidence-handoff-v1"):
+        if include_step_evidence and self._patched_or_false_outside_workflow("run-step-evidence-handoff-v1"):
             artifact_refs.extend(self._assessment_context.get("stepEvidenceRefs") or [])
         if self._patched_or_false_outside_workflow(
             RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH
@@ -12015,6 +12019,20 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 and workflow.patched(RUN_SCHEDULED_OCCURRENCE_PLAN_ADMISSION_PATCH)
             ):
                 await self._admit_scheduled_occurrence_plan(parameters)
+            if self._patched_or_false_outside_workflow("run-recurring-implementation-admission-v1"):
+                await self._await_recurring_implementation_admission(parameters)
+                if self._cancel_requested:
+                    await self._run_finalizing_stage(
+                        parameters=parameters, status="canceled", error=None
+                    )
+                    self._close_status = CLOSE_STATUS_CANCELED
+                    self._set_state(STATE_CANCELED, summary="Execution canceled.")
+                    await self._record_terminal_state(
+                        state=STATE_CANCELED,
+                        close_status=CLOSE_STATUS_CANCELED,
+                        summary="Execution canceled.",
+                    )
+                    return {"status": "canceled"}
             resolved_plan_ref = await self._run_planning_stage(
                 parameters=parameters,
                 input_ref=input_ref,
@@ -19443,18 +19461,28 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return
         if self._patched_or_false_outside_workflow("run-step-evidence-handoff-v1"):
             evidence_refs = outputs.get("stepEvidenceRefs")
-            if isinstance(evidence_refs, list):
-                previous = self._assessment_context.get("stepEvidenceRefs") or []
+            manifest_ref = outputs.get("stepEvidenceRef")
+            if isinstance(manifest_ref, str) and manifest_ref.startswith("art_"):
+                manifest_ref = "artifact://" + manifest_ref
+            if (
+                isinstance(evidence_refs, list)
+                and evidence_refs
+                and evidence_refs[0] == manifest_ref
+                and all(
+                    isinstance(ref, str) and ref.startswith("artifact://art_")
+                    for ref in evidence_refs
+                )
+            ):
+                bundle = list(dict.fromkeys(evidence_refs))
+                previous = self._assessment_context.get("stepEvidenceBundles") or []
+                bundles = [group for group in previous if group[0] != manifest_ref] + [bundle]
+                # Bound history while retaining inventory/report groups intact.
+                while sum(len(group) for group in bundles) > 128:
+                    bundles.pop(0)
+                self._assessment_context["stepEvidenceBundles"] = bundles
                 self._assessment_context["stepEvidenceRefs"] = list(
-                    dict.fromkeys(
-                        [
-                            ref
-                            for ref in [*previous, *evidence_refs]
-                            if isinstance(ref, str)
-                            and ref.startswith("artifact://art_")
-                        ]
-                    )
-                )[-128:]
+                    dict.fromkeys(ref for group in bundles for ref in group)
+                )
         self._last_step_id = node_id
         operator_summary = self._sanitize_operator_summary(
             self._coerce_text(
@@ -22068,7 +22096,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 task_queue=self._workflow_child_task_queue(),
                 cancellation_type=(
                     ChildWorkflowCancellationType.WAIT_CANCELLATION_COMPLETED
-                    if guard_claim
+                    if guard_claim or availability_enabled
                     else ChildWorkflowCancellationType.TRY_CANCEL
                 ),
                 static_summary="Waiting for pull request merge readiness",
@@ -22083,33 +22111,49 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             )
             if not availability_enabled:
                 return child
-            recurrence = (parameters.get("system") or {}).get("recurrence") or {}
-            if (
-                recurrence.get("definitionId")
-                and (self._trusted_issue_context or {}).get("trustedSource")
-                == "moonmind.github.get_issue"
-                and self._moonspec_gate_verdict == "FULLY_IMPLEMENTED"
-                and payload["mergeAutomationConfig"]["finishMode"] == "merge"
-            ):
-                self._publish_context["implementationAvailability"] = {
-                    "state": "review_ready",
-                    "definitionId": str(recurrence["definitionId"]),
-                    "mergeWorkflowId": workflow_id,
-                }
-                self._update_memo()
-                await self._maybe_admit_review_ready_successor()
-                while not child.done() and (
-                    self._publish_context.get("implementationSuccessor") or {}
-                ).get("status") not in {"not_applicable", "dispatch_error"}:
-                    try:
-                        await workflow.wait_condition(
-                            child.done, timeout=timedelta(minutes=5)
-                        )
-                    except asyncio.TimeoutError:
-                        await self._maybe_admit_review_ready_successor(
-                            allow_next_observation=True
-                        )
-            return await child
+            try:
+                recurrence = (parameters.get("system") or {}).get("recurrence") or {}
+                if (
+                    recurrence.get("definitionId")
+                    and (self._trusted_issue_context or {}).get("trustedSource")
+                    == "moonmind.github.get_issue"
+                    and self._moonspec_gate_verdict == "FULLY_IMPLEMENTED"
+                    and payload["mergeAutomationConfig"]["finishMode"] == "merge"
+                ):
+                    self._publish_context["implementationAvailability"] = {
+                        "state": "review_ready",
+                        "definitionId": str(recurrence["definitionId"]),
+                        "mergeWorkflowId": workflow_id,
+                    }
+                    self._update_memo()
+                    await self._maybe_admit_review_ready_successor()
+                    while not child.done() and (
+                        self._publish_context.get("implementationSuccessor") or {}
+                    ).get("status") not in {"not_applicable", "dispatch_error"}:
+                        try:
+                            await workflow.wait_condition(
+                                child.done, timeout=timedelta(minutes=5)
+                            )
+                        except asyncio.TimeoutError:
+                            await self._maybe_admit_review_ready_successor(
+                                allow_next_observation=True
+                            )
+                return await child
+
+            finally:
+                # The lease owner can cancel us while we await an auxiliary
+                # Activity or timer. That cancellation never reaches this
+                # detached handle implicitly: stop and drain it explicitly.
+                if not child.done():
+                    child.cancel()
+                    drained = asyncio.gather(child, return_exceptions=True)
+                    while not drained.done():
+                        try:
+                            await asyncio.shield(drained)
+                        except (asyncio.CancelledError, CancelledError):
+                            # Repeated parent cancellation cannot cut short
+                            # ordered resolver/agent cleanup.
+                            continue
 
         try:
             if guard_claim:
@@ -22211,6 +22255,54 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             child_result, finish_mode=finish_mode
         ):
             raise ValueError(reason or "merge automation failed")
+
+    async def _await_recurring_implementation_admission(self, parameters) -> None:
+        from moonmind.workflows.temporal.recurring_implementation import (
+            is_automatic_issue_search,
+        )
+
+        system = parameters.get("system") or {}
+        recurrence = system.get("recurrence") or {} if isinstance(system, Mapping) else {}
+        if (
+            not recurrence.get("definitionId")
+            or not is_automatic_issue_search(parameters)
+            or getattr(workflow.info(), "parent", None) is not None
+        ):
+            return
+        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("recurring.admit_implementation")
+        try:
+            while not self._cancel_requested:
+                observed = await workflow.execute_activity(
+                    "recurring.admit_implementation",
+                    {"definitionId": str(recurrence["definitionId"])},
+                    **self._execute_kwargs_for_route(route),
+                )
+                if observed.get("status") in {"admitted", "not_applicable"}:
+                    self._awaiting_external = False
+                    self._waiting_reason = None
+                    if self._state == STATE_AWAITING_EXTERNAL:
+                        self._set_state(
+                            STATE_PLANNING, summary="Planning execution strategy."
+                        )
+                    return
+                if observed.get("status") != "waiting":
+                    raise ValueError(
+                        "Recurring implementation admission returned no authoritative outcome"
+                    )
+                self._awaiting_external = True
+                self._waiting_reason = (
+                    "Waiting for an independent issue implementation slot."
+                )
+                self._set_state(STATE_AWAITING_EXTERNAL, summary=self._waiting_reason)
+                try:
+                    await workflow.wait_condition(
+                        lambda: self._cancel_requested, timeout=timedelta(seconds=30)
+                    )
+                except asyncio.TimeoutError:
+                    pass
+        finally:
+            self._awaiting_external = False
+            self._waiting_reason = None
 
     async def _maybe_admit_review_ready_successor(
         self, *, allow_next_observation: bool = False
@@ -23744,6 +23836,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if self._patched_or_false_outside_workflow(
             RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH
         ):
+            if self._assessment_context.get(
+                "stepEvidenceBundles"
+            ) and self._patched_or_false_outside_workflow("run-step-evidence-handoff-v1"):
+                parameters["stepEvidenceMandatoryRefs"] = (
+                    self._append_durable_handoff_attachment_refs(
+                        input_refs,
+                        agent_kind=agent_kind,
+                        include_step_evidence=False,
+                    )
+                )
+                parameters["stepEvidenceBundles"] = self._assessment_context["stepEvidenceBundles"]
             input_refs = self._append_durable_handoff_attachment_refs(
                 input_refs,
                 agent_kind=agent_kind,

@@ -362,6 +362,16 @@ class OmnigentWorkspaceMaterializer:
         if not isinstance(attachment_refs, (list, tuple)):
             attachment_refs = ()
         attachment_refs = tuple(dict.fromkeys((*attachment_refs, *named_refs.values())))
+        from moonmind.workflows.temporal.step_evidence import (
+            step_evidence_projection_options,
+        )
+
+        evidence_options = step_evidence_projection_options(parameters)
+        if evidence_options:
+            evidence_options["mandatory_refs"] = [
+                *evidence_options["mandatory_refs"],
+                *named_refs.values(),
+            ]
         attachment_evidence = []
         if not materialization_complete:
             # A retry reconciles the same generation; changed inputs are an
@@ -380,6 +390,7 @@ class OmnigentWorkspaceMaterializer:
                     checkpoint_contract=source.restore_contract,
                     restore_refs=tuple(str(ref) for ref in restore_refs),
                     attachment_refs=tuple(str(ref) for ref in attachment_refs),
+                    **evidence_options,
                     workflow_id=owner_workflow_id,
                     runtime_uid=runtime_uid,
                     runtime_gid=runtime_gid,
@@ -399,6 +410,7 @@ class OmnigentWorkspaceMaterializer:
                 attachment_evidence = await self._artifact_projector.project_attachments(
                     candidate,
                     refs=attachment_refs,
+                    **evidence_options,
                     workflow_id=owner_workflow_id,
                     runtime_uid=runtime_uid,
                     runtime_gid=runtime_gid,
@@ -415,7 +427,7 @@ class OmnigentWorkspaceMaterializer:
             {
                 f"inputPath{index}": paths_by_ref[ref]
                 for index, ref in enumerate(attachment_refs, start=1)
-                if ref not in named_refs.values()
+                if ref not in named_refs.values() and ref in paths_by_ref
             }
         )
         # Clone-time commit identity does not survive workspace reconciliation:

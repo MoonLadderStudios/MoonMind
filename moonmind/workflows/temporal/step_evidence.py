@@ -23,6 +23,18 @@ MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_BYTES = 32 * 1024 * 1024
 
 
+def step_evidence_projection_options(
+    parameters: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """Carry controller-produced optional groups to the shared input owner."""
+    if not (parameters or {}).get("stepEvidenceBundles"):
+        return {}
+    return {
+        "evidence_bundles": parameters["stepEvidenceBundles"],
+        "mandatory_refs": parameters.get("stepEvidenceMandatoryRefs") or [],
+    }
+
+
 def append_step_evidence_instructions(
     text: str, *, parameters: Mapping[str, Any] | None
 ) -> str:
