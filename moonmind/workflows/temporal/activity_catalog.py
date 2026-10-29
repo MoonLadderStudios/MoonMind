@@ -1070,6 +1070,15 @@ def build_default_activity_catalog(
         ),
         # ---- General-purpose repo operations (provider-agnostic) ----
         TemporalActivityDefinition(
+            activity_type="recurring.admit_implementation",
+            family="integration",
+            capability_class="integration:github",
+            task_queue=cfg.activity_integrations_task_queue,
+            fleet=INTEGRATIONS_FLEET,
+            timeouts=TemporalActivityTimeouts(30, 60),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=5),
+        ),
+        TemporalActivityDefinition(
             activity_type="recurring.review_ready_successor",
             family="integration",
             capability_class="integration:github",

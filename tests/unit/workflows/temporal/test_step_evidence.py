@@ -298,7 +298,7 @@ def test_receipt_refs_survive_continuation_and_attach_to_new_verifier(monkeypatc
     parent._record_execution_context(
         node_id="implement",
         execution_result={
-            "outputs": {"stepEvidenceRefs": [*refs, "/tmp/raw", refs[0]]}
+            "outputs": {"stepEvidenceRef": "art_inventory", "stepEvidenceRefs": refs}
         },
     )
     assert parent._assessment_context["stepEvidenceRefs"] == refs

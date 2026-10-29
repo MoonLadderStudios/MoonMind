@@ -1050,6 +1050,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integrations",
         "recurring_review_ready_successor",
     ),
+    "recurring.admit_implementation": ("integrations", "recurring_admit_implementation"),
     "repo.create_pr": ("integrations", "repo_create_pr"),
     "repo.sync_pr_unverified_criteria": (
         "integrations",
@@ -4766,6 +4767,21 @@ class TemporalIntegrationActivities:
         artifact_service: TemporalArtifactService | None = None,
     ) -> None:
         self._artifact_service = artifact_service
+
+    async def recurring_admit_implementation(self, payload, /, **kwargs):
+        from uuid import UUID
+        from api_service.db.base import get_async_session_context
+        from api_service.services.recurring_workflows_service import (
+            RecurringWorkflowsService,
+        )
+
+        info = temporal_activity.info()
+        async with get_async_session_context() as session:
+            return await RecurringWorkflowsService(session).admit_issue_implementation(
+                definition_id=UUID(str(payload["definitionId"])),
+                workflow_id=info.workflow_id,
+                run_id=info.workflow_run_id,
+            )
 
     async def recurring_review_ready_successor(self, payload, /, **kwargs):
         from uuid import UUID
@@ -10787,6 +10803,10 @@ class TemporalAgentRuntimeActivities:
                     "inputRefs materialization requires a MoonMind-managed workspace"
                 )
             ownership = workspace.stat()
+            from moonmind.workflows.temporal.step_evidence import (
+                step_evidence_projection_options,
+            )
+
             await WorkspaceArtifactProjector(
                 self._artifact_service
             ).project_attachments(
@@ -10795,6 +10815,7 @@ class TemporalAgentRuntimeActivities:
                 workflow_id=request.correlation_id,
                 runtime_uid=ownership.st_uid,
                 runtime_gid=ownership.st_gid,
+                **step_evidence_projection_options(request.parameters),
             )
         remediation_evidence = await self._materialize_remediation_evidence_for_turn(
             request=request,

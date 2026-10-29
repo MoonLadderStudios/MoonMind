@@ -2321,48 +2321,212 @@ class RecurringWorkflowsService:
         await self._session.commit()
         return run
 
-    async def start_review_ready_successor(
-        self,
-        *,
-        definition_id: UUID,
-        workflow_id: str,
-        run_id: str,
-        ordinal: int,
-    ) -> dict[str, Any]:
-        """Journal one bounded successor; the original parent still owns its issue.
+    @staticmethod
+    def _uses_bounded_issue_implementation(definition) -> bool:
+        from moonmind.workflows.temporal.recurring_implementation import (
+            is_automatic_issue_search,
+        )
 
-        Only automatic GitHub searches use this path. Explicit issue targets and
-        other schedules retain their authored overlap behavior. The successor's
-        trusted loader still checks prerequisites and acquires its own claim.
+        parameters = (definition.target or {}).get("initialParameters") or {}
+        raw_policy = getattr(definition, "policy", None)
+        policy = raw_policy if isinstance(raw_policy, Mapping) else {}
+        if (policy.get("overlap") or {}).get("mode", "skip") != "skip":
+            return False
+        return is_automatic_issue_search(parameters)
+
+    async def _lock_issue_definition(self, definition) -> None:
+        await self._session.execute(
+            select(RecurringWorkflowDefinition)
+            .where(RecurringWorkflowDefinition.id == definition.id)
+            .with_for_update()
+        )
+
+    async def _recurring_issue_owners(self, definition):
+        """Reconcile native owners and journaled starts under the definition lock.
+
+        Temporal deliberately omits ALLOW_ALL starts from running_actions. The
+        dispatch journal retains their identities until a direct terminal
+        observation. An unknown dispatch occupies a slot; timeout is not proof
+        that no workflow started. Dispatch outcomes retain their original fact.
         """
+        rows = (
+            (
+                await self._session.execute(
+                    select(RecurringWorkflowRun)
+                    .where(
+                        RecurringWorkflowRun.definition_id == definition.id,
+                        RecurringWorkflowRun.terminal_observed_at.is_(None),
+                        RecurringWorkflowRun.outcome.in_(
+                            [
+                                RecurringWorkflowRunOutcome.PENDING_DISPATCH,
+                                RecurringWorkflowRunOutcome.ENQUEUED,
+                                RecurringWorkflowRunOutcome.DISPATCH_ERROR,
+                            ]
+                        ),
+                    )
+                    .order_by(RecurringWorkflowRun.created_at)
+                    .limit(101)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        owners = {}
+        # Migration leaves historical rows unobserved. Retire them in bounded
+        # committed batches instead of permanently rejecting busy schedules.
+        # An uninspected tail still reserves capacity until the next pass.
+        unknown = [str(rows[-1].id)] if len(rows) > 100 else []
+        rows = rows[:100]
+        now = datetime.now(UTC)
+        for row in rows:
+            if not row.temporal_workflow_id:
+                observation = await self._adapter.observe_schedule_trigger(
+                    definition_id=definition.id,
+                    scheduled_at=row.scheduled_for,
+                )
+                self._record_trigger_observation(row, observation)
+                if row.outcome == RecurringWorkflowRunOutcome.SKIPPED:
+                    row.terminal_observed_at = now
+                    continue
+                if not row.temporal_workflow_id:
+                    unknown.append(str(row.id))
+                    continue
+            identity = row.temporal_workflow_id
+            if identity not in owners:
+                owners[identity] = await self._adapter.recurring_issue_owner(identity)
+            if owners[identity]["state"] == "terminal":
+                row.terminal_observed_at = now
+        # Native cron/ordinary triggers are not journaled before their first
+        # Activity. Include them conservatively while startup registers them.
+        for identity in await self._adapter.recurring_native_owner_ids(definition.id):
+            if identity not in owners:
+                owners[identity] = await self._adapter.recurring_issue_owner(identity)
+        return {
+            identity: observed
+            for identity, observed in owners.items()
+            if observed["state"] != "terminal"
+        }, unknown
+
+    async def _register_recurring_issue_owner(self, definition, observed) -> None:
+        from uuid import NAMESPACE_URL, uuid5
+
+        workflow_id = observed["workflowId"]
+        existing = (
+            (
+                await self._session.execute(
+                    select(RecurringWorkflowRun)
+                    .where(
+                        RecurringWorkflowRun.definition_id == definition.id,
+                        RecurringWorkflowRun.temporal_workflow_id == workflow_id,
+                        RecurringWorkflowRun.terminal_observed_at.is_(None),
+                    )
+                    .limit(1)
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if existing is not None:
+            return
+        self._session.add(
+            RecurringWorkflowRun(
+                id=uuid5(
+                    NAMESPACE_URL,
+                    "moonmind:occurrence-owner:" + workflow_id + ":" + observed["runId"],
+                ),
+                definition_id=definition.id,
+                scheduled_for=observed["startedAt"],
+                trigger=RecurringWorkflowRunTrigger.SCHEDULE,
+                outcome=RecurringWorkflowRunOutcome.ENQUEUED,
+                temporal_workflow_id=workflow_id,
+                temporal_run_id=observed["runId"],
+                dispatch_attempts=1,
+                dispatch_after=None,
+                message="Execution registered for bounded issue admission.",
+            )
+        )
+
+    async def admit_issue_implementation(
+        self, *, definition_id: UUID, workflow_id: str, run_id: str
+    ) -> dict[str, Any]:
+        """Gate fresh occurrences before planning or issue claims, including cron."""
+        definition = await self.get_definition(definition_id)
+        if not self._uses_bounded_issue_implementation(definition):
+            return {"status": "not_applicable"}
+        observed = await self._adapter.recurring_issue_owner(workflow_id)
+        if not observed.get("root") or not workflow_id.startswith(f"mm:{definition_id}-"):
+            return {"status": "not_applicable"}
+        if observed.get("runId") != run_id:
+            raise RecurringWorkflowValidationError(
+                "implementation admission belongs to a superseded workflow run"
+            )
+        await self._lock_issue_definition(definition)
+        owners, unknown = await self._recurring_issue_owners(definition)
+        others = {
+            identity: state for identity, state in owners.items() if identity != workflow_id
+        }
+        # A native occurrence can be queued while an untracked successor is
+        # active. Register at most two owners, and admit at most one implementer.
+        if not unknown and len(others) < 2:
+            await self._register_recurring_issue_owner(definition, observed)
+        admitted = (
+            not unknown
+            and len(others) < 2
+            and all(state.get("reviewReady") for state in others.values())
+        )
+        await self._session.commit()
+        return {
+            "status": "admitted" if admitted else "waiting",
+            "blockingWorkflowIds": list(others),
+            "unconfirmedRequestIds": unknown,
+        }
+
+    async def start_review_ready_successor(
+        self, *, definition_id: UUID, workflow_id: str, run_id: str, ordinal: int
+    ) -> dict[str, Any]:
+        """Reserve one journaled successor, retaining every unresolved owner."""
         from uuid import NAMESPACE_URL, uuid5
 
         definition = await self.get_definition(definition_id)
-        parameters = (definition.target or {}).get("initialParameters") or {}
-        task = parameters.get("workflow") or parameters.get("task") or {}
-        steps = task.get("steps") or []
-        searches = [step.get("tool") for step in steps if isinstance(step, Mapping)]
-        is_search = any(
-            isinstance(tool, Mapping)
-            and tool.get("id") == "github.load_issue_preset_brief"
-            and "issueSearch" in (tool.get("inputs") or {})
-            for tool in searches
-        )
-        if not definition.enabled or not is_search:
-            return {"status": "not_applicable"}
-        if (
-            not workflow_id.startswith(f"mm:{definition_id}-")
-            or not run_id
-            or ordinal < 0
+        if not definition.enabled or not self._uses_bounded_issue_implementation(
+            definition
         ):
+            return {"status": "not_applicable"}
+        if not workflow_id.startswith(f"mm:{definition_id}-") or not run_id or ordinal < 0:
             raise RecurringWorkflowValidationError("invalid review-ready occurrence")
-        request_id = uuid5(
-            NAMESPACE_URL, f"moonmind:review-ready:{workflow_id}:{ordinal}"
+        await self._lock_issue_definition(definition)
+        owners, unknown = await self._recurring_issue_owners(definition)
+        request_id = uuid5(NAMESPACE_URL, f"moonmind:review-ready:{workflow_id}:{ordinal}")
+        existing = await self._session.get(RecurringWorkflowRun, request_id)
+        if existing is not None:
+            # Observe a prior effect, including an accepted-but-unacknowledged
+            # trigger. Never submit it again after failure or process restart.
+            await self._session.commit()
+            return {
+                "status": existing.outcome.value,
+                "requestId": str(existing.id),
+                "workflowId": existing.temporal_workflow_id,
+                "runId": existing.temporal_run_id,
+            }
+        observed = owners.get(workflow_id) or await self._adapter.recurring_issue_owner(
+            workflow_id
         )
+        if (
+            unknown
+            or observed.get("state") != "running"
+            or not observed.get("root")
+            or observed.get("runId") != run_id
+            or not observed.get("reviewReady")
+            or set(owners) - {workflow_id}
+        ):
+            await self._session.commit()
+            return {
+                "status": "skipped",
+                "reason": "No independent implementation slot is available.",
+            }
+        await self._register_recurring_issue_owner(definition, observed)
         run = await self.create_manual_run(
-            definition,
-            request_id=request_id,
-            review_ready_owner=(workflow_id, run_id),
+            definition, request_id=request_id, review_ready_owner=(workflow_id, run_id)
         )
         return {
             "status": run.outcome.value,

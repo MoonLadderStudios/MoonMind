@@ -3425,6 +3425,13 @@ async def test_review_ready_successor_restart_never_retriggers_recorded_request(
                     )
                 )
             owner = f"mm:{definition.id}-2026-10-29T01:00:00Z"
+            mock_temporal_adapter.recurring_native_owner_ids = AsyncMock(return_value=[owner])
+            mock_temporal_adapter.recurring_issue_owner = AsyncMock(side_effect=lambda identity: {
+                "state": "running", "root": True, "workflowId": identity,
+                "runId": "parent-run" if identity == owner else "successor-run",
+                "startedAt": datetime(2026, 10, 29, 1, tzinfo=UTC),
+                "reviewReady": identity == owner,
+            })
             kwargs = dict(
                 definition_id=definition.id,
                 workflow_id=owner,
@@ -3446,6 +3453,12 @@ async def test_review_ready_successor_restart_never_retriggers_recorded_request(
             restarted._ensure_schedule_action_current = AsyncMock()
             replayed = await restarted.start_review_ready_successor(**kwargs)
             assert replayed["requestId"] == request_id
+            mock_temporal_adapter.trigger_schedule.assert_awaited_once()
+            # A later observation has a different idempotency key. Neither
+            # a live untracked successor nor an unknown accepted trigger
+            # frees another slot after the service process restarts.
+            later = await restarted.start_review_ready_successor(**{**kwargs, "ordinal": 1})
+            assert later["status"] == "skipped"
             mock_temporal_adapter.trigger_schedule.assert_awaited_once()
             if ack_lost:
                 mock_temporal_adapter.observe_schedule_trigger.return_value = (
@@ -3526,6 +3539,16 @@ async def test_review_ready_successor_understands_admitted_workflow_inputs(task_
             temporal_run_id="successor-run",
         )
     )
+    definition.id = definition_id
+    identity = f"mm:{definition_id}-time"
+    service._session = MagicMock()
+    service._session.get = AsyncMock(return_value=None)
+    service._session.commit = AsyncMock()
+    service._lock_issue_definition = AsyncMock()
+    service._recurring_issue_owners = AsyncMock(return_value=({identity: {
+        "state": "running", "root": True, "runId": "run", "reviewReady": True,
+    }}, []))
+    service._register_recurring_issue_owner = AsyncMock()
     result = await service.start_review_ready_successor(
         definition_id=definition_id,
         workflow_id=f"mm:{definition_id}-time",
@@ -3534,6 +3557,44 @@ async def test_review_ready_successor_understands_admitted_workflow_inputs(task_
     )
     assert result["status"] == "enqueued"
     service.create_manual_run.assert_awaited_once()
+
+
+async def test_bounded_owner_observation_retires_old_history_in_committed_batches(
+    tmp_path, mock_temporal_adapter,
+):
+    async with recurring_db(tmp_path) as maker:
+        definition_id = uuid4()
+        async with maker() as session:
+            definition = RecurringWorkflowDefinition(
+                id=definition_id, name="Old issue schedule", cron="* * * * *",
+                timezone="UTC", target={}, policy={},
+            )
+            session.add(definition)
+            for index in range(101):
+                session.add(RecurringWorkflowRun(
+                    definition_id=definition_id,
+                    scheduled_for=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(minutes=index),
+                    outcome=RecurringWorkflowRunOutcome.ENQUEUED,
+                    temporal_workflow_id=f"old-{index}", temporal_run_id=f"run-{index}",
+                ))
+            await session.commit()
+            mock_temporal_adapter.recurring_native_owner_ids = AsyncMock(return_value=[])
+            mock_temporal_adapter.recurring_issue_owner = AsyncMock(return_value={"state": "terminal"})
+            service = RecurringWorkflowsService(session, temporal_client_adapter=mock_temporal_adapter)
+            owners, unknown = await service._recurring_issue_owners(definition)
+            assert not owners
+            assert len(unknown) == 1  # The uninspected tail is still reserved.
+            assert mock_temporal_adapter.recurring_issue_owner.await_count == 100
+            await session.commit()
+        async with maker() as session:
+            service = RecurringWorkflowsService(session, temporal_client_adapter=mock_temporal_adapter)
+            definition = await service.get_definition(definition_id)
+            assert await service._recurring_issue_owners(definition) == ({}, [])
+            assert mock_temporal_adapter.recurring_issue_owner.await_count == 101
+            await session.commit()
+            rows = (await session.execute(select(RecurringWorkflowRun))).scalars().all()
+            assert all(row.terminal_observed_at for row in rows)
+            assert all(row.outcome == RecurringWorkflowRunOutcome.ENQUEUED for row in rows)
 
 
 def _retrieval_retirement_target(location, field, value):
