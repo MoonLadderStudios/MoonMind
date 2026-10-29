@@ -1,7 +1,6 @@
 import re
 import uuid
 
-
 """Temporal worker runtime entrypoint."""
 
 import asyncio
@@ -58,20 +57,28 @@ from moonmind.workflows.agent_skills.agent_skills_activities import (
 )
 from moonmind.workflows.executions.execution_contract import (
     build_authoritative_workflow_input_snapshot,
+)
+from moonmind.workflows.executions.execution_contract import (
     dedupe_workflow_steps as _dedupe_repeated_step_entries,
+)
+from moonmind.workflows.executions.execution_contract import (
     workflow_has_explicit_steps,
     workflow_plan_tool_type,
+)
+from moonmind.workflows.executions.execution_contract import (
     workflow_step_tool_name as _selected_step_tool_name,
+)
+from moonmind.workflows.executions.execution_contract import (
     workflow_step_tool_type as _selected_step_tool_type,
 )
 from moonmind.workflows.executions.preset_expansion import expand_preset_for_child_run
-from moonmind.workflows.executions.runtime_target_selection import (
-    AuthoringSurface,
-    resolve_runtime_target_selection,
-)
 from moonmind.workflows.executions.repository_contract import (
     repository_branch_from_value,
     repository_name_from_value,
+)
+from moonmind.workflows.executions.runtime_target_selection import (
+    AuthoringSurface,
+    resolve_runtime_target_selection,
 )
 from moonmind.workflows.skills.deployment_execution import (
     DeploymentUpdateExecutor,
@@ -84,21 +91,22 @@ from moonmind.workflows.skills.deployment_execution import (
     daemon_bind_source,
     register_deployment_update_tool_handler,
 )
+from moonmind.workflows.skills.deployment_overview import (
+    register_deployment_overview_tool_handler,
+)
 from moonmind.workflows.skills.ops_diagnostics_execution import (
     HostDockerComposeOpsDiagnosisRunner,
     OpsStackDiagnosisExecutor,
     register_ops_diagnose_stack_tool_handler,
 )
-from moonmind.workflows.skills.deployment_overview import (
-    register_deployment_overview_tool_handler,
-)
-from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
 from moonmind.workflows.skills.security_assessment import (
     register_security_assessment_tool_handler,
 )
+from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
 from moonmind.workflows.skills.tool_definitions import (
     STORY_OUTPUT_TASK_TOOLS as _STORY_OUTPUT_TASK_TOOLS,
 )
+from moonmind.workflows.temporal.activities.reviewer import ConfiguredStepReviewer
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
     TemporalIntegrationActivities,
@@ -107,8 +115,8 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalSandboxActivities,
     TemporalSkillActivities,
 )
-from moonmind.workflows.temporal.activities.reviewer import ConfiguredStepReviewer
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
     TemporalArtifactActivities,
     TemporalArtifactRepository,
     TemporalArtifactService,
@@ -140,8 +148,8 @@ from moonmind.workflows.temporal.worker_healthcheck import (
 )
 from moonmind.workflows.temporal.workers import (
     AGENT_RUNTIME_FLEET,
-    LLM_FLEET,
     DEPLOYMENT_FLEET,
+    LLM_FLEET,
     WORKFLOW_FLEET,
     build_worker_activity_bindings,
     build_worker_spec,
@@ -2455,11 +2463,50 @@ def _container_job_evidence_publisher(artifact_service: TemporalArtifactService)
 
 def _container_job_artifact_reader(artifact_service: TemporalArtifactService):
     async def read(request, artifact_id: str) -> bytes:
-        # Inputs are read with the job owner's own artifact authority, the
-        # same principal admission checked and evidence is published under.
-        principal = f"{request.owner.principal_type}:{request.owner.principal_id}"
+        from temporalio import activity
+
+        from moonmind.schemas.container_job_models import (
+            ContainerJobSubmitRequest,
+            container_job_workflow_id,
+        )
+        from moonmind.workflows.temporal.artifacts import (
+            ArtifactAccessContext,
+            TemporalArtifactAuthorizationError,
+        )
+
+        # Recover authority from the API's durable input admission, including
+        # jobs retained across updates. Payload owner strings cannot select
+        # another job, add an input, or acquire the operator's authority.
+        if (
+            not activity.in_activity()
+            or activity.info().workflow_id != container_job_workflow_id(request.job_id)
+        ):
+            raise TemporalArtifactAuthorizationError(
+                "container job input requires its actual Activity admission"
+            )
+        async with get_async_session_context() as session:
+            record = await session.get(ContainerJobRecord, request.job_id)
+            if record is None or (record.owner_id, record.owner_type) != (
+                request.owner.principal_id,
+                request.owner.principal_type,
+            ):
+                raise TemporalArtifactAuthorizationError(
+                    "container job input has no matching durable admission"
+                )
+            admitted = ContainerJobSubmitRequest.model_validate(record.request_json)
+        inputs = {
+            item.artifact_ref.removeprefix("artifact://").removeprefix("artifact:")
+            for item in admitted.spec.input_attachments or ()
+            if item.artifact_ref
+        }
+        artifact_id = artifact_id.removeprefix("artifact://").removeprefix("artifact:")
+        if artifact_id not in inputs:
+            raise TemporalArtifactAuthorizationError(
+                "artifact is outside the admitted container job inputs"
+            )
         _artifact, payload = await artifact_service.read(
-            artifact_id=artifact_id, principal=principal
+            artifact_id=artifact_id,
+            access=ArtifactAccessContext.for_activity()._with_verified_inputs(inputs),
         )
         return payload
 
@@ -2761,6 +2808,19 @@ def _build_agent_runtime_deps(
     )
 
 
+class _ArtifactServiceProxy:
+    """Bind each worker artifact operation to its own database session."""
+
+    def __getattr__(self, name):
+        async def wrapper(*args, **kwargs):
+            async with get_async_session_context() as session:
+                service = TemporalArtifactService(TemporalArtifactRepository(session))
+                func = getattr(service, name)
+                return await func(*args, **kwargs)
+
+        return wrapper
+
+
 async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[object]]:
     """Build activity handlers for the configured non-workflow fleet.
 
@@ -2825,20 +2885,8 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
     enforced_network_refs: list[str] = []
     enforced_egress_profile_refs: list[str] = []
 
-    class ArtifactServiceProxy:
-        def __getattr__(self, name):
-            async def wrapper(*args, **kwargs):
-                async with get_async_session_context() as session:
-                    service = TemporalArtifactService(
-                        TemporalArtifactRepository(session)
-                    )
-                    func = getattr(service, name)
-                    return await func(*args, **kwargs)
-
-            return wrapper
-
     try:
-        artifact_service = ArtifactServiceProxy()  # type: ignore
+        artifact_service = _ArtifactServiceProxy()  # type: ignore
         sandbox_activities = TemporalSandboxActivities(
             artifact_service=artifact_service
         )
@@ -2850,9 +2898,10 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
         async def _read_story_output_artifact(artifact_ref: str) -> bytes:
             _artifact, payload = await artifact_service.read(
                 artifact_id=artifact_ref,
-                principal="system:story_output",
-                admitted_principal=f"workflow:{temporalio.activity.info().workflow_id}",
-                allow_restricted_raw=True,
+                access=ArtifactAccessContext.for_execution(
+                    temporalio.activity.info().workflow_id,
+                    principal="system:story_output",
+                ),
             )
             return payload
 
@@ -3093,10 +3142,7 @@ async def main_async() -> None:
     # retired instruction, never an ignored one or a hidden proxy fallback.
     # Retained sessions keep their recorded mode for historical reads and drain
     # under their recorded cleanup owner; this check only rejects new admission.
-    from moonmind.omnigent.bridge_config import (
-        BridgeConfigError,
-        resolve_bridge_config,
-    )
+    from moonmind.omnigent.bridge_config import BridgeConfigError, resolve_bridge_config
 
     try:
         resolve_bridge_config()
@@ -3216,7 +3262,11 @@ async def main_async() -> None:
             "activities": spec.activities,
             "workflow_runner": UnsandboxedWorkflowRunner(),
         }
-        from moonmind.workflows.temporal.worker_lifecycle import WORKER_DRAIN_TIMEOUT, serve_workers
+        from moonmind.workflows.temporal.worker_lifecycle import (
+            WORKER_DRAIN_TIMEOUT,
+            serve_workers,
+        )
+
         worker_kwargs["graceful_shutdown_timeout"] = WORKER_DRAIN_TIMEOUT
         workers = _build_queue_workers(client, topology, worker_kwargs)
         health_state.workers_constructed = True

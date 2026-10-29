@@ -23,6 +23,7 @@ from api_service.db.models import (
     TemporalArtifactUseClaim,
 )
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
     LocalTemporalArtifactStore,
     TemporalArtifactAuthorizationError,
     TemporalArtifactRepository,
@@ -30,6 +31,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactUnavailableError,
     TemporalArtifactValidationError,
 )
+from tests.artifact_access import access_for_test
 from tests.unit.workflows.temporal.test_saved_work_retention_4017 import (
     _complete_artifact,
     _service,
@@ -109,8 +111,7 @@ async def _claims(sessions, artifact_id: str):
 async def _serve(service, surface: str, artifact_id: str, **overrides):
     arguments = {
         "artifact_id": artifact_id,
-        "principal": _READER,
-        "admitted_principal": _OWNER,
+        "access": ArtifactAccessContext.for_service(_OWNER),
         **overrides,
     }
     result = await getattr(service, surface)(**arguments)
@@ -243,8 +244,7 @@ async def test_failed_acquisition_does_not_break_safe_preview_derivation(
 
         preview_ref = await service.compute_preview(
             artifact_id=artifact_id,
-            principal=_READER,
-            admitted_principal=_OWNER,
+            access=ArtifactAccessContext.for_service(_OWNER),
         )
 
         preview = await service._repository.get_artifact(preview_ref.artifact_id)
@@ -384,8 +384,11 @@ async def test_observation_failure_never_weakens_read_authorization(
                 artifact_id,
                 # The instance operator has metadata visibility, but no
                 # grant for another owner's restricted raw bytes.
-                admitted_principal=(
-                    "operator" if denial == "restricted_raw" else "wrong-scope"
+                access=access_for_test(
+                    _READER,
+                    admitted_principal=(
+                        "operator" if denial == "restricted_raw" else "wrong-scope"
+                    ),
                 ),
             )
 
@@ -632,6 +635,7 @@ async def test_explicit_claim_retry_extends_but_never_shortens_loaded_expiry(
         arguments = {
             "artifact_id": artifact_id,
             "principal": _OWNER,
+            "access": ArtifactAccessContext.for_service(_OWNER),
             "request_id": "explicit-restoration",
             "operation_kind": "restore",
         }
@@ -676,6 +680,7 @@ async def test_failed_claim_extension_preserves_loaded_expiry_and_caller_work(
             request_id=request_id,
             operation_kind="restore",
             ttl_seconds=300,
+            access=access_for_test(_OWNER),
         )
         original_id = original.id
         original_expiry = original.expires_at.replace(tzinfo=UTC)
@@ -767,7 +772,8 @@ async def test_release_failure_preserves_primary_serving_failure(
             )
             with pytest.raises(expected) as caught:
                 await getattr(service, surface)(
-                    artifact_id=artifact_id, principal=_READER, admitted_principal=_OWNER,
+                    artifact_id=artifact_id,
+                    access=ArtifactAccessContext.for_service(_OWNER),
                 )
         finally:
             event.remove(engine, "before_cursor_execute", fail_release)

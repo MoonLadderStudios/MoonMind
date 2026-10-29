@@ -13,6 +13,7 @@ from temporalio import activity
 from moonmind.schemas.agent_runtime_models import AgentRunResult, ManagedRunRecord
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
 from moonmind.workflows.temporal.artifacts import (
+    ExecutionRef,
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
     TemporalArtifactService,
@@ -20,6 +21,7 @@ from moonmind.workflows.temporal.artifacts import (
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+from tests.artifact_access import access_for_test
 from tests.unit.workflows.skills import (
     test_acceptance_source_binding as source_bindings,
 )
@@ -30,6 +32,7 @@ source_bound_report = source_bindings.source_bound_report
 
 def _configure_runtime(monkeypatch, *, new_history=True):
     from temporalio.api.workflowservice.v1 import DescribeWorkflowExecutionResponse
+
     from tests.unit.workflows.temporal.test_source_brief_artifact_authority import (
         _recorded_server,
     )
@@ -47,6 +50,7 @@ def _configure_runtime(monkeypatch, *, new_history=True):
         namespace="default", workflow_id="scope-parent:agent:verify", workflow_run_id="child-run"
     )
     monkeypatch.setattr(activity, "info", lambda: activity_info)
+    monkeypatch.setattr(activity, "in_activity", lambda: True)
     server, _ = _recorded_server(DescribeWorkflowExecutionResponse(
         workflow_execution_info={
             "execution": {"workflow_id": activity_info.workflow_id, "run_id": "child-run"},
@@ -178,12 +182,25 @@ async def test_dispatch_reads_durable_assessment_before_accepting_blocking_scope
         artifact, _ = await service.create(
             principal="system:agent_runtime",
             content_type="application/json",
+            link=ExecutionRef(
+                namespace="default",
+                workflow_id=run_module.workflow.info().workflow_id,
+                run_id="parent-run",
+                link_type="input.assessment",
+            ),
         )
         await service.write_complete(
             artifact_id=artifact.artifact_id,
             principal="system:agent_runtime",
             payload=json.dumps({"scope": scope}).encode(),
             content_type="application/json",
+        )
+        await service.delegate_read_access(
+            artifact_ids=[artifact.artifact_id],
+            workflow_id=activity.info().workflow_id,
+            access=access_for_test(
+                f"workflow:{run_module.workflow.info().workflow_id}"
+            ),
         )
         parent = run_module.MoonMindRunWorkflow()
         parent._assessment_context = {"assessmentArtifactRef": artifact.artifact_id}
@@ -216,7 +233,7 @@ async def test_dispatch_reads_durable_assessment_before_accepting_blocking_scope
         )
         _, stored = await service.read_path(
             artifact_id=artifact.artifact_id,
-            principal="system:agent_runtime",
+            access=access_for_test("system:agent_runtime"),
         )
         assert json.loads(stored.read_text()) == {"scope": scope}
 
@@ -350,12 +367,25 @@ async def test_publisher_reconciles_old_blocked_scope_from_original_source_bytes
             ref, _ = await service.create(
                 principal="system:agent_runtime",
                 content_type="application/json",
+                link=ExecutionRef(
+                    namespace="default",
+                    workflow_id=run_module.workflow.info().workflow_id,
+                    run_id="parent-run",
+                    link_type="input.assessment",
+                ),
             )
             await service.write_complete(
                 artifact_id=ref.artifact_id,
                 principal="system:agent_runtime",
                 payload=raw,
                 content_type="application/json",
+            )
+            await service.delegate_read_access(
+                artifact_ids=[ref.artifact_id],
+                workflow_id=activity.info().workflow_id,
+                access=access_for_test(
+                    f"workflow:{run_module.workflow.info().workflow_id}"
+                ),
             )
             return ref.artifact_id
 
@@ -400,8 +430,9 @@ async def test_publisher_reconciles_old_blocked_scope_from_original_source_bytes
             assert _name == "artifact.read"
             _, raw = await service.read(
                 artifact_id=request.artifact_ref.removeprefix("artifact://"),
-                principal=request.principal,
-                allow_restricted_raw=True,
+                access=access_for_test(
+                    f"workflow:{run_module.workflow.info().workflow_id}"
+                ),
             )
             return raw
 
@@ -410,6 +441,9 @@ async def test_publisher_reconciles_old_blocked_scope_from_original_source_bytes
         hydrated = await parent._hydrate_acceptance_result(mapped)
         gate = parent._moonspec_verify_gate_result(hydrated["outputs"])
         if not omit_current_requirement:
+            assert (
+                "validatedRefs" in published.metadata["moonSpecVerify"]
+            ), published.metadata
             assert (
                 "acceptanceProjection"
                 in published.metadata["moonSpecVerify"]["validatedRefs"]
@@ -424,8 +458,6 @@ async def test_publisher_reconciles_old_blocked_scope_from_original_source_bytes
         )
         assert parent._assessment_context["assessmentVerdict"] == "BLOCKED"
         _, old_bytes = await service.read(
-            artifact_id=assessment_ref,
-            principal="system:agent_runtime",
-            allow_restricted_raw=True,
+            artifact_id=assessment_ref, access=access_for_test("system:agent_runtime")
         )
         assert json.loads(old_bytes) == old_assessment

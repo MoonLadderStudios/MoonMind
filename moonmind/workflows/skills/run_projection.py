@@ -32,8 +32,11 @@ from moonmind.schemas.agent_skill_models import (
 )
 from moonmind.services.skills_on_demand import skills_on_demand_runtime_instruction
 from moonmind.workflows.agent_skills.selection import selected_agent_skill
-from moonmind.workflows.temporal.artifacts import TemporalArtifactError
 from moonmind.workflows.skills.workspace_links import cleanup_moonmind_skill_projections
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    TemporalArtifactError,
+)
 
 AUTO_SKILL_SENTINEL = "auto"
 ACTIVE_SKILL_SNAPSHOT_HEADER = "Active MoonMind skill snapshot:"
@@ -75,24 +78,110 @@ def _strip_legacy_skill_version_fields(data: Any) -> Any:
     return normalized
 
 
-def step_execution_read_principal(request: Any) -> str | None:
-    """Return the admitted Step Execution scope for runtime input reads.
-
-    The identity comes from the workflow-built launch envelope, never from
-    agent-authored owner strings, and the artifact service still requires the
-    read artifact to be owned by or linked to that execution.
-    """
-
+async def step_execution_artifact_access(request: Any) -> ArtifactAccessContext:
+    """Bind the Step owner using the existing Activity/server ancestry owner."""
     identity = getattr(request, "step_execution", None)
     workflow_id = str(getattr(identity, "workflow_id", "") or "").strip()
-    return f"workflow:{workflow_id}" if workflow_id else None
+    if not workflow_id:
+        raise SkillProjectionError(
+            "Skill reads require admitted Step Execution authority"
+        )
+    from temporalio import activity
+
+    if not activity.in_activity() or activity.info().workflow_id == workflow_id:
+        return ArtifactAccessContext.for_execution(
+            workflow_id, principal="agent_runtime"
+        )
+
+    from datetime import timedelta
+    from types import SimpleNamespace
+
+    from temporalio.api.common.v1 import WorkflowExecution
+    from temporalio.api.workflowservice.v1 import (
+        DescribeNamespaceRequest,
+        DescribeWorkflowExecutionRequest,
+    )
+
+    from moonmind.workflows.temporal.activity_runtime import (
+        _verified_artifact_parent_access,
+    )
+
+    info = activity.info()
+    metadata = getattr(request, "metadata", None) or {}
+    expected_run = str(getattr(identity, "run_id", "") or "").strip() or None
+    expected_temporal_run = metadata.get("parentTemporalRunId")
+    async with asyncio.timeout(10):
+        access = await _verified_artifact_parent_access(
+            info=info,
+            parent_workflow_id=workflow_id,
+            parent_run_id=expected_run,
+            parent_temporal_run_id=expected_temporal_run,
+        )
+        if access is not None:
+            return access
+        # The existing session supervisor is the AgentRun's child. Follow only
+        # that server-recorded hop; payload parent IDs never choose this node.
+        client = activity.client()
+        if client.namespace != info.namespace:
+            raise SkillProjectionError(
+                "Skill Activity namespace differs from its owner"
+            )
+        described = await client.workflow_service.describe_workflow_execution(
+            DescribeWorkflowExecutionRequest(
+                namespace=info.namespace,
+                execution=WorkflowExecution(
+                    workflow_id=info.workflow_id,
+                    run_id=info.workflow_run_id,
+                ),
+            ),
+            timeout=timedelta(seconds=10),
+            retry=True,
+        )
+        current = described.workflow_execution_info
+        namespace = await client.workflow_service.describe_namespace(
+            DescribeNamespaceRequest(namespace=info.namespace),
+            timeout=timedelta(seconds=10),
+            retry=True,
+        )
+        if (
+            current.execution.workflow_id == info.workflow_id
+            and current.execution.run_id == info.workflow_run_id
+            and current.type.name == "MoonMind.OmnigentSession"
+            and current.HasField("parent_execution")
+            and current.parent_namespace_id == namespace.namespace_info.id
+        ):
+            parent = current.parent_execution
+            agent = await client.workflow_service.describe_workflow_execution(
+                DescribeWorkflowExecutionRequest(
+                    namespace=info.namespace, execution=parent
+                ),
+                timeout=timedelta(seconds=10),
+                retry=True,
+            )
+            agent = agent.workflow_execution_info
+            if agent.execution == parent and agent.type.name == "MoonMind.AgentRun":
+                access = await _verified_artifact_parent_access(
+                    info=SimpleNamespace(
+                        namespace=info.namespace,
+                        workflow_id=parent.workflow_id,
+                        workflow_run_id=parent.run_id,
+                    ),
+                    parent_workflow_id=workflow_id,
+                    parent_run_id=expected_run,
+                    parent_temporal_run_id=expected_temporal_run,
+                )
+                if access is not None:
+                    return access
+    raise SkillProjectionError(
+        "Step Execution is outside the verified Activity owner chain"
+    )
 
 
 async def load_resolved_skillset(
     artifact_service: Any,
     skillset_ref: str,
     *,
-    admitted_principal: str | None = None,
+    access: ArtifactAccessContext,
 ) -> ResolvedSkillSet:
     """Read and validate a :class:`ResolvedSkillSet` from artifact storage."""
 
@@ -104,11 +193,7 @@ async def load_resolved_skillset(
     try:
         _artifact, payload = await artifact_service.read(
             artifact_id=skillset_ref,
-            principal="agent_runtime",
-            **(
-                {"admitted_principal": admitted_principal} if admitted_principal else {}
-            ),
-            allow_restricted_raw=True,
+            access=access,
         )
         data = json.loads(payload.decode("utf-8"))
         return ResolvedSkillSet.model_validate(_strip_legacy_skill_version_fields(data))
@@ -136,7 +221,7 @@ async def materialize_run_skill_snapshot(
     projection_owner_uid: int | None = None,
     projection_owner_gid: int | None = None,
     project_adapter_aliases: bool = True,
-    admitted_principal: str | None = None,
+    access: ArtifactAccessContext,
 ) -> dict[str, Any]:
     """Materialize a resolved snapshot for one run and return its metadata.
 
@@ -170,7 +255,7 @@ async def materialize_run_skill_snapshot(
         projection_owner_uid=projection_owner_uid,
         projection_owner_gid=projection_owner_gid,
         project_adapter_aliases=project_adapter_aliases,
-        admitted_principal=admitted_principal,
+        access=access,
     )
     try:
         materialization = await materializer.materialize(
@@ -494,7 +579,7 @@ __all__ = [
     "append_remediation_attempt_context",
     "build_skill_activation_summary",
     "load_resolved_skillset",
-    "step_execution_read_principal",
+    "step_execution_artifact_access",
     "materialize_run_skill_snapshot",
     "prepend_skill_activation_summary",
     "verify_skill_projection",

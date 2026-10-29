@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from typing import Any, Iterable, Protocol
 from uuid import uuid4
 
 from sqlalchemy import and_, func, or_, select
@@ -53,6 +53,7 @@ from moonmind.schemas.container_job_models import (
     RegistryAuthorization,
     TerminalOutcome,
     WorkloadCredentialAuthorization,
+    container_job_workflow_id,
     require_explicit_resources,
 )
 from moonmind.security.container_job_capabilities import (
@@ -68,6 +69,7 @@ from moonmind.security.workload_profiles import (
     resolve_profile_job,
     resolved_job_within_scope,
 )
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 
 _STDERR_MARKER = "[stderr]"
@@ -119,7 +121,7 @@ class ContainerJobArtifactReader(Protocol):
     """
 
     async def get_metadata(
-        self, *, artifact_id: str, principal: str
+        self, *, artifact_id: str, access: ArtifactAccessContext
     ) -> tuple[Any, Any, bool, Any]:
         pass
 
@@ -127,9 +129,17 @@ class ContainerJobArtifactReader(Protocol):
         self,
         *,
         artifact_id: str,
-        principal: str,
-        allow_restricted_raw: bool = False,
+        access: ArtifactAccessContext,
     ) -> tuple[Any, bytes]:
+        pass
+
+    async def delegate_read_access(
+        self,
+        *,
+        artifact_ids: Iterable[str],
+        workflow_id: str,
+        access: ArtifactAccessContext,
+    ) -> None:
         pass
 
 
@@ -331,11 +341,25 @@ class ContainerJobService:
         backend_settings: ContainerBackendSettings | None = None,
         capability: ContainerJobSessionCapability | None = None,
         operator: OperatorAdmission | None = None,
+        artifact_access: ArtifactAccessContext | None = None,
     ) -> None:
         self._session = session
         self._capability = capability
         self.repository = ContainerJobRepository(
             session, capability=capability, operator=operator
+        )
+        self._artifact_access = (
+            ArtifactAccessContext.require(artifact_access)
+            if artifact_access is not None
+            else (
+                ArtifactAccessContext.for_operator(operator)
+                if operator is not None
+                else (
+                    ArtifactAccessContext.for_execution(capability.workflow_id)
+                    if capability is not None
+                    else None
+                )
+            )
         )
         self._temporal = temporal or TemporalClientAdapter()
         self._artifacts = artifacts
@@ -499,6 +523,20 @@ class ContainerJobService:
             elif admitted_at.tzinfo is None:
                 admitted_at = admitted_at.replace(tzinfo=timezone.utc)
             credential_decisions = authorize_credentials(admitted_at)
+        inputs = [
+            item.artifact_ref
+            for item in request.spec.input_attachments or ()
+            if item.artifact_ref
+        ]
+        if inputs:
+            # The trusted caller just approved these exact rights, including
+            # restricted raw bytes. Persist them for the canonical job before
+            # starting it; its Activity payload cannot grant those rights later.
+            await self._artifacts.delegate_read_access(
+                artifact_ids=inputs,
+                workflow_id=container_job_workflow_id(record.job_id),
+                access=ArtifactAccessContext.require(self._artifact_access),
+            )
         if recovering_start_failure:
             record.state = ContainerJobState.QUEUED.value
             record.terminal_outcome_json = None
@@ -549,8 +587,8 @@ class ContainerJobService:
     ) -> None:
         """Admit artifact inputs under the job owner's existing read authority.
 
-        The worker reads them again under the same principal, so authority or
-        retention lost before launch still fails closed there. Missing and
+        The worker reads them under this job's delegated input rights, so
+        quarantine or retention lost before launch still fails closed. Missing and
         unreadable artifacts are refused alike, without revealing which.
         """
 
@@ -560,10 +598,12 @@ class ContainerJobService:
             if self._artifacts is None:
                 raise ValueError("artifact inputs require the artifact store")
             try:
-                artifact, *_ = await self._artifacts.get_metadata(
+                artifact, _links, _pinned, policy = await self._artifacts.get_metadata(
                     artifact_id=item.artifact_ref,
-                    principal=owner_artifact_principal(owner),
+                    access=ArtifactAccessContext.require(self._artifact_access),
                 )
+                if not policy.raw_access_allowed:
+                    raise ValueError("input attachment raw bytes are not readable")
             except Exception as exc:  # noqa: BLE001 - authority decides
                 raise ValueError(
                     "input attachment artifact is not readable by the job owner"
@@ -708,7 +748,14 @@ class ContainerJobService:
         try:
             _artifact, payload = await self._artifacts.read(
                 artifact_id=artifact_ref,
-                principal=owner_artifact_principal(owner),
+                # The public read already selected this exact durable reference
+                # from the owner/capability-checked job record. It grants only
+                # ordinary result bytes, never raw or operator authority.
+                access=ArtifactAccessContext.require(
+                    self._artifact_access
+                )._with_verified_inputs(
+                    [artifact_ref.removeprefix("artifact://").removeprefix("artifact:")]
+                ),
             )
         except ContainerJobEvidenceUnavailableError:
             raise
@@ -724,9 +771,19 @@ class ContainerJobService:
         if self._artifacts is None:
             raise ContainerJobEvidenceUnavailableError("artifact store is not configured")
         try:
-            artifact, _links, _pinned, _read_policy = await self._artifacts.get_metadata(
-                artifact_id=artifact_ref,
-                principal=owner_artifact_principal(owner),
+            artifact, _links, _pinned, _read_policy = (
+                await self._artifacts.get_metadata(
+                    artifact_id=artifact_ref,
+                    access=ArtifactAccessContext.require(
+                        self._artifact_access
+                    )._with_verified_inputs(
+                        [
+                            artifact_ref.removeprefix("artifact://").removeprefix(
+                                "artifact:"
+                            )
+                        ]
+                    ),
+                )
             )
         except Exception as exc:  # noqa: BLE001 - normalized to a stable evidence error
             raise ContainerJobEvidenceUnavailableError(

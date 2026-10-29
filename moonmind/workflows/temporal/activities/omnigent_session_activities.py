@@ -15,11 +15,9 @@ from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping
 from uuid import NAMESPACE_URL, uuid5
-from moonmind.omnigent.git_identity import publication_git_identity_projection
 
-from moonmind.omnigent.control_plane.cleanup_authority import (
-    CanonicalCleanupAuthority,
-)
+from moonmind.omnigent.control_plane.cleanup_authority import CanonicalCleanupAuthority
+from moonmind.omnigent.git_identity import publication_git_identity_projection
 from moonmind.omnigent.harness_platform.agent_profile import (
     accepted_imported_content_digests,
     accepted_upstream_snapshot_digests,
@@ -53,13 +51,13 @@ from moonmind.schemas.omnigent_session_models import (
     OmnigentPersistFailureRequest,
     OmnigentPersistSignalsRequest,
     OmnigentResolveIntentRequest,
+    OmnigentSessionActivityRequest,
     OmnigentSessionAdmissionDecision,
     OmnigentSessionAdmissionRequest,
-    OmnigentSessionActivityRequest,
     OmnigentSessionTerminalResult,
     OmnigentSessionWorkflowInput,
 )
-
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 _ARTIFACT_PRINCIPAL = "service:omnigent_session_supervisor"
 _MAX_EVENT_BATCH = 100
@@ -156,7 +154,7 @@ async def _remediation_context_input_ref(workflow_id: str) -> str | None:
 
 
 async def _read_json_artifact(
-    ref: str, *, admitted_principal: str | None = None
+    ref: str, *, access: ArtifactAccessContext
 ) -> dict[str, Any]:
     from api_service.db.base import async_session_maker
     from moonmind.workflows.temporal.artifacts import (
@@ -168,9 +166,7 @@ async def _read_json_artifact(
         service = TemporalArtifactService(TemporalArtifactRepository(session))
         _artifact, body = await service.read(
             artifact_id=_artifact_id(ref),
-            principal=_ARTIFACT_PRINCIPAL,
-            admitted_principal=admitted_principal,
-            allow_restricted_raw=True,
+            access=access,
         )
     value = json.loads(body)
     if not isinstance(value, dict):
@@ -333,6 +329,9 @@ async def omnigent_evaluate_session_admission_activity(
             request.omnigent_execution_plan,
             workflow_id=request.workflow_id,
             step_execution_id=request.step_execution_id,
+            access=ArtifactAccessContext.for_execution(
+                request.workflow_id, principal=_ARTIFACT_PRINCIPAL
+            ),
         )
         assert_agent_execution_authority(plan.payload.credentialBindings)
         selected_profiles = {
@@ -667,7 +666,7 @@ def _validate_plan_support_authority(plan: Any) -> None:
         raise ValueError("persisted exact-artifact evidence is incomplete")
 
 
-def _session_artifact_read_principal(
+def _session_artifact_access(
     request: OmnigentSessionActivityRequest,
     session: Any,
     binding: OmnigentExecutionPlanBinding,
@@ -711,7 +710,9 @@ def _session_artifact_read_principal(
         raise ValueError("intent snapshot conflicts with canonical session identity")
     if not session.moonmind_workflow_id:
         raise ValueError("canonical session lacks execution artifact authority")
-    return f"workflow:{session.moonmind_workflow_id}"
+    return ArtifactAccessContext.for_execution(
+        session.moonmind_workflow_id, principal=_ARTIFACT_PRINCIPAL
+    )
 
 
 async def _load_session_execution_plan(
@@ -740,7 +741,7 @@ async def _load_session_execution_plan(
         raise KeyError(request.session_id)
     return await _load_verified_execution_plan(
         binding,
-        admitted_principal=_session_artifact_read_principal(
+        access=_session_artifact_access(
             request, session, binding, intent_payload=intent_payload
         ),
     )
@@ -754,7 +755,10 @@ async def _load_intent_request(
         if isinstance(request, OmnigentSessionActivityRequest)
         else OmnigentSessionActivityRequest.model_validate(request)
     )
-    payload = await _read_json_artifact(parsed.compiled_execution_intent_ref)
+    payload = await _read_json_artifact(
+        parsed.compiled_execution_intent_ref,
+        access=ArtifactAccessContext.for_service(_ARTIFACT_PRINCIPAL),
+    )
     body = _json_bytes(payload)
     if _digest_bytes(body) != parsed.compiled_execution_intent_digest:
         raise ValueError("agent execution request snapshot digest mismatch")
@@ -829,7 +833,10 @@ async def _reconstruct_plan_bound_request(
     """Reload authored input and project it through immutable plan authority."""
 
     snapshot = await _read_json_artifact(
-        binding.task_input_snapshot_ref, admitted_principal=f"workflow:{workflow_id}"
+        binding.task_input_snapshot_ref,
+        access=ArtifactAccessContext.for_execution(
+            workflow_id, principal=_ARTIFACT_PRINCIPAL
+        ),
     )
     if _digest_bytes(_json_bytes(snapshot)) != binding.task_input_snapshot_digest:
         raise ValueError("task-input snapshot digest conflicts with execution plan")
@@ -1087,7 +1094,7 @@ class _AdmissionCertificateError(ValueError):
 
 
 async def _validate_plan_admission_authority(
-    persisted: Any, *, admitted_principal: str | None = None
+    persisted: Any, *, access: ArtifactAccessContext
 ) -> None:
     """Load and validate support, replay, and rollback evidence from the plan.
 
@@ -1144,13 +1151,7 @@ async def _validate_plan_admission_authority(
         "artifact:"
     )
     try:
-        support_evidence = (
-            await _read_json_artifact(
-                support_ref, admitted_principal=admitted_principal
-            )
-            if admitted_principal is not None
-            else await _read_json_artifact(support_ref)
-        )
+        support_evidence = await _read_json_artifact(support_ref, access=access)
     except Exception as exc:
         raise _AdmissionCertificateError(
             f"execution support evidence is unavailable: {exc}"
@@ -1262,7 +1263,7 @@ async def _load_verified_execution_plan(
     run_id: str | None = None,
     namespace: str = "default",
     step_execution_id: str | None = None,
-    admitted_principal: str | None = None,
+    access: ArtifactAccessContext,
 ):
     """Load the DB and artifact copies and verify one exact plan envelope.
 
@@ -1329,13 +1330,14 @@ async def _load_verified_execution_plan(
                 workflow_id=workflow_id,
                 run_id=execution_run_id,
                 namespace=namespace,
+                access=access,
             )
-            admitted_principal = f"workflow:{workflow_id}"
+            access = ArtifactAccessContext.for_execution(
+                workflow_id, principal=_ARTIFACT_PRINCIPAL
+            )
 
     async def read_plan_json(ref):
-        if admitted_principal is None:
-            return await _read_json_artifact(ref)
-        return await _read_json_artifact(ref, admitted_principal=admitted_principal)
+        return await _read_json_artifact(ref, access=access)
 
     artifact_payload = await read_plan_json(binding.plan_artifact_ref)
     artifact_plan = verify_execution_plan_envelope(artifact_payload)
@@ -1353,9 +1355,7 @@ async def _load_verified_execution_plan(
             "execution plan binding conflicts with task-input snapshot authority"
         )
     try:
-        await _validate_plan_admission_authority(
-            persisted, admitted_principal=admitted_principal
-        )
+        await _validate_plan_admission_authority(persisted, access=access)
     except _AdmissionCertificateError as exc:
         persisted = await _migrate_stranded_pre_upgrade_plan(
             persisted,
@@ -1562,8 +1562,8 @@ async def _project_runtime_binding_to_execution(
 ) -> None:
     """Publish a safe, monotonic binding summary to Workflow Detail."""
 
-    from api_service.db.base import async_session_maker
     from api_service.core.sync import mutate_execution_projection
+    from api_service.db.base import async_session_maker
 
     if not workflow_id:
         raise ValueError("runtime-binding projection requires workflow authority")
@@ -1636,9 +1636,7 @@ async def _persist_host_runtime_evidence(
         ClassAdmissionDecision,
         validate_exact_host_capabilities,
     )
-    from moonmind.omnigent.harness_platform.catalog import (
-        HarnessImplementationIdentity,
-    )
+    from moonmind.omnigent.harness_platform.catalog import HarnessImplementationIdentity
     from moonmind.omnigent.harness_platform.failures import (
         HarnessPlatformError,
         HarnessPlatformFailure,
@@ -1870,9 +1868,7 @@ async def _session_execution_authority_metadata(session: Any) -> dict[str, Any]:
     from moonmind.omnigent.harness_platform.execution_plan import (
         execution_support_identity,
     )
-    from moonmind.omnigent.harness_platform.stores import (
-        DbExecutionPlanStore,
-    )
+    from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
     from moonmind.omnigent.runtime_bindings import DbRuntimeBindingStore
 
     plan = await DbExecutionPlanStore(async_session_maker).load(plan_ref)
@@ -1971,6 +1967,7 @@ async def omnigent_resolve_intent_activity(
 ) -> dict[str, Any]:
     """Verify persisted plan authority and snapshot the bounded run request."""
 
+    from api_service.db.base import async_session_maker
     from moonmind.omnigent.control_plane import (
         ConflictingSessionAuthorityError,
         FencingScope,
@@ -1981,7 +1978,6 @@ async def omnigent_resolve_intent_activity(
         canonical_omnigent_session_id,
         canonical_omnigent_turn_attempt_id,
     )
-    from api_service.db.base import async_session_maker
 
     resolved = OmnigentResolveIntentRequest.model_validate(payload)
     if resolved.request is not None:
@@ -1993,7 +1989,10 @@ async def omnigent_resolve_intent_activity(
         if plan_binding is None:
             raise ValueError("resolve intent lacks persisted plan authority")
         execution_plan = await _load_verified_execution_plan(
-            plan_binding, admitted_principal=f"workflow:{resolved.workflow_id}"
+            plan_binding,
+            access=ArtifactAccessContext.for_execution(
+                resolved.workflow_id, principal=_ARTIFACT_PRINCIPAL
+            ),
         )
         request = await _reconstruct_plan_bound_request(
             binding=plan_binding,
@@ -2022,7 +2021,9 @@ async def omnigent_resolve_intent_activity(
     if request.omnigent_execution_plan is not None:
         execution_plan = await _load_verified_execution_plan(
             request.omnigent_execution_plan,
-            admitted_principal=f"workflow:{resolved.workflow_id}",
+            access=ArtifactAccessContext.for_execution(
+                resolved.workflow_id, principal=_ARTIFACT_PRINCIPAL
+            ),
         )
         request = _bind_request_to_execution_plan(request, execution_plan)
 
@@ -2302,9 +2303,7 @@ async def omnigent_load_reconciliation_inputs_activity(
     )
     runtime_binding_state = None
     if request.omnigent_execution_plan is not None:
-        from moonmind.omnigent.harness_platform.stores import (
-            DbRuntimeBindingStore,
-        )
+        from moonmind.omnigent.harness_platform.stores import DbRuntimeBindingStore
 
         runtime_binding_state = await DbRuntimeBindingStore(
             async_session_maker
@@ -2409,7 +2408,10 @@ async def omnigent_load_reconciliation_inputs_activity(
         or ""
     ).strip()
     if result_evidence_ref:
-        evidence = await _read_json_artifact(result_evidence_ref)
+        evidence = await _read_json_artifact(
+            result_evidence_ref,
+            access=ArtifactAccessContext.for_service(_ARTIFACT_PRINCIPAL),
+        )
         raw_terminal = evidence.get("terminalResult")
         if not isinstance(raw_terminal, Mapping):
             raise ValueError("terminal evidence is missing its compact result")
@@ -2681,7 +2683,10 @@ async def _settle_command(
     delivery_unknown: bool = False,
 ) -> dict[str, Any]:
     from api_service.db.base import async_session_maker
-    from moonmind.omnigent.control_plane import ControlPlaneOutcome, OmnigentControlPlaneStore
+    from moonmind.omnigent.control_plane import (
+        ControlPlaneOutcome,
+        OmnigentControlPlaneStore,
+    )
 
     if not request.command_id:
         raise ValueError("bounded side effect requires commandId")
@@ -2764,9 +2769,7 @@ async def omnigent_persist_signal_intents_activity(
         coerce_turn_source,
         compute_digest,
     )
-    from moonmind.omnigent.control_plane.identities import (
-        canonical_turn_command_key,
-    )
+    from moonmind.omnigent.control_plane.identities import canonical_turn_command_key
     from moonmind.omnigent.control_plane.turn_commands import (
         CanonicalTurnCommandService,
     )
@@ -2784,9 +2787,7 @@ async def omnigent_persist_signal_intents_activity(
         # live authority, reject an old supervisor task instead of applying its
         # intent to a replacement host/session binding.
         if request.omnigent_execution_plan is not None:
-            _session_artifact_read_principal(
-                request, session, request.omnigent_execution_plan
-            )
+            _session_artifact_access(request, session, request.omnigent_execution_plan)
             recorded_runtime_ref = str(
                 session.metadata.get("runtimeBindingRef") or ""
             )
@@ -2946,10 +2947,7 @@ async def omnigent_ensure_provider_profile_lease_activity(
 ) -> dict[str, Any]:
     from api_service.db.base import async_session_maker
     from api_service.db.models import ManagedAgentProviderProfile
-    from moonmind.omnigent.control_plane import (
-        FencingScope,
-        OmnigentControlPlaneStore,
-    )
+    from moonmind.omnigent.control_plane import FencingScope, OmnigentControlPlaneStore
     from moonmind.provider_profiles.lease_client import (
         CredentialLeasePurpose,
         ProviderProfileLeaseClient,
@@ -3087,12 +3085,10 @@ async def omnigent_ensure_provider_profile_lease_activity(
     runtime_binding_state = None
     replacing_runtime_authority = False
     if execution_plan is not None:
-        from moonmind.omnigent.harness_platform.stores import (
-            DbRuntimeBindingStore,
-        )
         from moonmind.omnigent.harness_platform.runtime_binding import (
             create_runtime_binding,
         )
+        from moonmind.omnigent.harness_platform.stores import DbRuntimeBindingStore
 
         provider_leases: dict[str, dict[str, Any]] = {}
         # Model leases only (MoonLadderStudios/MoonMind#4009): repository
@@ -3290,6 +3286,7 @@ class _SharedPoolClientCloser:
 
 async def _omnigent_client_context():
     import httpx
+
     from moonmind.omnigent.settings import (
         resolved_api_token,
         resolved_proxy_forward_headers,
@@ -3391,10 +3388,7 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
     from api_service.services.omnigent_policies import OmnigentPolicyService
     from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
     from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
-    from moonmind.omnigent.control_plane import (
-        FencingScope,
-        OmnigentControlPlaneStore,
-    )
+    from moonmind.omnigent.control_plane import FencingScope, OmnigentControlPlaneStore
     from moonmind.omnigent.execution_profiles import (
         PROFILES,
         default_execution_profile_ref_for_runtime,
@@ -3503,12 +3497,8 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
         and execution_plan.payload.effectiveLaunchSnapshotRef is not None
     ):
         effective_launch = await _read_json_artifact(
-            execution_plan.payload.effectiveLaunchSnapshotRef.removeprefix(
-                "artifact:"
-            ),
-            admitted_principal=_session_artifact_read_principal(
-                request, session, agent_plan_binding
-            ),
+            execution_plan.payload.effectiveLaunchSnapshotRef.removeprefix("artifact:"),
+            access=_session_artifact_access(request, session, agent_plan_binding),
         )
         if (
             effective_launch.get("providerProfileId")
@@ -4130,18 +4120,20 @@ async def omnigent_ensure_provider_session_activity(
 
 async def omnigent_submit_turn_activity(payload: Mapping[str, Any]) -> dict[str, Any]:
     from api_service.db.base import async_session_maker
+    from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
     from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
     from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
     from moonmind.omnigent.execute import (
-        _persisted_pre_dispatch_item_ids,
         _build_omnigent_first_message,
-        _first_message_text,
         _first_message_marker,
-        _snapshot_item_ids,
+        _first_message_text,
+        _persisted_pre_dispatch_item_ids,
         _snapshot_contains_first_message_marker,
+        _snapshot_item_ids,
     )
-    from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
-    from moonmind.workflows.adapters.omnigent_agent_adapter import build_omnigent_selection
+    from moonmind.workflows.adapters.omnigent_agent_adapter import (
+        build_omnigent_selection,
+    )
 
     request = OmnigentSessionActivityRequest.model_validate(payload)
     command, should_execute = await _claim_command(request)
@@ -4354,8 +4346,11 @@ async def omnigent_read_event_batch_activity(
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
     from api_service.db.base import async_session_maker
-    from moonmind.omnigent.control_plane import OmnigentControlPlaneStore, compute_digest
     from moonmind.omnigent.bridge_events import normalize_omnigent_observation
+    from moonmind.omnigent.control_plane import (
+        OmnigentControlPlaneStore,
+        compute_digest,
+    )
 
     request = OmnigentSessionActivityRequest.model_validate(payload)
     store = OmnigentControlPlaneStore(async_session_maker)
@@ -4444,9 +4439,12 @@ async def omnigent_observe_snapshot_activity(
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
     from api_service.db.base import async_session_maker
-    from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
     from moonmind.omnigent.bridge_events import normalize_omnigent_observation
-    from moonmind.omnigent.control_plane import OmnigentControlPlaneStore, compute_digest
+    from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+    from moonmind.omnigent.control_plane import (
+        OmnigentControlPlaneStore,
+        compute_digest,
+    )
     from moonmind.omnigent.execute import (
         _MARKED_TOOL_ONLY_QUIET_PERIOD_SECONDS,
         _MARKED_TURN_QUIET_PERIOD_SECONDS,
@@ -4875,7 +4873,9 @@ async def omnigent_persist_failure_activity(
 
     existing_ref = str(session.metadata.get(evidence_metadata_key) or "").strip()
     if existing_ref:
-        existing = await _read_json_artifact(existing_ref)
+        existing = await _read_json_artifact(
+            existing_ref, access=ArtifactAccessContext.for_service(_ARTIFACT_PRINCIPAL)
+        )
         raw_terminal = existing.get("terminalResult")
         if not isinstance(raw_terminal, Mapping):
             raise ValueError("persisted Omnigent failure evidence is incomplete")
@@ -4908,7 +4908,9 @@ async def omnigent_persist_failure_activity(
         or ""
     ).strip()
     if primary_ref:
-        primary_evidence = await _read_json_artifact(primary_ref)
+        primary_evidence = await _read_json_artifact(
+            primary_ref, access=ArtifactAccessContext.for_service(_ARTIFACT_PRINCIPAL)
+        )
         raw_primary = primary_evidence.get("terminalResult")
         if isinstance(raw_primary, Mapping):
             primary_terminal = _bind_terminal_evidence_ref(
@@ -5318,9 +5320,7 @@ async def omnigent_publish_workspace_activity(
     )
     runtime_state = None
     if execution_plan is not None:
-        from moonmind.omnigent.harness_platform.stores import (
-            DbRuntimeBindingStore,
-        )
+        from moonmind.omnigent.harness_platform.stores import DbRuntimeBindingStore
 
         runtime_state = await DbRuntimeBindingStore(
             async_session_maker

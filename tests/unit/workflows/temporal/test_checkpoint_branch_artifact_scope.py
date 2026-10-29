@@ -34,6 +34,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactService,
 )
 from moonmind.workflows.temporal.workflows import checkpoint_branch_turn as turns
+from tests.artifact_access import access_for_test
 
 pytestmark = pytest.mark.asyncio
 
@@ -152,15 +153,19 @@ async def test_retention_reads_only_recorded_source_turn_and_child_scopes(retent
         for ref in [*refs, result["agentResultRef"], result["diagnosticsRef"]]:
             artifact, links, pinned, _ = await artifacts(session).get_metadata(
                 artifact_id=ref.removeprefix("artifact://"),
-                principal="service:checkpoint-branch-turn",
-                admitted_principal="workflow:source",
+                access=access_for_test(
+                    "service:checkpoint-branch-turn",
+                    admitted_principal="workflow:source",
+                ),
             )
             assert pinned
             assert artifact.created_by_principal == producer
             assert any(link.link_type == turns._RETENTION_LINK_TYPE for link in links)
         _, data = await artifacts(session).read(
             artifact_id=result["agentResultRef"].removeprefix("artifact://"),
-            principal="service:checkpoint-branch-turn", admitted_principal="workflow:source",
+            access=access_for_test(
+                "service:checkpoint-branch-turn", admitted_principal="workflow:source"
+            ),
         )
         assert json.loads(data)["outputRefs"] == refs
 
@@ -214,7 +219,10 @@ async def test_rejection_evidence_uses_same_recorded_scope_and_keeps_producer(re
         for key in ("agentResultRef", "diagnosticsRef"):
             artifact, _, pinned, _ = await artifacts(session).get_metadata(
                 artifact_id=result[key].removeprefix("artifact://"),
-                principal="service:checkpoint-branch-turn", admitted_principal="workflow:source",
+                access=access_for_test(
+                    "service:checkpoint-branch-turn",
+                    admitted_principal="workflow:source",
+                ),
             )
             assert pinned
             assert artifact.created_by_principal == producer

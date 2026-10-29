@@ -21,6 +21,7 @@ from moonmind.workflows.temporal.artifacts import (
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 from moonmind.workflows.temporal.service import TemporalExecutionService
+from tests.artifact_access import access_for_test
 from tests.unit.omnigent import test_step_retry_input_authority as input_fixtures
 
 artifacts = input_fixtures.artifacts
@@ -69,12 +70,14 @@ async def test_real_step_retry_restores_inputs_and_keeps_completed_effects(
             reader = TemporalArtifactService(TemporalArtifactRepository(session))
             principal = f"workflow:{activity.info().workflow_id}"
             _, manifest = await reader.read(
-                artifact_id=artifact_id, principal=principal
+                artifact_id=artifact_id, access=access_for_test(principal)
             )
             body_id = json.loads(manifest)["skills"][0]["content_ref"]
-            return (await reader.read(artifact_id=body_id, principal=principal))[
-                1
-            ].decode()
+            return (
+                await reader.read(
+                    artifact_id=body_id, access=access_for_test(principal)
+                )
+            )[1].decode()
 
     async with await WorkflowEnvironment.start_local(
         data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER

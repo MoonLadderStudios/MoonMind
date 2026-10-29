@@ -30,6 +30,7 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
     build_activity_bindings,
 )
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.runtime.checkpoint_restore import (
     ManagedCheckpointRestoreService,
 )
@@ -261,7 +262,8 @@ async def test_checkpoint_outbound_policy_capture_and_cold_restore(
             "capabilitySetVersion": capabilities.capability_set_version,
             "capabilityDigest": capabilities.capability_digest,
             "idempotencyKey": "replay-restore",
-        }
+        },
+        access=ArtifactAccessContext.for_execution(identity["workflowId"]),
     )
     assert result["status"] == "succeeded"
     destination = tmp_path / "restored/restored-run/repo"

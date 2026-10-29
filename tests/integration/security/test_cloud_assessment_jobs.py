@@ -28,6 +28,7 @@ from unittest.mock import AsyncMock
 from urllib.parse import parse_qs
 
 import pytest
+
 from pydantic import ValidationError
 
 from api_service.services.container_jobs import (
@@ -61,6 +62,7 @@ from moonmind.security.workload_profiles import (
     AdmittedAssessmentScope,
 )
 from moonmind.workflows.temporal import container_job_attachments as attachments
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.container_job_attachments import storage_for
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from moonmind.workflows.temporal.worker_runtime import _container_job_artifact_reader
@@ -611,7 +613,7 @@ async def test_unusable_output_and_cancellation_stay_incomplete_and_readable(
     ) == ("outputs_retained" if scenario == "oversize" else "removed")
     retained = artifact_names(harness, accepted)["summary"]["artifactRef"]
     _, payload = await environment.service.read(
-        artifact_id=retained, principal=owner_artifact_principal(OWNER)
+        artifact_id=retained, access=ArtifactAccessContext.for_execution("assessment")
     )
     assert json.loads(payload)["status"] == "partial"
 

@@ -21,6 +21,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+from moonmind.security.operator_admission import OperatorAdmission
+
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
@@ -108,19 +110,13 @@ async def _insert_historical_manifest_record(session, *, state=None) -> object:
     return record
 
 
-def _override_user(app: FastAPI, *, is_superuser: bool = True) -> SimpleNamespace:
+def _override_user(app: FastAPI, *, is_superuser: bool = True) -> OperatorAdmission:
     from api_service.auth_providers import (
         get_instance_access,
         get_instance_access_optional,
     )
 
-    user = SimpleNamespace(
-        id=uuid4(),
-        email="gapclosure@example.com",
-        is_active=True,
-        is_superuser=is_superuser,
-        roles=[],
-    )
+    user = OperatorAdmission(via="loopback")
     app.dependency_overrides[get_instance_access] = lambda: user
     app.dependency_overrides[get_instance_access_optional] = lambda: user
     app.dependency_overrides[get_instance_access] = lambda: user
@@ -613,7 +609,7 @@ async def test_generic_artifact_upload_accepts_manifest_yaml_name(
     tmp_path: Path,
 ) -> None:
     """A generic artifact whose filename is manifest.yaml is ordinary content."""
-    from api_service.db.models import Base
+    from api_service.db.models import Base, TemporalArtifactRedactionLevel
     from moonmind.config.settings import settings
     from moonmind.workflows.temporal import (
         LocalTemporalArtifactStore,
@@ -645,7 +641,7 @@ async def test_generic_artifact_upload_accepts_manifest_yaml_name(
                 link=None,
                 metadata_json={"filename": "manifest.yaml"},
                 encryption=None,
-                redaction_level=None,
+                redaction_level=TemporalArtifactRedactionLevel.NONE,
             )
             assert artifact.artifact_id
     finally:

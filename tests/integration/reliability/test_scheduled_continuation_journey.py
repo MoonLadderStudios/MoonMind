@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -16,7 +17,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import delete, select
-from temporalio.testing import ActivityEnvironment
+from temporalio.api.enums.v1 import IndexedValueType
 from temporalio.client import (
     Schedule,
     ScheduleActionStartWorkflow,
@@ -29,30 +30,31 @@ from temporalio.common import (
     SearchAttributePair,
     TypedSearchAttributes,
 )
-from temporalio.api.enums.v1 import IndexedValueType
+from temporalio.testing import ActivityEnvironment
 
 from api_service.api.routers import executions as ex
 from api_service.db.models import (
     Base,
-    TemporalExecutionCanonicalRecord,
     TemporalArtifact,
     TemporalArtifactLink,
+    TemporalExecutionCanonicalRecord,
 )
 from moonmind.omnigent.host_services.workspace import OmnigentWorkspaceMaterializer
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
-from moonmind.workflows.temporal.activity_runtime import (
-    TemporalPlanActivities,
-    build_activity_bindings,
-)
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal.activity_catalog import (
     TemporalActivityCatalog,
     build_default_activity_catalog,
 )
+from moonmind.workflows.temporal.activity_runtime import (
+    TemporalPlanActivities,
+    build_activity_bindings,
+)
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
+    TemporalArtifactActivities,
     TemporalArtifactRepository,
     TemporalArtifactService,
-    TemporalArtifactActivities,
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.service import (
@@ -61,6 +63,7 @@ from moonmind.workflows.temporal.service import (
 )
 from moonmind.workflows.temporal.worker_runtime import _build_runtime_planner
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from tests.artifact_access import access_for_test
 from tests.integration.reliability.test_resolver_verification_capability_journey import (
     resolver_test_client,
 )
@@ -196,7 +199,7 @@ async def test_schedule_continuation_preserves_intent_and_materializes_evidence(
         }
     )
     owner = str(uuid4())
-    user = SimpleNamespace(id=owner)
+    user = OperatorAdmission(via="loopback")
     queue = "continuation-qualification-" + uuid4().hex
     adapter = TemporalClientAdapter(client)
     source_id = "mm:" + uuid4().hex
@@ -359,7 +362,8 @@ async def test_schedule_continuation_preserves_intent_and_materializes_evidence(
                         HTTPException, match="lost create acknowledgement"
                     ):
                         await ex.continue_in_new_workflow(
-                            source_id, payload, service, session, user, None
+                            source_id, payload, service, session, user, None,
+                            access=access_for_test("operator"),
                         )
                     copied_before_retry = set(
                         (
@@ -367,7 +371,8 @@ async def test_schedule_continuation_preserves_intent_and_materializes_evidence(
                         ).all()
                     )
                 result = await ex.continue_in_new_workflow(
-                    source_id, payload, service, session, user, None
+                    source_id, payload, service, session, user, None,
+                    access=access_for_test("operator"),
                 )
                 destination = result.destination_workflow_id
                 if lost_ack:
@@ -384,7 +389,8 @@ async def test_schedule_continuation_preserves_intent_and_materializes_evidence(
                         for artifact in new_artifacts
                     ), "Lost acknowledgement retry must reuse recorded evidence copies"
                 duplicate = await ex.continue_in_new_workflow(
-                    source_id, payload, service, session, user, None
+                    source_id, payload, service, session, user, None,
+                    access=access_for_test("operator"),
                 )
                 assert (
                     duplicate.destination_workflow_id == destination
@@ -427,7 +433,8 @@ async def test_schedule_continuation_preserves_intent_and_materializes_evidence(
                     parameters=params,
                 )
                 _, raw_plan = await artifacts.read(
-                    artifact_id=generated.plan_ref.artifact_id, principal=owner
+                    artifact_id=generated.plan_ref.artifact_id,
+                    access=access_for_test(owner),
                 )
                 plan = json.loads(raw_plan)
                 assert len(plan["nodes"]) == (2 if authored else 1)
@@ -462,7 +469,15 @@ async def test_schedule_continuation_preserves_intent_and_materializes_evidence(
 
                 async def dispatch(name, payload, **kwargs):
                     assert name == "artifact.link"
-                    return await ActivityEnvironment().run(
+                    environment = ActivityEnvironment()
+                    environment.info = replace(
+                        environment.info,
+                        workflow_id=destination,
+                        workflow_run_id=run,
+                        workflow_namespace=client.namespace,
+                        namespace=client.namespace,
+                    )
+                    return await environment.run(
                         binding.handler, json.loads(json.dumps(payload))
                     )
 

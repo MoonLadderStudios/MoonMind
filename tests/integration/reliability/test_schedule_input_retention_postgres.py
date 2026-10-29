@@ -15,11 +15,13 @@ from api_service.services.recurring_workflows_service import (
     RecurringWorkflowsService,
     RecurringWorkflowValidationError,
 )
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactStateError,
 )
+from tests.artifact_access import access_for_test
 from tests.support.isolated_postgres import isolated_postgres
 from tests.unit.workflows.temporal.test_saved_work_retention_4017 import (
     _complete_artifact,
@@ -103,7 +105,7 @@ async def write_schedule(
         return await service.update_definition(
             definition,
             target=payload,
-            actor=SimpleNamespace(id="operator"),
+            actor=OperatorAdmission(via="loopback"),
         )
     return await service.create_definition(
         name="Retained schedule",
@@ -117,7 +119,7 @@ async def write_schedule(
         owner_user_id=None,
         target=payload,
         policy={},
-        actor=SimpleNamespace(id="operator"),
+        actor=OperatorAdmission(via="loopback"),
     )
 
 
@@ -138,7 +140,9 @@ async def test_postgres_exact_reference_and_disabled_schedule_survive_sweep(tmp_
         result = await service.sweep_lifecycle(principal="service:sweeper", now=FUTURE)
         assert result.soft_deleted_count == 1
         assert (
-            await service.read(artifact_id=saved.artifact_id, principal="operator")
+            await service.read(
+                artifact_id=saved.artifact_id, access=access_for_test("operator")
+            )
         )[1]
         assert incidental.status is models.TemporalArtifactStatus.DELETED
 
@@ -187,7 +191,7 @@ async def test_schedule_write_wins_lock_before_expiry_sweep(
         async with sessions() as reader:
             assert (
                 await _service(reader, tmp_path).read(
-                    artifact_id=artifact_id, principal="operator"
+                    artifact_id=artifact_id, access=access_for_test("operator")
                 )
             )[1]
             if replacing:
@@ -261,7 +265,7 @@ async def test_expiry_sweep_wins_lock_and_schedule_cannot_save_deleted_input(
                 assert definition.target["inputArtifactRef"] == old_id
                 assert (
                     await _service(reader, tmp_path).read(
-                        artifact_id=old_id, principal="operator"
+                        artifact_id=old_id, access=access_for_test("operator")
                     )
                 )[1]
 
@@ -473,7 +477,9 @@ async def test_shared_blob_hard_sweep_and_multi_input_schedule_do_not_deadlock(
             reader = _service(session, tmp_path)
             for artifact_id in (first_id, second_id):
                 assert (
-                    await reader.read(artifact_id=artifact_id, principal="operator")
+                    await reader.read(
+                        artifact_id=artifact_id, access=access_for_test("operator")
+                    )
                 )[1]
 
 
@@ -542,6 +548,6 @@ async def test_explicit_shared_delete_and_schedule_admission_do_not_deadlock(
         async with sessions() as session:
             assert (
                 await _service(session, tmp_path).read(
-                    artifact_id=first_id, principal="operator"
+                    artifact_id=first_id, access=access_for_test("operator")
                 )
             )[1]

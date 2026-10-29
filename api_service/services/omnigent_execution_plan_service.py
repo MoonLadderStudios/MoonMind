@@ -90,6 +90,7 @@ from moonmind.services.skill_resolution import (
     SkillResolutionContext,
 )
 from moonmind.utils.logging import redact_sensitive_text
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.remediation_loop import (
     ToolDescriptor,
     tool_descriptor_selected_skill,
@@ -389,6 +390,8 @@ async def _persist_binary_artifact(
 
 @dataclass(frozen=True)
 class PersistedOmnigentExecutionPlan:
+    # In-process admission proof; never part of a serialized plan binding.
+    artifact_access: ArtifactAccessContext
     envelope: OmnigentExecutionPlanEnvelope
     binding: OmnigentExecutionPlanBinding
     artifact_refs: tuple[str, ...]
@@ -853,6 +856,7 @@ async def _verify_native_review_graph(
     principal: str,
     task_input_snapshot_ref: str,
     task_input_snapshot_digest: str,
+    access: ArtifactAccessContext,
 ) -> bool:
     """Require the compiler's closed graph to match its immutable input bytes."""
     graph = _native_review_graph(initial_parameters)
@@ -862,8 +866,7 @@ async def _verify_native_review_graph(
         artifact_id=task_input_snapshot_ref.removeprefix("artifact://").removeprefix(
             "artifact:"
         ),
-        principal=principal,
-        allow_restricted_raw=True,
+        access=access,
     )
     if _sha256(body) != task_input_snapshot_digest:
         raise ValueError("native review graph task-input snapshot digest mismatch")
@@ -965,10 +968,11 @@ async def _admit_repository_plan_inputs(
     initial_parameters: Mapping[str, Any],
     requires_github: bool,
     parent_plan: OmnigentExecutionPlanEnvelope | None,
-    parent_read_principal: str | None = None,
+    parent_artifact_access: ArtifactAccessContext | None = None,
     typed_authority: bool = True,
     native_review: bool = False,
     resolved_skills: AgentResolvedSkillSet | None = None,
+    access: ArtifactAccessContext,
 ) -> dict[str, Any]:
     """Derive transport/tool roles and freeze selection through existing owners.
 
@@ -1272,8 +1276,7 @@ async def _admit_repository_plan_inputs(
                     )
                 _artifact, parent_bytes = await artifact_service.read(
                     artifact_id=parent_access["artifactRef"].removeprefix("artifact:"),
-                    principal=parent_read_principal or principal,
-                    allow_restricted_raw=True,
+                    access=parent_artifact_access or access,
                 )
                 if (
                     "repository-access-snapshot:" + _sha256(parent_bytes)
@@ -1362,14 +1365,10 @@ async def compile_and_persist_execution_plan(
     workspace_source_kind: str | None = None,
     workspace_access_snapshot_ref: str | None = None,
     worker_authority_kinds: tuple[str, ...] | list[str] | None = None,
-    # Repository bindings re-admitted for child work (attenuated grants
-    # composed by the fan-out caller from trusted snapshots). Each entry is
-    # a v2 ``repository_connection`` binding payload keyed by slot. They are
-    # admitted only through ``trusted_repository_declarations``; entries
-    # without a declaration are rejected by the planner.
     repository_bindings: Mapping[str, Mapping[str, Any]] | None = None,
     parent_repository_plan: OmnigentExecutionPlanEnvelope | None = None,
-    parent_read_principal: str | None = None,
+    parent_artifact_access: ArtifactAccessContext | None = None,
+    access: ArtifactAccessContext,
 ) -> PersistedOmnigentExecutionPlan:
     """Compile and persist one plan before Temporal or provider side effects."""
 
@@ -1765,6 +1764,7 @@ async def compile_and_persist_execution_plan(
         principal=principal,
         task_input_snapshot_ref=task_input_snapshot_ref,
         task_input_snapshot_digest=task_input_snapshot_digest,
+        access=access,
     )
     repository_access = {}
     if repository_bindings is None:
@@ -1777,14 +1777,13 @@ async def compile_and_persist_execution_plan(
             initial_parameters=initial_parameters,
             requires_github="gh" in resolved_profile.tools,
             parent_plan=parent_repository_plan,
-            parent_read_principal=parent_read_principal,
+            parent_artifact_access=parent_artifact_access,
             native_review=native_review,
             resolved_skills=agent_resolved_skills,
-            # A model-only realizer keeps its existing credential path; typed
-            # repository authority is admitted only where it can be consumed.
             typed_authority=selected_realizer_consumes_repository_authority(
                 harness_id=harness_id
             ),
+            access=access,
         )
         repository_bindings = repository_inputs["bindings"]
         trusted_repository_declarations = repository_inputs["declarations"]
@@ -2149,6 +2148,7 @@ async def compile_and_persist_execution_plan(
     if support_evidence is not None:
         _evidence_refs = (support_evidence_ref,)
     return PersistedOmnigentExecutionPlan(
+        artifact_access=access,
         envelope=persisted,
         binding=binding,
         runtime_provider_rollout=(
@@ -2171,14 +2171,14 @@ async def compile_and_persist_execution_plan(
     )
 
 
-async def frozen_task_input_principal(
+async def frozen_task_input_provenance(
     db_session: Any, binding: OmnigentExecutionPlanBinding
 ) -> str:
-    """Return the principal that admitted a plan's original task input.
+    """Return creator provenance for accounting; this is not read authority.
 
     The original task input survives every plan compile. Its creator records
-    the admitted principal even when a service compiles the plan or a legacy
-    schedule owner no longer exists.
+    provenance even when a service compiles the plan or a legacy schedule
+    owner no longer exists. Artifact reads require their own trusted context.
     """
 
     from api_service.db.models import TemporalArtifact
@@ -2200,6 +2200,38 @@ async def frozen_task_input_principal(
     return principal
 
 
+async def frozen_execution_artifact_access(
+    db_session: Any, binding: OmnigentExecutionPlanBinding, *, workflow_id: str
+) -> ArtifactAccessContext:
+    """Recover only a persisted plan's admitted closure, never creator authority."""
+    from moonmind.omnigent.bridge_artifacts import (
+        _artifact_ids,
+        _execution_plan_input_refs,
+    )
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        verify_execution_plan_envelope,
+    )
+    from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
+
+    plan = await SessionExecutionPlanStore(db_session).load(binding.plan_ref)
+    if plan is None:
+        raise ValueError("persisted execution-plan read authority is unavailable")
+    plan = verify_execution_plan_envelope(plan)
+    if "sha256:" + plan.planRef.rsplit(":", 1)[-1] != binding.plan_digest:
+        raise ValueError(
+            "persisted execution-plan read authority conflicts with binding"
+        )
+    authority = plan.payload.authority
+    if authority is not None and (
+        authority.taskInputSnapshotRef != binding.task_input_snapshot_ref
+        or authority.taskInputSnapshotDigest != binding.task_input_snapshot_digest
+    ):
+        raise ValueError("persisted plan conflicts with original task-input authority")
+    return ArtifactAccessContext.for_execution(
+        workflow_id, principal="service:execution-plan"
+    )._with_verified_inputs(_artifact_ids(_execution_plan_input_refs(plan, binding)))
+
+
 async def compile_frozen_execution_plan(
     *,
     db_session: Any,
@@ -2211,6 +2243,7 @@ async def compile_frozen_execution_plan(
     initial_parameters: Mapping[str, Any],
     binding: OmnigentExecutionPlanBinding,
     parent_repository_plan: OmnigentExecutionPlanEnvelope | None = None,
+    access: ArtifactAccessContext,
 ) -> PersistedOmnigentExecutionPlan:
     """Compile an admitted workflow's frozen inputs again through this owner."""
 
@@ -2241,6 +2274,7 @@ async def compile_frozen_execution_plan(
         task_input_snapshot_digest=binding.task_input_snapshot_digest,
         db_session=db_session,
         parent_repository_plan=parent_repository_plan,
+        access=access,
     )
 
 
@@ -2250,6 +2284,7 @@ async def _resolver_child_frozen_inputs(
     principal: str,
     binding: OmnigentExecutionPlanBinding,
     recorded_plan: OmnigentExecutionPlanEnvelope,
+    access: ArtifactAccessContext,
 ) -> tuple[dict[str, Any], str, dict[str, Any]] | None:
     """Return a resolver child's frozen Profile, Provider Profile and inputs.
 
@@ -2265,9 +2300,7 @@ async def _resolver_child_frozen_inputs(
         return ref.removeprefix("artifact://").removeprefix("artifact:")
 
     _artifact, body = await artifact_service.read(
-        artifact_id=artifact_id(binding.task_input_snapshot_ref),
-        principal=principal,
-        allow_restricted_raw=True,
+        artifact_id=artifact_id(binding.task_input_snapshot_ref), access=access
     )
     if _sha256(body) != binding.task_input_snapshot_digest:
         raise ValueError("frozen task-input snapshot digest mismatch")
@@ -2287,9 +2320,7 @@ async def _resolver_child_frozen_inputs(
     if not profile_ref.startswith("artifact:"):
         raise ValueError("recorded execution plan lacks Agent Profile authority")
     _artifact, profile_body = await artifact_service.read(
-        artifact_id=artifact_id(profile_ref),
-        principal=principal,
-        allow_restricted_raw=True,
+        artifact_id=artifact_id(profile_ref), access=access
     )
     provider_profile_refs = {
         model_binding.providerProfileRef
@@ -2374,6 +2405,7 @@ async def changed_repository_selection(
     principal: str,
     recorded: OmnigentExecutionPlanPayload,
     admitted: OmnigentExecutionPlanPayload,
+    access: ArtifactAccessContext,
 ) -> list[str]:
     """Name the repository slots whose selected authority would change.
 
@@ -2383,16 +2415,14 @@ async def changed_repository_selection(
 
     async def selections(payload: OmnigentExecutionPlanPayload) -> dict[str, Any]:
         result = {}
-        access = (payload.resolvedTools or {}).get("repositoryAccess") or {}
-        for slot, entry in access.items():
+        repository_entries = (payload.resolvedTools or {}).get("repositoryAccess") or {}
+        for slot, entry in repository_entries.items():
             try:
                 artifact_ref, snapshot_ref = entry["artifactRef"], entry["snapshotRef"]
             except (KeyError, TypeError) as exc:
                 raise ValueError(f"repository access {slot} is malformed") from exc
             _artifact, body = await artifact_service.read(
-                artifact_id=str(artifact_ref).removeprefix("artifact:"),
-                principal=principal,
-                allow_restricted_raw=True,
+                artifact_id=str(artifact_ref).removeprefix("artifact:"), access=access
             )
             if "repository-access-snapshot:" + _sha256(body) != snapshot_ref:
                 raise ValueError(f"repository access snapshot {slot} digest mismatch")
@@ -2501,7 +2531,10 @@ async def readmit_frozen_execution_plan(
         if recorded_plan is None:
             return recorded("the recorded execution plan is unavailable")
     try:
-        principal = await frozen_task_input_principal(db_session, binding)
+        access = await frozen_execution_artifact_access(
+            db_session, binding, workflow_id=workflow_id
+        )
+        principal = await frozen_task_input_provenance(db_session, binding)
         compilation_parameters = initial_parameters
         parent_repository_plan = None
         if isinstance(snapshot, Mapping):
@@ -2512,6 +2545,7 @@ async def readmit_frozen_execution_plan(
                 principal=principal,
                 binding=binding,
                 recorded_plan=recorded_plan,
+                access=access,
             )
             if child_inputs is None:
                 return recorded("the workflow has no Agent Profile snapshot")
@@ -2534,6 +2568,7 @@ async def readmit_frozen_execution_plan(
             initial_parameters=compilation_parameters,
             binding=binding,
             parent_repository_plan=parent_repository_plan,
+            access=access,
         )
         changed = []
         if recorded_plan is not None:
@@ -2544,6 +2579,12 @@ async def readmit_frozen_execution_plan(
                 principal=principal,
                 recorded=recorded_plan.payload,
                 admitted=persisted_plan.envelope.payload,
+                # These are the verified outputs just created by this compiler,
+                # not refs chosen by the request or a creator identity.
+                access=access._with_verified_inputs(
+                    ref.removeprefix("artifact://").removeprefix("artifact:")
+                    for ref in persisted_plan.artifact_refs
+                ),
             )
         if changed:
             raise ValueError(
@@ -2581,7 +2622,7 @@ __all__ = [
     "changed_repository_selection",
     "compile_and_persist_execution_plan",
     "compile_frozen_execution_plan",
-    "frozen_task_input_principal",
+    "frozen_task_input_provenance",
     "json_artifact_digest",
     "persist_json_artifact",
     "readmit_frozen_execution_plan",

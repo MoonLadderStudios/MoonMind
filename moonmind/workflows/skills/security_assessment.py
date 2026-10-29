@@ -38,6 +38,7 @@ from moonmind.security.repository_scanners import ScannerSummary
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.skills.tool_plan_contracts import ToolFailure, ToolResult
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
     TemporalArtifactAuthorizationError,
     TemporalArtifactBytesMissingError,
     TemporalArtifactNotFoundError,
@@ -468,9 +469,18 @@ def _cloud_observation(
 
 
 class AssessmentExecution:
-    def __init__(self, service: Any, *, principal: str, context: Mapping[str, Any]):
+
+    def __init__(
+        self,
+        service: Any,
+        *,
+        principal: str,
+        context: Mapping[str, Any],
+        access: ArtifactAccessContext,
+    ):
         self.service = service
         self.principal = principal
+        self.access = ArtifactAccessContext.require(access)
         self.context = context
         self.execution = {
             "namespace": context["namespace"],
@@ -481,11 +491,7 @@ class AssessmentExecution:
     async def read(self, ref: str) -> tuple[Any, bytes]:
         _check_cancelled()
         # Always authorize current inputs before consulting a saved result.
-        artifact, body = await self.service.read(
-            artifact_id=ref,
-            principal=self.principal,
-            allow_restricted_raw=True,
-        )
+        artifact, body = await self.service.read(artifact_id=ref, access=self.access)
         if len(body) > _MAX_INPUT_BYTES:
             raise ToolFailure(
                 "INVALID_INPUT", "Security artifact exceeds the input bound.", False
@@ -514,9 +520,7 @@ class AssessmentExecution:
 
     async def saved(self, *, kind: str, key: str) -> tuple[str, dict] | None:
         artifacts = await self.service.list_for_execution(
-            **self.execution,
-            principal=self.principal,
-            link_type=kind,
+            **self.execution, link_type=kind, access=self.access
         )
         for artifact in reversed(artifacts):
             if (artifact.metadata_json or {}).get("subject") != key:
@@ -997,9 +1001,7 @@ class AssessmentExecution:
                 [report_key, "summary", request.review_ref, review_status]
             )
             saved_summary = await self.service.list_for_execution(
-                **self.execution,
-                principal=self.principal,
-                link_type="report.primary",
+                **self.execution, link_type="report.primary", access=self.access
             )
             summary_ref = next(
                 (
@@ -1226,6 +1228,9 @@ async def security_assessment_handler(
             context["temporal_artifact_service"],
             principal=principal,
             context=context,
+            access=ArtifactAccessContext.for_activity(
+                principal="system:security-assessment"
+            ),
         ).execute(request)
 
 

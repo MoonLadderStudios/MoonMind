@@ -11,10 +11,14 @@ nor read the job or its report.
 from __future__ import annotations
 
 import hashlib
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy import delete
+from temporalio import activity
 
+from api_service.db.models import TemporalArtifactLink, TemporalArtifactRedactionLevel
 from api_service.services.container_jobs import (
     ContainerJobNotFoundError,
     ContainerJobService,
@@ -25,8 +29,15 @@ from moonmind.schemas.container_job_models import (
     ContainerJobActivityRequest,
     ContainerJobSubmitRequest,
     OwnerIdentity,
+    container_job_workflow_id,
 )
-from moonmind.workflows.temporal.artifacts import TemporalArtifactAuthorizationError
+from moonmind.workflows.temporal import worker_runtime
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    TemporalArtifactAuthorizationError,
+    TemporalArtifactService,
+    TemporalArtifactStateError,
+)
 from moonmind.workflows.temporal.container_job_attachments import storage_for
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from moonmind.workflows.temporal.worker_runtime import (
@@ -42,10 +53,18 @@ OWNER = OwnerIdentity(principalType="user", principalId="operator")
 SIBLING = OwnerIdentity(principalType="user", principalId="sibling")
 
 
-async def _exported(service, payload: bytes, owner: OwnerIdentity) -> str:
+async def _exported(
+    service, payload: bytes, owner: OwnerIdentity, *, restricted=False
+) -> str:
     principal = owner_artifact_principal(owner)
     artifact, _ = await service.create(
-        principal=principal, content_type="application/json"
+        principal=principal,
+        content_type="application/json",
+        redaction_level=(
+            TemporalArtifactRedactionLevel.RESTRICTED
+            if restricted
+            else TemporalArtifactRedactionLevel.NONE
+        ),
     )
     await service.write_complete(
         artifact_id=artifact.artifact_id, principal=principal, payload=payload
@@ -70,14 +89,32 @@ def _submission(artifact_ref: str, key: str) -> ContainerJobSubmitRequest:
     )
 
 
+@pytest.mark.parametrize("restricted", [False, True])
 async def test_owned_report_outlives_cleanup_and_siblings_are_refused(
-    environment, tmp_path
+    environment, tmp_path, monkeypatch, restricted
 ):
     service = environment.service
-    exported = await _exported(service, b'{"accounts":["a"]}', OWNER)
-    foreign = await _exported(service, b'{"accounts":["s"]}', SIBLING)
+    monkeypatch.setattr(
+        worker_runtime, "get_async_session_context", environment.sessions
+    )
+    monkeypatch.setattr(
+        worker_runtime,
+        "TemporalArtifactService",
+        lambda repo: TemporalArtifactService(repo, store=service._store),
+    )
+    exported = await _exported(
+        service, b'{"accounts":["a"]}', OWNER, restricted=restricted
+    )
+    foreign = await _exported(
+        service, b'{"accounts":["s"]}', SIBLING, restricted=restricted
+    )
     jobs = ContainerJobService(
-        environment.session, temporal=AsyncMock(), artifacts=service
+        environment.session,
+        temporal=AsyncMock(),
+        artifacts=service,
+        artifact_access=ArtifactAccessContext.for_service(
+            owner_artifact_principal(OWNER)
+        ),
     )
     with pytest.raises(ValueError, match="not readable"):
         await jobs.submit(owner=OWNER, request=_submission(foreign, "foreign"))
@@ -96,7 +133,9 @@ async def test_owned_report_outlives_cleanup_and_siblings_are_refused(
         workspace_root=tmp_path,
         command_runner=daemon,
         evidence_publisher=_container_job_evidence_publisher(service),
-        artifact_reader=_container_job_artifact_reader(service),
+        artifact_reader=_container_job_artifact_reader(
+            worker_runtime._ArtifactServiceProxy()
+        ),
     )
     request = ContainerJobActivityRequest(
         jobId=accepted.job_id,
@@ -105,6 +144,12 @@ async def test_owned_report_outlives_cleanup_and_siblings_are_refused(
         request=submission,
         resolvedWorkspaceRef=str(workspace),
         resolvedImageRef="sha256:" + "a" * 64,
+    )
+    monkeypatch.setattr(activity, "in_activity", lambda: True)
+    monkeypatch.setattr(
+        activity,
+        "info",
+        lambda: SimpleNamespace(workflow_id=container_job_workflow_id(accepted.job_id)),
     )
     await backend.create_container(request)
     storage = storage_for(tmp_path, accepted.job_id)
@@ -129,7 +174,8 @@ async def test_owned_report_outlives_cleanup_and_siblings_are_refused(
     page = await jobs.artifacts(owner=OWNER, job_id=accepted.job_id)
     report = next(item for item in page.artifacts if item.name == "report")
     _artifact, payload = await service.read(
-        artifact_id=report.artifact_ref, principal=owner_artifact_principal(OWNER)
+        artifact_id=report.artifact_ref,
+        access=ArtifactAccessContext.for_service(owner_artifact_principal(OWNER)),
     )
     assert payload == b'{"findings":1}'
     assert report.sha256 == hashlib.sha256(payload).hexdigest()
@@ -139,5 +185,74 @@ async def test_owned_report_outlives_cleanup_and_siblings_are_refused(
     with pytest.raises(TemporalArtifactAuthorizationError):
         await service.read(
             artifact_id=report.artifact_ref,
-            principal=owner_artifact_principal(SIBLING),
+            access=ArtifactAccessContext.for_service(owner_artifact_principal(SIBLING)),
+        )
+
+
+@pytest.mark.parametrize(
+    "fault", ["quarantined", "revoked", "unselected", "foreign_job"]
+)
+async def test_delegated_raw_job_input_still_requires_live_exact_rights(
+    environment, monkeypatch, fault
+):
+    service = environment.service
+    selected = await _exported(service, b"approved raw", OWNER, restricted=True)
+    other = await _exported(service, b"unselected raw", OWNER, restricted=True)
+    jobs = ContainerJobService(
+        environment.session,
+        temporal=AsyncMock(),
+        artifacts=service,
+        artifact_access=ArtifactAccessContext.for_service(
+            owner_artifact_principal(OWNER)
+        ),
+    )
+    submission = _submission(selected, "restricted-job")
+    accepted = await jobs.submit(owner=OWNER, request=submission)
+    # A retry through the trusted API retains the job identity and its rights.
+    replay = await jobs.submit(owner=OWNER, request=submission)
+    assert replay.job_id == accepted.job_id and replay.replayed
+    request = ContainerJobActivityRequest(
+        jobId=accepted.job_id,
+        owner=OWNER,
+        ownershipToken=f"{accepted.job_id}:v1",
+        request=submission,
+    )
+    if fault == "quarantined":
+        row = await service._repository.get_artifact(selected)
+        row.metadata_json = {**(row.metadata_json or {}), "quarantine": True}
+    elif fault == "revoked":
+        await environment.session.execute(
+            delete(TemporalArtifactLink).where(
+                TemporalArtifactLink.artifact_id == selected,
+                TemporalArtifactLink.workflow_id
+                == container_job_workflow_id(accepted.job_id),
+                TemporalArtifactLink.link_type == "input.artifact.raw",
+            )
+        )
+    await environment.session.commit()
+    monkeypatch.setattr(
+        worker_runtime, "get_async_session_context", environment.sessions
+    )
+    monkeypatch.setattr(
+        worker_runtime,
+        "TemporalArtifactService",
+        lambda repo: TemporalArtifactService(repo, store=service._store),
+    )
+    monkeypatch.setattr(activity, "in_activity", lambda: True)
+    monkeypatch.setattr(
+        activity,
+        "info",
+        lambda: SimpleNamespace(
+            workflow_id=(
+                "other"
+                if fault == "foreign_job"
+                else container_job_workflow_id(accepted.job_id)
+            )
+        ),
+    )
+    with pytest.raises(
+        (TemporalArtifactAuthorizationError, TemporalArtifactStateError)
+    ):
+        await _container_job_artifact_reader(worker_runtime._ArtifactServiceProxy())(
+            request, other if fault == "unselected" else selected
         )

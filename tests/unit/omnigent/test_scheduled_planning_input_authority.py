@@ -38,11 +38,9 @@ from moonmind.workflows.temporal.artifacts import (
 )
 from moonmind.workflows.temporal.worker_runtime import _build_runtime_planner
 from moonmind.workflows.temporal.workflows import run as run_module
+from tests.artifact_access import access_for_test
 from tests.unit.omnigent import test_admitted_input_authority as authority_fixtures
-from tests.unit.omnigent.test_admitted_input_authority import (
-    _put,
-    _skill_set,
-)
+from tests.unit.omnigent.test_admitted_input_authority import _put, _skill_set
 from tests.unit.omnigent.test_plan_and_realizer_dispatch import _codex_plan_inputs
 
 pytestmark = pytest.mark.asyncio
@@ -172,6 +170,7 @@ async def _schedule(sessions):
 
 def _activity_context(monkeypatch, sessions):
     monkeypatch.setattr(db_base, "async_session_maker", sessions)
+    monkeypatch.setattr(omnigent_activities.activity, "in_activity", lambda: True)
     monkeypatch.setattr(
         omnigent_activities.activity,
         "info",
@@ -206,7 +205,8 @@ async def test_scheduled_admission_reaches_real_planner_and_retained_plan(
         service = TemporalArtifactService(TemporalArtifactRepository(session))
         with pytest.raises(TemporalArtifactAuthorizationError):
             await service.read(
-                artifact_id=saved.input_id, principal=f"workflow:{WORKFLOW}"
+                artifact_id=saved.input_id,
+                access=access_for_test(f"workflow:{WORKFLOW}"),
             )
     await _admit(saved.action)
     await _admit(saved.action)  # Activity retry must reuse the same grants.
@@ -222,20 +222,22 @@ async def test_scheduled_admission_reaches_real_planner_and_retained_plan(
         )
         assert result.plan_ref.artifact_id
         _, retained = await service.read(
-            artifact_id=saved.plan_id, principal=f"workflow:{WORKFLOW}"
+            artifact_id=saved.plan_id, access=access_for_test(f"workflow:{WORKFLOW}")
         )
         assert json.loads(retained) == {"saved": "plan"}
         _, manifest = await service.read(
-            artifact_id=saved.skills.manifest_id, principal=f"workflow:{WORKFLOW}"
+            artifact_id=saved.skills.manifest_id,
+            access=access_for_test(f"workflow:{WORKFLOW}"),
         )
         assert json.loads(manifest)["skills"][0]["content_ref"] == saved.skills.body_id
         _, skill_body = await service.read(
-            artifact_id=saved.skills.body_id, principal=f"workflow:{WORKFLOW}"
+            artifact_id=saved.skills.body_id,
+            access=access_for_test(f"workflow:{WORKFLOW}"),
         )
         assert skill_body == saved.skills.body
         with pytest.raises(TemporalArtifactAuthorizationError):
             await service.read(
-                artifact_id=saved.input_id, principal="workflow:unrelated"
+                artifact_id=saved.input_id, access=access_for_test("workflow:unrelated")
             )
         links = (
             (
@@ -261,7 +263,8 @@ async def test_verified_recovery_keeps_schedule_inputs_with_new_workflow_id(arti
         service = TemporalArtifactService(TemporalArtifactRepository(session))
         with pytest.raises(TemporalArtifactAuthorizationError):
             await service.read(
-                artifact_id=saved.input_id, principal=f"workflow:{recovery_id}"
+                artifact_id=saved.input_id,
+                access=access_for_test(f"workflow:{recovery_id}"),
             )
     plan = await DbExecutionPlanStore(artifacts).load(saved.binding.plan_ref)
     await link_verified_execution_plan_inputs(
@@ -270,16 +273,18 @@ async def test_verified_recovery_keeps_schedule_inputs_with_new_workflow_id(arti
         binding=saved.binding,
         workflow_id=recovery_id,
         run_id="recovery-run",
+        access=access_for_test("workflow:" + recovery_id),
     )
     async with artifacts() as session:
         service = TemporalArtifactService(TemporalArtifactRepository(session))
         _, body = await service.read(
-            artifact_id=saved.input_id, principal=f"workflow:{recovery_id}"
+            artifact_id=saved.input_id,
+            access=access_for_test(f"workflow:{recovery_id}"),
         )
         assert json.loads(body)["instructions"] == "Inspect the repository"
         with pytest.raises(TemporalArtifactAuthorizationError):
             await service.read(
-                artifact_id=saved.input_id, principal="workflow:unrelated"
+                artifact_id=saved.input_id, access=access_for_test("workflow:unrelated")
             )
 
 
@@ -302,7 +307,8 @@ async def test_scheduled_admission_uses_temporal_identity_without_a_name_convent
     async with artifacts() as session:
         service = TemporalArtifactService(TemporalArtifactRepository(session))
         _, body = await service.read(
-            artifact_id=saved.input_id, principal=f"workflow:{workflow_id}"
+            artifact_id=saved.input_id,
+            access=access_for_test(f"workflow:{workflow_id}"),
         )
         assert json.loads(body)["instructions"] == "Inspect the repository"
 
@@ -364,6 +370,7 @@ async def test_fresh_admission_links_new_skillset_before_workflow_consumer(
             }
         )
         return plan_service.PersistedOmnigentExecutionPlan(
+            artifact_access=kwargs["access"],
             envelope=plan,
             binding=binding,
             artifact_refs=(plan_id,),
@@ -427,13 +434,15 @@ async def test_fresh_admission_links_new_skillset_before_workflow_consumer(
             )
         ).plan_ref.artifact_id
         _, body = await service.read(
-            artifact_id=fresh_skills.body_id, principal=f"workflow:{WORKFLOW}"
+            artifact_id=fresh_skills.body_id,
+            access=access_for_test(f"workflow:{WORKFLOW}"),
         )
         assert body == fresh_skills.body
         for artifact_id in (fresh_skills.manifest_id, fresh_skills.body_id):
             with pytest.raises(TemporalArtifactAuthorizationError):
                 await service.read(
-                    artifact_id=artifact_id, principal="workflow:unrelated"
+                    artifact_id=artifact_id,
+                    access=access_for_test("workflow:unrelated"),
                 )
             artifact = await session.get(TemporalArtifact, artifact_id)
             assert artifact.created_by_principal == OWNER
@@ -536,7 +545,9 @@ async def test_scheduled_admission_refuses_changed_authority(
     elif corruption == "unreadable":
         async with artifacts() as session:
             artifact = await session.get(TemporalArtifact, saved.snapshot_id)
-            artifact.created_by_principal = "workflow:source-without-input-access"
+            from api_service.db.models import TemporalArtifactStatus
+
+            artifact.status = TemporalArtifactStatus.DELETED
             await session.commit()
     elif corruption == "plan-pointer":
         saved.action["initial_parameters"]["omnigentExecutionPlan"][
@@ -614,4 +625,29 @@ async def test_admission_does_not_bypass_protected_raw_inputs(
                     "principal": f"workflow:{WORKFLOW}",
                     "artifact_ref": artifact_id,
                 }
+            )
+
+
+async def test_recorded_scope_survives_creator_provenance_change(
+    artifacts, monkeypatch
+):
+    saved = await _schedule(artifacts)
+    _activity_context(monkeypatch, artifacts)
+    async with artifacts() as session:
+        artifact = await session.get(TemporalArtifact, saved.snapshot_id)
+        artifact.created_by_principal = "workflow:unrelated"
+        await session.commit()
+    await _admit(saved.action)
+    async with artifacts() as session:
+        service = TemporalArtifactService(TemporalArtifactRepository(session))
+        assert (
+            await service.read(
+                artifact_id=saved.input_id,
+                access=access_for_test(f"workflow:{WORKFLOW}"),
+            )
+        )[1]
+        with pytest.raises(TemporalArtifactAuthorizationError):
+            await service.read(
+                artifact_id=saved.snapshot_id,
+                access=access_for_test("workflow:unrelated"),
             )

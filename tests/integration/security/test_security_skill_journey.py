@@ -36,6 +36,7 @@ from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from moonmind.workflows.agent_skills.agent_skills_activities import (
     AgentSkillsActivities,
 )
+from tests.artifact_access import access_for_test
 from tests.integration.security.test_recurring_assessments import (
     environment as _artifact_environment,
 )
@@ -52,7 +53,9 @@ SCOPE = {"assets": ["app/routes.py"]}
 def job_workspace():
     # A root runner's private pytest parents cannot be traversed after dropping UID.
     with TemporaryDirectory(prefix="moonmind-security-job-") as directory:
-        workspace = Path(directory)
+        # Canonicalize this owned temporary root before the strict path walker
+        # encounters macOS's /var alias; application path policy stays intact.
+        workspace = Path(directory).resolve()
         workspace.chmod(0o755)
         yield workspace
 
@@ -91,7 +94,7 @@ async def materialize(service, workspace, selected, runtime_id="security-harness
     result = await AgentSkillMaterializer(
         str(workspace),
         artifact_service=service,
-        admitted_principal="workflow:assessment",
+        access=access_for_test("system", admitted_principal="workflow:assessment"),
     ).materialize(snapshot, runtime_id, RuntimeMaterializationMode.WORKSPACE_MOUNTED)
     return snapshot, result
 
@@ -204,8 +207,7 @@ async def test_selected_security_skill_reaches_harness_and_report_without_scanne
     assert result["counts"]["new"] == 0
     _, summary = await service.read(
         artifact_id=result["reportBundle"]["primary_report_ref"]["artifact_id"],
-        principal="workflow:assessment",
-        allow_restricted_raw=True,
+        access=access_for_test("workflow:assessment"),
     )
     assert b"invoice-owner" in summary
     assert b"No scanner findings supplied" in summary

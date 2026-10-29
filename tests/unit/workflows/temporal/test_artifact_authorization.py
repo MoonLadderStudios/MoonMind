@@ -18,6 +18,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from tests.artifact_access import access_for_test
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -46,7 +47,10 @@ async def test_link_lookup_outage_preserves_authority_failure_and_recovers(
 
             monkeypatch.setattr(session, "execute", unavailable)
             with pytest.raises(TemporalArtifactError) as raised:
-                await getattr(service, surface)(artifact_id=artifact.artifact_id, principal="workflow:reader")
+                await getattr(service, surface)(
+                    artifact_id=artifact.artifact_id,
+                    access=access_for_test("workflow:reader"),
+                )
             error = raised.value
             assert not isinstance(error, TemporalArtifactAuthorizationError)
             assert error.code == "artifact_authority_unavailable"
@@ -56,10 +60,16 @@ async def test_link_lookup_outage_preserves_authority_failure_and_recovers(
             assert artifact.status.value == "complete"
 
             monkeypatch.setattr(session, "execute", lookup)
-            _, data = await service.read(artifact_id=artifact.artifact_id, principal="workflow:reader")
+            _, data = await service.read(
+                artifact_id=artifact.artifact_id,
+                access=access_for_test("workflow:reader"),
+            )
             assert data == b"retained"
             with pytest.raises(TemporalArtifactAuthorizationError):
-                await service.read(artifact_id=artifact.artifact_id, principal="workflow:stranger")
+                await service.read(
+                    artifact_id=artifact.artifact_id,
+                    access=access_for_test("workflow:stranger"),
+                )
 
 @asynccontextmanager
 async def temporal_db(tmp_path: Path):
@@ -100,8 +110,7 @@ async def test_authenticated_mode_denies_cross_principal_read(
 
             with pytest.raises(TemporalArtifactAuthorizationError):
                 await service.read(
-                    artifact_id=artifact.artifact_id,
-                    principal="user-2",
+                    artifact_id=artifact.artifact_id, access=access_for_test("user-2")
                 )
 
 @pytest.mark.parametrize("surface", ["read", "metadata", "list", "latest"])
@@ -139,15 +148,24 @@ async def test_retired_selector_cannot_bypass_artifact_scope(
             if surface in {"read", "metadata"}:
                 with pytest.raises(TemporalArtifactAuthorizationError):
                     if surface == "read":
-                        await service.read(artifact_id=artifact.artifact_id, principal=principal)
+                        await service.read(
+                            artifact_id=artifact.artifact_id,
+                            access=access_for_test(principal),
+                        )
                     else:
-                        await service.get_metadata(artifact_id=artifact.artifact_id, principal=principal)
+                        await service.get_metadata(
+                            artifact_id=artifact.artifact_id,
+                            access=access_for_test(principal),
+                        )
             else:
                 async def listed():
                     return await service.list_for_execution(
-                        namespace="default", workflow_id="local-run", run_id="local-run-1",
-                        link_type="input.test", principal=principal,
+                        namespace="default",
+                        workflow_id="local-run",
+                        run_id="local-run-1",
+                        link_type="input.test",
                         latest_only=surface == "latest",
+                        access=access_for_test(principal),
                     )
                 if principal:
                     assert await listed() == []
@@ -183,8 +201,7 @@ async def test_restricted_raw_presign_denied_for_non_owner_in_auth_mode(
 
             with pytest.raises(TemporalArtifactAuthorizationError):
                 await service.presign_download(
-                    artifact_id=artifact.artifact_id,
-                    principal="user-2",
+                    artifact_id=artifact.artifact_id, access=access_for_test("user-2")
                 )
 
 async def test_restricted_report_metadata_uses_preview_default_read_without_raw_access(
@@ -220,8 +237,7 @@ async def test_restricted_report_metadata_uses_preview_default_read_without_raw_
             )
 
             _artifact, _links, _pinned, policy = await service.get_metadata(
-                artifact_id=artifact.artifact_id,
-                principal="operator",
+                artifact_id=artifact.artifact_id, access=access_for_test("operator")
             )
 
             assert policy.raw_access_allowed is False
@@ -233,8 +249,7 @@ async def test_restricted_report_metadata_uses_preview_default_read_without_raw_
             assert policy.default_read_ref.artifact_id != artifact.artifact_id
             with pytest.raises(TemporalArtifactAuthorizationError):
                 await service.presign_download(
-                    artifact_id=artifact.artifact_id,
-                    principal="operator",
+                    artifact_id=artifact.artifact_id, access=access_for_test("operator")
                 )
 
 
@@ -265,18 +280,33 @@ async def test_execution_list_requires_owner_or_admitted_execution(
             query = dict(namespace="default", workflow_id="run-a", run_id="run-a-1",
                          link_type="input.test", latest_only=latest_only)
             for principal in ("service:consumer", "system", "workflow:run-b"):
-                assert await service.list_for_execution(principal=principal, **query) == []
-                assert await service.list_for_execution(
-                    principal=principal, admitted_principal="workflow:run-b", **query
-                ) == []
-            with pytest.raises(TemporalArtifactAuthorizationError, match="principal required"):
-                await service.list_for_execution(principal="", **query)
+                assert (
+                    await service.list_for_execution(
+                        **query, access=access_for_test(principal)
+                    )
+                    == []
+                )
+                assert (
+                    await service.list_for_execution(
+                        **query,
+                        access=access_for_test(
+                            principal, admitted_principal="workflow:run-b"
+                        ),
+                    )
+                    == []
+                )
+            with pytest.raises(
+                TemporalArtifactAuthorizationError,
+                match="artifact access identity required",
+            ):
+                await service.list_for_execution(**query, access=access_for_test(""))
             for principal, admitted in (
                 ("service:producer", None), ("workflow:run-a", None),
                 ("service:consumer", "workflow:run-a"), ("operator", None),
                 ("00000000-0000-0000-0000-000000000000", None),
             ):
                 listed = await service.list_for_execution(
-                    principal=principal, admitted_principal=admitted, **query
+                    **query,
+                    access=access_for_test(principal, admitted_principal=admitted),
                 )
                 assert [row.artifact_id for row in listed] == [artifact.artifact_id]

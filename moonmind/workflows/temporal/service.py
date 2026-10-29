@@ -80,6 +80,7 @@ from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
 )
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
     ExecutionRef,
     TemporalArtifactAuthorizationError,
     TemporalArtifactError,
@@ -862,6 +863,11 @@ async def reconcile_pending_execution_intents(
 
 class TemporalExecutionService:
     """Canonical execution store for Temporal workflows."""
+
+    @property
+    def namespace(self) -> str:
+        """The destination namespace owned by this execution service."""
+        return self._namespace
 
     def __init__(
         self,
@@ -2841,6 +2847,7 @@ class TemporalExecutionService:
                         workflow_id=workflow_id,
                         run_id=run_id,
                         namespace=self._namespace,
+                        access=_admitted_execution_plan.artifact_access,
                     )
                     record.artifact_refs = list(
                         dict.fromkeys([*record.artifact_refs, *admitted_refs])
@@ -3172,6 +3179,25 @@ class TemporalExecutionService:
             await self._create_start_unconfirmed(
                 record, dict(intent), "history_absence_ambiguous"
             )
+
+    @staticmethod
+    def has_pending_start_attempt(record: TemporalExecutionCanonicalRecord) -> bool:
+        """Whether durable admission proves an attempted, unacknowledged Start."""
+        intent = (record.memo or {}).get(_CREATE_START_MEMO_KEY)
+        if (
+            not isinstance(intent, Mapping)
+            or TemporalExecutionService._create_start_stopped(record, intent)
+            or intent.get("runId")
+            or not isinstance(intent.get("taskQueue"), str)
+            or not intent["taskQueue"].strip()
+            or not isinstance(intent.get("firstRequestedAt"), str)
+        ):
+            return False
+        try:
+            attempted = datetime.fromisoformat(intent["firstRequestedAt"])
+        except ValueError:
+            return False
+        return attempted.tzinfo is not None
 
     @staticmethod
     def _create_start_stopped(
@@ -3607,8 +3633,10 @@ class TemporalExecutionService:
             )
             _artifact, body = await artifact_service.read(
                 artifact_id=artifact_id,
-                principal=principal,
-                allow_restricted_raw=True,
+                access=ArtifactAccessContext.for_execution(
+                    source_record.workflow_id,
+                    principal="service:temporal-execution-rerun-admission",
+                ),
             )
             resolved = ResolvedSkillSet.model_validate_json(body)
         except (PermissionError, TemporalArtifactAuthorizationError) as exc:
@@ -4196,6 +4224,7 @@ class TemporalExecutionService:
                     workflow_id=workflow_id,
                     run_id=run_id,
                     namespace=self._namespace,
+                    access=ArtifactAccessContext.for_execution(workflow_id),
                 )
             # Temporal may resume immediately after reset. Grants must already
             # be visible to its independent Activity database sessions.

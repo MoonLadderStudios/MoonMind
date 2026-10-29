@@ -46,6 +46,7 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
 )
+from tests.artifact_access import access_for_test
 from tests.helpers.repository_connections import (
     github_pat_connection,
     github_repository_assignment,
@@ -314,6 +315,7 @@ async def test_repeated_native_plan_reads_do_not_duplicate_execution_links(
     repository_consumers, existing_namespace, existing_type
 ):
     from sqlalchemy import select
+
     from moonmind.workflows.temporal.artifacts import ExecutionRef
 
     context = repository_consumers
@@ -344,19 +346,28 @@ async def test_repeated_native_plan_reads_do_not_duplicate_execution_links(
             return [(row.id, row.artifact_id) for row in result.scalars()]
 
     await reader._load_verified_execution_plan(
-        compiled.binding, workflow_id=_WORKFLOW, run_id="run-1"
+        compiled.binding,
+        workflow_id=_WORKFLOW,
+        run_id="run-1",
+        access=access_for_test("workflow:" + _WORKFLOW),
     )
     initial = await plan_links("run-1")
     assert len(initial) == len({artifact_id for _id, artifact_id in initial}) > 1
     for _poll in range(3):
         await reader._load_verified_execution_plan(
-            compiled.binding, workflow_id=_WORKFLOW, run_id="run-1"
+            compiled.binding,
+            workflow_id=_WORKFLOW,
+            run_id="run-1",
+            access=access_for_test("workflow:" + _WORKFLOW),
         )
     assert set(await plan_links("run-1")) == set(initial)
 
     # A later occurrence needs its own exact execution links.
     await reader._load_verified_execution_plan(
-        compiled.binding, workflow_id=_WORKFLOW, run_id="run-2"
+        compiled.binding,
+        workflow_id=_WORKFLOW,
+        run_id="run-2",
+        access=access_for_test("workflow:" + _WORKFLOW),
     )
     later = await plan_links("run-2")
     assert {artifact_id for _id, artifact_id in later} == {
@@ -429,7 +440,10 @@ async def test_invalid_plan_artifact_pointer_grants_no_execution_access(
     binding = compiled.binding.model_copy(update={"plan_artifact_ref": unrelated_id})
     with pytest.raises((ValueError, OmnigentArtifactError)):
         await reader._load_verified_execution_plan(
-            binding, workflow_id=_WORKFLOW, step_execution_id=_STEP
+            binding,
+            workflow_id=_WORKFLOW,
+            step_execution_id=_STEP,
+            access=access_for_test("workflow:" + _WORKFLOW),
         )
     async with context.sessions() as session:
         assert not await TemporalArtifactRepository(session).list_links(unrelated_id)
@@ -465,7 +479,8 @@ async def test_child_plan_reads_parent_artifacts_with_its_admitted_principal(
                     },
                 }
             },
-        }
+        },
+        access=access_for_test("user-1"),
     )
     from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 
@@ -473,7 +488,8 @@ async def test_child_plan_reads_parent_artifacts_with_its_admitted_principal(
         prepared["initial_parameters"]["omnigentExecutionPlan"]
     )
     child = await reader._load_verified_execution_plan(
-        child_binding, admitted_principal="user-1"
+        child_binding,
+        access=access_for_test("user-1"),
     )
     assert (
         child.payload.credentialBindings["source"].connectionRef
@@ -680,15 +696,34 @@ async def test_production_publisher_uses_destination_connection_before_remote_co
             b"selected-credential-canary"
             not in (
                 await context.artifacts.read(
-                    artifact_id=source.artifact_id, principal="user-1"
+                    artifact_id=source.artifact_id, access=access_for_test("user-1")
                 )
             )[1]
         )
 
 
 @pytest.fixture
-def native_review_activity(monkeypatch):
+def native_review_activity(monkeypatch, repository_consumers):
     from temporalio import activity
+
+    monkeypatch.setattr(activity, "in_activity", lambda: True)
+    compile_parent = repository_consumers.compile
+
+    async def compile_with_admitted_review_inputs(*args, **kwargs):
+        compiled = await compile_parent(*args, **kwargs)
+        # Model the native gate's trusted admission of the verified parent plan,
+        # rather than treating its authored principal as artifact permission.
+        await reader._load_verified_execution_plan(
+            compiled.binding,
+            workflow_id="merge-automation:review-only",
+            run_id="review-run-1",
+            access=access_for_test("user-1"),
+        )
+        return compiled
+
+    monkeypatch.setattr(
+        repository_consumers, "compile", compile_with_admitted_review_inputs
+    )
     monkeypatch.setattr(
         activity,
         "info",

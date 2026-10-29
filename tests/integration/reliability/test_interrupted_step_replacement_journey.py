@@ -133,6 +133,7 @@ from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from tests.artifact_access import access_for_test
 from tests.integration.omnigent.test_exact_docker_n_way_concurrency import (
     _credential_recovery_host_class,
     _exact_docker_environment_reason,
@@ -1380,13 +1381,17 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
                 with pytest.raises(TemporalArtifactAuthorizationError):
                     await observer.read(
                         artifact_id=artifact_id,
-                        principal="service:recovery-journey-observer",
-                        admitted_principal="workflow:unrelated-recovery-journey",
+                        access=access_for_test(
+                            "service:recovery-journey-observer",
+                            admitted_principal="workflow:unrelated-recovery-journey",
+                        ),
                     )
             _artifact, restore_bytes = await observer.read(
                 artifact_id=artifact_id,
-                principal="service:recovery-journey-observer",
-                admitted_principal=f"workflow:{successor.step_execution.workflow_id}",
+                access=access_for_test(
+                    "service:recovery-journey-observer",
+                    admitted_principal=f"workflow:{successor.step_execution.workflow_id}",
+                ),
             )
         with tarfile.open(
             fileobj=io.BytesIO(restore_bytes), mode="r:gz"

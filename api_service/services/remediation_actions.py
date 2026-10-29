@@ -19,6 +19,7 @@ from moonmind.omnigent.policies import (
     resolve_action,
     validate_approval_binding,
 )
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.remediation_actions import remediation_action_kinds
 from moonmind.workflows.temporal.remediation_tools import (
@@ -662,6 +663,9 @@ def build_remediation_action_executor(
             CheckpointBranchTurnExecutionOwner(
                 session,
                 principal="service:checkpoint-branch-remediation",
+                access=ArtifactAccessContext.for_service(
+                    "service:checkpoint-branch-remediation"
+                ),
                 client=client,
             )
             if session is not None

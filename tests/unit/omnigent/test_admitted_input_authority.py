@@ -51,7 +51,7 @@ from moonmind.workflows.skills.run_projection import (
     SkillProjectionError,
     load_resolved_skillset,
     materialize_run_skill_snapshot,
-    step_execution_read_principal,
+    step_execution_artifact_access,
 )
 from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
@@ -59,6 +59,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from tests.artifact_access import access_for_test
 from tests.unit.omnigent.test_plan_and_realizer_dispatch import _codex_plan_inputs
 
 AUTHENTICATED_MODES = ("accounts", "oidc", "header")
@@ -244,7 +245,8 @@ async def _read_as_owner(sessions, artifact_id: str) -> bytes:
         artifact = await TemporalArtifactRepository(session).get_artifact(artifact_id)
         service = TemporalArtifactService(TemporalArtifactRepository(session))
         _artifact, payload = await service.read(
-            artifact_id=artifact_id, principal=artifact.created_by_principal
+            artifact_id=artifact_id,
+            access=access_for_test(artifact.created_by_principal),
         )
     return payload
 
@@ -280,6 +282,7 @@ async def _admit(sessions, plan, binding, *, workflow_id: str) -> None:
         binding=binding,
         workflow_id=workflow_id,
         run_id=f"{workflow_id}-run",
+        access=access_for_test("workflow:" + workflow_id),
     )
 
 
@@ -336,7 +339,8 @@ async def test_legacy_manifest_canonical_digest_protects_the_admitted_closure(
     async with artifacts() as session:
         with pytest.raises(TemporalArtifactAuthorizationError):
             await TemporalArtifactService(TemporalArtifactRepository(session)).read(
-                artifact_id=skills.manifest_id, principal="workflow:unrelated"
+                artifact_id=skills.manifest_id,
+                access=access_for_test("workflow:unrelated"),
             )
 
 
@@ -368,11 +372,13 @@ async def test_bare_runtime_readers_are_denied_without_admitted_scope(
     async with artifacts() as session:
         service = TemporalArtifactService(TemporalArtifactRepository(session))
         with pytest.raises(SkillProjectionError):
-            await load_resolved_skillset(service, skills.manifest_id)
+            await load_resolved_skillset(
+                service, skills.manifest_id, access=access_for_test("system")
+            )
         with pytest.raises(TemporalArtifactAuthorizationError):
             await service.read(
                 artifact_id=skills.body_id,
-                principal="service:omnigent_workspace_restore",
+                access=access_for_test("service:omnigent_workspace_restore"),
             )
 
 
@@ -435,14 +441,15 @@ async def test_admitted_skill_closure_reaches_every_runtime_consumer(
             assert (projection / SKILL_NAME / "SKILL.md").read_bytes() == skills.body
 
     # Managed launcher: artifact service plus the Step Execution scope.
-    admitted_principal = step_execution_read_principal(request)
-    assert admitted_principal == "workflow:run-wf"
+    admitted_access = await step_execution_artifact_access(request)
+    assert admitted_access.execution_principal == "workflow:run-wf"
+    assert not admitted_access.is_operator
     managed_root = tmp_path / "managed"
     (managed_root / "repo").mkdir(parents=True)
     async with artifacts() as session:
         service = TemporalArtifactService(TemporalArtifactRepository(session))
         resolved = await load_resolved_skillset(
-            service, skills.manifest_id, admitted_principal=admitted_principal
+            service, skills.manifest_id, access=admitted_access
         )
         metadata = await materialize_run_skill_snapshot(
             workspace_path=managed_root / "repo",
@@ -450,7 +457,7 @@ async def test_admitted_skill_closure_reaches_every_runtime_consumer(
             runtime_id="claude_code",
             resolved_skillset=resolved,
             artifact_service=service,
-            admitted_principal=admitted_principal,
+            access=admitted_access,
         )
     visible = Path(metadata["visiblePath"])
     assert (visible / SKILL_NAME / "SKILL.md").read_bytes() == skills.body

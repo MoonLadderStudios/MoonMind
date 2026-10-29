@@ -1,22 +1,25 @@
 """Two-phase journey: the runner restarts the real store between these checks."""
 
-from datetime import UTC, datetime, timedelta
 import hashlib
 import io
 import json
 import os
-from pathlib import Path
 import shutil
 import tarfile
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
 from moonmind.workflows.skills.storage_migration import transfer_buckets
 from moonmind.workflows.temporal.artifacts import (
-    S3TemporalArtifactStore, TemporalArtifactAuthorizationError,
-    TemporalArtifactRepository, TemporalArtifactService,
+    S3TemporalArtifactStore,
+    TemporalArtifactAuthorizationError,
+    TemporalArtifactRepository,
+    TemporalArtifactService,
 )
+from tests.artifact_access import access_for_test
 from tests.integration.temporal.test_temporal_artifact_lifecycle import _db
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -83,8 +86,12 @@ async def test_retrieve_migrated_saved_inputs_after_restart(monkeypatch):
         repository = TemporalArtifactRepository(session)
         service = TemporalArtifactService(repository, store=new, lifecycle_hard_delete_after_seconds=1)
         with pytest.raises(TemporalArtifactAuthorizationError):
-            await service.read(artifact_id=manifest["inputId"], principal="other")
-        row, payload = await service.read(artifact_id=manifest["inputId"], principal="owner")
+            await service.read(
+                artifact_id=manifest["inputId"], access=access_for_test("other")
+            )
+        row, payload = await service.read(
+            artifact_id=manifest["inputId"], access=access_for_test("owner")
+        )
         assert row.artifact_id == manifest["inputId"]
         assert payload == b'{"objective":"restore saved step"}'
         claims = await repository.list_use_claims(manifest["sharedId"])
@@ -104,4 +111,8 @@ async def test_retrieve_migrated_saved_inputs_after_restart(monkeypatch):
         assert old.read_bytes(manifest["storageKey"]) == payload
         with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
             assert archive.extractfile("saved.py").read() == b"confirmed work survives host cleanup\n"
-        assert (await service.read(artifact_id=manifest["inputId"], principal="owner"))[1] == b'{"objective":"restore saved step"}'
+        assert (
+            await service.read(
+                artifact_id=manifest["inputId"], access=access_for_test("owner")
+            )
+        )[1] == b'{"objective":"restore saved step"}'

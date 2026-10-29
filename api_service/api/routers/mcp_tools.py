@@ -71,6 +71,7 @@ from moonmind.security.operator_admission import (
 )
 from moonmind.statuses.workflow import TERMINAL_WORKFLOW_STATES
 from moonmind.workflows import get_temporal_artifact_service
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.remediation_tools import RemediationEvidenceToolService
 
 logger = logging.getLogger(__name__)
@@ -382,6 +383,13 @@ async def _dispatch_tool_call(
         skills_context = SkillsOnDemandToolExecutionContext(
             enabled=settings.workflow.skills_on_demand_enabled,
             workspace_root=settings.workflow.repo_root,
+            artifact_access=(
+                ArtifactAccessContext.for_execution(
+                    caller.workflow_id, principal="system"
+                )
+                if isinstance(caller, McpToolCapability)
+                else ArtifactAccessContext.for_operator(caller)
+            ),
             artifact_service=artifact_service,
             async_session_maker=async_session_maker,
             skills_cache_root=settings.workflow.skills_cache_root,
@@ -414,6 +422,13 @@ async def _dispatch_tool_call(
                 action_executor=build_remediation_action_executor(session=session),
             ),
             principal=_caller_principal(caller),
+            access=(
+                ArtifactAccessContext.for_execution(
+                    caller.workflow_id, principal="service:remediation-tools"
+                )
+                if isinstance(caller, McpToolCapability)
+                else ArtifactAccessContext.for_operator(caller)
+            ),
         )
         return await _remediation_registry.call_tool(
             tool=payload.tool,

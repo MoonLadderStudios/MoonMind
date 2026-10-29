@@ -1,28 +1,33 @@
-import json
-import io
 import hashlib
+import io
+import json
 import tarfile
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from moonmind.schemas.agent_skill_models import (
     AgentSkillFormat,
-    AgentSkillSourceKind,
     AgentSkillProvenance,
+    AgentSkillSourceKind,
     ResolvedSkillEntry,
     ResolvedSkillSet,
     RuntimeMaterializationMode,
 )
 from moonmind.services.skill_materialization import AgentSkillMaterializer
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+from tests.artifact_access import access_for_test
+
 
 @pytest.mark.asyncio
 async def test_materializer_projects_selected_skill_to_agents_skills(tmp_path: Path):
     payload = b"---\nname: my_skill\ndescription: test\n---\n"
     artifact_service = _StaticArtifactService({"artifact-my-skill": payload})
     materializer = AgentSkillMaterializer(
-        str(tmp_path), artifact_service=artifact_service
+        str(tmp_path),
+        artifact_service=artifact_service,
+        access=access_for_test("system"),
     )
 
     skillset = ResolvedSkillSet(
@@ -102,7 +107,9 @@ async def test_materializer_projects_only_selected_skills(tmp_path: Path):
         }
     )
     materializer = AgentSkillMaterializer(
-        str(tmp_path), artifact_service=artifact_service
+        str(tmp_path),
+        artifact_service=artifact_service,
+        access=access_for_test("system"),
     )
     skillset = ResolvedSkillSet(
         snapshot_id="multi_snap",
@@ -147,6 +154,7 @@ async def test_materializer_projects_shared_helper_when_repo_skills_are_preserve
     materializer = AgentSkillMaterializer(
         str(workspace),
         artifact_service=artifact_service,
+        access=access_for_test("system"),
     )
     skillset = ResolvedSkillSet(
         snapshot_id="repo_preserved_snap",
@@ -185,7 +193,9 @@ async def test_materializer_extracts_skill_bundle_with_companion_files(
         }
     )
     materializer = AgentSkillMaterializer(
-        str(tmp_path), artifact_service=artifact_service
+        str(tmp_path),
+        artifact_service=artifact_service,
+        access=access_for_test("system"),
     )
     skillset = ResolvedSkillSet(
         snapshot_id="bundle_snap",
@@ -231,6 +241,7 @@ async def test_materializer_preserves_existing_agents_skills_directory_on_succes
         str(tmp_path),
         artifact_service=artifact_service,
         source_preservation_root=str(tmp_path / "runtime" / "repo_agents_skills"),
+        access=access_for_test("system"),
     )
     skillset = ResolvedSkillSet(
         snapshot_id="active_snap",
@@ -273,6 +284,7 @@ async def test_materializer_reports_structured_alias_projection_diagnostics(
     materializer = AgentSkillMaterializer(
         str(tmp_path),
         artifact_service=artifact_service,
+        access=access_for_test("system"),
     )
     skillset = ResolvedSkillSet(
         snapshot_id="active_snap",
@@ -334,6 +346,7 @@ async def test_materializer_rejects_checksum_mismatch_before_projection_switch(
     materializer = AgentSkillMaterializer(
         str(tmp_path),
         artifact_service=_StaticArtifactService({"artifact-active": payload}),
+        access=access_for_test("system"),
     )
     skillset = ResolvedSkillSet(
         snapshot_id="active_snap",
@@ -378,6 +391,7 @@ async def test_materializer_preserves_previous_projection_on_bundle_failure(
     materializer = AgentSkillMaterializer(
         str(tmp_path),
         artifact_service=_StaticArtifactService({"artifact-bundle": payload}),
+        access=access_for_test("system"),
     )
     skillset = ResolvedSkillSet(
         snapshot_id="active_snap",
@@ -414,7 +428,9 @@ async def test_materializer_refuses_unknown_agents_skills_symlink(tmp_path: Path
     external_target.mkdir()
     source_dir.parent.mkdir(parents=True)
     source_dir.symlink_to(external_target)
-    materializer = AgentSkillMaterializer(str(tmp_path))
+    materializer = AgentSkillMaterializer(
+        str(tmp_path), access=access_for_test("system")
+    )
     skillset = ResolvedSkillSet(
         snapshot_id="blocked_snap",
         resolved_at=datetime.now(tz=UTC),
@@ -446,6 +462,7 @@ async def test_materializer_preserves_checked_in_skills_until_projection_ready(
         str(tmp_path),
         artifact_service=_StaticArtifactService({}),
         source_preservation_root=str(tmp_path / "runtime" / "repo_agents_skills"),
+        access=access_for_test("system"),
     )
     skillset = ResolvedSkillSet(
         snapshot_id="missing_content_snap",
@@ -473,7 +490,9 @@ async def test_materializer_refuses_to_clear_symlinked_active_dir(tmp_path: Path
     backing_link = tmp_path / "runtime" / "skills_active" / "symlink_snap"
     backing_link.parent.mkdir(parents=True)
     backing_link.symlink_to(outside)
-    materializer = AgentSkillMaterializer(str(tmp_path))
+    materializer = AgentSkillMaterializer(
+        str(tmp_path), access=access_for_test("system")
+    )
     skillset = ResolvedSkillSet(
         snapshot_id="symlink_snap",
         resolved_at=datetime.now(tz=UTC),
@@ -496,7 +515,9 @@ async def test_materializer_does_not_block_on_incompatible_gemini_skills_path(
     gemini_skill = tmp_path / ".gemini" / "skills"
     gemini_skill.mkdir(parents=True)
     (gemini_skill / "SKILL.md").write_text("local gemini skill", encoding="utf-8")
-    materializer = AgentSkillMaterializer(str(tmp_path))
+    materializer = AgentSkillMaterializer(
+        str(tmp_path), access=access_for_test("system")
+    )
     skillset = ResolvedSkillSet(
         snapshot_id="optional_gemini_snap",
         resolved_at=datetime.now(tz=UTC),
@@ -526,7 +547,9 @@ async def test_materializer_does_not_block_on_incompatible_gemini_skills_path(
 async def test_materializer_creates_gemini_projection_only_for_gemini_runtime(
     tmp_path: Path,
 ):
-    materializer = AgentSkillMaterializer(str(tmp_path))
+    materializer = AgentSkillMaterializer(
+        str(tmp_path), access=access_for_test("system")
+    )
     skillset = ResolvedSkillSet(
         snapshot_id="gemini_snap",
         resolved_at=datetime.now(tz=UTC),
@@ -563,6 +586,7 @@ async def test_materializer_hybrid_returns_compact_metadata_without_skill_body(
     materializer = AgentSkillMaterializer(
         str(tmp_path),
         artifact_service=_StaticArtifactService({"artifact-compact": body}),
+        access=access_for_test("system"),
     )
     skillset = ResolvedSkillSet(
         snapshot_id="snap_hybrid",
@@ -589,6 +613,7 @@ async def test_materializer_can_skip_adapter_alias_projection(tmp_path: Path):
         str(tmp_path),
         artifact_service=_StaticArtifactService({"artifact-verifier": payload}),
         project_adapter_aliases=False,
+        access=access_for_test("system"),
     )
     skillset = ResolvedSkillSet(
         snapshot_id="snap_projectionless",
@@ -640,6 +665,7 @@ async def test_materializer_accepts_valid_conflict_free_alias_to_selected_snapsh
     materializer = AgentSkillMaterializer(
         str(tmp_path),
         artifact_service=_StaticArtifactService({"artifact-fix": payload}),
+        access=access_for_test("system"),
     )
     skillset = ResolvedSkillSet(
         snapshot_id="selected_snap",
@@ -680,7 +706,9 @@ async def test_materializer_rejects_dangling_alias_with_missing_asset_diagnostic
     missing_target = tmp_path / "elsewhere" / "gone_snap"
     alias.symlink_to(missing_target)
     assert not missing_target.exists()
-    materializer = AgentSkillMaterializer(str(tmp_path))
+    materializer = AgentSkillMaterializer(
+        str(tmp_path), access=access_for_test("system")
+    )
     skillset = ResolvedSkillSet(
         snapshot_id="selected_snap",
         resolved_at=datetime.now(tz=UTC),
@@ -717,7 +745,9 @@ async def test_materializer_unknown_alias_diagnostic_names_owner_and_preserves_w
     alias = tmp_path / ".agents" / "skills"
     alias.parent.mkdir(parents=True)
     alias.symlink_to(external_target)
-    materializer = AgentSkillMaterializer(str(tmp_path))
+    materializer = AgentSkillMaterializer(
+        str(tmp_path), access=access_for_test("system")
+    )
     skillset = ResolvedSkillSet(
         snapshot_id="blocked_snap",
         resolved_at=datetime.now(tz=UTC),
@@ -759,7 +789,9 @@ def test_nested_asset_change_updates_bundle_identity() -> None:
 
 @pytest.mark.asyncio
 async def test_materializer_prompt_bundle_mode(tmp_path: Path):
-    materializer = AgentSkillMaterializer(str(tmp_path))
+    materializer = AgentSkillMaterializer(
+        str(tmp_path), access=access_for_test("system")
+    )
 
     skillset = ResolvedSkillSet(
         snapshot_id="snap_prompt",
@@ -805,10 +837,9 @@ class _StaticArtifactService:
         self,
         *,
         artifact_id: str,
-        principal: str,
-        allow_restricted_raw: bool,
+        access: ArtifactAccessContext,
     ) -> tuple[object, bytes]:
-        del principal, allow_restricted_raw
+        ArtifactAccessContext.require(access)
         return object(), self._payloads[artifact_id]
 
 
@@ -855,6 +886,7 @@ async def test_real_bundle_builder_nested_change_alters_digest_and_materializes(
     materializer = AgentSkillMaterializer(
         str(tmp_path / "ws"),
         artifact_service=_StaticArtifactService({"artifact-verify": before_payload}),
+        access=access_for_test("system"),
     )
     skillset = ResolvedSkillSet(
         snapshot_id="nested_snap",
@@ -899,7 +931,9 @@ async def test_admitted_run_immutability_rejects_tampered_payload(tmp_path: Path
     tampered = _skill_bundle_payload({"SKILL.md": b"# tampered\n"})
     assert _digest(payload) != _digest(tampered)
     materializer = AgentSkillMaterializer(
-        str(tmp_path), artifact_service=_StaticArtifactService({"artifact-x": tampered})
+        str(tmp_path),
+        artifact_service=_StaticArtifactService({"artifact-x": tampered}),
+        access=access_for_test("system"),
     )
     skillset = ResolvedSkillSet(
         snapshot_id="admitted_snap",
@@ -942,7 +976,10 @@ async def test_resolved_selected_bundle_executes_despite_same_name_builtin_sourc
     assert b"stale" not in selected_payload
     materializer = AgentSkillMaterializer(
         str(tmp_path / "ws"),
-        artifact_service=_StaticArtifactService({"artifact-selected": selected_payload}),
+        artifact_service=_StaticArtifactService(
+            {"artifact-selected": selected_payload}
+        ),
+        access=access_for_test("system"),
     )
     skillset = ResolvedSkillSet(
         snapshot_id="selected_snap_r8",
@@ -983,7 +1020,9 @@ async def test_historical_snapshot_reuse_preserves_admitted_digest(tmp_path: Pat
     assert _digest(original) != _digest(changed)
     payloads = {"artifact-v1": original}
     materializer = AgentSkillMaterializer(
-        str(tmp_path), artifact_service=_StaticArtifactService(payloads)
+        str(tmp_path),
+        artifact_service=_StaticArtifactService(payloads),
+        access=access_for_test("system"),
     )
     skillset = ResolvedSkillSet(
         snapshot_id="reuse_snap",
@@ -1059,7 +1098,11 @@ async def test_restart_rematerialization_preserves_admitted_snapshot(tmp_path: P
         ],
     )
 
-    first = AgentSkillMaterializer(str(tmp_path), artifact_service=artifact_service)
+    first = AgentSkillMaterializer(
+        str(tmp_path),
+        artifact_service=artifact_service,
+        access=access_for_test("system"),
+    )
     await first.materialize(
         resolved_skillset=skillset,
         runtime_id="test_runtime",
@@ -1072,7 +1115,11 @@ async def test_restart_rematerialization_preserves_admitted_snapshot(tmp_path: P
     assert first_helper == b"# original helper\n"
 
     # Drop in-memory state: a new instance over the same workspace re-admits S.
-    second = AgentSkillMaterializer(str(tmp_path), artifact_service=artifact_service)
+    second = AgentSkillMaterializer(
+        str(tmp_path),
+        artifact_service=artifact_service,
+        access=access_for_test("system"),
+    )
     await second.materialize(
         resolved_skillset=skillset,
         runtime_id="test_runtime",
@@ -1112,6 +1159,7 @@ async def test_materializer_projects_declared_sibling_closure_from_snapshot(
                 "artifact-sibling": sibling_payload,
             }
         ),
+        access=access_for_test("system"),
     )
     skillset = ResolvedSkillSet(
         snapshot_id="sibling_snap",

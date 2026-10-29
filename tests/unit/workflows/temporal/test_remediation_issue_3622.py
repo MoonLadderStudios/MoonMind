@@ -23,7 +23,7 @@ from moonmind.workflows.temporal import (
     TemporalArtifactService,
 )
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
-from moonmind.workflows.temporal.artifacts import ExecutionRef
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext, ExecutionRef
 from moonmind.workflows.temporal.remediation_actions import (
     RemediationActionAuthorityService,
     RemediationMutationGuardPolicy,
@@ -121,7 +121,7 @@ async def test_missing_or_wrong_result_cannot_use_source_success(
             authority_result=authority,
             guard_result=guard,
             principal="service:test",
-            admitted_principal="service:remediation-context",
+            access=ArtifactAccessContext.for_service("service:remediation-context"),
         )
         assert result["verification"]["outcome"] == "evidence_unavailable"
         assert result["verification"]["pending"]
@@ -157,7 +157,7 @@ async def test_lost_receipt_acknowledgment_reuses_effect_and_exact_verdict(
             authority_result=authority,
             guard_result=guard,
             principal="service:test",
-            admitted_principal="service:remediation-context",
+            access=ArtifactAccessContext.for_service("service:remediation-context"),
         )
         tools = RemediationEvidenceToolService(
             session=session,
@@ -239,7 +239,7 @@ async def test_observation_interruption_retains_accepted_obligation(
             authority_result=authority,
             guard_result=guard,
             principal="service:test",
-            admitted_principal="service:remediation-context",
+            access=ArtifactAccessContext.for_service("service:remediation-context"),
         )
         assert result["verification"]["outcome"] == (
             "verification_failed" if interruption == "denied" else "canceled"
@@ -391,7 +391,7 @@ async def test_pending_rerun_resumes_without_repeating_accepted_effect(
             authority_result=authority,
             guard_result=guard,
             principal="service:test",
-            admitted_principal="service:remediation-context",
+            access=ArtifactAccessContext.for_service("service:remediation-context"),
         )
         result = await RemediationEvidenceToolService(
             session=session,
@@ -535,7 +535,7 @@ async def test_exact_branch_report_finishes_pending_verification(
             authority_result=authority,
             guard_result=guard,
             principal="service:test",
-            admitted_principal="service:remediation-context",
+            access=ArtifactAccessContext.for_service("service:remediation-context"),
         )
         tools = RemediationEvidenceToolService(
             session=session,

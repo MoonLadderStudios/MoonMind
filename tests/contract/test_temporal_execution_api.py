@@ -36,6 +36,7 @@ from moonmind.workflows.temporal import (
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.service import TemporalExecutionService
+from tests.artifact_access import access_for_test
 
 CURRENT_USER_DEP = get_instance_access
 CURRENT_USER_OPTIONAL_DEP = get_instance_access_optional
@@ -1523,7 +1524,7 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
                 )
                 _, stored = await artifact_service.read(
                     artifact_id=snapshot["artifactRef"],
-                    principal=str(shared_user_id),
+                    access=access_for_test(str(shared_user_id)),
                 )
                 snapshot_payload = json.loads(stored.decode("utf-8"))
                 assert snapshot_payload["draft"]["workflow"]["inputAttachments"] == [

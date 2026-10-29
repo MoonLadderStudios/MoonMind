@@ -17,9 +17,12 @@ from api_service.services.checkpoint_branch_turn_execution import (
     CheckpointBranchTurnExecutionOwner,
     CheckpointBranchTurnLaunchError,
 )
-from tests.unit.omnigent.test_checkpoint_branch_instruction_authority import (
-    auth_mode,  # noqa: F401
-    instruction_authority,  # noqa: F401
+from tests.artifact_access import access_for_test
+from tests.unit.omnigent.test_checkpoint_branch_instruction_authority import (  # noqa: F401
+    auth_mode,
+)
+from tests.unit.omnigent.test_checkpoint_branch_instruction_authority import (  # noqa: F401
+    instruction_authority,
 )
 
 
@@ -42,7 +45,10 @@ async def test_corrupt_instruction_bytes_create_no_grant_or_launch(
     client = SimpleNamespace(start_workflow=AsyncMock())
     async with fixture.sessions() as session:
         owner = CheckpointBranchTurnExecutionOwner(
-            session, principal=fixture.producer, client=client
+            session,
+            principal=fixture.producer,
+            client=client,
+            access=access_for_test(fixture.producer),
         )
         with pytest.raises(CheckpointBranchTurnLaunchError, match="bytes changed"):
             await owner._start_claimed_turn(

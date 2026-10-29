@@ -31,6 +31,7 @@ from moonmind.workflows.temporal.activity_runtime import (
     _default_registry_skill_payload,
 )
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
     TemporalArtifactService,
@@ -147,6 +148,8 @@ async def test_saved_default_claim_survives_lost_ack_and_worker_replacement(
         models.TemporalArtifactPin.__table__,
         models.TemporalArtifactUseClaim.__table__,
         models.TemporalArtifactDeletionIntent.__table__,
+        models.TemporalExecutionCanonicalRecord.__table__,
+        models.TemporalExecutionRecord.__table__,
     }
     pending = list(required)
     while pending:
@@ -166,14 +169,27 @@ async def test_saved_default_claim_survives_lost_ack_and_worker_replacement(
                 inputs=inputs,
                 context={"repository": "example/repo"},
             )
+        queue = "saved-preset-" + uuid4().hex
         principal = "service:omnigent-generic-host"
         request = AgentExecutionRequest(
             agentKind="external",
             agentId="omnigent",
             correlationId="saved-preset",
             idempotencyKey="registry",
+            stepExecution={
+                "workflowId": queue,
+                "runId": "fixture-admission",
+                "logicalStepId": "registry",
+                "executionOrdinal": 1,
+                "stepExecutionId": queue + ":fixture-admission:registry:execution:1",
+                "runtimeContextPolicy": "fresh_agent_run",
+            },
         )
-        gateway = TemporalOmnigentArtifactGateway(sessions, principal=principal)
+        gateway = TemporalOmnigentArtifactGateway(
+            sessions,
+            principal=principal,
+            access=ArtifactAccessContext.for_execution(queue),
+        )
         definitions = tuple(
             parse_tool_definition(_default_registry_skill_payload(name=name))
             for name in (
@@ -204,7 +220,6 @@ async def test_saved_default_claim_survives_lost_ack_and_worker_replacement(
         monkeypatch.setattr(
             settings.temporal, "address", os.environ["MOONMIND_TEST_TEMPORAL_ADDRESS"]
         )
-        queue = "saved-preset-" + uuid4().hex
 
         def bound(session):
             dispatcher = ToolActivityDispatcher()

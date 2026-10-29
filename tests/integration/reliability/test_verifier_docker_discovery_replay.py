@@ -29,6 +29,8 @@ from moonmind.schemas.agent_skill_models import (
     RuntimeMaterializationMode,
 )
 from moonmind.services.skill_materialization import AgentSkillMaterializer
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+from tests.artifact_access import access_for_test
 from tests.integration.reliability.helpers import load_replay
 
 pytestmark = [pytest.mark.integration, pytest.mark.reliability_journey]
@@ -47,9 +49,10 @@ async def test_verifier_docker_discovery_tool_replay(tmp_path, monkeypatch, case
     digest = "sha256:" + hashlib.sha256(payload).hexdigest()
 
     class ArtifactStore:
-        async def read(self, *, artifact_id, principal, allow_restricted_raw):
+
+        async def read(self, *, artifact_id, access: ArtifactAccessContext):
             assert artifact_id == "artifact:resolved-verifier"
-            assert principal == "system" and allow_restricted_raw
+            assert access == access_for_test("system")
             return object(), payload
 
     snapshot = ResolvedSkillSet(
@@ -67,7 +70,9 @@ async def test_verifier_docker_discovery_tool_replay(tmp_path, monkeypatch, case
         ],
     )
     materialized = await AgentSkillMaterializer(
-        str(workspace), artifact_service=ArtifactStore()
+        str(workspace),
+        artifact_service=ArtifactStore(),
+        access=access_for_test("system"),
     ).materialize(
         snapshot, manifest["runtimeId"], RuntimeMaterializationMode.WORKSPACE_MOUNTED
     )

@@ -18,7 +18,11 @@ from sqlalchemy.orm import aliased
 
 from api_service.db import models as db_models
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
-from moonmind.workflows.temporal.artifacts import ExecutionRef, TemporalArtifactService
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    ExecutionRef,
+    TemporalArtifactService,
+)
 from moonmind.workflows.temporal.remediation_verification import (
     REMEDIATION_VERIFICATION_OUTCOMES,
     VERIFIED_RESOLVED,
@@ -414,13 +418,14 @@ class RemediationContextBuilder:
         document: dict[str, Any] = {"kind": kind, "artifactRef": artifact_id}
         # The target's lifecycle manifests are owned by its workflow principal,
         # and its runtime evidence is linked to its execution.
-        admitted = f"workflow:{target_workflow_id}"
+        access = ArtifactAccessContext.for_execution(
+            target_workflow_id, principal=principal
+        )
         try:
             artifact, _links, _pinned, _policy = (
                 await self._artifact_service.get_metadata(
                     artifact_id=artifact_id,
-                    principal=principal,
-                    admitted_principal=admitted,
+                    access=access,
                 )
             )
             size = int(getattr(artifact, "size_bytes", 0) or 0)
@@ -431,8 +436,7 @@ class RemediationContextBuilder:
                 )
             _artifact, body = await self._artifact_service.read(
                 artifact_id=artifact_id,
-                principal=principal,
-                admitted_principal=admitted,
+                access=access,
             )
         except Exception as exc:  # degraded evidence, not a failed remediation
             return {**document, "reason": f"unreadable: {type(exc).__name__}"}, False

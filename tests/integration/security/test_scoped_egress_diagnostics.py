@@ -46,6 +46,7 @@ from moonmind.workflows.temporal.container_job_backend import DockerContainerJob
 from moonmind.workflows.temporal.workflows.container_job import (
     MoonMindContainerJobWorkflow,
 )
+from tests.artifact_access import access_for_test
 from tests.unit.security.test_scoped_egress import LeaseDocker, declaration, submission
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
@@ -263,7 +264,8 @@ async def test_denials_survive_worker_reconstruction_failure_cleanup_and_replay(
                 TemporalArtifactRepository(session), store=store
             )
             _, data = await artifacts.read(
-                artifact_id=result["publication"]["diagnosticsRef"], principal=principal
+                artifact_id=result["publication"]["diagnosticsRef"],
+                access=access_for_test(principal),
             )
             diagnostics = json.loads(data)
             network = diagnostics["egressEvidence"]
@@ -283,7 +285,7 @@ async def test_denials_survive_worker_reconstruction_failure_cleanup_and_replay(
             retained = network["retainedDenialObservation"]
             assert retained["deniedConnectionCount"] == 25
             _, snapshot_bytes = await artifacts.read(
-                artifact_id=retained["artifactRef"], principal=principal
+                artifact_id=retained["artifactRef"], access=access_for_test(principal)
             )
             snapshot = parse_and_verify_conformance_evidence(
                 snapshot_bytes, location="retained-denials"
@@ -304,7 +306,8 @@ async def test_denials_survive_worker_reconstruction_failure_cleanup_and_replay(
                 and b"/private" not in snapshot_bytes
             )
             _, lifecycle_bytes = await artifacts.read(
-                artifact_id=result["cleanup"]["diagnosticsRef"], principal=principal
+                artifact_id=result["cleanup"]["diagnosticsRef"],
+                access=access_for_test(principal),
             )
             lifecycle = parse_and_verify_conformance_evidence(
                 lifecycle_bytes, location="cleanup"

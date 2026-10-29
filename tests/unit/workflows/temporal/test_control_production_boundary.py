@@ -7,22 +7,37 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from temporalio.common import SearchAttributeKey, SearchAttributePair, TypedSearchAttributes
+from temporalio.common import (
+    SearchAttributeKey,
+    SearchAttributePair,
+    TypedSearchAttributes,
+)
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from api_service.core.sync import sync_execution_projection
-from api_service.db.models import Base, TemporalExecutionCanonicalRecord, TemporalExecutionRecord, TemporalWorkflowType
+from api_service.db.models import (
+    Base,
+    TemporalExecutionCanonicalRecord,
+    TemporalExecutionRecord,
+    TemporalWorkflowType,
+)
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.service import TemporalExecutionService
 from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
+from tests.artifact_access import access_for_test
 from tests.helpers.temporal_visibility import register_deployment_search_attributes
 
 
 @pytest.mark.asyncio
 async def test_control_adapter_confirms_actual_workflow_safe_point_and_replays(tmp_path, monkeypatch):
-    from moonmind.schemas.workflow_control_models import WorkflowControlBatch, WorkflowControlTarget
     import hashlib
+
+    from moonmind.schemas.workflow_control_models import (
+        WorkflowControlBatch,
+        WorkflowControlTarget,
+    )
+
     queue = f"control-boundary-{uuid4()}"
     async with await WorkflowEnvironment.start_time_skipping() as env:
         await register_deployment_search_attributes(env)
@@ -105,10 +120,21 @@ async def _assert_projection_writer_interleaving(tmp_path, monkeypatch, old_desc
     """Exercise four real writers with actual Temporal descriptions and artifact bytes."""
     from api_service.db import base as db_base
     from api_service.db.models import TemporalExecutionOwnerType
-    from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore, DbRuntimeBindingStore
-    from moonmind.workflows.temporal.activities.omnigent_session_activities import _project_runtime_binding_to_execution
-    from moonmind.workflows.temporal.artifacts import LocalTemporalArtifactStore, TemporalArtifactRepository, TemporalArtifactService
-    from moonmind.workflows.temporal.worker_runtime import _persist_child_run_task_input_snapshot
+    from moonmind.omnigent.harness_platform.stores import (
+        DbExecutionPlanStore,
+        DbRuntimeBindingStore,
+    )
+    from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+        _project_runtime_binding_to_execution,
+    )
+    from moonmind.workflows.temporal.artifacts import (
+        LocalTemporalArtifactStore,
+        TemporalArtifactRepository,
+        TemporalArtifactService,
+    )
+    from moonmind.workflows.temporal.worker_runtime import (
+        _persist_child_run_task_input_snapshot,
+    )
     from tests.unit.omnigent.test_generic_plane_n_way_concurrency import _zen_plan
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/projection.db")
@@ -142,7 +168,9 @@ async def _assert_projection_writer_interleaving(tmp_path, monkeypatch, old_desc
                 parameters={"workflow": {"title": "Scheduled control", "instructions": "Wait for the scheduled boundary"}, "targetRuntime": "codex_cli"},
                 artifact_service=service,
             )
-            _, contents = await service.read(artifact_id=snapshot, principal=owner_id, allow_restricted_raw=True)
+            _, contents = await service.read(
+                artifact_id=snapshot, access=access_for_test(owner_id)
+            )
             assert b"Wait for the scheduled boundary" in contents
         await _project_runtime_binding_to_execution(workflow_id=old_description.id, state=binding_state)
         async with sessions() as session:
@@ -171,7 +199,10 @@ async def _assert_projection_writer_interleaving(tmp_path, monkeypatch, old_desc
 
 async def _assert_control_progress_preserves_confirmed_evidence(tmp_path, confirmed):
     """A delayed observer cannot erase a real workflow's confirmed safe point."""
-    from api_service.services.system_operations import SystemOperationsService, WorkerOperationCommand
+    from api_service.services.system_operations import (
+        SystemOperationsService,
+        WorkerOperationCommand,
+    )
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/control-audit.db")
     async with engine.begin() as connection:
@@ -205,7 +236,10 @@ async def _assert_control_progress_preserves_confirmed_evidence(tmp_path, confir
 
 
 async def _assert_durable_mixed_fanout(tmp_path, observed, adapter):
-    from api_service.services.system_operations import SystemOperationsService, WorkerOperationCommand
+    from api_service.services.system_operations import (
+        SystemOperationsService,
+        WorkerOperationCommand,
+    )
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/mixed-control.db")
     async with engine.begin() as connection:

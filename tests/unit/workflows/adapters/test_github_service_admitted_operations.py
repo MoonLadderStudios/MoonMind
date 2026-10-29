@@ -70,8 +70,8 @@ def _transport(monkeypatch):
 def _plan(connection, assignment, operations, *, consumer="agent", anonymous=False):
     from moonmind.auth.bound_acquisition import AccessMode, select_repository_authority
     from moonmind.omnigent.harness_platform.execution_plan import (
-        create_execution_plan_envelope,
         compute_model_config_digest,
+        create_execution_plan_envelope,
     )
 
     snapshot = select_repository_authority(
@@ -184,9 +184,7 @@ async def _record_authority(
 ):
     from moonmind.auth import github_app_wiring, github_credentials
     from moonmind.omnigent import bridge_artifacts
-    from moonmind.omnigent.harness_platform.stores import (
-        SessionExecutionPlanStore,
-    )
+    from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
     from moonmind.workflows.temporal.activities import (
         omnigent_session_activities as activities,
     )
@@ -241,7 +239,8 @@ async def _record_authority(
         }
 
         async def read_plan(ref, **kwargs):
-            assert kwargs["admitted_principal"] == "workflow:mm:run-b"
+            assert kwargs["access"].execution_principal == "workflow:mm:run-b"
+            assert not kwargs["access"].is_operator
             if ref == "artifact:art_plan":
                 return plan.model_dump(by_alias=True, mode="json")
             if ref == "art_profile":
@@ -445,6 +444,7 @@ async def test_frozen_child_uses_its_recorded_parent_operation_grant(
     monkeypatch, tmp_path, operations
 ):
     from temporalio import activity
+
     from tests.helpers.repository_connections import TemporalParentClient
 
     requests = _transport(monkeypatch)

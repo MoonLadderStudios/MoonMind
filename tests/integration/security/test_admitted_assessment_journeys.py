@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock
 from urllib.parse import urlsplit
 
 import pytest
+
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from typer.testing import CliRunner
@@ -52,6 +53,7 @@ from moonmind.security.container_job_capabilities import (
 from moonmind.security.image_assessment_runner import run_image_assessment
 from moonmind.security.repository_scanner_runner import run_scanner
 from moonmind.security.repository_scanners import RepositoryScan
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.container_job_attachments import storage_for
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from moonmind.workflows.temporal.worker_runtime import _container_job_artifact_reader
@@ -212,8 +214,7 @@ async def assert_retained(environment, refs, published):
     for ref in refs:
         _, body = await environment.service.read(
             artifact_id=ref,
-            principal=owner_artifact_principal(OWNER),
-            allow_restricted_raw=True,
+            access=ArtifactAccessContext.for_execution("assessment"),
         )
         assert body == published[ref]
         assert json.loads(body)
@@ -290,7 +291,7 @@ async def test_repository_scan_cli_job_keeps_native_reports_after_cleanup(
         resolvedWorkspaceRef=str(root),
         resolvedImageRef=IMAGE_REF,
     )
-    await backend.create_container(request)
+    await web.create_container_in_activity(backend, request, environment, monkeypatch)
     storage = storage_for(tmp_path, started.job_id)
     scan = RepositoryScan.model_validate(admission)
     code = run_scanner(
@@ -323,7 +324,7 @@ async def test_image_assessment_cli_job_keeps_native_report_after_cleanup(
     image.install_trivy(tmp_path, monkeypatch)
     db = tmp_path / "feeds"
     digest = image.database(db, {"pkg:apk/openssl@3.0.1": ["CVE-2024-0001"]}, "one")
-    archive = await image.owned_artifact(
+    archive = await recurring.put(
         environment.service, image.image_archive(image.VULNERABLE)
     )
     assessment = ImageAssessment(
@@ -373,7 +374,7 @@ async def test_image_assessment_cli_job_keeps_native_report_after_cleanup(
         resolvedWorkspaceRef=str(workspace),
         resolvedImageRef=IMAGE_REF,
     )
-    await backend.create_container(request)
+    await web.create_container_in_activity(backend, request, environment, monkeypatch)
     for name in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"):
         monkeypatch.delenv(name, raising=False)
     storage = storage_for(tmp_path, started.job_id)

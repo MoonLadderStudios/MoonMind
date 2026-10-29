@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import inspect
 import hashlib
+import inspect
 import json
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -14,6 +14,8 @@ import pytest
 from pydantic import ValidationError
 
 from moonmind.config.settings import TemporalSettings
+from moonmind.omnigent.harness_platform.execution_plan import AdmissionAuthority
+from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.reconciler import (
     CompiledSessionIntent,
     DecisionKind,
@@ -25,31 +27,30 @@ from moonmind.omnigent.reconciler import (
     TerminalOutcome,
     classify_provider_status,
 )
+from moonmind.omnigent.session_supervisor_rollback import (
+    SUPERVISOR_ROLLBACK_POLICY_VERSION,
+)
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunResult,
     OmnigentExecutionPlanBinding,
 )
-from moonmind.omnigent.harness_platform.execution_plan import AdmissionAuthority
-from moonmind.omnigent.host_failures import OmnigentOAuthHostError
-from moonmind.omnigent.session_supervisor_rollback import (
-    SUPERVISOR_ROLLBACK_POLICY_VERSION,
-)
 from moonmind.schemas.omnigent_session_models import (
     OMNIGENT_SESSION_FEATURE_GENERATION,
-    OmnigentResolveIntentRequest,
-    OmnigentPersistFailureRequest,
     OmnigentFailureAuthorityRequest,
+    OmnigentPersistFailureRequest,
+    OmnigentResolveIntentRequest,
+    OmnigentSessionActivityRequest,
     OmnigentSessionAdmissionDecision,
     OmnigentSessionAdmissionRequest,
-    OmnigentSessionActivityRequest,
     OmnigentSessionContinueAsNewState,
     OmnigentSessionSignal,
     OmnigentSessionTerminalResult,
     OmnigentSessionWorkflowInput,
 )
-from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
 from moonmind.workflows.temporal.activities import omnigent_session_activities
+from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.workflow_registry import workflow_fleet_workflow_types
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.omnigent_session import (
@@ -738,7 +739,7 @@ async def test_plan_admission_rejects_missing_support_evidence() -> None:
 
     with pytest.raises(ValueError, match="lacks persisted admission evidence"):
         await omnigent_session_activities._validate_plan_admission_authority(
-            persisted
+            persisted, access=ArtifactAccessContext.for_execution("workflow-1")
         )
 
 
@@ -753,7 +754,7 @@ async def test_pre_evidence_codex_plan_keeps_recorded_legacy_realizer() -> None:
     )
 
     await omnigent_session_activities._validate_plan_admission_authority(
-        persisted
+        persisted, access=ArtifactAccessContext.for_execution("workflow-1")
     )
 
 
@@ -792,7 +793,7 @@ async def test_plan_admission_rejects_mismatched_replay_authority(
 
     with pytest.raises(ValueError, match=message):
         await omnigent_session_activities._validate_plan_admission_authority(
-            persisted
+            persisted, access=ArtifactAccessContext.for_execution("workflow-1")
         )
 
 
@@ -815,7 +816,7 @@ async def test_plan_admission_rejects_mismatched_support_artifact(
         payload=SimpleNamespace(authority=object(), admissionAuthority=authority)
     )
 
-    async def read_support(ref: str) -> dict[str, str]:
+    async def read_support(ref: str, *, access) -> dict[str, str]:
         assert ref == "art-support"
         return recorded
 
@@ -841,7 +842,7 @@ async def test_plan_admission_rejects_mismatched_support_artifact(
 
     with pytest.raises(ValueError, match="support evidence conflicts"):
         await omnigent_session_activities._validate_plan_admission_authority(
-            persisted
+            persisted, access=ArtifactAccessContext.for_execution("workflow-1")
         )
 
 
@@ -1160,9 +1161,7 @@ async def test_side_effect_rejects_obsolete_runtime_binding_fence(
 
 
 def _exact_host_evidence_fixture() -> tuple[SimpleNamespace, dict[str, object]]:
-    from moonmind.omnigent.harness_platform.catalog import (
-        HarnessImplementationIdentity,
-    )
+    from moonmind.omnigent.harness_platform.catalog import HarnessImplementationIdentity
 
     host_class_ref = "omnigent-codex-current@1"
     host_image_ref = "ghcr.io/example/omnigent-host@sha256:" + "a" * 64
@@ -1381,9 +1380,9 @@ async def test_snapshot_requires_stable_marked_turn_before_idle_terminal(
 
     # Load launch dependencies before replacing the store class with a factory.
     # Otherwise a cold import captures that factory in evaluated type hints.
-    import moonmind.omnigent.session_launch  # noqa: F401
     import moonmind.omnigent.bridge_store as bridge_store_module
     import moonmind.omnigent.control_plane as control_plane_module
+    import moonmind.omnigent.session_launch  # noqa: F401
 
     marker = "MoonMind-Omnigent-Run:\n  idempotencyKey: turn-1"
     snapshot = {
@@ -2325,12 +2324,11 @@ async def test_profile_lease_request_carries_owning_workflow_authority(
 ) -> None:
     """An activity-owned grant is rejected without `metadata.workflowId`."""
 
+    import moonmind.omnigent.control_plane as control_plane_module
+    import moonmind.provider_profiles.lease_client as lease_client_module
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
         MoonMindProviderProfileManagerWorkflow,
     )
-
-    import moonmind.omnigent.control_plane as control_plane_module
-    import moonmind.provider_profiles.lease_client as lease_client_module
 
     session = SimpleNamespace(
         session_id="oms_123",
@@ -2478,18 +2476,13 @@ async def test_signal_continuation_claims_through_the_canonical_command_service(
     the supposedly canonical boundary (#3707 §1).
     """
 
-    import api_service.db.base as db_base
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
     from sqlalchemy.orm import sessionmaker
 
+    import api_service.db.base as db_base
     from api_service.db.models import Base
-    from moonmind.omnigent.control_plane import (
-        OmnigentControlPlaneStore,
-        TurnSource,
-    )
-    from moonmind.omnigent.control_plane.identities import (
-        canonical_turn_command_key,
-    )
+    from moonmind.omnigent.control_plane import OmnigentControlPlaneStore, TurnSource
+    from moonmind.omnigent.control_plane.identities import canonical_turn_command_key
     from moonmind.omnigent.control_plane.turn_commands import (
         CanonicalSessionBootstrap,
         CanonicalTurnCommandService,

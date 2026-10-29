@@ -4,8 +4,8 @@ import asyncio
 import hashlib
 import io
 import json
-import subprocess
 import shutil
+import subprocess
 import tarfile
 from pathlib import Path
 
@@ -19,16 +19,22 @@ from moonmind.schemas.checkpoint_restore_models import (
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
 from moonmind.workflows.temporal.activity_runtime import TemporalSandboxActivities
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.runtime.checkpoint_restore import (
     ManagedCheckpointRestoreService,
 )
+from tests.artifact_access import access_for_test
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sandbox_destination", [False, True])
 @pytest.mark.parametrize("excluded_skill", [False, True])
 async def test_unpublished_head_restores_after_source_loss_with_owned_destination(tmp_path, sandbox_destination, excluded_skill):
-    from moonmind.workflows.temporal.runtime.workspace_locators import SandboxWorkspaceRecordStore, SandboxWorkspaceRecord
+    from moonmind.workflows.temporal.runtime.workspace_locators import (
+        SandboxWorkspaceRecord,
+        SandboxWorkspaceRecordStore,
+    )
+
     remote, _ = _repo(tmp_path / "remote")
     def git(path, *args):
         return subprocess.check_output(["git", "-C", str(path), *args]).decode().strip()
@@ -82,7 +88,7 @@ async def test_unpublished_head_restores_after_source_loss_with_owned_destinatio
     shutil.rmtree(source)
     assert git(remote, "rev-parse", "HEAD") == baseline
     service = ManagedCheckpointRestoreService(authority_root=authority, artifact_store=store, repository_source_root=remote)
-    result = await service.restore(request)
+    result = await service.restore(request, access=access_for_test("workflow:source"))
     assert git(restored, "rev-parse", "HEAD") == head
     assert (restored / "candidate.txt").read_text() == "unpublished commit"
     assert not (restored / "deleted.txt").exists()
@@ -96,15 +102,18 @@ async def test_unpublished_head_restores_after_source_loss_with_owned_destinatio
     assert staged_binary == b"\x00\xff\x01"
     assert (restored / "partial.bin").read_bytes() == b"\x00\xff\x02"
     assert result["destinationWorkspaceLocator"]["kind"] == ("sandbox" if sandbox_destination else "managed_runtime")
-    assert await service.restore(request) == result
+    assert (
+        await service.restore(request, access=access_for_test("workflow:source"))
+        == result
+    )
     shutil.rmtree(restored)
-    await service.restore(request)
+    await service.restore(request, access=access_for_test("workflow:source"))
     assert git(restored, "rev-parse", "HEAD") == head
     # Equal file bytes do not authorize adoption of a different Git candidate.
     git(restored, "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
         "commit", "--allow-empty", "-m", "new candidate")
     with pytest.raises(CheckpointRestoreError, match="CHECKPOINT_RESTORE_IDEMPOTENCY_CONFLICT"):
-        await service.restore(request)
+        await service.restore(request, access=access_for_test("workflow:source"))
 
 
 def _sha(payload: bytes) -> str:
@@ -130,7 +139,9 @@ def _repo(path: Path) -> tuple[Path, str]:
 
 
 def test_index_capture_scans_binary_index_bytes_before_export(tmp_path):
-    from moonmind.workflows.temporal.runtime.checkpoint_history import capture_git_index_patch
+    from moonmind.workflows.temporal.runtime.checkpoint_history import (
+        capture_git_index_patch,
+    )
 
     workspace, head = _repo(tmp_path / "source")
     secret_file = workspace / "binary.bin"
@@ -204,8 +215,11 @@ async def test_restore_preserves_authorized_index_after_export_policy_changes(
     service = ManagedCheckpointRestoreService(
         authority_root=authority, artifact_store=store, repository_source_root=source
     )
-    result = await service.restore(request)
-    assert await service.restore(request) == result
+    result = await service.restore(request, access=access_for_test("workflow:source"))
+    assert (
+        await service.restore(request, access=access_for_test("workflow:source"))
+        == result
+    )
     restored = authority / "new-run" / "repo"
     index_content = subprocess.check_output(
         ["git", "-C", str(restored), "show", ":tracked.txt"], text=True
@@ -398,7 +412,8 @@ async def test_cold_restore_survives_source_deletion_and_is_idempotent(
     )
 
     first, second = await asyncio.gather(
-        service.restore(request), service.restore(request)
+        service.restore(request, access=access_for_test("workflow:source")),
+        service.restore(request, access=access_for_test("workflow:source")),
     )
 
     restored = tmp_path / "authority" / "new-run" / "repo"
@@ -486,7 +501,7 @@ async def test_self_contained_cold_restore_needs_no_source_credential_or_host(
         authority_root=tmp_path / "authority", artifact_store=store
     )
 
-    await service.restore(request)
+    await service.restore(request, access=access_for_test("workflow:source"))
 
     restored = tmp_path / "authority" / "new-run" / "repo"
     restored_head = subprocess.check_output(
@@ -619,10 +634,12 @@ async def test_cold_restore_needing_origin_objects_uses_source_run_admitted_acce
             with pytest.raises(
                 CheckpointRestoreError, match="CHECKPOINT_REPOSITORY_UNAVAILABLE"
             ):
-                await service.restore(request)
+                await service.restore(
+                    request, access=access_for_test("workflow:source")
+                )
             assert reads == [] and clone_tokens == []
             return
-        await service.restore(request)
+        await service.restore(request, access=access_for_test("workflow:source"))
     finally:
         await engine.dispose()
 
@@ -753,7 +770,10 @@ async def test_restore_rejects_incompatible_artifact_content_type(tmp_path: Path
         "manifestRef": "artifact://manifest", "manifestDigest": "sha256:" + "0" * 64,
     }}
     with pytest.raises(CheckpointRestoreError) as raised:
-        await service.restore(_request(checkpoint_ref=checkpoint_ref, capture=capture, base="a"))
+        await service.restore(
+            _request(checkpoint_ref=checkpoint_ref, capture=capture, base="a"),
+            access=access_for_test("workflow:source"),
+        )
     assert raised.value.code == "CHECKPOINT_ARTIFACT_CONTENT_TYPE_MISMATCH"
 
 
@@ -799,13 +819,13 @@ async def test_restore_rejects_digest_mismatch_and_idempotency_drift(
     ).artifact_ref
     request = _request(checkpoint_ref=checkpoint_ref, capture=capture, base="deadbeef")
     with pytest.raises(CheckpointRestoreError, match="CHECKPOINT_ARCHIVE_CORRUPTED"):
-        await service.restore(request)
+        await service.restore(request, access=access_for_test("workflow:source"))
     drift = dict(request)
     drift["capabilityDigest"] = "changed"
     with pytest.raises(
         CheckpointRestoreError, match="CHECKPOINT_RESTORE_IDEMPOTENCY_CONFLICT"
     ):
-        await service.restore(drift)
+        await service.restore(drift, access=access_for_test("workflow:source"))
 
 
 def _repo_with(path: Path, files: dict[str, str]) -> tuple[Path, str]:
@@ -884,7 +904,7 @@ async def test_restore_replays_base_file_deletions(tmp_path: Path) -> None:
         repository_source_root=tmp_path / "source-destroyed",
     )
 
-    await service.restore(request)
+    await service.restore(request, access=access_for_test("workflow:source"))
 
     restored = tmp_path / "authority" / "new-run" / "repo"
     assert (restored / "tracked.txt").read_text() == "changed\n"
@@ -915,7 +935,7 @@ async def test_restore_allowed_before_run_record_exists(tmp_path: Path) -> None:
         run_store=_RunStore(),
     )
 
-    result = await service.restore(request)
+    result = await service.restore(request, access=access_for_test("workflow:source"))
     assert result["destinationWorkspaceLocator"]["agentRunId"] == "new-run"
 
 
@@ -949,7 +969,7 @@ async def test_restore_rejects_bound_run_record_mismatch(tmp_path: Path) -> None
     with pytest.raises(
         CheckpointRestoreError, match="CHECKPOINT_DESTINATION_IDENTITY_MISMATCH"
     ):
-        await service.restore(request)
+        await service.restore(request, access=access_for_test("workflow:source"))
 
 
 @pytest.mark.asyncio
@@ -972,7 +992,8 @@ async def test_restore_rejects_non_object_checkpoint(tmp_path: Path) -> None:
     }
     with pytest.raises(CheckpointRestoreError, match="CHECKPOINT_MANIFEST_CORRUPTED"):
         await service.restore(
-            _request(checkpoint_ref=checkpoint_ref, capture=capture, base="a")
+            _request(checkpoint_ref=checkpoint_ref, capture=capture, base="a"),
+            access=access_for_test("workflow:source"),
         )
 
 
@@ -1068,6 +1089,7 @@ def test_assert_ready_skips_corrupted_records(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_restore_handler_maps_checkpoint_error_to_typed_application_error() -> None:
     from temporalio import exceptions as temporal_exceptions
+    from temporalio.testing import ActivityEnvironment
 
     from moonmind.workflows.temporal.activity_runtime import (
         TemporalAgentRuntimeActivities,
@@ -1079,18 +1101,23 @@ async def test_restore_handler_maps_checkpoint_error_to_typed_application_error(
         def __init__(self, code: str) -> None:
             self._code = code
 
-        async def restore(self, request):
+        async def restore(self, request, *, access):
+            ArtifactAccessContext.require(access)
             raise CheckpointRestoreError(self._code, "boom")
 
     activities._checkpoint_restore = _FailingRestore("CHECKPOINT_ARCHIVE_CORRUPTED")
     with pytest.raises(temporal_exceptions.ApplicationError) as raised:
-        await activities.agent_runtime_restore_workspace_checkpoint({})
+        await ActivityEnvironment().run(
+            activities.agent_runtime_restore_workspace_checkpoint, {}
+        )
     assert raised.value.type == "CHECKPOINT_ARCHIVE_CORRUPTED"
     assert raised.value.non_retryable is True
 
     # A retry-recommended failure code stays retryable.
     activities._checkpoint_restore = _FailingRestore("CHECKPOINT_ARTIFACT_MISSING")
     with pytest.raises(temporal_exceptions.ApplicationError) as retryable:
-        await activities.agent_runtime_restore_workspace_checkpoint({})
+        await ActivityEnvironment().run(
+            activities.agent_runtime_restore_workspace_checkpoint, {}
+        )
     assert retryable.value.type == "CHECKPOINT_ARTIFACT_MISSING"
     assert retryable.value.non_retryable is False

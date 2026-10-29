@@ -18,12 +18,15 @@ from moonmind.omnigent.workspace_intent import (
     authored_repository_source,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from tests.artifact_access import access_for_test
+from tests.unit.services.test_omnigent_execution_plan_service import (  # noqa: F401
+    _ready_opencode_image_pair,
+)
 from tests.unit.services.test_omnigent_execution_plan_service import (
     _compile_opencode_plan,
     _configure_github_repository_plan_test,
     _PlanStore,
     _ReadableRepositoryPlanArtifacts,
-    _ready_opencode_image_pair,  # noqa: F401
 )
 
 
@@ -271,6 +274,7 @@ async def test_self_contained_restore_does_not_reacquire_source_authority(kind):
         },
         requires_github=False,
         parent_plan=None,
+        access=access_for_test("user-1"),
     )
     assert result["sourceKind"] == kind
     assert result["access"] == result["bindings"] == {}
@@ -311,12 +315,10 @@ async def test_compiler_rejects_repository_conflict_before_connection_or_artifac
             artifact_service=artifacts,
             principal="user-1",
             workflow_id="conflicting-repositories",
-            initial_parameters={
-                "repository": "owner/repo-b",
-                **other_projection,
-            },
+            initial_parameters={"repository": "owner/repo-b", **other_projection},
             requires_github=True,
             parent_plan=None,
+            access=access_for_test("user-1"),
         )
     sessions.assert_not_called()
     assert artifacts.payloads == {}
@@ -394,6 +396,7 @@ async def test_compiler_preserves_malformed_publication_signals_for_canonical_va
             },
             requires_github=True,
             parent_plan=None,
+            access=access_for_test("user-1"),
         )
     sessions.assert_not_called()
 

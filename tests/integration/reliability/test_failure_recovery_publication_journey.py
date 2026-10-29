@@ -35,6 +35,7 @@ from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
 )
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
@@ -439,7 +440,8 @@ async def test_failed_middle_step_retains_bytes_and_resumes_only_unfinished_phas
                     "capabilitySetVersion": capabilities.capability_set_version,
                     "capabilityDigest": capabilities.capability_digest,
                     "idempotencyKey": f"restore-{ordinal}",
-                }
+                },
+                access=ArtifactAccessContext.for_execution(target.workflow_id),
             )
             counts["restore"] += 1
             assert restored["restorationEvidenceRef"]
@@ -725,7 +727,7 @@ async def test_failed_middle_step_retains_bytes_and_resumes_only_unfinished_phas
             authority_result=authority_result.to_dict(),
             guard_result=guard.to_dict(),
             principal="service:test",
-            admitted_principal="service:remediation-context",
+            access=ArtifactAccessContext.for_service("service:remediation-context"),
         )
         tools = RemediationEvidenceToolService(
             session=session,

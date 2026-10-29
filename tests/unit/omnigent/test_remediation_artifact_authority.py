@@ -7,7 +7,7 @@ Temporal server, PostgreSQL, Docker, or external provider is involved.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 import pytest
 import pytest_asyncio
@@ -280,7 +280,13 @@ async def test_production_omnigent_activity_binds_head_to_admitted_step(
             "remediation_workspace": binding.model_dump(by_alias=True),
         }
     )
-    result = await ActivityEnvironment().run(omnigent_execute_activity, request)
+    environment = ActivityEnvironment()
+    environment.info = replace(
+        environment.info,
+        workflow_id=request.step_execution.workflow_id,
+        workflow_run_id=request.step_execution.run_id,
+    )
+    result = await environment.run(omnigent_execute_activity, request)
     assert result.summary == "head admitted"
 
 

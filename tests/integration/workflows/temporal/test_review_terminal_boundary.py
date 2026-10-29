@@ -346,7 +346,8 @@ async def test_review_survives_through_terminal_persistence(
                 assert row["artifacts"]["outputSummary"] == output
                 manifest = json.loads(
                     await owners.read(
-                        row["artifacts"]["stepExecutionManifestRef"], principal=owner
+                        row["artifacts"]["stepExecutionManifestRef"],
+                        principal=owner,
                     )
                 )
                 assert (

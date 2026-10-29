@@ -8,6 +8,7 @@ from moonmind.mcp.remediation_tool_registry import (
     RemediationToolExecutionContext,
     RemediationToolRegistry,
 )
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 pytestmark = pytest.mark.asyncio
 
@@ -59,6 +60,9 @@ async def test_registry_exposes_and_dispatches_authenticated_bounded_read() -> N
         context=RemediationToolExecutionContext(
             service=service,  # type: ignore[arg-type]
             principal="user:owner",
+            access=ArtifactAccessContext.for_execution(
+                "remediation-1", principal="user:owner"
+            ),
         ),
     )
 
@@ -71,6 +75,8 @@ async def test_registry_exposes_and_dispatches_authenticated_bounded_read() -> N
             "include_content": True,
             "max_content_bytes": 1024,
             "principal": "user:owner",
-            "admitted_principal": None,
+            "access": ArtifactAccessContext.for_execution(
+                "remediation-1", principal="user:owner"
+            ),
         }
     ]

@@ -35,6 +35,7 @@ from moonmind.statuses.checkpoint_branch import (
     CheckpointBranchState,
     CheckpointBranchTurnState,
 )
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.remediation_workspace_head import (
     REMEDIATION_HEAD_MISMATCH,
     REMEDIATION_HEAD_STALE_VERSION,
@@ -347,8 +348,9 @@ class CheckpointBranchService:
         branch = await self._get_branch(workflow_id=workflow_id, branch_id=branch_id)
         artifact, payload = await artifact_service.read(
             artifact_id=verifier_artifact_ref.removeprefix("artifact://"),
-            principal="service:remediation-context",
-            admitted_principal=f"workflow:{workflow_id}",
+            access=ArtifactAccessContext.for_execution(
+                workflow_id, principal="service:remediation-context"
+            ),
         )
         if (
             artifact.created_by_principal != "system:agent_runtime"

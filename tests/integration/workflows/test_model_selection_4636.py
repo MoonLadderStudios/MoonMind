@@ -29,15 +29,20 @@ from api_service.services.recurring_workflows_service import (
     RecurringWorkflowValidationError,
 )
 from moonmind.runtime_intent import model_selection_fields
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.executions.execution_contract import (
     build_canonical_workflow_view,
 )
 from moonmind.workflows.executions.model_resolver import resolve_model_effort
-from moonmind.workflows.temporal.artifacts import LocalTemporalArtifactStore
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    LocalTemporalArtifactStore,
+)
 from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.strategies.codex_cli import CodexCliStrategy
 from moonmind.workflows.temporal.worker_runtime import _build_runtime_planner
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from tests.artifact_access import access_for_test
 from tests.unit.api.test_presets_service import template_db
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration_ci]
@@ -515,9 +520,7 @@ async def test_4636_schedule_artifact_cutoff_and_saved_reference_survive_restart
             )
             assert definition.target["inputArtifactRef"] == artifact.artifact_id
             _artifact, body = await artifacts.read(
-                artifact_id=artifact.artifact_id,
-                principal="system",
-                allow_restricted_raw=True,
+                artifact_id=artifact.artifact_id, access=access_for_test("system")
             )
             saved = json.loads(body)
             profile = await session.get(ManagedAgentProviderProfile, "issue-4636")
@@ -562,8 +565,11 @@ async def test_4636_saved_artifact_step_reset_reaches_snapshot_preview_and_launc
         json.dumps({"workflow": original}).encode(),
         content_type="application/json",
     )
+    admission = OperatorAdmission(via="snapshot-test")
+    access = ArtifactAccessContext.for_operator(admission)
 
     async def read_artifact(**kwargs):
+        assert kwargs["access"] is access
         return SimpleNamespace(), store.read_bytes("issue-4636/input.json")
 
     monkeypatch.setattr(
@@ -574,11 +580,12 @@ async def test_4636_saved_artifact_step_reset_reaches_snapshot_preview_and_launc
     _payload, restored = (
         await executions._snapshot_source_payload_from_parameters_and_artifact(
             session=None,
-            user=SimpleNamespace(id="operator"),
+            user=admission,
             record=SimpleNamespace(input_ref="issue-4636-input"),
             parameters={
                 "workflow": {"steps": [{"id": "work", "instructions": "Saved work"}]}
             },
+            access=access,
         )
     )
     assert model_selection_fields(restored["steps"][0]["runtime"]) == {}
@@ -801,8 +808,7 @@ async def test_4636_schedule_replaces_missing_artifact_and_reloads_new_launch_in
             )
             _artifact, body = await artifacts.read(
                 artifact_id=definition.target["inputArtifactRef"],
-                principal="system",
-                allow_restricted_raw=True,
+                access=access_for_test("system"),
             )
             selected = await session.get(ManagedAgentProviderProfile, "issue-4636")
             authored, request, command = launch_from_input(

@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -21,6 +21,9 @@ from moonmind.publish.saved_candidate import (
     SavedPublicationAdmission,
     SavedPublicationCommit,
 )
+
+if TYPE_CHECKING:
+    from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 PublicationSemanticContext = Literal["accepted", "incomplete_draft_handoff"]
 PublicationReconciliation = Literal[
@@ -618,6 +621,8 @@ class SavedWorkPublicationContract(BaseModel):
     source_run_id: str = Field(..., alias="sourceRunId")
     saved_work_ref: str = Field(..., alias="savedWorkRef")
     saved_work_digest: str = Field(..., alias="savedWorkDigest")
+    # Retained workflow payloads carry this creator/use-claim accounting value.
+    # Artifact read authority is rebound to execution grants at the Activity.
     admitted_principal: str = Field(..., alias="admittedPrincipal")
     destination: SavedWorkPublicationDestination
     github_authority_ref: str = Field(..., alias="githubAuthorityRef")
@@ -710,6 +715,206 @@ def saved_work_publication_workflow_id(
 
     digest = contract.publication_idempotency_key.removeprefix("saved-publication:")
     return f"{contract.source_workflow_id}:saved-work-publication:{digest[:24]}"[:300]
+
+
+async def _recorded_publication_admission(
+    contract: PublicationRecoveryContract | SavedWorkPublicationContract,
+) -> tuple[str, bool]:
+    """Verify the owning API's immutable admission of this exact running workflow."""
+    import asyncio
+
+    from temporalio import activity
+    from temporalio.service import RPCError
+
+    from moonmind.workflows.temporal.artifacts import (
+        TemporalArtifactAuthorizationError,
+        TemporalArtifactUnavailableError,
+    )
+
+    def denied() -> NoReturn:
+        raise TemporalArtifactAuthorizationError(
+            "publication requires its recorded API input admission"
+        )
+
+    if not activity.in_activity():
+        denied()
+    info = activity.info()
+    namespace = getattr(info, "workflow_namespace", None) or getattr(
+        info, "namespace", None
+    )
+    client = activity.client()
+    if not namespace or client.namespace != namespace:
+        denied()
+    saved_work = isinstance(contract, SavedWorkPublicationContract)
+    model = SavedWorkPublicationContract if saved_work else PublicationRecoveryContract
+    expected_workflow = (
+        saved_work_publication_workflow_id(contract)
+        if saved_work
+        else publication_recovery_workflow_id(contract)
+    )
+    root_ref = (
+        contract.saved_work_ref
+        if saved_work
+        else contract.continuation.before_publication_checkpoint_ref
+    )
+    try:
+        async with asyncio.timeout(10):
+            handle = client.get_workflow_handle(
+                info.workflow_id, run_id=info.workflow_run_id
+            )
+            async for event in handle.fetch_history_events(page_size=1):
+                if event.event_id != 1 or not event.HasField(
+                    "workflow_execution_started_event_attributes"
+                ):
+                    denied()
+                started = event.workflow_execution_started_event_attributes
+                if (
+                    started.workflow_type.name != "MoonMind.PublicationRecoveryV1"
+                    or started.HasField("parent_workflow_execution")
+                    or len(started.input.payloads) != 1
+                ):
+                    denied()
+                values = await client.data_converter.decode(started.input.payloads)
+                try:
+                    recorded = model.model_validate(values[0])
+                except (ValueError, TypeError, IndexError):
+                    denied()
+                if (
+                    recorded.model_dump(mode="json", by_alias=True)
+                    != contract.model_dump(mode="json", by_alias=True)
+                    or expected_workflow != info.workflow_id
+                ):
+                    denied()
+                expected = {
+                    "publication_semantic_context": (
+                        "saved_work" if saved_work else contract.target.semantic_context
+                    ),
+                    "source_workflow_id": contract.source_workflow_id,
+                    "source_run_id": contract.source_run_id,
+                    "publication_idempotency_key": (
+                        contract.publication_idempotency_key
+                        if saved_work
+                        else contract.continuation.publication_idempotency_key
+                    ),
+                }
+                if saved_work:
+                    expected["saved_work_digest"] = contract.saved_work_digest
+                for key, value in expected.items():
+                    if key not in started.memo.fields:
+                        denied()
+                    decoded = await client.data_converter.decode(
+                        [started.memo.fields[key]]
+                    )
+                    if decoded != [value]:
+                        denied()
+                return namespace, "artifact_input_admission" in started.memo.fields
+            denied()
+    except (RPCError, TimeoutError, ConnectionError) as exc:
+        raise TemporalArtifactUnavailableError(
+            str(root_ref or "publication"), dependency="authority", operation="read"
+        ) from exc
+
+
+async def verified_publication_source_access(
+    contract: PublicationRecoveryContract,
+) -> ArtifactAccessContext:
+    """Read the admitted checkpoint source without borrowing operator/creator roles.
+
+    The restore plane still validates its exact source/candidate and the closed
+    archive/manifest hashes. Its context grants only ordinary source-execution
+    rights; restricted raw and quarantine policy remain unchanged.
+    """
+    from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+
+    await _recorded_publication_admission(contract)
+    return ArtifactAccessContext.for_execution(
+        contract.source_workflow_id, principal="service:publication-recovery"
+    )
+
+
+async def recover_recorded_saved_work_inputs(
+    service: Any, contract: SavedWorkPublicationContract
+) -> None:
+    """Recover the exact input admission of retained v1 publication runs.
+
+    New API admissions record their grant installation in server-owned memo.
+    This decoder is removable when older admissions have left retention. Authority comes from this exact
+    run's immutable API start/memo, never its Activity payload's principal.
+    """
+    if contract.schema_version != SAVED_WORK_PUBLICATION_SCHEMA_VERSION:
+        return
+    from temporalio import activity
+
+    from moonmind.publish.saved_work_source import (
+        parse_saved_work_publication_manifest,
+        saved_work_artifact_id,
+    )
+    from moonmind.workflows.temporal.artifacts import (
+        ArtifactAccessContext,
+        TemporalArtifactAuthorizationError,
+        TemporalArtifactStateError,
+    )
+
+    def denied() -> NoReturn:
+        raise TemporalArtifactAuthorizationError(
+            "publication requires its recorded API input admission"
+        )
+
+    access = ArtifactAccessContext.for_activity(
+        principal="service:saved-work-publication"
+    )
+    info = activity.info()
+    root_id = saved_work_artifact_id(contract.saved_work_ref)
+    links = await service._repository.list_links(root_id)
+    if any(
+        link.workflow_id == info.workflow_id
+        and link.link_type in {"input.artifact.admitted", "input.artifact.raw"}
+        for link in links
+    ):
+        return
+    namespace, declared_grants = await _recorded_publication_admission(contract)
+    if declared_grants:
+        # New admissions already installed their rights. Missing links are not
+        # permission to recreate an intentionally revoked or corrupted grant.
+        denied()
+    if not any(
+        link.workflow_id == contract.source_workflow_id
+        and link.run_id == contract.source_run_id
+        for link in links
+    ):
+        denied()
+    root = await service._repository.get_artifact(root_id)
+    if (
+        root.content_type
+        != "application/vnd.moonmind.saved-work-manifest+json;version=1"
+        or "sha256:" + str(root.sha256).removeprefix("sha256:")
+        != contract.saved_work_digest
+    ):
+        raise TemporalArtifactStateError("recorded publication manifest changed")
+    # The receipt attests a raw-readable exact closure. Its temporary process
+    # context never gains operator/recovery authority, and shared state and
+    # quarantine checks still run before any durable input link is installed.
+    root_access = access._with_recorded_publication_inputs([root_id])
+    _, body = await service.read(artifact_id=root_id, access=root_access)
+    if "sha256:" + hashlib.sha256(body).hexdigest() != contract.saved_work_digest:
+        raise TemporalArtifactStateError("recorded publication manifest bytes changed")
+    _, objects = parse_saved_work_publication_manifest(body)
+    ids = [root_id, *(saved_work_artifact_id(obj.ref) for obj in objects)]
+    for obj in objects:
+        artifact = await service._repository.get_artifact(
+            saved_work_artifact_id(obj.ref)
+        )
+        if (
+            artifact.content_type != obj.content_type
+            or "sha256:" + str(artifact.sha256).removeprefix("sha256:") != obj.digest
+        ):
+            raise TemporalArtifactStateError("recorded publication input changed")
+    await service.delegate_read_access(
+        artifact_ids=ids,
+        workflow_id=info.workflow_id,
+        namespace=namespace,
+        access=access._with_recorded_publication_inputs(ids),
+    )
 
 
 class SavedWorkPublicationResult(BaseModel):

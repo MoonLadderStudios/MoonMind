@@ -1,9 +1,18 @@
-import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from moonmind.schemas.temporal_activity_models import ArtifactReadInput, ArtifactWriteCompleteInput
-from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
+import pytest
+from temporalio.testing import ActivityEnvironment
+
+from moonmind.schemas.temporal_activity_models import (
+    ArtifactReadInput,
+    ArtifactWriteCompleteInput,
+)
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    TemporalArtifactActivities,
+)
+
 
 @pytest.fixture
 def mock_service():
@@ -11,9 +20,10 @@ def mock_service():
     # Mock read
     mock_artifact = AsyncMock()
     service.read.return_value = (mock_artifact, b"test payload")
-    
+
     # Mock write_complete
     service.write_complete.return_value = mock_artifact
+    service.write_for_activity.return_value = mock_artifact
     return service
 
 @pytest.fixture
@@ -32,9 +42,13 @@ async def test_artifact_read_pydantic_model(activities, mock_service):
         artifact_ref="test-ref",
         principal="test-principal"
     )
-    payload = await activities.artifact_read(request)
+    environment = ActivityEnvironment()
+    payload = await environment.run(activities.artifact_read, request)
     assert payload == b"test payload"
-    mock_service.read.assert_called_once_with(artifact_id="test-ref", principal="test-principal")
+    mock_service.read.assert_awaited_once_with(
+        artifact_id="test-ref",
+        access=ArtifactAccessContext.for_execution(environment.info.workflow_id),
+    )
 
 @pytest.mark.asyncio
 async def test_artifact_read_legacy_dict_validation_path(activities, mock_service):
@@ -42,9 +56,13 @@ async def test_artifact_read_legacy_dict_validation_path(activities, mock_servic
         "artifact_ref": "test-ref",
         "principal": "test-principal"
     }
-    payload = await activities.artifact_read(request)
+    environment = ActivityEnvironment()
+    payload = await environment.run(activities.artifact_read, request)
     assert payload == b"test payload"
-    mock_service.read.assert_called_once_with(artifact_id="test-ref", principal="test-principal")
+    mock_service.read.assert_awaited_once_with(
+        artifact_id="test-ref",
+        access=ArtifactAccessContext.for_execution(environment.info.workflow_id),
+    )
 
 @pytest.mark.asyncio
 async def test_artifact_write_complete_pydantic_model(activities, mock_service, patch_build_artifact_ref):
@@ -55,11 +73,11 @@ async def test_artifact_write_complete_pydantic_model(activities, mock_service, 
         content_type="text/plain"
     )
     await activities.artifact_write_complete(request)
-    mock_service.write_complete.assert_called_once_with(
+    mock_service.write_for_activity.assert_awaited_once_with(
         artifact_id="test-id",
         principal="test-principal",
         payload=b"test payload",
-        content_type="text/plain"
+        content_type="text/plain",
     )
 
 @pytest.mark.asyncio
@@ -71,11 +89,11 @@ async def test_artifact_write_complete_legacy_dict(activities, mock_service, pat
         "content_type": "text/plain"
     }
     await activities.artifact_write_complete(request)
-    mock_service.write_complete.assert_called_once_with(
+    mock_service.write_for_activity.assert_awaited_once_with(
         artifact_id="test-id",
         principal="test-principal",
         payload=b"test payload",
-        content_type="text/plain"
+        content_type="text/plain",
     )
 
 @pytest.mark.asyncio
@@ -87,11 +105,11 @@ async def test_artifact_write_complete_payload_roundtrip_legacy_list_ints(activi
         "content_type": "text/plain"
     }
     await activities.artifact_write_complete(request)
-    mock_service.write_complete.assert_called_once_with(
+    mock_service.write_for_activity.assert_awaited_once_with(
         artifact_id="test-id",
         principal="test-principal",
         payload=b"test payload",
-        content_type="text/plain"
+        content_type="text/plain",
     )
 
 @pytest.mark.asyncio
@@ -321,7 +339,7 @@ async def test_write_run_digest_persists_bounded_output_summary_artifact(
         namespace="default",
         workflow_id="mm:run:123",
         run_id="temporal-run-1",
-        principal="service:temporal-finalize",
+        access=ArtifactAccessContext.for_service("service:temporal-finalize"),
         link_type="output.summary",
     )
     _, create_kwargs = mock_service.create.await_args
@@ -585,10 +603,7 @@ def test_run_digest_artifact_fixture_reads_without_vector_database():
     import json
     from pathlib import Path
 
-    from moonmind.memory.run_digest import (
-        RUN_DIGEST_ARTIFACT_SCHEMA_VERSION,
-        RunDigest,
-    )
+    from moonmind.memory.run_digest import RUN_DIGEST_ARTIFACT_SCHEMA_VERSION, RunDigest
 
     fixture = (
         Path(__file__).parent

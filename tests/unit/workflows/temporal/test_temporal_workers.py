@@ -8,13 +8,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from temporalio import workflow
 
 from api_service.db.models import Base
 from moonmind.config.settings import TemporalSettings, settings
+from moonmind.workflows.agent_skills.agent_skills_activities import (
+    AgentSkillsActivities,
+)
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
 from moonmind.workflows.temporal import (
     AGENT_RUNTIME_FLEET,
@@ -28,7 +30,12 @@ from moonmind.workflows.temporal import (
     TemporalPlanActivities,
     TemporalSandboxActivities,
     TemporalSkillActivities,
+    activity_runtime,
     build_default_activity_catalog,
+)
+from moonmind.workflows.temporal.activity_runtime import (
+    TemporalActivityRuntimeError,
+    TemporalAgentRuntimeActivities,
 )
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
@@ -36,13 +43,9 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
-from moonmind.workflows.temporal import activity_runtime
-from moonmind.workflows.temporal.activity_runtime import (
-    TemporalActivityRuntimeError,
+from moonmind.workflows.temporal.publish_auto_evidence import (
+    parse_auto_publish_evidence,
 )
-from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
-from moonmind.workflows.temporal.publish_auto_evidence import parse_auto_publish_evidence
-from moonmind.workflows.agent_skills.agent_skills_activities import AgentSkillsActivities
 from moonmind.workflows.temporal.workers import (
     build_all_worker_topologies,
     build_worker_activity_bindings,
@@ -55,6 +58,7 @@ from moonmind.workflows.temporal.workflow_registry import (
     workflow_fleet_activity_handlers,
     workflow_fleet_workflow_classes,
 )
+from tests.artifact_access import access_for_test
 
 
 async def _artifact_service(
@@ -291,13 +295,26 @@ def test_pr_resolver_terminal_publication_is_idempotent(tmp_path: Path):
                 },
             }
 
-            first = await activities.pr_resolver_write_terminal_result(request)
-            second = await activities.pr_resolver_write_terminal_result(request)
+            from temporalio.testing import ActivityEnvironment
+
+            environment = ActivityEnvironment()
+            environment.info = replace(
+                environment.info,
+                workflow_id="resolver-wf",
+                workflow_run_id="resolver-run",
+                workflow_namespace="default",
+            )
+            first = await environment.run(
+                activities.pr_resolver_write_terminal_result, request
+            )
+            second = await environment.run(
+                activities.pr_resolver_write_terminal_result, request
+            )
 
             assert second == first
             _artifact, publish_payload = await service.read(
                 artifact_id=first["publishEvidenceRef"],
-                principal="resolver-user",
+                access=access_for_test("resolver-user"),
             )
             evidence = parse_auto_publish_evidence(publish_payload)
             assert evidence.merged is True
@@ -306,7 +323,7 @@ def test_pr_resolver_terminal_publication_is_idempotent(tmp_path: Path):
                 namespace="default",
                 workflow_id="resolver-wf",
                 run_id="resolver-run",
-                principal="resolver-user",
+                access=access_for_test("resolver-user"),
             )
             assert len(artifacts) == 2
         finally:

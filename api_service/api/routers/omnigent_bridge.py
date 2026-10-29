@@ -24,6 +24,8 @@ from hashlib import sha256
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+
 if TYPE_CHECKING:  # pragma: no cover - annotations only; runtime stays lazy
     from moonmind.omnigent.bridge_embedded import (
         EmbeddedHostHeartbeatRequest as EmbeddedHostHeartbeatRequest,
@@ -673,7 +675,9 @@ async def _resolve_embedded_evidence(
                 )
                 _artifact, body = await service.read(
                     artifact_id=artifact_id,
-                    principal="service:omnigent-embedded-evidence-gate",
+                    access=ArtifactAccessContext.for_service(
+                        "service:omnigent-embedded-evidence-gate"
+                    ),
                 )
                 claim = validate_embedded_evidence(
                     body,
@@ -3914,6 +3918,7 @@ async def _captured_terminal_snapshot(row: Any) -> dict[str, Any] | None:
             else TemporalOmnigentArtifactGateway(
                 async_session_maker,
                 principal=f"workflow:{row.moonmind_workflow_id}",
+                access=ArtifactAccessContext.for_execution(row.moonmind_workflow_id),
             )
         )
         captured = json.loads(await gateway.read_text(ref))

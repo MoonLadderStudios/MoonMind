@@ -80,6 +80,7 @@ from moonmind.workflows.temporal.activities.omnigent_activities import (
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
 )
+from tests.artifact_access import access_for_test
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -834,8 +835,7 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
     assert authority["evidenceRequest"]["remediation"] is True
     launch_ref = authority["launchEvidenceRef"]
     launch_artifact, launch_bytes = await artifact_service.read(
-        artifact_id=launch_ref,
-        principal="system",
+        artifact_id=launch_ref, access=access_for_test("system")
     )
     assert launch_artifact.sha256 == hashlib.sha256(launch_bytes).hexdigest()
     launch_payload = parse_and_verify_conformance_evidence(
@@ -881,8 +881,7 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
         assert release_signals == []
 
     terminal_artifact, terminal_bytes = await artifact_service.read(
-        artifact_id=terminal_ref,
-        principal="system",
+        artifact_id=terminal_ref, access=access_for_test("system")
     )
     assert terminal_artifact.sha256 == hashlib.sha256(terminal_bytes).hexdigest()
     if cleanup_succeeds:

@@ -1,7 +1,5 @@
 """Mounted artifact recovery preserves admission and retained accounting."""
 
-from api_service.migrations.account_source import source_user_ids
-
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
@@ -21,13 +19,19 @@ from api_service.db.models import (
     TemporalArtifactUseClaim,
     WorkflowRun,
 )
+from api_service.migrations.account_source import source_user_ids
 from api_service.services import single_user_conversion as conversion
 from moonmind.config.settings import settings
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 from moonmind.workflows.temporal.artifacts import (
-    LocalTemporalArtifactStore, TemporalArtifactRepository, TemporalArtifactService, TemporalArtifactValidationError,
+    LocalTemporalArtifactStore,
+    TemporalArtifactRepository,
+    TemporalArtifactService,
+    TemporalArtifactValidationError,
 )
-from moonmind.workflows.temporal.runtime.managed_session_store import ManagedSessionStore
+from moonmind.workflows.temporal.runtime.managed_session_store import (
+    ManagedSessionStore,
+)
 from tests.helpers.account_source import User
 from tests.unit.services.test_artifact_conversion import database, seed, service
 
@@ -63,9 +67,13 @@ async def test_session_and_direct_recovery_share_trusted_operator_scope(
     metadata_principals = set()
     read_metadata = TemporalArtifactService.get_metadata
 
-    async def observe_metadata(self, *, artifact_id, principal, **kwargs):
-        metadata_principals.add(principal)
-        return await read_metadata(self, artifact_id=artifact_id, principal=principal, **kwargs)
+    async def observe_metadata(self, *, artifact_id, access, **kwargs):
+        metadata_principals.add(
+            (access.principal, access.is_operator, access.execution_principal)
+        )
+        return await read_metadata(
+            self, artifact_id=artifact_id, access=access, **kwargs
+        )
 
     monkeypatch.setattr(TemporalArtifactService, "get_metadata", observe_metadata)
     async with database(tmp_path) as maker:
@@ -150,7 +158,7 @@ async def test_session_and_direct_recovery_share_trusted_operator_scope(
                 assert projected[rows["main"]]["raw_access_allowed"] is True
                 assert projected[rows["quarantined"]]["raw_access_allowed"] is False
                 assert projected[rows["machine"]]["raw_access_allowed"] is False
-                assert metadata_principals == {DEFAULT_OPERATOR}
+                assert metadata_principals == {(DEFAULT_OPERATOR, True, None)}
                 for headers in [
                     {"X-MoonMind-Execution-Fanout": "v1"},
                     {"X-MoonMind-Execution-Fanout": "v1", "X-MoonMind-Admitted-Principal": "operator"},

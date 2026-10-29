@@ -7,6 +7,8 @@ from types import SimpleNamespace
 import pytest
 
 from api_service.services import omnigent_execution_plan_service as service
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+from tests.artifact_access import access_for_test
 from tests.unit.services.test_omnigent_execution_plan_service import (
     _ArtifactService,
     _policy_snapshot,
@@ -507,6 +509,7 @@ async def test_review_only_default_codex_admits_native_collaboration_authority(
             authored_request_digest=snapshot_digest,
             task_input_snapshot_ref=snapshot_ref,
             task_input_snapshot_digest=snapshot_digest,
+            access=access_for_test("user-1"),
         )
 
     try:
@@ -653,12 +656,10 @@ async def test_native_review_proof_checks_frozen_input_bytes(tmp_path, mutation)
     body = json.dumps({"snapshotVersion": 1, "draft": frozen}).encode()
 
     class Artifacts:
-        async def read(self, *, artifact_id, principal, allow_restricted_raw):
-            assert (artifact_id, principal, allow_restricted_raw) == (
-                "art_frozen",
-                "user-1",
-                True,
-            )
+
+        async def read(self, *, artifact_id, access: ArtifactAccessContext):
+            assert artifact_id == "art_frozen"
+            assert access == access_for_test("user-1")
             return None, body
 
     digest = "sha256:" + "0" * 64 if mutation == "digest" else service._sha256(body)
@@ -669,4 +670,5 @@ async def test_native_review_proof_checks_frozen_input_bytes(tmp_path, mutation)
             principal="user-1",
             task_input_snapshot_ref="artifact:art_frozen",
             task_input_snapshot_digest=digest,
+            access=access_for_test("user-1"),
         )
