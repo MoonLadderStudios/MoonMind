@@ -162,6 +162,7 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalSandboxActivities,
 )
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactTransactionOwnership,
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
     TemporalArtifactService,
@@ -6949,9 +6950,14 @@ async def test_exact_rerun_rejects_incomplete_dynamic_skill_snapshot(
             )
         )
     )
+
+    def artifact_factory(_repository, *, transaction_ownership):
+        assert transaction_ownership is ArtifactTransactionOwnership.CALLER
+        return artifact_service
+
     monkeypatch.setattr(
         "moonmind.workflows.temporal.service.TemporalArtifactService",
-        lambda _repository: artifact_service,
+        artifact_factory,
     )
     service = TemporalExecutionService(SimpleNamespace())
 

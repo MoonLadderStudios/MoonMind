@@ -117,6 +117,32 @@ async def test_concurrent_same_key_different_inputs_only_grants_the_create_winne
     starts = []
 
     async def start(**kwargs):
+        # The external dispatch boundary must observe committed admission,
+        # including grants, through an independent Activity-style session.
+        plan_ref = kwargs["input_args"]["initial_parameters"]["omnigentExecutionPlan"][
+            "planRef"
+        ]
+        selected = next(
+            saved for saved in candidates if saved.binding.plan_ref == plan_ref
+        )
+        async with sessions() as observer:
+            record = await observer.get(
+                TemporalExecutionCanonicalRecord, "mm:deterministic-api-create"
+            )
+            assert record is not None
+            reader = TemporalArtifactService(TemporalArtifactRepository(observer))
+            for artifact_id in (
+                selected.input_id,
+                selected.plan_id,
+                selected.snapshot_id,
+                selected.skills.manifest_id,
+                selected.skills.body_id,
+            ):
+                _, body = await reader.read(
+                    artifact_id=artifact_id,
+                    access=access_for_test("workflow:mm:deterministic-api-create"),
+                )
+                assert body
         starts.append(kwargs)
         return SimpleNamespace(run_id="actual-postgres-run")
 

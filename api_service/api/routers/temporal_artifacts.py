@@ -34,6 +34,7 @@ from moonmind.schemas.temporal_artifact_models import (
 )
 from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactTransactionOwnership,
     COLLECTION_CATEGORY_LINK_PREFIXES,
     ArtifactAccessContext,
     TemporalArtifactAuthorizationError,
@@ -228,7 +229,10 @@ async def _get_temporal_artifact_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> TemporalArtifactService:
     try:
-        return TemporalArtifactService(TemporalArtifactRepository(session))
+        return TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
+        )
     except (TemporalArtifactUnavailableError, TemporalArtifactStorageAccessError) as exc:
         _raise_temporal_artifact_http(exc)
         raise

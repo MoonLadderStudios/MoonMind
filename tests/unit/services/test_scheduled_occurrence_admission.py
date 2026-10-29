@@ -19,6 +19,10 @@ from api_service.db.models import ManagedAgentProviderProfile, TemporalArtifact
 from api_service.services import omnigent_execution_plan_service as plan_service
 from api_service.services.recurring_workflows_service import RecurringWorkflowsService
 from moonmind.omnigent.harness_platform import stores
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactTransactionOwnership,
+    TemporalArtifactService,
+)
 from tests.artifact_access import access_for_test
 from tests.unit.services.test_omnigent_execution_plan_service import (
     _ArtifactService,
@@ -35,12 +39,17 @@ _TASK_DIGEST = "sha256:" + "1" * 64
 
 
 class _OccurrenceSession:
-    """Rows the occurrence admission reads; it writes nothing else."""
+    """Admission lookup rows and staged compiler artifact metadata."""
 
     def __init__(self, provider) -> None:
         self.provider = provider
         self.commits = 0
         self.rollbacks = 0
+        self.artifact_rows = []
+
+    def add(self, row):
+        assert isinstance(row, TemporalArtifact)
+        self.artifact_rows.append(row)
 
     async def get(self, model, key):
         if model is ManagedAgentProviderProfile and key == self.provider.profile_id:
@@ -57,6 +66,21 @@ class _OccurrenceSession:
 
     async def rollback(self):
         self.rollbacks += 1
+
+
+def _bind_caller_artifacts(monkeypatch, artifacts):
+    class BoundArtifactService(TemporalArtifactService):
+        def __new__(cls, repository, *, transaction_ownership):
+            assert transaction_ownership is ArtifactTransactionOwnership.CALLER
+            # Preserve the compiler's shared payload transport, but stage its
+            # metadata in the Activity's admission transaction.
+            artifacts._db_session = repository._session
+            return artifacts
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.artifacts.TemporalArtifactService",
+        BoundArtifactService,
+    )
 
 
 class _RetiringArtifacts(_ArtifactService):
@@ -292,9 +316,7 @@ async def test_worker_activity_admits_the_occurrence_through_the_schedule_owner(
     monkeypatch.setattr(
         bridge_artifacts, "link_verified_execution_plan_inputs", AsyncMock()
     )
-    monkeypatch.setattr(
-        omnigent_activities, "_OnDemandTemporalArtifactService", lambda _f: artifacts
-    )
+    _bind_caller_artifacts(monkeypatch, artifacts)
 
     with pytest.raises(ValueError, match="workflowId"):
         await omnigent_activities.omnigent_admit_scheduled_occurrence_plan_activity(
@@ -329,9 +351,7 @@ async def _successor_admission(monkeypatch, artifacts, parameters, session):
         yield session
 
     monkeypatch.setattr(db_base, "async_session_maker", session_maker)
-    monkeypatch.setattr(
-        omnigent_activities, "_OnDemandTemporalArtifactService", lambda _f: artifacts
-    )
+    _bind_caller_artifacts(monkeypatch, artifacts)
     monkeypatch.setattr(
         omnigent_activities.activity,
         "info",
@@ -467,7 +487,7 @@ class _ChildSuccessorSession:
     def __getattr__(self, name):
         return getattr(self._session, name)
 
-    async def get(self, model, key):
+    async def get(self, model, key, **kwargs):
         if model is ManagedAgentProviderProfile:
             return self.provider if key == self.provider.profile_id else None
         if model is TemporalArtifact and key == self.task_ref:
@@ -475,7 +495,7 @@ class _ChildSuccessorSession:
                 created_by_principal="user-1",
                 sha256=self.task_digest.removeprefix("sha256:"),
             )
-        return await self._session.get(model, key)
+        return await self._session.get(model, key, **kwargs)
 
     async def commit(self):
         self.commits += 1
@@ -513,6 +533,7 @@ async def test_resolver_child_successor_binds_the_installed_runtime_with_its_aut
     _configure_ready_host_image_pair(monkeypatch)
     monkeypatch.setattr(stores, "SessionExecutionPlanStore", _PlanStore)
     monkeypatch.setattr(plan_service, "DbExecutionPlanStore", _PlanStore)
+    monkeypatch.setattr(plan_service, "SessionExecutionPlanStore", _PlanStore)
     repository, engine, sessions = await _configure_github_repository_plan_test(
         monkeypatch,
         tmp_path,
@@ -566,11 +587,7 @@ async def test_resolver_child_successor_binds_the_installed_runtime_with_its_aut
             return json.loads(artifacts.payloads[ref])
 
         monkeypatch.setattr(db_base, "async_session_maker", session_maker)
-        monkeypatch.setattr(
-            omnigent_activities,
-            "_OnDemandTemporalArtifactService",
-            lambda _f: artifacts,
-        )
+        _bind_caller_artifacts(monkeypatch, artifacts)
         monkeypatch.setattr(
             omnigent_session_activities, "_load_verified_execution_plan", load_parent
         )
@@ -743,9 +760,7 @@ async def test_step_successor_keeps_the_recorded_plan_when_its_repository_route_
             yield current["session"]
 
     monkeypatch.setattr(db_base, "async_session_maker", session_maker)
-    monkeypatch.setattr(
-        omnigent_activities, "_OnDemandTemporalArtifactService", lambda _f: artifacts
-    )
+    _bind_caller_artifacts(monkeypatch, artifacts)
     monkeypatch.setattr(
         omnigent_activities.activity,
         "info",

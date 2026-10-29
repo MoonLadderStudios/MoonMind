@@ -136,9 +136,18 @@ from moonmind.workflows.temporal.service import (
     TemporalExecutionRerunSkillSnapshotError,
     TemporalExecutionService,
 )
+from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
 from tests.artifact_access import access_for_test
 
 _TARGET_SEARCH_ATTRIBUTE_TYPE = int(IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST)
+
+
+def _caller_owned_artifact_factory(service):
+    def factory(_session, *, transaction_ownership):
+        assert transaction_ownership is ArtifactTransactionOwnership.CALLER
+        return service
+
+    return factory
 
 
 def test_deployment_skill_requirements_merge_into_canonical_capabilities() -> None:
@@ -5161,6 +5170,9 @@ def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
 def test_api_execution_compiles_opencode_plan_before_temporal_schedule(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
+    from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
+    from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
+
     test_client, temporal_service, _user = client
     events: list[str] = []
     compiled_parameters: dict[str, object] = {}
@@ -5213,6 +5225,9 @@ def test_api_execution_compiles_opencode_plan_before_temporal_schedule(
     async def compile_plan(**_kwargs):
         events.append("execution_plan")
         compiled_parameters.update(_kwargs["initial_parameters"])
+        assert _kwargs["db_session"] is db_session
+        assert isinstance(_kwargs["execution_plan_store"], SessionExecutionPlanStore)
+        assert _kwargs["execution_plan_store"]._session is db_session
         return SimpleNamespace(
             binding=plan_binding,
             artifact_refs=("art_profile", "art_skills", "art_opencode_plan"),
@@ -5235,7 +5250,7 @@ def test_api_execution_compiles_opencode_plan_before_temporal_schedule(
         patch(
             "api_service.api.routers.executions.get_temporal_artifact_service",
             return_value=SimpleNamespace(),
-        ),
+        ) as artifact_factory,
     ):
         response = test_client.post(
             "/api/executions",
@@ -5264,6 +5279,9 @@ def test_api_execution_compiles_opencode_plan_before_temporal_schedule(
         )
 
     assert response.status_code == 201, response.text
+    artifact_factory.assert_called_once_with(
+        db_session, transaction_ownership=ArtifactTransactionOwnership.CALLER
+    )
     assert events == ["task_snapshot", "execution_plan", "temporal_schedule"]
     assert compiled_parameters["model"] == "opencode-go/gpt-5.6-luna"
     assert compiled_parameters["effort"] == "xhigh"
@@ -12428,7 +12446,7 @@ def test_create_task_shaped_recurring_schedule_lifts_snake_case_artifact_aliases
     monkeypatch.setattr(
         executions_module,
         "get_temporal_artifact_service",
-        lambda _session: artifact_service,
+        _caller_owned_artifact_factory(artifact_service),
     )
 
     with patch(
@@ -12775,7 +12793,7 @@ def test_task_submission_snapshot_uses_input_artifact_for_stripped_step_instruct
     )
     monkeypatch.setattr(
         "api_service.api.routers.executions.get_temporal_artifact_service",
-        lambda _session: artifact_service,
+        _caller_owned_artifact_factory(artifact_service),
     )
 
     captured: dict[str, object] = {}
@@ -16636,7 +16654,7 @@ def test_request_rerun_update_snapshot_hydrates_instructions_from_input_artifact
     )
     monkeypatch.setattr(
         "api_service.api.routers.executions.get_temporal_artifact_service",
-        lambda _session: artifact_service,
+        _caller_owned_artifact_factory(artifact_service),
     )
     captured_workflow_payload: dict[str, object] = {}
 
@@ -16767,7 +16785,7 @@ def test_exact_rerun_restores_publish_policy_from_authoritative_snapshot(
     )
     monkeypatch.setattr(
         "api_service.api.routers.executions.get_temporal_artifact_service",
-        lambda _session: artifact_service,
+        _caller_owned_artifact_factory(artifact_service),
     )
     reuse_snapshot = AsyncMock(return_value="art-snapshot-source")
     monkeypatch.setattr(
@@ -16905,7 +16923,7 @@ def test_exact_rerun_rejects_incomplete_dynamic_skill_snapshot(
     )
     monkeypatch.setattr(
         "api_service.api.routers.executions.get_temporal_artifact_service",
-        lambda _session: artifact_service,
+        _caller_owned_artifact_factory(artifact_service),
     )
     service.update_execution.side_effect = (
         TemporalExecutionRerunSkillSnapshotError(
@@ -22414,7 +22432,7 @@ def test_4636_input_artifact_cannot_introduce_new_strict_intent(
     )
     monkeypatch.setattr(
         "api_service.api.routers.executions.get_temporal_artifact_service",
-        lambda _session: artifact_service,
+        _caller_owned_artifact_factory(artifact_service),
     )
     monkeypatch.setattr(
         "api_service.api.routers.executions._persist_original_workflow_input_snapshot_from_parameters",
@@ -22496,7 +22514,7 @@ def test_4636_saved_artifact_provenance_uses_current_authored_selection(
     artifact_service = SimpleNamespace(read=AsyncMock(side_effect=read_artifact))
     monkeypatch.setattr(
         "api_service.api.routers.executions.get_temporal_artifact_service",
-        lambda _session: artifact_service,
+        _caller_owned_artifact_factory(artifact_service),
     )
     monkeypatch.setattr(
         "api_service.api.routers.executions._persist_original_workflow_input_snapshot_from_parameters",
@@ -22557,7 +22575,7 @@ def test_4636_execution_update_replaces_unavailable_input_artifact(
     artifact_service = SimpleNamespace(read=AsyncMock(side_effect=read_artifact))
     monkeypatch.setattr(
         "api_service.api.routers.executions.get_temporal_artifact_service",
-        lambda _session: artifact_service,
+        _caller_owned_artifact_factory(artifact_service),
     )
     monkeypatch.setattr(
         "api_service.api.routers.executions._persist_original_workflow_input_snapshot_from_parameters",

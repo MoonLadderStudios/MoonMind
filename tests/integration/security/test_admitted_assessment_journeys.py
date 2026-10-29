@@ -53,7 +53,12 @@ from moonmind.security.container_job_capabilities import (
 from moonmind.security.image_assessment_runner import run_image_assessment
 from moonmind.security.repository_scanner_runner import run_scanner
 from moonmind.security.repository_scanners import RepositoryScan
-from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    ArtifactTransactionOwnership,
+    TemporalArtifactRepository,
+    TemporalArtifactService,
+)
 from moonmind.workflows.temporal.container_job_attachments import storage_for
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from moonmind.workflows.temporal.worker_runtime import _container_job_artifact_reader
@@ -115,8 +120,16 @@ class Session:
             monkeypatch.setenv(name, value)
         monkeypatch.setattr(mcp_tools.settings.security, "JWT_SECRET_KEY", SECRET)
         monkeypatch.setattr(mcp_tools, "container_jobs_ready", lambda: True)
+        def artifact_service(session, *, transaction_ownership):
+            assert transaction_ownership is ArtifactTransactionOwnership.CALLER
+            return TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=environment.service._store,
+                transaction_ownership=transaction_ownership,
+            )
+
         monkeypatch.setattr(
-            mcp_tools, "get_temporal_artifact_service", lambda _s: environment.service
+            mcp_tools, "get_temporal_artifact_service", artifact_service
         )
         # The route builds its own service; the deployment's backend
         # settings, image authorizer and Temporal client are injected here.

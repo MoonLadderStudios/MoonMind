@@ -18,6 +18,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
+from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
 from moonmind.omnigent.policies import (
     policy_authority_evidence,
     validate_policy_authority_evidence,
@@ -2093,7 +2094,9 @@ async def resume_pending_action_verifications(
 
     return await RemediationEvidenceToolService(
         session=session,
-        artifact_service=get_temporal_artifact_service(session),
+        artifact_service=get_temporal_artifact_service(
+            session, transaction_ownership=ArtifactTransactionOwnership.CALLER
+        ),
         verification_phase=RemediationVerificationPhase(
             reader=CanonicalRecordEvidenceReader(session),
             max_poll_cap=0,

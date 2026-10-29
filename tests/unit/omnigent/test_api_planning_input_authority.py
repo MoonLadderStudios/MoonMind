@@ -20,7 +20,7 @@ from api_service.db.models import (
 from api_service.services import omnigent_execution_plan_service as plan_service
 from moonmind.config.settings import settings
 from moonmind.omnigent.harness_platform.planner import compile_execution_plan
-from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
+from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
 from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal.activity_runtime import TemporalPlanActivities
@@ -123,22 +123,15 @@ async def _api_context(sessions, monkeypatch, *, corruption=None):
                 )
             },
         }
-        plan = await DbExecutionPlanStore(sessions).persist(
-            compile_execution_plan(**inputs)
+        store = kwargs.get("execution_plan_store") or SessionExecutionPlanStore(
+            kwargs["db_session"]
         )
-        body = json.dumps(
-            plan.model_dump(mode="json", by_alias=True),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        ).encode()
-        envelope_id = await _put(
-            sessions,
-            body,
-            owner=actor,
-            workflow_id=None,
-            link_type="",
-            metadata={"artifact_class": "omnigent.execution_plan"},
+        plan = await store.persist(compile_execution_plan(**inputs))
+        envelope_id, _digest = await plan_service.persist_json_artifact(
+            artifact_service=kwargs["artifact_service"],
+            principal=actor,
+            artifact_class="omnigent.execution_plan",
+            payload=plan.model_dump(mode="json", by_alias=True),
         )
         binding = OmnigentExecutionPlanBinding(
             planRef=plan.planRef,

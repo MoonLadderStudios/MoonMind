@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from api_service.api.routers import mcp_tools
 from api_service.db.models import Base
 from api_service.services.container_jobs import ContainerJobService
+from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
 from moonmind.omnigent.harness_platform.execution_plan import (
     create_execution_plan_envelope,
 )
@@ -210,7 +211,11 @@ async def test_workspace_authority_survives_api_persistence_and_worker_launch(
         mcp_tools.settings.security, "JWT_SECRET_KEY", "test-container-secret"
     )
     monkeypatch.setattr(mcp_tools, "container_jobs_ready", lambda: True)
-    monkeypatch.setattr(mcp_tools, "get_temporal_artifact_service", lambda _session: None)
+    def artifact_service(_session, *, transaction_ownership):
+        assert transaction_ownership is ArtifactTransactionOwnership.CALLER
+        return None
+
+    monkeypatch.setattr(mcp_tools, "get_temporal_artifact_service", artifact_service)
     monkeypatch.setattr(
         mcp_tools,
         "ContainerJobService",

@@ -21,6 +21,7 @@ from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_te
 from moonmind.workflows.temporal.artifacts import (
     ArtifactAccessContext,
     ExecutionRef,
+    ArtifactTransactionOwnership,
     TemporalArtifactService,
 )
 from moonmind.workflows.temporal.remediation_verification import (
@@ -212,8 +213,12 @@ class RemediationContextBuilder:
         *,
         session: AsyncSession,
         artifact_service: TemporalArtifactService,
+        transaction_ownership: ArtifactTransactionOwnership = ArtifactTransactionOwnership.STANDALONE,
         step_ledger_loader: StepLedgerLoader | None = None,
     ) -> None:
+        self._transaction_ownership = ArtifactTransactionOwnership(
+            transaction_ownership
+        )
         self._session = session
         self._artifact_service = artifact_service
         self._step_ledger_loader = step_ledger_loader
@@ -302,7 +307,10 @@ class RemediationContextBuilder:
         if artifact.artifact_id not in refs:
             refs.append(artifact.artifact_id)
             remediation_record.artifact_refs = refs
-        await self._session.commit()
+        if self._transaction_ownership is ArtifactTransactionOwnership.CALLER:
+            await self._session.flush()
+        else:
+            await self._session.commit()
         await self._session.refresh(link)
         await self._session.refresh(artifact)
 

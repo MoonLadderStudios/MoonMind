@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.auth_providers import get_instance_access, instance_operator_principal
 from api_service.db.base import get_async_session
 from api_service.services.container_jobs import ContainerJobService
+from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
 from moonmind.config.settings import settings
 from moonmind.mcp.container_job_tool_registry import (
     classify_container_job_error,
@@ -119,7 +120,11 @@ def _build_service(
     session: AsyncSession, operator: OperatorAdmission
 ) -> ContainerJobService:
     return ContainerJobService(
-        session, artifacts=get_temporal_artifact_service(session), operator=operator
+        session,
+        artifacts=get_temporal_artifact_service(
+            session, transaction_ownership=ArtifactTransactionOwnership.CALLER
+        ),
+        operator=operator,
     )
 
 

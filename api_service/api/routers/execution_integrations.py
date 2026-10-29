@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -243,7 +244,8 @@ async def ingest_integration_callback(
             and _callback_profile(integration_name).capture_artifacts
         ):
             artifact_service = TemporalArtifactService(
-                TemporalArtifactRepository(session)
+                TemporalArtifactRepository(session),
+                transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
             )
             event_type = str(payload.event_type).strip()
             artifact_ref = await artifact_service.write_integration_event_artifact(

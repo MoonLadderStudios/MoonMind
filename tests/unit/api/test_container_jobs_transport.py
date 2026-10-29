@@ -34,6 +34,7 @@ from moonmind.schemas.container_job_models import (
     RegistryAuthorization,
 )
 from moonmind.security.operator_admission import OperatorAdmission
+from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -101,8 +102,13 @@ def _install_fake_service(monkeypatch, module, service) -> None:
         "ContainerJobService",
         lambda session, artifacts=None, capability=None, operator=None: service,
     )
+
+    def artifact_service(session, *, transaction_ownership):
+        assert transaction_ownership is ArtifactTransactionOwnership.CALLER
+        return None
+
     monkeypatch.setattr(
-        module, "get_temporal_artifact_service", lambda session: None, raising=False
+        module, "get_temporal_artifact_service", artifact_service, raising=False
     )
 
 

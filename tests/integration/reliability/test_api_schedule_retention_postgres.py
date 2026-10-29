@@ -3,6 +3,7 @@
 import asyncio
 from contextvars import ContextVar
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -176,10 +177,19 @@ async def test_api_create_and_saved_schedule_edit_share_inputs_without_deadlock(
         )
         definition_id, version = definition.id, definition.version
         assert skill_id in definition.target["omnigentAuthorityArtifactRefs"]
+        # Only already-retained inputs become sweep candidates. Newly admitted
+        # execution artifacts keep their normal lifetimes.
+        for artifact_id in (skill_id, input_id):
+            artifact = await TemporalArtifactRepository(session).get_artifact(
+                artifact_id
+            )
+            artifact.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        await session.commit()
 
     role = ContextVar("admission_retention_role", default="")
     retained_skill, admitted_input = asyncio.Event(), asyncio.Event()
     api_shared_lock_attempt = asyncio.Event()
+    sweep_completed = asyncio.Event()
     original_retain = recurring.RecurringWorkflowsService._retain_target_artifacts
     original_create = TemporalExecutionService.create_execution
     original_lock = TemporalArtifactRepository.get_artifact_for_update
@@ -199,10 +209,7 @@ async def test_api_create_and_saved_schedule_edit_share_inputs_without_deadlock(
             role.reset(token)
 
     async def lock(self, artifact_id):
-        canonical_api = (
-            role.get() == "api"
-            and self._session.sync_session.join_transaction_mode == "create_savepoint"
-        )
+        canonical_api = role.get() == "api"
         if canonical_api and artifact_id == skill_id:
             # A globally ordered admission may wait on the Skill first. Let
             # retention finish in that case instead of creating a test-only
@@ -212,6 +219,7 @@ async def test_api_create_and_saved_schedule_edit_share_inputs_without_deadlock(
         if role.get() == "retention" and artifact_id == skill_id:
             retained_skill.set()
             await asyncio.wait_for(api_shared_lock_attempt.wait(), 15)
+            await asyncio.wait_for(sweep_completed.wait(), 15)
         elif canonical_api and artifact_id == input_id:
             admitted_input.set()
             api_shared_lock_attempt.set()
@@ -241,6 +249,18 @@ async def test_api_create_and_saved_schedule_edit_share_inputs_without_deadlock(
                 actor=OperatorAdmission(via="loopback"),
             )
 
+    async def sweep_retention():
+        await asyncio.wait_for(retained_skill.wait(), 15)
+        token = role.set("sweep")
+        try:
+            async with sessions() as session:
+                return await TemporalArtifactService(
+                    TemporalArtifactRepository(session)
+                ).sweep_lifecycle(principal="service:lifecycle")
+        finally:
+            sweep_completed.set()
+            role.reset(token)
+
     adapter = SimpleNamespace(
         start_workflow=AsyncMock(
             return_value=SimpleNamespace(run_id="shared-input-run")
@@ -263,17 +283,22 @@ async def test_api_create_and_saved_schedule_edit_share_inputs_without_deadlock(
                     },
                 },
             ),
+            sweep_retention(),
             return_exceptions=True,
         ),
         45,
     )
     assert retained_skill.is_set() and admitted_input.is_set(), outcomes
+    assert sweep_completed.is_set(), outcomes
     errors = [
         str(outcome) for outcome in outcomes if isinstance(outcome, BaseException)
     ]
     assert not errors, "\n".join(errors)
     adapter.start_workflow.assert_awaited_once()
     execution = outcomes[1]
+    assert outcomes[2].soft_deleted_count == 0
+    # Saved-definition protection excludes both expired inputs before locking.
+    assert outcomes[2].expired_candidate_count == 0
     async with sessions() as session:
         definition = await session.get(RecurringWorkflowDefinition, definition_id)
         assert definition.name == "Renamed saved inputs"

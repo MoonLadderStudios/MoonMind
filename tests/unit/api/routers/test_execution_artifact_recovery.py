@@ -18,7 +18,11 @@ from api_service.db.models import (
     TemporalWorkflowType,
 )
 from api_service.services import single_user_conversion as conversion
-from moonmind.workflows.temporal.artifacts import TemporalArtifactRepository
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactTransactionOwnership,
+    TemporalArtifactRepository,
+    TemporalArtifactService,
+)
 from tests.artifact_access import access_for_test
 from tests.unit.services.test_artifact_conversion import database, seed, service
 
@@ -58,7 +62,18 @@ async def test_converted_artifact_attached_to_new_workflow(
             await session.commit()
             artifacts = service(session, tmp_path)
             retained_quota = await TemporalArtifactRepository(session).quota_usage_for_scope(owner)
-            monkeypatch.setattr(ex, "get_temporal_artifact_service", lambda _: artifacts)
+            def artifact_service(
+                db_session,
+                *,
+                transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
+            ):
+                return TemporalArtifactService(
+                    TemporalArtifactRepository(db_session),
+                    store=artifacts._store,
+                    transaction_ownership=transaction_ownership,
+                )
+
+            monkeypatch.setattr(ex, "get_temporal_artifact_service", artifact_service)
             evidence = ex._SourceCapturedEvidence(
                 available=True,
                 named_refs={"finalSnapshotRef": artifact_ref},
