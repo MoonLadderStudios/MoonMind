@@ -1209,7 +1209,9 @@ async def native_journey(
         ("codex-native", "idle"),
         ("claude-native", "idle"),
         ("claude-native-api-key", "idle"),
+        ("claude-native-api-key", "failed"),
         ("codex-native-api-key", "idle"),
+        ("codex-native-api-key", "failed"),
         ("opencode-native", "idle"),
         ("opencode-native", "failed"),
     ],
@@ -1415,3 +1417,183 @@ async def assert_native_turn_saved_and_cleaned(
         and len(manager.inspections) == 1
     )
     return result
+
+
+@pytest.mark.parametrize(
+    "native_journey", ["claude-native-api-key", "codex-native-api-key"], indirect=True
+)
+async def test_api_key_route_cancellation_cleans_owned_host_and_provider_config(
+    native_journey, monkeypatch
+):
+    """An explicit cancel mid-turn still removes the run-scoped key config."""
+    journey = native_journey
+    server, docker = journey.server, journey.docker
+    monkeypatch.setattr(
+        "moonmind.omnigent.activity_ownership.delivery_was_revoked", lambda: False
+    )
+    execution = asyncio.create_task(
+        journey.realizer.execute(journey.request, journey.plan)
+    )
+
+    async def cancel_running_turn():
+        execution.cancel()
+
+    server.on_first_message = cancel_running_turn
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(execution, 30)
+
+    assert len(server.session_ids) == 1 and docker.create_count == 1
+    assert ("host_remove", docker.container_name) in journey.events
+    assert not server.host_alive
+    # Only the deployment-owned OAuth volume survives; the provider config
+    # volume holding the key was owned by this attempt and is gone.
+    assert docker.volumes == {"journey_oauth": {}}
+    assert any(kind == "volume_remove" for kind, _ref in journey.events)
+    binding = await journey.services.runtime_binding_store.get(
+        stable_binding_id(
+            execution_plan_ref=journey.plan.planRef,
+            idempotency_key=journey.request.idempotency_key,
+        )
+    )
+    assert binding.state is RuntimeBindingState.cleaned
+    handle = next(iter(binding.credentialRuntimeHandles.values()))
+    assert handle["materializerRef"] == "omnigent-provider-config@1"
+    cleanup = json.loads(
+        await journey.gateway.read_text(
+            binding.attestationRefs["cleanupAttestationRef"]
+        )
+    )
+    assert cleanup["results"]["credentials"][0]["removed"] is True
+    host_lease = await journey.services.host_lease_repository.get(binding.hostLeaseRef)
+    assert host_lease.status == "cleaned"
+    # The workflow owns the provider grant; cancellation does not release it
+    # from inside the Activity, and the key never reaches a recorded command.
+    async with journey.session_factory() as session:
+        provider_lease = await session.get(
+            ProviderProfileSlotLease, journey.provider_lease_id
+        )
+        assert provider_lease.lease_state == "held"
+    assert SECRET not in json.dumps(docker.commands)
+    assert SECRET not in json.dumps(binding.model_dump(mode="json"))
+
+
+@pytest.mark.parametrize(
+    "native_journey", ["claude-native-api-key", "codex-native-api-key"], indirect=True
+)
+async def test_api_key_successor_restores_saved_work_with_fresh_provider_config(
+    native_journey, monkeypatch
+):
+    """The restarted step resumes from the interrupted attempt's verified save.
+
+    The interrupted attempt's host, workspace and run-scoped provider config
+    are gone. The successor attempt of the same logical step rematerializes the
+    key config from its Profile, restores the saved bytes from artifact
+    storage, and leaves the interrupted attempt's completed effects alone.
+    """
+    journey = native_journey
+    request, plan, realizer = journey.request, journey.plan, journey.realizer
+    server, docker = journey.server, journey.docker
+    interrupted = await assert_native_turn_saved_and_cleaned(journey, "failed")
+    saved = interrupted.metadata["savedWorkspaceCheckpoint"]
+    predecessor_config = docker.auth_json
+    predecessor_workspace = server.workspace
+    predecessor_binding_id = stable_binding_id(
+        execution_plan_ref=plan.planRef, idempotency_key=request.idempotency_key
+    )
+    predecessor_binding = await journey.services.runtime_binding_store.get(
+        predecessor_binding_id
+    )
+    created_volumes = [
+        argv[-1]
+        for argv in docker.commands
+        if argv[:3] == ("docker", "volume", "create")
+        and argv[-1].startswith("mm-omnigent-credential-")
+    ]
+    assert len(created_volumes) == 1
+
+    # The Run workflow hands the successor the same plan and the verified save
+    # as workspaceCheckpointRestoreRef (run.py interrupted-step carry).
+    workflow_id = request.step_execution.workflow_id
+    step_id = workflow_id + ":run:implement:execution:2"
+    payload = request.model_dump(by_alias=True, mode="json", exclude_none=True)
+    payload["idempotencyKey"] = "native-turn-2"
+    payload["stepExecution"].update(executionOrdinal=2, stepExecutionId=step_id)
+    payload["workspaceSpec"] = {
+        "workspaceCheckpointRestoreRef": saved["archiveRef"],
+        "workspaceLocator": {
+            "kind": "sandbox",
+            "workspaceId": hashlib.sha256(
+                f"{workflow_id}:{step_id}".encode()
+            ).hexdigest()[:24],
+            "relativePath": "repo",
+        },
+    }
+    # A restarted step runs in a new AgentRun child, so its credential
+    # runtime identity is distinct from the interrupted attempt's.
+    payload["admittedProviderCapacity"].update(
+        stepExecutionId=step_id,
+        idempotencyKey="native-turn-2",
+        agentRunRunId="agent-run-2",
+    )
+    successor = AgentExecutionRequest.model_validate(payload)
+    journey.manager.request = successor
+    await journey.gateway.admit_execution_plan_inputs(request=successor, plan=plan)
+
+    restored = {}
+    observed_command = docker.command
+
+    async def observe_launch(argv, **kwargs):
+        if list(argv[:2]) == ["docker", "create"]:
+            workspace = Path(_mounts(list(argv))["/workspaces/run"]["src"])
+            report = workspace / RESULT_PATH
+            restored["bytes"] = report.read_bytes() if report.exists() else None
+        return await observed_command(argv, **kwargs)
+
+    monkeypatch.setattr(docker_backend, "run_runtime_command", observe_launch)
+    monkeypatch.setattr(credential_materializers, "run_runtime_command", observe_launch)
+    server.terminal_status, server.status = "idle", "idle"
+    server.items, server.events = [], []
+    docker.auth_json = None
+
+    result = await realizer.execute(successor, plan)
+
+    assert result.failure_class is None, result
+    # Saved work came from artifact storage: the interrupted attempt's worker
+    # root was deleted before the successor launched.
+    assert restored == {"bytes": GENERATED}
+    assert server.workspace != predecessor_workspace
+    assert len(server.session_ids) == 2 and docker.create_count == 2
+    messages = [event for event in server.events if event.get("type") == "message"]
+    assert len(messages) == 1
+    # The key config was materialized again into a new run-scoped volume and
+    # removed with the successor's host.
+    created_volumes = [
+        argv[-1]
+        for argv in docker.commands
+        if argv[:3] == ("docker", "volume", "create")
+        and argv[-1].startswith("mm-omnigent-credential-")
+    ]
+    assert len(created_volumes) == 2 and created_volumes[0] != created_volumes[1]
+    assert docker.auth_json == predecessor_config
+    assert docker.volumes == {"journey_oauth": {}}
+    binding = await journey.services.runtime_binding_store.get(
+        stable_binding_id(
+            execution_plan_ref=plan.planRef, idempotency_key=successor.idempotency_key
+        )
+    )
+    assert binding.state is RuntimeBindingState.cleaned
+    assert binding.hostLeaseRef != predecessor_binding.hostLeaseRef
+    handle = next(iter(binding.credentialRuntimeHandles.values()))
+    assert handle["materializerRef"] == "omnigent-provider-config@1"
+    assert SECRET not in json.dumps(binding.model_dump(mode="json"))
+    # The interrupted attempt's recorded outcome is untouched, and redelivering
+    # it neither launches a host nor repeats its turn.
+    assert (
+        await journey.services.runtime_binding_store.get(predecessor_binding_id)
+    ) == predecessor_binding
+    journey.manager.request = request
+    replay = await realizer.execute(request, plan)
+    assert replay.metadata["savedWorkspaceCheckpoint"] == saved
+    assert replay.failure_class == interrupted.failure_class
+    assert len(server.session_ids) == 2 and docker.create_count == 2
+
