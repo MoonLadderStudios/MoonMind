@@ -457,3 +457,39 @@ async def test_s3_markers_and_payload_use_bounded_put_and_prefix_pagination(
         Prefix="_moonmind/pending-writes/",
         MaxKeys=1000,
     )
+
+
+@pytest.mark.parametrize("failure", [TimeoutError, PermissionError])
+async def test_pending_marker_failure_preserves_storage_error_contract(
+    tmp_path, monkeypatch, failure
+):
+    from moonmind.workflows.temporal.artifacts import (
+        TemporalArtifactStorageAccessError,
+        TemporalArtifactUnavailableError,
+    )
+
+    store = LocalTemporalArtifactStore(tmp_path / "bytes")
+    async with temporal_db(tmp_path) as maker, maker() as session:
+        service = _service(session, store, caller=True)
+        artifact, _ = await service.create(
+            principal="service:test", content_type="text/plain"
+        )
+
+        def fail_marker(**kwargs):
+            raise failure("synthetic marker failure")
+
+        monkeypatch.setattr(store, "record_pending_write", fail_marker)
+        expected = (
+            TemporalArtifactUnavailableError
+            if failure is TimeoutError
+            else TemporalArtifactStorageAccessError
+        )
+        with pytest.raises(expected) as caught:
+            await service.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal="service:test",
+                payload=b"not uploaded",
+            )
+        assert isinstance(caught.value.__cause__, failure)
+        assert not store.object_exists(artifact.storage_key)
+        await session.rollback()

@@ -4112,16 +4112,16 @@ class TemporalArtifactService:
                 await self._finish_mutation()
                 raise
 
-        if self._transaction_ownership is ArtifactTransactionOwnership.CALLER:
-            # Storage-owned intent survives the surrounding admission rollback.
-            # It carries no payload or access grant. Only lifecycle reconciles it
-            # after observing the committed outcome under the same key fence.
-            await _settled_storage_call(
-                lambda: self._store.record_pending_write(
-                    artifact_id=artifact.artifact_id, storage_key=artifact.storage_key
-                )
-            )
         try:
+            if self._transaction_ownership is ArtifactTransactionOwnership.CALLER:
+                # Storage-owned intent survives the surrounding admission rollback.
+                # It carries no payload or access grant. Only lifecycle reconciles it
+                # after observing the committed outcome under the same key fence.
+                await _settled_storage_call(
+                    lambda: self._store.record_pending_write(
+                        artifact_id=artifact.artifact_id, storage_key=artifact.storage_key
+                    )
+                )
             await _settled_storage_call(
                 lambda: self._store.write_bytes(
                     artifact.storage_key,
