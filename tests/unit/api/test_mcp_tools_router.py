@@ -16,6 +16,7 @@ from moonmind.mcp.jira_tool_registry import JiraToolRegistry
 from moonmind.mcp.skills_on_demand_registry import SkillsOnDemandToolRegistry
 from moonmind.mcp.tool_registry import ResourceListResponse
 from moonmind.schemas.container_job_models import OwnerIdentity
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.security.container_job_capabilities import (
     mint_container_job_session_capability,
 )
@@ -44,7 +45,9 @@ def router_app(
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(mcp_tools_router.router, prefix="/api")
-    app.dependency_overrides[mcp_tools_router.get_mcp_caller] = lambda: SimpleNamespace(id=None)
+    app.dependency_overrides[mcp_tools_router.get_mcp_caller] = lambda: OperatorAdmission(
+        via="mcp-router-test-fixture"
+    )
     monkeypatch.setattr(
         mcp_tools_router,
         "_execution_tool_registry",

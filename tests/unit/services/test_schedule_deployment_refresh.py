@@ -13,6 +13,7 @@ from api_service.db.models import (
     OmnigentAgentProfileUsage,
     OmnigentAgentProfileVersion,
     OmnigentOAuthHostBindingRecord,
+    OmnigentExecutionPlanRecord,
     OmnigentUpstreamAgentProjection,
     TemporalArtifact,
     TemporalArtifactStatus,
@@ -22,6 +23,17 @@ from api_service.services.omnigent_policies import OmnigentPolicyService
 from moonmind.omnigent.policies import document_digest
 from tests.unit.services.test_omnigent_agent_profile_selection import _GenericV2Session
 from tests.unit.services.test_omnigent_execution_plan_service import _policy_snapshot
+
+
+def _persisted_schedule_plan(digest_char):
+    from tests.unit.services.test_recurring_workflows_service import _schedule_plan
+
+    plan = _schedule_plan(digest_char)
+    return OmnigentExecutionPlanRecord(
+        schema_version=plan.schemaVersion,
+        plan_ref=plan.planRef,
+        payload_json=plan.payload.model_dump(mode="json", by_alias=True),
+    )
 
 
 class DeploymentSession(_GenericV2Session):
@@ -74,6 +86,7 @@ class DeploymentSession(_GenericV2Session):
             )
             for artifact_id in (
                 "art_original_task",
+                "art_task_input",
                 "task-input",
                 "art_new_plan",
                 "art_skills",
@@ -85,6 +98,9 @@ class DeploymentSession(_GenericV2Session):
             return self.provider
         if model is TemporalArtifact:
             return self.task_inputs.get(key)
+        if model is OmnigentExecutionPlanRecord:
+            plan = _persisted_schedule_plan("1")
+            return plan if key == plan.plan_ref else None
         return await super().get(model, key)
 
     async def execute(self, statement):
@@ -435,9 +451,19 @@ class ManagedBootstrapScheduleSession:
         )
         self.binding = SimpleNamespace(launch_policy_ref=binding_policy)
         self.provider = SimpleNamespace(profile_id="codex_openai_oauth")
-        self.task_input = SimpleNamespace(
-            created_by_principal="original-task-principal", sha256="a" * 64,
-        )
+        plan = _persisted_schedule_plan("1")
+        self.plans = {plan.plan_ref: plan}
+        self.artifacts = {
+            artifact_id: TemporalArtifact(
+                artifact_id=artifact_id,
+                storage_key=f"managed-refresh/{artifact_id}",
+                status=TemporalArtifactStatus.COMPLETE,
+                hard_deleted_at=None,
+                created_by_principal="original-task-principal",
+                sha256="a" * 64,
+            )
+            for artifact_id in ("art_task_input", "art_plan", "art_skills", "plan", "skills")
+        }
 
     @staticmethod
     def snapshot(version):
@@ -462,8 +488,16 @@ class ManagedBootstrapScheduleSession:
         if model is ManagedAgentProviderProfile:
             return self.provider
         if model is TemporalArtifact:
-            return self.task_input
+            return self.artifacts.get(key)
+        if model is OmnigentExecutionPlanRecord:
+            return self.plans.get(key)
         raise AssertionError(f"unexpected get {model.__name__}")
+
+    async def execute(self, statement):
+        assert statement.column_descriptions[0].get("entity") is TemporalArtifact
+        artifact_id = statement.compile().params["artifact_id_1"]
+        artifact = self.artifacts.get(artifact_id)
+        return SimpleNamespace(scalars=lambda: SimpleNamespace(first=lambda: artifact))
 
     async def scalar(self, statement):
         entity = statement.column_descriptions[0].get("entity")
@@ -645,6 +679,8 @@ async def test_plan_schedule_refresh_converges_until_authority_moves(
         compiled.append(kwargs)
         # Every compile persists new artifacts, so its binding is always new.
         binding = _schedule_plan_binding(str(len(compiled) + 1))
+        plan = _persisted_schedule_plan(str(len(compiled) + 1))
+        session.plans[plan.plan_ref] = plan
         return SimpleNamespace(
             envelope=SimpleNamespace(
                 payload=SimpleNamespace(

@@ -22,15 +22,17 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.api.routers.temporal_artifacts import (
     _get_temporal_artifact_service,
-    _resolve_principal,
     router,
 )
+from api_service.auth_providers import get_artifact_access
 from api_service.db import models as db_models
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+
+from tests.artifact_access import access_for_test
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -165,7 +167,7 @@ async def _collection_client(tmp_path: Path, rows: list[_Row], principal: str):
             store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
         )
         app.dependency_overrides[_get_temporal_artifact_service] = lambda: service
-        app.dependency_overrides[_resolve_principal] = lambda: principal
+        app.dependency_overrides[get_artifact_access] = lambda: access_for_test(principal)
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://testserver"
         ) as client:
@@ -284,13 +286,11 @@ async def test_machine_principal_collection_keeps_execution_boundary(
         ids, flags, _costs = await _all_pages(
             client, statements, category="artifacts", limit=4
         )
-    visible = [
-        row.artifact_id
-        for row in rows
-        if not row.artifact_id.startswith("art_hidden")
-    ]
+    # Historical creator labels and missing owners do not admit a workflow
+    # to artifacts linked only to another execution.
+    visible = [row.artifact_id for row in rows if row.artifact_id.startswith("art_linked")]
     assert ids == visible
-    assert flags == [True, True, False]
+    assert flags == [True, False]
 
     (tmp_path / "service").mkdir()
     async with _collection_client(tmp_path / "service", rows, "service:collector") as (
@@ -300,4 +300,5 @@ async def test_machine_principal_collection_keeps_execution_boundary(
         ids, _flags, _costs = await _all_pages(
             client, statements, category="artifacts", limit=25
         )
-    assert ids == ["art_unowned_000", "art_unowned_001"]
+    # A bare service identity has no trusted execution or operator admission.
+    assert ids == []

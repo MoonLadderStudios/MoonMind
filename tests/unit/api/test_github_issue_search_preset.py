@@ -922,6 +922,7 @@ async def test_blocked_assessment_stops_preset_before_start_with_original_diagno
     from datetime import datetime, timezone
 
     from moonmind.workflows.temporal.artifacts import (
+        ExecutionRef,
         LocalTemporalArtifactStore,
         TemporalArtifactActivities,
         TemporalArtifactRepository,
@@ -988,7 +989,15 @@ async def test_blocked_assessment_stops_preset_before_start_with_original_diagno
         )
         activity_boundary.activities._artifact_service = service
         assessment, _upload = await service.create(
-            principal="test:issue-search", content_type="application/json"
+            principal="test:issue-search",
+            content_type="application/json",
+            # Match the assessment publisher's parent-owned evidence handoff.
+            link=ExecutionRef(
+                namespace="default",
+                workflow_id=info.workflow_id,
+                run_id=info.run_id,
+                link_type="input.assessment_handoff",
+            ),
         )
         await service.write_complete(
             artifact_id=assessment.artifact_id,
