@@ -1657,8 +1657,15 @@ async def update_profile(
         "execution_configuration", profile.execution_configuration
     )
     execution_contract_supplied = bool(
-        {"provider_id", "credential_source", "runtime_materialization_mode"}
-        .intersection(update_data)
+        {
+            "provider_id",
+            "credential_source",
+            "runtime_materialization_mode",
+            "env_template",
+            "secret_refs",
+            "file_templates",
+            "home_path_overrides",
+        }.intersection(update_data)
         or update_data.get("import_existing_credential_volume")
     )
     if execution_configuration and (
@@ -1685,6 +1692,12 @@ async def update_profile(
                 else update_data.get(
                     "runtime_materialization_mode", profile.runtime_materialization_mode
                 )
+            ),
+            env_template=update_data.get("env_template", profile.env_template),
+            secret_refs=update_data.get("secret_refs", profile.secret_refs),
+            file_templates=update_data.get("file_templates", profile.file_templates),
+            home_path_overrides=update_data.get(
+                "home_path_overrides", profile.home_path_overrides
             ),
             execution_configuration=execution_configuration,
         )

@@ -324,9 +324,13 @@ def _omnigent_egress_admits(url: str) -> bool:
 
     from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
 
-    parts = urlsplit(url)
-    host = (parts.hostname or "").lower().rstrip(".")
-    if parts.scheme != "https" or not host or parts.port not in (None, 443):
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower().rstrip(".")
+        port = parts.port
+    except ValueError:
+        return False
+    if parts.scheme != "https" or not host or port not in (None, 443):
         return False
     return any(
         destination.dns_name is not None

@@ -113,15 +113,13 @@ def _provider_materializer_error(
     from moonmind.omnigent.harness_platform.host_classes import get_launch_policy
     from moonmind.omnigent.harness_platform.materializers import (
         get_materializer,
-        materializer_ref_for_provider,
+        materializer_ref_for_profile,
         validate_binding_materializer,
     )
 
     harness_selection = document.get("harness") or {}
     try:
-        materializer_ref = materializer_ref_for_provider(
-            profile.runtime_id, profile.provider_id
-        )
+        materializer_ref = materializer_ref_for_profile(profile)
         materializer_auth_models = set(
             get_materializer(materializer_ref).acceptedAuthModels
         )

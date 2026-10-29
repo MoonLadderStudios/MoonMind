@@ -100,10 +100,8 @@ def test_a_closed_path_names_no_shared_lifecycle_gap(field: str) -> None:
     "surface",
     [
         "python:moonmind.workflows.temporal.runtime.launcher:ManagedRuntimeLauncher",
-        "python:moonmind.workflows.temporal.workflows.agent_session:"
-        "MoonMindAgentSessionWorkflow",
-        "python:moonmind.workflows.temporal.runtime.codex_session_runtime:"
-        "CodexManagedSessionRuntime",
+        "python:moonmind.workflows.temporal.workflows.agent_session:MoonMindAgentSessionWorkflow",
+        "python:moonmind.workflows.temporal.runtime.codex_session_runtime:CodexManagedSessionRuntime",
     ],
 )
 def test_direct_launcher_and_agent_session_owners_are_inventoried(

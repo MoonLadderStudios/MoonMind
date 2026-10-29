@@ -1206,6 +1206,11 @@ async def test_credential_maintenance_drains_generic_hosts_without_legacy_bindin
     async def no_binding(_self, _profile_id):
         return None
 
+    async def consumers(profile_ref, **_kwargs):
+        assert profile_ref == "codex_openai_oauth"
+        return [object()]
+
+    monkeypatch.setattr(generic_host_janitor, "list_profile_host_consumers", consumers)
     monkeypatch.setattr(omnigent_settings, "generic_host_enabled", lambda: True)
     monkeypatch.setattr(
         production,
@@ -1219,13 +1224,129 @@ async def test_credential_maintenance_drains_generic_hosts_without_legacy_bindin
         oauth_hosts.OmnigentOAuthHostRepository, "get_binding_for_profile", no_binding
     )
 
-    call = oauth_session_activities.oauth_session_prepare_credential_maintenance(
-        {"profile_id": "codex_openai_oauth"}
-    )
     if open_owner:
         # Maintenance fails closed; the OAuth workflow reports the drain failure.
         with pytest.raises(HarnessPlatformError, match="open workflow"):
-            await call
+            await oauth_session_activities.oauth_session_prepare_credential_maintenance(
+                {"profile_id": "codex_openai_oauth"}
+            )
     else:
-        assert await call == {"profile_id": "codex_openai_oauth", "drained": 2}
+        result = (
+            await oauth_session_activities.oauth_session_prepare_credential_maintenance(
+                {"profile_id": "codex_openai_oauth"}
+            )
+        )
+        assert result == {"profile_id": "codex_openai_oauth", "drained": 2}
     assert drained == [(services.generic_realizer, "codex_openai_oauth")]
+
+
+@pytest.mark.asyncio
+async def test_credential_maintenance_without_generic_consumers_needs_no_execution_plane(
+    monkeypatch: pytest.MonkeyPatch, _oauth_activity_session_factory
+) -> None:
+    from api_service.db import base
+    from moonmind.omnigent import production
+    from moonmind.omnigent import settings as omnigent_settings
+
+    monkeypatch.setattr(base, "async_session_maker", _oauth_activity_session_factory)
+    monkeypatch.setattr(omnigent_settings, "generic_host_enabled", lambda: True)
+
+    def unavailable_execution_plane(**_kwargs):
+        raise AssertionError("No consumer needs the execution plane")
+
+    monkeypatch.setattr(
+        production,
+        "build_generic_omnigent_execution_services",
+        unavailable_execution_plane,
+    )
+    assert await oauth_session_activities.oauth_session_prepare_credential_maintenance(
+        {"profile_id": "direct-codex-profile"}
+    ) == {"profile_id": "direct-codex-profile", "drained": 0}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("generic_enabled", [False, True])
+async def test_credential_maintenance_with_consumers_requires_execution_plane(
+    monkeypatch: pytest.MonkeyPatch, generic_enabled: bool
+) -> None:
+    from moonmind.omnigent import generic_host_janitor, production
+    from moonmind.omnigent import settings as omnigent_settings
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+
+    async def consumers(profile_ref, **_kwargs):
+        assert profile_ref == "codex_openai_oauth"
+        return [object()]
+
+    monkeypatch.setattr(generic_host_janitor, "list_profile_host_consumers", consumers)
+    monkeypatch.setattr(production, "generic_host_enabled", lambda: generic_enabled)
+    monkeypatch.setattr(
+        omnigent_settings, "generic_host_enabled", lambda: generic_enabled
+    )
+    monkeypatch.setattr(production, "resolved_server_url", lambda: "")
+    with pytest.raises(HarnessPlatformError) as error:
+        await oauth_session_activities._drain_generic_profile_hosts(
+            "codex_openai_oauth"
+        )
+    assert error.value.code == "OMNIGENT_GENERIC_REALIZER_NOT_READY"
+
+
+@pytest.mark.asyncio
+async def test_credential_maintenance_inventory_failure_blocks_authentication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.omnigent import generic_host_janitor, production
+
+    async def broken_inventory(*_args, **_kwargs):
+        raise RuntimeError("inventory unavailable")
+
+    def unexpected_services(**_kwargs):
+        pytest.fail("Cannot drain without a verified inventory")
+
+    monkeypatch.setattr(
+        generic_host_janitor, "list_profile_host_consumers", broken_inventory
+    )
+    monkeypatch.setattr(
+        production, "build_generic_omnigent_execution_services", unexpected_services
+    )
+    with pytest.raises(RuntimeError, match="inventory unavailable"):
+        await oauth_session_activities.oauth_session_prepare_credential_maintenance(
+            {"profile_id": "codex_openai_oauth"}
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "profile_ref,host_ref,host_status,expected",
+    [
+        ("target", "host", "ready", True),
+        ("target", "host", "cleanup_failed", True),
+        ("other", "host", "ready", False),
+        ("target", "host", "cleaned", False),
+        ("target", None, "ready", False),
+        ("target", "host", None, False),
+    ],
+)
+async def test_generic_profile_consumer_inventory(
+    profile_ref, host_ref, host_status, expected
+) -> None:
+    from moonmind.omnigent.generic_host_janitor import list_profile_host_consumers
+
+    binding = SimpleNamespace(
+        providerLeases={"provider": {"providerProfileRef": profile_ref}},
+        hostLeaseRef=host_ref,
+    )
+
+    class Bindings:
+        async def list_recoverable(self, *, stale_before):
+            assert stale_before is not None
+            return [binding]
+
+    class Leases:
+        async def get(self, ref):
+            assert ref == "host"
+            return SimpleNamespace(status=host_status) if host_status else None
+
+    result = await list_profile_host_consumers(
+        "target", runtime_bindings=Bindings(), host_leases=Leases()
+    )
+    assert result == ([binding] if expected else [])
