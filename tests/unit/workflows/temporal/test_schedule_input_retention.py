@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 
 from api_service.db import models
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
     TemporalArtifactStateError,
@@ -199,7 +200,7 @@ async def test_saved_deployment_skill_keeps_its_frozen_content_after_skill_updat
                 "omnigentAuthorityArtifactRefs": authority_refs,
             },
             policy={},
-            actor=SimpleNamespace(id="user-1"),
+            actor=OperatorAdmission(via="loopback"),
         )
         updated = await skills.update_skill_content(
             skill_slug="retained-deployment-skill",
