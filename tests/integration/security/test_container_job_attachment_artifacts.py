@@ -34,6 +34,7 @@ from moonmind.schemas.container_job_models import (
 from moonmind.workflows.temporal import worker_runtime
 from moonmind.workflows.temporal.artifacts import (
     ArtifactAccessContext,
+    ArtifactTransactionOwnership,
     TemporalArtifactAuthorizationError,
     TemporalArtifactService,
     TemporalArtifactStateError,
@@ -97,10 +98,17 @@ async def test_owned_report_outlives_cleanup_and_siblings_are_refused(
     monkeypatch.setattr(
         worker_runtime, "get_async_session_context", environment.sessions
     )
+
+    def artifact_factory(repo, *, transaction_ownership):
+        assert transaction_ownership is ArtifactTransactionOwnership.STANDALONE
+        return TemporalArtifactService(
+            repo,
+            store=service._store,
+            transaction_ownership=transaction_ownership,
+        )
+
     monkeypatch.setattr(
-        worker_runtime,
-        "TemporalArtifactService",
-        lambda repo: TemporalArtifactService(repo, store=service._store),
+        worker_runtime, "TemporalArtifactService", artifact_factory
     )
     exported = await _exported(
         service, b'{"accounts":["a"]}', OWNER, restricted=restricted
@@ -233,10 +241,17 @@ async def test_delegated_raw_job_input_still_requires_live_exact_rights(
     monkeypatch.setattr(
         worker_runtime, "get_async_session_context", environment.sessions
     )
+
+    def artifact_factory(repo, *, transaction_ownership):
+        assert transaction_ownership is ArtifactTransactionOwnership.STANDALONE
+        return TemporalArtifactService(
+            repo,
+            store=service._store,
+            transaction_ownership=transaction_ownership,
+        )
+
     monkeypatch.setattr(
-        worker_runtime,
-        "TemporalArtifactService",
-        lambda repo: TemporalArtifactService(repo, store=service._store),
+        worker_runtime, "TemporalArtifactService", artifact_factory
     )
     monkeypatch.setattr(activity, "in_activity", lambda: True)
     monkeypatch.setattr(

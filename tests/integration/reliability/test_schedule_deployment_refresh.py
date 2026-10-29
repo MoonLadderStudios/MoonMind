@@ -165,13 +165,30 @@ async def test_scheduled_image_update_reaches_dispatch_with_matching_authority(
     )
     service = RecurringWorkflowsService(session, temporal_client_adapter=adapter, artifact_service=object())
     if concurrent_update == "schedule":
-        async def changed_definition(*_args, **_kwargs):
-            definition.version += 1
-
-        session.refresh.side_effect = changed_definition
+        session.commit = AsyncMock()
+        # Compilation now retains the definition lock. A newer saved edit
+        # can win only before the separate post-commit dispatch lock is taken.
+        # The PostgreSQL dispatch-fence tests exercise the actual overlap.
+        winner = SimpleNamespace(
+            **{**vars(definition), "version": definition.version + 1}
+        )
+        service._lock_definition_for_update = AsyncMock(return_value=winner)
+        async with service._dispatch_committed_definition(
+            definition.id, definition.version
+        ) as current:
+            assert current is None
+            if current is not None:
+                await service._ensure_schedule_action_current(current)
+        service._lock_definition_for_update.assert_awaited_once_with(definition.id)
+        adapter.update_schedule.assert_not_awaited()
+        session.commit.assert_awaited_once()
+        assert winner.version == 2
+        assert winner.target == historical_input
+        assert session.usage.version == 1
+        assert definition.target == historical_input
+        return
     if concurrent_update:
         expected_error = {
-            "schedule": RecurringWorkflowConflictError,
             "profile": RecurringWorkflowConflictError,
             "policy": PolicyConflict,
             "server": deployment_identity.OmnigentDeploymentIdentityConflict,
