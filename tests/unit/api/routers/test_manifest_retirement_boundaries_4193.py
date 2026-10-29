@@ -255,7 +255,7 @@ async def test_ordinary_manifest_yaml_flows_as_supported_content(
     tmp_path: Path,
 ) -> None:
     """A generic artifact named manifest.yaml is ordinary supported content."""
-    from api_service.db.models import Base
+    from api_service.db.models import Base, TemporalArtifactRedactionLevel
     from moonmind.config.settings import settings
     from moonmind.workflows.temporal import (
         LocalTemporalArtifactStore,
@@ -292,7 +292,7 @@ async def test_ordinary_manifest_yaml_flows_as_supported_content(
                 link=None,
                 metadata_json={"filename": "manifest.yaml"},
                 encryption=None,
-                redaction_level=None,
+                redaction_level=TemporalArtifactRedactionLevel.NONE,
             )
             assert artifact.artifact_id
             completed = await service.write_complete(

@@ -110,6 +110,7 @@ from api_service.services.control_stop_continuation import (
     TemporalControlStopContinuationStarter,
 )
 from api_service.services.linked_continuation import (
+    CONTINUATION_EVIDENCE_MAX_BYTES,
     RELATIONSHIP_TYPE_LINKED_CONTINUATION,
     LinkedContinuationConflict,
     SqlLinkedContinuationRepository,
@@ -18824,7 +18825,7 @@ async def download_workflow_captured_evidence(
 
 # Durable single-put limit; a source evidence artifact larger than this cannot be
 # copied into a durable Temporal artifact via write_complete, so it is skipped.
-_CONTINUATION_EVIDENCE_MAX_BYTES = 10 * 1024 * 1024
+_CONTINUATION_EVIDENCE_MAX_BYTES = CONTINUATION_EVIDENCE_MAX_BYTES
 
 
 def _evidence_attachment_content_type(filename: str) -> str:
@@ -19038,6 +19039,9 @@ async def continue_in_new_workflow(
     result are never mutated, and no message is posted into the source session.
     """
 
+    destination_namespace = service.namespace
+    if not isinstance(destination_namespace, str) or not destination_namespace.strip():
+        raise HTTPException(status_code=503, detail="Destination namespace is unavailable")
     source = await _get_owned_execution(
         service=service, workflow_id=workflow_id, user=user
     )
@@ -19293,12 +19297,40 @@ async def continue_in_new_workflow(
         # ``workflow`` payload's ``inputAttachments`` (the same shape the ordinary
         # create path uses) and link them to the destination workflow after it is
         # created (#3641 §6).
-        source_attachments = await _materialize_continuation_source_attachments(
-            session=session,
-            user=user,
-            refs=payload.selected_source_artifact_refs,
-            access=access,
+        from api_service.services.linked_continuation import (
+            EVIDENCE_COPY_ADMISSION,
+            evidence_copy_admission,
+            evidence_copy_attachments,
         )
+
+        try:
+            if EVIDENCE_COPY_ADMISSION in (reservation.record.pinned_source_refs or {}):
+                source_attachments = evidence_copy_attachments(
+                    evidence_copy_admission(
+                        reservation.record, namespace=destination_namespace
+                    )
+                )
+            else:
+                source_attachments = await _materialize_continuation_source_attachments(
+                    session=session,
+                    user=user,
+                    refs=payload.selected_source_artifact_refs,
+                    access=access,
+                )
+                if source_attachments:
+                    source_attachments = await repository.record_evidence_copies(
+                        reservation.record,
+                        namespace=destination_namespace,
+                        attachments=source_attachments,
+                    )
+        except LinkedContinuationConflict as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "continuation_evidence_admission_conflict",
+                    "message": str(exc),
+                },
+            ) from exc
         if source_attachments:
             workflow_payload = initial_params.get("workflow")
             if not isinstance(workflow_payload, dict):

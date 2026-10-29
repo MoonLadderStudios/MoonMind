@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -468,7 +469,15 @@ async def test_schedule_continuation_preserves_intent_and_materializes_evidence(
 
                 async def dispatch(name, payload, **kwargs):
                     assert name == "artifact.link"
-                    return await ActivityEnvironment().run(
+                    environment = ActivityEnvironment()
+                    environment.info = replace(
+                        environment.info,
+                        workflow_id=destination,
+                        workflow_run_id=run,
+                        workflow_namespace=client.namespace,
+                        namespace=client.namespace,
+                    )
+                    return await environment.run(
                         binding.handler, json.loads(json.dumps(payload))
                     )
 

@@ -24,7 +24,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.db.models import WorkflowLinkedContinuationRecord
+from api_service.db.models import (
+    TemporalArtifact,
+    TemporalArtifactStatus,
+    WorkflowLinkedContinuationRecord,
+)
 
 RELATIONSHIP_TYPE_LINKED_CONTINUATION = "linked_continuation"
 
@@ -53,6 +57,61 @@ def compute_request_digest(payload: dict[str, Any]) -> str:
 
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+EVIDENCE_COPY_ADMISSION = "evidenceCopyAdmission"
+CONTINUATION_EVIDENCE_MAX_BYTES = 10 * 1024 * 1024
+
+
+def evidence_copy_admission(record, *, namespace: str) -> list[dict[str, Any]]:
+    """Decode only the server-recorded copies, never authored workflow inputs."""
+    pinned = record.pinned_source_refs or {}
+    admission = pinned.get(EVIDENCE_COPY_ADMISSION)
+    selected = pinned.get("selectedSourceArtifactRefs")
+    if (
+        not isinstance(admission, dict)
+        or admission.get("schemaVersion") != 1
+        or admission.get("namespace") != namespace
+        or not isinstance(selected, list)
+        or not isinstance(admission.get("copies"), list)
+        or not admission["copies"]
+    ):
+        raise LinkedContinuationConflict(
+            "Continuation evidence has no matching recorded copy admission; "
+            "restore its existing input links or submit a new continuation."
+        )
+    seen = set()
+    for entry in admission["copies"]:
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("artifactId"), str)
+            or not entry["artifactId"].startswith("art_")
+            or entry["artifactId"] in seen
+            or entry.get("sourceRef") not in selected
+            or not isinstance(entry.get("sha256"), str)
+            or len(entry["sha256"]) != 64
+            or any(c not in "0123456789abcdef" for c in entry["sha256"])
+            or not isinstance(entry.get("sizeBytes"), int)
+            or isinstance(entry.get("sizeBytes"), bool)
+            or not 0 <= entry["sizeBytes"] <= CONTINUATION_EVIDENCE_MAX_BYTES
+            or not isinstance(entry.get("contentType"), str)
+            or not isinstance(entry.get("filename"), str)
+        ):
+            raise LinkedContinuationConflict(
+                "Continuation evidence copy admission is invalid"
+            )
+        seen.add(entry["artifactId"])
+    return admission["copies"]
+
+
+def evidence_copy_attachments(copies):
+    return [
+        {
+            key: entry[key]
+            for key in ("artifactId", "filename", "contentType", "sizeBytes")
+        }
+        for entry in copies
+    ]
 
 
 @dataclass(frozen=True)
@@ -175,6 +234,59 @@ class SqlLinkedContinuationRepository:
                 "The idempotency key was already used for a different continuation "
                 "request."
             )
+
+    async def record_evidence_copies(
+        self,
+        record: WorkflowLinkedContinuationRecord,
+        *,
+        namespace: str,
+        attachments: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Pin authorized copies before dispatch and preserve a concurrent winner."""
+        result = await self._session.execute(
+            select(WorkflowLinkedContinuationRecord)
+            .where(WorkflowLinkedContinuationRecord.id == record.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        record = result.scalar_one()
+        pinned = dict(record.pinned_source_refs or {})
+        if EVIDENCE_COPY_ADMISSION not in pinned:
+            copies = []
+            for attachment in attachments:
+                artifact = await self._session.get(
+                    TemporalArtifact, attachment["artifactId"]
+                )
+                metadata = dict(getattr(artifact, "metadata_json", None) or {})
+                if (
+                    artifact is None
+                    or artifact.status is not TemporalArtifactStatus.COMPLETE
+                    or metadata.get("artifact_class")
+                    != "linked_continuation_source_evidence"
+                    or metadata.get("source_ref")
+                    not in pinned.get("selectedSourceArtifactRefs", [])
+                    or artifact.size_bytes != attachment["sizeBytes"]
+                    or artifact.content_type != attachment["contentType"]
+                ):
+                    raise LinkedContinuationConflict(
+                        "Continuation evidence copy is unavailable"
+                    )
+                copies.append(
+                    {
+                        **attachment,
+                        "sha256": artifact.sha256,
+                        "sourceRef": metadata["source_ref"],
+                    }
+                )
+            pinned[EVIDENCE_COPY_ADMISSION] = {
+                "schemaVersion": 1,
+                "namespace": namespace,
+                "copies": copies,
+            }
+            record.pinned_source_refs = pinned
+        copies = evidence_copy_admission(record, namespace=namespace)
+        await self._session.commit()
+        return evidence_copy_attachments(copies)
 
     async def finalize(
         self,
