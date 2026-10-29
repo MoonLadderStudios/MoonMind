@@ -10,9 +10,9 @@
 
 ## 1. Purpose and Design
 
-PR merge automation is parent-owned subordinate orchestration. An implementation workflow publishes a PR, waits for external readiness, invokes the resolved `pr-resolver` Skill through ordinary execution, and stays nonterminal until the requested finish and required post-merge effects complete. An existing-PR workflow can enter the same gate without creating another PR, and its review-only finish requests fresh review without invoking a resolver or publishing.
+PR merge automation keeps implementation's parent active through the requested finish and required post-merge effects. An existing PR can enter the same gate; review-only requests fresh review without a resolver or publication.
 
-`MoonMind.UserWorkflow` owns its `MoonMind.MergeAutomation` child and awaits the result. Merge automation owns durable scheduling, review-request effects, bounded waits, and resolver-child supervision; the resolved portable Skill owns PR diagnosis, remediation, merge gating, and merge effects. Downstream workflows depend on the original parent workflowId, and for resolver modes the required resolver capabilities are hard readiness requirements under [Required Capabilities](RequiredCapabilities.md).
+`MoonMind.UserWorkflow` awaits its `MoonMind.MergeAutomation` child. The child owns scheduling, review requests, waits, and resolver supervision; the portable Skill owns diagnosis, remediation, merge gating and merge effects. Downstream dependencies retain the original parent workflowId. Resolver capabilities remain hard readiness requirements under [Required Capabilities](RequiredCapabilities.md).
 
 One authored publishing selection governs the scope. A PR-and-merge policy derives PR publication for implementation, no direct publication for the gate/coordinator, and Skill-owned `auto` for the resolver. These are internal roles, not user overrides, and a coordinator's compiled `none` never becomes a descendant prohibition.
 
@@ -32,7 +32,7 @@ A resolver may repair and merge a newer head than the original candidate. On eit
 
 ## 3. Why Child Workflows
 
-A separate top-level follow-up would create a second dependency target and make the original parent's success ambiguous. Folding everything into one UserWorkflow would mix implementation/publication, external waits, and repeated resolver attempts into one history and duplicate resolver logic. The child boundary keeps each durable and inspectable.
+Automatic GitHub issue-search schedules can admit one independent implementation while a verified, review-ready parent awaits its live merge child. The schedule retains Skip: a journaled trigger overrides overlap only after observing exactly one active parent and its merge owner. Two active parents admit no third. Lost acknowledgments retain the request identity; uncertain starts are observed rather than resubmitted. Explicit issue targets retain their authored behavior. The successor uses normal prerequisite checks and claims; the waiting parent keeps its issue claim and terminal outcome. This releases implementation capacity, never a dependency on unmerged work.
 
 The resolver is a child UserWorkflow with ordinary workspace preparation, logging, artifacts, and Skill snapshots. Temporal starts it directly, bypassing API admission. Preparing its plan creates immutable artifacts; `plan.validate` delegates their verified closure to the Activity's actual namespace/workflow/run before the workflow reads its Skill manifest. This applies to agent and native plans: successful compilation alone does not prove readable inputs. Retried validation reuses durable links without changing owners or bytes. The exact `pr-resolver` bundle then runs through AgentRun; the Skill owns diagnosis, remediation, merge checks, and terminal evidence. `MoonMind.PRResolver` remains only for replaying recorded histories.
 

@@ -1660,6 +1660,7 @@ class TemporalClientAdapter:
         definition_id: Any,
         request_id: str | None = None,
         scheduled_at: datetime | None = None,
+        review_ready_owner: tuple[str, str] | None = None,
     ) -> ScheduleTriggerResult:
         from uuid import uuid4
         from google.protobuf.timestamp_pb2 import Timestamp
@@ -1669,9 +1670,54 @@ class TemporalClientAdapter:
 
         handle, description = await self._get_schedule_handle(definition_id)
         client = await self.get_client()
+        if review_ready_owner is not None:
+            # Override Skip for this one journaled trigger only. Keep at most
+            # two issue owners: a verified durable merge owner and one successor.
+            # The schedule policy, issue claims and prerequisite checks stay intact.
+            owner_id, owner_run = review_ready_owner
+            actions = description.info.running_actions
+            eligible = (
+                not description.schedule.state.paused
+                and description.schedule.policy.overlap == ScheduleOverlapPolicy.SKIP
+                and owner_id.startswith(f"mm:{definition_id}-")
+                and len(actions) == 1
+                and actions[0].workflow_id == owner_id
+            )
+            if eligible:
+                parent = await client.get_workflow_handle(
+                    owner_id, run_id=owner_run
+                ).describe()
+                memo = await parent.memo()
+                marker = memo.get("implementationAvailability") or {}
+                eligible = (
+                    parent.status == WorkflowExecutionStatus.RUNNING
+                    and isinstance(marker, dict)
+                    and marker.get("state") == "review_ready"
+                    and marker.get("definitionId") == str(definition_id)
+                    and isinstance(marker.get("mergeWorkflowId"), str)
+                    and bool(marker["mergeWorkflowId"])
+                )
+                if eligible:
+                    merge = await client.get_workflow_handle(
+                        marker["mergeWorkflowId"]
+                    ).describe()
+                    eligible = (
+                        merge.status == WorkflowExecutionStatus.RUNNING
+                        and merge.workflow_type == "MoonMind.MergeAutomation"
+                        and merge.parent_id == owner_id
+                        and merge.parent_run_id == owner_run
+                    )
+            if not eligible:
+                return ScheduleTriggerResult(
+                    disposition="skipped",
+                    message="No independent implementation slot is available.",
+                )
         # A positive active-owner observation can answer Skip without sending
         # an unobservable trigger. Temporal remains the overlap authority.
-        if description.schedule.policy.overlap == ScheduleOverlapPolicy.SKIP:
+        if (
+            review_ready_owner is None
+            and description.schedule.policy.overlap == ScheduleOverlapPolicy.SKIP
+        ):
             for running in description.info.running_actions:
                 owner = client.get_workflow_handle(
                     running.workflow_id, run_id=running.first_execution_run_id
@@ -1699,6 +1745,13 @@ class TemporalClientAdapter:
                     patch=SchedulePatch(
                         trigger_immediately=TriggerImmediatelyRequest(
                             scheduled_time=timestamp,
+                            **(
+                                {
+                                    "overlap_policy": ScheduleOverlapPolicy.ALLOW_ALL.value
+                                }
+                                if review_ready_owner is not None
+                                else {}
+                            ),
                         )
                     ),
                 )

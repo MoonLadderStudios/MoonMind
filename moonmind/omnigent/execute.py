@@ -758,6 +758,11 @@ async def _build_omnigent_first_message(
             text += "\n\nMoonMind materialized input files (relative to the workspace):\n"
             text += "\n".join(f"- {name}: {path}" for name, path in input_paths.items())
     text = append_remediation_attempt_context(text, parameters=parameters)
+    from moonmind.workflows.temporal.step_evidence import (
+        append_step_evidence_instructions,
+    )
+
+    text = append_step_evidence_instructions(text, parameters=parameters)
     metadata = parameters.get("metadata")
     moonmind = metadata.get("moonmind") if isinstance(metadata, dict) else {}
     if not isinstance(moonmind, dict):

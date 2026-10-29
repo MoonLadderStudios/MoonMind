@@ -480,6 +480,8 @@ _PUBLISHED_ARTIFACT_REF_KEYS = frozenset(
         "publishEvidence",
         "publishEvidenceRef",
         "reportBundle",
+        "stepEvidenceRef",
+        "stepEvidenceRefs",
     }
 )
 

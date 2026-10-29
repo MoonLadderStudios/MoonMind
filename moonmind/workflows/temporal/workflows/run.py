@@ -10,7 +10,7 @@ from typing import Any, Optional, TypedDict, cast
 
 from temporalio import exceptions, workflow
 from temporalio.common import RetryPolicy, SearchAttributeKey, SearchAttributePair
-from temporalio.exceptions import CancelledError
+from temporalio.exceptions import CancelledError, is_cancelled_exception
 from temporalio.workflow import ActivityCancellationType, ChildWorkflowCancellationType
 
 with workflow.unsafe.imports_passed_through():
@@ -4453,6 +4453,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     "assessedBranch",
                 }
             }
+            if self._assessment_context.get(
+                "stepEvidenceRefs"
+            ) and self._patched_or_false_outside_workflow("run-step-evidence-handoff-v1"):
+                continuation["assessmentContext"]["stepEvidenceRefs"] = list(
+                    self._assessment_context.get("stepEvidenceRefs") or []
+                )
             trusted_issue = self._trusted_issue_context or {}
             compact_issue = {
                 key: trusted_issue[key]
@@ -10530,6 +10536,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._assessment_context.get("assessmentArtifactRef")
             or self._assessment_context.get("assessment_artifact_ref")
         ]
+        if self._patched_or_false_outside_workflow("run-step-evidence-handoff-v1"):
+            artifact_refs.extend(self._assessment_context.get("stepEvidenceRefs") or [])
         if self._patched_or_false_outside_workflow(
             RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH
         ):
@@ -19433,7 +19441,20 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         outputs = self._effective_result_outputs(execution_result)
         if not isinstance(outputs, Mapping):
             return
-
+        if self._patched_or_false_outside_workflow("run-step-evidence-handoff-v1"):
+            evidence_refs = outputs.get("stepEvidenceRefs")
+            if isinstance(evidence_refs, list):
+                previous = self._assessment_context.get("stepEvidenceRefs") or []
+                self._assessment_context["stepEvidenceRefs"] = list(
+                    dict.fromkeys(
+                        [
+                            ref
+                            for ref in [*previous, *evidence_refs]
+                            if isinstance(ref, str)
+                            and ref.startswith("artifact://art_")
+                        ]
+                    )
+                )[-128:]
         self._last_step_id = node_id
         operator_summary = self._sanitize_operator_summary(
             self._coerce_text(
@@ -22030,8 +22051,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         lease = (self._trusted_issue_context or {}).get("issueClaimLease")
         guard_claim = lease and workflow.patched("run-merge-gate-issue-lease-v1")
 
+        availability_enabled = self._patched_or_false_outside_workflow(
+            "run-review-ready-successor-v1"
+        )
+
         async def await_merge():
-            return await workflow.execute_child_workflow(
+            start_child = (
+                workflow.start_child_workflow
+                if availability_enabled
+                else workflow.execute_child_workflow
+            )
+            child = await start_child(
                 "MoonMind.MergeAutomation",
                 payload,
                 id=workflow_id,
@@ -22051,6 +22081,33 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     else {}
                 ),
             )
+            if not availability_enabled:
+                return child
+            recurrence = (parameters.get("system") or {}).get("recurrence") or {}
+            if (
+                recurrence.get("definitionId")
+                and (self._trusted_issue_context or {}).get("trustedSource")
+                == "moonmind.github.get_issue"
+                and self._moonspec_gate_verdict == "FULLY_IMPLEMENTED"
+                and payload["mergeAutomationConfig"]["finishMode"] == "merge"
+            ):
+                self._publish_context["implementationAvailability"] = {
+                    "state": "review_ready",
+                    "definitionId": str(recurrence["definitionId"]),
+                    "mergeWorkflowId": workflow_id,
+                }
+                self._update_memo()
+                await self._maybe_admit_review_ready_successor()
+                while not child.done() and (
+                    self._publish_context.get("implementationSuccessor") or {}
+                ).get("status") not in {"enqueued", "not_applicable", "dispatch_error"}:
+                    try:
+                        await workflow.wait_condition(
+                            child.done, timeout=timedelta(minutes=5)
+                        )
+                    except asyncio.TimeoutError:
+                        await self._maybe_admit_review_ready_successor()
+            return await child
 
         try:
             if guard_claim:
@@ -22079,6 +22136,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             else:
                 child_result = await await_merge()
         except CancelledError:
+            self._publish_context.pop("implementationAvailability", None)
             self._awaiting_external = False
             self._waiting_reason = None
             self._publish_context["mergeAutomationStatus"] = (
@@ -22091,6 +22149,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._update_search_attributes()
             raise
         except Exception as exc:
+            self._publish_context.pop("implementationAvailability", None)
             self._awaiting_external = False
             self._waiting_reason = None
             self._publish_context["mergeAutomationStatus"] = "failed"
@@ -22104,6 +22163,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._update_memo()
             self._update_search_attributes()
             raise
+        self._publish_context.pop("implementationAvailability", None)
         self._awaiting_external = False
         self._waiting_reason = None
         self._publish_context["mergeAutomationResult"] = (
@@ -22149,6 +22209,44 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             child_result, finish_mode=finish_mode
         ):
             raise ValueError(reason or "merge automation failed")
+
+    async def _maybe_admit_review_ready_successor(self) -> None:
+        availability = self._publish_context.get("implementationAvailability")
+        if (
+            self._cancel_requested
+            or not isinstance(availability, Mapping)
+            or availability.get("state") != "review_ready"
+        ):
+            return
+        observed = self._publish_context.get("implementationSuccessor") or {}
+        status = observed.get("status")
+        # Response loss retains the same journal identity. Only a confirmed
+        # Skip (no external start) permits a later admission observation.
+        if status in {"enqueued", "not_applicable", "dispatch_error"}:
+            return
+        ordinal = int(observed.get("ordinal", 0)) + (status == "skipped")
+        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "recurring.review_ready_successor"
+        )
+        try:
+            result = await workflow.execute_activity(
+                "recurring.review_ready_successor",
+                {"definitionId": availability["definitionId"], "ordinal": ordinal},
+                **self._execute_kwargs_for_route(route),
+            )
+            self._publish_context["implementationSuccessor"] = {
+                **dict(result),
+                "ordinal": ordinal,
+            }
+        except Exception as exc:
+            if is_cancelled_exception(exc):
+                raise
+            # Scheduling availability is auxiliary; it never changes this
+            # issue's lease, merge result, cancellation or completion outcome.
+            self._publish_context["implementationSuccessor"] = {
+                "status": "pending_dispatch",
+                "ordinal": ordinal,
+            }
 
     async def _restore_issue_claim_lease(self) -> None:
         """Recover claim identity omitted by older Continue-As-New payloads."""
@@ -23492,6 +23590,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     node_id=node_id,
                 )
         assessment_parameter_injection_needed = False
+        if repository_operation == "write" and self._patched_or_false_outside_workflow(
+            "run-step-evidence-handoff-v1"
+        ):
+            parameters["stepEvidenceMode"] = "produce"
+        elif (
+            selected_skill.lower() == "moonspec-verify"
+            and self._assessment_context.get("stepEvidenceRefs")
+            and self._patched_or_false_outside_workflow("run-step-evidence-handoff-v1")
+        ):
+            parameters["stepEvidenceMode"] = "inspect"
         nested_inputs = node_inputs.get("inputs")
         skill_inputs = nested_inputs if isinstance(nested_inputs, Mapping) else {}
         for source in (node_inputs, skill_inputs):
@@ -26923,6 +27031,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "titleConfidence": self._title_confidence
             or ("high" if self._title_provenance == "user_explicit" else "medium"),
         }
+        if self._patched_or_false_outside_workflow("run-review-ready-successor-v1"):
+            memo_dict["implementationAvailability"] = self._publish_context.get(
+                "implementationAvailability"
+            )
         if self._title_target:
             memo_dict["titleTarget"] = dict(self._title_target)
         if self._issue_search_capacity_retry_enabled and self._publish_context.get(

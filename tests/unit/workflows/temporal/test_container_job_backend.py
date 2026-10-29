@@ -46,6 +46,9 @@ from moonmind.workflows.temporal.container_job_backend import (
     DockerContainerJobBackend,
     FilesystemCapacityAdmissionLock,
 )
+from moonmind.workflows.temporal.container_image_acquisition import (
+    ImageAcquisitionError,
+)
 
 JOB_ID = "container-job:0123456789abcdef0123456789abcdef"
 
@@ -191,6 +194,34 @@ async def test_readiness_fails_when_disabled_or_unreachable(tmp_path) -> None:
     )
     with pytest.raises(ContainerBackendReadinessError):
         await backend.check_readiness()
+
+
+@pytest.mark.asyncio
+async def test_pull_denial_preserves_diagnostics_without_assuming_image_exists(
+    tmp_path,
+):
+    raw = b"Error response from daemon: denied: requested access to the resource is denied"
+    reports = []
+
+    async def runner(_args):
+        return 1, b"", raw
+
+    async def publish(_request, _name, data):
+        reports.append(data)
+        return "artifact://pull-diagnostics"
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=runner,
+        evidence_publisher=publish,
+    )
+    with pytest.raises(ImageAcquisitionError) as caught:
+        await backend._pull_image(_request(tmp_path), "ghcr.io/org/unpublished:1")
+    assert caught.value.failure_class == ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED
+    assert caught.value.diagnostics_ref == "artifact://pull-diagnostics"
+    assert raw in reports[0]
+    assert "publication" in str(caught.value)
+    assert "permissions" in str(caught.value)
 
 
 @pytest.mark.asyncio

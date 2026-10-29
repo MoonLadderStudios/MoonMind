@@ -698,6 +698,92 @@ class TestTriggerSchedule:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
+        "fault",
+        [
+            None,
+            "second_owner",
+            "not_ready",
+            "wrong_parent",
+            "wrong_run",
+            "child_finished",
+            "paused",
+        ],
+    )
+    async def test_review_ready_overlap_is_bounded_and_requires_live_merge_owner(
+        self, fault
+    ):
+        from temporalio.client import WorkflowExecutionStatus
+
+        parent_id = f"mm:{_TEST_UUID}-2026-10-29T00:00:00Z"
+        handle = _mock_schedule_handle()
+        handle.id = _SCHEDULE_ID
+        description = SimpleNamespace(
+            schedule=SimpleNamespace(
+                policy=SimpleNamespace(overlap=ScheduleOverlapPolicy.SKIP),
+                state=SimpleNamespace(paused=fault == "paused"),
+            ),
+            info=SimpleNamespace(
+                running_actions=[
+                    SimpleNamespace(workflow_id=parent_id, first_execution_run_id="run")
+                ]
+            ),
+        )
+        if fault == "second_owner":
+            description.info.running_actions.append(
+                SimpleNamespace(workflow_id="other", first_execution_run_id="other-run")
+            )
+        handle.describe.return_value = description
+        marker = {
+            "definitionId": str(_TEST_UUID),
+            "mergeWorkflowId": "merge-owner",
+            "state": "review_ready",
+        }
+        if fault == "not_ready":
+            marker["state"] = "implementing"
+        parent = SimpleNamespace(
+            status=WorkflowExecutionStatus.RUNNING,
+            memo=AsyncMock(return_value={"implementationAvailability": marker}),
+        )
+        child = SimpleNamespace(
+            status=(
+                WorkflowExecutionStatus.COMPLETED
+                if fault == "child_finished"
+                else WorkflowExecutionStatus.RUNNING
+            ),
+            workflow_type="MoonMind.MergeAutomation",
+            parent_id="other" if fault == "wrong_parent" else parent_id,
+            parent_run_id="other-run" if fault == "wrong_run" else "run",
+        )
+        client = MagicMock(namespace="default", identity="test")
+        client.get_schedule_handle.return_value = handle
+        client.get_workflow_handle.side_effect = lambda wid, **kw: SimpleNamespace(
+            describe=AsyncMock(return_value=child if wid == "merge-owner" else parent)
+        )
+        client.workflow_service.patch_schedule = AsyncMock()
+        adapter = _make_adapter(client)
+        adapter.observe_schedule_trigger = AsyncMock(
+            return_value=ScheduleTriggerResult(disposition="started")
+        )
+        result = await adapter.trigger_schedule(
+            definition_id=_TEST_UUID,
+            request_id="stable-handoff",
+            review_ready_owner=(parent_id, "run"),
+        )
+        if fault is None:
+            request = client.workflow_service.patch_schedule.await_args.args[0]
+            assert request.request_id == "stable-handoff"
+            assert (
+                request.patch.trigger_immediately.overlap_policy
+                == ScheduleOverlapPolicy.ALLOW_ALL.value
+            )
+            assert description.schedule.policy.overlap == ScheduleOverlapPolicy.SKIP
+            assert result.disposition == "started"
+        else:
+            client.workflow_service.patch_schedule.assert_not_awaited()
+            assert result.disposition == "skipped"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
         "scheduled_at",
         [
             datetime(2026, 10, 25, 1, 2, 3, 123456, tzinfo=timezone.utc),
