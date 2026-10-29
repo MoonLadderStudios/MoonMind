@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     )
 
 import boto3
+from botocore.config import Config as S3ClientConfig
 from botocore.exceptions import ClientError
 from botocore.exceptions import ConnectionError as S3ConnectionError
 from botocore.exceptions import ReadTimeoutError
@@ -729,6 +730,31 @@ def build_artifact_ref(artifact: db_models.TemporalArtifact) -> ArtifactRef:
         encryption=artifact.encryption.value,
     )
 
+_PENDING_WRITE_PREFIX = "_moonmind/pending-writes/"
+_PENDING_WRITE_SETTLE = timedelta(hours=24)
+_TRUSTED_PUT_MAX_BYTES = 5 * 1024**3
+
+
+async def _settled_storage_call(operation):
+    """Do not let cancellation release DB fencing before a thread finishes."""
+    future = asyncio.get_running_loop().run_in_executor(None, operation)
+    try:
+        return await asyncio.shield(future)
+    except asyncio.CancelledError as primary:
+        while not future.done():
+            try:
+                await asyncio.shield(future)
+            except asyncio.CancelledError:
+                continue
+            except Exception:  # noqa: BLE001 - drain the original cancelled operation
+                break
+        try:
+            future.result()
+        except BaseException as cleanup:  # noqa: BLE001
+            primary.add_note(f"Storage operation ended with {type(cleanup).__name__}")
+        raise
+
+
 class TemporalArtifactStore:
     """Storage adapter contract for artifact bytes."""
 
@@ -773,6 +799,80 @@ class TemporalArtifactStore:
             f"{safe_namespace}/blobs/{safe_scope}/sha256/"
             f"{digest[:2]}/{digest}"
         )
+
+    def pending_write_keys(self, *, limit: int, after: str | None = None) -> list[str]:
+        """List one bounded oldest-first page for the existing lifecycle owner."""
+        return []
+
+    def pending_writes_exist(self) -> bool:
+        return bool(self.pending_write_keys(limit=1))
+
+    supports_pending_writes = False
+
+    def record_pending_write(self, *, artifact_id: str, storage_key: str) -> str:
+        if not self.supports_pending_writes:
+            raise TemporalArtifactValidationError(
+                "Storage cannot recover caller-owned uploads"
+            )
+        marker = {
+            "version": 1,
+            "artifactId": artifact_id,
+            "storageKey": storage_key,
+            "createdAt": datetime.now(UTC).isoformat(),
+        }
+        payload = json.dumps(marker, sort_keys=True, separators=(",", ":")).encode()
+        key = (
+            _PENDING_WRITE_PREFIX
+            + datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
+            + "-"
+            + hashlib.sha256(payload).hexdigest()
+            + ".json"
+        )
+        self.write_bytes(key, payload, content_type="application/json")
+        return key
+
+    def read_pending_write(self, key: str) -> dict[str, Any]:
+        if not key.startswith(_PENDING_WRITE_PREFIX) or not key.endswith(".json"):
+            raise TemporalArtifactValidationError("Invalid pending-write marker key")
+        chunks = []
+        size = 0
+        for chunk in self.read_chunks(key, chunk_size=4096):
+            size += len(chunk)
+            if size > 4096:
+                raise TemporalArtifactValidationError(
+                    "Pending-write marker exceeds bound"
+                )
+            chunks.append(chunk)
+        payload = b"".join(chunks)
+        if hashlib.sha256(payload).hexdigest() != key[-69:-5]:
+            raise TemporalArtifactValidationError(
+                "Invalid pending-write marker identity"
+            )
+        marker = json.loads(payload)
+        artifact_id = marker.get("artifactId", "")
+        target = marker.get("storageKey", "")
+        path = Path(target)
+        if (
+            marker.get("version") != 1
+            or not re.fullmatch(r"art_[a-zA-Z0-9_-]+", artifact_id)
+            or path.is_absolute()
+            or ".." in path.parts
+            or target.startswith(_PENDING_WRITE_PREFIX)
+            or not (
+                re.fullmatch(
+                    r".+/artifacts/\d{4}/\d{2}/\d{2}/" + re.escape(artifact_id), target
+                )
+                or re.fullmatch(
+                    r".+/blobs/[a-z0-9][a-z0-9._-]{0,63}/sha256/[a-f0-9]{2}/[a-f0-9]{64}",
+                    target,
+                )
+            )
+        ):
+            raise TemporalArtifactValidationError("Invalid pending-write target")
+        created = datetime.fromisoformat(marker["createdAt"])
+        if created.tzinfo is None:
+            raise TemporalArtifactValidationError("Invalid pending-write timestamp")
+        return marker
 
     def object_matches(
         self,
@@ -939,8 +1039,51 @@ class LocalTemporalArtifactStore(TemporalArtifactStore):
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, destination)
+            directory = destination.parent
+            while directory.is_relative_to(self.root.resolve()):
+                directory_fd = os.open(directory, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+                if directory == self.root.resolve():
+                    break
+                directory = directory.parent
         finally:
             temporary.unlink(missing_ok=True)
+
+    supports_pending_writes = True
+
+    def pending_write_keys(self, *, limit: int, after: str | None = None) -> list[str]:
+        directory = self.resolve_storage_key(_PENDING_WRITE_PREFIX)
+        if not directory.exists():
+            return []
+        if after is not None and getattr(self, "_pending_write_scan_exhausted", False):
+            return []
+        iterator = getattr(self, "_pending_write_scan", None)
+        if iterator is None:
+            self._pending_write_scan_exhausted = False
+            iterator = os.scandir(directory)
+            self._pending_write_scan = iterator
+        keys = []
+        for _ in range(max(1, limit)):
+            entry = next(iterator, None)
+            if entry is None:
+                iterator.close()
+                self._pending_write_scan = None
+                self._pending_write_scan_exhausted = True
+                break
+            # Include malformed entries in the bounded page, without trusting
+            # them as target paths. Validation reports them, then scanning moves on.
+            keys.append(_PENDING_WRITE_PREFIX + entry.name)
+        return keys
+
+    def pending_writes_exist(self) -> bool:
+        directory = self.resolve_storage_key(_PENDING_WRITE_PREFIX)
+        if not directory.exists():
+            return False
+        with os.scandir(directory) as entries:
+            return next(entries, None) is not None
 
     def read_bytes(self, storage_key: str) -> bytes:
         return self.resolve_storage_key(storage_key).read_bytes()
@@ -1020,6 +1163,32 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
             client = boto3.client(**self._client_kwargs)
             self._client_local.client = client
         return client
+
+    @property
+    def _write_client(self):
+        client = getattr(self._client_local, "write_client", None)
+        if client is None:
+            client = boto3.client(
+                **self._client_kwargs,
+                config=S3ClientConfig(
+                    connect_timeout=10,
+                    read_timeout=60,
+                    retries={"total_max_attempts": 3, "mode": "standard"},
+                ),
+            )
+            self._client_local.write_client = client
+        return client
+
+    supports_pending_writes = True
+
+    def pending_write_keys(self, *, limit: int, after: str | None = None) -> list[str]:
+        response = self._client.list_objects_v2(
+            Bucket=self._bucket,
+            Prefix=_PENDING_WRITE_PREFIX,
+            MaxKeys=min(1000, max(1, limit)),
+            **({"StartAfter": after} if after else {}),
+        )
+        return [entry["Key"] for entry in response.get("Contents", [])]
 
     @property
     def backend(self) -> db_models.TemporalArtifactStorageBackend:
@@ -1112,7 +1281,7 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
         }
         if content_type:
             kwargs["ContentType"] = content_type
-        self._client.put_object(**kwargs)
+        self._write_client.put_object(**kwargs)
 
     def read_bytes(self, storage_key: str) -> bytes:
         response = self._client.get_object(Bucket=self._bucket, Key=storage_key)
@@ -1432,6 +1601,37 @@ class TemporalArtifactRepository:
             raise _missing_artifact_error(artifact_id)
         return artifact
 
+    async def fence_storage_key(
+        self, *, storage_backend, storage_key: str, wait: bool = True
+    ) -> bool:
+        """Fence even a new key whose artifact insert is still uncommitted."""
+        dialect = self._session.get_bind().dialect.name
+        if dialect == "postgresql":
+            token = int.from_bytes(
+                hashlib.sha256(
+                    (str(storage_backend) + "\0" + storage_key).encode()
+                ).digest()[:8],
+                "big",
+                signed=True,
+            )
+            function = (
+                func.pg_advisory_xact_lock if wait else func.pg_try_advisory_xact_lock
+            )
+            result = await self._session.scalar(select(function(token)))
+            return True if wait else bool(result)
+        if dialect == "sqlite":
+            # SQLite's SELECT FOR UPDATE is a no-op. A zero-row UPDATE still
+            # takes its database writer lock, without changing application data.
+            await self._session.execute(
+                update(db_models.TemporalArtifact)
+                .where(db_models.TemporalArtifact.artifact_id == "")
+                .values(artifact_id="")
+            )
+            return True
+        raise TemporalArtifactValidationError(
+            "Artifact storage fencing requires PostgreSQL or SQLite"
+        )
+
     @_artifact_authority_boundary
     async def lock_storage_references(
         self,
@@ -1440,6 +1640,10 @@ class TemporalArtifactRepository:
         storage_key: str,
     ) -> None:
         """Serialize final-blob deletion across logical references."""
+
+        await self.fence_storage_key(
+            storage_backend=storage_backend, storage_key=storage_key
+        )
 
         stmt = (
             select(db_models.TemporalArtifact.artifact_id)
@@ -3666,7 +3870,11 @@ class TemporalArtifactService:
         upload_url: str | None = None
         required_headers: dict[str, str] = {}
 
-        if declared_size is not None and declared_size > self._direct_upload_max_bytes:
+        if (
+            declared_size is not None
+            and declared_size > self._direct_upload_max_bytes
+            and self._transaction_ownership is ArtifactTransactionOwnership.STANDALONE
+        ):
             if not self._store.supports_multipart:
                 raise TemporalArtifactValidationError(
                     "artifact exceeds max bytes "
@@ -3823,8 +4031,15 @@ class TemporalArtifactService:
         principal: str,
         payload: bytes,
         content_type: str | None = None,
+        _trusted_in_process: bool = False,
     ) -> db_models.TemporalArtifact:
         artifact = await self._repository.get_artifact(artifact_id)
+        if self._transaction_ownership is ArtifactTransactionOwnership.CALLER:
+            await self._repository.lock_storage_references(
+                storage_backend=artifact.storage_backend,
+                storage_key=artifact.storage_key,
+            )
+            artifact = await self._repository.get_artifact_for_update(artifact_id)
         self._assert_mutation_access(artifact, principal=principal)
 
         if artifact.status is db_models.TemporalArtifactStatus.DELETED:
@@ -3852,7 +4067,13 @@ class TemporalArtifactService:
             raise TemporalArtifactStateError(
                 "artifact expects multipart completion; use /complete with parts"
             )
-        if len(payload) > self._direct_upload_max_bytes:
+        max_bytes = (
+            _TRUSTED_PUT_MAX_BYTES
+            if _trusted_in_process
+            and self._transaction_ownership is ArtifactTransactionOwnership.CALLER
+            else self._direct_upload_max_bytes
+        )
+        if len(payload) > max_bytes:
             raise TemporalArtifactValidationError(
                 f"artifact exceeds max bytes ({self._direct_upload_max_bytes})"
             )
@@ -3860,7 +4081,7 @@ class TemporalArtifactService:
         digest, actual_size = self._compute_digest_and_size(payload)
         if (
             artifact.upload_mode is db_models.TemporalArtifactUploadMode.SINGLE_PUT
-            and actual_size > self._direct_upload_max_bytes
+            and actual_size > max_bytes
         ):
             artifact.status = db_models.TemporalArtifactStatus.FAILED
             await self._finish_mutation()
@@ -3891,9 +4112,17 @@ class TemporalArtifactService:
                 await self._finish_mutation()
                 raise
 
+        if self._transaction_ownership is ArtifactTransactionOwnership.CALLER:
+            # Storage-owned intent survives the surrounding admission rollback.
+            # It carries no payload or access grant. Only lifecycle reconciles it
+            # after observing the committed outcome under the same key fence.
+            await _settled_storage_call(
+                lambda: self._store.record_pending_write(
+                    artifact_id=artifact.artifact_id, storage_key=artifact.storage_key
+                )
+            )
         try:
-            await asyncio.get_running_loop().run_in_executor(
-                None,
+            await _settled_storage_call(
                 lambda: self._store.write_bytes(
                     artifact.storage_key,
                     payload,
@@ -3948,6 +4177,7 @@ class TemporalArtifactService:
                 principal=principal,
                 payload=payload,
                 content_type=content_type,
+                _trusted_in_process=True,
             )
         if artifact.status is db_models.TemporalArtifactStatus.COMPLETE:
             digest, actual_size = self._compute_digest_and_size(payload)
@@ -3963,6 +4193,7 @@ class TemporalArtifactService:
             return artifact
         if artifact.status is db_models.TemporalArtifactStatus.DELETED:
             raise TemporalArtifactStateError("artifact is deleted")
+        self._require_standalone_use()
         if not artifact.upload_id:
             raise TemporalArtifactStateError("multipart upload session is missing")
         if not payload:
@@ -4089,6 +4320,7 @@ class TemporalArtifactService:
 
         payload: bytes
         if artifact.upload_mode is db_models.TemporalArtifactUploadMode.MULTIPART:
+            self._require_standalone_use()
             if not artifact.upload_id:
                 raise TemporalArtifactStateError("multipart upload session is missing")
             normalized_parts = self._normalize_parts(parts)
@@ -4993,6 +5225,76 @@ class TemporalArtifactService:
             artifact_id=artifact.artifact_id, error=None
         )
 
+    async def _reconcile_pending_writes(
+        self, *, now: datetime, limit: int
+    ) -> tuple[int, bool]:
+        """Use the existing lifecycle budget to retire settled upload intents."""
+        self._pending_write_page_advanced = False
+        if getattr(self, "_pending_write_draining", False) and getattr(
+            self, "_pending_write_scan_complete", False
+        ):
+            return 0, bool(
+                await _settled_storage_call(self._store.pending_writes_exist)
+            )
+        keys = await _settled_storage_call(
+            lambda: self._store.pending_write_keys(
+                limit=limit, after=getattr(self, "_pending_write_cursor", None)
+            )
+        )
+        self._pending_write_cursor = keys[-1] if keys else None
+        self._pending_write_page_advanced = bool(keys)
+        if not keys:
+            self._pending_write_scan_complete = True
+        reconciled = 0
+        pending = len(keys) >= limit
+        for key in keys:
+            try:
+                marker = await _settled_storage_call(
+                    lambda key=key: self._store.read_pending_write(key)
+                )
+                if (
+                    datetime.fromisoformat(marker["createdAt"]) + _PENDING_WRITE_SETTLE
+                    > now
+                ):
+                    pending = True
+                    continue
+                target = marker["storageKey"]
+                if not await self._repository.fence_storage_key(
+                    storage_backend=self._store.backend, storage_key=target, wait=False
+                ):
+                    pending = True
+                    continue
+                if not await self._repository.has_live_storage_reference(
+                    storage_backend=self._store.backend, storage_key=target
+                ):
+                    # Absent metadata after the writer fence is the rolled-back
+                    # case. A sibling COMPLETE or PENDING row owns shared bytes.
+                    await _settled_storage_call(
+                        lambda target=target: self._store.delete(target)
+                    )
+                    if await _settled_storage_call(
+                        lambda target=target: self._store.object_exists(target)
+                    ):
+                        pending = True
+                        continue
+                await _settled_storage_call(lambda key=key: self._store.delete(key))
+                reconciled += 1
+            except Exception:  # Preserve marker and continue bounded reconciliation.
+                pending = True
+                logger.warning(
+                    "Pending artifact upload reconciliation unavailable key=%s",
+                    key,
+                    exc_info=True,
+                )
+            finally:
+                # This method runs only under the standalone lifecycle owner.
+                # Never accumulate key locks across candidates in opposite order.
+                await self._repository.commit()
+        pending = pending or bool(
+            await _settled_storage_call(lambda: self._store.pending_writes_exist())
+        )
+        return reconciled, pending
+
     async def reconcile_deletion_intents(
         self,
         *,
@@ -5351,6 +5653,9 @@ class TemporalArtifactService:
             # group too; no later candidate may reverse that lock order.
             await self._finish_mutation()
 
+        upload_reconciled, pending_uploads = await self._reconcile_pending_writes(
+            now=sweep_now, limit=page_size
+        )
         reconciled, intent_count = await self._reconcile_deletion_intent_page(
             principal=principal, limit=page_size, on_progress=on_progress
         )
@@ -5387,10 +5692,11 @@ class TemporalArtifactService:
             soft_deleted_count=soft_deleted,
             hard_deleted_count=hard_deleted,
             skipped_in_use_count=skipped_in_use,
-            reconciled_deletion_count=reconciled,
+            reconciled_deletion_count=reconciled + upload_reconciled,
             pruned_claim_count=pruned,
             hard_delete_candidate_count=len(hard_candidates),
             drained=not pending_intents
+            and not pending_uploads
             and all(
                 count < page_size
                 for count in (
@@ -5430,50 +5736,60 @@ class TemporalArtifactService:
         lifecycle_run_id = run_id or str(uuid4())
         deadline = time.monotonic() + max(0.0, time_budget.total_seconds())
         pages: list[LifecycleSweepSummary] = []
-        while True:
-            page = await self.sweep_lifecycle(
-                principal=principal,
+        self._pending_write_draining = True
+        self._pending_write_scan_complete = False
+        try:
+            while True:
+                page = await self.sweep_lifecycle(
+                    principal=principal,
+                    run_id=lifecycle_run_id,
+                    now=now,
+                    limit=limit,
+                    on_progress=on_progress,
+                )
+                pages.append(page)
+                if on_page is not None:
+                    on_page(page)
+                # Store errors are not progress: an outage hands at most one page
+                # of tombstones to reconciliation per pass.
+                progressed = (
+                    page.soft_deleted_count
+                    + page.hard_deleted_count
+                    + page.reconciled_deletion_count
+                    + page.purged_count
+                    + page.purge_unconfirmed_count
+                    > 0
+                )
+                progressed = progressed or getattr(
+                    self, "_pending_write_page_advanced", False
+                )
+                if page.drained or not progressed or time.monotonic() >= deadline:
+                    break
+            return LifecycleSweepSummary(
                 run_id=lifecycle_run_id,
-                now=now,
-                limit=limit,
-                on_progress=on_progress,
+                expired_candidate_count=sum(p.expired_candidate_count for p in pages),
+                soft_deleted_count=sum(p.soft_deleted_count for p in pages),
+                hard_deleted_count=sum(p.hard_deleted_count for p in pages),
+                skipped_in_use_count=sum(p.skipped_in_use_count for p in pages),
+                reconciled_deletion_count=sum(
+                    p.reconciled_deletion_count for p in pages
+                ),
+                pruned_claim_count=sum(p.pruned_claim_count for p in pages),
+                hard_delete_candidate_count=sum(
+                    p.hard_delete_candidate_count for p in pages
+                ),
+                pages=len(pages),
+                drained=pages[-1].drained,
+                purge_candidate_count=sum(p.purge_candidate_count for p in pages),
+                purged_count=sum(p.purged_count for p in pages),
+                purged_link_count=sum(p.purged_link_count for p in pages),
+                # Every page recounts the same withheld rows; the last is current.
+                purge_protected_count=pages[-1].purge_protected_count,
+                purge_unconfirmed_count=sum(p.purge_unconfirmed_count for p in pages),
+                purge_error_count=sum(p.purge_error_count for p in pages),
             )
-            pages.append(page)
-            if on_page is not None:
-                on_page(page)
-            # Store errors are not progress: an outage hands at most one page
-            # of tombstones to reconciliation per pass.
-            progressed = (
-                page.soft_deleted_count
-                + page.hard_deleted_count
-                + page.reconciled_deletion_count
-                + page.purged_count
-                + page.purge_unconfirmed_count
-                > 0
-            )
-            if page.drained or not progressed or time.monotonic() >= deadline:
-                break
-        return LifecycleSweepSummary(
-            run_id=lifecycle_run_id,
-            expired_candidate_count=sum(p.expired_candidate_count for p in pages),
-            soft_deleted_count=sum(p.soft_deleted_count for p in pages),
-            hard_deleted_count=sum(p.hard_deleted_count for p in pages),
-            skipped_in_use_count=sum(p.skipped_in_use_count for p in pages),
-            reconciled_deletion_count=sum(p.reconciled_deletion_count for p in pages),
-            pruned_claim_count=sum(p.pruned_claim_count for p in pages),
-            hard_delete_candidate_count=sum(
-                p.hard_delete_candidate_count for p in pages
-            ),
-            pages=len(pages),
-            drained=pages[-1].drained,
-            purge_candidate_count=sum(p.purge_candidate_count for p in pages),
-            purged_count=sum(p.purged_count for p in pages),
-            purged_link_count=sum(p.purged_link_count for p in pages),
-            # Every page recounts the same withheld rows; the last is current.
-            purge_protected_count=pages[-1].purge_protected_count,
-            purge_unconfirmed_count=sum(p.purge_unconfirmed_count for p in pages),
-            purge_error_count=sum(p.purge_error_count for p in pages),
-        )
+        finally:
+            self._pending_write_draining = False
 
     async def compute_preview(
         self,

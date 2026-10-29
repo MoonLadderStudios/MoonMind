@@ -294,6 +294,20 @@ class _MemoryS3Client:
             raise ClientError({"Error": {"Code": "404"}}, "HeadObject")
         return {"ContentLength": len(self.objects[Key])}
 
+    def list_objects_v2(
+        self, *, Bucket: str, Prefix: str, MaxKeys: int = 1000, StartAfter: str = ""
+    ) -> dict[str, object]:
+        assert 1 <= MaxKeys <= 1000
+        keys = sorted(
+            key for key in self.objects if key.startswith(Prefix) and key > StartAfter
+        )
+        page = keys[:MaxKeys]
+        return {
+            "Contents": [{"Key": key} for key in page],
+            "KeyCount": len(page),
+            "IsTruncated": len(keys) > len(page),
+        }
+
     def delete_object(self, *, Bucket: str, Key: str) -> None:
         self.objects.pop(Key, None)
 
