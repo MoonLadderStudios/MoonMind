@@ -46,6 +46,8 @@ from api_service.services.checkpoint_branch_turn_execution import (
     CheckpointBranchTurnExecutionOwner,
 )
 
+from moonmind.security.operator_admission import OperatorAdmission
+
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
 
@@ -366,23 +368,19 @@ async def test_public_checkpoint_branch_launch_is_idempotent_under_postgres_race
     branch_id = f"cbr-launch-race-{suffix}"
     turn_id = f"cbt-launch-race-{suffix}"
     request_key = f"checkpoint-launch-race-{suffix}"
-    user = SimpleNamespace(
-        id=uuid4(),
-        email="checkpoint-launch-race@example.test",
-        is_superuser=True,
-        roles=[],
-    )
+    user = OperatorAdmission(via="checkpoint-launch-race-test")
+    historical_owner_id = str(uuid4())
     source = TemporalExecutionCanonicalRecord(
         workflow_id=workflow_id,
         run_id=run_id,
         namespace="default",
         workflow_type=TemporalWorkflowType.USER_WORKFLOW,
-        owner_id=str(user.id),
+        owner_id=historical_owner_id,
         owner_type="user",
         state="executing",
         entry="api",
         search_attributes={
-            "mm_owner_id": str(user.id),
+            "mm_owner_id": historical_owner_id,
             "mm_owner_type": "user",
         },
         memo={},

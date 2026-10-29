@@ -461,9 +461,16 @@ async def test_default_repairs_pending_recovery_atomically(
             assert result.digest == first.digest
             artifact = await repaired.get(TemporalArtifact, artifact_id)
             assert artifact.operator_recovery_granted is True
-            assert (
+            # Persisted eligibility does not turn an ordinary read into an
+            # explicit operator recovery request for restricted bytes.
+            with pytest.raises(TemporalArtifactAuthorizationError):
                 await artifact_service(repaired).read(
                     artifact_id=artifact_id, access=access_for_test("operator")
+                )
+            assert (
+                await artifact_service(repaired).read(
+                    artifact_id=artifact_id,
+                    access=access_for_test("operator", recovery_principal="operator"),
                 )
             )[1] == b"retained bytes"
             row = (
@@ -554,7 +561,8 @@ async def test_startup_converts_later_eligible_artifact(
             )
             assert (
                 await artifacts.read(
-                    artifact_id=new_id, access=access_for_test("operator")
+                    artifact_id=new_id,
+                    access=access_for_test("operator", recovery_principal="operator"),
                 )
             )[1] == b"later bytes"
         async with maker() as unchanged:
@@ -935,7 +943,8 @@ async def test_container_user_evidence_recovers_without_rewriting_ownership(
             )[1] == b"job evidence"
             assert (
                 await service.read(
-                    artifact_id=artifact_id, access=access_for_test("operator")
+                    artifact_id=artifact_id,
+                    access=access_for_test("operator", recovery_principal="operator"),
                 )
             )[1] == b"job evidence"
 

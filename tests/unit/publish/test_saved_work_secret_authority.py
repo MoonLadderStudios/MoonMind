@@ -1,10 +1,13 @@
 """Mutable managed-secret rotation fences immutable publication admissions."""
 
 from contextlib import asynccontextmanager
+from dataclasses import replace
 
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker
+from temporalio import activity
 from temporalio.exceptions import ApplicationError
+from temporalio.testing import ActivityEnvironment
 
 from api_service.db.models import Base
 from api_service.services.repository_connections import RepositoryConnectionService
@@ -29,6 +32,8 @@ from tests.unit.publish.test_saved_work_publication_journey import (
     journey,
 )
 
+
+_SDK_ACTIVITY_INFO = activity.info
 
 @asynccontextmanager
 async def managed_destination(tmp_path, monkeypatch, slug):
@@ -148,14 +153,25 @@ async def test_managed_secret_rotation_fences_retry_before_effect(
                 client_adapter=object(),
                 workspace_root=tmp_path / "restarted-worker",
             )
-            with pytest.raises(ApplicationError) as restarted:
-                await restarted_runtime.publication_recovery_saved_work_prepare(
-                    {
-                        "contract": contract,
-                        "destinationWorkflowId": "mm:source:saved-work-publication:x",
-                        "destinationRunId": "restarted-publication-run",
-                    }
-                )
+            environment = ActivityEnvironment()
+            environment.info = replace(
+                environment.info,
+                namespace="default",
+                workflow_namespace="default",
+                workflow_id="mm:source:saved-work-publication:x",
+                workflow_run_id="restarted-publication-run",
+            )
+            with monkeypatch.context() as restarted_sdk:
+                restarted_sdk.setattr(activity, "info", _SDK_ACTIVITY_INFO)
+                with pytest.raises(ApplicationError) as restarted:
+                    await environment.run(
+                        restarted_runtime.publication_recovery_saved_work_prepare,
+                        {
+                            "contract": contract,
+                            "destinationWorkflowId": "mm:source:saved-work-publication:x",
+                            "destinationRunId": "restarted-publication-run",
+                        },
+                    )
             assert restarted.value.type == "PUBLICATION_AUTHORITY_CHANGED"
         assert await decisions() == captured["decisions"]
         assert state.git_commands == captured["commands"]
