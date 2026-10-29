@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
@@ -25,12 +26,27 @@ def _patch_workflow_context(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda _attributes: None,
     )
 
+    async def start_child(*args, **kwargs):
+        # Current parents retain a child handle while checking implementation
+        # availability. Keep each test's result/authority assertions in its
+        # existing child double and supply the real handle-shaped boundary.
+        result = await run_workflow_module.workflow.execute_child_workflow(
+            *args, **kwargs
+        )
+        handle = asyncio.get_running_loop().create_future()
+        handle.set_result(result)
+        return handle
+
+    monkeypatch.setattr(run_workflow_module.workflow, "start_child_workflow", start_child)
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("publication_memo_enabled", [False, True])
+@pytest.mark.parametrize("availability_enabled", [False, True])
 async def test_parent_owned_merge_automation_awaits_child_success(
     monkeypatch: pytest.MonkeyPatch,
     publication_memo_enabled: bool,
+    availability_enabled: bool,
 ) -> None:
     _patch_workflow_context(monkeypatch)
     memo = {
@@ -44,7 +60,9 @@ async def test_parent_owned_merge_automation_awaits_child_success(
         run_workflow_module.workflow,
         "patched",
         lambda patch: (
-            publication_memo_enabled
+            availability_enabled
+            if patch == "run-review-ready-successor-v1"
+            else publication_memo_enabled
             if patch == "run-publication-git-identity-child-memo-v1"
             else True
         ),
@@ -86,7 +104,11 @@ async def test_parent_owned_merge_automation_awaits_child_success(
     )
     assert calls[0]["workflow_type"] == "MoonMind.MergeAutomation"
     assert calls[0]["payload"]["workflowType"] == "MoonMind.MergeAutomation"
-    assert calls[0]["kwargs"]["cancellation_type"] == ChildWorkflowCancellationType.TRY_CANCEL
+    assert calls[0]["kwargs"]["cancellation_type"] == (
+        ChildWorkflowCancellationType.WAIT_CANCELLATION_COMPLETED
+        if availability_enabled
+        else ChildWorkflowCancellationType.TRY_CANCEL
+    )
     assert workflow._awaiting_external is False
     assert workflow._publish_context["mergeAutomationStatus"] == "merged"
     assert workflow._publish_context["mergeAutomationWorkflowId"].startswith(
