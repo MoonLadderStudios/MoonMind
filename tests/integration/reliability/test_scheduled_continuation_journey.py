@@ -51,6 +51,7 @@ from moonmind.workflows.temporal.activity_runtime import (
     build_activity_bindings,
 )
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactTransactionOwnership,
     LocalTemporalArtifactStore,
     TemporalArtifactActivities,
     TemporalArtifactRepository,
@@ -215,9 +216,18 @@ async def test_schedule_continuation_preserves_intent_and_materializes_evidence(
                 TemporalArtifactRepository(session),
                 store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
             )
-            monkeypatch.setattr(
-                ex, "get_temporal_artifact_service", lambda _: artifacts
-            )
+            def artifact_service(
+                db_session,
+                *,
+                transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
+            ):
+                return TemporalArtifactService(
+                    TemporalArtifactRepository(db_session),
+                    store=artifacts._store,
+                    transaction_ownership=transaction_ownership,
+                )
+
+            monkeypatch.setattr(ex, "get_temporal_artifact_service", artifact_service)
 
             async def publish(body):
                 artifact, _ = await artifacts.create(

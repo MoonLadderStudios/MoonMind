@@ -34,6 +34,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
+from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
 from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 # ---------------------------------------------------------------------------
@@ -651,7 +652,9 @@ class CanonicalRecordEvidenceReader:
         from moonmind.workflows import get_temporal_artifact_service
 
         try:
-            await get_temporal_artifact_service(self._session).read(
+            await get_temporal_artifact_service(
+                self._session, transaction_ownership=ArtifactTransactionOwnership.CALLER
+            ).read(
                 artifact_id=branch.latest_verification_ref.removeprefix("artifact://"),
                 access=ArtifactAccessContext.for_execution(
                     workflow_id, principal="service:remediation-context"

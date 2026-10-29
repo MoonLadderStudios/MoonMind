@@ -25,6 +25,7 @@ from moonmind.security.execution_fanout_capabilities import (
     mint_execution_fanout_capability,
 )
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactTransactionOwnership,
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
     TemporalArtifactService,
@@ -53,8 +54,10 @@ async def test_system_owned_fanout_expands_existing_pr_preset(
     monkeypatch.setattr(
         executions_module,
         "get_temporal_artifact_service",
-        lambda session: TemporalArtifactService(
-            TemporalArtifactRepository(session), store=artifact_store
+        lambda session, *, transaction_ownership=ArtifactTransactionOwnership.STANDALONE: TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=artifact_store,
+            transaction_ownership=transaction_ownership,
         ),
     )
     artifact_ref = "art:sha256:machine-plan"

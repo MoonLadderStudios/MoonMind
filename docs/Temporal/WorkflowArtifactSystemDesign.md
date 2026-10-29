@@ -753,28 +753,28 @@ to release locks; metadata purge commits bounded pages. Heartbeats continue
 during pending operations and between candidates. A stalled page ends the pass;
 unresolved intents report a backlog for the next hourly pass.
 
-Retention class is assigned when an artifact is created or linked. When the
-mapping shortens a link type's class, a migration applies the new class to
-existing rows whose every link carries that type, so previously written
-evidence does not keep its longer expiry. As with linking, the new expiry
-counts from the latest such link, never earlier than creation. Such migrations
-only change expiry; the sweep still enforces every protection before deleting.
+Retention class is assigned on creation/linking. Migrations shorten expiry only
+when every link matches the changed class, measured from the latest link, never
+before creation. Sweeps still enforce all protections.
 
-Saved schedules, including disabled definitions, retain admitted inputs and frozen
-Skill bodies after edits. Bootstrap repairs incomplete lists from the verified
-original manifest before refresh. Current Skill definitions retain their content;
-unreferenced revisions expire normally. Retention and deletion share globally
-ordered artifact/alias locks, without access grants or pins.
+Schedules commit desired definitions and retained grants before Temporal dispatch.
+The same definition row lock fences older delayed dispatches; startup reconciliation
+repairs uncertain projections by saved ID. Dispatch errors mean saved/pending refresh,
+not recreate. Disabled schedules also retain inputs. Bootstrap repairs incomplete
+lists from verified original manifests. Current Skill definitions retain content;
+unreferenced revisions expire normally. Retention and deletion share ordered
+artifact/alias locks, without access grants or pins.
 
-Current raw and normalized journals referenced by non-terminal Omnigent bridge
+Raw and normalized journals referenced by non-terminal Omnigent bridge
 sessions remain recovery data. Their ordinary retention resumes when the
 session ends. Pins and live use claims protect all artifact classes.
 
-Read-use observations use savepoints; caller-owned reads release only their
-observation. Independent reads commit observations; streams and signed URLs retain
-TTL claims. Connection and transaction-control failures propagate. Cleanup faults
-attach a safe diagnostic to the serving error or cancellation, preserving its
-cause and TTL protection.
+`ArtifactTransactionOwnership.CALLER` flushes mutations without committing admission,
+retry, or schedule transactions. `STANDALONE` commits independently. Start/reset
+follows durable input grants. Caller reads release observation-only savepoints before further artifact locks,
+without connection-shape inference or commit containment. Streams, signed downloads and physical
+lifecycle deletion require standalone ownership. Committed TTL claims survive caller rollback. Cleanup preserves primary errors and cancellation;
+transaction-control failures propagate.
 
 Known database connection failures return `artifact_authority_unavailable`;
 storage timeouts return `artifact_storage_unavailable` (HTTP 503, `Retry-After: 5`).

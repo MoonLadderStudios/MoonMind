@@ -338,77 +338,13 @@ class DbHarnessCatalogRepository:
     async def persist(
         self, result: HarnessCatalogSyncResult
     ) -> HarnessCatalogSyncResult:
-        from api_service.db.models import OmnigentHarnessCatalogSnapshotRecord
-        from api_service.db.models import OmnigentHarnessTrustRecord as DbTrustRecord
-
-        snapshot = result.snapshot
         async with self._session_factory() as session:
-            existing = await session.get(
-                OmnigentHarnessCatalogSnapshotRecord, snapshot.catalogRef
-            )
-            if existing is None:
-                session.add(
-                    OmnigentHarnessCatalogSnapshotRecord(
-                        catalog_ref=snapshot.catalogRef,
-                        endpoint_ref=snapshot.endpointRef,
-                        omnigent_version=snapshot.omnigentVersion,
-                        omnigent_build_digest=snapshot.omnigentBuildDigest,
-                        observed_at=snapshot.observedAt,
-                        source_digest=snapshot.sourceDigest,
-                        snapshot_json=snapshot.model_dump(by_alias=True, mode="json"),
-                        diagnostics_json=dict(result.diagnostics),
-                    )
-                )
-            for trust in result.trust_records:
-                row = await session.get(DbTrustRecord, trust.implementationRef)
-                values = {
-                    "harness_id": trust.harnessId,
-                    "catalog_ref": snapshot.catalogRef,
-                    "trust_state": trust.trustState.value,
-                    "reason_code": (
-                        "plugin_load_error"
-                        if any(
-                            item.get("harnessId") == trust.harnessId
-                            for item in snapshot.pluginLoadErrors
-                        )
-                        else None
-                    ),
-                    "plugin_load_error_json": next(
-                        (
-                            dict(item)
-                            for item in snapshot.pluginLoadErrors
-                            if item.get("harnessId") == trust.harnessId
-                        ),
-                        None,
-                    ),
-                }
-                if row is None:
-                    session.add(
-                        DbTrustRecord(
-                            implementation_ref=trust.implementationRef, **values
-                        )
-                    )
-                else:
-                    # The identity key is exact; sync may refresh diagnostics but cannot
-                    # silently upgrade an operator-blocked or approved plugin decision.
-                    if row.trust_state in {
-                        TrustState.plugin_approved.value,
-                        TrustState.blocked.value,
-                    }:
-                        continue
-                    # Trust is authority for the exact implementation, not for
-                    # whichever catalog happened to observe it most recently.
-                    # Keep its original catalog association so refreshing the
-                    # inventory cannot make an older immutable snapshot lose
-                    # its trust evidence.
-                    values.pop("catalog_ref", None)
-                    for key, value in values.items():
-                        setattr(row, key, value)
             try:
+                await self.persist_in_session(session, result)
                 await session.commit()
             except IntegrityError as exc:
                 await session.rollback()
-                loaded = await self.load(snapshot.catalogRef)
+                loaded = await self.load(result.snapshot.catalogRef)
                 if loaded is not None:
                     return loaded
                 raise HarnessPlatformError(
@@ -416,8 +352,117 @@ class DbHarnessCatalogRepository:
                     code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
                 ) from exc
             await self._prune_observations(
-                session, endpoint_ref=snapshot.endpointRef
+                session, endpoint_ref=result.snapshot.endpointRef
             )
+        return result
+
+    @staticmethod
+    async def persist_in_session(
+        session: Any, result: HarnessCatalogSyncResult
+    ) -> HarnessCatalogSyncResult:
+        """Stage immutable catalog/trust authority with its caller's plan.
+
+        Catalog pruning remains owned by standalone synchronization; compilation
+        cannot delete observations or commit unrelated admission work.
+        """
+        from api_service.db.models import OmnigentHarnessCatalogSnapshotRecord
+        from api_service.db.models import OmnigentHarnessTrustRecord as DbTrustRecord
+
+        async def locked_or_insert(model, key, values):
+            row = await session.get(
+                model, key, with_for_update=True, populate_existing=True
+            )
+            if row is not None:
+                return row
+            # Isolate only the unique insert race. begin_nested preflushes
+            # caller changes, so losing this insert cannot discard them.
+            savepoint = await session.begin_nested()
+            try:
+                row = model(**values)
+                session.add(row)
+                await session.flush()
+            except BaseException as primary:
+                try:
+                    await savepoint.rollback()
+                except BaseException as cleanup:
+                    primary.add_note(
+                        f"Catalog insert rollback also failed: {type(cleanup).__name__}"
+                    )
+                    raise primary
+                if not isinstance(primary, IntegrityError):
+                    raise
+                row = await session.get(
+                    model, key, with_for_update=True, populate_existing=True
+                )
+                if row is None:
+                    raise
+                return row
+            else:
+                await savepoint.commit()
+                return row
+
+        snapshot = result.snapshot
+        snapshot_json = snapshot.model_dump(by_alias=True, mode="json")
+        existing = await locked_or_insert(
+            OmnigentHarnessCatalogSnapshotRecord,
+            snapshot.catalogRef,
+            {
+                "catalog_ref": snapshot.catalogRef,
+                "endpoint_ref": snapshot.endpointRef,
+                "omnigent_version": snapshot.omnigentVersion,
+                "omnigent_build_digest": snapshot.omnigentBuildDigest,
+                "observed_at": snapshot.observedAt,
+                "source_digest": snapshot.sourceDigest,
+                "snapshot_json": snapshot_json,
+                "diagnostics_json": dict(result.diagnostics),
+            },
+        )
+        if existing.snapshot_json != snapshot_json:
+            raise HarnessPlatformError(
+                "catalog persistence conflict",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            )
+        for trust in sorted(
+            result.trust_records, key=lambda item: item.implementationRef
+        ):
+            values = {
+                "harness_id": trust.harnessId,
+                "catalog_ref": snapshot.catalogRef,
+                "trust_state": trust.trustState.value,
+                "reason_code": (
+                    "plugin_load_error"
+                    if any(
+                        item.get("harnessId") == trust.harnessId
+                        for item in snapshot.pluginLoadErrors
+                    )
+                    else None
+                ),
+                "plugin_load_error_json": next(
+                    (
+                        dict(item)
+                        for item in snapshot.pluginLoadErrors
+                        if item.get("harnessId") == trust.harnessId
+                    ),
+                    None,
+                ),
+            }
+            row = await locked_or_insert(
+                DbTrustRecord,
+                trust.implementationRef,
+                {"implementation_ref": trust.implementationRef, **values},
+            )
+            # Inspect the locked current decision, never a stale identity-map
+            # value: admission cannot overwrite a concurrent operator block.
+            if row.trust_state in {
+                TrustState.plugin_approved.value,
+                TrustState.blocked.value,
+            }:
+                continue
+            # An implementation retains its original catalog association.
+            values.pop("catalog_ref", None)
+            for key, value in values.items():
+                setattr(row, key, value)
+        await session.flush()
         return result
 
     @staticmethod

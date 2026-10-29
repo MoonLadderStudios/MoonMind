@@ -1052,7 +1052,7 @@ async def test_remediation_checkpoint_branch_repair_creates_fresh_branch_from_co
 
     monkeypatch.setattr(
         "api_service.api.routers.executions.get_temporal_artifact_service",
-        lambda session: _ArtifactService(),
+        lambda session, *, transaction_ownership: _ArtifactService(),
     )
     snapshot = {
         "profileId": "agent-profile-remediation",
@@ -1258,7 +1258,7 @@ async def test_remediation_checkpoint_branch_repair_resolves_recovery_boundary(
 
     monkeypatch.setattr(
         "api_service.api.routers.executions.get_temporal_artifact_service",
-        lambda session: _ArtifactService(),
+        lambda session, *, transaction_ownership: _ArtifactService(),
     )
 
     response = await checkpoint_branch_client.post(
@@ -1335,7 +1335,7 @@ async def test_remediation_checkpoint_branch_repair_rejects_empty_context_body(
 
     monkeypatch.setattr(
         "api_service.api.routers.executions.get_temporal_artifact_service",
-        lambda session: _ArtifactService(),
+        lambda session, *, transaction_ownership: _ArtifactService(),
     )
 
     response = await checkpoint_branch_client.post(
@@ -1399,7 +1399,7 @@ async def test_remediation_checkpoint_branch_repair_fails_closed_for_unselected_
 
     monkeypatch.setattr(
         "api_service.api.routers.executions.get_temporal_artifact_service",
-        lambda session: _ArtifactService(),
+        lambda session, *, transaction_ownership: _ArtifactService(),
     )
 
     response = await checkpoint_branch_client.post(

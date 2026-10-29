@@ -220,7 +220,7 @@ This keeps the recurring schedule page focused on controlling the cadence and re
 
 - If the schedule no longer exists, show a not-found state with a link back to `/schedules`.
 - If the detail request succeeds but run history fails, keep the schedule controls available and show a localized runs-panel error.
-- If update fails because reconciliation with Temporal failed, present the MoonMind API error and leave the page state unchanged.
+- Validation failures leave the saved definition unchanged. A Temporal synchronization error can follow a committed edit: show the saved/pending error and refresh the definition rather than treating the edit as rolled back.
 - If delete is unavailable because runtime config omits `sources.schedules.delete`, do not render the delete action.
 - If the schedule is disabled, the page should show it as paused/disabled rather than failed.
 - If `lastDispatchStatus` or `lastDispatchError` indicates failure, the page should show an attention state but still allow edit, run now, and available destructive actions when authorized.

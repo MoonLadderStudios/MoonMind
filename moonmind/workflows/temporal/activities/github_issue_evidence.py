@@ -70,6 +70,7 @@ async def collect_github_issue_evidence(
     if artifact_service is None:
         from api_service.db.base import async_session_maker
         from moonmind.workflows.temporal.artifacts import (
+            ArtifactTransactionOwnership,
             TemporalArtifactRepository,
             TemporalArtifactService,
         )
@@ -79,7 +80,10 @@ async def collect_github_issue_evidence(
                 payload,
                 result,
                 files,
-                TemporalArtifactService(TemporalArtifactRepository(session)),
+                TemporalArtifactService(
+                    TemporalArtifactRepository(session),
+                    transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
+                ),
             )
     return await _persist_evidence(payload, result, files, artifact_service)
 

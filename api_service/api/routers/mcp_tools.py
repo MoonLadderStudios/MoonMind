@@ -21,6 +21,7 @@ from api_service.db.models import TemporalExecutionCanonicalRecord
 from api_service.services.container_jobs import ContainerJobService
 from api_service.services.remediation_actions import build_remediation_action_executor
 from api_service.services.remediation_evidence import ManagedRunRemediationLogAdapter
+from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
 from moonmind.config.settings import settings
 from moonmind.integrations.jira.errors import JiraToolError
 from moonmind.integrations.jira.tool import JiraToolService
@@ -306,7 +307,9 @@ async def _dispatch_container_job_tool(
     context = ContainerJobToolContext(
         service=ContainerJobService(
             session,
-            artifacts=get_temporal_artifact_service(session),
+            artifacts=get_temporal_artifact_service(
+                session, transaction_ownership=ArtifactTransactionOwnership.CALLER
+            ),
             capability=capability,
             operator=operator,
         ),
@@ -416,7 +419,9 @@ async def _dispatch_tool_call(
         context = RemediationToolExecutionContext(
             service=RemediationEvidenceToolService(
                 session=session,
-                artifact_service=get_temporal_artifact_service(session),
+                artifact_service=get_temporal_artifact_service(
+                    session, transaction_ownership=ArtifactTransactionOwnership.CALLER
+                ),
                 log_reader=log_adapter,
                 live_follower=log_adapter,
                 action_executor=build_remediation_action_executor(session=session),

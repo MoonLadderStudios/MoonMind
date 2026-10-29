@@ -80,6 +80,7 @@ from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
 )
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactTransactionOwnership,
     ArtifactAccessContext,
     ExecutionRef,
     TemporalArtifactAuthorizationError,
@@ -909,8 +910,10 @@ class TemporalExecutionService:
         context_session = session if session is not None else self._session
         return RemediationContextBuilder(
             session=context_session,
+            transaction_ownership=ArtifactTransactionOwnership.CALLER,
             artifact_service=TemporalArtifactService(
-                TemporalArtifactRepository(context_session)
+                TemporalArtifactRepository(context_session),
+                transaction_ownership=ArtifactTransactionOwnership.CALLER,
             ),
             step_ledger_loader=self._query_step_ledger_rows,
         )
@@ -2151,7 +2154,8 @@ class TemporalExecutionService:
         decision_artifact = await RemediationLifecyclePublisher(
             session=self._session,
             artifact_service=TemporalArtifactService(
-                TemporalArtifactRepository(self._session)
+                TemporalArtifactRepository(self._session),
+                transaction_ownership=ArtifactTransactionOwnership.CALLER,
             ),
         ).publish_json_artifact(
             remediation_workflow_id=remediation_workflow_id,
@@ -2772,7 +2776,7 @@ class TemporalExecutionService:
             )
             from moonmind.omnigent.bridge_artifacts import (
                 OmnigentArtifactError,
-                link_verified_execution_plan_inputs,
+                link_verified_execution_plan_inputs_in_session,
             )
             from moonmind.schemas.agent_runtime_models import (
                 OmnigentExecutionPlanBinding,
@@ -2830,24 +2834,19 @@ class TemporalExecutionService:
                 # before it may delegate. Competing same-key API requests use
                 # the same workflow ID and must not contribute losing inputs.
                 await self._session.flush()
-                admission_sessions = async_sessionmaker(
-                    bind=await self._session.connection(),
-                    expire_on_commit=False,
-                    join_transaction_mode="create_savepoint",
-                )
-                # The artifact owner retains its validation, link and read-use
-                # accounting. Its commits release only nested savepoints; this
-                # canonical transaction commits the record and entire closure
-                # together, or rolls both back on any admission failure.
+                # The application owns the canonical record and its entire
+                # verified grant closure. Lower-level operations only flush.
                 try:
-                    admitted_refs = await link_verified_execution_plan_inputs(
-                        session_factory=admission_sessions,
-                        plan=_admitted_execution_plan.envelope,
-                        binding=_admitted_execution_plan.binding,
-                        workflow_id=workflow_id,
-                        run_id=run_id,
-                        namespace=self._namespace,
-                        access=_admitted_execution_plan.artifact_access,
+                    admitted_refs = (
+                        await link_verified_execution_plan_inputs_in_session(
+                            session=self._session,
+                            plan=_admitted_execution_plan.envelope,
+                            binding=_admitted_execution_plan.binding,
+                            workflow_id=workflow_id,
+                            run_id=run_id,
+                            namespace=self._namespace,
+                            access=_admitted_execution_plan.artifact_access,
+                        )
                     )
                     record.artifact_refs = list(
                         dict.fromkeys([*record.artifact_refs, *admitted_refs])
@@ -2992,27 +2991,37 @@ class TemporalExecutionService:
                 TemporalExecutionRemediationLink, workflow_id, populate_existing=True
             )
             if remediation_link is None or not remediation_link.context_artifact_ref:
+                # Optional context preparation can fail its SQL writes. Isolate
+                # that operation, not artifact commits, so the already-held
+                # canonical lock and recoverable start intent remain usable.
+                context_transaction = await self._session.begin_nested()
                 try:
-                    async with AsyncSession(
-                        bind=await self._session.connection(),
-                        expire_on_commit=False,
-                        join_transaction_mode="create_savepoint",
-                    ) as context_session:
-                        await self._remediation_context_builder(
-                            session=context_session
-                        ).build_context(remediation_workflow_id=workflow_id)
-                    # The producer committed through a separate session.
-                    if remediation_link is not None:
-                        await self._session.refresh(remediation_link)
-                except Exception as error:
+                    await self._remediation_context_builder().build_context(
+                        remediation_workflow_id=workflow_id
+                    )
+                except BaseException as error:
+                    try:
+                        await context_transaction.rollback()
+                    except BaseException as cleanup:
+                        error.add_note(
+                            "Remediation context rollback also failed: "
+                            f"{type(cleanup).__name__}"
+                        )
+                        raise error
+                    if not isinstance(error, Exception):
+                        raise
+                    # Rollback expires any fields the builder mutated. Reload
+                    # under the same outer lock before recording the retry cause.
+                    record = await locked_record()
                     logger.exception(
                         "Remediation context preparation failed for %s", workflow_id
                     )
                     await self._create_start_unconfirmed(
                         record, intent, "remediation_context_unavailable", error
                     )
-                # Artifact-owner commits release only savepoints, preserving
-                # admission serialization until its context and intent are durable.
+                else:
+                    await context_transaction.commit()
+                # The same owner makes context and start intent durable together.
                 record = await locked_record()
                 intent = dict(record.memo[_CREATE_START_MEMO_KEY])
                 if self._create_start_stopped(record, intent):
@@ -3629,7 +3638,8 @@ class TemporalExecutionService:
             principal = "service:temporal-execution-rerun-admission"
         try:
             artifact_service = TemporalArtifactService(
-                TemporalArtifactRepository(self._session)
+                TemporalArtifactRepository(self._session),
+                transaction_ownership=ArtifactTransactionOwnership.CALLER,
             )
             _artifact, body = await artifact_service.read(
                 artifact_id=artifact_id,
@@ -4183,7 +4193,7 @@ class TemporalExecutionService:
             return
         from moonmind.omnigent.bridge_artifacts import (
             OmnigentArtifactError,
-            link_verified_execution_plan_inputs,
+            link_verified_execution_plan_inputs_in_session,
         )
         from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
         from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
@@ -4208,24 +4218,15 @@ class TemporalExecutionService:
                 raise OmnigentArtifactError(
                     "The recorded execution plan is unavailable"
                 )
-            # Artifact services commit their own read accounting and links.
-            # Keep those commits inside savepoints until the entire verified
-            # closure succeeds, including on databases with deferred BEGIN.
-            async with self._session.begin_nested():
-                admission_sessions = async_sessionmaker(
-                    bind=await self._session.connection(),
-                    expire_on_commit=False,
-                    join_transaction_mode="create_savepoint",
-                )
-                await link_verified_execution_plan_inputs(
-                    session_factory=admission_sessions,
-                    plan=plan,
-                    binding=binding,
-                    workflow_id=workflow_id,
-                    run_id=run_id,
-                    namespace=self._namespace,
-                    access=ArtifactAccessContext.for_execution(workflow_id),
-                )
+            await link_verified_execution_plan_inputs_in_session(
+                session=self._session,
+                plan=plan,
+                binding=binding,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                namespace=self._namespace,
+                access=ArtifactAccessContext.for_execution(workflow_id),
+            )
             # Temporal may resume immediately after reset. Grants must already
             # be visible to its independent Activity database sessions.
             await self._session.commit()

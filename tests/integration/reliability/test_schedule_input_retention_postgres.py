@@ -164,12 +164,48 @@ async def test_schedule_write_wins_lock_before_expiry_sweep(
         admitted, release = asyncio.Event(), asyncio.Event()
         temporal = adapter()
 
-        async def pause_before_commit(**kwargs):
+        retain = RecurringWorkflowsService._retain_target_artifacts
+
+        async def pause_before_commit(service, target):
+            await retain(service, target)
             admitted.set()
             await release.wait()
 
-        temporal.create_schedule.side_effect = pause_before_commit
-        temporal.update_schedule.side_effect = pause_before_commit
+        monkeypatch.setattr(
+            RecurringWorkflowsService, "_retain_target_artifacts", pause_before_commit
+        )
+        rpc_observations = []
+
+        async def inspect_committed_inputs(**kwargs):
+            # The RPC no longer contains uncommitted admission. A separate
+            # consumer sees the definition and its retained input beforehand.
+            async with sessions() as observer:
+                definition = await observer.get(
+                    models.RecurringWorkflowDefinition, kwargs["definition_id"]
+                )
+                assert definition is not None
+                assert definition.target["inputArtifactRef"] == artifact_id
+                service = _service(observer, tmp_path)
+                assert (
+                    await service.read(
+                        artifact_id=artifact_id, access=access_for_test("operator")
+                    )
+                )[1]
+                result = await service.sweep_lifecycle(
+                    principal="service:sweeper", now=FUTURE
+                )
+                # Replacing a definition releases its old input. Only that
+                # retired input may be collected, never the newly admitted one.
+                assert result.soft_deleted_count == int(replacing)
+                assert (
+                    await service.read(
+                        artifact_id=artifact_id, access=access_for_test("operator")
+                    )
+                )[1]
+                rpc_observations.append(True)
+
+        temporal.create_schedule.side_effect = inspect_committed_inputs
+        temporal.update_schedule.side_effect = inspect_committed_inputs
         async with sessions() as writer, sessions() as collector:
             writer_task = asyncio.create_task(
                 write_schedule(
@@ -188,6 +224,7 @@ async def test_schedule_write_wins_lock_before_expiry_sweep(
             await writer_task
             assert was_blocked
             assert (await sweep_task).soft_deleted_count == 0
+            assert rpc_observations == [True]
         async with sessions() as reader:
             assert (
                 await _service(reader, tmp_path).read(
@@ -195,12 +232,13 @@ async def test_schedule_write_wins_lock_before_expiry_sweep(
                 )
             )[1]
             if replacing:
-                # Replacement releases the old input after its target commits.
+                # The RPC-time sweep collected the released old input. A
+                # subsequent sweep is idempotent, not a second deletion.
                 assert (
                     await _service(reader, tmp_path).sweep_lifecycle(
                         principal="service:sweeper", now=FUTURE
                     )
-                ).soft_deleted_count == 1
+                ).soft_deleted_count == 0
                 old = await reader.get(models.TemporalArtifact, old_id)
                 assert old.status is models.TemporalArtifactStatus.DELETED
 

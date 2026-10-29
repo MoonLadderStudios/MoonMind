@@ -330,6 +330,7 @@ from moonmind.workflows.temporal import (
     TemporalExecutionValidationError,
 )
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactTransactionOwnership,
     TemporalArtifactAuthorizationError,
     TemporalArtifactNotFoundError,
     TemporalArtifactStateError,
@@ -1328,7 +1329,9 @@ async def _write_checkpoint_branch_preparation_artifact(
 ) -> tuple[str, str]:
     body = json.dumps(dict(payload), sort_keys=True, separators=(",", ":")).encode()
     digest = f"sha256:{hashlib.sha256(body).hexdigest()}"
-    artifact_service = get_checkpoint_branch_artifact_service(session)
+    artifact_service = get_checkpoint_branch_artifact_service(
+        session, transaction_ownership=ArtifactTransactionOwnership.CALLER
+    )
     artifact, _upload = await artifact_service.create(
         principal=principal,
         content_type=content_type,
@@ -6485,7 +6488,9 @@ async def _hydrate_execution_report_projection(
         return execution
 
     try:
-        artifact_service = get_temporal_artifact_service(session)
+        artifact_service = get_temporal_artifact_service(
+            session, transaction_ownership=ArtifactTransactionOwnership.CALLER
+        )
         report_roles = (
             "report.primary",
             "report.summary",
@@ -10423,9 +10428,9 @@ async def _validate_model_selection_submission(
 
     async def read_input_artifact(ref: str) -> Any:
         try:
-            _artifact, body = await get_temporal_artifact_service(session).read(
-                artifact_id=_artifact_id_from_ref(ref), access=access
-            )
+            _artifact, body = await get_temporal_artifact_service(
+                session, transaction_ownership=ArtifactTransactionOwnership.CALLER
+            ).read(artifact_id=_artifact_id_from_ref(ref), access=access)
             return json.loads(body.decode("utf-8"))
         except Exception as exc:
             raise _invalid_workflow_request(
@@ -10494,7 +10499,9 @@ async def _exact_rerun_parameters_from_snapshot(
             },
         )
     try:
-        artifact_service = get_temporal_artifact_service(session)
+        artifact_service = get_temporal_artifact_service(
+            session, transaction_ownership=ArtifactTransactionOwnership.CALLER
+        )
         _artifact, body = await artifact_service.read(
             artifact_id=artifact_id, access=access
         )
@@ -10602,7 +10609,9 @@ async def _snapshot_source_payload_from_parameters_and_artifact(
     if not artifact_id:
         return parameter_payload, parameter_task
     try:
-        artifact_service = get_temporal_artifact_service(session)
+        artifact_service = get_temporal_artifact_service(
+            session, transaction_ownership=ArtifactTransactionOwnership.CALLER
+        )
         _artifact, body = await artifact_service.read(
             artifact_id=artifact_id, access=access
         )
@@ -10741,7 +10750,9 @@ async def _persist_original_workflow_input_snapshot(
         source_workflow_id=source_workflow_id,
         source_run_id=source_run_id,
     )
-    artifact_service = get_temporal_artifact_service(session)
+    artifact_service = get_temporal_artifact_service(
+        session, transaction_ownership=ArtifactTransactionOwnership.CALLER
+    )
     principal = _execution_principal(user)
     body = json.dumps(snapshot_payload, sort_keys=True, separators=(",", ":")).encode(
         "utf-8"
@@ -12441,6 +12452,8 @@ async def _create_execution_from_workflow_request(
             persist_json_artifact,
         )
 
+        from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
+
         snapshot_source, snapshot_task = _snapshot_source_payload_from_parameters(
             initial_parameters
         )
@@ -12460,7 +12473,9 @@ async def _create_execution_from_workflow_request(
             task_payload=snapshot_task,
             attachment_refs=attachment_index,
         )
-        artifact_service = get_temporal_artifact_service(session)
+        artifact_service = get_temporal_artifact_service(
+            session, transaction_ownership=ArtifactTransactionOwnership.CALLER
+        )
         principal_id = _execution_principal(user)
         (
             prelaunch_task_input_snapshot_ref,
@@ -12486,6 +12501,7 @@ async def _create_execution_from_workflow_request(
                 task_input_snapshot_ref=prelaunch_task_input_snapshot_ref,
                 task_input_snapshot_digest=prelaunch_task_input_snapshot_digest,
                 db_session=session,
+                execution_plan_store=SessionExecutionPlanStore(session),
             )
         except Exception as exc:
             from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
@@ -13937,7 +13953,9 @@ async def _attach_remediation_artifact_projection(
         )
     link.lifecycle_artifacts = lifecycle_artifacts or None
 
-    artifact_service = get_temporal_artifact_service(session)
+    artifact_service = get_temporal_artifact_service(
+        session, transaction_ownership=ArtifactTransactionOwnership.CALLER
+    )
     for artifact_type, attribute in (
         ("remediation.action_request", "latest_action_request"),
         ("remediation.action_result", "latest_action_result"),
@@ -14134,7 +14152,9 @@ async def _read_remediation_context_payload(
     target_run_id: str,
     access: ArtifactAccessContext,
 ) -> dict[str, Any]:
-    artifact_service = get_temporal_artifact_service(session)
+    artifact_service = get_temporal_artifact_service(
+        session, transaction_ownership=ArtifactTransactionOwnership.CALLER
+    )
     artifact, body = await artifact_service.read(
         artifact_id=context_artifact_ref, access=access
     )
@@ -16830,7 +16850,9 @@ async def record_checkpoint_branch_verification(
             workflow_id=workflow_id,
             branch_id=branch_id,
             verifier_artifact_ref=payload.verifier_artifact_ref,
-            artifact_service=get_temporal_artifact_service(session),
+            artifact_service=get_temporal_artifact_service(
+                session, transaction_ownership=ArtifactTransactionOwnership.CALLER
+            ),
         )
     except (
         ValueError,
