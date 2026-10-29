@@ -1441,6 +1441,30 @@ async def test_recurring_managed_bootstrap_policy_cutover_refreshes_temporal_act
                 temporal_client_adapter=adapter,
                 artifact_service=SimpleNamespace(),
             )
+
+            async def retain_compiled_target(target, **_kwargs):
+                # This replay substitutes the new compiler and its transport.
+                # Isolate only that result's publication, not profile refresh,
+                # schedule revision, usage, or the Temporal action update.
+                assert (
+                    target["initialParameters"]["omnigentExecutionPlan"] == plan_binding
+                )
+                root = await session.get(TemporalArtifact, "art_plan")
+                assert root is not None
+                assert root.status == TemporalArtifactStatus.COMPLETE
+                return root.artifact_id
+
+            retain_target = AsyncMock(side_effect=retain_compiled_target)
+            retain_original_target = service._retain_target_artifacts
+
+            async def retain_target_boundary(target, **kwargs):
+                if "omnigentExecutionPlan" not in target.get("initialParameters", {}):
+                    return await retain_original_target(target, **kwargs)
+                return await retain_target(target, **kwargs)
+
+            monkeypatch.setattr(
+                service, "_retain_target_artifacts", retain_target_boundary
+            )
             old_workflow_type, old_workflow_input = (
                 service._workflow_bundle_for_definition(definition)
             )
@@ -1457,6 +1481,8 @@ async def test_recurring_managed_bootstrap_policy_cutover_refreshes_temporal_act
 
             assert (await service.refresh_managed_bootstrap_schedules()).refreshed == 1
             await session.refresh(definition)
+            retain_target.assert_awaited_once()
+            assert definition.input_artifact_root_id == "art_plan"
 
             assert definition.version == expected["definitionVersion"]
             assert definition.target["agentProfile"]["version"] == expected[

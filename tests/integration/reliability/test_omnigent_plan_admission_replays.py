@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from types import SimpleNamespace
 
 import pytest
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from api_service.db.models import Base
 from api_service.services import omnigent_execution_plan_service as service
 from api_service.services.omnigent_agent_profile_selection import (
     default_launch_policy_ref,
@@ -12,18 +16,24 @@ from api_service.services.omnigent_agent_profile_selection import (
 from moonmind.workflows.executions.execution_contract import (
     build_canonical_workflow_view,
 )
+from moonmind.workflows.temporal.artifacts import (
+    LocalTemporalArtifactStore,
+    TemporalArtifactRepository,
+    TemporalArtifactService,
+)
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
+from tests.artifact_access import access_for_test
 from tests.integration.reliability.helpers import load_replay
 from tests.unit.services.test_omnigent_execution_plan_service import (
-    _ArtifactService,
     _OPENCODE_ALLOWED_LAUNCH_POLICIES,
-    _PlanStore,
     _capture_plan_payload,
-    _compile_opencode_plan,
+    _PlanStore,
     _protected_support_evidence,
     _write_deployment_evidence,
 )
-
+from tests.unit.services.test_omnigent_execution_plan_service import (
+    _compile_opencode_plan as _compile_fixture_plan,
+)
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -34,9 +44,54 @@ pytestmark = [
 _SERVER_IMAGE_REF = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "6" * 64
 
 
+@pytest_asyncio.fixture
+async def artifacts(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/admission.db")
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            yield TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+    finally:
+        await engine.dispose()
+
+
+async def _compile_opencode_plan(monkeypatch, *, artifacts, **kwargs):
+    payload = json.dumps(kwargs.get("extra_parameters") or {}, sort_keys=True).encode()
+    task, _ = await artifacts.create(
+        principal="user-1", content_type="application/json"
+    )
+    await artifacts.write_complete(
+        artifact_id=task.artifact_id,
+        principal="user-1",
+        payload=payload,
+        content_type="application/json",
+    )
+    compiled = await _compile_fixture_plan(
+        monkeypatch,
+        artifacts=artifacts,
+        task_input_snapshot_ref=task.artifact_id,
+        task_input_snapshot_digest="sha256:" + hashlib.sha256(payload).hexdigest(),
+        **kwargs,
+    )
+    closure = await artifacts.verified_dependencies(
+        root_artifact_id=compiled.binding.plan_artifact_ref,
+        access=access_for_test("user-1"),
+    )
+    assert closure is not None
+    required = {item.artifact_id for item in closure.dependencies if item.required}
+    assert task.artifact_id in required
+    assert compiled.resolved_skillset_ref in required
+    return compiled
+
+
 @pytest.mark.parametrize("payload_key", ["task", "workflow"])
 async def test_scheduled_skill_snapshot_reaches_agent_launch(
     monkeypatch: pytest.MonkeyPatch,
+    artifacts,
     payload_key: str,
 ) -> None:
     """Replay admission of the persisted schedule envelope through dispatch."""
@@ -44,7 +99,6 @@ async def test_scheduled_skill_snapshot_reaches_agent_launch(
     replay_id = "scheduled-skill-snapshot-authority"
     manifest = load_replay(replay_id, "manifest.json")
     expected = load_replay(replay_id, "expected-outcome.json")
-    artifacts = _ArtifactService()
     workflow_intent = {
         **manifest["initialParameters"]["task"],
         "remediation": {"maxAttempts": 3},
@@ -67,7 +121,10 @@ async def test_scheduled_skill_snapshot_reaches_agent_launch(
             payload_key: workflow_intent,
         },
     )
-    snapshot = json.loads(artifacts.payloads[result.resolved_skillset_ref])
+    _, snapshot_bytes = await artifacts.read(
+        artifact_id=result.resolved_skillset_ref, access=access_for_test("user-1")
+    )
+    snapshot = json.loads(snapshot_bytes)
     assert [entry["skill_name"] for entry in snapshot["skills"]] == expected[
         "selectedSkills"
     ]
@@ -129,6 +186,7 @@ async def test_scheduled_skill_snapshot_reaches_agent_launch(
 @pytest.mark.parametrize("payload_key", ["task", "workflow"])
 async def test_schedule_envelope_cannot_bypass_runtime_target_validation(
     monkeypatch: pytest.MonkeyPatch,
+    artifacts,
     payload_key: str,
 ) -> None:
     monkeypatch.setattr(
@@ -142,7 +200,7 @@ async def test_schedule_envelope_cannot_bypass_runtime_target_validation(
     with pytest.raises(ValueError, match="Requested runtime target does not match"):
         await _compile_opencode_plan(
             monkeypatch,
-            artifacts=_ArtifactService(),
+            artifacts=artifacts,
             launch_policy_ref="omnigent-on-demand@1",
             plan_store=_PlanStore(object()),
             extra_parameters={
@@ -183,7 +241,7 @@ def _ready_opencode_image_pair(monkeypatch: pytest.MonkeyPatch) -> None:
                     "failureCode": None,
                     "serverImageRef": _SERVER_IMAGE_REF,
                     "hostImageRef": host_ref,
-                }
+                },
             },
         )
 
@@ -191,29 +249,44 @@ def _ready_opencode_image_pair(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def test_omnigent_fanout_capability_is_platform_admitted(
+    tmp_path,
     monkeypatch: pytest.MonkeyPatch,
+    artifacts,
 ) -> None:
     replay_id = "omnigent-fanout-plan-admission"
     manifest = load_replay(replay_id, "manifest.json")
     expected = load_replay(replay_id, "expected-outcome.json")
 
-    async def resolve_skills(**_kwargs):
-        return (
-            SimpleNamespace(
-                skills=[
-                    SimpleNamespace(
-                        required_capabilities=manifest["resolvedSkill"][
-                            "requiredCapabilities"
-                        ]
-                    )
-                ]
-            ),
-            "art_skill_manifest",
-            "sha256:" + "5" * 64,
-            (),
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_skill_models import ResolvedSkillEntry, ResolvedSkillSet
+
+    # Replay the original resolved Skill authority, not today's changed Skill.
+    # Production still bundles, persists, hashes and seals its actual bytes.
+    skill = manifest["resolvedSkill"]
+    source = tmp_path / skill["name"] / "SKILL.md"
+    source.parent.mkdir()
+    source.write_text("# " + skill["name"] + "\n" + manifest["failureShape"] + "\n")
+
+    async def resolve_original(_self, selector, context):
+        assert [entry.name for entry in selector.include] == [skill["name"]]
+        return ResolvedSkillSet(
+            snapshot_id=context.snapshot_id,
+            deployment_id=context.deployment_id,
+            resolved_at=datetime.now(UTC),
+            skills=[
+                ResolvedSkillEntry(
+                    skill_name=skill["name"],
+                    required_capabilities=skill["requiredCapabilities"],
+                    provenance={
+                        "source_kind": skill["sourceKind"],
+                        "source_path": str(source.parent),
+                    },
+                )
+            ],
         )
 
-    monkeypatch.setattr(service, "_resolve_and_persist_skills", resolve_skills)
+    monkeypatch.setattr(service.AgentSkillResolver, "resolve", resolve_original)
     monkeypatch.setattr(
         service,
         "resolve_execution_evidence",
@@ -225,22 +298,24 @@ async def test_omnigent_fanout_capability_is_platform_admitted(
 
     result = await _compile_opencode_plan(
         monkeypatch,
-        artifacts=_ArtifactService(),
+        artifacts=artifacts,
         launch_policy_ref=manifest["launchPolicyRef"],
         plan_store=_PlanStore(object()),
+        extra_parameters={
+            "workflow": {"skills": {"include": [manifest["resolvedSkill"]["name"]]}}
+        },
     )
 
     assert (
         result.envelope.payload.classAdmissionDecision
         == expected["classAdmissionDecision"]
     )
-    assert result.envelope.payload.resolvedTools["tools"] == expected[
-        "resolvedTools"
-    ]
+    assert result.envelope.payload.resolvedTools["tools"] == expected["resolvedTools"]
 
 
 async def test_batch_github_capabilities_do_not_leak_jira_into_omnigent(
     monkeypatch: pytest.MonkeyPatch,
+    artifacts,
 ) -> None:
     replay_id = "omnigent-batch-github-jira-capability-leak"
     manifest = load_replay(replay_id, "manifest.json")
@@ -251,9 +326,9 @@ async def test_batch_github_capabilities_do_not_leak_jira_into_omnigent(
         payload=manifest["authoredPayload"],
     )
 
-    assert canonical["requiredCapabilities"] == expected[
-        "normalizedRequiredCapabilities"
-    ]
+    assert (
+        canonical["requiredCapabilities"] == expected["normalizedRequiredCapabilities"]
+    )
     assert set(expected["forbiddenCapabilities"]).isdisjoint(
         canonical["requiredCapabilities"]
     )
@@ -268,7 +343,7 @@ async def test_batch_github_capabilities_do_not_leak_jira_into_omnigent(
     )
     result = await _compile_opencode_plan(
         monkeypatch,
-        artifacts=_ArtifactService(),
+        artifacts=artifacts,
         launch_policy_ref=manifest["launchPolicyRef"],
         plan_store=_PlanStore(object()),
         extra_parameters={
@@ -281,32 +356,25 @@ async def test_batch_github_capabilities_do_not_leak_jira_into_omnigent(
         result.envelope.payload.classAdmissionDecision
         == expected["classAdmissionDecision"]
     )
-    assert result.envelope.payload.resolvedTools["tools"] == expected[
-        "resolvedTools"
-    ]
+    assert result.envelope.payload.resolvedTools["tools"] == expected["resolvedTools"]
 
 
 async def test_default_evidence_admits_opencode_zen_model(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
+    artifacts,
 ) -> None:
     replay_id = "opencode-default-model-evidence-admission"
     manifest = load_replay(replay_id, "manifest.json")
     expected = load_replay(replay_id, "expected-outcome.json")
-    monkeypatch.setenv(
-        "MOONMIND_OMNIGENT_EVIDENCE_POLICY", manifest["evidencePolicy"]
-    )
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", manifest["evidencePolicy"])
     monkeypatch.setenv(
         "MOONMIND_DEPLOYMENT_EVIDENCE_KEY_PATH",
         str(tmp_path / "deployment_evidence_key"),
     )
-    admitted_policy = default_launch_policy_ref(
-        _OPENCODE_ALLOWED_LAUNCH_POLICIES
-    )
+    admitted_policy = default_launch_policy_ref(_OPENCODE_ALLOWED_LAUNCH_POLICIES)
     assert admitted_policy == manifest["launchPolicyRef"]
-    qualified_plan = await _capture_plan_payload(
-        launch_policy_ref=admitted_policy
-    )
+    qualified_plan = await _capture_plan_payload(launch_policy_ref=admitted_policy)
     _write_deployment_evidence(
         tmp_path,
         monkeypatch,
@@ -316,7 +384,7 @@ async def test_default_evidence_admits_opencode_zen_model(
 
     result = await _compile_opencode_plan(
         monkeypatch,
-        artifacts=_ArtifactService(),
+        artifacts=artifacts,
         launch_policy_ref=admitted_policy,
         plan_store=_PlanStore(None),
         extra_parameters={
@@ -337,6 +405,7 @@ async def test_default_evidence_admits_opencode_zen_model(
 async def test_selected_zen_materializer_has_independent_deployment_evidence(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
+    artifacts,
 ) -> None:
     replay_id = "opencode-selected-materializer-evidence-admission"
     manifest = load_replay(replay_id, "manifest.json")
@@ -371,7 +440,7 @@ async def test_selected_zen_materializer_has_independent_deployment_evidence(
 
     result = await _compile_opencode_plan(
         monkeypatch,
-        artifacts=_ArtifactService(),
+        artifacts=artifacts,
         launch_policy_ref=launch_policy_ref,
         plan_store=_PlanStore(None),
         provider_id=manifest["selectedProviderId"],
