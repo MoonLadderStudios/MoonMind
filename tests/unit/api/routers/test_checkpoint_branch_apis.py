@@ -48,6 +48,8 @@ from api_service.services.checkpoint_branch_turn_execution import (
     build_branch_turn_execution_identity,
 )
 from moonmind.schemas.temporal_models import StepLedgerSnapshotModel
+from moonmind.security.operator_admission import OperatorAdmission
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 
 def _empty_dependency() -> SimpleNamespace:
@@ -379,8 +381,9 @@ def _override_user_dependencies(app: FastAPI, user: SimpleNamespace) -> None:
     if not user_dependencies:
         user_dependencies = {get_instance_access, get_instance_access_optional}
 
-    def _current_user() -> SimpleNamespace:
-        return user
+    def _current_user() -> OperatorAdmission:
+        # Historical record ownership is provenance, not current admission.
+        return OperatorAdmission(via="checkpoint-branch-fixture")
 
     for dependency in user_dependencies:
         app.dependency_overrides[dependency] = _current_user
@@ -1020,7 +1023,8 @@ async def test_remediation_checkpoint_branch_repair_creates_fresh_branch_from_co
     )
 
     class _ArtifactService:
-        async def read(self, *, artifact_id: str, principal: str):
+        async def read(self, *, artifact_id: str, access):
+            assert ArtifactAccessContext.require(access).is_operator
             assert artifact_id == "ctx-remediation-1"
             return (
                 SimpleNamespace(
@@ -1232,7 +1236,8 @@ async def test_remediation_checkpoint_branch_repair_resolves_recovery_boundary(
     )
 
     class _ArtifactService:
-        async def read(self, *, artifact_id: str, principal: str):
+        async def read(self, *, artifact_id: str, access):
+            assert ArtifactAccessContext.require(access).is_operator
             return (
                 SimpleNamespace(metadata_json={"artifact_type": "remediation.context"}),
                 json.dumps(
@@ -1319,7 +1324,8 @@ async def test_remediation_checkpoint_branch_repair_rejects_empty_context_body(
     )
 
     class _ArtifactService:
-        async def read(self, *, artifact_id: str, principal: str):
+        async def read(self, *, artifact_id: str, access):
+            assert ArtifactAccessContext.require(access).is_operator
             return (
                 SimpleNamespace(
                     metadata_json={"artifact_type": "remediation.context"}
@@ -1373,7 +1379,8 @@ async def test_remediation_checkpoint_branch_repair_fails_closed_for_unselected_
     )
 
     class _ArtifactService:
-        async def read(self, *, artifact_id: str, principal: str):
+        async def read(self, *, artifact_id: str, access):
+            assert ArtifactAccessContext.require(access).is_operator
             return (
                 SimpleNamespace(
                     metadata_json={"artifact_type": "remediation.context"}

@@ -15177,6 +15177,10 @@ def test_get_execution_step_executions_returns_bounded_manifest_history() -> Non
         via="loopback"
     )
 
+    app.dependency_overrides[executions_module.get_artifact_access] = (
+        lambda: access_for_test("operator")
+    )
+
     async def _read_artifact(**kwargs):
         artifact_id = kwargs["artifact_id"]
         payload = _step_execution_manifest_payload(
@@ -15228,8 +15232,7 @@ def test_get_execution_step_executions_returns_bounded_manifest_history() -> Non
     assert "summary" not in payload["stepExecutions"][1]["outputRefs"]
     assert artifact_service.read.await_args_list[0] == call(
         artifact_id="art-attempt-1",
-        principal=instance_operator_principal(),
-        allow_restricted_raw=True,
+        access=access_for_test("operator"),
     )
 
 
