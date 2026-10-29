@@ -1309,3 +1309,25 @@ def test_journal_transition_actor_selects_its_exact_invocation_owner():
             "integration_matrix"
         ]
     ) == {"suite": ["controller-journey"]}
+
+
+@pytest.mark.parametrize(
+    "changed_path",
+    [
+        # Assessment admission across API, MCP, CLI, and the security.assess
+        # tool: scoped capability checks and their journeys are hermetic
+        # integration tests (MoonLadderStudios/MoonMind#5034).
+        "api_service/services/container_jobs.py",
+        "api_service/api/routers/container_jobs.py",
+        "api_service/api/routers/mcp_tools.py",
+        "moonmind/container_job_cli.py",
+        "moonmind/mcp/container_job_tool_registry.py",
+        "moonmind/workflows/skills/security_assessment.py",
+        "moonmind/security/web_assessments.py",
+    ],
+)
+def test_assessment_admission_paths_select_integration_ci(changed_path: str) -> None:
+    assert (REPO_ROOT / changed_path).exists(), changed_path
+    outputs = _outputs([changed_path])
+    assert outputs["integration_ci"] == "true", changed_path
+    assert outputs["integration_hermetic"] == "true", changed_path

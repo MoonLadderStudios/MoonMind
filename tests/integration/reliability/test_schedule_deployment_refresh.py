@@ -8,16 +8,22 @@ from uuid import uuid4
 import pytest
 
 from api_service.services import omnigent_execution_plan_service
-from api_service.db.models import OmnigentPolicyVersion
+from api_service.db.models import OmnigentExecutionPlanRecord, OmnigentPolicyVersion
 from api_service.services.omnigent_policies import PolicyConflict
 from api_service.services.recurring_workflows_service import (
     RecurringWorkflowConflictError,
     RecurringWorkflowsService,
 )
 from moonmind.omnigent import deployment_identity
+from moonmind.omnigent.harness_platform.stores import InMemoryExecutionPlanStore
 from moonmind.omnigent.profile_bound_execution import _compile_persisted_effective_launch
 from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 from tests.integration.reliability.helpers import load_replay
+from tests.unit.services.test_omnigent_execution_plan_service import (
+    _ArtifactService,
+    _compile_opencode_plan,
+    _configure_ready_host_image_pair,
+)
 from tests.unit.services.test_schedule_deployment_refresh import deployment_session  # noqa: F401
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.reliability_journey]
@@ -43,9 +49,41 @@ async def test_scheduled_image_update_reaches_dispatch_with_matching_authority(
 
     session.scalar = locked_scalar
     parameters = session.parameters()
+    # The saved schedule must carry a real, digest-verified plan before its
+    # frozen inputs can be read. Keep transport fake, not plan authority.
+    with monkeypatch.context() as plan_patch:
+        _configure_ready_host_image_pair(plan_patch)
+        plan_patch.setattr(
+            omnigent_execution_plan_service,
+            "resolve_execution_evidence",
+            lambda *_args, **_kwargs: (None, "uncertified"),
+        )
+        original_plan = await _compile_opencode_plan(
+            plan_patch,
+            artifacts=_ArtifactService(),
+            launch_policy_ref="omnigent-on-demand@1",
+            plan_store=InMemoryExecutionPlanStore(),
+            task_input_snapshot_ref="art_original_task",
+            task_input_snapshot_digest="sha256:" + "a" * 64,
+        )
+    get_record = session.get
+
+    async def persisted_record(model, key):
+        if model is OmnigentExecutionPlanRecord:
+            envelope = original_plan.envelope
+            if key != envelope.planRef:
+                return None
+            return OmnigentExecutionPlanRecord(
+                plan_ref=envelope.planRef,
+                schema_version=envelope.schemaVersion,
+                payload_json=envelope.payload.model_dump(mode="json", by_alias=True),
+            )
+        return await get_record(model, key)
+
+    session.get = persisted_record
     binding = OmnigentExecutionPlanBinding(
-        planRef="omnigent-execution-plan:sha256:" + "1" * 64,
-        planDigest="sha256:" + "1" * 64,
+        planRef=original_plan.binding.plan_ref,
+        planDigest=original_plan.binding.plan_digest,
         planArtifactRef="art_old_plan",
         taskInputSnapshotRef="art_original_task",
         taskInputSnapshotDigest="sha256:" + "a" * 64,

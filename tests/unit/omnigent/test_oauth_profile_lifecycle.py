@@ -5186,6 +5186,7 @@ async def _drive_authority_chain_coordinator(
     session_interruption: bool = True,
     credential_resolver=None,
     resolve_source_credential: bool = False,
+    materialized_input_paths: dict | None = None,
 ) -> tuple[list[str], list[dict], dict, AgentRunResult]:
     """Drive a fully-stubbed on-demand coordinator run with the given runner.
 
@@ -5283,6 +5284,7 @@ async def _drive_authority_chain_coordinator(
             return {
                 "hostId": "host-1",
                 "workspacePath": "/workspaces/run",
+                "materializedInputPaths": dict(materialized_input_paths or {}),
                 "egressAttestation": {
                     "profileRef": "omnigent-egress@1",
                     "profileDigest": "sha256:" + "1" * 64,
@@ -5433,6 +5435,26 @@ async def _drive_authority_chain_coordinator(
         dict(coordinator_result.metadata or {}),
         coordinator_result,
     )
+
+
+@pytest.mark.asyncio
+async def test_profile_bound_projected_receipt_paths_reach_the_actual_first_message():
+    from moonmind.omnigent.execute import _build_omnigent_first_message
+
+    paths = {"inputPath1": ".moonmind/attachments/receipt-hash"}
+
+    async def execute(request, **_kwargs):
+        authorization = request.parameters["omnigent"]["_moonmindProfileAuthorization"]
+        assert authorization["materializedInputPaths"] == paths
+        prompt = await _build_omnigent_first_message(
+            request=request,
+            prompt={"text": "Verify the candidate"},
+            artifact_gateway=SimpleNamespace(),
+        )
+        assert paths["inputPath1"] in prompt["data"]["content"][0]["text"]
+        return AgentRunResult(summary="done")
+
+    await _drive_authority_chain_coordinator(execute, materialized_input_paths=paths)
 
 
 @pytest.mark.asyncio

@@ -110,6 +110,53 @@ def test_feed_refresh_cli_submits_one_source_free_job(tmp_path, monkeypatch):
     assert submitted[0]["imageSourceRef"] == "repository-security"
 
 
+def test_web_assessment_cli_submits_one_typed_job(tmp_path, monkeypatch):
+    admission = tmp_path / "web.json"
+    admission.write_text(
+        json.dumps(
+            {
+                "mode": "baseline",
+                "assessmentRef": "web-1",
+                "origin": "http://app.example.test:8080",
+                "routes": [{"path": "/", "methods": ["GET"]}],
+                "egressPolicyRef": "web-target",
+                "timeoutSeconds": 300,
+            }
+        )
+    )
+    submitted = []
+
+    def run(spec, **kwargs):
+        submitted.append(spec)
+        return ContainerJobResult(
+            job_id="container-job:" + "1" * 32,
+            state="succeeded",
+            exit_code=0,
+            failure_class=None,
+            message=None,
+            logs_ref=None,
+            artifacts_ref=None,
+        )
+
+    monkeypatch.setattr("moonmind.cli.run_container_job", run)
+    result = CliRunner().invoke(
+        app, ["container", "web-assessment", "--admission", str(admission)]
+    )
+    assert result.exit_code == 0, result.output
+    (spec,) = submitted
+    assert spec["webAssessment"]["origin"] == "http://app.example.test:8080"
+    assert spec["imageSourceRef"] == "web-assessment"
+    assert spec["egressPolicyRef"] == "web-target"
+
+    admission.write_text(json.dumps({"mode": "baseline", "origin": "secret-ish"}))
+    refused = CliRunner().invoke(
+        app, ["container", "web-assessment", "--admission", str(admission)]
+    )
+    assert refused.exit_code == 1
+    assert "secret-ish" not in refused.output
+    assert len(submitted) == 1
+
+
 class _FakeClient:
     def __init__(self, states: list[str]) -> None:
         self.states = states

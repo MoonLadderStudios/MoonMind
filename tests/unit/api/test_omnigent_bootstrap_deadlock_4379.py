@@ -10,6 +10,8 @@ equivalent) without manual DB writes.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from api_service.services import omnigent_policies as policies
@@ -25,7 +27,29 @@ NEW_SERVER = "ghcr.io/example/omnigent-server@sha256:" + "b" * 64
 NEW_HOST = "ghcr.io/example/omnigent-host-moonmind@sha256:" + "b" * 64
 
 
+_installed_shared_host: dict[str, str] = {}
+
+
+@pytest.fixture(autouse=True)
+def _deployment_installs_the_resolved_host(monkeypatch):
+    """The deployment image leg installs the host the resolver returns.
+
+    OpenCode policies launch the shared host image (omnigent-opencode@2), which
+    bootstrap reads from the persisted resolved deployment state.
+    """
+
+    _installed_shared_host.clear()
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.store.load_resolved_state",
+        lambda: SimpleNamespace(
+            shared_host_image_ref=_installed_shared_host.get("host")
+        ),
+    )
+
+
 def _image_resolver_factory(server_ref: str, host_ref: str):
+    _installed_shared_host["host"] = host_ref
+
     async def _image(image_ref: str):
         kind = "host" if "host" in image_ref else "server"
         return host_ref if kind == "host" else server_ref

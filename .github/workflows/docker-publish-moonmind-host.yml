@@ -21,15 +21,15 @@ on:
   workflow_dispatch:
     inputs:
       codex_cli_version:
-        description: "Override the Dockerfile Codex pin (>=0.100.0,<0.200.0)"
+        description: "Override the Dockerfile Codex pin (exact release)"
         required: false
         type: string
       claude_cli_version:
-        description: "Override the Dockerfile Claude Code pin (>=2.0.0,<3.0.0)"
+        description: "Override the Dockerfile Claude Code pin (exact release)"
         required: false
         type: string
       opencode_version:
-        description: "Override the Dockerfile OpenCode pin (>=1.17.7,<1.19.0)"
+        description: "Override the Dockerfile OpenCode pin (exact release)"
         required: false
         type: string
       gh_version:
@@ -204,14 +204,8 @@ jobs:
             OMNIGENT_HOST_BASE_IMAGE=${{ steps.base.outputs.base_image }}
             OMNIGENT_BUILD_DIGEST=${{ steps.base.outputs.base_digest }}
             CODEX_CLI_VERSION=${{ needs.metadata.outputs.codex_version }}
-            CODEX_MIN_VERSION=0.100.0
-            CODEX_MAX_VERSION=0.200.0
             CLAUDE_CLI_VERSION=${{ needs.metadata.outputs.claude_version }}
-            CLAUDE_MIN_VERSION=2.0.0
-            CLAUDE_MAX_VERSION=3.0.0
             OPENCODE_VERSION=${{ needs.metadata.outputs.opencode_version }}
-            OPENCODE_MIN_VERSION=1.17.7
-            OPENCODE_MAX_VERSION=1.19.0
             OMNIGENT_GH_VERSION=${{ needs.metadata.outputs.gh_version }}
           outputs: type=image,name=${{ steps.meta.outputs.image_name }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=moonmind-host-${{ steps.meta.outputs.pair }}
@@ -227,7 +221,7 @@ jobs:
           docker pull "${image}" || true
           docker run --rm "${image}" sh -c 'command -v codex && codex --version'
           docker run --rm "${image}" sh -c 'command -v claude && claude --version'
-          docker run --rm "${image}" sh -c 'command -v opencode && opencode --version | grep -E "1\.(17|18)"'
+          docker run --rm "${image}" sh -c 'command -v opencode && opencode --version'
 
       - name: Verify offline OpenCode plugin startup
         run: |
@@ -247,9 +241,9 @@ jobs:
           docker run --rm --network none --user 1000:1000 "${image}" moonmind --help
           # Ordinary and login shells resolve the image-owned executables.
           docker run --rm --network none --user 1000:1000 "${image}" \
-            sh -c 'command -v gh && command -v moonmind && python3 -c "import httpx"'
+            sh -c 'command -v gh && command -v moonmind && python3 -c "import httpx" && jq --version && jq -en "1 + 1 == 2"'
           docker run --rm --network none --user 1000:1000 "${image}" \
-            bash -lc 'command -v gh && command -v moonmind && python3 -c "import httpx"'
+            bash -lc 'command -v gh && command -v moonmind && python3 -c "import httpx" && jq --version && jq -en "1 + 1 == 2"'
           # Runtime user cannot rewrite image-owned tools.
           docker run --rm --network none --user 1000:1000 "${image}" \
             sh -c 'test ! -w /opt/moonmind-tools/bin/gh && test ! -w /opt/moonmind-tools/bin/moonmind'

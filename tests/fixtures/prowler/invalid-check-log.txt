@@ -1,0 +1,2 @@
+{"timestamp": "2026-10-28 11:55:25,220", "filename": "checks_loader.py:90", "level": "CRITICAL", "module": "checks_loader", "message": "Invalid check(s) specified: no_such_check_xyz"}
+{"timestamp": "2026-10-28 11:55:25,221", "filename": "checks_loader.py:93", "level": "CRITICAL", "module": "checks_loader", "message": "Please provide valid check names. Use 'prowler aws --list-checks' to see available checks."}

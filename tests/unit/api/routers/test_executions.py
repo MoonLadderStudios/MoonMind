@@ -9768,6 +9768,14 @@ def test_create_task_shaped_execution_forwards_operator_assessment_scope(
     # The run workflow reads only this run parameter as the operator's scope.
     assert initial_parameters["assessmentScope"] == {
         **_ASSESSMENT_SCOPE,
+        "targets": [
+            {
+                "workspacePath": "app",
+                "webRoutes": [],
+                "webExclusions": [],
+                "cloudRegions": [],
+            }
+        ],
         "configurationExceptions": [],
         "networkRefs": [],
         "grants": [],

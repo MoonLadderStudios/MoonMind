@@ -251,6 +251,7 @@ async def test_refresh_covers_all_launchable_harnesses(inventory_boundary, monke
     monkeypatch.setenv("MOONMIND_OMNIGENT_RESOLVED_IMAGES_PATH", str(tmp_path / "images.json"))
     save_resolved_state(ResolvedOmnigentDeploymentState(
         server_image_ref=server_image, opencode_host_image_ref=host_image,
+        shared_host_image_ref=host_image,
         details={"opencodeHostCompatibility": {
             "status": "ready", "serverImageRef": server_image, "hostImageRef": host_image,
         }},

@@ -555,6 +555,41 @@ def test_concurrent_refresh_and_reads_never_observe_partial_snapshots(tmp_path):
     assert len(list((root / "snapshots").iterdir())) <= 3
 
 
+@pytest.mark.parametrize(
+    ("racing", "relative"), [("read_bytes", feeds.MANIFEST), ("open", "db/trivy.db")]
+)
+def test_retired_then_republished_snapshot_reads_as_absence(
+    tmp_path, monkeypatch, racing, relative
+):
+    # A reader loses files to retention mid-read and a lagging writer then
+    # republishes identical content: that is absence, not corruption. The
+    # race hooks the reads themselves: pathlib's stat helpers call each other
+    # differently across Python versions. Retention's rename is held so the
+    # republished directory cannot reuse the retired one's inode.
+    root = tmp_path / "feeds"
+    snapshot = publish(root)
+    published = root / "snapshots" / snapshot.snapshot_id
+    real = getattr(Path, racing)
+    raced = []
+
+    def retire_and_republish(self, *args, **kwargs):
+        if raced or self != published / relative:
+            return real(self, *args, **kwargs)
+        raced.append(self)
+        published.rename(root / "staging" / "retired")
+        try:
+            return real(self, *args, **kwargs)
+        finally:
+            publish(root)
+
+    monkeypatch.setattr(Path, racing, retire_and_republish)
+    with pytest.raises(feeds.FeedSnapshotError) as error:
+        feeds.load_snapshot(root, snapshot.snapshot_id)
+    assert raced and error.value.code == "feed_snapshot_unavailable"
+    monkeypatch.undo()
+    assert feeds.load_snapshot(root, snapshot.snapshot_id) == snapshot
+
+
 # ----------------------------------------------------- imported archives
 
 
@@ -714,11 +749,16 @@ def test_refresh_job_is_source_free_and_credential_free():
     ],
 )
 def test_refresh_job_rejects_source_credentials_and_redirection(override):
+    # An explicit null attachment list would mount the live workspace.
     spec = refresh_spec(refresh(), **override)
-    if spec.get("inputAttachments") is None:
-        spec.pop("inputAttachments")
     with pytest.raises(ValueError):
         ContainerJobSpec.model_validate(spec)
+
+
+def test_omitted_refresh_attachments_stay_source_free():
+    spec = refresh_spec(refresh())
+    spec.pop("inputAttachments")
+    assert ContainerJobSpec.model_validate(spec).input_attachments == []
 
 
 def test_scanner_reads_feed_snapshot_read_only_without_network():
@@ -857,6 +897,120 @@ async def test_import_launch_mounts_no_workspace_and_only_the_feed_cache_writabl
     feed = next(m for m in mounts if f"dst={feeds.FEED_CACHE_TARGET}" in m)
     assert not feed.endswith(",readonly")
     assert create[create.index("--network") + 1] == "none"
+
+
+# ------------------------------------------- scheduled source-free refresh
+
+
+RESOURCES = {"cpuMillis": 2000, "memoryMiB": 2048, "pids": 256}
+
+
+def _dump(spec: ContainerJobSpec) -> dict:
+    return spec.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
+def test_typed_refresh_expands_to_the_canonical_source_free_job():
+    """A schedule names only the refresh; the owner derives the whole job."""
+    typed = ContainerJobSpec.model_validate(
+        {
+            "feedRefresh": refresh().model_dump(mode="json", by_alias=True),
+            "resources": RESOURCES,
+        }
+    )
+    canonical = ContainerJobSpec.model_validate(feeds.build_feed_refresh_job(refresh()))
+    assert typed.workspace_ref is None
+    assert typed.image_source_ref == "repository-security"
+    assert _dump(typed) == _dump(canonical)
+    # The persisted spec decodes to itself, so exact replay stays exact.
+    assert _dump(ContainerJobSpec.model_validate(_dump(typed))) == _dump(typed)
+    with pytest.raises(ValueError):
+        ContainerJobSpec.model_validate(
+            {
+                "feedRefresh": refresh().model_dump(mode="json", by_alias=True),
+                "resources": RESOURCES,
+                "command": ["-c", "import os"],
+            }
+        )
+
+
+def test_only_source_free_jobs_omit_the_workspace():
+    imported = feeds.build_feed_refresh_job(
+        FeedRefresh(
+            acquisition="import", feedCacheRef="feeds", archiveArtifactRef="art_x1"
+        )
+    )
+    assert ContainerJobSpec.model_validate(imported).workspace_ref is None
+    for spec in (
+        {"image": "alpine:3", "resources": RESOURCES},
+        {
+            "image": "alpine:3",
+            "resources": RESOURCES,
+            "inputAttachments": [{"name": "source", "workspacePath": "."}],
+        },
+    ):
+        with pytest.raises(ValueError, match="workspaceRef"):
+            ContainerJobSpec.model_validate(spec)
+
+
+@pytest.mark.asyncio
+async def test_source_free_job_resolves_and_launches_without_a_workspace(tmp_path):
+    commands = []
+
+    async def runner(args):
+        commands.append(tuple(args))
+        if args[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
+            return 1, b"", b"no such container"
+        return 0, b"", b""
+
+    async def reader(_request, _ref):
+        return b"archive"
+
+    job_id = "container-job:0123456789abcdef0123456789abcdef"
+    spec = feeds.build_feed_refresh_job(
+        FeedRefresh(
+            acquisition="import", feedCacheRef="feeds", archiveArtifactRef="art_x1"
+        )
+    )
+    activity = ContainerJobActivityRequest.model_validate(
+        {
+            "jobId": job_id,
+            "ownershipToken": f"{job_id}:v1",
+            "request": {
+                "idempotencyKey": "feeds",
+                "source": {"source": "workflow", "workflowId": "mm:feeds"},
+                "spec": spec,
+            },
+        }
+    )
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=runner,
+        artifact_reader=reader,
+        settings=resolve_container_backend_settings(
+            {
+                CACHE_SOURCES_ENV_KEY: json.dumps(
+                    [
+                        {
+                            "cacheRef": "feeds",
+                            "volumeName": "scanner-feeds",
+                            "target": feeds.FEED_CACHE_TARGET,
+                            "readOnly": False,
+                        }
+                    ]
+                )
+            }
+        ),
+    )
+    resolved = await backend.resolve_workspace(activity)
+    assert resolved.resolved_workspace_ref is None
+    assert resolved.workspace_probe == "not_mounted"
+    activity.workspace_probe = resolved.workspace_probe
+    activity.resolved_image_ref = "sha256:" + "a" * 64
+    await backend.create_container(activity)
+    create = next(c for c in commands if c[0] == "create")
+    mounts = [create[i + 1] for i, item in enumerate(create) if item == "--mount"]
+    assert not any("dst=/workspace" in m for m in mounts)
+    assert any("dst=/inputs/feed-archive" in m for m in mounts)
 
 
 # ------------------------------------------------ scanner execution record

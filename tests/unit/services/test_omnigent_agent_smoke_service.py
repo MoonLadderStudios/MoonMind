@@ -468,6 +468,7 @@ async def test_smoke_admission_uses_actual_host_instead_of_expired_catalog(sessi
         lambda: SimpleNamespace(
             server_image_ref=server_ref,
             opencode_host_image_ref=host_ref,
+            shared_host_image_ref=host_ref,
             details={
                 "opencodeHostCompatibility": {
                     "status": "ready",

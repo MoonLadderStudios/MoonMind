@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import configparser
 import hashlib
+import logging
 import os
 import shutil
 import stat
@@ -247,6 +248,8 @@ class WorkspaceArtifactProjector:
         checkpoint_contract: str | None = None,
         restore_refs: tuple[str, ...] = (),
         attachment_refs: tuple[str, ...] = (),
+        evidence_bundles: Any = None,
+        mandatory_refs: Any = None,
         workflow_id: str,
         runtime_uid: int,
         runtime_gid: int,
@@ -311,6 +314,7 @@ class WorkspaceArtifactProjector:
             workflow_id=workflow_id,
             runtime_uid=runtime_uid,
             runtime_gid=runtime_gid,
+            **({"evidence_bundles": evidence_bundles, "mandatory_refs": mandatory_refs} if evidence_bundles is not None else {}),
         )
         if attachment_evidence:
             evidence["attachments"] = attachment_evidence
@@ -324,6 +328,8 @@ class WorkspaceArtifactProjector:
         workflow_id: str,
         runtime_uid: int,
         runtime_gid: int,
+        evidence_bundles: Any = None,
+        mandatory_refs: Any = None,
     ) -> list[dict[str, Any]]:
         """Reconcile current inputs without restoring the candidate repository."""
         root = workspace / ".moonmind" / "attachments"
@@ -331,6 +337,11 @@ class WorkspaceArtifactProjector:
             raise WorkspaceArtifactProjectionError(
                 "attachment directories must not be symlinks",
                 code="WORKSPACE_AUTHORITY_MISMATCH",
+            )
+        if evidence_bundles is not None:
+            refs = await self._select_evidence_attachments(
+                refs=refs, bundles=evidence_bundles, mandatory_refs=mandatory_refs,
+                workflow_id=workflow_id,
             )
         evidence = await self._materialize_bundle(
             workspace,
@@ -365,6 +376,90 @@ class WorkspaceArtifactProjector:
         if evidence:
             self._exclude_attachments_from_git(workspace)
         return evidence
+
+    async def _select_evidence_attachments(
+        self, *, refs, bundles, mandatory_refs, workflow_id
+    ):
+        """Fit optional whole receipt groups beside ordinary admitted inputs.
+
+        Stored byte sizes and existing artifact authority own this decision.
+        Neither a producer's manifest nor a caller-supplied size raises an
+        attachment limit or grants access. Materialization revalidates bytes.
+        """
+
+        def invalid(message):
+            return WorkspaceArtifactProjectionError(
+                message, code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED"
+            )
+
+        refs = tuple(dict.fromkeys(refs))
+        if not isinstance(bundles, (list, tuple)) or not isinstance(
+            mandatory_refs, (list, tuple)
+        ):
+            raise invalid("invalid optional evidence groups")
+        groups = []
+        for group in bundles:
+            if (
+                not isinstance(group, (list, tuple))
+                or not 1 <= len(group) <= 33
+                or any(not isinstance(ref, str) or ref not in refs for ref in group)
+            ):
+                raise invalid("evidence groups must contain complete declared inputs")
+            groups.append(tuple(dict.fromkeys(group)))
+        optional = {ref for group in groups for ref in group}
+        if len(optional) > 128 or any(ref not in refs for ref in mandatory_refs):
+            raise invalid("evidence proposal exceeds its bound or loses required inputs")
+        required = set(mandatory_refs) | (set(refs) - optional)
+        while True:
+            expanded = required | {
+                ref for group in groups if required.intersection(group) for ref in group
+            }
+            if expanded == required:
+                break
+            required = expanded
+        selected = [ref for ref in refs if ref in required]
+        if len(selected) > MAX_INPUT_REFS:
+            raise invalid("too many required attachments for the authorized workspace")
+        sizes = {}
+        service = self._require_service("attachments")
+        for ref in refs:
+            admitted = await self._validate_metadata(
+                service,
+                artifact_id=self._artifact_id(ref, noun="attachments"),
+                budget_bytes=MAX_INPUT_BYTES,
+                access=ArtifactAccessContext.for_execution(workflow_id),
+                required_workflow_id=workflow_id,
+            )
+            sizes[ref] = admitted.size_bytes
+        required_known = all(
+            isinstance(sizes[ref], int) and sizes[ref] >= 0 for ref in selected
+        )
+        used = sum(sizes[ref] or 0 for ref in selected)
+        if used > MAX_TOTAL_BYTES:
+            raise invalid(
+                "required attachments exceed the cumulative authorized workspace bound"
+            )
+        # Newest receipts have priority, but every inventory/report group is
+        # all-or-nothing. Unknown sizes cannot consume optional input budget.
+        for group in reversed(groups):
+            extra = [ref for ref in group if ref not in selected]
+            known = required_known and all(
+                isinstance(sizes[ref], int) and sizes[ref] >= 0 for ref in extra
+            )
+            extra_bytes = sum(sizes[ref] or 0 for ref in extra)
+            if (
+                known
+                and len(selected) + len(extra) <= MAX_INPUT_REFS
+                and used + extra_bytes <= MAX_TOTAL_BYTES
+            ):
+                selected.extend(extra)
+                used += extra_bytes
+            else:
+                logging.getLogger(__name__).info(
+                    "Optional evidence bundle omitted by aggregate attachment budget: %s",
+                    group[0],
+                )
+        return tuple(selected)
 
     @staticmethod
     def _clear_runtime_inputs(workspace: Path) -> None:

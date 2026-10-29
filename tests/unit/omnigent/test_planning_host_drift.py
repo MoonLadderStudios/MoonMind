@@ -226,9 +226,11 @@ def _mock_current_host(monkeypatch, host_ref: str) -> None:
         import os
 
         current = os.environ.get("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "")
+        # The default deployment resolves both variables to one shared image.
         return SimpleNamespace(
             server_image_ref=os.environ.get("OMNIGENT_IMAGE_REF"),
             opencode_host_image_ref=current,
+            shared_host_image_ref=current,
             details={
                 "opencodeHostCompatibility": {
                     "status": "ready",

@@ -34,7 +34,9 @@ from api_service.db.models import (
 )
 from api_service.services.omnigent_agent_bootstrap_service import (
     BOOTSTRAP_PROFILE_ID,
+    CLAUDE_API_KEY_BUILTIN_PROFILE_ID,
     CLAUDE_BUILTIN_PROFILE_ID,
+    CODEX_API_KEY_BUILTIN_PROFILE_ID,
     OPENCODE_BUILTIN_PROFILE_ID,
     BootstrapDefaultConflictError,
     build_bootstrap_document,
@@ -51,7 +53,10 @@ from api_service.services.omnigent_agent_profile_service import (
     synchronize_upstream_inventory,
 )
 from api_service.services.omnigent_policies import seed_bootstrap_policies
-from api_service.services.profile_execution_selection import profile_execution_selection
+from api_service.services.profile_execution_selection import (
+    profile_execution_selection,
+    profile_route_runtime,
+)
 
 TRUST_CORE_TRUSTED = "core_trusted"
 
@@ -246,8 +251,12 @@ async def test_seed_uses_builtin_codex_when_env_absent(session):
         )
         is True
     )
-    count = await session.scalar(select(func.count()).select_from(OmnigentAgentProfile))
-    assert count == 1
+    # The stock Codex agent backs the OAuth default and the managed API-key
+    # configuration.
+    assert set(await session.scalars(select(OmnigentAgentProfile.profile_id))) == {
+        BOOTSTRAP_PROFILE_ID,
+        CODEX_API_KEY_BUILTIN_PROFILE_ID,
+    }
     profile = await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID)
     assert profile is not None
     assert profile.state == "active"
@@ -403,6 +412,176 @@ async def test_connected_claude_resolves_managed_omnigent_configuration(
         session, inventory=inventory
     )
     assert claude.active_version == 2
+
+
+def _api_key_claude_provider(profile_id: str, **env):
+    return SimpleNamespace(
+        profile_id=profile_id,
+        runtime_id="claude_code",
+        provider_id="anthropic",
+        credential_source="secret_ref",
+        runtime_materialization_mode="api_key_env",
+        execution_configuration=None,
+        secret_refs={"anthropic_api_key": "env://ANTHROPIC_API_KEY"},
+        env_template={
+            "ANTHROPIC_API_KEY": {"from_secret_ref": "anthropic_api_key"},
+            **env,
+        },
+        file_templates=None,
+        home_path_overrides=None,
+    )
+
+
+async def test_api_key_claude_profiles_route_through_managed_api_key_configuration(
+    session, monkeypatch
+):
+    monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "true")
+    shared_image = "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "3" * 64
+
+    async def resolver(image_ref: str) -> str:
+        return shared_image
+
+    await seed_bootstrap_policies(
+        session,
+        env={
+            "MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED": "true",
+            "OMNIGENT_SHARED_HOST_IMAGE_REF": shared_image,
+        },
+        image_resolver=resolver,
+    )
+    api_key = _api_key_claude_provider("claude_anthropic_api")
+    # A deployment that has not reconciled the configuration yet keeps
+    # routing the Profile to its direct launch.
+    assert await profile_route_runtime(session, None, api_key) == "claude_code"
+
+    inventory = [
+        {
+            "id": "ag_claude",
+            "name": "claude-native-ui",
+            "version": "2",
+            "harness": "claude-native",
+            "capabilities": ["session.start"],
+        }
+    ]
+    await synchronize_upstream_inventory(
+        session, endpoint_ref="default", bridge_mode="proxy", inventory=inventory
+    )
+    assert await reconcile_builtin_claude_agent_profile(session, inventory=inventory)
+    managed = await session.get(OmnigentAgentProfile, CLAUDE_API_KEY_BUILTIN_PROFILE_ID)
+    assert managed is not None
+    assert managed.default_for_runtime is False
+    version = await session.scalar(
+        select(OmnigentAgentProfileVersion).where(
+            OmnigentAgentProfileVersion.profile_id == CLAUDE_API_KEY_BUILTIN_PROFILE_ID,
+            OmnigentAgentProfileVersion.version == managed.active_version,
+        )
+    )
+    assert version.rollout_metadata["managedBuiltin"] == "claude-api-key"
+    assert version.document["harness"] == "claude-native"
+    assert version.document["policyRef"] == "claude-on-demand@1"
+    assert version.document["providerRequirements"] == {
+        "credentialSource": "secret_ref",
+        "materializationMode": "api_key_env",
+        "providerIds": ["anthropic"],
+        "runtimeId": "claude_code",
+    }
+
+    assert await profile_route_runtime(session, None, api_key) == "omnigent"
+    selection = await profile_execution_selection(session, api_key, None)
+    assert selection["profileId"] == CLAUDE_API_KEY_BUILTIN_PROFILE_ID
+    assert selection["harnessId"] == "claude-native"
+    # A launch environment the provider config cannot carry stays direct.
+    untranslatable = _api_key_claude_provider(
+        "claude_custom_endpoint",
+        ANTHROPIC_BASE_URL="https://api.minimax.io/anthropic",
+    )
+    assert await profile_route_runtime(session, None, untranslatable) == "claude_code"
+
+    # Reconciliation is idempotent for both managed configurations.
+    assert await reconcile_builtin_claude_agent_profile(session, inventory=inventory)
+    assert (
+        await session.scalar(
+            select(func.count())
+            .select_from(OmnigentAgentProfileVersion)
+            .where(
+                OmnigentAgentProfileVersion.profile_id
+                == CLAUDE_API_KEY_BUILTIN_PROFILE_ID
+            )
+        )
+        == 1
+    )
+
+
+def _api_key_codex_provider(profile_id: str, **env):
+    return SimpleNamespace(
+        profile_id=profile_id,
+        runtime_id="codex_cli",
+        provider_id="openai",
+        credential_source="secret_ref",
+        runtime_materialization_mode="api_key_env",
+        execution_configuration=None,
+        secret_refs={"openai_api_key": "env://OPENAI_API_KEY"},
+        env_template={"OPENAI_API_KEY": {"from_secret_ref": "openai_api_key"}, **env},
+        file_templates=None,
+        home_path_overrides=None,
+    )
+
+
+async def test_api_key_codex_profiles_route_through_managed_api_key_configuration(
+    session,
+):
+    api_key = _api_key_codex_provider("codex_openai_api")
+    # A deployment that has not reconciled the configuration yet keeps
+    # routing the Profile to its direct launch.
+    assert await profile_route_runtime(session, None, api_key) == "codex_cli"
+
+    inventory = _inventory("codex-native-ui")
+    assert await reconcile_bootstrap_agent_profile(session, env={}, inventory=inventory)
+    managed = await session.get(OmnigentAgentProfile, CODEX_API_KEY_BUILTIN_PROFILE_ID)
+    assert managed is not None
+    assert managed.default_for_runtime is False
+    version = await session.scalar(
+        select(OmnigentAgentProfileVersion).where(
+            OmnigentAgentProfileVersion.profile_id == CODEX_API_KEY_BUILTIN_PROFILE_ID,
+            OmnigentAgentProfileVersion.version == managed.active_version,
+        )
+    )
+    assert version.rollout_metadata["managedBuiltin"] == "codex-api-key"
+    assert version.rollout_metadata["origin"] == "builtin_codex"
+    assert version.document["harness"] == "codex-native"
+    assert version.document["source"]["upstreamId"] == "codex-native-ui"
+    assert version.document["providerRequirements"] == {
+        "credentialSource": "secret_ref",
+        "materializationMode": "api_key_env",
+        "providerIds": ["openai"],
+        "runtimeId": "codex_cli",
+    }
+
+    assert await profile_route_runtime(session, None, api_key) == "omnigent"
+    selection = await profile_execution_selection(session, api_key, None)
+    assert selection["profileId"] == CODEX_API_KEY_BUILTIN_PROFILE_ID
+    assert selection["harnessId"] == "codex-native"
+    # A Profile whose own config.toml or endpoint the provider config cannot
+    # carry stays direct.
+    untranslatable = _api_key_codex_provider(
+        "codex_custom_endpoint", OPENAI_BASE_URL="https://api.minimax.io/v1"
+    )
+    assert await profile_route_runtime(session, None, untranslatable) == "codex_cli"
+
+    # Reconciliation is idempotent.
+    assert await reconcile_bootstrap_agent_profile(session, env={}, inventory=inventory)
+    assert (
+        await session.scalar(
+            select(func.count())
+            .select_from(OmnigentAgentProfileVersion)
+            .where(
+                OmnigentAgentProfileVersion.profile_id
+                == CODEX_API_KEY_BUILTIN_PROFILE_ID
+            )
+        )
+        == 1
+    )
 
 
 async def test_seed_does_not_claim_ready_before_upstream_identity_is_observed(session):

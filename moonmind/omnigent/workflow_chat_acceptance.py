@@ -247,7 +247,7 @@ WORKFLOW_CHAT_COMBINATIONS: tuple[WorkflowChatCombination, ...] = (
     WorkflowChatCombination(
         combination_id="opencode-through-generic-omnigent-host",
         harness_id="opencode-native",
-        host_class_ref="omnigent-opencode@1",
+        host_class_ref="omnigent-opencode@2",
         launch_policy_ref="opencode-on-demand@1",
         execution_realizer_ref="generic-omnigent-host@1",
         compose_profile="omnigent-host-codex",
@@ -256,9 +256,8 @@ WORKFLOW_CHAT_COMBINATIONS: tuple[WorkflowChatCombination, ...] = (
         provider_profile_class=_OPENCODE_API_KEY_PROFILE_CLASS,
         credential_materializer_ref="opencode-auth-json@1",
         auth_mode="opencode-api-key",
-        # The OpenCode journey runs the dedicated OpenCode host image, which is
-        # pinned separately from the Codex host digest.
-        host_image_key="opencodeHost",
+        # Fresh OpenCode work runs the shared host image, like Codex.
+        host_image_key="host",
     ),
 )
 

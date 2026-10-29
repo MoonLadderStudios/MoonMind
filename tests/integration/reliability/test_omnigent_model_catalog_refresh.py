@@ -134,6 +134,11 @@ def _install_catalog_cli(root: Path, *, fault: str) -> None:
             "model_corrected",
         )
     ]
+    # A changed vendor release is provenance; an absent runtime is not.
+    + [
+        (fault, "opencode-native")
+        for fault in ("vendor_release_changed", "vendor_runtime_missing")
+    ]
     + [
         (fault, "codex-native")
         for fault in (
@@ -253,6 +258,12 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
             assert argv[:3] == ["docker", "exec", "replay-host"]
             if argv[3:] == ["/opt/venv/bin/omnigent", "--version"]:
                 return 0, "omnigent 0.13.0", ""
+            if argv[3:] == ["opencode", "--version"]:
+                events.append("vendor_version")
+                if fault == "vendor_runtime_missing":
+                    # The real backend turns the failed exec into its typed cause.
+                    return await super().run(["sh", "-c", "exit 127"], **kwargs)
+                return 0, "opencode 2.0.1", ""
             if argv[3] == "/bin/sh":
                 if argv[-1] == "/home/app/.codex":
                     return 0, "4", ""
@@ -368,13 +379,13 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
             return {"containerRemoved": True}
 
     monkeypatch.setattr(
-        attestation,
-        "_run_exact_host_runner_command",
+        attestation.upstream_probes,
+        "run_runner_command",
         AsyncMock(return_value=(0, "", "")),
     )
     monkeypatch.setattr(
-        attestation,
-        "_run_exact_host_opencode_command",
+        attestation.upstream_probes,
+        "run_opencode_shell_command",
         AsyncMock(return_value=(0, "", "")),
     )
     monkeypatch.setattr(
@@ -391,7 +402,13 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
             SimpleNamespace(
                 harnessId=harness_id,
                 implementationRef="harness@1",
-                runtimeDependencies=[],
+                # The support evidence recorded this release; the vendor
+                # faults launch a host whose runtime differs from it.
+                runtimeDependencies=(
+                    [{"name": "opencode", "version": "1.18.11"}]
+                    if fault.startswith("vendor_")
+                    else []
+                ),
             )
         ],
     )
@@ -494,6 +511,16 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
         assert candidate.read_text() == "preserved edits"
         assert plan.payload.modelConfig.qualifiedId == selected_model
         return
+    if fault == "vendor_runtime_missing":
+        with pytest.raises(HarnessPlatformError) as exc:
+            await runtime.realize(**realize_inputs)
+        assert exc.value.code == "OMNIGENT_VENDOR_RUNTIME_MISMATCH"
+        assert remediation_for(exc.value.code) == "align_vendor_runtime"
+        assert attempts == []
+        assert events.count("launch") == 1
+        assert events[-1] == "cleanup"
+        assert candidate.read_text() == "preserved edits"
+        return
     catalog_exhausted = fault in {
         "exhausted",
         "artifact_error",
@@ -520,13 +547,31 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
         if terminal_http_error:
             assert exc.value.status_code == int(fault.removeprefix("http_"))
         elif fault != "cancelled":
+            # Reads that never completed observed no absence: the cause stays
+            # an unavailable catalog, not a request to pick another model.
             assert exc.value.code == (
-                "OMNIGENT_MODEL_UNAVAILABLE"
-                if catalog_exhausted
-                else "OMNIGENT_HARNESS_BUILD_MISMATCH"
+                "OMNIGENT_HARNESS_BUILD_MISMATCH"
+                if not catalog_exhausted
+                else (
+                    "OMNIGENT_HARNESS_CATALOG_UNAVAILABLE"
+                    if fault == "probe_exhausted"
+                    else "OMNIGENT_MODEL_UNAVAILABLE"
+                )
+            )
+            assert remediation_for(exc.value.code) == (
+                "retry_catalog_sync"
+                if fault == "probe_exhausted"
+                else (
+                    "select_available_model"
+                    if catalog_exhausted
+                    else "align_host_build"
+                )
             )
         assert len(attempts) == (manifest["maxAttempts"] if catalog_exhausted else 1)
-        if catalog_exhausted:
+        if fault == "probe_exhausted":
+            assert "could not be read on the exact host in 3 attempts" in str(exc.value)
+            assert exc.value.transient is True
+        elif catalog_exhausted:
             assert "after 3 catalog reads" in str(exc.value)
         if fault.startswith("model_mismatch"):
             assert "opencode-go/gemini-4-argon-contributor" in str(exc.value)
@@ -542,12 +587,26 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
         assert "cleanup" not in events
         assert len(attempts) == (
             1
-            if fault in {"none", "model_corrected", "oauth_aged", "oauth_reconnected"}
+            if fault
+            in {
+                "none",
+                "model_corrected",
+                "oauth_aged",
+                "oauth_reconnected",
+                "vendor_release_changed",
+            }
             else 2
         )
         if fault.startswith("oauth_"):
             assert events.index("login_session") < events.index("catalog")
             assert events.count("login_session") == len(attempts) + 1
+        if fault == "vendor_release_changed":
+            host_evidence = json.loads(
+                (tmp_path / "generic-host-attestation.json").read_text()
+            )
+            # Observed and declared releases are both kept for diagnosis.
+            assert host_evidence["runtimeVersions"] == {"opencode": "opencode 2.0.1"}
+            assert host_evidence["declaredRuntimeVersions"] == {"opencode": "1.18.11"}
     record_ended_login.assert_not_awaited()
     assert events.count("launch") == 1
     assert set(attempts) == {"replay-host"}
@@ -573,7 +632,13 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
             "request_timeout",
             "probe_exhausted",
         }:
-            assert evidence["attempts"][0]["errorCode"] == "OMNIGENT_MODEL_UNAVAILABLE"
+            assert (
+                evidence["attempts"][0]["errorCode"]
+                == "OMNIGENT_HARNESS_CATALOG_UNAVAILABLE"
+            )
         if fault == "model_mismatch_probe_error":
-            assert evidence["attempts"][-1]["errorCode"] == "OMNIGENT_MODEL_UNAVAILABLE"
+            assert (
+                evidence["attempts"][-1]["errorCode"]
+                == "OMNIGENT_HARNESS_CATALOG_UNAVAILABLE"
+            )
         assert "private provider diagnostic" not in json.dumps(evidence)

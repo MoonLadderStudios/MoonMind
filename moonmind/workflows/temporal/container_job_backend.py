@@ -82,6 +82,7 @@ from moonmind.schemas.workspace_locator_models import (
     ManagedWorkspaceLocator,
     SandboxWorkspaceLocator,
 )
+from moonmind.security.cloud_assessments import CloudImage, summarize_cloud_assessment
 from moonmind.security.container_services import (
     SERVICE_DIGEST_LABEL,
     SERVICE_LABEL,
@@ -126,6 +127,19 @@ from moonmind.security.workload_credentials import (
     launch_authorizations,
     parse_aws_source,
     session_seconds,
+    web_identity_authorization,
+)
+from moonmind.security.web_assessments import (
+    API_FILES,
+    API_INPUT,
+    CREDENTIAL_TARGET as WEB_CREDENTIAL_TARGET,
+    WEB_OUTPUT_FILES,
+    WebEvidenceError,
+    check_api_definition,
+    render_web_assessment_plan,
+    sanitize_messages,
+    sanitize_report,
+    summarize_web_assessment,
 )
 from moonmind.security.workload_profiles import (
     WORKLOAD_CREDENTIALS_TARGET,
@@ -579,7 +593,12 @@ class _CapacityWait(RuntimeError):
 
 def _withholds_console(spec) -> bool:
     """Scanner console output can repeat inputs; evidence is the checked output."""
-    return spec.repository_scan is not None or spec.image_assessment is not None
+    return (
+        spec.repository_scan is not None
+        or spec.image_assessment is not None
+        or spec.web_assessment is not None
+        or spec.cloud_assessment is not None
+    )
 
 
 class DockerContainerJobBackend:
@@ -1181,6 +1200,10 @@ class DockerContainerJobBackend:
 
     async def resolve_workspace(self, request: ContainerJobActivityRequest):
         locator = request.request.spec.workspace_ref
+        if locator is None:
+            # Source-free: the job reads only captured artifacts and job-owned
+            # storage, so there is no workspace to authorize or mount.
+            return ContainerJobActivityResult(workspaceProbe="not_mounted")
         if isinstance(locator, ManagedWorkspaceLocator):
             if self._managed_run_store is None:
                 raise RuntimeError("managed run store is unavailable")
@@ -1360,8 +1383,16 @@ class DockerContainerJobBackend:
         if code:
             failure = classify_pull_failure(stderr.decode(errors="replace"))
             detail = f"docker pull failed for the requested image ({failure.value})"
+            if failure is ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED:
+                detail += (
+                    " A registry denial does not establish that the repository or "
+                    "tag exists. Verify successful image publication and the exact "
+                    "reference, then the existing pull identity's permissions before "
+                    "changing credentials or image admission."
+                )
             if (
                 failure is ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED
+                and auth_dir is None
                 and image_source_ref is not None
                 and direct_reference
             ):
@@ -1369,9 +1400,8 @@ class DockerContainerJobBackend:
                 # which authenticates only through the deployment GitHub
                 # credential. A source registryCredentialRef would not apply
                 # to this request, so never advise it here.
-                detail = (
-                    f"docker pull failed for the requested image ({failure.value}): "
-                    f"the image is in the repository of deployment image source "
+                detail += (
+                    " The image is in the repository of deployment image source "
                     f"{image_source_ref!r}, but no deployment GitHub credential "
                     "was available, so the pull was anonymous and the registry "
                     "denied it. Give the deployment GitHub credential "
@@ -1383,6 +1413,7 @@ class DockerContainerJobBackend:
                 )
             elif (
                 failure is ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED
+                and auth_dir is None
                 and image_source_ref is not None
             ):
                 # This source took the public path because it declares no
@@ -1392,15 +1423,19 @@ class DockerContainerJobBackend:
                 # deployment sources needs authenticating. Never name the
                 # credential itself.
                 registry = normalize_image_reference(image).registry
-                detail = (
-                    f"docker pull failed for the requested image ({failure.value}): "
-                    f"deployment image source {image_source_ref!r} resolved to "
+                detail += (
+                    f" Deployment image source {image_source_ref!r} resolved to "
                     f"{registry} without a registryCredentialRef, so the pull was "
                     "anonymous and the registry denied it. Configure that source's "
                     "registryCredentialRef with a managed secret holding "
                     "'username:token' for that registry, or point the source at a "
                     "publicly readable image."
                 )
+            elif (
+                failure is ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED
+                and auth_dir is not None
+            ):
+                detail += " The pull used an existing authorized registry identity."
             raise ImageAcquisitionError(
                 detail,
                 failure_class=failure,
@@ -1830,7 +1865,7 @@ class DockerContainerJobBackend:
         spec = request.request.spec
         # Workspace visibility is authorized before any expensive acquisition,
         # so a missing-image pull can never precede workspace resolution.
-        if not request.resolved_workspace_ref:
+        if not request.resolved_workspace_ref and spec.workspace_ref is not None:
             raise ImageAcquisitionError(
                 "workspace must be resolved before image acquisition",
                 failure_class=ContainerJobFailureClass.WORKSPACE,
@@ -2720,9 +2755,11 @@ class DockerContainerJobBackend:
             return []
 
     async def create_container(self, request: ContainerJobActivityRequest):
-        if not request.resolved_workspace_ref or not request.resolved_image_ref:
-            raise RuntimeError("resolved workspace and image are required")
         spec = request.request.spec
+        if not request.resolved_image_ref or (
+            not request.resolved_workspace_ref and spec.workspace_ref is not None
+        ):
+            raise RuntimeError("resolved workspace and image are required")
         validate_scanner_job(spec)
         try:
             # Retries and restarts reach this point too: a profile job runs
@@ -2794,52 +2831,60 @@ class DockerContainerJobBackend:
             )
             network_mode = egress_attestation.network_ref
         await self._reject_ownership_collision(request, name)
-        volume_name = request.resolved_workspace_volume_name
-        volume_subpath = request.resolved_workspace_volume_subpath
-        if (
-            not volume_name
-            and not volume_subpath
-            and self._workspace_volume_name is not None
-        ):
-            # Already-running workflows may carry the pre-volume Activity shape.
-            # Reconstruct only deployment-owned metadata at the trusted launch
-            # boundary so those histories use the same daemon-visible mount.
-            workspace = Path(request.resolved_workspace_ref).resolve()
-            if not workspace.is_relative_to(self._workspace_root):
-                raise RuntimeError("resolved workspace escapes its authority")
-            derived_subpath = workspace.relative_to(self._workspace_root).as_posix()
-            if not derived_subpath or derived_subpath == "." or "," in derived_subpath:
-                raise RuntimeError(
-                    "resolved workspace has an invalid volume subpath"
+        workspace_mount = None
+        if spec.workspace_ref is not None:
+            volume_name = request.resolved_workspace_volume_name
+            volume_subpath = request.resolved_workspace_volume_subpath
+            if (
+                not volume_name
+                and not volume_subpath
+                and self._workspace_volume_name is not None
+            ):
+                # Already-running workflows may carry the pre-volume Activity shape.
+                # Reconstruct only deployment-owned metadata at the trusted launch
+                # boundary so those histories use the same daemon-visible mount.
+                workspace = Path(request.resolved_workspace_ref).resolve()
+                if not workspace.is_relative_to(self._workspace_root):
+                    raise RuntimeError("resolved workspace escapes its authority")
+                derived_subpath = workspace.relative_to(self._workspace_root).as_posix()
+                if (
+                    not derived_subpath
+                    or derived_subpath == "."
+                    or "," in derived_subpath
+                ):
+                    raise RuntimeError(
+                        "resolved workspace has an invalid volume subpath"
+                    )
+                volume_name = self._workspace_volume_name
+                volume_subpath = derived_subpath
+            if bool(volume_name) != bool(volume_subpath):
+                raise RuntimeError("resolved workspace volume metadata is incomplete")
+            if volume_name and volume_subpath:
+                if volume_name != self._workspace_volume_name:
+                    raise RuntimeError(
+                        "resolved workspace volume is not deployment-authorized"
+                    )
+                workspace = Path(request.resolved_workspace_ref).resolve()
+                if not workspace.is_relative_to(self._workspace_root):
+                    raise RuntimeError("resolved workspace escapes its authority")
+                expected_subpath = workspace.relative_to(
+                    self._workspace_root
+                ).as_posix()
+                if volume_subpath != expected_subpath:
+                    raise RuntimeError(
+                        "resolved workspace volume subpath does not match workspace"
+                    )
+                workspace_mount = (
+                    f"type=volume,src={volume_name},dst=/workspace,"
+                    f"volume-subpath={volume_subpath}"
                 )
-            volume_name = self._workspace_volume_name
-            volume_subpath = derived_subpath
-        if bool(volume_name) != bool(volume_subpath):
-            raise RuntimeError("resolved workspace volume metadata is incomplete")
-        if volume_name and volume_subpath:
-            if volume_name != self._workspace_volume_name:
-                raise RuntimeError(
-                    "resolved workspace volume is not deployment-authorized"
+            else:
+                # Preserve the pre-volume activity shape for already-started runs.
+                workspace_mount = (
+                    f"type=bind,src={request.resolved_workspace_ref},dst=/workspace"
                 )
-            workspace = Path(request.resolved_workspace_ref).resolve()
-            if not workspace.is_relative_to(self._workspace_root):
-                raise RuntimeError("resolved workspace escapes its authority")
-            expected_subpath = workspace.relative_to(self._workspace_root).as_posix()
-            if volume_subpath != expected_subpath:
-                raise RuntimeError(
-                    "resolved workspace volume subpath does not match workspace"
-                )
-            workspace_mount = (
-                f"type=volume,src={volume_name},dst=/workspace,"
-                f"volume-subpath={volume_subpath}"
-            )
-        else:
-            # Preserve the pre-volume activity shape for already-started runs.
-            workspace_mount = (
-                f"type=bind,src={request.resolved_workspace_ref},dst=/workspace"
-            )
-        if spec.workspace_read_only:
-            workspace_mount += ",readonly"
+            if spec.workspace_read_only:
+                workspace_mount += ",readonly"
         # An attachment job never sees the live workspace: its inputs are
         # captured read-only copies and it writes only to job-owned storage.
         mounts = (
@@ -2848,6 +2893,8 @@ class DockerContainerJobBackend:
             else [workspace_mount]
         )
         mounts.extend(await self._deliver_target_credential(request))
+        mounts.extend(await self._prepare_web_assessment(request))
+        await self._prepare_cloud_assessment(request)
         credential_args = await self._deliver_workload_credentials(request)
         args = [
             "create",
@@ -2885,6 +2932,11 @@ class DockerContainerJobBackend:
         for mount in mounts:
             args.extend(("--mount", mount))
         args.extend(("--cpus", str(cpu_limit / 1000)))
+        if spec.repository_scan is not None and spec.input_attachments is not None:
+            # The scanner writes only to its job-owned /outputs and /tmp; its
+            # image root stays read-only. Opengrep's one-file release executes
+            # an extracted child from that /tmp, so scratch must stay exec.
+            args.append("--read-only")
         if spec.repository_scan is not None and spec.input_attachments is None:
             output = self._scanner_output_directory(request)
             if volume_name and volume_subpath:
@@ -3061,7 +3113,12 @@ class DockerContainerJobBackend:
         """Capture inputs once into job-owned storage and return its mounts."""
 
         storage = self._attachment_storage(request)
-        workspace = Path(request.resolved_workspace_ref).resolve()
+        # Source-free jobs have no workspace and capture no workspace paths.
+        workspace = (
+            Path(request.resolved_workspace_ref).resolve()
+            if request.resolved_workspace_ref
+            else None
+        )
         admitted = {item.name: item for item in request.request.spec.input_attachments}
 
         async def capture(name: str, destination: Path) -> dict:
@@ -3188,6 +3245,95 @@ class DockerContainerJobBackend:
                 storage, "credentials", TARGET_AUTH_TARGET, read_only=True
             )
         ]
+
+    async def _prepare_web_assessment(
+        self, request: ContainerJobActivityRequest
+    ) -> list[str]:
+        """Check the definition, write the plan and deliver the identity secret.
+
+        Runs on every create. The plan is rendered from the admitted
+        assessment alone; the secret is a read-only file outside the plan,
+        argv and environment, and is removed once the container exits.
+        """
+
+        web = request.request.spec.web_assessment
+        if web is None:
+            return []
+        storage = self._attachment_storage(request)
+        if web.api_definition is not None:
+            captured = storage.inputs / API_INPUT / API_FILES[web.api_definition.format]
+            try:
+                body = await asyncio.to_thread(captured.read_bytes)
+                check_api_definition(web, body)
+            except (OSError, WebEvidenceError) as exc:
+                raise ContainerJobBackendError(
+                    ContainerJobFailureClass.AUTHORIZATION,
+                    "API definition is unreadable or outside the admitted scope",
+                ) from exc
+        try:
+            await asyncio.to_thread(
+                attachments.write_plan,
+                storage.outputs / web.output_directory,
+                render_web_assessment_plan(web),
+            )
+        except OSError as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.WORKSPACE,
+                "web assessment plan could not be written",
+            ) from exc
+        try:
+            decision = web_identity_authorization(
+                request, now=datetime.now(timezone.utc)
+            )
+        except TimeoutError as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.CREDENTIAL_EXPIRED, str(exc)
+            ) from exc
+        except PermissionError as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.AUTHORIZATION, str(exc)
+            ) from exc
+        if decision is None:
+            return []
+        secret = await self._resolve_workload_secret(decision)
+        try:
+            await asyncio.to_thread(
+                attachments.deliver_credential,
+                storage,
+                secret.encode(),
+                ownership_token=request.ownership_token,
+                file_name="secret",
+            )
+        except (attachments.AttachmentStorageError, OSError) as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.WORKSPACE,
+                "web identity credential could not be delivered",
+            ) from exc
+        return [
+            self._attachment_mount(
+                storage, "credentials", WEB_CREDENTIAL_TARGET, read_only=True
+            )
+        ]
+
+    async def _prepare_cloud_assessment(
+        self, request: ContainerJobActivityRequest
+    ) -> None:
+        """Prowler opens its log file before creating its output directory."""
+
+        cloud = request.request.spec.cloud_assessment
+        if cloud is None:
+            return
+        storage = self._attachment_storage(request)
+        try:
+            await asyncio.to_thread(
+                attachments.prepare_output_directory,
+                storage.outputs / cloud.output_directory,
+            )
+        except OSError as exc:
+            raise ContainerJobBackendError(
+                ContainerJobFailureClass.WORKSPACE,
+                "cloud assessment output directory could not be prepared",
+            ) from exc
 
     def _output_root(self, request: ContainerJobActivityRequest) -> Path:
         storage = self._attachment_storage(request)
@@ -3846,6 +3992,10 @@ class DockerContainerJobBackend:
             return await self._collect_scanner_outputs(request)
         if request.request.spec.image_assessment is not None:
             return await self._collect_image_assessment_outputs(request)
+        if request.request.spec.web_assessment is not None:
+            return await self._collect_web_assessment_outputs(request)
+        if request.request.spec.cloud_assessment is not None:
+            return await self._collect_cloud_assessment_outputs(request, delivered)
         outputs = request.request.spec.outputs
         if not outputs or self._publish is None:
             return []
@@ -4034,12 +4184,19 @@ class DockerContainerJobBackend:
             except (ValueError, TypeError, RecursionError):
                 payload = b""
                 limitations.append("native_evidence_unavailable")
+                # An unproduced report (a stopped scan) leaves nothing to keep;
+                # a rejected one is the only copy, so release retains it.
+                missing = by_name[mode]["status"] == ArtifactCollectionStatus.MISSING
                 manifest.append(
                     ContainerJobArtifact(
                         name=mode,
                         relativePath=f"{output_directory}/{mode}.json",
-                        collectionStatus="rejected",
-                        detail="Native evidence unavailable or sanitization failed.",
+                        collectionStatus="missing" if missing else "rejected",
+                        detail=(
+                            "Native evidence was not produced."
+                            if missing
+                            else "Native evidence unavailable or sanitization failed."
+                        ),
                     )
                 )
             state = execution.states[mode] if execution else terminal
@@ -4302,6 +4459,257 @@ class DockerContainerJobBackend:
             )
         except ValueError:
             rejected("summary", "Image assessment summary exceeds the output bound.")
+        return manifest
+
+    async def _collect_web_assessment_outputs(
+        self, request: ContainerJobActivityRequest
+    ):
+        """Sanitize ZAP's native evidence and publish it with its summary.
+
+        Reads whatever exists, so a timeout or cancellation during active
+        testing still publishes the passive phase. The identity secret leaves
+        the container's mount but stays worker-only until cleanup, so this
+        and any retried publication scrub every copy.
+        """
+        storage = self._attachment_storage(request)
+        secrets: list[str] = []
+        if storage is not None:
+            secret = await asyncio.to_thread(
+                attachments.retire_credential, storage, "secret"
+            )
+            if secret:
+                secrets.append(secret)
+        if self._publish is None:
+            return []
+        spec = request.request.spec
+        web = spec.web_assessment
+        entries = await asyncio.to_thread(
+            self._build_output_entries, self._output_root(request), list(spec.outputs)
+        )
+        payloads = {e["name"]: e["payload"] for e in entries}
+        manifest: list[ContainerJobArtifact] = []
+        bytes_remaining = self._settings.max_output_total_bytes
+        files_remaining = self._settings.max_output_files
+        limit = web.max_report_bytes
+
+        async def publish(name, payload, *, media_type, relative_path):
+            nonlocal bytes_remaining, files_remaining
+            if len(payload) > min(limit, bytes_remaining) or files_remaining < 1:
+                manifest.append(
+                    ContainerJobArtifact(
+                        name=name,
+                        relativePath=relative_path,
+                        collectionStatus="rejected",
+                        detail="Output exceeds the collection ceiling.",
+                    )
+                )
+                return None
+            suffix = os.path.splitext(relative_path)[1]
+            ref = await self._publish_artifact(
+                request, f"{request.job_id}-output-{name}{suffix}", payload
+            )
+            bytes_remaining -= len(payload)
+            files_remaining -= 1
+            manifest.append(
+                ContainerJobArtifact(
+                    name=name,
+                    artifactRef=ref,
+                    sizeBytes=len(payload),
+                    sha256=hashlib.sha256(payload).hexdigest(),
+                    mediaType=media_type,
+                    relativePath=relative_path,
+                    collectionStatus="collected",
+                )
+            )
+            return ref
+
+        limitations: list[str] = []
+        refs: dict[str, str | None] = dict.fromkeys(WEB_OUTPUT_FILES)
+        safe: dict[str, bytes | None] = dict.fromkeys(WEB_OUTPUT_FILES)
+        for output in spec.outputs:
+            name, relative = output.name, output.relative_path
+            payload = payloads.get(name)
+            if payload is None:
+                manifest.append(
+                    ContainerJobArtifact(
+                        name=name,
+                        relativePath=relative,
+                        collectionStatus="missing",
+                        detail="ZAP did not produce this output.",
+                    )
+                )
+                continue
+            sanitize = (
+                sanitize_report if relative.endswith(".json") else sanitize_messages
+            )
+            try:
+                safe[name] = sanitize(payload, secrets, limit)
+            except WebEvidenceError as exc:
+                limitations.append(f"{name}_{exc}")
+                safe[name] = None
+                manifest.append(
+                    ContainerJobArtifact(
+                        name=name,
+                        relativePath=relative,
+                        collectionStatus="rejected",
+                        detail="Native evidence is malformed or exceeds its bound.",
+                    )
+                )
+                continue
+            refs[name] = await publish(
+                name, safe[name], media_type="application/json", relative_path=relative
+            )
+        plan_ref = await publish(
+            "plan",
+            render_web_assessment_plan(web),
+            media_type="application/yaml",
+            relative_path=f"{web.output_directory}/plan.yaml",
+        )
+        summary = summarize_web_assessment(
+            web,
+            report=safe["report"],
+            messages=safe["messages"],
+            passive_report=safe["passive-report"],
+            passive_messages=safe["passive-messages"],
+            exit_code=request.exit_code,
+            terminal_state=str(request.terminal_state or "failed"),
+            native_ref=refs["report"] or refs["passive-report"],
+            messages_ref=refs["messages"] or refs["passive-messages"],
+            plan_ref=plan_ref,
+            limitations=limitations,
+        )
+        await publish(
+            "summary",
+            summary.model_dump_json(by_alias=True).encode(),
+            media_type="application/json",
+            relative_path=f"{web.output_directory}/summary.json",
+        )
+        return manifest
+
+    async def _collect_cloud_assessment_outputs(
+        self, request: ContainerJobActivityRequest, delivered: Sequence[str]
+    ) -> list[ContainerJobArtifact]:
+        """Publish Prowler's native OCSF and log with a cloud-posture summary.
+
+        Reads whatever exists, so a timeout, cancellation or failed run still
+        publishes its usable records, classified as incomplete. Every
+        delivered session value is redacted, also on a publication retry.
+        """
+        if self._publish is None:
+            return []
+        spec = request.request.spec
+        cloud = spec.cloud_assessment
+        entries = await asyncio.to_thread(
+            self._build_output_entries, self._output_root(request), list(spec.outputs)
+        )
+        manifest: list[ContainerJobArtifact] = []
+        limitations: list[str] = []
+        bodies: dict[str, bytes | None] = {}
+        refs: dict[str, str | None] = {}
+        for entry in entries:
+            name, relative = entry["name"], entry["relative_path"]
+            payload = entry["payload"]
+            bodies[name] = refs[name] = None
+            if payload is None:
+                missing = entry["status"] == ArtifactCollectionStatus.MISSING
+                if not missing:
+                    limitations.append(f"{name}_exceeds_limit")
+                manifest.append(
+                    ContainerJobArtifact(
+                        name=name,
+                        relativePath=relative,
+                        collectionStatus=entry["status"],
+                        detail=(
+                            "Prowler did not produce this output."
+                            if missing
+                            else entry["detail"]
+                        ),
+                    )
+                )
+                continue
+            payload = _without_delivered(payload, None, delivered)
+            status = ArtifactCollectionStatus.COLLECTED
+            if name == "log":
+                # Free-text provider messages; only a bounded, redacted tail.
+                payload = redact_sensitive_text(
+                    payload.decode("utf-8", errors="replace")
+                ).encode("utf-8")
+                bodies[name] = payload
+                if len(payload) > cloud.max_report_bytes:
+                    payload = payload[-cloud.max_report_bytes :]
+                    status = ArtifactCollectionStatus.TRUNCATED
+                media_type = "text/plain"
+            elif len(payload) > cloud.max_report_bytes:
+                limitations.append("report_exceeds_limit")
+                manifest.append(
+                    ContainerJobArtifact(
+                        name=name,
+                        relativePath=relative,
+                        collectionStatus=ArtifactCollectionStatus.REJECTED,
+                        detail="Native report exceeds the admitted bound.",
+                    )
+                )
+                continue
+            else:
+                bodies[name] = payload
+                media_type = "application/json"
+            suffix = os.path.splitext(relative)[1]
+            refs[name] = await self._publish_artifact(
+                request, f"{request.job_id}-output-{name}{suffix}", payload
+            )
+            manifest.append(
+                ContainerJobArtifact(
+                    name=name,
+                    artifactRef=refs[name],
+                    sizeBytes=len(payload),
+                    sha256=hashlib.sha256(payload).hexdigest(),
+                    mediaType=media_type,
+                    relativePath=relative,
+                    collectionStatus=status,
+                )
+            )
+        observed = request.image_observation
+        summary = summarize_cloud_assessment(
+            cloud,
+            image=CloudImage(
+                sourceRef=spec.image_source_ref,
+                requestedReference=observed.requested_reference if observed else None,
+                resolvedRef=(
+                    observed.resolved_digest
+                    if observed and observed.resolved_digest
+                    else request.resolved_image_ref
+                ),
+            ),
+            report=bodies.get("report"),
+            log=bodies.get("log"),
+            exit_code=request.exit_code,
+            terminal_state=getattr(
+                request.terminal_state, "value", request.terminal_state or "failed"
+            ),
+            native_ref=refs.get("report"),
+            log_ref=refs.get("log"),
+            started_at=request.started_at.isoformat() if request.started_at else None,
+            finished_at=(
+                request.finished_at.isoformat() if request.finished_at else None
+            ),
+            limitations=limitations,
+        )
+        body = summary.model_dump_json(by_alias=True).encode()
+        relative = f"{cloud.output_directory}/summary.json"
+        ref = await self._publish_artifact(
+            request, f"{request.job_id}-output-summary.json", body
+        )
+        manifest.append(
+            ContainerJobArtifact(
+                name="summary",
+                artifactRef=ref,
+                sizeBytes=len(body),
+                sha256=hashlib.sha256(body).hexdigest(),
+                mediaType="application/json",
+                relativePath=relative,
+                collectionStatus=ArtifactCollectionStatus.COLLECTED,
+            )
+        )
         return manifest
 
     async def _capture_limitations(

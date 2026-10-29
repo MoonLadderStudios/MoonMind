@@ -130,7 +130,10 @@ from moonmind.omnigent.bridge_config import (
 # production path (and OpenAPI) never requires bridge_embedded at import time.
 # The retained-row decoder is equally launch-free (it imports only declarative
 # config constants), so production historical reads use it directly.
-from moonmind.omnigent.embedded_drain import decode_embedded_retained_session
+from moonmind.omnigent.embedded_drain import (
+    decode_embedded_retained_session,
+    embedded_retry_may_reconcile,
+)
 from moonmind.omnigent.embedded_host_requests import (
     EmbeddedHostHeartbeatRequest,
     EmbeddedHostRegisterRequest,
@@ -892,17 +895,23 @@ async def _existing_embedded_retry_session_id(
 
     A retry reuses the idempotency key whose first request persisted the
     durable row (or crossed the host launch boundary) before losing its
-    response. Only a row with a bound ``omnigent_session_id`` counts: a
-    key with no row — or a row with no session yet — is still new admission.
-    A store without the ``get_existing`` reader offers no retry evidence,
-    so the lookup degrades to ``None`` (reject) instead of failing.
+    response. Only a non-terminal embedded-recorded row with a bound
+    ``omnigent_session_id`` counts (``embedded_retry_may_reconcile``): the
+    embedded drain counts exactly those rows, so a retry can never re-dispatch
+    a runner after the drain reported ``drained``. A key with no row, a row
+    with no session yet, or a terminal row is still new admission. A store
+    without the ``get_existing`` reader offers no retry evidence, so the
+    lookup degrades to ``None`` (reject) instead of failing.
     """
 
     reader = getattr(store, "get_existing", None)
     if not callable(reader) or not idempotency_key:
         return None
     existing = await reader(idempotency_key)
-    if existing is None:
+    if existing is None or not embedded_retry_may_reconcile(
+        status=getattr(existing, "status", None),
+        metadata=getattr(existing, "metadata_", None),
+    ):
         return None
     return _clean(getattr(existing, "omnigent_session_id", None))
 

@@ -23,6 +23,8 @@ from moonmind.omnigent.harness_platform.failures import (
 from moonmind.omnigent.harness_platform.materializers import (
     OPENCODE_AUTH_GID,
     OPENCODE_AUTH_UID,
+    PROVIDER_CONFIG_MATERIALIZER_REF,
+    ProviderConfigEndpoint,
     build_opencode_auth_json_bytes,
 )
 from moonmind.omnigent.provider_leases import AcquiredProviderLease
@@ -92,6 +94,9 @@ class CredentialMaterializationContext:
     # Admitted Omnigent series the writer fallback must match (same
     # major.minor). Empty means provenance-only qualification.
     expected_omnigent_version: str = ""
+    # The endpoint an API-key Provider Profile declares; ``None`` uses the
+    # provider config's default route endpoints.
+    provider_endpoint: ProviderConfigEndpoint | None = None
 
 
 class DockerCommandBackend(Protocol):
@@ -666,16 +671,28 @@ class DockerOmnigentProviderConfigMaterializer(DockerOpencodeAuthJsonMaterialize
         runtime_ref, digest = credential_runtime_identity(acquired, self.ref)
         volume_name = f"mm-omnigent-credential-{digest[:32]}"
         route = context.provider_route_ref.strip()
-        route_config = self._ROUTES.get(route)
         qualified_model = context.model_qualified_id.strip()
-        if route_config is None or not qualified_model.startswith(f"{route}/"):
-            context.secrets.clear()
-            raise HarnessPlatformError(
-                f"Omnigent provider config route {route!r} is unsupported",
-                code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
-            )
-        family, base_url = route_config
-        model_id = qualified_model.split("/", 1)[1]
+        endpoint = context.provider_endpoint
+        if endpoint is not None:
+            # An API-key Profile's own endpoint and pins. Its declared model
+            # wins over the plan's, as it did on the Profile's direct launch.
+            family, base_url = endpoint.family, endpoint.baseUrl
+            route = family
+            model_id = endpoint.defaultModel or qualified_model.rpartition("/")[2]
+            models = {
+                **endpoint.modelPins,
+                **({"default": model_id} if model_id else {}),
+            }
+        else:
+            route_config = self._ROUTES.get(route)
+            if route_config is None or not qualified_model.startswith(f"{route}/"):
+                context.secrets.clear()
+                raise HarnessPlatformError(
+                    f"Omnigent provider config route {route!r} is unsupported",
+                    code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+                )
+            family, base_url = route_config
+            models = {"default": qualified_model.split("/", 1)[1]}
         payload = json.dumps(
             {
                 "providers": {
@@ -685,7 +702,7 @@ class DockerOmnigentProviderConfigMaterializer(DockerOpencodeAuthJsonMaterialize
                         family: {
                             "base_url": base_url,
                             "api_key": context.secrets.require("api_key"),
-                            "models": {"default": model_id},
+                            "models": models,
                         },
                     }
                 }
@@ -801,6 +818,7 @@ class DockerOmnigentProviderConfigMaterializer(DockerOpencodeAuthJsonMaterialize
             "materializerRef": self.ref,
             "providerRouteRef": route,
             "modelQualifiedId": qualified_model,
+            "providerBaseUrl": base_url,
             "attachment": attachment,
             "owner": "1000:1000",
             "directoryMode": "0700",
@@ -1284,10 +1302,20 @@ class OmnigentCredentialProvisioningService:
                     )
                     handle_index = len(handles)
                     handles.append(anticipated)
-                    secrets = await self._secrets.resolve(
-                        acquired=acquired,
-                        allowed_secret_roles=descriptor.requiredSecretRoles,
-                    )
+                    provider_endpoint = None
+                    if binding.materializerRef == PROVIDER_CONFIG_MATERIALIZER_REF:
+                        (
+                            secrets,
+                            provider_endpoint,
+                        ) = await self._secrets.resolve_provider_config(
+                            acquired=acquired,
+                            allowed_secret_roles=descriptor.requiredSecretRoles,
+                        )
+                    else:
+                        secrets = await self._secrets.resolve(
+                            acquired=acquired,
+                            allowed_secret_roles=descriptor.requiredSecretRoles,
+                        )
                     implementation = self._registry.require(binding.materializerRef)
                     try:
                         handle = await implementation.materialize(
@@ -1303,6 +1331,7 @@ class OmnigentCredentialProvisioningService:
                                 expected_omnigent_version=str(
                                     getattr(plan.payload, "omnigentVersion", "") or ""
                                 ),
+                                provider_endpoint=provider_endpoint,
                             )
                         )
                     finally:

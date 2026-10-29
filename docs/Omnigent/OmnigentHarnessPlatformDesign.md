@@ -95,10 +95,10 @@ A Host Class says what a host should contain; it does not prove what the selecte
 
 - Host Class, architecture, harness id, and the harness package, version, entry point, and digest match the plan and trusted catalog.
 - The image digest and build match, or the image is qualified same-repository drift (digest-pinned, observed or operator-pinned, present locally, with a parseable Omnigent version and a live-probed executable). A foreign repository or a changed build label on an unchanged image never qualifies.
-- Each required vendor runtime is in the same major.minor series.
+- Each required vendor runtime is present and runnable. Its release is recorded as provenance; a different release is not a mismatch, while the same release with a different recorded digest is.
 - Every required capability is positively reported, and the attestation is fresh and tied to the current host-lease fencing generation.
 
-Where upstream lacks attestation fields, an approved MoonMind verifier at the host-realization boundary inspects the image and binaries without changing runner behavior. A connected static host whose plugin or vendor runtime changes fails closed for new sessions until requalified.
+Where upstream lacks attestation fields, an approved MoonMind verifier at the host-realization boundary inspects the image and binaries without changing runner behavior. Facts the host tunnel cannot serve (the OpenCode catalog, Claude's served verdict for a canonical id, the runner environment) come from in-host probes owned by `host_services/upstream_probes.py`, which records each removal condition; a missing upstream helper fails as `OMNIGENT_HARNESS_BUILD_MISMATCH`. A connected static host whose plugin or vendor runtime changes fails closed for new sessions until requalified.
 
 ## 6. Agent Profiles
 
@@ -169,7 +169,7 @@ A launch policy (`moonmind.omnigent-launch-policy.v2`) governs host behavior, no
 
 **Exact host.** After the host exists, a verifier intersects that decision with the host attestation, network and mount attestation, live model-option attestation, and bridge readiness into a fenced `ExactHostCapabilityDecision`. Missing, unknown, stale, or mismatched required evidence blocks runner and session creation.
 
-**Model validation** retries missing models and transient catalog errors on the same host and lease, at most three reads. Authentication and invalid requests stay terminal. Codex OAuth validation rejects a proven ended login before and after catalog reads: `codex login status` can pass and a failed refresh can return bundled models. Ordinary token expiry remains refreshable. A successful CLI exit alone is insufficient; launch requires the exact selected model or Claude's upstream `served` verdict. Exhausted reads retain bounded evidence before cleanup.
+**Model validation** retries missing models and transient catalog errors on the same host and lease, at most three reads. Authentication and invalid requests stay terminal. Codex OAuth validation rejects a proven ended login before and after catalog reads: `codex login status` can pass and a failed refresh can return bundled models. Ordinary token expiry remains refreshable. A successful CLI exit alone is insufficient; launch requires the exact selected model or Claude's upstream `served` verdict. Exhausted reads retain bounded evidence before cleanup. A completed read without the model fails as `OMNIGENT_MODEL_UNAVAILABLE`; when no read completed, absence was never observed and the failure stays `OMNIGENT_HARNESS_CATALOG_UNAVAILABLE`.
 
 **Required versus preferred.** Missing or unknown required capabilities block plan creation (class level) or realization (exact host). A missing preferred capability can yield an explicit degraded decision. Degradation never broadens authority, and no mismatch silently picks another harness, profile, Host Class, model, policy, or realizer.
 

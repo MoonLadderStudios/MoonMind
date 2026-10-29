@@ -33,9 +33,11 @@ from moonmind.schemas.workspace_locator_models import (
 )
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.schemas.repository_scanner_models import (
+    CloudAssessment,
     FeedRefresh,
     ImageAssessment,
     RepositoryScan,
+    WebAssessment,
 )
 
 CONTAINER_JOB_CONTRACT_VERSION = "v1"
@@ -473,6 +475,8 @@ class ContainerJobSpec(ContractModel):
     repository_scan: RepositoryScan | None = Field(None, alias="repositoryScan")
     feed_refresh: FeedRefresh | None = Field(None, alias="feedRefresh")
     image_assessment: ImageAssessment | None = Field(None, alias="imageAssessment")
+    web_assessment: WebAssessment | None = Field(None, alias="webAssessment")
+    cloud_assessment: CloudAssessment | None = Field(None, alias="cloudAssessment")
     workload_profile: WorkloadProfileSelection | None = Field(
         None, alias="workloadProfile"
     )
@@ -483,7 +487,8 @@ class ContainerJobSpec(ContractModel):
         pattern=r"^[a-z0-9](?:[a-z0-9.-]{0,126}[a-z0-9])?$",
         max_length=128,
     )
-    workspace_ref: WorkspaceLocator = Field(alias="workspaceRef")
+    # Omitted only by source-free jobs, which mount and capture no workspace.
+    workspace_ref: WorkspaceLocator | None = Field(None, alias="workspaceRef")
     # None preserves the exact serialized shape of already-admitted v1 jobs.
     # Scoped transports stamp True from signed read-only session authority.
     workspace_read_only: bool | None = Field(
@@ -520,6 +525,25 @@ class ContainerJobSpec(ContractModel):
     )
 
     _validate_registry_credential_ref = field_validator("registry_credential_ref")(_opaque_secret_reference)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _expand_typed_feed_refresh(cls, value: Any) -> Any:
+        from moonmind.security.scanner_feeds import expand_feed_refresh_job
+
+        return expand_feed_refresh_job(value)
+
+    @model_validator(mode="after")
+    def _workspace_only_when_read(self) -> "ContainerJobSpec":
+        if self.workspace_ref is None and (
+            self.input_attachments is None
+            or any(item.workspace_path is not None for item in self.input_attachments)
+        ):
+            raise ValueError(
+                "workspaceRef is required unless the job is source-free "
+                "(declared inputAttachments with no workspacePath)"
+            )
+        return self
 
     @field_validator("input_attachments")
     @classmethod
@@ -558,6 +582,8 @@ class ContainerJobSpec(ContractModel):
                 self.image is not None
                 or self.repository_scan is not None
                 or self.image_assessment is not None
+                or self.web_assessment is not None
+                or self.cloud_assessment is not None
             ):
                 raise ValueError(
                     "workload profile jobs cannot select an image or scanner"
@@ -591,13 +617,17 @@ class ContainerJobSpec(ContractModel):
                 for item in self.environment
             ):
                 raise ValueError("egress proxy environment is deployment-owned")
+        from moonmind.security.cloud_assessments import validate_cloud_assessment_job
         from moonmind.security.image_assessments import validate_image_assessment_job
         from moonmind.security.repository_scanners import validate_scanner_job
         from moonmind.security.scanner_feeds import validate_feed_refresh_job
+        from moonmind.security.web_assessments import validate_web_assessment_job
 
         validate_scanner_job(self)
         validate_feed_refresh_job(self)
         validate_image_assessment_job(self)
+        validate_web_assessment_job(self)
+        validate_cloud_assessment_job(self)
         return self
 
     @field_validator("workdir")

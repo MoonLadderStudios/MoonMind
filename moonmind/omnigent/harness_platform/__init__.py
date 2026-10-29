@@ -21,7 +21,6 @@ from moonmind.omnigent.harness_platform.agent_profile import (
 from moonmind.omnigent.harness_platform.attestation import (
     HostHarnessAttestation,
     validate_exact_host_attestation,
-    validate_runtime_pack_preflight,
 )
 from moonmind.omnigent.harness_platform.catalog import (
     HarnessCatalogSnapshot,
@@ -56,7 +55,6 @@ from moonmind.omnigent.harness_platform.host_classes import (
     OMNIGENT_OPENCODE_HOST_IMAGE_ENV,
     OMNIGENT_SHARED_HOST_IMAGE_ENV,
     OPENCODE_PINNED_VERSION,
-    OPENCODE_SUPPORTED_RANGE,
     HostClass,
     LaunchPolicy,
     get_host_class,
@@ -73,7 +71,6 @@ from moonmind.omnigent.harness_platform.materializers import (
     OPENCODE_AUTH_PARENT_MODE,
     OPENCODE_AUTH_TARGET_PATH,
     OPENCODE_PROVIDER_KEY,
-    OPENCODE_SUPPORTED_VERSION_RANGE,
     CredentialMaterializer,
     assert_opencode_materialization_secret_free,
     build_opencode_auth_json_bytes,
@@ -94,7 +91,6 @@ from moonmind.omnigent.harness_platform.runtime_packs import (
     RUNTIME_PACK_SCHEMA_VERSION,
     RuntimePackDescriptor,
     get_runtime_pack,
-    is_vendor_version_supported,
     pack_ref_for_harness,
     register_runtime_pack,
     runtime_dependencies_for_pack,
@@ -129,8 +125,6 @@ __all__ = [
     "OPENCODE_AUTH_TARGET_PATH",
     "OPENCODE_PINNED_VERSION",
     "OPENCODE_PROVIDER_KEY",
-    "OPENCODE_SUPPORTED_RANGE",
-    "OPENCODE_SUPPORTED_VERSION_RANGE",
     "RUNTIME_PACK_SCHEMA_VERSION",
     "BundleSource",
     "CredentialBindingSet",
@@ -190,7 +184,6 @@ __all__ = [
     "get_runtime_pack",
     "get_shared_host_image_ref",
     "is_launchable_trust",
-    "is_vendor_version_supported",
     "materialize_credential",
     "pack_ref_for_harness",
     "parse_binding_set_ref",
@@ -201,6 +194,5 @@ __all__ = [
     "select_execution_realizer",
     "validate_agent_profile",
     "validate_exact_host_attestation",
-    "validate_runtime_pack_preflight",
     "verify_execution_plan_envelope",
 ]

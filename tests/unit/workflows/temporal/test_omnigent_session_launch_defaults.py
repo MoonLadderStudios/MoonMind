@@ -56,6 +56,8 @@ async def test_canonical_create_replays_frozen_launch_defaults(
     )
     async with sessions() as db:
         row = await db.get(OmnigentBridgeSession, bridge.bridge_session_id)
+        # Defaults frozen before the ScheduleWakeup deny existed carry no
+        # deny entry; their retries must keep the recorded launch arguments.
         row.metadata_ = {
             **row.metadata_,
             "workflowLaunchDefaults": {

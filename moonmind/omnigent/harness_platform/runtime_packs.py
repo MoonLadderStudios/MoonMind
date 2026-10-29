@@ -32,7 +32,6 @@ RUNTIME_PACK_SCHEMA_VERSION = "moonmind.omnigent-harness-runtime-pack.v1"
 
 _SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _VERSION_RE = re.compile(r"^[0-9]+(\.[0-9]+){0,3}$")
-_RANGE_RE = re.compile(r"^>=([0-9.]+),<([0-9.]+)$")
 
 
 class VendorRuntimeDescriptor(BaseModel):
@@ -43,7 +42,6 @@ class VendorRuntimeDescriptor(BaseModel):
     name: str
     versionCommand: tuple[str, ...] = Field(alias="versionCommand")
     versionRegex: str = Field(alias="versionRegex")
-    supportedRange: str = Field(alias="supportedRange")
     pinnedVersion: str = Field(alias="pinnedVersion")
 
     @model_validator(mode="after")
@@ -58,17 +56,10 @@ class VendorRuntimeDescriptor(BaseModel):
             re.compile(self.versionRegex)
         except re.error as exc:
             raise ValueError(f"invalid versionRegex: {exc}") from exc
-        if not _RANGE_RE.fullmatch(self.supportedRange):
-            raise ValueError(
-                f"supportedRange must be '>=<min>,<<max>' (got {self.supportedRange!r})"
-            )
         if not _VERSION_RE.fullmatch(self.pinnedVersion):
             raise ValueError(
                 f"pinnedVersion must be a plain version (got {self.pinnedVersion!r})"
             )
-        low, high = self.supportedRange.split(",", 1)
-        if low[2:] > high[1:]:
-            raise ValueError("supportedRange lower bound must not exceed upper")
         return self
 
 
@@ -211,33 +202,6 @@ def pack_ref_for_harness(harness_id: str) -> str:
     return matches[0]
 
 
-def is_vendor_version_supported(pack: RuntimePackDescriptor, version: str) -> bool:
-    """Return whether ``version`` is inside the pack's supported range."""
-
-    match = _RANGE_RE.fullmatch(pack.vendorRuntime.supportedRange)
-    if match is None:
-        return False
-    low, high = match.group(1), match.group(2)
-
-    def parse(value: str) -> tuple[int, ...]:
-        try:
-            return tuple(int(part) for part in value.split("."))
-        except ValueError:
-            return ()
-
-    observed = parse(version)
-    if not observed:
-        return False
-    lower, upper = parse(low), parse(high)
-    if not lower or not upper:
-        return False
-    width = max(len(observed), len(lower), len(upper))
-    observed += (0,) * (width - len(observed))
-    lower += (0,) * (width - len(lower))
-    upper += (0,) * (width - len(upper))
-    return lower <= observed < upper
-
-
 def runtime_dependencies_for_pack(pack: RuntimePackDescriptor) -> tuple[dict[str, Any], ...]:
     """Return the Host Class ``runtimeDependencies`` entries for a pack.
 
@@ -266,7 +230,6 @@ def _pack(
     vendor_name: str,
     version_command: tuple[str, ...],
     version_regex: str,
-    supported_range: str,
     pinned_version: str,
     credential_target: str,
     environment: dict[str, str] | None = None,
@@ -281,7 +244,6 @@ def _pack(
                 "name": vendor_name,
                 "versionCommand": list(version_command),
                 "versionRegex": version_regex,
-                "supportedRange": supported_range,
                 "pinnedVersion": pinned_version,
             },
             "credentialLayout": {"targetPath": credential_target},
@@ -311,7 +273,6 @@ register_runtime_pack(
         vendor_name="opencode",
         version_command=("opencode", "--version"),
         version_regex=r"[0-9]+\.[0-9]+\.[0-9]+",
-        supported_range=">=1.17.7,<1.19.0",
         pinned_version="1.18.11",
         credential_target="/home/app/.local/share/opencode",
         environment={
@@ -325,7 +286,7 @@ register_runtime_pack(
 # Vendor pins mirror ``services/omnigent/moonmind-host/Dockerfile`` and
 # ``host_classes.OPENCODE_PINNED_VERSION``. Updating a pin is a deployment
 # change that must land in the shared image build args and these descriptors
-# in the same change; exact-host attestation rejects a drifted runtime.
+# in the same change; exact-host attestation records the observed release.
 register_runtime_pack(
     _pack(
         pack_id="codex-native-pack",
@@ -333,7 +294,6 @@ register_runtime_pack(
         vendor_name="codex",
         version_command=("codex", "--version"),
         version_regex=r"[0-9]+\.[0-9]+\.[0-9]+",
-        supported_range=">=0.100.0,<0.200.0",
         pinned_version="0.159.0",
         credential_target="/home/app/.codex",
         forbidden=_SHARED_OAUTH_FORBIDDEN
@@ -347,7 +307,6 @@ register_runtime_pack(
         vendor_name="claude",
         version_command=("claude", "--version"),
         version_regex=r"[0-9]+\.[0-9]+\.[0-9]+",
-        supported_range=">=2.0.0,<3.0.0",
         pinned_version="2.1.281",
         credential_target="/home/app/.claude",
         forbidden=_SHARED_OAUTH_FORBIDDEN
@@ -363,7 +322,6 @@ __all__ = [
     "RuntimePackDescriptor",
     "VendorRuntimeDescriptor",
     "get_runtime_pack",
-    "is_vendor_version_supported",
     "pack_ref_for_harness",
     "register_runtime_pack",
     "runtime_dependencies_for_pack",

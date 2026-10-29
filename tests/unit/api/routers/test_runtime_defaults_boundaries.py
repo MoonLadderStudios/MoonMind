@@ -13,10 +13,12 @@ from api_service.api.routers.recurring_workflows import (
     _get_service as get_recurring_service,
 )
 from api_service.api.routers.recurring_workflows import router as recurring_router
+from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
 from api_service.services.recurring_workflows_service import RecurringWorkflowsService
 from api_service.services.settings_catalog import SettingsCatalogService
 from moonmind.config.settings import settings
+from moonmind.security.operator_admission import OperatorAdmission
 from tests.unit.api.routers.test_execution_saved_profile_boundaries import (
     agent_requests,
     raw_request,
@@ -27,10 +29,15 @@ from tests.unit.api.routers.test_execution_saved_profile_boundaries import (
 from tests.unit.api.routers.test_execution_saved_profile_boundaries import (
     stored_parameters,
 )
-from tests.unit.api.routers.test_executions import _override_user_dependencies
 from tests.unit.services.test_recurring_workflows_service import recurring_db
 
 saved_profile_submission = _saved_profile_submission
+
+
+def _override_operator_admission(app):
+    admission = OperatorAdmission(via="loopback")
+    app.dependency_overrides[get_instance_access] = lambda: admission
+    return admission
 
 
 @pytest.mark.asyncio
@@ -120,7 +127,7 @@ async def dedicated_context(saved_profile_submission):
     app.include_router(recurring_router)
     app.dependency_overrides[get_recurring_service] = lambda: service
     app.dependency_overrides[get_async_session] = lambda: context.session
-    user = _override_user_dependencies(app, is_superuser=True)
+    user = _override_operator_admission(app)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -512,7 +519,7 @@ async def test_dedicated_recurring_api_rejects_saved_missing_account(
         await session.rollback()
         app = FastAPI()
         app.include_router(recurring_router)
-        _override_user_dependencies(app, is_superuser=True)
+        _override_operator_admission(app)
         service = RecurringWorkflowsService(
             session, temporal_client_adapter=adapter, artifact_service=SimpleNamespace()
         )
@@ -956,6 +963,9 @@ async def test_raw_configured_profile_keeps_omnigent_product_boundary(
         changes={"workflow.default_runtime": "claude_code"},
     )
     profile = await context.session.get(ManagedAgentProviderProfile, "saved-codex_cli")
+    # An API-key Codex Profile leaves its direct route only when its key
+    # translates exactly, as the guided API-key action stores it.
+    profile.env_template = {"OPENAI_API_KEY": {"from_secret_ref": "provider_api_key"}}
     if configuration == "pinned-missing":
         profile.execution_configuration = {
             "profileId": "selected-configuration",

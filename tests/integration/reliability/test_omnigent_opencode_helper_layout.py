@@ -11,11 +11,9 @@ from types import SimpleNamespace
 import pytest
 
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
-from moonmind.omnigent.host_services.attestation import (
-    _read_exact_host_model_options,
-    _run_exact_host_opencode_command,
-)
+from moonmind.omnigent.host_services.attestation import _read_exact_host_model_options
 from moonmind.omnigent.host_services.runtime_scripts import OmnigentRuntimeScriptService
+from moonmind.omnigent.host_services.upstream_probes import run_opencode_shell_command
 from tests.integration.reliability.helpers import load_replay
 from tests.unit.omnigent.test_generic_platform_production_services import (
     _upstream_helper_layout,
@@ -93,7 +91,7 @@ async def test_admitted_host_layout_preserves_shell_and_model_probes(
             "assert os.environ['MOONMIND_STEP_EXECUTION_ID'] == 'replay-step'; "
             f"print('probe reached command'); sys.exit({status})"
         )
-        code, stdout, stderr = await _run_exact_host_opencode_command(
+        code, stdout, stderr = await run_opencode_shell_command(
             backend=backend,
             container_name="replay-host",
             argv=[sys.executable, "-c", command],
@@ -138,7 +136,7 @@ async def test_broken_selected_layout_never_uses_other_helpers(
     backend = LocalHostBackend(tmp_path)
     with pytest.raises(HarnessPlatformError) as excinfo:
         if boundary == "shell":
-            await _run_exact_host_opencode_command(
+            await run_opencode_shell_command(
                 backend=backend, container_name="replay-host", argv=["true"]
             )
         else:

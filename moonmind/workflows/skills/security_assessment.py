@@ -26,8 +26,10 @@ from moonmind.security.assessments import (
     compare_observations,
     content_key,
 )
+from moonmind.security.cloud_assessments import CloudAssessmentSummary
 from moonmind.security.github_alerts import alert_observation, correlate_alerts
 from moonmind.security.image_assessments import ImageAssessmentSummary
+from moonmind.security.web_assessments import WebAssessmentSummary
 from moonmind.security.passive_repo_scan import (
     PASSIVE_SCAN_TOOL_REF,
     parse_scan_report_json,
@@ -50,6 +52,19 @@ _MAX_INPUT_BYTES = 8 * 1024 * 1024
 def _check_cancelled() -> None:
     if activity.in_activity() and activity.is_cancelled():
         raise asyncio.CancelledError()
+
+
+def _feed_intelligence(execution) -> dict[str, str]:
+    """Scanner version and the vulnerability/check data snapshot it read."""
+    if execution is None:
+        return {}
+    values = {"version": execution.version or "unavailable"}
+    snapshot = execution.feed.snapshot if execution.feed else None
+    if snapshot is not None:
+        values["feedSnapshot"] = snapshot.snapshot_id
+    elif execution.database_digest:
+        values["database"] = execution.database_digest
+    return values
 
 
 def observe_inventory(
@@ -104,6 +119,7 @@ def observe_inventory(
                 rule_ids=[rule.id for rule in feed.rules],
                 status=inventory.status,
                 config_ref=inventory.config_ref,
+                intelligence={"feedRevision": feed.revision},
             )
         ],
         provenance={
@@ -162,6 +178,7 @@ def _passive_observation(
                 rule_ids=["credential", "private_key", "authorization", "token"],
                 config_ref=content_key(native.to_payload()["config"]),
                 status="partial" if native.verdict == "incomplete" else "complete",
+                intelligence={"rules": content_key(native.to_payload()["config"])},
             )
         ],
         provenance={
@@ -258,6 +275,7 @@ def _scanner_observation(
                     ]
                 ),
                 status="complete" if complete else "partial",
+                intelligence=_feed_intelligence(summary.execution),
             )
         ],
         provenance={
@@ -317,6 +335,7 @@ def _image_observation(
                 # reassessment compares one inventory across vulnerability data.
                 config_ref=content_key(["image-vulnerabilities", version]),
                 status="complete" if complete and assets else "partial",
+                intelligence=_feed_intelligence(execution),
             )
         ],
         provenance={
@@ -326,6 +345,125 @@ def _image_observation(
             "imageFeedSnapshot": (execution.database_digest if execution else None)
             or "unavailable",
             "imageScannerVersion": version,
+        },
+    )
+
+
+def _web_observation(
+    request, summary: WebAssessmentSummary, ref: str, created_at: datetime
+) -> Observation:
+    """ZAP findings as web coverage of one origin, mode and identity."""
+    result, admission = summary.result, summary.admission
+    if any(not set(f.evidence_refs) <= {summary.native_ref} for f in result.findings):
+        raise ValueError("finding evidence differs from retained native records")
+    if any(f.asset not in request.scope.assets for f in result.findings):
+        raise ValueError("web finding outside admitted assessment scope")
+    assets = [a for a in result.examined_assets if a in request.scope.assets]
+    identity = admission.identity.name if admission.identity else "anonymous"
+    return Observation(
+        scope=request.scope,
+        observed_at=created_at,
+        expires_at=created_at + timedelta(days=1),
+        findings=result.findings,
+        coverage=[
+            Coverage(
+                source="web",
+                tool="zap",
+                assets=assets,
+                rule_ids=[],
+                all_rules=summary.status == "complete",
+                # Mode, identity, admitted routes and the routes actually
+                # tested decide what absence can mean: a finding on a route
+                # this crawl never reached was not reassessed.
+                config_ref=content_key(
+                    [
+                        "web",
+                        admission.mode,
+                        admission.active_strength,
+                        identity,
+                        [r.model_dump(mode="json") for r in admission.routes],
+                        admission.exclusions,
+                        sorted(summary.coverage.tested_routes),
+                    ]
+                ),
+                status=(
+                    "complete"
+                    if summary.status == "complete" and assets
+                    else (
+                        "authentication_failed"
+                        if summary.coverage.authentication is not None
+                        and summary.coverage.authentication.status == "failed"
+                        else "partial"
+                    )
+                ),
+                intelligence={"version": summary.execution.version or "unavailable"},
+            )
+        ],
+        provenance={
+            "webSummary": ref,
+            "webNativeReport": summary.native_ref or "unavailable",
+            "webPlan": summary.plan_ref or "unavailable",
+            "webMode": admission.mode,
+            "webIdentity": identity,
+        },
+    )
+
+
+def _cloud_observation(
+    request, summary: CloudAssessmentSummary, ref: str, created_at: datetime
+) -> Observation:
+    """Prowler findings as cloud coverage of one account's admitted selection.
+
+    The summary's own invariants already refuse a clean outcome over partial
+    coverage; this keeps its status rather than deriving a better one.
+    """
+    result, admission = summary.result, summary.admission
+    if any(not set(f.evidence_refs) <= {summary.native_ref} for f in result.findings):
+        raise ValueError("finding evidence differs from retained native records")
+    if any(f.asset not in request.scope.assets for f in result.findings):
+        raise ValueError("cloud finding outside admitted assessment scope")
+    assets = [a for a in result.examined_assets if a in request.scope.assets]
+    if summary.status == "complete" and assets:
+        status = "complete"
+    elif any(d.kind == "credentials_rejected" for d in summary.diagnostics):
+        status = "authentication_failed"
+    elif summary.outcome == "execution_failed":
+        status = "failed"
+    else:
+        status = "partial"
+    return Observation(
+        scope=request.scope,
+        observed_at=created_at,
+        expires_at=created_at + timedelta(days=1),
+        findings=result.findings,
+        coverage=[
+            Coverage(
+                source="cloud",
+                tool="prowler",
+                assets=assets,
+                rule_ids=summary.coverage.checks_with_results,
+                all_rules=status == "complete",
+                # Absence is comparable only for the same regions, checks or
+                # services and Prowler version.
+                config_ref=content_key(
+                    [
+                        "cloud",
+                        admission.provider,
+                        sorted(admission.regions),
+                        sorted(admission.checks),
+                        sorted(admission.services),
+                        summary.execution.version,
+                    ]
+                ),
+                status=status,
+                intelligence={"version": summary.execution.version or "unavailable"},
+            )
+        ],
+        provenance={
+            "cloudSummary": ref,
+            "cloudNativeReport": summary.native_ref or "unavailable",
+            "cloudAccount": f"{admission.provider}:{admission.account}",
+            "cloudOutcome": summary.outcome,
         },
     )
 
@@ -592,6 +730,67 @@ class AssessmentExecution:
                                     "interpretation": image_summary.interpretation,
                                 }
                             )
+                        elif payload.get("schemaVersion") == "web-assessment/v1":
+                            web_summary = WebAssessmentSummary.model_validate(payload)
+                            if web_summary.native_ref:
+                                await self.read(web_summary.native_ref)
+                            observed_at = metadata.created_at
+                            if observed_at.tzinfo is None:
+                                observed_at = observed_at.replace(tzinfo=UTC)
+                            observation = _web_observation(
+                                request, web_summary, ref, observed_at
+                            )
+                            scanner_summaries.append(
+                                {
+                                    "scanner": "zap",
+                                    "target": web_summary.admission.origin,
+                                    "summaryRef": ref,
+                                    "nativeRefs": (
+                                        {"report": web_summary.native_ref}
+                                        if web_summary.native_ref
+                                        else {}
+                                    ),
+                                    "coverage": observation.coverage[0].status,
+                                    "execution": {
+                                        "report": web_summary.result.execution
+                                    },
+                                    "limitations": sorted(web_summary.limitations),
+                                    "verification": web_summary.verification,
+                                    "interpretation": web_summary.interpretation,
+                                }
+                            )
+                        elif payload.get("schemaVersion") == "cloud-posture/v1":
+                            cloud_summary = CloudAssessmentSummary.model_validate(
+                                payload
+                            )
+                            if cloud_summary.native_ref:
+                                await self.read(cloud_summary.native_ref)
+                            observed_at = metadata.created_at
+                            if observed_at.tzinfo is None:
+                                observed_at = observed_at.replace(tzinfo=UTC)
+                            observation = _cloud_observation(
+                                request, cloud_summary, ref, observed_at
+                            )
+                            scanner_summaries.append(
+                                {
+                                    "scanner": "prowler",
+                                    "target": observation.provenance["cloudAccount"],
+                                    "summaryRef": ref,
+                                    "nativeRefs": (
+                                        {"report": cloud_summary.native_ref}
+                                        if cloud_summary.native_ref
+                                        else {}
+                                    ),
+                                    "coverage": observation.coverage[0].status,
+                                    "outcome": cloud_summary.outcome,
+                                    "execution": {
+                                        "report": cloud_summary.result.execution
+                                    },
+                                    "limitations": sorted(cloud_summary.limitations),
+                                    "verification": cloud_summary.verification,
+                                    "interpretation": cloud_summary.interpretation,
+                                }
+                            )
                         elif payload.get("toolRef") == PASSIVE_SCAN_TOOL_REF:
                             observed_at = metadata.created_at
                             if observed_at.tzinfo is None:
@@ -644,6 +843,17 @@ class AssessmentExecution:
                             }
                         )
                     findings_by_id[finding.finding_id] = finding
+            closures = {}
+            for item in observations:
+                for finding_id, closure in item.upstream_closed.items():
+                    closures.setdefault(finding_id, set()).add(closure)
+            # A finding another source still reports, or that sources close
+            # differently, is not closed upstream.
+            upstream_closed = {
+                finding_id: next(iter(states))
+                for finding_id, states in closures.items()
+                if len(states) == 1 and finding_id not in findings_by_id
+            }
             if scan_diagnostics or not observations:
                 coverage.append(
                     Coverage(
@@ -663,6 +873,7 @@ class AssessmentExecution:
                 expires_at=min((item.expires_at for item in observations), default=now),
                 findings=list(findings_by_id.values()),
                 coverage=coverage,
+                upstream_closed=upstream_closed,
                 provenance={
                     **{f"input{index}": ref for index, ref in enumerate(refs)},
                     **{
@@ -856,6 +1067,26 @@ def _summary(comparison: dict) -> str:
             *[f"- {key.replace('_', ' ')}: {value}" for key, value in counts.items()],
             "",
             "Absence describes comparable completed coverage only; it is not a confirmed fix.",
+            (
+                "Remediated verified requires a linked passing retest or the "
+                "source's own fixed state; closed upstream is a source decision, "
+                "not a fix."
+            ),
+            *(
+                [
+                    "Refreshed intelligence may explain new or absent findings: "
+                    + ", ".join(comparison["intelligenceChanges"])
+                    + "."
+                ]
+                if comparison.get("intelligenceChanges")
+                else []
+            ),
+            *[
+                f"- decision on {row['decision']['findingId'][:12]} requires review: "
+                + ", ".join(row["reviewReasons"]).replace("_", " ")
+                for row in comparison["decisions"]
+                if row["status"] == "review_required"
+            ],
             "Stale or partial evidence and expired decisions require review.",
             "Finding evidence, provenance and attributed decisions are retained in the structured report.",
             "",
@@ -870,7 +1101,8 @@ def _scanner_summary(summaries: list[dict]) -> str:
             "",
             f"Scanner: {summary['scanner']}"
             + (f" on {summary['target']}" if summary.get("target") else "")
-            + f". Coverage: {summary['coverage']}.",
+            + f". Coverage: {summary['coverage']}."
+            + (f" Outcome: {summary['outcome']}." if summary.get("outcome") else ""),
             f"Execution: {json.dumps(summary['execution'], sort_keys=True)}.",
             "Verification: not performed.",
             "Native evidence: " + ", ".join(summary["nativeRefs"].values()) + ".",

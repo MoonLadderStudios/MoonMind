@@ -731,9 +731,9 @@ async def test_catalog_delegates_unrelated_requests(
 @pytest.mark.parametrize(
     "response,code",
     [
-        ((1, "", "private-provider-diagnostic"), "OMNIGENT_MODEL_UNAVAILABLE"),
-        ((0, "not-json", ""), "OMNIGENT_MODEL_UNAVAILABLE"),
-        ((0, '{"models": {}}', ""), "OMNIGENT_MODEL_UNAVAILABLE"),
+        ((1, "", "private-provider-diagnostic"), "OMNIGENT_HARNESS_CATALOG_UNAVAILABLE"),
+        ((0, "not-json", ""), "OMNIGENT_HARNESS_CATALOG_UNAVAILABLE"),
+        ((0, '{"models": {}}', ""), "OMNIGENT_HARNESS_CATALOG_UNAVAILABLE"),
         (
             (
                 97,
