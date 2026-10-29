@@ -435,10 +435,12 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "ended-login check in ``host_services``."
         ),
         missingOutcome=(
-            "OAuth credential maintenance (draining bound hosts before an"
-            " OAuth mutation, revalidating a reconnected or validated "
-            "profile) and the OAuth host-lease janitor, which call this "
-            "runtime whichever realizer ran."
+            "OAuth credential maintenance for profile-bound and static "
+            "bindings (stopping their hosts before an OAuth mutation, "
+            "revalidating a reconnected or validated profile) and the "
+            "OAuth host-lease janitor. Generic hosts are already drained "
+            "before that mutation by ``GenericOmnigentHostJanitor."
+            "drain_profile`` and attest the login at each launch."
         ),
     ),
     LegacyPathRecord(

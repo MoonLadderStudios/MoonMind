@@ -594,6 +594,7 @@ class NativeDocker(StaticCodexDocker):
         self.script = ""
         self.network_ref = ""
         self.launch_image = ""
+        self.fail_host_removal = False
 
     async def command(self, argv, *, input_bytes=None, **_kwargs):
         code, out, err = await self._command(list(argv), input_bytes=input_bytes)
@@ -681,6 +682,8 @@ class NativeDocker(StaticCodexDocker):
             return 0, "", ""
         if argv[:2] == ["docker", "rm"]:
             assert argv[-1] == self.container_name
+            if self.fail_host_removal:
+                return 1, "", "controlled daemon failure"
             self.server.host_alive = self.container_running = False
             self.events.append(("host_remove", self.container_name))
             return 0, "", ""
@@ -1597,3 +1600,75 @@ async def test_api_key_successor_restores_saved_work_with_fresh_provider_config(
     assert replay.failure_class == interrupted.failure_class
     assert len(server.session_ids) == 2 and docker.create_count == 2
 
+
+@pytest.mark.parametrize("owner_closed", [True, False])
+@pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
+async def test_credential_maintenance_drains_generic_host_mounting_oauth_home(
+    native_journey, owner_closed
+):
+    """OAuth maintenance releases a generic host left holding the OAuth home.
+
+    The turn completes but its host removal fails, so the binding stays
+    cleanup-pending with the Profile's OAuth volume mounted read-write.
+    Credential maintenance releases it through the generic realizer's own
+    reconciliation once its workflow has closed, and refuses to proceed while
+    that workflow is still open.
+    """
+    from moonmind.omnigent.generic_host_janitor import GenericOmnigentHostJanitor
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+
+    journey = native_journey
+    services, docker, server = journey.services, journey.docker, journey.server
+    docker.fail_host_removal = True
+    result = await journey.realizer.execute(journey.request, journey.plan)
+    assert result.failure_class is None, result
+    binding_id = stable_binding_id(
+        execution_plan_ref=journey.plan.planRef,
+        idempotency_key=journey.request.idempotency_key,
+    )
+    binding = await services.runtime_binding_store.get(binding_id)
+    assert binding.state is not RuntimeBindingState.cleaned
+    host_lease = await services.host_lease_repository.get(binding.hostLeaseRef)
+    assert host_lease.status != "cleaned"
+    assert server.host_alive
+    assert docker.mounts["/home/app/.codex"]["src"] == "journey_oauth"
+    assert "readonly" not in docker.mounts["/home/app/.codex"]
+
+    docker.fail_host_removal = False
+    owners = []
+
+    async def owner_has_closed(candidate):
+        owners.append(candidate.bindingId)
+        return owner_closed
+
+    janitor = GenericOmnigentHostJanitor(
+        host_leases=services.host_lease_repository,
+        runtime_bindings=services.runtime_binding_store,
+        realizer=services.generic_realizer,
+        owner_has_closed=owner_has_closed,
+    )
+    # Another Profile's maintenance leaves this binding alone.
+    assert await janitor.drain_profile("another-profile") == {"drained": 0}
+    assert owners == []
+    if not owner_closed:
+        with pytest.raises(HarnessPlatformError, match=binding_id):
+            await janitor.drain_profile(PROFILE)
+        assert server.host_alive
+        assert (
+            await services.host_lease_repository.get(binding.hostLeaseRef)
+        ).status != "cleaned"
+        return
+    assert await janitor.drain_profile(PROFILE) == {"drained": 1}
+    assert owners == [binding_id]
+    assert not server.host_alive
+    assert ("host_remove", docker.container_name) in journey.events
+    assert (
+        await services.host_lease_repository.get(binding.hostLeaseRef)
+    ).status == "cleaned"
+    assert (
+        await services.runtime_binding_store.get(binding_id)
+    ).state is RuntimeBindingState.cleaned
+    # The Profile-owned OAuth home is preserved for the maintenance itself.
+    assert "journey_oauth" in docker.volumes
+    # A repeated maintenance attempt finds nothing left to drain.
+    assert await janitor.drain_profile(PROFILE) == {"drained": 0}

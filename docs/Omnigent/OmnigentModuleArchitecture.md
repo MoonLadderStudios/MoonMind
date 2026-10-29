@@ -278,8 +278,10 @@ rows stay live because the shared lifecycle still lacks the Codex and Claude
 key Profiles the Omnigent provider config cannot carry exactly (the seeded
 MiniMax Profiles), Claude slash-command passthrough, one session reused across
 a run's steps, static-connected Codex/Claude hosts, and OAuth credential
-maintenance and its host-lease janitor. API-key Codex and Claude Profiles that
-translate exactly already run on the shared lifecycle. Each row's
+maintenance of profile-bound and static hosts with its host-lease janitor.
+API-key Codex and Claude Profiles that translate exactly already run on the
+shared lifecycle, and credential maintenance drains a Profile's generic hosts
+through the generic host janitor before mutating its OAuth home. Each row's
 `missingOutcome` names its own share; the Codex/Claude CLIs and Node stay in
 the application image until those rows are deleted.
 
