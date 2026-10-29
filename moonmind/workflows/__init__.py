@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from moonmind.workflows.automation.repositories import (
@@ -36,10 +37,19 @@ def get_temporal_artifact_repository(
 
     return TemporalArtifactRepository(session)
 
-def get_temporal_artifact_service(session: AsyncSession) -> TemporalArtifactService:
+
+def get_temporal_artifact_service(
+    session: AsyncSession,
+    *,
+    transaction_ownership: ArtifactTransactionOwnership = ArtifactTransactionOwnership.STANDALONE,
+) -> TemporalArtifactService:
     """Factory helper returning Temporal artifact service for one session."""
 
-    return TemporalArtifactService(get_temporal_artifact_repository(session))
+    return TemporalArtifactService(
+        get_temporal_artifact_repository(session),
+        transaction_ownership=transaction_ownership,
+    )
+
 
 __all__ = sorted(
     [

@@ -16,7 +16,11 @@ from api_service.services.checkpoint_branch_turn_execution import (
     build_branch_turn_execution_identity,
 )
 from api_service.services.remediation_actions import TemporalRemediationControlPlane
-from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    TemporalArtifactRepository,
+    TemporalArtifactService,
+)
 from moonmind.workflows.temporal.remediation_actions import remediation_parameter_digest
 from moonmind.workflows.temporal.remediation_tools import (
     MoonMindControlPlaneRemediationActionExecutor,
@@ -242,7 +246,9 @@ async def test_lost_branch_start_ack_preserves_exact_pending_result(
         assert accepted_starts == [admitted_identities[0].workflow_id]
         monkeypatch.setattr(
             "moonmind.workflows.get_temporal_artifact_service",
-            lambda _session: artifacts,
+            lambda db, **kwargs: TemporalArtifactService(
+                TemporalArtifactRepository(db), store=artifacts._store, **kwargs
+            ),
         )
         # The existing terminal owner resumes verification without a browser or
         # another action request. A failed repair stays failed, not no-change.

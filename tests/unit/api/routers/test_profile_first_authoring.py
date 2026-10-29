@@ -136,7 +136,9 @@ def test_rendered_profile_request_reaches_matching_immutable_plan(
         selection, "provider_profile_launch_ready", lambda *args, **kwargs: True
     )
     monkeypatch.setattr(
-        executions, "get_temporal_artifact_service", lambda _: artifacts
+        executions,
+        "get_temporal_artifact_service",
+        lambda _, *, transaction_ownership: artifacts,
     )
     monkeypatch.setenv(
         "OMNIGENT_OPENCODE_HOST_IMAGE_REF",

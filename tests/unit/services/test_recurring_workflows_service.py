@@ -530,9 +530,7 @@ async def test_create_definition_failure_after_admission_leaves_no_definition(
     mock_temporal_adapter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Artifact persistence commits its session; a later failure must not
-    leave a committed definition that reconciliation could launch or a retry
-    could duplicate."""
+    """Failed input admission leaves no definition for reconciliation to launch."""
 
     from moonmind.config.settings import settings
 
@@ -568,6 +566,7 @@ async def test_create_definition_failure_after_admission_leaves_no_definition(
         "api_service.services.omnigent_execution_plan_service."
         "compile_and_persist_execution_plan",
         AsyncMock(
+            side_effect=RuntimeError("plan compilation unavailable"),
             return_value=SimpleNamespace(
                 binding=SimpleNamespace(
                     model_dump=lambda **_kwargs: dict(plan_binding)
@@ -576,9 +575,6 @@ async def test_create_definition_failure_after_admission_leaves_no_definition(
                 resolved_skillset_ref="art_skills",
             )
         ),
-    )
-    mock_temporal_adapter.create_schedule.side_effect = RuntimeError(
-        "temporal unavailable"
     )
 
     async with recurring_db(tmp_path) as session_maker:
@@ -592,15 +588,14 @@ async def test_create_definition_failure_after_admission_leaves_no_definition(
             )
             await session.commit()
 
-            async def _persist_and_commit(**_kwargs):
-                # TemporalArtifactService.create() commits the shared session.
-                await session.commit()
+            async def _persist_and_flush(**_kwargs):
+                await session.flush()
                 return ("art_task", "sha256:" + "c" * 64)
 
             monkeypatch.setattr(
                 "api_service.services.omnigent_execution_plan_service."
                 "persist_json_artifact",
-                _persist_and_commit,
+                _persist_and_flush,
             )
             service = RecurringWorkflowsService(
                 session,
@@ -634,6 +629,7 @@ async def test_create_definition_failure_after_admission_leaves_no_definition(
                 await session.execute(select(RecurringWorkflowDefinition))
             ).scalars().all()
     assert stored == []
+    mock_temporal_adapter.create_schedule.assert_not_awaited()
 
 
 async def test_create_definition_leaves_a_default_managed_runtime_plan_free(
@@ -2287,14 +2283,12 @@ async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
             )
             return usage.effective_snapshot
 
-        # Artifact persistence commits the shared session before plan
-        # compilation can fail. The usage row must not advance ahead of the
-        # definition, or every later refresh would reject the schedule.
-        async def commit_then_fail(**_kwargs):
-            await session.commit()
+        # Failed compilation leaves usage and desired definition unchanged.
+        async def flush_then_fail(**_kwargs):
+            await session.flush()
             raise RuntimeError("plan compilation unavailable")
 
-        admission.compile_plan.side_effect = commit_then_fail
+        admission.compile_plan.side_effect = flush_then_fail
         failed = await service.refresh_managed_bootstrap_schedules()
         assert failed.refreshed == 0
         [failure] = failed.failures
@@ -2305,15 +2299,17 @@ async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
         assert await usage_snapshot() == old_snapshot
         mock_temporal_adapter.update_schedule.assert_not_called()
 
-        # A Temporal schedule update can fail after admission. The usage row
-        # stays with the unchanged definition for the same reason.
+        admission.compile_plan.reset_mock()
+        refresh_calls.clear()
+        # Uncertain Temporal dispatch retains the complete desired revision.
+        # Reconciliation retries the action without repeating admission.
         compiled_plan = admission.compile_plan.return_value
 
-        async def compile_after_commit(**_kwargs):
-            await session.commit()
+        async def compile_after_flush(**_kwargs):
+            await session.flush()
             return compiled_plan
 
-        admission.compile_plan.side_effect = compile_after_commit
+        admission.compile_plan.side_effect = compile_after_flush
         mock_temporal_adapter.update_schedule.side_effect = RuntimeError(
             "schedule update unavailable"
         )
@@ -2322,16 +2318,14 @@ async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
         [failure] = failed.failures
         assert "schedule update unavailable" in failure
         await session.refresh(definition)
-        assert definition.version == 1
-        assert definition.target["agentProfileSnapshot"] == old_snapshot
-        assert await usage_snapshot() == old_snapshot
+        assert definition.version == 2
+        assert definition.target["agentProfileSnapshot"] == new_snapshot
+        assert await usage_snapshot() == new_snapshot
 
         mock_temporal_adapter.update_schedule.side_effect = None
         mock_temporal_adapter.update_schedule.reset_mock()
-        admission.compile_plan.side_effect = None
-        admission.compile_plan.reset_mock()
-        refresh_calls.clear()
-        assert (await service.refresh_managed_bootstrap_schedules()).refreshed == 1
+        # The existing action reconciler applies the committed desired revision.
+        await service._ensure_schedule_action_current(definition)
 
         await session.refresh(definition)
         assert definition.version == 2
@@ -3817,6 +3811,9 @@ async def test_removed_runtime_schedule_is_paused_and_keeps_saved_work(
             assert definition.target == saved
             assert definition.enabled is False
             mock_temporal_adapter.reset_mock()
+            mock_temporal_adapter.describe_schedule.return_value = SimpleNamespace(
+                schedule=SimpleNamespace(state=SimpleNamespace(paused=True))
+            )
             assert await service.reconcile_schedules() == 0
             mock_temporal_adapter.pause_schedule.assert_not_called()
 
@@ -4050,3 +4047,82 @@ async def test_existing_schedule_missing_profile_projection_is_repaired_4640(
             PROVIDER_PROFILE_SEARCH_ATTRIBUTE
         ] == provider_profile_state_token("pending")
         assert updated["workflow_input"] == workflow_input
+
+
+async def test_schedule_dispatch_observes_committed_definition(
+    tmp_path: Path, mock_temporal_adapter,
+) -> None:
+    """Temporal consumers must not race uncommitted admission or edits."""
+    async with recurring_db(tmp_path) as session_maker:
+        async def assert_created(**kwargs):
+            async with session_maker() as observer:
+                stored = await observer.get(
+                    RecurringWorkflowDefinition, kwargs["definition_id"]
+                )
+                assert stored is not None, "schedule dispatched before admission commit"
+                assert stored.version == 1
+
+        mock_temporal_adapter.create_schedule.side_effect = assert_created
+        async with session_maker() as session:
+            service = RecurringWorkflowsService(
+                session, temporal_client_adapter=mock_temporal_adapter
+            )
+            definition = await _mm3935_plan_less_schedule(session, service)
+
+            async def assert_disabled(**kwargs):
+                async with session_maker() as observer:
+                    stored = await observer.get(
+                        RecurringWorkflowDefinition, kwargs["definition_id"]
+                    )
+                    assert stored.enabled is False
+                    assert stored.version == 2
+
+            mock_temporal_adapter.pause_schedule.side_effect = assert_disabled
+            await service.update_definition(definition, enabled=False)
+
+
+async def test_schedule_dispatch_failure_retains_reconcilable_admission(
+    tmp_path: Path, mock_temporal_adapter,
+) -> None:
+    """An uncertain external result retains its one durable schedule identity."""
+    async with recurring_db(tmp_path) as session_maker:
+        mock_temporal_adapter.create_schedule.side_effect = RuntimeError("lost response")
+        async with session_maker() as session:
+            service = RecurringWorkflowsService(
+                session, temporal_client_adapter=mock_temporal_adapter
+            )
+            with pytest.raises(RecurringWorkflowValidationError, match="lost response"):
+                await _mm3935_plan_less_schedule(session, service)
+            await session.rollback()
+        async with session_maker() as session:
+            definitions = (await session.execute(select(RecurringWorkflowDefinition))).scalars().all()
+            assert len(definitions) == 1
+            definition = definitions[0]
+            assert definition.temporal_schedule_id == f"mm-schedule:{definition.id}"
+            mock_temporal_adapter.create_schedule.side_effect = None
+            mock_temporal_adapter.describe_schedule.side_effect = ScheduleNotFoundError("missing")
+            service = RecurringWorkflowsService(session, temporal_client_adapter=mock_temporal_adapter)
+            assert await service.reconcile_schedules() == 1
+            assert mock_temporal_adapter.create_schedule.await_args.kwargs["definition_id"] == definition.id
+
+
+async def test_disabled_schedule_reconciliation_does_not_recreate_or_starve(
+    tmp_path: Path, mock_temporal_adapter,
+) -> None:
+    async with recurring_db(tmp_path) as maker:
+        async with maker() as session:
+            ids = [uuid4() for _ in range(3)]
+            for definition_id in ids:
+                session.add(RecurringWorkflowDefinition(
+                    id=definition_id, name="Disabled", cron="* * * * *",
+                    timezone="UTC", enabled=False,
+                    target={"workflowType": "MoonMind.ManifestIngest"}, policy={},
+                    temporal_schedule_id=f"mm-schedule:{definition_id}",
+                ))
+            await session.commit()
+            mock_temporal_adapter.pause_schedule.side_effect = ScheduleNotFoundError("missing")
+            service = RecurringWorkflowsService(session, temporal_client_adapter=mock_temporal_adapter)
+            await service.reconcile_schedules(limit=1)
+            assert {call.kwargs["definition_id"] for call in mock_temporal_adapter.pause_schedule.await_args_list} == set(ids)
+            mock_temporal_adapter.create_schedule.assert_not_awaited()
+            mock_temporal_adapter.update_schedule.assert_not_awaited()

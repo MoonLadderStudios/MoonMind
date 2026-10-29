@@ -560,6 +560,17 @@ async def test_physical_savepoint_control_errors_never_report_read_success(
             event.remove(engine, "before_cursor_execute", fail_control)
 
         error = caught.value
+        if phase == "rollback":
+            # A failed cleanup must not replace the original claim failure.
+            # Both real SQL failures remain observable and no bytes are served.
+            assert isinstance(error, IntegrityError)
+            assert _INSERT_FAILURE in str(error)
+            assert any(
+                "Artifact observation rollback also failed" in note
+                for note in error.__notes__
+            )
+            assert error.__context__ is not None
+            error = error.__context__
         if isinstance(error, TemporalArtifactUnavailableError):
             # Eager savepoint setup can fail inside the authority boundary.
             # Check its safe classification and the actual injected SQL cause,

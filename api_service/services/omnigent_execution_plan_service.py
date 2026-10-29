@@ -70,7 +70,10 @@ from moonmind.omnigent.harness_platform.planner import (
     selected_realizer_consumes_repository_authority,
 )
 from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet
-from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
+from moonmind.omnigent.harness_platform.stores import (
+    DbExecutionPlanStore,
+    SessionExecutionPlanStore,
+)
 from moonmind.omnigent.host_services.mounted_tools import deployment_mounted_tool_names
 from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 from moonmind.schemas.agent_skill_models import AgentSkillFormat
@@ -90,7 +93,10 @@ from moonmind.services.skill_resolution import (
     SkillResolutionContext,
 )
 from moonmind.utils.logging import redact_sensitive_text
-from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    ArtifactTransactionOwnership,
+)
 from moonmind.workflows.temporal.remediation_loop import (
     ToolDescriptor,
     tool_descriptor_selected_skill,
@@ -1868,18 +1874,22 @@ async def compile_and_persist_execution_plan(
             HarnessCatalogSyncResult as _CatalogSyncResult,
         )
 
-        await DbHarnessCatalogRepository(session_factory).persist(
-            _CatalogSyncResult(
-                snapshot=catalog,
-                trust_records=(trust,),
-                diagnostics={
-                    "harnessCount": 1,
-                    "agentCount": 0,
-                    "hostCount": 0,
-                    "source": "execution-plan-compilation",
-                },
-            )
+        catalog_result = _CatalogSyncResult(
+            snapshot=catalog,
+            trust_records=(trust,),
+            diagnostics={
+                "harnessCount": 1,
+                "agentCount": 0,
+                "hostCount": 0,
+                "source": "execution-plan-compilation",
+            },
         )
+        if db_session is not None:
+            await DbHarnessCatalogRepository.persist_in_session(
+                db_session, catalog_result
+            )
+        else:
+            await DbHarnessCatalogRepository(session_factory).persist(catalog_result)
     repository = initial_parameters.get("repository")
     workspace = initial_parameters.get("workspace")
     repository_intent_ref = _digest_ref(
@@ -2126,7 +2136,11 @@ async def compile_and_persist_execution_plan(
                     }
                 )
             )
-    plan_store = execution_plan_store or DbExecutionPlanStore(session_factory)
+    plan_store = execution_plan_store or (
+        SessionExecutionPlanStore(db_session)
+        if db_session is not None
+        else DbExecutionPlanStore(session_factory)
+    )
     persisted = await plan_store.persist(plan)
     plan_payload = persisted.model_dump(mode="json", by_alias=True)
     plan_artifact_ref, _artifact_digest = await persist_json_artifact(
@@ -2254,7 +2268,8 @@ async def compile_frozen_execution_plan(
     )
 
     artifact_service = artifact_service or TemporalArtifactService(
-        TemporalArtifactRepository(db_session)
+        TemporalArtifactRepository(db_session),
+        transaction_ownership=ArtifactTransactionOwnership.CALLER,
     )
     compilation_parameters = dict(initial_parameters)
     compilation_parameters.pop("omnigentExecutionPlan", None)
@@ -2519,7 +2534,8 @@ async def readmit_frozen_execution_plan(
     except Exception as exc:
         raise ValueError("Omnigent execution-plan authority is invalid") from exc
     artifact_service = artifact_service or TemporalArtifactService(
-        TemporalArtifactRepository(db_session)
+        TemporalArtifactRepository(db_session),
+        transaction_ownership=ArtifactTransactionOwnership.CALLER,
     )
     snapshot = initial_parameters.get("agentProfileSnapshot")
     recorded_plan = None

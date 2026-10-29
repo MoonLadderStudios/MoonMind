@@ -16,6 +16,7 @@ from api_service.auth_providers import instance_operator_principal
 from api_service.db.models import Base, ContainerJobRecord
 from api_service.services.container_jobs import ContainerJobService
 from api_service.services.single_user_conversion import SingleUserConversionRun
+from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
 from moonmind.schemas.container_job_models import (
     ContainerJobSubmitRequest,
     OwnerIdentity,
@@ -91,8 +92,12 @@ async def admitted_jobs(tmp_path, monkeypatch, request):
             yield session
 
     app.dependency_overrides[container_jobs.get_async_session] = sessions
+    def artifact_service(_session, *, transaction_ownership):
+        assert transaction_ownership is ArtifactTransactionOwnership.CALLER
+        return None
+
     for module in (container_jobs, mcp_tools):
-        monkeypatch.setattr(module, "get_temporal_artifact_service", lambda _: None)
+        monkeypatch.setattr(module, "get_temporal_artifact_service", artifact_service)
         monkeypatch.setattr(
             module,
             "ContainerJobService",

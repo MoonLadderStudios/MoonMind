@@ -32,7 +32,10 @@ from moonmind.omnigent.settings import resolved_server_url
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.utils.logging import redact_sensitive_payload
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
-from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    ArtifactTransactionOwnership,
+)
 
 _MAX_OMNIGENT_HARVEST_ITEMS = 100
 _MAX_OMNIGENT_CONTENT_BYTES = 10 * 1024 * 1024
@@ -74,11 +77,48 @@ async def link_verified_execution_plan_inputs(
     namespace: str = "default",
     planning_parameters: Mapping[str, Any] | None = None,
 ) -> tuple[str, ...]:
-    """Link exact verified inputs and return their admitted artifact IDs."""
+    """Own one standalone transaction for an Activity's verified input closure."""
+    async with session_factory() as session:
+        try:
+            linked = await link_verified_execution_plan_inputs_in_session(
+                session=session,
+                plan=plan,
+                binding=binding,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                access=access,
+                namespace=namespace,
+                planning_parameters=planning_parameters,
+            )
+            await session.commit()
+            return linked
+        except BaseException as primary:
+            try:
+                await session.rollback()
+            except BaseException as cleanup:
+                primary.add_note(
+                    f"Artifact admission rollback also failed: {type(cleanup).__name__}"
+                )
+            raise
+
+
+async def link_verified_execution_plan_inputs_in_session(
+    *,
+    session,
+    plan,
+    binding,
+    workflow_id: str,
+    run_id: str,
+    access: ArtifactAccessContext,
+    namespace: str = "default",
+    planning_parameters: Mapping[str, Any] | None = None,
+) -> tuple[str, ...]:
+    """Stage verified grants in the application-owned admission transaction."""
     from moonmind.omnigent.harness_platform.execution_plan import (
         verify_execution_plan_envelope,
     )
     from moonmind.workflows.temporal.artifacts import (
+        ArtifactTransactionOwnership,
         TemporalArtifactNotFoundError,
         TemporalArtifactRepository,
         TemporalArtifactService,
@@ -111,106 +151,107 @@ async def link_verified_execution_plan_inputs(
             "plan input delegation conflicts with admitted authority"
         )
     refs = _execution_plan_input_refs(plan, binding)
-    async with session_factory() as session:
-        repository = TemporalArtifactRepository(session)
-        # Parameter-selected and freshly compiled plans have no compact binding;
-        # their verified persisted envelope supplies the input closure. When
-        # present, the compact plan artifact pointer is validated before attaching
-        # any execution grant. A wrong pointer must not expose an unrelated blob
-        # while the subsequent plan comparison reports the mismatch.
-        if binding is not None:
-            plan_artifact = await repository.get_artifact(
-                TemporalOmnigentArtifactGateway._artifact_id(binding.plan_artifact_ref)
+    repository = TemporalArtifactRepository(session)
+    # Parameter-selected and freshly compiled plans have no compact binding;
+    # their verified persisted envelope supplies the input closure. When
+    # present, the compact plan artifact pointer is validated before attaching
+    # any execution grant. A wrong pointer must not expose an unrelated blob
+    # while the subsequent plan comparison reports the mismatch.
+    if binding is not None:
+        plan_artifact = await repository.get_artifact(
+            TemporalOmnigentArtifactGateway._artifact_id(binding.plan_artifact_ref)
+        )
+        expected_digest = hashlib.sha256(
+            json.dumps(
+                plan.model_dump(mode="json", by_alias=True),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        if (
+            plan_artifact.sha256 != expected_digest
+            or (plan_artifact.metadata_json or {}).get("artifact_class")
+            != "omnigent.execution_plan"
+        ):
+            raise OmnigentArtifactError(
+                "plan artifact pointer conflicts with verified execution authority"
             )
-            expected_digest = hashlib.sha256(
-                json.dumps(
-                    plan.model_dump(mode="json", by_alias=True),
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    ensure_ascii=False,
-                ).encode("utf-8")
-            ).hexdigest()
+    admission = plan.payload.admissionAuthority
+    if admission is not None and admission.admissionMode == "strict":
+        support_ref = admission.supportEvidenceRef
+        try:
+            support_artifact = await repository.get_artifact(
+                TemporalOmnigentArtifactGateway._artifact_id(support_ref)
+            )
+        except (TemporalArtifactNotFoundError, OmnigentArtifactError):
+            # The validator owns unavailable-certificate handling,
+            # including ordinary reissue of retained pre-upgrade strict
+            # authority. Missing/undecodable artifacts receive no grant.
+            refs.discard(support_ref)
+        else:
             if (
-                plan_artifact.sha256 != expected_digest
-                or (plan_artifact.metadata_json or {}).get("artifact_class")
-                != "omnigent.execution_plan"
+                support_artifact.sha256
+                != admission.supportEvidenceDigest.removeprefix("sha256:")
+                or (support_artifact.metadata_json or {}).get("artifact_class")
+                != "omnigent.execution_support_evidence"
             ):
                 raise OmnigentArtifactError(
-                    "plan artifact pointer conflicts with verified execution authority"
+                    "support evidence pointer conflicts with verified execution authority"
                 )
-        admission = plan.payload.admissionAuthority
-        if admission is not None and admission.admissionMode == "strict":
-            support_ref = admission.supportEvidenceRef
-            try:
-                support_artifact = await repository.get_artifact(
-                    TemporalOmnigentArtifactGateway._artifact_id(support_ref)
-                )
-            except (TemporalArtifactNotFoundError, OmnigentArtifactError):
-                # The validator owns unavailable-certificate handling,
-                # including ordinary reissue of retained pre-upgrade strict
-                # authority. Missing/undecodable artifacts receive no grant.
-                refs.discard(support_ref)
-            else:
-                if (
-                    support_artifact.sha256
-                    != admission.supportEvidenceDigest.removeprefix("sha256:")
-                    or (support_artifact.metadata_json or {}).get("artifact_class")
-                    != "omnigent.execution_support_evidence"
-                ):
-                    raise OmnigentArtifactError(
-                        "support evidence pointer conflicts with verified execution authority"
-                    )
-        service = TemporalArtifactService(repository)
-        frozen_refs, attachments, input_access = await _frozen_planning_input_refs(
-            repository,
-            service,
-            plan=plan,
-            binding=binding,
-            planning_parameters=planning_parameters,
-            access=access._with_verified_inputs(_artifact_ids(refs)),
+    service = TemporalArtifactService(
+        repository, transaction_ownership=ArtifactTransactionOwnership.CALLER
+    )
+    frozen_refs, attachments, input_access = await _frozen_planning_input_refs(
+        repository,
+        service,
+        plan=plan,
+        binding=binding,
+        planning_parameters=planning_parameters,
+        access=access._with_verified_inputs(_artifact_ids(refs)),
+    )
+    refs.update(frozen_refs)
+    linked_ids = _artifact_ids(refs)
+    manifest_id = _skill_manifest_id(plan)
+    if manifest_id is not None:
+        manifest_digest = plan.payload.resolvedSkills.get("resolvedSkillSetDigest")
+        if not manifest_digest:
+            raise OmnigentArtifactError("admitted Skill manifest lacks its digest")
+        # Resolve the complete immutable closure before taking any grant
+        # locks. Use the proven original input scope, or an already admitted
+        # execution, rather than creating a manifest grant to discover it.
+        linked_ids.update(
+            await _skill_content_ids(
+                service,
+                manifest_id,
+                workflow_id=workflow_id,
+                access=input_access,
+                expected_digest=manifest_digest,
+            )
         )
-        refs.update(frozen_refs)
-        linked_ids = _artifact_ids(refs)
-        manifest_id = _skill_manifest_id(plan)
-        if manifest_id is not None:
-            manifest_digest = plan.payload.resolvedSkills.get("resolvedSkillSetDigest")
-            if not manifest_digest:
-                raise OmnigentArtifactError("admitted Skill manifest lacks its digest")
-            # Resolve the complete immutable closure before taking any grant
-            # locks. Use the proven original input scope, or an already admitted
-            # execution, rather than creating a manifest grant to discover it.
-            linked_ids.update(
-                await _skill_content_ids(
-                    service,
-                    manifest_id,
-                    workflow_id=workflow_id,
-                    access=input_access,
-                    expected_digest=manifest_digest,
-                )
-            )
 
-        async def link(artifact_id: str) -> None:
-            await _link_execution_input(
-                repository,
-                artifact_id,
-                workflow_id=workflow_id,
-                run_id=run_id,
-                namespace=namespace,
-            )
+    async def link(artifact_id: str) -> None:
+        await _link_execution_input(
+            repository,
+            artifact_id,
+            workflow_id=workflow_id,
+            run_id=run_id,
+            namespace=namespace,
+        )
 
-        for artifact_id in sorted(linked_ids):
-            await link(artifact_id)
-        for artifact_id, label in sorted(attachments.items()):
-            await _link_execution_input(
-                repository,
-                artifact_id,
-                workflow_id=workflow_id,
-                run_id=run_id,
-                namespace=namespace,
-                link_type="input.attachment",
-                label=label,
-            )
-        return tuple(sorted(linked_ids))
+    for artifact_id in sorted(linked_ids):
+        await link(artifact_id)
+    for artifact_id, label in sorted(attachments.items()):
+        await _link_execution_input(
+            repository,
+            artifact_id,
+            workflow_id=workflow_id,
+            run_id=run_id,
+            namespace=namespace,
+            link_type="input.attachment",
+            label=label,
+        )
+    return tuple(sorted(linked_ids))
 
 
 async def _link_execution_input(
@@ -225,6 +266,7 @@ async def _link_execution_input(
 ) -> None:
     """Grant one execution read access to an input it was admitted to use."""
     from moonmind.workflows.temporal.artifacts import (
+        ArtifactTransactionOwnership,
         ExecutionRef,
         TemporalArtifactService,
     )
@@ -241,7 +283,9 @@ async def _link_execution_input(
         for link in await repository.list_links(artifact_id)
     ):
         return
-    await TemporalArtifactService(repository).link_artifact(
+    await TemporalArtifactService(
+        repository, transaction_ownership=ArtifactTransactionOwnership.CALLER
+    ).link_artifact(
         artifact_id=artifact_id,
         principal=_GATEWAY_PRINCIPAL,
         execution_ref=ExecutionRef(
@@ -713,7 +757,10 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
             request, name=name, link_type=link_type
         )
         async with self._session_factory() as session:
-            service = TemporalArtifactService(TemporalArtifactRepository(session))
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
+            )
             if saved_metadata or checkpoint_kind:
                 if execution_link is None:
                     raise OmnigentArtifactError("Saved work requires execution ownership")
@@ -831,7 +878,10 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
         async with self._session_factory() as session:
             service = ManagedCheckpointRestoreService(
                 authority_root=authority_root,
-                artifact_service=TemporalArtifactService(TemporalArtifactRepository(session)),
+                artifact_service=TemporalArtifactService(
+                    TemporalArtifactRepository(session),
+                    transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
+                ),
             )
             return await service.restore(
                 request,
@@ -845,7 +895,10 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
         )
 
         async with self._session_factory() as session:
-            service = TemporalArtifactService(TemporalArtifactRepository(session))
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
+            )
             _artifact, payload = await service.read(
                 artifact_id=self._artifact_id(artifact_ref),
                 access=self._read_access
@@ -910,7 +963,10 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
         )
 
         async with self._session_factory() as session:
-            service = TemporalArtifactService(TemporalArtifactRepository(session))
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
+            )
             _artifact, payload = await service.read(
                 artifact_id=artifact_id,
                 access=ArtifactAccessContext.for_execution(
@@ -966,7 +1022,10 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
         if artifact_id not in admitted_ids and manifest_id is not None:
             async with self._session_factory() as session:
                 admitted_ids |= await _skill_content_ids(
-                    TemporalArtifactService(TemporalArtifactRepository(session)),
+                    TemporalArtifactService(
+                        TemporalArtifactRepository(session),
+                        transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
+                    ),
                     manifest_id,
                     workflow_id=identity.workflow_id,
                     access=ArtifactAccessContext.for_execution(
@@ -1005,6 +1064,7 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
                 workflow_id=identity.workflow_id,
                 run_id=identity.run_id,
             )
+            await session.commit()
         return await self._read_for_execution(
             artifact_id, workflow_id=identity.workflow_id
         )
@@ -1045,6 +1105,7 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
                 workflow_id=identity.workflow_id,
                 run_id=identity.run_id,
             )
+            await session.commit()
         return await self._read_for_execution(
             artifact_id, workflow_id=identity.workflow_id
         )
@@ -1064,7 +1125,10 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
         )
 
         async with self._session_factory() as session:
-            service = TemporalArtifactService(TemporalArtifactRepository(session))
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
+            )
             return await service.read_chunks(
                 artifact_id=self._artifact_id(artifact_id),
                 access=access,
@@ -1085,7 +1149,10 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
         )
 
         async with self._session_factory() as session:
-            service = TemporalArtifactService(TemporalArtifactRepository(session))
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
+            )
             return await service.get_metadata(
                 artifact_id=self._artifact_id(artifact_id),
                 access=access,

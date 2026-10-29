@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from api_service.api.routers import mcp_tools
 from api_service.db.models import Base, ContainerJobRecord
 from api_service.services.container_jobs import ContainerJobService
+from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
 from moonmind.config.container_backend_settings import (
     CACHE_SOURCES_ENV_KEY,
     IMAGE_SOURCES_ENV_KEY,
@@ -223,7 +224,11 @@ async def journey(tmp_path, monkeypatch):
     settings = backend_settings()
     monkeypatch.setattr(mcp_tools.settings.security, "JWT_SECRET_KEY", SECRET)
     monkeypatch.setattr(mcp_tools, "container_jobs_ready", lambda: True)
-    monkeypatch.setattr(mcp_tools, "get_temporal_artifact_service", lambda _s: None)
+    def artifact_service(_session, *, transaction_ownership):
+        assert transaction_ownership is ArtifactTransactionOwnership.CALLER
+        return None
+
+    monkeypatch.setattr(mcp_tools, "get_temporal_artifact_service", artifact_service)
     monkeypatch.setattr(
         mcp_tools,
         "ContainerJobService",

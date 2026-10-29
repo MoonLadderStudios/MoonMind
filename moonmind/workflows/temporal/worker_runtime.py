@@ -116,6 +116,7 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalSkillActivities,
 )
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactTransactionOwnership,
     ArtifactAccessContext,
     TemporalArtifactActivities,
     TemporalArtifactRepository,
@@ -374,7 +375,8 @@ async def _persist_child_run_task_input_snapshot(
         return existing_ref
 
     service = artifact_service or TemporalArtifactService(
-        TemporalArtifactRepository(session)
+        TemporalArtifactRepository(session),
+        transaction_ownership=ArtifactTransactionOwnership.CALLER,
     )
     principal = _owner_principal_for_child_snapshot(canonical)
     snapshot_payload = _build_child_run_task_input_snapshot_payload(
@@ -2814,7 +2816,10 @@ class _ArtifactServiceProxy:
     def __getattr__(self, name):
         async def wrapper(*args, **kwargs):
             async with get_async_session_context() as session:
-                service = TemporalArtifactService(TemporalArtifactRepository(session))
+                service = TemporalArtifactService(
+                    TemporalArtifactRepository(session),
+                    transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
+                )
                 func = getattr(service, name)
                 return await func(*args, **kwargs)
 

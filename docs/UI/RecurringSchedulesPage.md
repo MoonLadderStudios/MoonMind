@@ -472,7 +472,7 @@ Rules:
 9. Delete should clearly state that future recurring dispatch stops, but prior workflow executions and artifacts remain.
 10. If the schedule no longer exists, show a not-found state with a link back to Recurring.
 11. If run history fails, keep schedule controls available and show a localized runs-panel error.
-12. If update or reconciliation fails, show the API error inline and leave the previous detail state visible.
+12. Show update errors inline. Validation failures leave saved state unchanged; a saved/pending Temporal synchronization error requires refreshing the committed definition, not creating a replacement.
 
 ---
 

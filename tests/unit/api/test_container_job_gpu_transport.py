@@ -27,6 +27,7 @@ from api_service.api.routers import mcp_tools as mcp_tools_router
 from api_service.auth_providers import get_instance_access, instance_operator_principal
 from api_service.db.models import Base, ContainerJobRecord
 from api_service.services.container_jobs import ContainerJobService
+from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
 from moonmind.schemas.container_job_models import (
     ContainerJobActivityRequest,
     ContainerJobFailureClass,
@@ -102,8 +103,12 @@ def _install_real_service(monkeypatch, module, session_factory, temporal) -> Non
             operator=operator,
         ),
     )
+    def artifact_service(session, *, transaction_ownership):
+        assert transaction_ownership is ArtifactTransactionOwnership.CALLER
+        return None
+
     monkeypatch.setattr(
-        module, "get_temporal_artifact_service", lambda session: None, raising=False
+        module, "get_temporal_artifact_service", artifact_service, raising=False
     )
     return session_dependency
 

@@ -43,10 +43,11 @@ if os.environ.get("GH4354_ARTIFACT_ROOT"):
         TemporalArtifactService,
     )
 
-    def artifact_service(session):
+    def artifact_service(session, **kwargs):
         return TemporalArtifactService(
             TemporalArtifactRepository(session),
             store=LocalTemporalArtifactStore(os.environ["GH4354_ARTIFACT_ROOT"]),
+            **kwargs,
         )
 
     container_jobs.get_temporal_artifact_service = artifact_service

@@ -124,7 +124,9 @@ async def test_create_review_only_freezes_compiled_workspace_before_native_admis
 
     artifacts = Artifacts()
     monkeypatch.setattr(
-        executions, "get_temporal_artifact_service", lambda _session: artifacts
+        executions,
+        "get_temporal_artifact_service",
+        lambda _session, *, transaction_ownership: artifacts,
     )
     if snapshot_mutation == "workspace":
         persist_json_artifact = service.persist_json_artifact

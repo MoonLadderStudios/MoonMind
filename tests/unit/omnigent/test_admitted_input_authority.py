@@ -809,3 +809,38 @@ async def test_planned_host_launch_preserves_raw_protection(
     assert type(failure.value).__name__ in {
         "TemporalArtifactAuthorizationError", "TemporalArtifactStateError"
     }
+
+
+@pytest.mark.asyncio
+async def test_selected_agent_source_grant_is_durable_before_independent_read(artifacts):
+    body = b"selected agent source"
+    artifact_id = await _put(
+        artifacts, body, owner="service:profile-author", workflow_id=None,
+        link_type="input.agent_source",
+    )
+    request = AgentExecutionRequest.model_validate({
+        "agentKind": "external", "agentId": "omnigent",
+        "correlationId": "selected-source", "idempotencyKey": "selected-source:step",
+        "stepExecution": {
+            "schemaVersion": "v1", "workflowId": "selected-source",
+            "runId": "selected-source-run", "logicalStepId": "step",
+            "executionOrdinal": 1,
+            "stepExecutionId": "selected-source:selected-source-run:step:execution:1",
+            "runtimeContextPolicy": "fresh_agent_run",
+        },
+    })
+    gateway = TemporalOmnigentArtifactGateway(artifacts)
+    assert await gateway.read_selected_agent_source(artifact_id, request=request) == body
+    async with artifacts() as independent:
+        service = TemporalArtifactService(TemporalArtifactRepository(independent))
+        assert (await service.read(
+            artifact_id=artifact_id, access=access_for_test("workflow:selected-source")
+        ))[1] == body
+        with pytest.raises(TemporalArtifactAuthorizationError):
+            await service.read(artifact_id=artifact_id, access=access_for_test("workflow:unrelated"))
+        links = list((await independent.scalars(select(TemporalArtifactLink).where(
+            TemporalArtifactLink.artifact_id == artifact_id
+        ))).all())
+        assert [(link.workflow_id, link.run_id) for link in links] == [
+            ("selected-source", "selected-source-run")
+        ]

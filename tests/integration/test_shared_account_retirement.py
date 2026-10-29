@@ -422,7 +422,7 @@ async def test_retirement_refuses_a_live_reader_without_losing_converted_state(
 
 
 async def test_converted_running_job_preserves_temporal_handoff_and_cancel(
-    pg_maker, monkeypatch
+    pg_maker, monkeypatch, tmp_path
 ):
     """Exercise the real adapter/server; no lifecycle Activity is substituted."""
     from fastapi import FastAPI
@@ -464,7 +464,13 @@ async def test_converted_running_job_preserves_temporal_handoff_and_cancel(
             result = await run_guarded_upgrade(session, operator_authorized=True)
             assert result.published
         monkeypatch.setattr(
-            container_jobs, "get_temporal_artifact_service", lambda _: None
+            container_jobs,
+            "get_temporal_artifact_service",
+            lambda db, **kwargs: TemporalArtifactService(
+                TemporalArtifactRepository(db),
+                store=LocalTemporalArtifactStore(tmp_path / "job-evidence"),
+                **kwargs,
+            ),
         )
         monkeypatch.setattr(
             container_jobs,
