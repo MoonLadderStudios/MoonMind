@@ -30,6 +30,9 @@ from tests.unit.omnigent.test_generic_platform_production_services import (
 from tests.unit.omnigent.test_profile_bound_plan_authority import (
     admitted_codex_plan as _admitted_codex_plan,
 )
+from tests.unit.services.test_omnigent_execution_plan_service import (
+    _compiler_dependency_owner,  # noqa: F401 - pytest fixture import
+)
 
 admitted_codex_plan = _admitted_codex_plan
 

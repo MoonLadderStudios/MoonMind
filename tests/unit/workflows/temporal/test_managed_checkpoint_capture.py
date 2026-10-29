@@ -57,6 +57,7 @@ def test_managed_capture_contract_and_catalog_reject_other_authorities() -> None
 @pytest.mark.asyncio
 async def test_managed_checkpoint_artifact_uses_content_addressed_writer() -> None:
     calls: list[tuple[str, bytes, str]] = []
+    sealed = []
 
     class ArtifactService:
         async def put_content_addressed_payload_complete(
@@ -71,6 +72,15 @@ async def test_managed_checkpoint_artifact_uses_content_addressed_writer() -> No
                 encryption=SimpleNamespace(value="none"),
             )
             return artifact, False
+
+        async def record_verified_dependencies(
+            self, *, root_artifact_id, dependencies, access
+        ):
+            from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+
+            assert ArtifactAccessContext.require(access).principal == "system"
+            assert tuple(dependencies) == ()  # An archive is a leaf, not a manifest.
+            sealed.append(root_artifact_id)
 
     activities = TemporalAgentRuntimeActivities(
         run_store=object(),
@@ -87,6 +97,8 @@ async def test_managed_checkpoint_artifact_uses_content_addressed_writer() -> No
 
     assert artifact_ref == "art-checkpoint"
     assert calls == [("art-checkpoint", payload, "checkpoint_archive")]
+
+    assert sealed == ["art-checkpoint"]
 
 
 @pytest.mark.asyncio

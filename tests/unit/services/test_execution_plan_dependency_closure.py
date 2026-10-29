@@ -101,7 +101,6 @@ async def test_saved_plan_admission_reuses_sealed_inputs_without_rediscovering_s
 
     monkeypatch.setattr(bridge_artifacts, "_skill_content_digests", no_discovery)
     async with artifacts() as session:
-        repository = TemporalArtifactRepository(session)
         plan = await SessionExecutionPlanStore(session).load(saved.binding.plan_ref)
         linked = await bridge_artifacts.link_verified_execution_plan_inputs_in_session(
             session=session,
