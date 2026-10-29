@@ -21,15 +21,15 @@ on:
   workflow_dispatch:
     inputs:
       codex_cli_version:
-        description: "Override the Dockerfile Codex pin (>=0.100.0,<0.200.0)"
+        description: "Override the Dockerfile Codex pin (exact release)"
         required: false
         type: string
       claude_cli_version:
-        description: "Override the Dockerfile Claude Code pin (>=2.0.0,<3.0.0)"
+        description: "Override the Dockerfile Claude Code pin (exact release)"
         required: false
         type: string
       opencode_version:
-        description: "Override the Dockerfile OpenCode pin (>=1.17.7,<1.19.0)"
+        description: "Override the Dockerfile OpenCode pin (exact release)"
         required: false
         type: string
       gh_version:
