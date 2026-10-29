@@ -135,7 +135,14 @@ async def test_system_owned_fanout_expands_existing_pr_preset(
             if artifact_field == "inputArtifactRef":
                 artifacts = executions_module.get_temporal_artifact_service(session)
                 artifact, _ = await artifacts.create(
-                    principal="system", content_type="application/json"
+                    principal="system",
+                    content_type="application/json",
+                    link={
+                        "namespace": "default",
+                        "workflow_id": parent_id,
+                        "run_id": "parent-run",
+                        "link_type": "output",
+                    },
                 )
                 artifact_ref = artifact.artifact_id
                 await artifacts.write_complete(
