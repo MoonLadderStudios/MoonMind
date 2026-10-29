@@ -746,8 +746,7 @@ expiry grants no workspace-deletion or completion authority.
 
 An agent run has one execution budget, resolved from `timeoutPolicy` by a single
 authority and enforced identically by the `MoonMind.AgentRun` poll loop and the
-managed process supervisor. The workflow publishes the resolved budget into the
-launch request, so the two deadlines cannot diverge.
+managed process supervisor, which receives it in the launch request.
 
 | Field | Meaning |
 |---|---|
@@ -778,11 +777,25 @@ budget and the condition that ended it.
 Monotonic intervals resist host clock changes; persisted wall-clock timestamps
 correlate runtime evidence. Before ending for lack of progress, the supervisor
 samples CPU/workspace activity and the workflow checks fresh canonical status.
-Managed recovery preserves confirmed completion and bounds cancellation, polling
-and result fetching to the remaining budget. A fetch timeout at that deadline
-produces the normal budget result and retains its original diagnostics; other
-Activity errors keep their failure behavior. Provider quota classification still
-enters cooldown recovery. The hard ceiling ends execution without further reconciliation.
+
+**One allowance per attempt.** Execution and automatic recovery (cooldown
+re-entry, process-loss successor, terminal-contract continuation, profile-bound
+retry) share one cumulative allowance; slot, capacity and cooldown waits and
+pause before dispatch stop the clock without resetting it. Status, cancel and
+fetch Activities during execution derive their timeouts from the remaining
+allowance in one place; a fetch timeout at the deadline yields the normal budget
+result with its original diagnostics. Confirming an already-terminal run and
+saving its result keep their catalog-bounded timeouts, even after expiry, and
+start no task work. MoonMind.Run step retries charge failed attempts against
+the step's hard ceiling (§16.1); a rerun gets its own allowance.
+
+**One recovery owner.** Adapters, providers and successor builders only propose
+recovery; the AgentRun workflow admits at most one per result (cooldown,
+successor or terminal stop). It never repeats a `delivery_unknown` effect,
+never re-attempts a `no_retry` failure (auth rejection, permission denial,
+invalid choice) and admits nothing once the allowance is spent. Results record
+`recoveryDecisions` and `consumedExecutionSeconds`. The hard ceiling ends
+execution without further reconciliation.
 
 ### Progress evidence
 

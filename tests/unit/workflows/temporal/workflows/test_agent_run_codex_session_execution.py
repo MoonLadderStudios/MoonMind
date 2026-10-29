@@ -2569,6 +2569,10 @@ async def _run_default_profile_cooldown_retry_case(
         def patched(patch_id: str) -> bool:
             if patch_id == "agent-run-provider-disposition-precedence-v1":
                 return disposition_patch_enabled
+            if patch_id == agent_run_module.AGENT_RUN_STEP_BUDGET_OWNER_PATCH_ID:
+                # Evaluated at workflow start, so any history that predates
+                # disposition precedence also predates the recovery owner.
+                return disposition_patch_enabled and _patch_all_enabled(patch_id)
             if patch_id == sticky_patch_id:
                 return sticky_patch_enabled
             if patch_id == retry_budget_patch_id:

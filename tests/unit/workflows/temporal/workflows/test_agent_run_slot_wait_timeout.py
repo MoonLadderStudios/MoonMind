@@ -128,7 +128,10 @@ class TestSlotWaitRetryBehavior:
         pause_gate_index = source.rindex(
             "await workflow.wait_condition(lambda: not self._paused)"
         )
-        reset_index = source.index("overall_start = workflow.now()", pause_gate_index)
+        reset_index = source.index(
+            "overall_start = _resume_clock(workflow.now())",
+            pause_gate_index,
+        )
         launch_index = source.index("self.run_status = RunStatus.launching")
 
         assert pause_gate_index < reset_index < launch_index
