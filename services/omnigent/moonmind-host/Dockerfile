@@ -24,14 +24,8 @@
 ARG OMNIGENT_HOST_BASE_IMAGE
 ARG OMNIGENT_BUILD_DIGEST
 ARG CODEX_CLI_VERSION=0.159.0
-ARG CODEX_MIN_VERSION=0.100.0
-ARG CODEX_MAX_VERSION=0.200.0
 ARG CLAUDE_CLI_VERSION=2.1.281
-ARG CLAUDE_MIN_VERSION=2.0.0
-ARG CLAUDE_MAX_VERSION=3.0.0
 ARG OPENCODE_VERSION=1.18.11
-ARG OPENCODE_MIN_VERSION=1.17.7
-ARG OPENCODE_MAX_VERSION=1.19.0
 ARG OPENCODE_PLUGIN_NPM_CACHE=/opt/moonmind/opencode-npm-cache
 # Image-owned helper tools (MoonLadderStudios/MoonMind#4558): gh and the
 # non-secret MoonMind container CLI. The single pin source is
@@ -44,14 +38,8 @@ FROM ${OMNIGENT_HOST_BASE_IMAGE} AS base
 # Re-declare args after FROM
 ARG OMNIGENT_BUILD_DIGEST
 ARG CODEX_CLI_VERSION
-ARG CODEX_MIN_VERSION
-ARG CODEX_MAX_VERSION
 ARG CLAUDE_CLI_VERSION
-ARG CLAUDE_MIN_VERSION
-ARG CLAUDE_MAX_VERSION
 ARG OPENCODE_VERSION
-ARG OPENCODE_MIN_VERSION
-ARG OPENCODE_MAX_VERSION
 ARG OPENCODE_PLUGIN_NPM_CACHE
 ARG OMNIGENT_GH_VERSION
 
@@ -74,23 +62,6 @@ RUN npm config set fund false \
     && command -v codex >/dev/null || { echo "codex binary missing after install" >&2; exit 1; } \
     && command -v claude >/dev/null || { echo "claude binary missing after install" >&2; exit 1; } \
     && command -v opencode >/dev/null || { echo "opencode binary missing after install" >&2; exit 1; }
-
-# Verify each installed vendor version is inside its trusted runtime-pack
-# supported range (inclusive lower, exclusive upper). A drifted runtime fails
-# the build instead of becoming launch authority.
-RUN CODEX_INSTALLED="$(codex --version 2>&1 | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)" \
-    && CLAUDE_INSTALLED="$(claude --version 2>&1 | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)" \
-    && OPENCODE_INSTALLED="$(opencode --version 2>&1 | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)" \
-    && [ -n "${CODEX_INSTALLED}" ] || { echo "could not parse codex --version" >&2; exit 1; } \
-    && [ -n "${CLAUDE_INSTALLED}" ] || { echo "could not parse claude --version" >&2; exit 1; } \
-    && [ -n "${OPENCODE_INSTALLED}" ] || { echo "could not parse opencode --version" >&2; exit 1; } \
-    && python3 -c "import sys; from packaging.version import Version; iv=Version('${CODEX_INSTALLED}'); minv=Version('${CODEX_MIN_VERSION}'); maxv=Version('${CODEX_MAX_VERSION}'); sys.exit(0 if minv <= iv < maxv else 1)" \
-        || { echo "codex version ${CODEX_INSTALLED} outside supported range ${CODEX_MIN_VERSION}..${CODEX_MAX_VERSION} (exclusive upper)" >&2; exit 1; } \
-    && python3 -c "import sys; from packaging.version import Version; iv=Version('${CLAUDE_INSTALLED}'); minv=Version('${CLAUDE_MIN_VERSION}'); maxv=Version('${CLAUDE_MAX_VERSION}'); sys.exit(0 if minv <= iv < maxv else 1)" \
-        || { echo "claude version ${CLAUDE_INSTALLED} outside supported range ${CLAUDE_MIN_VERSION}..${CLAUDE_MAX_VERSION} (exclusive upper)" >&2; exit 1; } \
-    && python3 -c "import sys; from packaging.version import Version; iv=Version('${OPENCODE_INSTALLED}'); minv=Version('${OPENCODE_MIN_VERSION}'); maxv=Version('${OPENCODE_MAX_VERSION}'); sys.exit(0 if minv <= iv < maxv else 1)" \
-        || { echo "opencode version ${OPENCODE_INSTALLED} outside supported range ${OPENCODE_MIN_VERSION}..${OPENCODE_MAX_VERSION} (exclusive upper)" >&2; exit 1; } \
-    && echo "codex ${CODEX_INSTALLED}, claude ${CLAUDE_INSTALLED}, opencode ${OPENCODE_INSTALLED} within supported ranges"
 
 # Image-owned Omnigent helper tools (MoonLadderStudios/MoonMind#4558).
 #
@@ -156,7 +127,8 @@ WORKDIR /home/app
 ENV HOME="/home/app" \
     PATH="/opt/moonmind-tools/bin:/opt/venv/bin:/usr/local/bin:${PATH}"
 
-# Sanity check as non-root
+# Sanity check as non-root. The printed vendor releases are build provenance,
+# not admission; the native CLI readiness check below decides usability.
 RUN command -v codex && codex --version \
     && command -v claude && claude --version \
     && command -v opencode && opencode --version \
@@ -170,7 +142,7 @@ RUN command -v codex && codex --version \
 RUN --network=none python3 -c 'import fcntl, httpx' \
     && bash -lc "python3 -c 'import fcntl, httpx'"
 
-# A binary and MoonMind's supported range alone do not prove the installed
+# A binary and its release number alone do not prove the installed
 # Omnigent native harness can use it. Check that owner's actual readiness
 # contract without credentials or network before publishing the image.
 RUN --network=none /opt/venv/bin/python - <<'PY'
