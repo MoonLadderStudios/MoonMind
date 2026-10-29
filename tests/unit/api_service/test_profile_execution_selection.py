@@ -602,3 +602,82 @@ def test_authored_api_key_claude_configuration_wins_over_managed_fallback():
         )["profileId"]
         == "claude-api-team"
     )
+
+
+def _codex_api_key_provider(**env):
+    return provider(
+        profile_id="codex_openai_api",
+        runtime_id="codex_cli",
+        provider_id="openai",
+        credential_source="secret_ref",
+        runtime_materialization_mode="api_key_env",
+        secret_refs={"openai_api_key": "env://OPENAI_API_KEY"},
+        env_template={
+            "OPENAI_API_KEY": {"from_secret_ref": "openai_api_key"},
+            **env,
+        },
+        file_templates=None,
+        home_path_overrides=None,
+    )
+
+
+def _codex_configuration(name, *, credential_source, rollout_metadata=None):
+    row, version = configuration(name, providers=["openai"])
+    version.document["harness"] = "codex-native"
+    version.document["providerRequirements"].update(
+        runtimeId="codex_cli",
+        credentialSource=credential_source,
+        materializationMode=(
+            "api_key_env" if credential_source == "secret_ref" else "oauth_home"
+        ),
+    )
+    version.created_by = None
+    version.rollout_metadata = rollout_metadata
+    return row, version
+
+
+def test_api_key_codex_profile_moves_to_managed_api_key_configuration():
+    bootstrap = _codex_configuration(
+        "omnigent-bootstrap-default", credential_source="oauth_volume"
+    )
+    bootstrap[0].default_for_runtime = True
+    stock_api_key = _codex_configuration(
+        "omnigent-codex-api-key",
+        credential_source="secret_ref",
+        rollout_metadata={"managedBuiltin": "codex-api-key"},
+    )
+    api_key = _codex_api_key_provider()
+
+    # Before the managed API-key configuration exists the Profile keeps its
+    # direct route; with it, new work is admitted through the shared lifecycle.
+    assert profile_has_native_inventory_route(api_key, [bootstrap])
+    assert not profile_has_native_inventory_route(api_key, [bootstrap, stock_api_key])
+    assert (
+        select_execution_configuration(api_key, [bootstrap, stock_api_key])["profileId"]
+        == "omnigent-codex-api-key"
+    )
+    # An authored Codex API-key configuration wins over the managed fallback.
+    authored = _codex_configuration("codex-api-team", credential_source="secret_ref")
+    assert (
+        select_execution_configuration(api_key, [stock_api_key, authored])["profileId"]
+        == "codex-api-team"
+    )
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"OPENAI_BASE_URL": "https://api.minimax.io/v1"},
+        {"OPENAI_ORG_ID": "org-example"},
+    ],
+)
+def test_untranslatable_api_key_codex_profile_keeps_direct_route(env):
+    stock_api_key = _codex_configuration(
+        "omnigent-codex-api-key",
+        credential_source="secret_ref",
+        rollout_metadata={"managedBuiltin": "codex-api-key"},
+    )
+    api_key = _codex_api_key_provider(**env)
+
+    assert not configuration_accepts_profile(stock_api_key[1].document, api_key)
+    assert profile_has_native_inventory_route(api_key, [stock_api_key])

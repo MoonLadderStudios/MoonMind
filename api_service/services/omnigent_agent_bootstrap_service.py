@@ -63,6 +63,7 @@ logger = logging.getLogger(__name__)
 BOOTSTRAP_PROFILE_ID = "omnigent-bootstrap-default"
 CLAUDE_BUILTIN_PROFILE_ID = "omnigent-claude-default"
 CLAUDE_API_KEY_BUILTIN_PROFILE_ID = "omnigent-claude-api-key"
+CODEX_API_KEY_BUILTIN_PROFILE_ID = "omnigent-codex-api-key"
 OPENCODE_BUILTIN_PROFILE_ID = "omnigent-opencode-default"
 _ENV_DEFAULT_AGENT_NAME = "OMNIGENT_DEFAULT_AGENT_NAME"
 _BUILTIN_DEFAULT_AGENT_NAME = "codex-native-ui"
@@ -663,20 +664,25 @@ async def _active_bootstrap_launch_policy_ref(session: AsyncSession) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class _ManagedClaudeConfiguration:
+class _ManagedConfiguration:
     profile_id: str
     marker: str
     display_name: str
     description: str
     credential_source: str
     materialization_mode: str
+    harness: str = "claude-native"
+    execution_profile_ref: str = "omnigent-claude@1"
+    provider_runtime_id: str = "claude_code"
+    provider_ids: tuple[str, ...] = ("anthropic",)
+    origin: str = "builtin_claude"
 
 
 # The stock Claude agent backs one managed configuration per Provider Profile
 # credential shape. Selection keeps them disjoint (credential source), and an
 # authored configuration for the same shape wins over either fallback.
 _MANAGED_CLAUDE_CONFIGURATIONS = (
-    _ManagedClaudeConfiguration(
+    _ManagedConfiguration(
         profile_id=CLAUDE_BUILTIN_PROFILE_ID,
         marker="claude",
         display_name="Claude Code via Omnigent",
@@ -687,7 +693,7 @@ _MANAGED_CLAUDE_CONFIGURATIONS = (
         credential_source="oauth_volume",
         materialization_mode="oauth_home",
     ),
-    _ManagedClaudeConfiguration(
+    _ManagedConfiguration(
         profile_id=CLAUDE_API_KEY_BUILTIN_PROFILE_ID,
         marker="claude-api-key",
         display_name="Claude Code via Omnigent (API key)",
@@ -700,8 +706,27 @@ _MANAGED_CLAUDE_CONFIGURATIONS = (
         materialization_mode="api_key_env",
     ),
 )
-MANAGED_CLAUDE_BUILTINS = {
-    item.profile_id: item.marker for item in _MANAGED_CLAUDE_CONFIGURATIONS
+# The bootstrap Codex configuration serves OAuth Profiles; API-key Codex
+# Profiles get their own managed configuration on the same stock agent.
+_MANAGED_CODEX_API_KEY_CONFIGURATION = _ManagedConfiguration(
+    profile_id=CODEX_API_KEY_BUILTIN_PROFILE_ID,
+    marker="codex-api-key",
+    display_name="Codex via Omnigent (API key)",
+    description=(
+        "MoonMind-managed Codex configuration for API-key Provider Profiles "
+        "whose key and endpoint the Omnigent provider config carries."
+    ),
+    credential_source="secret_ref",
+    materialization_mode="api_key_env",
+    harness=_BOOTSTRAP_HARNESS,
+    execution_profile_ref=_BOOTSTRAP_EXECUTION_PROFILE_REF,
+    provider_runtime_id=_BOOTSTRAP_PROVIDER_RUNTIME_ID,
+    provider_ids=("openai",),
+    origin="builtin_codex",
+)
+MANAGED_BUILTIN_MARKERS = {
+    item.profile_id: item.marker
+    for item in (*_MANAGED_CLAUDE_CONFIGURATIONS, _MANAGED_CODEX_API_KEY_CONFIGURATION)
 }
 
 
@@ -750,7 +775,7 @@ async def reconcile_builtin_claude_agent_profile(
     )["ready"]:
         return False
     results = [
-        await _reconcile_managed_claude_configuration(
+        await _reconcile_managed_configuration(
             session,
             managed,
             upstream_id=upstream_id,
@@ -764,9 +789,9 @@ async def reconcile_builtin_claude_agent_profile(
     return all(results)
 
 
-async def _reconcile_managed_claude_configuration(
+async def _reconcile_managed_configuration(
     session: AsyncSession,
-    managed: _ManagedClaudeConfiguration,
+    managed: _ManagedConfiguration,
     *,
     upstream_id: str,
     upstream_version: str | None,
@@ -778,10 +803,10 @@ async def _reconcile_managed_claude_configuration(
         upstream_id,
         upstream_version=upstream_version,
         launch_policy_ref=launch_policy_ref,
-        execution_profile_ref="omnigent-claude@1",
-        harness="claude-native",
-        provider_runtime_id="claude_code",
-        provider_ids=("anthropic",),
+        execution_profile_ref=managed.execution_profile_ref,
+        harness=managed.harness,
+        provider_runtime_id=managed.provider_runtime_id,
+        provider_ids=managed.provider_ids,
         credential_source=managed.credential_source,
         materialization_mode=managed.materialization_mode,
     )
@@ -830,14 +855,14 @@ async def _reconcile_managed_claude_configuration(
                         "id": "portable_builtin_contract",
                         "status": "ready",
                         "message": (
-                            "The stock Claude profile is structurally ready; "
+                            "The managed configuration is structurally ready; "
                             "launch readiness is checked at admission."
                         ),
                     }
                 ],
             },
             rollout_metadata={
-                "origin": "builtin_claude",
+                "origin": managed.origin,
                 "managedBuiltin": managed.marker,
                 "materializedAt": observed_at.isoformat(),
                 "launchPolicyRef": launch_policy_ref,
@@ -866,7 +891,7 @@ async def _reconcile_managed_claude_configuration(
             version=candidate.version,
             actor_id=None,
             metadata_json={
-                "origin": "builtin_claude",
+                "origin": managed.origin,
                 "previousVersion": active.version if active else None,
                 "launchPolicyRef": launch_policy_ref,
             },
@@ -880,6 +905,39 @@ async def _reconcile_managed_claude_configuration(
         version = await _load_active_version(session, current) if current else None
         return bool(version is not None and version.digest == digest)
     return True
+
+
+async def _reconcile_managed_codex_api_key_configuration(
+    session: AsyncSession,
+    *,
+    upstream_id: str,
+    upstream_version: str | None,
+    launch_policy_ref: str,
+    observed_at: datetime,
+) -> bool:
+    """Bind the observed stock Codex agent for API-key Codex Profiles."""
+
+    projection = await session.get(
+        OmnigentUpstreamAgentProjection,
+        projection_identity(_BOOTSTRAP_ENDPOINT_REF, upstream_id, upstream_version),
+    )
+    if not projection_readiness(
+        projection,
+        now=observed_at,
+        bridge_mode=_BOOTSTRAP_BRIDGE_MODE,
+        harness=_BOOTSTRAP_HARNESS,
+        required_capabilities=_BOOTSTRAP_REQUIRED_CAPABILITIES,
+    )["ready"]:
+        return False
+    return await _reconcile_managed_configuration(
+        session,
+        _MANAGED_CODEX_API_KEY_CONFIGURATION,
+        upstream_id=upstream_id,
+        upstream_version=upstream_version,
+        launch_policy_ref=launch_policy_ref,
+        projection=projection,
+        observed_at=observed_at,
+    )
 
 
 async def _reconcile_bootstrap_profile_launch_policy(
@@ -1038,6 +1096,13 @@ async def reconcile_bootstrap_agent_profile(
             launch_policy_ref=launch_policy_ref,
             now=observed_at,
         )
+        await _reconcile_managed_codex_api_key_configuration(
+            session,
+            upstream_id=upstream_id,
+            upstream_version=upstream_version,
+            launch_policy_ref=launch_policy_ref,
+            observed_at=observed_at,
+        )
     await reconcile_builtin_claude_agent_profile(
         session, inventory=inventory, env=env, now=observed_at
     )
@@ -1055,7 +1120,8 @@ __all__ = [
     "BOOTSTRAP_PROFILE_ID",
     "CLAUDE_API_KEY_BUILTIN_PROFILE_ID",
     "CLAUDE_BUILTIN_PROFILE_ID",
-    "MANAGED_CLAUDE_BUILTINS",
+    "CODEX_API_KEY_BUILTIN_PROFILE_ID",
+    "MANAGED_BUILTIN_MARKERS",
     "OPENCODE_BUILTIN_PROFILE_ID",
     "BootstrapDefaultConflictError",
     "DefaultAgentResolution",

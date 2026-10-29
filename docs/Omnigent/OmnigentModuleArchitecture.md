@@ -274,12 +274,12 @@ deletion removes its row in the same change rather than leaving a stale entry.
 | Embedded host/runner transport admission | `omnigent.legacy.embedded_host_transport` | `new_admission_disabled` |
 
 The direct Codex/Claude launch, AgentSession, profile-bound and OAuth host
-rows stay live because the shared lifecycle still lacks API-key and
-custom-endpoint Codex Provider Profiles, the Claude key Profiles the Omnigent
-provider config cannot carry exactly, Claude slash-command passthrough, one
-session reused across a run's steps, static-connected Codex/Claude hosts, and
-OAuth credential maintenance and its host-lease janitor. API-key Claude
-Profiles that translate exactly already run on the shared lifecycle. Each row's
+rows stay live because the shared lifecycle still lacks the Codex and Claude
+key Profiles the Omnigent provider config cannot carry exactly (the seeded
+MiniMax Profiles), Claude slash-command passthrough, one session reused across
+a run's steps, static-connected Codex/Claude hosts, and OAuth credential
+maintenance and its host-lease janitor. API-key Codex and Claude Profiles that
+translate exactly already run on the shared lifecycle. Each row's
 `missingOutcome` names its own share; the Codex/Claude CLIs and Node stay in
 the application image until those rows are deleted.
 

@@ -357,7 +357,13 @@ DEFAULT_HOST_CLASS_TEMPLATES: tuple[HostClassTemplate, ...] = (
         harness_ids=("codex-native",),
         image_env=OMNIGENT_SHARED_HOST_IMAGE_ENV,
         integration_modes=("native-server",),
-        materializer_refs=("codex-oauth-home@1", "none@1"),
+        # API-key Codex Profiles reach the native launch through the Omnigent
+        # provider config rather than an enrolled OAuth home.
+        materializer_refs=(
+            "codex-oauth-home@1",
+            "omnigent-provider-config@1",
+            "none@1",
+        ),
         runtime_pack_ref="codex-native-pack@1",
     ),
     HostClassTemplate(
