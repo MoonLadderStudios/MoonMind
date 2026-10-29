@@ -3362,6 +3362,241 @@ async def test_manual_request_persists_before_rpc_and_resumes_observation_withou
             mock_temporal_adapter.trigger_schedule.assert_awaited_once()
 
 
+@pytest.mark.parametrize("ack_lost", [False, True])
+async def test_review_ready_successor_restart_never_retriggers_recorded_request(
+    tmp_path,
+    mock_temporal_adapter,
+    ack_lost,
+):
+    async with recurring_db(tmp_path) as maker:
+        async with maker() as session:
+            service = RecurringWorkflowsService(
+                session, temporal_client_adapter=mock_temporal_adapter
+            )
+            definition = await service.create_definition(
+                name="Independent issues",
+                description="",
+                enabled=True,
+                schedule_type="cron",
+                cron="*/40 * * * *",
+                timezone="UTC",
+                scope_type="personal",
+                scope_ref=None,
+                owner_user_id=uuid4(),
+                target={
+                    "workflowType": "MoonMind.UserWorkflow",
+                    "initialParameters": {"task": {"instructions": "Work"}},
+                },
+                policy={},
+            )
+            definition.target = {
+                "workflowType": "MoonMind.UserWorkflow",
+                "initialParameters": {
+                    "task": {
+                        "steps": [
+                            {
+                                "tool": {
+                                    "id": "github.load_issue_preset_brief",
+                                    "inputs": {
+                                        "issueSearch": "repo:org/repo is:open",
+                                        "repository": "org/repo",
+                                    },
+                                }
+                            }
+                        ]
+                    },
+                },
+            }
+            await session.commit()
+            service._ensure_schedule_action_current = AsyncMock()
+            if ack_lost:
+                mock_temporal_adapter.trigger_schedule.side_effect = ConnectionError(
+                    "response lost"
+                )
+                mock_temporal_adapter.observe_schedule_trigger = AsyncMock(
+                    return_value=ScheduleTriggerResult()
+                )
+            else:
+                mock_temporal_adapter.trigger_schedule.return_value = (
+                    ScheduleTriggerResult(
+                        disposition="started",
+                        workflow_id="successor",
+                        run_id="successor-run",
+                    )
+                )
+            owner = f"mm:{definition.id}-2026-10-29T01:00:00Z"
+            mock_temporal_adapter.recurring_native_owner_ids = AsyncMock(return_value=[owner])
+            mock_temporal_adapter.recurring_issue_owner = AsyncMock(side_effect=lambda identity: {
+                "state": "running", "root": True, "workflowId": identity,
+                "runId": "parent-run" if identity == owner else "successor-run",
+                "startedAt": datetime(2026, 10, 29, 1, tzinfo=UTC),
+                "reviewReady": identity == owner,
+            })
+            kwargs = dict(
+                definition_id=definition.id,
+                workflow_id=owner,
+                run_id="parent-run",
+                ordinal=0,
+            )
+            result = await service.start_review_ready_successor(**kwargs)
+            request_id = result["requestId"]
+            assert result["status"] == ("pending_dispatch" if ack_lost else "enqueued")
+            assert mock_temporal_adapter.trigger_schedule.await_args.kwargs[
+                "review_ready_owner"
+            ] == (owner, "parent-run")
+        # A new process/session recovers the original journal row. Response
+        # loss never authorizes another trigger, including after restart.
+        async with maker() as session:
+            restarted = RecurringWorkflowsService(
+                session, temporal_client_adapter=mock_temporal_adapter
+            )
+            restarted._ensure_schedule_action_current = AsyncMock()
+            replayed = await restarted.start_review_ready_successor(**kwargs)
+            assert replayed["requestId"] == request_id
+            mock_temporal_adapter.trigger_schedule.assert_awaited_once()
+            # A later observation has a different idempotency key. Neither
+            # a live untracked successor nor an unknown accepted trigger
+            # frees another slot after the service process restarts.
+            later = await restarted.start_review_ready_successor(**{**kwargs, "ordinal": 1})
+            assert later["status"] == "skipped"
+            mock_temporal_adapter.trigger_schedule.assert_awaited_once()
+            if ack_lost:
+                mock_temporal_adapter.observe_schedule_trigger.return_value = (
+                    ScheduleTriggerResult(
+                        disposition="started",
+                        workflow_id="successor",
+                        run_id="successor-run",
+                    )
+                )
+                assert await restarted.reconcile_manual_runs() == 1
+                reconciled = await restarted.start_review_ready_successor(**kwargs)
+                assert reconciled["status"] == "enqueued"
+                assert reconciled["workflowId"] == "successor"
+                mock_temporal_adapter.trigger_schedule.assert_awaited_once()
+
+
+@pytest.mark.parametrize("enabled, search", [(False, True), (True, False)])
+async def test_review_ready_successor_preserves_explicit_and_disabled_schedules(
+    enabled, search
+):
+    definition = SimpleNamespace(
+        enabled=enabled,
+        target={
+            "initialParameters": {
+                "task": {
+                    "steps": [
+                        {
+                            "tool": {
+                                "id": "github.load_issue_preset_brief",
+                                "inputs": (
+                                    {"issueSearch": ""}
+                                    if search
+                                    else {"issueNumber": 1}
+                                ),
+                            }
+                        },
+                    ]
+                }
+            }
+        },
+    )
+    service = RecurringWorkflowsService(None, temporal_client_adapter=MagicMock())
+    service.get_definition = AsyncMock(return_value=definition)
+    service.create_manual_run = AsyncMock()
+    assert await service.start_review_ready_successor(
+        definition_id=uuid4(), workflow_id="owner", run_id="run", ordinal=0
+    ) == {"status": "not_applicable"}
+    service.create_manual_run.assert_not_awaited()
+
+
+@pytest.mark.parametrize("task_key", ["task", "workflow"])
+async def test_review_ready_successor_understands_admitted_workflow_inputs(task_key):
+    definition_id = uuid4()
+    definition = SimpleNamespace(
+        enabled=True,
+        target={
+            "initialParameters": {
+                task_key: {
+                    "steps": [
+                        {
+                            "tool": {
+                                "id": "github.load_issue_preset_brief",
+                                "inputs": {"issueSearch": ""},
+                            }
+                        },
+                    ]
+                }
+            }
+        },
+    )
+    service = RecurringWorkflowsService(None, temporal_client_adapter=MagicMock())
+    service.get_definition = AsyncMock(return_value=definition)
+    service.create_manual_run = AsyncMock(
+        return_value=SimpleNamespace(
+            id=uuid4(),
+            outcome=RecurringWorkflowRunOutcome.ENQUEUED,
+            temporal_workflow_id="successor",
+            temporal_run_id="successor-run",
+        )
+    )
+    definition.id = definition_id
+    identity = f"mm:{definition_id}-time"
+    service._session = MagicMock()
+    service._session.get = AsyncMock(return_value=None)
+    service._session.commit = AsyncMock()
+    service._lock_issue_definition = AsyncMock()
+    service._recurring_issue_owners = AsyncMock(return_value=({identity: {
+        "state": "running", "root": True, "runId": "run", "reviewReady": True,
+    }}, []))
+    service._register_recurring_issue_owner = AsyncMock()
+    result = await service.start_review_ready_successor(
+        definition_id=definition_id,
+        workflow_id=f"mm:{definition_id}-time",
+        run_id="run",
+        ordinal=0,
+    )
+    assert result["status"] == "enqueued"
+    service.create_manual_run.assert_awaited_once()
+
+
+async def test_bounded_owner_observation_retires_old_history_in_committed_batches(
+    tmp_path, mock_temporal_adapter,
+):
+    async with recurring_db(tmp_path) as maker:
+        definition_id = uuid4()
+        async with maker() as session:
+            definition = RecurringWorkflowDefinition(
+                id=definition_id, name="Old issue schedule", cron="* * * * *",
+                timezone="UTC", target={}, policy={},
+            )
+            session.add(definition)
+            for index in range(101):
+                session.add(RecurringWorkflowRun(
+                    definition_id=definition_id,
+                    scheduled_for=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(minutes=index),
+                    outcome=RecurringWorkflowRunOutcome.ENQUEUED,
+                    temporal_workflow_id=f"old-{index}", temporal_run_id=f"run-{index}",
+                ))
+            await session.commit()
+            mock_temporal_adapter.recurring_native_owner_ids = AsyncMock(return_value=[])
+            mock_temporal_adapter.recurring_issue_owner = AsyncMock(return_value={"state": "terminal"})
+            service = RecurringWorkflowsService(session, temporal_client_adapter=mock_temporal_adapter)
+            owners, unknown = await service._recurring_issue_owners(definition)
+            assert not owners
+            assert len(unknown) == 1  # The uninspected tail is still reserved.
+            assert mock_temporal_adapter.recurring_issue_owner.await_count == 100
+            await session.commit()
+        async with maker() as session:
+            service = RecurringWorkflowsService(session, temporal_client_adapter=mock_temporal_adapter)
+            definition = await service.get_definition(definition_id)
+            assert await service._recurring_issue_owners(definition) == ({}, [])
+            assert mock_temporal_adapter.recurring_issue_owner.await_count == 101
+            await session.commit()
+            rows = (await session.execute(select(RecurringWorkflowRun))).scalars().all()
+            assert all(row.terminal_observed_at for row in rows)
+            assert all(row.outcome == RecurringWorkflowRunOutcome.ENQUEUED for row in rows)
+
+
 def _retrieval_retirement_target(location, field, value):
     from copy import deepcopy
 
