@@ -67,8 +67,6 @@ from moonmind.omnigent.host_services.attestation import (
     _assert_exact_omnigent_build,
     _attest_workspace_mount,
     _read_exact_host_model_options,
-    _run_exact_host_opencode_command,
-    _run_exact_host_runner_command,
     _skill_projection_probe_message,
 )
 from moonmind.omnigent.host_services.github_credentials import (
@@ -85,6 +83,10 @@ from moonmind.omnigent.host_services.runtime_environment import (
 )
 from moonmind.omnigent.host_services.runtime_scripts import OmnigentRuntimeScriptService
 from moonmind.omnigent.host_services.skills import OmnigentSkillDeliveryService
+from moonmind.omnigent.host_services.upstream_probes import (
+    run_opencode_shell_command,
+    run_runner_command,
+)
 from moonmind.omnigent.host_services.workspace import OmnigentWorkspaceMaterializer
 from moonmind.omnigent.provider_leases import (
     AcquiredProviderLease,
@@ -217,7 +219,7 @@ async def test_exact_host_runner_probe_uses_authoritative_environment_builder() 
             calls.append((argv, kwargs))
             return 0, "ready", ""
 
-    result = await _run_exact_host_runner_command(
+    result = await run_runner_command(
         backend=Backend(),
         container_name="mm-host-opencode",
         argv=["gh", "auth", "status", "--hostname", "github.com"],
@@ -246,7 +248,7 @@ async def test_exact_host_opencode_probe_composes_both_environment_builders() ->
             calls.append((argv, kwargs))
             return 0, "ready", ""
 
-    result = await _run_exact_host_opencode_command(
+    result = await run_opencode_shell_command(
         backend=Backend(),
         container_name="mm-host-opencode",
         argv=["gh", "auth", "status", "--hostname", "github.com"],
@@ -264,7 +266,7 @@ async def test_exact_host_opencode_probe_composes_both_environment_builders() ->
     assert "from omnigent.host.connect import _build_runner_env" in argv[5]
     assert "opencode_app_server.filtered_server_env" in argv[5]
     assert "moonmind-context" in argv[5]
-    assert "env=runner_env" in argv[5]
+    assert "child, *sys.argv[1:]], env=env" in argv[5]
     assert argv[6:] == ["gh", "auth", "status", "--hostname", "github.com"]
     assert kwargs == {"timeout_seconds": 30.0, "check": False}
 
@@ -329,7 +331,7 @@ async def test_exact_host_runner_probe_source_runs_against_upstream_layout(
     tmp_path: Path,
 ) -> None:
     probe_source = await _capture_probe_source(
-        lambda backend: _run_exact_host_runner_command(
+        lambda backend: run_runner_command(
             backend=backend, container_name="mm-host-opencode", argv=["true"]
         )
     )
@@ -373,7 +375,7 @@ async def test_exact_host_opencode_probe_source_fails_typed_on_upstream_helper_d
     layout: str,
 ) -> None:
     probe_source = await _capture_probe_source(
-        lambda backend: _run_exact_host_opencode_command(
+        lambda backend: run_opencode_shell_command(
             backend=backend, container_name="mm-host-opencode", argv=["true"]
         )
     )
@@ -412,13 +414,13 @@ async def test_exact_host_opencode_probe_source_fails_typed_on_upstream_helper_d
     ("run_probe", "boundary"),
     [
         (
-            lambda backend: _run_exact_host_runner_command(
+            lambda backend: run_runner_command(
                 backend=backend, container_name="mm-host-opencode", argv=["true"]
             ),
             "runner environment",
         ),
         (
-            lambda backend: _run_exact_host_opencode_command(
+            lambda backend: run_opencode_shell_command(
                 backend=backend, container_name="mm-host-opencode", argv=["true"]
             ),
             "OpenCode shell environment",
@@ -472,10 +474,10 @@ async def test_exact_host_probe_contract_failures_keep_their_own_status(
         async def run(self, argv, **kwargs):
             return code, "", stderr
 
-    assert await _run_exact_host_runner_command(
+    assert await run_runner_command(
         backend=Backend(), container_name="mm-host-opencode", argv=["true"]
     ) == (code, "", stderr)
-    assert await _run_exact_host_opencode_command(
+    assert await run_opencode_shell_command(
         backend=Backend(), container_name="mm-host-opencode", argv=["true"]
     ) == (code, "", stderr)
     with pytest.raises(HarnessPlatformError) as excinfo:
@@ -486,7 +488,10 @@ async def test_exact_host_probe_contract_failures_keep_their_own_status(
             omnigent_host_id="host-opencode",
             harness_id="opencode-native",
         )
-    assert excinfo.value.code == HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE
+    assert (
+        excinfo.value.code
+        == HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE
+    )
 
 
 @pytest.mark.asyncio
@@ -547,7 +552,8 @@ async def test_opencode_exact_host_model_options_fail_closed_without_diagnostics
         )
 
     assert str(exc.value) == expected_message
-    assert exc.value.code == HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE
+    assert exc.value.code == HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE
+    assert exc.value.transient is True
     assert "sensitive context" not in str(exc.value)
 
 

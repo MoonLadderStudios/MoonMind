@@ -143,9 +143,7 @@ def validate_exact_host_attestation(
             code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
         )
     if attestation.hostImageRef != expectedImageRef:
-        # Rebuilt images change SHA/patch while keeping major.minor. Accept
-        # same-repository drift here; series compatibility was proven by the
-        # launch-time version gates and is re-checked below for vendors. A
+        # A rebuilt image changes its digest. Accept same-repository drift; a
         # foreign repository is never compatible drift.
         try:
             from moonmind.omnigent.host_image_drift import is_compatible_image_drift
@@ -226,30 +224,10 @@ def validate_exact_host_attestation(
                 f"required vendor runtime {name} missing",
                 code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
             )
-        # Vendor patch may evolve (1.18.11 -> 1.18.12); only major.minor
-        # steers compatibility. Exact-equality matching fails every vendor
-        # patch rebuild.
-        try:
-            from moonmind.omnigent.compatibility import vendor_versions_compatible
-
-            vendor_ok = bool(
-                vendor_versions_compatible(
-                    str(exp_dep.get("version") or ""), actual.version
-                )
-            )
-        except Exception:
-            vendor_ok = False
-        if not vendor_ok:
-            raise HarnessPlatformError(
-                f"vendor runtime {name} version mismatch",
-                code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
-            )
-        # A descriptor-driven runtime pack pins the vendor version identity;
-        # only an explicitly recorded expectation carries a digest to compare.
-        # Patch drift necessarily changes the vendor binary digest, so the
-        # digest pin is enforced only when the versions match exactly;
-        # series-compatible patch drift is already bounded by the version
-        # gate above.
+        # A different release is provenance, not incompatibility: required
+        # behavior is proven by capabilities and readiness, not version
+        # strings. The same release with different bytes is not the runtime
+        # the support evidence recorded.
         expected_digest = exp_dep.get("digest")
         versions_equal = str(exp_dep.get("version") or "") == actual.version
         if expected_digest and versions_equal and str(expected_digest) != actual.digest:
