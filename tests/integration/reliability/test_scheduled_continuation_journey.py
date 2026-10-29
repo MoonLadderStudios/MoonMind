@@ -40,6 +40,7 @@ from api_service.db.models import (
 )
 from moonmind.omnigent.host_services.workspace import OmnigentWorkspaceMaterializer
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal.activity_catalog import (
     TemporalActivityCatalog,
     build_default_activity_catalog,
@@ -197,7 +198,7 @@ async def test_schedule_continuation_preserves_intent_and_materializes_evidence(
         }
     )
     owner = str(uuid4())
-    user = SimpleNamespace(id=owner)
+    user = OperatorAdmission(via="loopback")
     queue = "continuation-qualification-" + uuid4().hex
     adapter = TemporalClientAdapter(client)
     source_id = "mm:" + uuid4().hex
@@ -360,7 +361,8 @@ async def test_schedule_continuation_preserves_intent_and_materializes_evidence(
                         HTTPException, match="lost create acknowledgement"
                     ):
                         await ex.continue_in_new_workflow(
-                            source_id, payload, service, session, user, None
+                            source_id, payload, service, session, user, None,
+                            access=access_for_test("operator"),
                         )
                     copied_before_retry = set(
                         (
@@ -368,7 +370,8 @@ async def test_schedule_continuation_preserves_intent_and_materializes_evidence(
                         ).all()
                     )
                 result = await ex.continue_in_new_workflow(
-                    source_id, payload, service, session, user, None
+                    source_id, payload, service, session, user, None,
+                    access=access_for_test("operator"),
                 )
                 destination = result.destination_workflow_id
                 if lost_ack:
@@ -385,7 +388,8 @@ async def test_schedule_continuation_preserves_intent_and_materializes_evidence(
                         for artifact in new_artifacts
                     ), "Lost acknowledgement retry must reuse recorded evidence copies"
                 duplicate = await ex.continue_in_new_workflow(
-                    source_id, payload, service, session, user, None
+                    source_id, payload, service, session, user, None,
+                    access=access_for_test("operator"),
                 )
                 assert (
                     duplicate.destination_workflow_id == destination

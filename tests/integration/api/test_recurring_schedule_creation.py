@@ -19,17 +19,13 @@ from api_service.api.routers.executions import (
 from api_service.auth_providers import get_instance_access, get_instance_access_optional
 from api_service.db.base import get_async_session
 from api_service.services.recurring_workflows_service import RecurringWorkflowValidationError
+from moonmind.security.operator_admission import OperatorAdmission
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
 
-def _override_user_dependencies(app: FastAPI) -> SimpleNamespace:
-    user = SimpleNamespace(
-        id=uuid4(),
-        email="recurring@example.com",
-        is_active=True,
-        is_superuser=False,
-    )
+def _override_user_dependencies(app: FastAPI) -> OperatorAdmission:
+    user = OperatorAdmission(via="loopback")
     user_dependencies = {
         dep.call
         for route_entry in router.routes

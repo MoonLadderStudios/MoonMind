@@ -14,6 +14,7 @@ from api_service.services.recurring_workflows_service import (
     RecurringWorkflowValidationError,
 )
 from moonmind.config.settings import settings
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.executions.execution_contract import workflow_requires_agent
 from tests.unit.api.routers.test_execution_saved_profile_boundaries import (
     saved_profile_submission as saved_profile_submission,
@@ -100,7 +101,7 @@ async def test_recurring_tool_finishing_reaches_plan_owner(
             "initialParameters": parameters,
         },
         "agent_profile_selection": None,
-        "actor": SimpleNamespace(id=uuid4()),
+        "actor": OperatorAdmission(via="loopback"),
     }
     if compiler_rejects:
         with pytest.raises(
