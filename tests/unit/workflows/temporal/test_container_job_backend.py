@@ -225,6 +225,26 @@ async def test_pull_denial_preserves_diagnostics_without_assuming_image_exists(
 
 
 @pytest.mark.asyncio
+async def test_authenticated_denial_does_not_claim_anonymous_pull_or_missing_credentials(tmp_path):
+    async def runner(_args):
+        return 1, b"", b"denied: requested access to the resource is denied"
+    backend = DockerContainerJobBackend(workspace_root=tmp_path, command_runner=runner)
+    with pytest.raises(ImageAcquisitionError) as caught:
+        await backend._pull_image(
+            _request(tmp_path),
+            "ghcr.io/org/unpublished:1",
+            image_source_ref="render",
+            direct_reference=True,
+            auth_dir=tmp_path / "auth",
+        )
+    message = str(caught.value)
+    assert caught.value.failure_class == ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED
+    assert "anonymous" not in message
+    assert "no deployment GitHub credential" not in message
+    assert "publication" in message
+
+
+@pytest.mark.asyncio
 async def test_readiness_passes_when_endpoint_reachable(tmp_path) -> None:
     commands: list[tuple[str, ...]] = []
     backend = DockerContainerJobBackend(

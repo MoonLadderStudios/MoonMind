@@ -1383,8 +1383,16 @@ class DockerContainerJobBackend:
         if code:
             failure = classify_pull_failure(stderr.decode(errors="replace"))
             detail = f"docker pull failed for the requested image ({failure.value})"
+            if failure is ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED:
+                detail += (
+                    " A registry denial does not establish that the repository or "
+                    "tag exists. Verify successful image publication and the exact "
+                    "reference, then the existing pull identity's permissions before "
+                    "changing credentials or image admission."
+                )
             if (
                 failure is ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED
+                and auth_dir is None
                 and image_source_ref is not None
                 and direct_reference
             ):
@@ -1392,9 +1400,8 @@ class DockerContainerJobBackend:
                 # which authenticates only through the deployment GitHub
                 # credential. A source registryCredentialRef would not apply
                 # to this request, so never advise it here.
-                detail = (
-                    f"docker pull failed for the requested image ({failure.value}): "
-                    f"the image is in the repository of deployment image source "
+                detail += (
+                    " The image is in the repository of deployment image source "
                     f"{image_source_ref!r}, but no deployment GitHub credential "
                     "was available, so the pull was anonymous and the registry "
                     "denied it. Give the deployment GitHub credential "
@@ -1406,6 +1413,7 @@ class DockerContainerJobBackend:
                 )
             elif (
                 failure is ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED
+                and auth_dir is None
                 and image_source_ref is not None
             ):
                 # This source took the public path because it declares no
@@ -1415,22 +1423,19 @@ class DockerContainerJobBackend:
                 # deployment sources needs authenticating. Never name the
                 # credential itself.
                 registry = normalize_image_reference(image).registry
-                detail = (
-                    f"docker pull failed for the requested image ({failure.value}): "
-                    f"deployment image source {image_source_ref!r} resolved to "
+                detail += (
+                    f" Deployment image source {image_source_ref!r} resolved to "
                     f"{registry} without a registryCredentialRef, so the pull was "
                     "anonymous and the registry denied it. Configure that source's "
                     "registryCredentialRef with a managed secret holding "
                     "'username:token' for that registry, or point the source at a "
                     "publicly readable image."
                 )
-            if failure is ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED:
-                detail += (
-                    " A registry denial does not establish that the repository or "
-                    "tag exists. Verify successful image publication and the exact "
-                    "reference, then the existing pull identity's permissions before "
-                    "changing credentials or image admission."
-                )
+            elif (
+                failure is ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED
+                and auth_dir is not None
+            ):
+                detail += " The pull used an existing authorized registry identity."
             raise ImageAcquisitionError(
                 detail,
                 failure_class=failure,
