@@ -47,6 +47,13 @@ from moonmind.omnigent.runtime_bindings import (
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.activities import omnigent_session_activities as reader
+from moonmind.workflows.temporal.activities.omnigent_activities import (
+    _OnDemandTemporalArtifactService,
+)
+from moonmind.workflows.temporal.artifacts import (
+    LocalTemporalArtifactStore,
+    TemporalArtifactService,
+)
 from tests.artifact_access import access_for_test
 from tests.helpers.git_transport import (
     basic_authorization,
@@ -60,7 +67,6 @@ from tests.helpers.repository_connections import (
     record_repository_connections,
 )
 from tests.unit.services.test_omnigent_execution_plan_service import (  # noqa: F401
-    _ArtifactService,
     _compile_opencode_plan,
     _ready_opencode_image_pair,
 )
@@ -144,22 +150,23 @@ async def app_context(tmp_path, monkeypatch):
         "resolve_execution_evidence",
         lambda *_args, **_kwargs: (None, "uncertified"),
     )
-    artifacts = _ArtifactService()
-
-    async def read_json(ref, **_kwargs):
-        return json.loads(artifacts.payloads[ref.removeprefix("artifact:")])
+    monkeypatch.setattr(
+        TemporalArtifactService,
+        "_build_store_from_settings",
+        staticmethod(lambda: LocalTemporalArtifactStore(tmp_path / "artifacts")),
+    )
+    artifacts = _OnDemandTemporalArtifactService(sessions)
 
     async def read_bytes(ref):
-        return artifacts.payloads[ref.removeprefix("artifact:")]
+        _metadata, payload = await artifacts.read(
+            artifact_id=ref.removeprefix("artifact:"),
+            access=access_for_test("user-1"),
+        )
+        return payload
 
     async def read_repository_access_snapshot(ref, *, request):
         return await read_bytes(ref)
 
-    async def read(*, artifact_id, **_kwargs):
-        return SimpleNamespace(artifact_id=artifact_id), artifacts.payloads[artifact_id]
-
-    artifacts.read = read
-    monkeypatch.setattr(reader, "_read_json_artifact", read_json)
     transport_generator = start_synthetic_github(
         tmp_path / "transport", required_token="ghs_source_clone"
     )
@@ -263,6 +270,25 @@ class _ProjectionBackend:
 async def _prepared_live_host(monkeypatch, context, tmp_path):
     """Admit, compile and prepare one gh-enabled attempt on a generic host."""
 
+    from api_service.api.routers.executions import (
+        _build_original_workflow_input_snapshot_payload,
+    )
+
+    snapshot = _build_original_workflow_input_snapshot_payload(
+        source_kind="create",
+        payload={
+            "repository": _target(),
+            "targetRuntime": "omnigent",
+            "requiredCapabilities": ["gh"],
+        },
+        task_payload={"instructions": "Use durable refs only."},
+    )
+    input_ref, input_digest = await writer.persist_json_artifact(
+        artifact_service=context.artifacts,
+        principal="user-1",
+        artifact_class="original_task_input_snapshot",
+        payload=snapshot,
+    )
     compiled = await _compile_opencode_plan(
         monkeypatch,
         artifacts=context.artifacts,
@@ -271,9 +297,17 @@ async def _prepared_live_host(monkeypatch, context, tmp_path):
         session_factory=context.sessions,
         extra_parameters={"requiredCapabilities": ["gh"], "repository": _target()},
         workflow_id=_WORKFLOW,
+        task_input_snapshot_ref=input_ref,
+        task_input_snapshot_digest=input_digest,
     )
+    closure = await context.artifacts.verified_dependencies(
+        root_artifact_id=compiled.binding.plan_artifact_ref,
+        access=access_for_test("user-1"),
+    )
+    assert closure is not None
+    assert input_ref in {entry.artifact_id for entry in closure.dependencies}
     plan = await reader._load_verified_execution_plan(
-        compiled.binding, access=access_for_test("service:omnigent-session")
+        compiled.binding, access=access_for_test("user-1")
     )
     backend = _ProjectionBackend(tmp_path / "gh-projection")
 
