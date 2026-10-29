@@ -193,10 +193,16 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         ),
         missingOutcome=(
             "Codex key Profiles the Omnigent provider config cannot carry "
-            "exactly: the seeded MiniMax Profile brings its own "
-            "``config.toml`` provider (Chat Completions wire, retry and idle "
-            "tuning) through a file template, and some Profiles name an "
-            "endpoint the Omnigent egress profile does not admit. Exact "
+            "exactly: the seeded MiniMax Profile writes its own "
+            "``config.toml`` provider through a file template, and some "
+            "Profiles name an endpoint the Omnigent egress profile does not "
+            "admit (it has no ``api.minimax.io``). Omnigent can pin that "
+            "table by name (``cli-config``) or generate one (``key``), but "
+            'it coerces ``wire_api = "chat"`` to ``responses``, because '
+            "Codex 0.137 and later refuse ``chat`` at config load. That "
+            "Codex also refuses the template's ``chat`` wire and top-level "
+            "``profile`` key on the direct route. Migrating the Profile "
+            "therefore needs MiniMax's Responses wire confirmed first. Exact "
             "OpenAI API-key Profiles already "
             "run through ``omnigent-provider-config@1`` "
             "(``omnigent-codex-api-key``). Also one session reused across a "
