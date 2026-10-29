@@ -254,6 +254,8 @@ with deterministic workflow code, not Temporal Local Activities.
 | `publication_recovery.saved_work_pull_request` | `integrations` | `mm.activity.integrations` |
 | `publication_recovery.saved_work_push` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `publication_recovery.verify` | `integrations` | `mm.activity.integrations` |
+| `recurring.admit_implementation` | `integrations` | `mm.activity.integrations` |
+| `recurring.review_ready_successor` | `integrations` | `mm.activity.integrations` |
 | `release.reconcile` | `deployment` | `mm.activity.deployment` |
 | `repo.create_pr` | `integrations` | `mm.activity.integrations` |
 | `repo.sync_pr_unverified_criteria` | `integrations` | `mm.activity.integrations` |
