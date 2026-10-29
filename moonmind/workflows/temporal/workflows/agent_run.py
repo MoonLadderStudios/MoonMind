@@ -5,9 +5,9 @@ import logging
 import os
 import re
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Literal
 from temporalio import workflow, activity
 from temporalio.exceptions import (
     ActivityError,
@@ -326,6 +326,96 @@ def profile_bound_retry_start_to_close_seconds(
     if remaining <= 0:
         return None
     return max(int(minimum_seconds), remaining)
+
+
+# One execution budget per logical step attempt, and one owner for recovery
+# decisions (MoonLadderStudios/MoonMind#4986). Cooldown re-entry, pause and
+# automatic successors resume the attempt's execution clock with the time it
+# already consumed instead of a fresh allowance, and every successor or
+# cooldown re-entry is selected by :func:`decide_attempt_recovery` and recorded
+# on the result. Retained histories keep their recorded clock resets.
+AGENT_RUN_STEP_BUDGET_OWNER_PATCH_ID = "agent-run-step-budget-owner-v1"
+_MAX_RECORDED_RECOVERY_DECISIONS = 16
+
+AttemptRecoveryAction = Literal["successor", "cooldown", "terminal_stop"]
+
+
+@dataclass(frozen=True)
+class AttemptRecoveryDecision:
+    """The recovery the owner selected for one failed execution attempt."""
+
+    action: AttemptRecoveryAction
+    reason: str
+
+    def to_metadata(self, *, consumed_seconds: float) -> dict[str, Any]:
+        return {
+            "action": self.action,
+            "reason": self.reason,
+            "consumedExecutionSeconds": max(0, int(consumed_seconds)),
+        }
+
+
+def decide_attempt_recovery(
+    *,
+    proposed_action: Literal["successor", "cooldown"] | None,
+    proposed_reason: str,
+    retry_disposition: str,
+    execution_state: str,
+    remaining_budget_seconds: float,
+) -> AttemptRecoveryDecision:
+    """Select the single recovery an execution attempt may take.
+
+    Adapters, providers and successor builders only *propose* a recovery from
+    the typed result (#4984 outcome fields). This is the one place that admits
+    it. An uncertain effect is never repeated before its reconciliation owner
+    resolves it, a ``no_retry`` failure (auth rejection, permission denial,
+    invalid user choice) is never re-attempted, and a successor or cooldown
+    re-entry is never admitted once the attempt's execution allowance is
+    spent: after expiry only saving and confirmation may run.
+    """
+
+    if proposed_action is None:
+        return AttemptRecoveryDecision("terminal_stop", proposed_reason)
+    if execution_state == "delivery_unknown":
+        return AttemptRecoveryDecision(
+            "terminal_stop", "uncertain_effect_requires_reconciliation"
+        )
+    if retry_disposition == "no_retry":
+        return AttemptRecoveryDecision("terminal_stop", "non_retryable_failure")
+    if remaining_budget_seconds <= 0:
+        return AttemptRecoveryDecision("terminal_stop", "execution_budget_exhausted")
+    return AttemptRecoveryDecision(proposed_action, proposed_reason)
+
+
+def budget_bounded_activity_timeouts(
+    activity_type: str,
+    *,
+    remaining_budget_seconds: float | None,
+) -> dict[str, timedelta]:
+    """Activity timeout overrides that keep one call inside the remaining budget.
+
+    Every attempt-scoped read or reconciliation (status, result fetch, cancel)
+    derives its overrides here so no consumer recomputes the arithmetic
+    differently. Temporal retries of the call share its ScheduleToClose, so
+    they cannot obtain a fresh allowance either. ``None`` means the caller has
+    no execution allowance to enforce and the catalog route's own bounded
+    timeouts apply unchanged.
+    """
+
+    if remaining_budget_seconds is None:
+        return {}
+    route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(activity_type)
+    bound = max(0.001, float(remaining_budget_seconds))
+    return {
+        "start_to_close_timeout": timedelta(
+            seconds=min(route.timeouts.start_to_close_seconds, bound)
+        ),
+        "schedule_to_close_timeout": timedelta(
+            seconds=min(route.timeouts.schedule_to_close_seconds, bound)
+        ),
+    }
+
+
 OMNIGENT_SESSION_SUPERVISOR_PATCH_ID = (
     "agent-run-omnigent-session-supervisor-v1"
 )
@@ -1295,6 +1385,12 @@ class MoonMindAgentRun:
         self._skip_default_profile_pin_once: bool = False
         self._provider_cooldown_retry_counts: dict[str, int] = {}
         self._provider_cooldown_retry_attempts: int = 0
+        # MoonLadderStudios/MoonMind#4986: the attempt's execution ledger and
+        # its recorded recovery decisions. Plain workflow state, so worker
+        # restart replays the same cumulative budget and decision history.
+        self._step_budget_owner_enabled: bool = False
+        self._consumed_execution_seconds: float = 0.0
+        self._attempt_recovery_decisions: list[dict[str, Any]] = []
         self._terminal_result_payload_compacted_for_history: bool = False
         self._terminal_contract_fresh_process_history: list[dict[str, Any]] = []
         self._managed_process_loss_recovery_history: list[dict[str, Any]] = []
@@ -2478,6 +2574,72 @@ class MoonMindAgentRun:
             min(budget.max_seconds, max(budget.base_seconds, goes_stale_at))
         )
 
+    def _resume_execution_clock(self, at: datetime) -> datetime:
+        """Start or resume the attempt's execution clock at ``at``.
+
+        Capacity, cooldown and pause waits are not execution, so the clock
+        restarts after them. Under the step-budget owner it resumes with the
+        time the attempt already consumed instead of a fresh allowance;
+        retained histories keep their recorded reset.
+        """
+
+        if not self._step_budget_owner_enabled:
+            return at
+        return at - timedelta(seconds=self._consumed_execution_seconds)
+
+    def _decide_attempt_recovery(
+        self,
+        *,
+        result: AgentRunResult | None,
+        proposed_action: Literal["successor", "cooldown"] | None,
+        proposed_reason: str,
+        remaining_budget_seconds: float,
+    ) -> AttemptRecoveryDecision:
+        """Ask the recovery owner, and record its decision on this attempt."""
+
+        decision = decide_attempt_recovery(
+            proposed_action=proposed_action,
+            proposed_reason=proposed_reason,
+            retry_disposition=(
+                result.retry_disposition if result is not None else "unknown"
+            ),
+            execution_state=(
+                result.execution_state if result is not None else "unknown"
+            ),
+            remaining_budget_seconds=remaining_budget_seconds,
+        )
+        self._record_attempt_recovery_decision(decision)
+        return decision
+
+    def _record_attempt_recovery_decision(
+        self, decision: AttemptRecoveryDecision
+    ) -> None:
+        if not self._step_budget_owner_enabled:
+            return
+        self._attempt_recovery_decisions.append(
+            decision.to_metadata(consumed_seconds=self._consumed_execution_seconds)
+        )
+        del self._attempt_recovery_decisions[:-_MAX_RECORDED_RECOVERY_DECISIONS]
+
+    def _with_execution_budget_accounting(
+        self, result: AgentRunResult
+    ) -> AgentRunResult:
+        """Record the attempt's consumed budget and recovery decisions.
+
+        The consumed allowance is the one banked at the last budget
+        evaluation, so recording it reads no extra clock value.
+        """
+
+        if not self._step_budget_owner_enabled:
+            return result
+        metadata = dict(result.metadata or {})
+        metadata["consumedExecutionSeconds"] = int(self._consumed_execution_seconds)
+        if self._attempt_recovery_decisions:
+            metadata["recoveryDecisions"] = [
+                dict(item) for item in self._attempt_recovery_decisions
+            ]
+        return result.model_copy(update={"metadata": metadata})
+
     @staticmethod
     def _publish_execution_budget(
         *,
@@ -3118,7 +3280,7 @@ class MoonMindAgentRun:
         self._terminal_result_payload_compacted_for_history = False
         self.final_result = self._enrich_result_metadata(
             request=request,
-            result=result,
+            result=self._with_execution_budget_accounting(result),
             include_parent_execution=workflow.patched(
                 PARENT_EXECUTION_ARTIFACT_HANDOFF_PATCH_ID
             ),
@@ -3583,8 +3745,17 @@ class MoonMindAgentRun:
         adapter: AgentAdapter,
         uses_codex_session_adapter: bool,
         use_managed_status_activity: bool,
-        remaining_budget_seconds: float | None = None,
+        remaining_budget_seconds: float | None,
     ) -> AgentRunResult:
+        """Read the attempt's result within the allowance the caller names.
+
+        ``remaining_budget_seconds`` is required so every caller decides which
+        allowance the read consumes: the attempt's remaining execution budget,
+        or ``None`` to confirm a run already observed terminal under the
+        catalog route's bounded allowance. A confirmation read starts no task
+        work and never extends the execution clock.
+        """
+
         def _pr_resolver_fetch_flags() -> tuple[bool, bool]:
             expected = (
                 _request_selected_skill(
@@ -3627,29 +3798,15 @@ class MoonMindAgentRun:
             )
 
         if use_managed_status_activity:
-            fetch_budget = {}
             fetch_deadline = None
             if remaining_budget_seconds is not None:
                 fetch_deadline = workflow.now() + timedelta(
                     seconds=remaining_budget_seconds
                 )
-                route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-                    "agent_runtime.fetch_result"
-                )
-                fetch_budget = {
-                    "start_to_close_timeout": timedelta(
-                        seconds=min(
-                            route.timeouts.start_to_close_seconds,
-                            remaining_budget_seconds,
-                        )
-                    ),
-                    "schedule_to_close_timeout": timedelta(
-                        seconds=min(
-                            route.timeouts.schedule_to_close_seconds,
-                            remaining_budget_seconds,
-                        )
-                    ),
-                }
+            fetch_budget = budget_bounded_activity_timeouts(
+                "agent_runtime.fetch_result",
+                remaining_budget_seconds=remaining_budget_seconds,
+            )
             try:
                 result_payload = await self._execute_routed_activity(
                     "agent_runtime.fetch_result",
@@ -4052,6 +4209,7 @@ class MoonMindAgentRun:
                 adapter=None,  # activity-backed managed-session fetch ignores the adapter
                 uses_codex_session_adapter=True,
                 use_managed_status_activity=True,
+                remaining_budget_seconds=None,
             )
             evaluated = await _evaluate(refreshed)
             history[-1]["outcome"] = (
@@ -4075,13 +4233,13 @@ class MoonMindAgentRun:
         )
         return evaluated.model_copy(update={"metadata": metadata})
 
-    def _managed_process_loss_recovery_request(
+    def _managed_process_loss_recovery_available(
         self,
         *,
         request: AgentExecutionRequest,
         result: AgentRunResult,
-    ) -> AgentExecutionRequest | None:
-        """Build one bounded replacement after startup reconciliation loses a PID."""
+    ) -> bool:
+        """Whether a lost process may propose its one saved-workspace successor."""
 
         if (
             request.agent_kind != "managed"
@@ -4093,12 +4251,27 @@ class MoonMindAgentRun:
             or len(self._managed_process_loss_recovery_history)
             >= _MAX_MANAGED_PROCESS_LOSS_RECOVERIES
         ):
-            return None
+            return False
+        capabilities = resolve_runtime_execution_capabilities(
+            self._managed_runtime_id(request.agent_id)
+        )
+        return capabilities.workspace_authority == "managed_runtime"
 
-        runtime_id = self._managed_runtime_id(request.agent_id)
-        capabilities = resolve_runtime_execution_capabilities(runtime_id)
-        if capabilities.workspace_authority != "managed_runtime":
+    def _managed_process_loss_recovery_request(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        result: AgentRunResult,
+    ) -> AgentExecutionRequest | None:
+        """Build one bounded replacement after startup reconciliation loses a PID."""
+
+        if not self._managed_process_loss_recovery_available(
+            request=request, result=result
+        ):
             return None
+        capabilities = resolve_runtime_execution_capabilities(
+            self._managed_runtime_id(request.agent_id)
+        )
 
         attempt = len(self._managed_process_loss_recovery_history) + 1
         self._managed_process_loss_recovery_history.append(
@@ -4170,13 +4343,13 @@ class MoonMindAgentRun:
         )
         return result.model_copy(update={"metadata": metadata})
 
-    def _fresh_process_terminal_contract_request(
+    def _fresh_process_terminal_contract_available(
         self,
         *,
         request: AgentExecutionRequest,
         result: AgentRunResult,
-    ) -> AgentExecutionRequest | None:
-        """Build one bounded replacement process over the same workspace."""
+    ) -> bool:
+        """Whether missing terminal evidence may propose a continuation."""
 
         metadata = result.metadata if isinstance(result.metadata, Mapping) else {}
         if (
@@ -4188,12 +4361,28 @@ class MoonMindAgentRun:
             or len(self._terminal_contract_fresh_process_history)
             >= _MAX_TERMINAL_CONTRACT_CONTINUATIONS
         ):
-            return None
+            return False
+        capabilities = resolve_runtime_execution_capabilities(
+            self._managed_runtime_id(request.agent_id)
+        )
+        return capabilities.workspace_authority == "managed_runtime"
 
-        runtime_id = self._managed_runtime_id(request.agent_id)
-        capabilities = resolve_runtime_execution_capabilities(runtime_id)
-        if capabilities.workspace_authority != "managed_runtime":
+    def _fresh_process_terminal_contract_request(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        result: AgentRunResult,
+    ) -> AgentExecutionRequest | None:
+        """Build one bounded replacement process over the same workspace."""
+
+        if not self._fresh_process_terminal_contract_available(
+            request=request, result=result
+        ):
             return None
+        metadata = result.metadata if isinstance(result.metadata, Mapping) else {}
+        capabilities = resolve_runtime_execution_capabilities(
+            self._managed_runtime_id(request.agent_id)
+        )
 
         missing = [
             str(item)
@@ -4338,7 +4527,7 @@ class MoonMindAgentRun:
         adapter: AgentAdapter,
         uses_codex_session_adapter: bool,
         use_managed_status_activity: bool,
-        remaining_budget_seconds: float | None = None,
+        remaining_budget_seconds: float | None,
     ) -> AgentRunStatusModel:
         if uses_codex_session_adapter:
             return await adapter.status(self.run_id)
@@ -4385,17 +4574,10 @@ class MoonMindAgentRun:
 
         if not workflow.patched(MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID):
             return timedelta(seconds=180)
-        if remaining_budget_seconds is None:
-            return None
-        configured_seconds = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-            "agent_runtime.status"
-        ).timeouts.schedule_to_close_seconds
-        return timedelta(
-            seconds=min(
-                float(configured_seconds),
-                max(0.001, float(remaining_budget_seconds)),
-            )
-        )
+        return budget_bounded_activity_timeouts(
+            "agent_runtime.status",
+            remaining_budget_seconds=remaining_budget_seconds,
+        ).get("schedule_to_close_timeout")
 
     async def _reconcile_managed_no_progress(
         self,
@@ -4419,7 +4601,7 @@ class MoonMindAgentRun:
         while True:
             self.run_status = status_obj.status
             if status_obj.status in _TERMINAL_RUN_STATUSES:
-                fetch_budget = {}
+                remaining_fetch_budget: float | None = None
                 if (
                     use_managed_status_activity
                     and not uses_codex_session_adapter
@@ -4433,13 +4615,12 @@ class MoonMindAgentRun:
                     )
                     if remaining_fetch_budget <= 0:
                         return None
-                    fetch_budget["remaining_budget_seconds"] = remaining_fetch_budget
                 return await self._fetch_managed_result(
                     request=request,
                     adapter=adapter,
                     uses_codex_session_adapter=uses_codex_session_adapter,
                     use_managed_status_activity=use_managed_status_activity,
-                    **fetch_budget,
+                    remaining_budget_seconds=remaining_fetch_budget,
                 )
 
             remaining_grace = (deadline - workflow.now()).total_seconds()
@@ -4467,7 +4648,7 @@ class MoonMindAgentRun:
                         remaining_budget_seconds=remaining_overall,
                     )
                     if status_obj.status in _TERMINAL_RUN_STATUSES:
-                        fetch_budget = {}
+                        remaining_fetch_budget = None
                         if workflow.patched(
                             AGENT_RUN_MANAGED_RESULT_FETCH_BUDGET_PATCH_ID
                         ):
@@ -4477,15 +4658,12 @@ class MoonMindAgentRun:
                             )
                             if remaining_fetch_budget <= 0:
                                 return None
-                            fetch_budget["remaining_budget_seconds"] = (
-                                remaining_fetch_budget
-                            )
                         return await self._fetch_managed_result(
                             request=request,
                             adapter=adapter,
                             uses_codex_session_adapter=uses_codex_session_adapter,
                             use_managed_status_activity=use_managed_status_activity,
-                            **fetch_budget,
+                            remaining_budget_seconds=remaining_fetch_budget,
                         )
                     remaining_overall = (
                         timeout_seconds
@@ -4567,23 +4745,12 @@ class MoonMindAgentRun:
             and not uses_codex_session_adapter
             and workflow.patched(AGENT_RUN_MANAGED_NO_PROGRESS_EXPIRY_RECOVERY_PATCH_ID)
         )
-        cancel_budget = {}
-        if bounded_expiry_recovery:
-            route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("agent_runtime.cancel")
-            cancel_budget = {
-                "start_to_close_timeout": timedelta(
-                    seconds=min(
-                        route.timeouts.start_to_close_seconds,
-                        remaining_overall,
-                    )
-                ),
-                "schedule_to_close_timeout": timedelta(
-                    seconds=min(
-                        route.timeouts.schedule_to_close_seconds,
-                        remaining_overall,
-                    )
-                ),
-            }
+        cancel_budget = budget_bounded_activity_timeouts(
+            "agent_runtime.cancel",
+            remaining_budget_seconds=(
+                remaining_overall if bounded_expiry_recovery else None
+            ),
+        )
 
         try:
             await self._execute_routed_activity(
@@ -4658,7 +4825,7 @@ class MoonMindAgentRun:
             )
             self.run_status = status_obj.status
             if status_obj.status in _TERMINAL_RUN_STATUSES:
-                fetch_budget = {}
+                remaining_fetch_budget: float | None = None
                 if bounded_expiry_recovery and workflow.patched(
                     AGENT_RUN_MANAGED_RESULT_FETCH_BUDGET_PATCH_ID
                 ):
@@ -4667,13 +4834,12 @@ class MoonMindAgentRun:
                     ).total_seconds()
                     if remaining_fetch_budget <= 0:
                         return None
-                    fetch_budget["remaining_budget_seconds"] = remaining_fetch_budget
                 result = await self._fetch_managed_result(
                     request=request,
                     adapter=adapter,
                     uses_codex_session_adapter=uses_codex_session_adapter,
                     use_managed_status_activity=use_managed_status_activity,
-                    **fetch_budget,
+                    remaining_budget_seconds=remaining_fetch_budget,
                 )
                 if self._result_requires_provider_cooldown(result):
                     return result
@@ -5892,10 +6058,13 @@ class MoonMindAgentRun:
         except CancelledError:
             raise
         except Exception as exc:
+            retry_disposition = "unknown"
+            execution_state = "unknown"
             cause = exc
             while cause is not None:
                 if getattr(cause, "non_retryable", False):
-                    raise
+                    retry_disposition = "no_retry"
+                    break
                 if (
                     getattr(cause, "type", type(cause).__name__)
                     in _OMNIGENT_RECONCILIATION_REQUIRED_ERROR_TYPES
@@ -5907,7 +6076,8 @@ class MoonMindAgentRun:
                     # recovery and left uncertain work behind a parked command.
                     # A same-key retry would only hit that fence and obscure
                     # this cause. Old histories retain their recorded retry.
-                    raise
+                    execution_state = "delivery_unknown"
+                    break
                 cause = getattr(cause, "cause", None)
             budget_start = getattr(exc, "_omnigent_capacity_admitted_at", lane_start)
             elapsed = (workflow.now() - budget_start).total_seconds()
@@ -5915,9 +6085,18 @@ class MoonMindAgentRun:
                 first_stc_seconds=stc_seconds,
                 elapsed_seconds=elapsed,
             )
-            if retry_stc is None:
-                # The first attempt consumed the whole budget: propagate the
-                # original failure so the run records a timeout instead of
+            decision = decide_attempt_recovery(
+                proposed_action="successor",
+                proposed_reason="profile_bound_single_retry",
+                retry_disposition=retry_disposition,
+                execution_state=execution_state,
+                remaining_budget_seconds=0.0 if retry_stc is None else retry_stc,
+            )
+            self._record_attempt_recovery_decision(decision)
+            if decision.action != "successor":
+                # Propagate the original failure: a non-retryable cause or
+                # uncertain parked work is never repeated, and an attempt
+                # that consumed the whole budget records a timeout instead of
                 # mutating the provider or repository after the lane's
                 # execution authority expired.
                 raise
@@ -7493,8 +7672,11 @@ class MoonMindAgentRun:
                 progress_aware=progress_aware_budget,
             )
 
+        self._step_budget_owner_enabled = workflow.patched(
+            AGENT_RUN_STEP_BUDGET_OWNER_PATCH_ID
+        )
         # Loop for handling 429 cooldown & profile swaps safely within the timeout boundary
-        overall_start = workflow.now()
+        overall_start = self._resume_execution_clock(workflow.now())
         # Progress evidence for the progress-aware execution budget. ``None``
         # means no progress has been observed for this run yet, which the budget
         # treats exactly as the old flat deadline: only positively observed
@@ -7515,6 +7697,11 @@ class MoonMindAgentRun:
 
             now = workflow.now()
             elapsed_now = (now - overall_start).total_seconds()
+            if self._step_budget_owner_enabled:
+                # Bank the consumed allowance at every evaluation, so the
+                # clock resumes from here after a capacity, cooldown or pause
+                # wait, and the result records it without another clock read.
+                self._consumed_execution_seconds = max(0.0, elapsed_now)
             idle_now = self._budget_idle_progress_seconds(
                 progress_aware=progress_aware_budget,
                 last_progress_at=last_progress_at,
@@ -7535,6 +7722,21 @@ class MoonMindAgentRun:
                     idle_progress_seconds=idle_now,
                 ),
             )
+
+        def _resume_clock(at: datetime) -> datetime:
+            """Resume after an excluded wait, keeping progress staleness too.
+
+            The wait is not execution, so it neither consumes the allowance
+            nor ages the last progress observation.
+            """
+
+            nonlocal last_progress_at
+            if self._step_budget_owner_enabled and last_progress_at is not None:
+                stopped_at = overall_start + timedelta(
+                    seconds=self._consumed_execution_seconds
+                )
+                last_progress_at += max(timedelta(0), at - stopped_at)
+            return self._resume_execution_clock(at)
 
         def _budget_remaining_seconds() -> float:
             """Seconds the run may still execute under its current budget."""
@@ -7620,7 +7822,7 @@ class MoonMindAgentRun:
                 manager_handle = None
                 if self._paused:
                     await workflow.wait_condition(lambda: not self._paused)
-                    overall_start = workflow.now()
+                    overall_start = _resume_clock(workflow.now())
 
                 # Acquire provider-profile slot if managed
                 if request.agent_kind == "managed":
@@ -7982,9 +8184,9 @@ class MoonMindAgentRun:
                     if self._paused:
                         await workflow.wait_condition(lambda: not self._paused)
 
-                    # Reset the execution clock so the timeout budget starts
-                    # from launch readiness, excluding slot and pause waits.
-                    overall_start = workflow.now()
+                    # Resume the execution clock at launch readiness,
+                    # excluding slot, cooldown and pause waits.
+                    overall_start = _resume_clock(workflow.now())
 
                     self.run_status = RunStatus.launching
                     # MoonLadderStudios/MoonMind#1088: route through the
@@ -8376,6 +8578,7 @@ class MoonMindAgentRun:
                                 adapter=adapter,
                                 uses_codex_session_adapter=uses_codex_session_adapter,
                                 use_managed_status_activity=use_managed_status_activity,
+                                remaining_budget_seconds=None,
                             )
                             skip_poll_and_fetch = True
 
@@ -8583,7 +8786,13 @@ class MoonMindAgentRun:
                             # progress may spend the extension, so this one stops
                             # at the base window the workflow enforces.
                             stc_seconds = min(
-                                max(int(timeout_seconds), 60),
+                                max(
+                                    int(
+                                        timeout_seconds
+                                        - self._consumed_execution_seconds
+                                    ),
+                                    60,
+                                ),
                                 86400,
                             )
                             act_name = f"integration.{validated_id}.execute"
@@ -8662,7 +8871,7 @@ class MoonMindAgentRun:
                                 # starts with a budget already spent and a
                                 # successful result is later overwritten with a
                                 # timeout.
-                                overall_start = admitted_at
+                                overall_start = _resume_clock(admitted_at)
                             self.final_result = (
                                 AgentRunResult(**result_payload)
                                 if isinstance(result_payload, dict)
@@ -8940,13 +9149,21 @@ class MoonMindAgentRun:
                         )
                         self.final_result = AgentRunResult(**result_dict) if isinstance(result_dict, dict) else result_dict
                     else:
+                        # The budget verdict above admitted this read, and
+                        # the run was already observed terminal: it is a
+                        # confirmation read under the route's bounded
+                        # allowance, not new task work.
                         self.final_result = await self._fetch_managed_result(
                             request=request,
                             adapter=adapter,
                             uses_codex_session_adapter=uses_codex_session_adapter,
                             use_managed_status_activity=use_managed_status_activity,
+                            remaining_budget_seconds=None,
                         )
 
+                # Successor builders and provider cooldown only propose; the
+                # recovery owner admits at most one recovery per result.
+                recovery_decision: AttemptRecoveryDecision | None = None
                 if self.final_result is not None:
                     if workflow.patched(
                         MANAGED_PROCESS_LOSS_RECOVERY_PATCH_ID
@@ -8956,11 +9173,27 @@ class MoonMindAgentRun:
                                 self.final_result
                             )
                         )
+                        if (
+                            self._step_budget_owner_enabled
+                            and self._managed_process_loss_recovery_available(
+                                request=request,
+                                result=self.final_result,
+                            )
+                        ):
+                            recovery_decision = self._decide_attempt_recovery(
+                                result=self.final_result,
+                                proposed_action="successor",
+                                proposed_reason="managed_process_loss",
+                                remaining_budget_seconds=_budget_remaining_seconds(),
+                            )
                         recovery_request = (
                             self._managed_process_loss_recovery_request(
                                 request=request,
                                 result=self.final_result,
                             )
+                            if recovery_decision is None
+                            or recovery_decision.action == "successor"
+                            else None
                         )
                         if recovery_request is not None:
                             active_profile_id = str(
@@ -8995,11 +9228,28 @@ class MoonMindAgentRun:
                                 self.final_result
                             )
                         )
+                        if (
+                            recovery_decision is None
+                            and self._step_budget_owner_enabled
+                            and self._fresh_process_terminal_contract_available(
+                                request=request,
+                                result=self.final_result,
+                            )
+                        ):
+                            recovery_decision = self._decide_attempt_recovery(
+                                result=self.final_result,
+                                proposed_action="successor",
+                                proposed_reason="terminal_contract_continuation",
+                                remaining_budget_seconds=_budget_remaining_seconds(),
+                            )
                         continuation_request = (
                             self._fresh_process_terminal_contract_request(
                                 request=request,
                                 result=self.final_result,
                             )
+                            if recovery_decision is None
+                            or recovery_decision.action == "successor"
+                            else None
                         )
                         if continuation_request is not None:
                             active_profile_id = str(
@@ -9063,6 +9313,10 @@ class MoonMindAgentRun:
                     )
                 else:
                     requires_provider_cooldown = False
+                if recovery_decision is not None:
+                    # The owner already stopped this attempt; a cooldown
+                    # re-entry would be a second, unadmitted recovery.
+                    requires_provider_cooldown = False
 
                 provider_retry_budget_enabled = workflow.patched(
                     AGENT_RUN_PROVIDER_COOLDOWN_RETRY_BUDGET_PATCH_ID
@@ -9082,6 +9336,13 @@ class MoonMindAgentRun:
                         )
                     )
                     requires_provider_cooldown = False
+                    if self._step_budget_owner_enabled:
+                        recovery_decision = self._decide_attempt_recovery(
+                            result=self.final_result,
+                            proposed_action=None,
+                            proposed_reason="provider_cooldown_retry_exhausted",
+                            remaining_budget_seconds=_budget_remaining_seconds(),
+                        )
 
                 if (
                     requires_provider_cooldown
@@ -9108,6 +9369,29 @@ class MoonMindAgentRun:
                     await self._report_omnigent_provider_cooldown(
                         cooldown_seconds=omnigent_cooldown_seconds
                     )
+
+                if self._step_budget_owner_enabled and recovery_decision is None:
+                    cooldown_proposed = bool(
+                        request.agent_kind == "managed"
+                        and manager_handle
+                        and requires_provider_cooldown
+                    )
+                    if cooldown_proposed or (
+                        self.final_result is not None
+                        and self.final_result.failure_class is not None
+                    ):
+                        recovery_decision = self._decide_attempt_recovery(
+                            result=self.final_result,
+                            proposed_action="cooldown" if cooldown_proposed else None,
+                            proposed_reason=(
+                                "provider_cooldown"
+                                if cooldown_proposed
+                                else "no_recovery_proposed"
+                            ),
+                            remaining_budget_seconds=_budget_remaining_seconds(),
+                        )
+                        if recovery_decision.action != "cooldown":
+                            requires_provider_cooldown = False
 
                 if (
                     request.agent_kind == "managed"
@@ -9250,6 +9534,31 @@ class MoonMindAgentRun:
                             and requested_execution_profile_ref is None
                         )
                         continue  # Retries loop
+
+                if (
+                    recovery_decision is not None
+                    and recovery_decision.reason == "execution_budget_exhausted"
+                ):
+                    # A refused recovery ends the attempt the way the budget
+                    # verdict would have, keeping the unrecovered failure.
+                    elapsed, exhausted_verdict, exhausted_deadline = _budget_state()
+                    unrecovered = self.final_result
+                    self.run_status = RunStatus.timed_out
+                    self.final_result = self._timed_out_result(
+                        request=request,
+                        timeout_seconds=exhausted_deadline,
+                        elapsed_seconds=elapsed,
+                        detail=(
+                            "exhausted its execution budget before recovery "
+                            "could start"
+                        ),
+                        budget=execution_budget if progress_aware_budget else None,
+                        verdict=exhausted_verdict,
+                    )
+                    if unrecovered is not None:
+                        self.final_result.metadata["unrecoveredFailureId"] = (
+                            unrecovered.failure_id
+                        )
 
                 # No provider cooldown retry remains, or this is an external agent.
                 if manager_handle and request.execution_profile_ref:
