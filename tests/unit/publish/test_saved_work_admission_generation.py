@@ -12,13 +12,17 @@ from temporalio.exceptions import ApplicationError
 from api_service.api.routers import executions
 from api_service.services.repository_connections import RepositoryConnectionService
 from moonmind.workflows.executions.repository_contract import DEFAULT_GIT_CONNECTION_REF
-from moonmind.workflows.temporal.artifacts import find_saved_work_publication_decisions
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    find_saved_work_publication_decisions,
+)
 from moonmind.workflows.temporal.client import WorkflowStartResult
 from moonmind.workflows.temporal.publication_recovery import (
     SavedWorkPublicationContract,
     SavedWorkPublicationDestination,
     saved_work_publication_operation_key,
 )
+from tests.artifact_access import access_for_test
 from tests.helpers.repository_connections import (
     github_pat_connection,
     github_repository_assignment,
@@ -80,8 +84,8 @@ def test_recovery_freezes_original_task_instead_of_later_remediation(
             snapshot["snapshotVersion"] = "original-task-input/v1"
     original = json.dumps(snapshot).encode()
 
-    async def read(*, artifact_id, principal):
-        reads.append((artifact_id, principal))
+    async def read(*, artifact_id, access):
+        reads.append((artifact_id, ArtifactAccessContext.require(access)))
         if artifact_id == "original-input":
             if failure == "unreadable":
                 return None, b"{"
@@ -100,7 +104,7 @@ def test_recovery_freezes_original_task_instead_of_later_remediation(
                 )
             return None, original
         artifact, payload = await read_saved(
-            artifact_id=artifact_id, principal=principal
+            artifact_id=artifact_id, access=access
         )
         if saved_work and artifact_id == "art_saved":
             manifest = json.loads(payload)
@@ -152,7 +156,7 @@ def test_recovery_freezes_original_task_instead_of_later_remediation(
     assert "Verify concurrent credential isolation." in body
     assert "artifact://original-input" in body
     assert "only retire failed tests" not in body
-    assert ("original-input", str(user.id)) in reads
+    assert ("original-input", access_for_test("operator")) in reads
 
 
 def test_omitted_generation_keeps_the_literal_prechange_operation_key():

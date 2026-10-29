@@ -29,6 +29,7 @@ from moonmind.workflows.temporal.activities.omnigent_activities import (
     omnigent_execute_activity,
     omnigent_prepare_child_execution_plan_activity,
 )
+from tests.artifact_access import access_for_test
 
 
 @pytest.mark.asyncio
@@ -69,14 +70,14 @@ async def test_prepare_child_execution_plan_recompiles_child_skill_authority(
     provider_profile = SimpleNamespace(profile_id="opencode-zen-free")
     observed: dict[str, Any] = {}
 
-    async def fake_load_verified(binding, *, admitted_principal=None):
+    async def fake_load_verified(binding, *, access):
         assert binding == OmnigentExecutionPlanBinding.model_validate(parent_binding)
-        assert admitted_principal == "user-1"
+        assert access == access_for_test("user-1")
         return parent_plan
 
-    async def fake_read_json(ref, *, admitted_principal=None):
+    async def fake_read_json(ref, *, access):
         assert ref == "art-agent-profile"
-        assert admitted_principal == "user-1"
+        assert access == access_for_test("user-1")
         return {"document": {"harness": {"id": "opencode-native"}}}
 
     async def fake_persist_json_artifact(**kwargs):
@@ -165,7 +166,8 @@ async def test_prepare_child_execution_plan_recompiles_child_skill_authority(
                     },
                 },
             },
-        }
+        },
+        access=access_for_test("user-1"),
     )
 
     assert result["initial_parameters"]["omnigentExecutionPlan"] == (
@@ -209,10 +211,10 @@ async def isolated_control_plane(monkeypatch: pytest.MonkeyPatch, tmp_path):
     stale commands from) the ambient application database.
     """
 
-    import api_service.db.base as db_base
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
     from sqlalchemy.orm import sessionmaker
 
+    import api_service.db.base as db_base
     from api_service.db.models import Base
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/control_plane.db")
@@ -585,9 +587,7 @@ async def test_generic_dispatch_preserves_typed_boundary_failure(
 ) -> None:
     """Known boundary failures keep their cause and recovery recommendation."""
 
-    from moonmind.omnigent.harness_platform.failures import (
-        HarnessPlatformError,
-    )
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
     from tests.unit.omnigent.test_generic_platform_production_services import _plan
 
     plan = _plan("opencode-go/model")
@@ -1760,19 +1760,14 @@ async def test_profile_bound_activity_coordinator_claims_canonical_continuations
     a real control-plane store.
     """
 
-    import api_service.db.base as db_base
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
     from sqlalchemy.orm import sessionmaker
 
+    import api_service.db.base as db_base
     from api_service.db.models import Base
     from moonmind.omnigent import profile_bound_execution as pbe_module
-    from moonmind.omnigent.control_plane import (
-        OmnigentControlPlaneStore,
-        TurnSource,
-    )
-    from moonmind.omnigent.control_plane.identities import (
-        canonical_omnigent_session_id,
-    )
+    from moonmind.omnigent.control_plane import OmnigentControlPlaneStore, TurnSource
+    from moonmind.omnigent.control_plane.identities import canonical_omnigent_session_id
     from moonmind.omnigent.control_plane.turn_commands import (
         CanonicalTurnCommandService,
     )
@@ -1866,13 +1861,8 @@ async def test_unprofiled_execute_claims_the_canonical_turn_boundary(
     cleanup fence.
     """
 
-    from moonmind.omnigent.control_plane import (
-        OmnigentControlPlaneStore,
-        TurnSource,
-    )
-    from moonmind.omnigent.control_plane.identities import (
-        canonical_omnigent_session_id,
-    )
+    from moonmind.omnigent.control_plane import OmnigentControlPlaneStore, TurnSource
+    from moonmind.omnigent.control_plane.identities import canonical_omnigent_session_id
 
     session_factory = isolated_control_plane
 

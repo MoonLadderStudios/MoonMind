@@ -17,6 +17,8 @@ import api_service.api.routers.executions as executions_module
 from api_service.auth_providers import get_instance_access, get_instance_access_optional
 from api_service.db.base import get_async_session
 
+from moonmind.security.operator_admission import OperatorAdmission
+
 BANNED_EXECUTION_RESPONSE_KEYS = {
     "attempt",
     "attempts",
@@ -53,12 +55,8 @@ def _assert_no_banned_execution_keys(value) -> None:
             _assert_no_banned_execution_keys(child)
 
 
-def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> MagicMock:
-    # Plain MagicMock: AsyncMock user objects can trigger "never awaited" warnings
-    # when routes or FastAPI touch attributes during teardown.
-    mock_user = MagicMock()
-    mock_user.id = "user-123"
-    mock_user.is_superuser = is_superuser
+def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> OperatorAdmission:
+    mock_user = OperatorAdmission(via="loopback")
     app.dependency_overrides[get_instance_access] = lambda: mock_user
     # Optional-boundary routes (e.g. describe) resolve through the shared
     # optional dependency; override it too so tests exercise route logic.
@@ -77,7 +75,7 @@ def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> MagicMoc
     return mock_user
 
 @pytest.fixture
-def client() -> Iterator[tuple[TestClient, AsyncMock, MagicMock, MagicMock]]:
+def client() -> Iterator[tuple[TestClient, AsyncMock, OperatorAdmission, MagicMock]]:
     app = FastAPI()
     app.include_router(executions_module.router)
     service = AsyncMock()

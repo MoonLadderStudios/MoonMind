@@ -25,6 +25,7 @@ from moonmind.workflows.temporal.runtime.checkpoint_restore import (
     ManagedCheckpointRestoreService,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+from tests.artifact_access import access_for_test
 from tests.unit.workflows.executions.test_control_stop_continuation import (
     _payload as control_stop_payload,
 )
@@ -207,8 +208,12 @@ async def test_managed_codex_checkpoint_cold_resume_uses_only_durable_state(
         "capabilityDigest": capabilities.capability_digest,
         "idempotencyKey": "cold-resume:restore:implement:2",
     }
-    restored = await restore_service.restore(restore_request)
-    assert restored == await restore_service.restore(restore_request)
+    restored = await restore_service.restore(
+        restore_request, access=access_for_test("workflow:source")
+    )
+    assert restored == await restore_service.restore(
+        restore_request, access=access_for_test("workflow:source")
+    )
     locator = restored["destinationWorkspaceLocator"]
     assert locator == {
         "kind": "managed_runtime",
@@ -272,9 +277,13 @@ async def test_managed_codex_checkpoint_cold_resume_uses_only_durable_state(
     control_stop_request = contract.restore_request(
         destination_run_id="control-stop-run"
     )
-    control_stop_restored = await restore_service.restore(control_stop_request)
+    control_stop_restored = await restore_service.restore(
+        control_stop_request, access=access_for_test("workflow:source")
+    )
 
-    assert control_stop_restored == await restore_service.restore(control_stop_request)
+    assert control_stop_restored == await restore_service.restore(
+        control_stop_request, access=access_for_test("workflow:source")
+    )
     assert control_stop_restored["checkpointRef"] == control_stop_checkpoint_ref
     assert control_stop_restored["destinationWorkspaceLocator"] == {
         "kind": "managed_runtime",

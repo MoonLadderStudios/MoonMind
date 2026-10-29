@@ -4,6 +4,8 @@ from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from typing import Any
 
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+
 
 async def acquire_merge_automation_repository_credential(
     authority: Mapping[str, Any], *, repository: str, operation: str
@@ -35,13 +37,18 @@ async def acquire_merge_automation_repository_credential(
         raise ValueError("review authority conflicts with its executing workflow")
     principal = f"workflow:{execution.workflow_id}"
     plan = await _load_verified_execution_plan(
-        binding, workflow_id=execution.workflow_id, run_id=execution.workflow_run_id
+        binding,
+        workflow_id=execution.workflow_id,
+        run_id=execution.workflow_run_id,
+        access=ArtifactAccessContext.for_activity(),
     )
     credentials = OmnigentGithubCredentialService(
         None,
         session_factory=async_session_maker,
         artifact_gateway=TemporalOmnigentArtifactGateway(
-            async_session_maker, principal=principal
+            async_session_maker,
+            principal=principal,
+            access=ArtifactAccessContext.for_activity(),
         ),
     )
     identity = await credentials.admitted_repository_identity(

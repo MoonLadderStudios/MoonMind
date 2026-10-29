@@ -1,10 +1,10 @@
-from datetime import UTC, datetime
 import io
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tarfile
+from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -19,7 +19,10 @@ from moonmind.schemas.agent_skill_models import (
     RuntimeMaterializationMode,
     SkillSelector,
 )
-from moonmind.workflows.agent_skills.agent_skills_activities import AgentSkillsActivities
+from moonmind.workflows.agent_skills.agent_skills_activities import (
+    AgentSkillsActivities,
+)
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -270,7 +273,7 @@ assert classify_snapshot(pending).action is ResolverAction.WAIT
 async def test_build_prompt_index_activity_returns_bundle():
     activities = AgentSkillsActivities()
     ActivityEnvironment()
-    
+
     snapshot = ResolvedSkillSet(
         snapshot_id="snap-temp",
         resolved_at="2024-01-01T00:00:00Z",
@@ -283,24 +286,29 @@ async def test_build_prompt_index_activity_returns_bundle():
             }
         ]
     )
-    
+
     result = await activities.build_prompt_index(snapshot)
-    
+
     assert "Snapshot: snap-temp" in result
 
-async def test_materialize_activity_returns_materialization():
+
+async def test_materialize_activity_returns_materialization(tmp_path, monkeypatch):
     import tempfile
-    
+
+    # Isolate default relative backing paths from this checkout's run artifacts.
+    monkeypatch.chdir(tmp_path)
     activities = AgentSkillsActivities()
     env = ActivityEnvironment()
-    
+
     snapshot = ResolvedSkillSet(
         snapshot_id="snap-materialize",
         resolved_at="2024-01-01T00:00:00Z",
         skills=[]
     )
-    
+
     with tempfile.TemporaryDirectory() as tempdir:
+        # macOS exposes the same temporary root through a symlinked /var path.
+        tempdir = str(Path(tempdir).resolve())
         result = await env.run(
             activities.materialize,
             snapshot,
@@ -308,10 +316,11 @@ async def test_materialize_activity_returns_materialization():
             RuntimeMaterializationMode.WORKSPACE_MOUNTED,
             tempdir
         )
-        
+
         assert result.runtime_id == "test_runtime"
         assert result.materialization_mode == RuntimeMaterializationMode.WORKSPACE_MOUNTED
         assert len(result.workspace_paths) == 1
+
 
 async def test_materialize_activity_returns_canonical_agents_skills_metadata(
     tmp_path,
@@ -379,11 +388,10 @@ class _RecordingArtifactService:
     async def read(
         self,
         *,
-        artifact_id: str,
-        principal: str,
-        allow_restricted_raw: bool,
+        artifact_id,
+        access: ArtifactAccessContext,
     ):
-        del principal, allow_restricted_raw
+        ArtifactAccessContext.require(access)
         return SimpleNamespace(artifact_id=artifact_id), self.payloads[artifact_id]
 
 

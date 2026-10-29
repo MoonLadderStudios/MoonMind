@@ -14,10 +14,11 @@ from moonmind.omnigent.profile_bound_execution import (
 )
 from moonmind.omnigent.settings import generic_codex_qualified
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from tests.artifact_access import access_for_test
 from tests.unit.services.test_omnigent_execution_plan_service import (
     _ArtifactService,
-    _PlanStore,
     _configure_ready_host_image_pair,
+    _PlanStore,
     _policy_snapshot,
     _protected_support_evidence,
     _snapshot,
@@ -76,6 +77,7 @@ async def _admit_codex_plan(
             authored_request_digest="sha256:" + "1" * 64,
             task_input_snapshot_ref="art_request_1",
             task_input_snapshot_digest="sha256:" + "1" * 64,
+            access=access_for_test("user-1"),
         )
     assert generic_codex_qualified() is True
     assert admitted.envelope.payload.executionRealizerRef == "codex-profile-bound@1"

@@ -34,6 +34,7 @@ from moonmind.schemas.omnigent_session_models import (
     OMNIGENT_SESSION_COMPATIBILITY_VERSION,
     OMNIGENT_SESSION_FEATURE_GENERATION,
 )
+from tests.artifact_access import access_for_test
 
 # The deployment-managed OpenCode Agent Profile allows both the generic and
 # the harness-shaped launch policy; admission always selects the first.
@@ -546,6 +547,7 @@ async def test_product_boundary_persists_secret_free_plan_and_exact_realizer(
         authored_request_digest="sha256:" + "1" * 64,
         task_input_snapshot_ref="art_request_1",
         task_input_snapshot_digest="sha256:" + "1" * 64,
+        access=access_for_test("user-1"),
     )
 
     assert result.envelope.payload.executionRealizerRef == realizer
@@ -636,6 +638,7 @@ async def test_claude_plan_binds_the_profiles_credential_materializer(
         session_factory=object(),
         artifact_service=_ArtifactService(),
         principal="user-1",
+        access=access_for_test("user-1"),
         workflow_id="mm:test-claude-credential-shape",
         agent_profile_snapshot=snapshot,
         provider_profile=SimpleNamespace(
@@ -717,6 +720,7 @@ async def test_codex_plan_binds_the_profiles_credential_materializer(
         session_factory=object(),
         artifact_service=_ArtifactService(),
         principal="user-1",
+        access=access_for_test("user-1"),
         workflow_id="mm:test-codex-credential-shape",
         agent_profile_snapshot=snapshot,
         provider_profile=SimpleNamespace(
@@ -812,6 +816,7 @@ async def test_product_boundary_uses_exact_arm64_architecture_for_support_identi
         authored_request_digest="sha256:" + "1" * 64,
         task_input_snapshot_ref="art_request_arm64",
         task_input_snapshot_digest="sha256:" + "1" * 64,
+        access=access_for_test("user-1"),
     )
 
     assert result.envelope.payload.hostArchitecture == "linux/arm64"
@@ -989,6 +994,7 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
         task_input_snapshot_ref="art_request_1",
         task_input_snapshot_digest="sha256:" + "1" * 64,
         execution_plan_store=SessionExecutionPlanStore(db_session),
+        access=access_for_test("user-1"),
     )
 
     envelope = result.envelope
@@ -1360,9 +1366,7 @@ async def test_codex_oauth_profile_compiles_against_synchronized_inventory(
         workflow_id="mm:test-codex-synchronized-inventory",
         agent_profile_snapshot=snapshot,
         provider_profile=SimpleNamespace(
-            profile_id="codex-oauth",
-            runtime_id="codex_cli",
-            provider_id="openai",
+            profile_id="codex-oauth", runtime_id="codex_cli", provider_id="openai"
         ),
         initial_parameters={
             "model": "gpt-5.5",
@@ -1376,6 +1380,7 @@ async def test_codex_oauth_profile_compiles_against_synchronized_inventory(
         task_input_snapshot_ref="art_request_1",
         task_input_snapshot_digest="sha256:" + "1" * 64,
         execution_plan_store=plan_store,
+        access=access_for_test("user-1"),
     )
 
     payload = result.envelope.payload
@@ -1466,6 +1471,7 @@ async def test_codex_admission_binds_installed_images_without_a_policy_version(
         task_input_snapshot_ref="art_request_1",
         task_input_snapshot_digest="sha256:" + "1" * 64,
         execution_plan_store=_PlanStore(object()),
+        access=access_for_test("user-1"),
     )
 
     payload = result.envelope.payload
@@ -1523,6 +1529,7 @@ async def test_codex_admission_rejects_a_foreign_host_family_before_persistence(
             task_input_snapshot_ref="art_request_1",
             task_input_snapshot_digest="sha256:" + "1" * 64,
             execution_plan_store=_PlanStore(object()),
+            access=access_for_test("user-1"),
         )
     assert artifacts.payloads == {}
 
@@ -1644,6 +1651,7 @@ async def _compile_opencode_plan(
         task_input_snapshot_digest=task_input_snapshot_digest,
         execution_plan_store=plan_store,
         parent_repository_plan=parent_repository_plan,
+        access=access_for_test("user-1"),
     )
 
 
@@ -2065,6 +2073,7 @@ async def test_repository_codex_product_admission_requires_capable_realizer(
                 }
             },
             workspace_source_kind="repository",
+            access=access_for_test("user-1"),
         )
 
     if generic_admitted:
@@ -2199,6 +2208,7 @@ async def test_repository_codex_default_admits_typed_authority_only_when_consuma
             authored_request_digest="sha256:" + "1" * 64,
             task_input_snapshot_ref="art_request_1",
             task_input_snapshot_digest="sha256:" + "1" * 64,
+            access=access_for_test("user-1"),
         )
 
     try:
@@ -3601,6 +3611,7 @@ async def _native_review_preset_plan_test(monkeypatch, tmp_path, selection):
             authored_request_digest=snapshot_digest,
             task_input_snapshot_ref=snapshot_ref,
             task_input_snapshot_digest=snapshot_digest,
+            access=access_for_test("user-1"),
         )
 
     return SimpleNamespace(

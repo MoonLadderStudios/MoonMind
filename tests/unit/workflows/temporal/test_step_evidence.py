@@ -7,6 +7,7 @@ import subprocess
 import pytest
 
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
     ExecutionRef,
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
@@ -110,14 +111,16 @@ async def test_receipt_bytes_remain_readable_after_workspace_loss(tmp_path):
         )
         (root / "artifacts/tests.json").unlink()
         _, raw = await service.read(
-            artifact_id=result["stepEvidenceRef"], principal="workflow:parent"
+            artifact_id=result["stepEvidenceRef"],
+            access=ArtifactAccessContext.for_execution("parent"),
         )
         saved = json.loads(raw)
         assert saved["subject"] == manifest["subject"]
         assert "verdict" not in saved and "validatedRefs" not in saved
         ref = saved["files"][0]["artifactRef"]
         _, receipt = await service.read(
-            artifact_id=ref.removeprefix("artifact://"), principal="workflow:parent"
+            artifact_id=ref.removeprefix("artifact://"),
+            access=ArtifactAccessContext.for_execution("parent"),
         )
         assert receipt == body
         assert saved["files"][0]["sha256"] == manifest["files"][0]["sha256"]
@@ -417,13 +420,16 @@ async def test_actual_publisher_links_receipts_to_proven_parent_and_preserves_pr
         else:
             _, raw = await service.read(
                 artifact_id=result.metadata["stepEvidenceRef"],
-                principal="workflow:parent",
+                access=ArtifactAccessContext.for_execution("parent"),
             )
             saved = json.loads(raw)
             ref = saved["files"][0]["artifactRef"].removeprefix("artifact://")
             _, receipt = await service.read(
-                artifact_id=ref, principal="workflow:parent"
+                artifact_id=ref, access=ArtifactAccessContext.for_execution("parent")
             )
             assert receipt == body
             with pytest.raises(TemporalArtifactAuthorizationError):
-                await service.read(artifact_id=ref, principal="workflow:unrelated")
+                await service.read(
+                    artifact_id=ref,
+                    access=ArtifactAccessContext.for_execution("unrelated"),
+                )

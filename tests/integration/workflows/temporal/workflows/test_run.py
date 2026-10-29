@@ -23,6 +23,7 @@ from moonmind.workflows.temporal.activity_catalog import (
     ARTIFACTS_TASK_QUEUE,
     LLM_TASK_QUEUE,
 )
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
 from tests.integration.workflows.temporal.workflows.test_merge_automation_full_topology import (
     _register_search_attributes,
@@ -83,7 +84,15 @@ async def _running_user_workflow(
     """Stub external effects, retaining the real registered parent and queues."""
     calls: dict[str, list[Any]] = {
         key: []
-        for key in ("plan", "reads", "children", "terminal", "summaries", "skills")
+        for key in (
+            "plan",
+            "reads",
+            "read_contexts",
+            "children",
+            "terminal",
+            "summaries",
+            "skills",
+        )
     }
     selected_plan = plan if plan is not None else _plan()
     _CHILD_CASES[workflow_id] = (child_result, calls["children"])
@@ -96,6 +105,15 @@ async def _running_user_workflow(
     @activity.defn(name="artifact.read")
     async def read(payload: dict[str, Any]) -> bytes:
         calls["reads"].append(payload)
+        info = activity.info()
+        calls["read_contexts"].append(
+            {
+                "workflow_id": info.workflow_id,
+                "run_id": info.workflow_run_id,
+                "namespace": info.workflow_namespace,
+                "execution_principal": ArtifactAccessContext.for_activity().execution_principal,
+            }
+        )
         # Unexpected registry reads must fail instead of returning a plan and
         # passing an assertion before dispatch ever reaches its child.
         assert payload["artifact_ref"] == "artifact://plan/test"
@@ -198,7 +216,13 @@ async def test_user_workflow_completes_and_projects_queryable_step_ledger() -> N
         assert len(calls["children"]) == 1
         assert calls["terminal"][-1]["state"] == "completed"
         assert calls["plan"][0]["principal"] == f"workflow:{handle.id}"
-        assert calls["reads"][0]["principal"] == f"workflow:{handle.id}"
+        assert "principal" not in calls["reads"][0]
+        assert calls["read_contexts"][0] == {
+            "workflow_id": handle.id,
+            "run_id": handle.first_execution_run_id,
+            "namespace": "default",
+            "execution_principal": f"workflow:{handle.id}",
+        }
         await Replayer(
             workflows=[MoonMindUserWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
@@ -216,7 +240,13 @@ async def test_user_workflow_ignores_untrusted_payload_owner() -> None:
     ) as (handle, calls):
         assert (await handle.result())["status"] == "success"
         assert calls["plan"][0]["principal"] == f"workflow:{handle.id}"
-        assert calls["reads"][0]["principal"] == f"workflow:{handle.id}"
+        assert "principal" not in calls["reads"][0]
+        assert calls["read_contexts"][0] == {
+            "workflow_id": handle.id,
+            "run_id": handle.first_execution_run_id,
+            "namespace": "default",
+            "execution_principal": f"workflow:{handle.id}",
+        }
         assert (await handle.describe()).search_attributes["mm_owner_id"] == [
             "trusted-owner"
         ]

@@ -15,6 +15,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from tests.artifact_access import access_for_test
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -57,9 +58,9 @@ async def test_local_dev_create_upload_complete_list(tmp_path: Path) -> None:
                 namespace="moonmind",
                 workflow_id="wf-local",
                 run_id="run-local",
-                principal="default-user",
                 link_type="output.primary",
                 latest_only=True,
+                access=access_for_test("default-user"),
             )
             assert len(listed) == 1
             assert listed[0].artifact_id == artifact.artifact_id

@@ -40,8 +40,8 @@ from moonmind.workflows.temporal.github_issue_attempts import (
     parse_attempt_comment,
     render_attempt_comment,
 )
-
 from moonmind.workflows.temporal.issue_claim_store import IssueClaimStore
+from tests.artifact_access import access_for_test
 
 REPO = "MoonLadderStudios/MoonMind"
 FIXTURE = Path(__file__).parent / "fixtures/github_issue_claim_label_only.json"
@@ -213,8 +213,7 @@ async def test_default_search_claim_survives_assessment_and_blocker_handoffs(
     assert issue["labels"] == [{"name": "status: in-progress"}]
     _, persisted = await artifacts.read(
         artifact_id=loaded.outputs["briefArtifactRef"],
-        principal="fixture-owner",
-        allow_restricted_raw=True,
+        access=access_for_test("fixture-owner"),
     )
     assert json.loads(persisted)["admissionClaimExecuted"] == claim
     checked = await invoke(
@@ -266,7 +265,9 @@ async def test_assessment_receives_lossless_normalized_brief_attachment(
     )
     assert loaded.status == "COMPLETED", loaded.outputs
     ref = loaded.outputs["briefArtifactRef"]
-    _, original = await artifacts.read(artifact_id=ref, principal="fixture-owner")
+    _, original = await artifacts.read(
+        artifact_id=ref, access=access_for_test("fixture-owner")
+    )
     brief = json.loads(original)
     assert brief["issue_provider"] == "github"
     assert brief["issue_ref"] == f"{REPO}#4271"

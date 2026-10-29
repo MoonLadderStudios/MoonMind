@@ -9,10 +9,12 @@ from uuid import uuid4
 import pytest
 
 from api_service.db import models
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
     TemporalArtifactStateError,
 )
+from tests.artifact_access import access_for_test
 from tests.unit.workflows.temporal.test_saved_work_retention_4017 import (
     _complete_artifact,
     _service,
@@ -40,7 +42,9 @@ async def test_current_saved_deployment_skill_content_survives_expiry(tmp_path):
         await artifacts.sweep_lifecycle(principal="service:sweeper", now=FUTURE)
 
         assert (
-            await artifacts.read(artifact_id=skill.artifact_ref, principal="operator")
+            await artifacts.read(
+                artifact_id=skill.artifact_ref, access=access_for_test("operator")
+            )
         )[1] == b"# Current Skill\nKeep this saved content.\n"
 
 
@@ -162,7 +166,7 @@ async def test_saved_deployment_skill_keeps_its_frozen_content_after_skill_updat
             artifact_id=frozen.envelope.payload.agentProfileSnapshotRef.removeprefix(
                 "artifact:"
             ),
-            principal="user-1",
+            access=access_for_test("user-1"),
         )
         profile_snapshot = json.loads(profile_bytes)
         authority_refs = [task.artifact_id, *frozen.artifact_refs]
@@ -196,7 +200,7 @@ async def test_saved_deployment_skill_keeps_its_frozen_content_after_skill_updat
                 "omnigentAuthorityArtifactRefs": authority_refs,
             },
             policy={},
-            actor=SimpleNamespace(id="user-1"),
+            actor=OperatorAdmission(via="loopback"),
         )
         updated = await skills.update_skill_content(
             skill_slug="retained-deployment-skill",
@@ -224,13 +228,17 @@ async def test_saved_deployment_skill_keeps_its_frozen_content_after_skill_updat
         # definition moves; the new revision is still current saved work too.
         assert result.soft_deleted_count == 1
         assert (
-            await artifacts.read(artifact_id=frozen_content_ref, principal="user-1")
+            await artifacts.read(
+                artifact_id=frozen_content_ref, access=access_for_test("user-1")
+            )
         )[1] == frozen_content.encode()
         assert (
             await session.get(models.TemporalArtifact, unreferenced.artifact_id)
         ).status is models.TemporalArtifactStatus.DELETED
         assert (
-            await artifacts.read(artifact_id=updated_content_ref, principal="user-1")
+            await artifacts.read(
+                artifact_id=updated_content_ref, access=access_for_test("user-1")
+            )
         )[1] == b"# Saved Skill\nDifferent content for future admissions.\n"
 
 
@@ -277,7 +285,9 @@ async def test_schedule_input_survives_expiry_sweep_and_remains_readable(
         result = await service.sweep_lifecycle(principal="service:sweeper", now=FUTURE)
         assert result.soft_deleted_count == 0
         assert (
-            await service.read(artifact_id=artifact.artifact_id, principal="operator")
+            await service.read(
+                artifact_id=artifact.artifact_id, access=access_for_test("operator")
+            )
         )[1] == b'{"instructions":"retained"}'
         claim = await service.acquire_saved_work_use(
             artifact_id=artifact.artifact_id,
@@ -285,11 +295,13 @@ async def test_schedule_input_survives_expiry_sweep_and_remains_readable(
             request_id="scheduled-use",
             operation_kind="restore",
             ttl_seconds=60,
+            access=access_for_test("operator"),
         )
         assert claim.artifact_id == artifact.artifact_id
         with pytest.raises(TemporalArtifactAuthorizationError):
             await service.read(
-                artifact_id=artifact.artifact_id, principal="workflow:unrelated"
+                artifact_id=artifact.artifact_id,
+                access=access_for_test("workflow:unrelated"),
             )
 
 
@@ -320,7 +332,7 @@ async def test_retained_target_keeps_root_and_compact_plan_reference_shapes(tmp_
         for artifact in artifacts:
             assert (
                 await service.read(
-                    artifact_id=artifact.artifact_id, principal="operator"
+                    artifact_id=artifact.artifact_id, access=access_for_test("operator")
                 )
             )[1]
 
@@ -349,9 +361,11 @@ async def test_replacement_releases_input_after_its_last_schedule_reference(tmp_
         await session.commit()
         result = await service.sweep_lifecycle(principal="service:sweeper", now=FUTURE)
         assert result.soft_deleted_count == 1
-        assert (await service.read(artifact_id=new.artifact_id, principal="operator"))[
-            1
-        ]
+        assert (
+            await service.read(
+                artifact_id=new.artifact_id, access=access_for_test("operator")
+            )
+        )[1]
         assert old.status is models.TemporalArtifactStatus.COMPLETE
         assert incidental.status is models.TemporalArtifactStatus.DELETED
         await session.delete(shared)

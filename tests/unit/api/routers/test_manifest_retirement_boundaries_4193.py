@@ -40,6 +40,8 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+from tests.artifact_access import access_for_test
+
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
@@ -99,15 +101,14 @@ async def _insert_historical_manifest_record(session) -> object:
 
 def test_production_worker_registry_has_no_manifest_ingest() -> None:
     """The exact production worker composition registers no Manifest work."""
+    from temporalio import activity, workflow
+
+    from moonmind.workflows.temporal.workers import list_registered_workflow_types
     from moonmind.workflows.temporal.workflow_registry import (
         product_workflow_types,
         workflow_fleet_activity_handlers,
         workflow_fleet_workflow_classes,
     )
-    from moonmind.workflows.temporal.workers import (
-        list_registered_workflow_types,
-    )
-    from temporalio import activity, workflow
 
     classes = workflow_fleet_workflow_classes()
     temporal_names = [
@@ -254,7 +255,7 @@ async def test_ordinary_manifest_yaml_flows_as_supported_content(
     tmp_path: Path,
 ) -> None:
     """A generic artifact named manifest.yaml is ordinary supported content."""
-    from api_service.db.models import Base
+    from api_service.db.models import Base, TemporalArtifactRedactionLevel
     from moonmind.config.settings import settings
     from moonmind.workflows.temporal import (
         LocalTemporalArtifactStore,
@@ -291,7 +292,7 @@ async def test_ordinary_manifest_yaml_flows_as_supported_content(
                 link=None,
                 metadata_json={"filename": "manifest.yaml"},
                 encryption=None,
-                redaction_level=None,
+                redaction_level=TemporalArtifactRedactionLevel.NONE,
             )
             assert artifact.artifact_id
             completed = await service.write_complete(
@@ -302,8 +303,7 @@ async def test_ordinary_manifest_yaml_flows_as_supported_content(
             )
             assert completed.artifact_id == artifact.artifact_id
             _read_artifact, read_bytes = await service.read(
-                artifact_id=artifact.artifact_id,
-                principal=principal,
+                artifact_id=artifact.artifact_id, access=access_for_test(principal)
             )
             assert read_bytes == payload
     finally:

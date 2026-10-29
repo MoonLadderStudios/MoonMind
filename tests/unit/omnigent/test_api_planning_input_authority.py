@@ -32,11 +32,9 @@ from moonmind.workflows.temporal.artifacts import (
 )
 from moonmind.workflows.temporal.service import TemporalExecutionService
 from moonmind.workflows.temporal.worker_runtime import _build_runtime_planner
+from tests.artifact_access import access_for_test
 from tests.unit.omnigent import test_admitted_input_authority as _authority_fixtures
-from tests.unit.omnigent.test_admitted_input_authority import (
-    _put,
-    _skill_set,
-)
+from tests.unit.omnigent.test_admitted_input_authority import _put, _skill_set
 from tests.unit.omnigent.test_plan_and_realizer_dispatch import _codex_plan_inputs
 
 pytestmark = pytest.mark.asyncio
@@ -152,6 +150,7 @@ async def _api_context(sessions, monkeypatch, *, corruption=None):
         if corruption == "binding":
             binding = binding.model_copy(update={"plan_digest": "sha256:" + "f" * 64})
         result = plan_service.PersistedOmnigentExecutionPlan(
+            artifact_access=kwargs["access"],
             envelope=plan,
             binding=binding,
             artifact_refs=(envelope_id, skills.manifest_id),
@@ -178,48 +177,64 @@ async def test_normal_api_manifest_is_readable_at_the_first_temporal_consumer(
     failures = []
 
     async def start_workflow(**kwargs):
-        # Temporal may start executing before start_workflow returns. This is
-        # the same artifact.read implementation the parent uses before AgentRun.
-        async with artifacts() as session:
-            reader = TemporalArtifactActivities(
-                TemporalArtifactService(TemporalArtifactRepository(session))
+        from temporalio import activity
+
+        with monkeypatch.context() as admitted:
+            admitted.setattr(activity, "in_activity", lambda: True)
+            admitted.setattr(
+                activity,
+                "info",
+                lambda: SimpleNamespace(
+                    namespace="default",
+                    workflow_namespace="default",
+                    workflow_id=kwargs["workflow_id"],
+                    workflow_run_id="actual-api-run",
+                ),
             )
-            try:
-                body = await reader.artifact_read(
-                    {
-                        "principal": f"workflow:{kwargs['workflow_id']}",
-                        "artifact_ref": kwargs["input_args"]["initial_parameters"][
-                            "resolvedSkillsetRef"
-                        ],
-                    }
+            # Temporal may start executing before start_workflow returns. This is
+            # the same artifact.read implementation the parent uses before AgentRun.
+            async with artifacts() as session:
+                reader = TemporalArtifactActivities(
+                    TemporalArtifactService(TemporalArtifactRepository(session))
                 )
-                observed.append(json.loads(body))
-                if include_roots:
-                    planner = TemporalPlanActivities(
-                        artifact_service=reader._service,
-                        planner=_build_runtime_planner(),
-                    )
-                    result = await planner.plan_generate(
-                        principal=f"workflow:{kwargs['workflow_id']}",
-                        inputs_ref=kwargs["input_args"]["input_artifact_ref"],
-                        parameters=kwargs["input_args"]["initial_parameters"],
-                    )
-                    assert result.plan_ref.artifact_id
-                    plan = await reader.artifact_read(
+                try:
+                    body = await reader.artifact_read(
                         {
                             "principal": f"workflow:{kwargs['workflow_id']}",
-                            "artifact_ref": kwargs["input_args"]["plan_artifact_ref"],
+                            "artifact_ref": kwargs["input_args"]["initial_parameters"][
+                                "resolvedSkillsetRef"
+                            ],
                         }
                     )
-                    assert json.loads(plan) == {"saved": "plan"}
-            except Exception as exc:
-                failures.append(exc)
-                raise
-        if lost_ack:
-            raise ConnectionError(
-                "Start acknowledgement was lost after the consumer ran"
-            )
-        return SimpleNamespace(run_id="actual-api-run")
+                    observed.append(json.loads(body))
+                    if include_roots:
+                        planner = TemporalPlanActivities(
+                            artifact_service=reader._service,
+                            planner=_build_runtime_planner(),
+                        )
+                        result = await planner.plan_generate(
+                            principal=f"workflow:{kwargs['workflow_id']}",
+                            inputs_ref=kwargs["input_args"]["input_artifact_ref"],
+                            parameters=kwargs["input_args"]["initial_parameters"],
+                        )
+                        assert result.plan_ref.artifact_id
+                        plan = await reader.artifact_read(
+                            {
+                                "principal": f"workflow:{kwargs['workflow_id']}",
+                                "artifact_ref": kwargs["input_args"][
+                                    "plan_artifact_ref"
+                                ],
+                            }
+                        )
+                        assert json.loads(plan) == {"saved": "plan"}
+                except Exception as exc:
+                    failures.append(exc)
+                    raise
+            if lost_ack:
+                raise ConnectionError(
+                    "Start acknowledgement was lost after the consumer ran"
+                )
+            return SimpleNamespace(run_id="actual-api-run")
 
     adapter = SimpleNamespace(
         start_workflow=AsyncMock(side_effect=start_workflow),
@@ -265,6 +280,7 @@ async def test_normal_api_manifest_is_readable_at_the_first_temporal_consumer(
             principal_context={},
             authorization=None,
             execution_fanout=None,
+            access=access_for_test("operator"),
         )
         assert failures == []
         assert observed
@@ -294,6 +310,7 @@ async def test_normal_api_manifest_is_readable_at_the_first_temporal_consumer(
             principal_context={},
             authorization=None,
             execution_fanout=None,
+            access=access_for_test("operator"),
         )
         assert repeated.workflow_id == response.workflow_id
         adapter.start_workflow.assert_awaited_once()
@@ -301,12 +318,13 @@ async def test_normal_api_manifest_is_readable_at_the_first_temporal_consumer(
         reader = TemporalArtifactService(TemporalArtifactRepository(session))
         _, manifest = await reader.read(
             artifact_id=saved.skills.manifest_id,
-            principal=f"workflow:{response.workflow_id}",
+            access=access_for_test(f"workflow:{response.workflow_id}"),
         )
         assert json.loads(manifest) == observed[0]
         with pytest.raises(TemporalArtifactAuthorizationError):
             await reader.read(
-                artifact_id=saved.skills.manifest_id, principal="workflow:unrelated"
+                artifact_id=saved.skills.manifest_id,
+                access=access_for_test("workflow:unrelated"),
             )
 
 
@@ -366,6 +384,7 @@ async def test_api_refuses_invalid_or_unreadable_authority_before_start(
                 principal_context={},
                 authorization=None,
                 execution_fanout=None,
+                access=access_for_test("operator"),
             )
         assert denied.value.status_code == 422
         assert denied.value.detail["code"] == "invalid_execution_request"

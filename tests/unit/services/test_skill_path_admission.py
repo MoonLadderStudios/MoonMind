@@ -1,7 +1,7 @@
 """Resolved skill artifacts cannot turn names or snapshot IDs into host paths."""
 
-from datetime import UTC, datetime
 import json
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -15,6 +15,7 @@ from moonmind.workflows.skills.run_projection import (
     SkillProjectionError,
     load_resolved_skillset,
 )
+from tests.artifact_access import access_for_test
 
 
 def snapshot_payload(**updates):
@@ -66,7 +67,9 @@ async def test_materializer_rechecks_mutated_models_before_filesystem_io(
         snapshot.snapshot_id = str(outside)
     else:
         snapshot.skills[0].skill_name = str(outside)
-    materializer = AgentSkillMaterializer(str(tmp_path / "workspace"))
+    materializer = AgentSkillMaterializer(
+        str(tmp_path / "workspace"), access=access_for_test("system")
+    )
     with pytest.raises(ValueError, match="single path component"):
         await materializer.materialize(
             snapshot, "codex", RuntimeMaterializationMode.HYBRID
@@ -89,7 +92,9 @@ async def test_materializer_rejects_symlinked_active_parent(tmp_path, explicit_b
     )
     backing = workspace / "runtime" / "skills_active" / "snapshot-safe"
     materializer = AgentSkillMaterializer(
-        str(workspace), backing_root=str(backing) if explicit_backing else None
+        str(workspace),
+        backing_root=str(backing) if explicit_backing else None,
+        access=access_for_test("system"),
     )
     snapshot = ResolvedSkillSet.model_validate(snapshot_payload(skills=[]))
     with pytest.raises(RuntimeError, match="Failed to prepare"):
@@ -114,7 +119,9 @@ async def test_runtime_artifact_loader_rejects_unsafe_paths(field):
             return object(), json.dumps(payload).encode()
 
     with pytest.raises(SkillProjectionError, match="single path component"):
-        await load_resolved_skillset(ArtifactService(), "artifact-snapshot")
+        await load_resolved_skillset(
+            ArtifactService(), "artifact-snapshot", access=access_for_test("system")
+        )
 
 
 @pytest.mark.asyncio
@@ -133,9 +140,9 @@ async def test_skill_materialization_does_not_launder_symlinked_run_root(
     snapshot = ResolvedSkillSet.model_validate(snapshot_payload(skills=[]))
     with pytest.raises((RuntimeError, OSError), match="directory|symlink"):
         if entrypoint == "materializer":
-            await AgentSkillMaterializer(str(root)).materialize(
-                snapshot, "codex", RuntimeMaterializationMode.HYBRID
-            )
+            await AgentSkillMaterializer(
+                str(root), access=access_for_test("system")
+            ).materialize(snapshot, "codex", RuntimeMaterializationMode.HYBRID)
         else:
             await materialize_run_skill_snapshot(
                 workspace_path=root / "repo",
@@ -143,6 +150,7 @@ async def test_skill_materialization_does_not_launder_symlinked_run_root(
                 runtime_id="codex",
                 resolved_skillset=snapshot,
                 artifact_service=None,
+                access=access_for_test("system"),
             )
     assert marker.read_text() == "preserve"
     assert sorted(path.name for path in outside.iterdir()) == ["saved-work.txt"]

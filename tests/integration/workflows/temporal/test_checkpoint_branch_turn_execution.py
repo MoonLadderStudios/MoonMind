@@ -64,6 +64,7 @@ from api_service.services.checkpoint_branch_turn_execution import (
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.schemas.omnigent_session_models import OmnigentSessionWorkflowInput
 from moonmind.schemas.temporal_models import StepExecutionCheckpointModel
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows import get_temporal_artifact_repository
 from moonmind.workflows.temporal.activities import omnigent_activities
 from moonmind.workflows.temporal.activities.omnigent_activities import (
@@ -89,6 +90,7 @@ from moonmind.workflows.temporal.workflows.checkpoint_branch_turn import (
     persist_checkpoint_branch_turn_terminal,
     persist_checkpoint_branch_turn_terminal_rejection,
 )
+from tests.artifact_access import access_for_test
 from tests.helpers.checkpoint_branch_turn_runtime import (
     CheckpointBranchRuntimeLedger,
     checkpoint_branch_policy_snapshot,
@@ -1080,7 +1082,9 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
         if getattr(dependency.call, "__name__", "") == "_current_user_fallback"
     } or {get_instance_access}
     for dependency in user_dependencies:
-        app.dependency_overrides[dependency] = lambda: user
+        app.dependency_overrides[dependency] = lambda: OperatorAdmission(
+            via="checkpoint-operator-fixture"
+        )
 
     ledger = CheckpointBranchRuntimeLedger(artifact_writer=write_artifact)
     created_checkpoint_ids: set[str] = set()
@@ -1696,8 +1700,7 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
             assert step.runtime_selection["effort"] == "high"
             _artifact, context_bytes = await artifacts.read(
                 artifact_id=step.context_bundle_ref.removeprefix("artifact://"),
-                principal=principal,
-                allow_restricted_raw=True,
+                access=access_for_test(principal),
             )
             assert "sha256:" + hashlib.sha256(context_bytes).hexdigest() == step.context_bundle_digest
             context = json.loads(context_bytes)
@@ -2326,6 +2329,7 @@ async def test_preclaim_artifact_retry_reuses_exact_owned_ref(
         owner = CheckpointBranchTurnExecutionOwner(
             session,
             principal="service:test",
+            access=access_for_test("service:test"),
         )
         first = await owner._write_artifact(
             content_type="application/json",
@@ -2539,9 +2543,10 @@ async def test_terminal_activity_keeps_child_saved_candidate_on_parent_capture_f
         )
         _artifact, body = await artifacts.read(
             artifact_id=result["agentResultRef"].removeprefix("artifact://"),
-            principal="service:checkpoint-branch-turn",
-            admitted_principal="workflow:source-workflow",
-            allow_restricted_raw=True,
+            access=access_for_test(
+                "service:checkpoint-branch-turn",
+                admitted_principal="workflow:source-workflow",
+            ),
         )
         stored = json.loads(body)
         assert "failureClass" not in stored
@@ -2660,17 +2665,20 @@ async def test_terminal_activity_retains_saved_manifest_dependencies(
         )
         _artifact, body = await artifacts.read(
             artifact_id=result["agentResultRef"].removeprefix("artifact://"),
-            principal="service:checkpoint-branch-turn",
-            admitted_principal="workflow:source-workflow",
-            allow_restricted_raw=True,
+            access=access_for_test(
+                "service:checkpoint-branch-turn",
+                admitted_principal="workflow:source-workflow",
+            ),
         )
         candidate = json.loads(body)["metadata"]["savedWorkspaceCheckpoint"]
         assert candidate["dependencyRefs"] == [history_ref, index_ref]
         for ref in (manifest_ref, history_ref, index_ref):
             _metadata, _links, pinned, _policy = await artifacts.get_metadata(
                 artifact_id=ref.removeprefix("artifact://"),
-                principal="service:checkpoint-branch-turn",
-                admitted_principal="workflow:source-workflow",
+                access=access_for_test(
+                    "service:checkpoint-branch-turn",
+                    admitted_principal="workflow:source-workflow",
+                ),
             )
             assert pinned, ref
     await engine.dispose()
@@ -2861,9 +2869,10 @@ async def test_terminal_rejection_activity_is_retry_stable_and_terminalizes_row(
         rejection_id = first["agentResultRef"].removeprefix("artifact://")
         _artifact, body = await artifacts.read(
             artifact_id=rejection_id,
-            principal="service:checkpoint-branch-turn",
-            admitted_principal="workflow:source-workflow",
-            allow_restricted_raw=True,
+            access=access_for_test(
+                "service:checkpoint-branch-turn",
+                admitted_principal="workflow:source-workflow",
+            ),
         )
         assert b"terminalPayloadDigest" in body
         assert b"unsafe" not in body
@@ -2966,9 +2975,10 @@ async def test_terminal_handoff_pins_every_retained_ref_across_lifecycle_sweep(
         for artifact_id in retained_ids:
             _artifact, body = await artifacts.read(
                 artifact_id=artifact_id,
-                principal="service:checkpoint-branch-turn",
-                admitted_principal="workflow:source-workflow",
-                allow_restricted_raw=True,
+                access=access_for_test(
+                    "service:checkpoint-branch-turn",
+                    admitted_principal="workflow:source-workflow",
+                ),
             )
             assert body
     await engine.dispose()
@@ -3026,9 +3036,10 @@ async def test_terminal_handoff_promotes_omnigent_refs_before_recording(
         )
         _artifact, body = await artifacts.read(
             artifact_id=result["agentResultRef"].removeprefix("artifact://"),
-            principal="service:checkpoint-branch-turn",
-            admitted_principal="workflow:source-workflow",
-            allow_restricted_raw=True,
+            access=access_for_test(
+                "service:checkpoint-branch-turn",
+                admitted_principal="workflow:source-workflow",
+            ),
         )
         stored = json.loads(body)
         retained = [
@@ -3049,8 +3060,10 @@ async def test_pre_cutover_pending_persistence_invocations_keep_real_handlers(
 ):
     """Old workflow-queue payloads still cross the retained persistence owners."""
     from pathlib import Path
+
     from temporalio.client import WorkflowHistory
     from temporalio.converter import DataConverter
+
     from moonmind.workflows.temporal.workflow_registry import (
         workflow_fleet_activity_handlers,
     )

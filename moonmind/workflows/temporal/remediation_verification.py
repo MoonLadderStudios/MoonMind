@@ -34,6 +34,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 # ---------------------------------------------------------------------------
 # Normalized verification outcomes
@@ -652,8 +653,9 @@ class CanonicalRecordEvidenceReader:
         try:
             await get_temporal_artifact_service(self._session).read(
                 artifact_id=branch.latest_verification_ref.removeprefix("artifact://"),
-                principal="service:remediation-context",
-                admitted_principal=f"workflow:{workflow_id}",
+                access=ArtifactAccessContext.for_execution(
+                    workflow_id, principal="service:remediation-context"
+                ),
             )
         except Exception:
             return _unavailable_snapshot(

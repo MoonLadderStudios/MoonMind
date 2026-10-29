@@ -19,11 +19,13 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+from temporalio.testing import ActivityEnvironment
 
 from api_service.services.container_jobs import (
     ContainerJobScopeDeniedError,
@@ -54,6 +56,7 @@ from moonmind.security.web_assessments import (
 )
 from moonmind.security.workload_profiles import AdmittedAssessmentScope
 from moonmind.workflows.temporal import container_job_attachments as attachments
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.container_job_attachments import storage_for
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from moonmind.workflows.temporal.worker_runtime import _container_job_artifact_reader
@@ -244,6 +247,7 @@ class Harness:
         self, environment, tmp_path, monkeypatch, app, gateway, *, admitted=None
     ):
         self.environment = environment
+        self.monkeypatch = monkeypatch
         self.tmp_path = tmp_path
         self.app, self.gateway = app, gateway
         self.temporal = AsyncMock()
@@ -304,7 +308,14 @@ class Harness:
     async def owned_artifact(self, payload: bytes) -> str:
         principal = owner_artifact_principal(OWNER)
         artifact, _ = await self.environment.service.create(
-            principal=principal, content_type="application/json"
+            principal=principal,
+            content_type="application/json",
+            link={
+                "namespace": "default",
+                "workflow_id": "assessment",
+                "run_id": "run",
+                "link_type": "input.assessment",
+            },
         )
         await self.environment.service.write_complete(
             artifact_id=artifact.artifact_id, principal=principal, payload=payload
@@ -360,7 +371,9 @@ class Harness:
             resolvedWorkspaceRef=str(workspace),
             resolvedImageRef="sha256:" + "a" * 64,
         )
-        await backend.create_container(request)
+        await create_container_in_activity(
+            backend, request, self.environment, self.monkeypatch
+        )
         create = [c for c in self.commands if c[0] == "create"][-1]
         storage = storage_for(self.tmp_path, accepted.job_id)
         code = self.execute(create, storage, web, fault)
@@ -697,7 +710,7 @@ async def test_malformed_output_plan_codes_and_cancellation_stay_partial(
     ) == ("outputs_retained" if fault == "malformed" else "removed")
     retained = artifact_names(harness, accepted)["summary"]["artifactRef"]
     _, payload = await environment.service.read(
-        artifact_id=retained, principal=owner_artifact_principal(OWNER)
+        artifact_id=retained, access=ArtifactAccessContext.for_execution("assessment")
     )
     assert json.loads(payload)["status"] == "partial"
 
@@ -850,3 +863,16 @@ async def test_clean_target_is_complete_and_distinct_from_lost_coverage(
     )
     assert second["coverageStatus"] == "stale_or_partial"
     assert second["scannerSummaries"][0]["coverage"] == "partial"
+
+
+async def create_container_in_activity(backend, request, environment, monkeypatch):
+    """Exercise input restoration with its actual job Activity and persisted admission."""
+    from moonmind.schemas.container_job_models import container_job_workflow_id
+    from moonmind.workflows.temporal import worker_runtime
+
+    monkeypatch.setattr(worker_runtime, "get_async_session_context", environment.sessions)
+    activity = ActivityEnvironment()
+    activity.info = replace(
+        activity.info, workflow_id=container_job_workflow_id(request.job_id)
+    )
+    return await activity.run(backend.create_container, request)

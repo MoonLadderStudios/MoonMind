@@ -2,6 +2,7 @@
 
 import asyncio
 from copy import deepcopy
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -11,6 +12,7 @@ from fastapi import Response
 from sqlalchemy import select
 from temporalio.client import WorkflowExecutionStatus
 from temporalio.service import RPCError, RPCStatusCode
+from temporalio.testing import ActivityEnvironment
 
 from api_service.api.routers import executions
 from api_service.db.models import (
@@ -23,6 +25,7 @@ from moonmind.config.settings import settings
 from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
     TemporalArtifactActivities,
     TemporalArtifactRepository,
     TemporalArtifactService,
@@ -92,15 +95,17 @@ async def admit_then_disappear(sessions, adapter, *, disappear=True):
             service._ensure_create_start_confirmed = AsyncMock(
                 side_effect=RequestDisappeared()
             )
+        admission = OperatorAdmission(via="loopback")
         request = executions.create_execution(
             payload=deepcopy(payload),
             service=service,
             session=session,
-            user=OperatorAdmission(via="loopback"),
+            user=admission,
             _submit_enabled=None,
             principal_context={},
             authorization=None,
             execution_fanout=None,
+            access=ArtifactAccessContext.for_operator(admission),
         )
         if disappear:
             with pytest.raises(RequestDisappeared):
@@ -135,9 +140,13 @@ async def test_operational_tick_recovers_committed_admission_without_client_retr
             reader = TemporalArtifactActivities(
                 TemporalArtifactService(TemporalArtifactRepository(session))
             )
-            body = await reader.artifact_read(
+            environment = ActivityEnvironment()
+            environment.info = replace(
+                environment.info, workflow_id=kwargs["workflow_id"]
+            )
+            body = await environment.run(
+                reader.artifact_read,
                 {
-                    "principal": f"workflow:{kwargs['workflow_id']}",
                     "artifact_ref": kwargs["input_args"]["initial_parameters"][
                         "resolvedSkillsetRef"
                     ],

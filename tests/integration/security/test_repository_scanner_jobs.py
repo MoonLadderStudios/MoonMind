@@ -29,6 +29,7 @@ from moonmind.security.repository_scanners import RepositoryScan, build_scanner_
 from moonmind.security.scanner_feeds import publish_snapshot
 from moonmind.workflows.temporal.container_job_attachments import storage_for
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
+from tests.artifact_access import access_for_test
 from tests.integration.security import test_recurring_assessments as recurring
 from tests.integration.security.test_recurring_assessments import invoke, put, read
 
@@ -392,7 +393,7 @@ async def test_repository_job_retains_sanitized_evidence_and_report(
         outputs["reportBundle"]["primary_report_ref"]["artifact_id"],
     }:
         _, body = await environment.service.read(
-            artifact_id=ref, principal="workflow:assessment", allow_restricted_raw=True
+            artifact_id=ref, access=access_for_test("workflow:assessment")
         )
         assert MARKER.encode() not in body
     record = await jobs.repository.get_for_owner(owner=owner, job_id=accepted.job_id)
@@ -416,9 +417,7 @@ async def test_repository_job_retains_sanitized_evidence_and_report(
 
 
 async def _evidence_text(service, ref):
-    _, raw = await service.read(
-        artifact_id=ref, principal="operator", allow_restricted_raw=True
-    )
+    _, raw = await service.read(artifact_id=ref, access=access_for_test("operator"))
     return raw.decode()
 
 
@@ -657,9 +656,7 @@ async def test_unreadable_native_reports_withhold_admission_metadata_through_rep
         outputs["reportBundle"]["primary_report_ref"]["artifact_id"],
     }:
         _, body = await environment.service.read(
-            artifact_id=artifact_ref,
-            principal="workflow:assessment",
-            allow_restricted_raw=True,
+            artifact_id=artifact_ref, access=access_for_test("workflow:assessment")
         )
         assert MARKER.encode() not in body
 
@@ -860,8 +857,7 @@ async def test_combined_gitleaks_findings_reach_report_with_partial_coverage(
     assert len(comparison["observation"]["findings"]) == 4096
     _, markdown = await environment.service.read(
         artifact_id=outputs["reportBundle"]["primary_report_ref"]["artifact_id"],
-        principal="workflow:assessment",
-        allow_restricted_raw=True,
+        access=access_for_test("workflow:assessment"),
     )
     assert b"combined_finding_bound_exceeded" in markdown
 

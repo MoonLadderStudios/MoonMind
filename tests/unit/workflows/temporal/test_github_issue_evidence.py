@@ -2,14 +2,19 @@
 
 import hashlib
 import json
+from dataclasses import replace
 
 import pytest
+from temporalio.testing import ActivityEnvironment
 
 from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    ExecutionRef,
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from tests.artifact_access import access_for_test
 from tests.unit.workflows.adapters.test_github_actions_evidence import (
     HEAD,
     REPO,
@@ -47,7 +52,7 @@ async def test_failed_job_bytes_persist_without_provider_artifact_ids(
         assert result["status"] == "ready" and len(result["evidenceRefs"]) == 2
         _, raw_manifest = await service.read(
             artifact_id=result["artifactRef"].removeprefix("artifact://"),
-            principal="workflow:work-1",
+            access=access_for_test("workflow:work-1"),
         )
         files = json.loads(raw_manifest)["files"]
         for item in files:
@@ -59,7 +64,7 @@ async def test_failed_job_bytes_persist_without_provider_artifact_ids(
             assert "artifactId" not in item
             _, body = await service.read(
                 artifact_id=item["artifactRef"].removeprefix("artifact://"),
-                principal="workflow:work-1",
+                access=access_for_test("workflow:work-1"),
             )
             assert hashlib.sha256(body).hexdigest() == item["sha256"]
             if item["sourceType"] == "job-log":
@@ -103,7 +108,8 @@ async def test_collection_persists_materializable_bytes_and_compact_identity(
         assert len(result["evidenceRefs"]) == 1
         ref = result["evidenceRefs"][0]
         _, stored = await service.read(
-            artifact_id=ref.removeprefix("artifact://"), principal="workflow:work-1"
+            artifact_id=ref.removeprefix("artifact://"),
+            access=access_for_test("workflow:work-1"),
         )
         assert stored == b'{"tests":12}'
         assert (
@@ -111,7 +117,7 @@ async def test_collection_persists_materializable_bytes_and_compact_identity(
         )
         _, manifest_bytes = await service.read(
             artifact_id=result["artifactRef"].removeprefix("artifact://"),
-            principal="workflow:work-1",
+            access=access_for_test("workflow:work-1"),
         )
         manifest = json.loads(manifest_bytes)
         assert manifest["files"][0]["artifactRef"] == ref
@@ -257,6 +263,11 @@ async def test_published_pr_real_bytes_verifier_and_durable_owner_complete_same_
                 principal="workflow:issue-owner",
                 content_type="application/json",
                 metadata_json={"name": name},
+                # Match artifact.create's SDK-owned publication link.
+                link=ExecutionRef(
+                    namespace="moonmind", workflow_id="issue-owner",
+                    run_id="run-1", link_type="output.artifact",
+                ),
             )
             await store.write_complete(
                 artifact_id=artifact.artifact_id,
@@ -270,15 +281,30 @@ async def test_published_pr_real_bytes_verifier_and_durable_owner_complete_same_
         report_reads = []
 
         async def read_report(name, request, **_kwargs):
-            assert (
-                name == "artifact.read" and request.principal == "workflow:issue-owner"
-            )
+            assert name == "artifact.read"
+            assert "principal" not in request.model_dump()
             report_reads.append(request.artifact_ref)
-            _, body = await store.read(
-                artifact_id=str(request.artifact_ref).removeprefix("artifact://"),
-                principal=request.principal,
+            environment = ActivityEnvironment()
+            environment.info = replace(
+                environment.info,
+                namespace="moonmind",
+                workflow_namespace="moonmind",
+                workflow_id="issue-owner",
+                workflow_run_id="run-1",
             )
-            return body
+
+            async def read():
+                assert (
+                    ArtifactAccessContext.for_activity().execution_principal
+                    == "workflow:issue-owner"
+                )
+                _, body = await store.read(
+                    artifact_id=str(request.artifact_ref).removeprefix("artifact://"),
+                    access=ArtifactAccessContext.for_activity(),
+                )
+                return body
+
+            return await environment.run(read)
 
         monkeypatch.setattr(run_module, "execute_typed_activity", read_report)
 
@@ -412,7 +438,7 @@ async def test_published_pr_real_bytes_verifier_and_durable_owner_complete_same_
             assert manifest_ref in request.input_refs
             _, manifest_bytes = await store.read(
                 artifact_id=manifest_ref.removeprefix("artifact://"),
-                principal="workflow:issue-owner",
+                access=access_for_test("workflow:issue-owner"),
             )
             manifest = json.loads(manifest_bytes)
             assert 101 in manifest["runIds"]
@@ -422,7 +448,7 @@ async def test_published_pr_real_bytes_verifier_and_durable_owner_complete_same_
                 assert ref in request.input_refs
                 _, body = await store.read(
                     artifact_id=ref.removeprefix("artifact://"),
-                    principal="workflow:issue-owner",
+                    access=access_for_test("workflow:issue-owner"),
                 )
                 assert "sha256:" + hashlib.sha256(body).hexdigest() == digest
                 assert json.loads(body)["tests"] == 12
@@ -495,7 +521,7 @@ async def test_published_pr_real_bytes_verifier_and_durable_owner_complete_same_
         if initial_verdict == "NO_DETERMINATION":
             _, original_bytes = await store.read(
                 artifact_id=initial_projection["reportRef"].removeprefix("artifact://"),
-                principal="workflow:issue-owner",
+                access=access_for_test("workflow:issue-owner"),
             )
             assert (
                 "sha256:" + hashlib.sha256(original_bytes).hexdigest()

@@ -33,6 +33,8 @@ from api_service.services.recurring_workflows_service import (
     ScheduleRunExecution,
 )
 
+from moonmind.security.operator_admission import OperatorAdmission
+
 LIST_DEFAULTS = {
     "cursor": None,
     "sort": "updatedAt",
@@ -589,7 +591,7 @@ async def test_mm3788_create_route_rejects_a_cross_runtime_provider_profile(
 async def test_mm3788_create_route_accepts_a_profile_owned_by_the_target_runtime(
     tmp_path: Path,
 ) -> None:
-    user = SimpleNamespace(id=uuid4(), is_superuser=False)
+    user = OperatorAdmission(via="loopback")
 
     async with _mm3788_session(tmp_path) as session:
         created = await _mm3788_create_owned(_mm3788_service(session), user)
@@ -609,7 +611,7 @@ async def test_create_route_preserves_missing_execution_configuration_error(
 ) -> None:
     """Omnigent selection rejects missing authority before schedule persistence."""
 
-    user = SimpleNamespace(id=uuid4(), is_superuser=False)
+    user = OperatorAdmission(via="loopback")
 
     async with _mm3788_session(tmp_path) as session:
         service = _mm3788_service(session)
@@ -641,7 +643,7 @@ async def test_create_route_preserves_missing_execution_configuration_error(
 async def test_mm3788_update_route_rejects_a_cross_runtime_provider_profile(
     tmp_path: Path,
 ) -> None:
-    user = SimpleNamespace(id=uuid4(), is_superuser=False)
+    user = OperatorAdmission(via="loopback")
 
     async with _mm3788_session(tmp_path) as session:
         created = await _mm3788_create_owned(_mm3788_service(session), user)
@@ -687,7 +689,7 @@ async def test_mm3788_update_route_rejects_a_cross_runtime_provider_profile(
 async def test_mm3788_update_route_accepts_a_profile_owned_by_the_target_runtime(
     tmp_path: Path,
 ) -> None:
-    user = SimpleNamespace(id=uuid4(), is_superuser=False)
+    user = OperatorAdmission(via="loopback")
 
     async with _mm3788_session(tmp_path) as session:
         created = await _mm3788_create_owned(_mm3788_service(session), user)
@@ -729,7 +731,7 @@ async def test_recurring_http_api_rejects_retired_retrieval_without_persisting(
 
     app = FastAPI()
     app.include_router(recurring_router.router)
-    user = SimpleNamespace(id=uuid4(), is_superuser=True)
+    user = OperatorAdmission(via="loopback")
     for route in recurring_router.router.routes:
         for dependency in route.dependant.dependencies:
             if dependency.call.__name__ in {
@@ -816,7 +818,7 @@ async def test_mm3935_schedule_edit_route_admits_a_default_omnigent_target(
     admission = _mm3935_plan_admission(monkeypatch)
     app = FastAPI()
     app.include_router(recurring_router.router)
-    user = SimpleNamespace(id=uuid4(), is_superuser=True)
+    user = OperatorAdmission(via="loopback")
     for route in recurring_router.router.routes:
         for dependency in route.dependant.dependencies:
             if dependency.call.__name__ in {

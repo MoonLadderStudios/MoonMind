@@ -11,6 +11,7 @@ import pytest
 from moonmind.schemas.agent_runtime_models import AgentRunResult
 from moonmind.workflows.skills.acceptance_contract import acceptance_evidence
 from moonmind.workflows.temporal import agent_result_payloads as payloads
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from tests.unit.workflows.skills import test_acceptance_source_binding as bindings
 
 source_bound_report = bindings.source_bound_report
@@ -179,9 +180,9 @@ async def test_story_finalizer_rereads_projection_with_workflow_authority(
         assert acceptance_evidence(full) is not None
     service.read.assert_awaited_once_with(
         artifact_id="art_complete_report",
-        principal="system:agent_runtime",
-        admitted_principal="workflow:owner",
-        allow_restricted_raw=True,
+        access=ArtifactAccessContext.for_execution(
+            "owner", principal="system:agent_runtime"
+        ),
     )
 
 
@@ -269,7 +270,9 @@ async def test_ready_activity_checks_published_report_bytes(
     assert ready.await_count == (1 if digest_state == "match" else 0)
     if digest_state == "match":
         assert ready.await_args.kwargs["base_ref"] == "main"
-    assert service.read.await_args.kwargs["admitted_principal"] == "workflow:owner"
+    assert (
+        service.read.await_args.kwargs["access"].execution_principal == "workflow:owner"
+    )
 
 
 @pytest.mark.asyncio
@@ -360,4 +363,6 @@ async def test_jira_completion_rereads_immutable_report_before_mutation(
     assert transition.await_count == (1 if read_state == "match" else 0), result
     if read_state != "match":
         assert result["status"] == "blocked"
-    assert read.await_args.kwargs["admitted_principal"] == "workflow:actual-owner"
+    assert (
+        read.await_args.kwargs["access"].execution_principal == "workflow:actual-owner"
+    )

@@ -49,6 +49,7 @@ from moonmind.utils.logging import redact_sensitive_payload
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
     CLAUDE_DISALLOWED_TOOLS_DEFAULTS_KEY,
 )
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 # Traceability: MM-1152 created the canonical store; MM-1156 moved the
 # first-message idempotency state machine onto it from the superseded mapping.
@@ -4237,8 +4238,9 @@ class OmnigentBridgeSessionStore:
                     }
                     _, payload = await artifacts.read(
                         artifact_id=artifact_id,
-                        principal=artifact.created_by_principal,
-                        admitted_principal=f"workflow:{row.moonmind_workflow_id}",
+                        access=ArtifactAccessContext.for_execution(
+                            row.moonmind_workflow_id
+                        )._with_verified_inputs((artifact_id,)),
                     )
                     try:
                         entries = [
@@ -4283,6 +4285,7 @@ class OmnigentBridgeSessionStore:
         for kind in ("raw", "normalized"):
             replacements[kind] = await self._publish_compacted_journal(
                 template=templates[kind],
+                access=ArtifactAccessContext.for_execution(row.moonmind_workflow_id),
                 kind=kind,
                 count=count,
                 source_key=source_key,
@@ -4344,6 +4347,7 @@ class OmnigentBridgeSessionStore:
         self,
         *,
         template: dict[str, Any],
+        access: ArtifactAccessContext,
         kind: str,
         count: int,
         source_key: str,
@@ -4406,7 +4410,8 @@ class OmnigentBridgeSessionStore:
             await artifacts._repository.commit()
             if artifact.status is TemporalArtifactStatus.COMPLETE:
                 _, existing = await artifacts.read(
-                    artifact_id=artifact.artifact_id, principal=template["principal"]
+                    artifact_id=artifact.artifact_id,
+                    access=access._with_verified_inputs((artifact.artifact_id,)),
                 )
                 if existing != payload:
                     raise OmnigentIdempotencyError(

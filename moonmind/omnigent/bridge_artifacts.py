@@ -32,6 +32,7 @@ from moonmind.omnigent.settings import resolved_server_url
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.utils.logging import redact_sensitive_payload
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 _MAX_OMNIGENT_HARVEST_ITEMS = 100
 _MAX_OMNIGENT_CONTENT_BYTES = 10 * 1024 * 1024
@@ -69,6 +70,7 @@ async def link_verified_execution_plan_inputs(
     binding,
     workflow_id: str,
     run_id: str,
+    access: ArtifactAccessContext,
     namespace: str = "default",
     planning_parameters: Mapping[str, Any] | None = None,
 ) -> tuple[str, ...]:
@@ -82,6 +84,7 @@ async def link_verified_execution_plan_inputs(
         TemporalArtifactService,
     )
 
+    access = ArtifactAccessContext.require(access)
     plan = verify_execution_plan_envelope(
         plan.model_dump(mode="json", by_alias=True)
         if hasattr(plan, "model_dump")
@@ -158,12 +161,13 @@ async def link_verified_execution_plan_inputs(
                         "support evidence pointer conflicts with verified execution authority"
                     )
         service = TemporalArtifactService(repository)
-        frozen_refs, attachments, input_principal = await _frozen_planning_input_refs(
+        frozen_refs, attachments, input_access = await _frozen_planning_input_refs(
             repository,
             service,
             plan=plan,
             binding=binding,
             planning_parameters=planning_parameters,
+            access=access._with_verified_inputs(_artifact_ids(refs)),
         )
         refs.update(frozen_refs)
         linked_ids = _artifact_ids(refs)
@@ -180,7 +184,7 @@ async def link_verified_execution_plan_inputs(
                     service,
                     manifest_id,
                     workflow_id=workflow_id,
-                    principal=input_principal or _GATEWAY_PRINCIPAL,
+                    access=input_access,
                     expected_digest=manifest_digest,
                 )
             )
@@ -251,8 +255,14 @@ async def _link_execution_input(
 
 
 async def _frozen_planning_input_refs(
-    repository, service, *, plan, binding, planning_parameters
-) -> tuple[set[str], dict[str, str | None], str | None]:
+    repository,
+    service,
+    *,
+    plan,
+    binding,
+    planning_parameters,
+    access: ArtifactAccessContext,
+) -> tuple[set[str], dict[str, str | None], ArtifactAccessContext]:
     """Delegate saved planning inputs through their immutable admission proof.
 
     A plan's snapshot is authority for the saved input/plan pointers, rather
@@ -266,7 +276,7 @@ async def _frozen_planning_input_refs(
                 "scheduled planning lacks frozen input authority"
             )
         if binding is None:
-            return set(), {}, None
+            return set(), {}, access
         # Retained compact plans predate the embedded authority document; their
         # admitted binding still pins the original input bytes and read scope.
         snapshot_ref = binding.task_input_snapshot_ref
@@ -276,14 +286,19 @@ async def _frozen_planning_input_refs(
         snapshot_digest = authority.taskInputSnapshotDigest
     snapshot_id = TemporalOmnigentArtifactGateway._artifact_id(snapshot_ref)
     snapshot_artifact = await repository.get_artifact(snapshot_id)
-    principal = str(snapshot_artifact.created_by_principal or "").strip()
     expected_digest = snapshot_digest.removeprefix("sha256:")
-    if not principal or snapshot_artifact.sha256 != expected_digest:
+    if snapshot_artifact.sha256 != expected_digest:
         raise OmnigentArtifactError("frozen task-input snapshot authority mismatch")
+    if (
+        str(getattr(snapshot_artifact.status, "value", snapshot_artifact.status))
+        != "complete"
+    ):
+        from moonmind.workflows.temporal.artifacts import TemporalArtifactStateError
+
+        raise TemporalArtifactStateError("frozen task-input snapshot is not readable")
     _, body = await service.read(
         artifact_id=snapshot_id,
-        principal=principal,
-        allow_restricted_raw=True,
+        access=access._with_verified_inputs((snapshot_id,)),
     )
     if hashlib.sha256(body).hexdigest() != expected_digest:
         raise OmnigentArtifactError("frozen task-input snapshot digest mismatch")
@@ -295,13 +310,13 @@ async def _frozen_planning_input_refs(
     if not isinstance(source, dict):
         if planning_parameters is not None:
             raise OmnigentArtifactError("scheduled planning lacks a schedule snapshot")
-        return set(), {}, principal
+        return set(), {}, access
     scheduled = source.get("kind") == "schedule"
     target = frozen.get("target") if scheduled else frozen.get("draft")
     if not isinstance(target, dict):
         if scheduled or planning_parameters is not None:
             raise OmnigentArtifactError("schedule snapshot lacks its frozen target")
-        return set(), {}, principal
+        return set(), {}, access
     if scheduled and not str(source.get("definitionId") or "").strip():
         raise OmnigentArtifactError("schedule snapshot lacks definition authority")
     if planning_parameters is not None:
@@ -344,15 +359,22 @@ async def _frozen_planning_input_refs(
         attachments[artifact_id] = str(attachment.get("filename") or "").strip() or None
         refs.add(artifact_id)
     for artifact_id in sorted(_artifact_ids(refs)):
-        # Snapshot creation does not let a machine invent permission for an
-        # unrelated artifact. Its original admitted principal must be able to
-        # read every delegated input, including retained security checks.
-        await service.read(
+        # The verified persisted input context admits these exact references.
+        # Metadata admission does not grant restricted bytes to an execution;
+        # its eventual byte read still crosses the shared raw-access gate.
+        if access.is_operator:
+            # Initial HTTP admission carries the real operator proof. Validate
+            # its current raw permission before it can delegate a selected ref.
+            await service.read(artifact_id=artifact_id, access=access)
+            continue
+        artifact, _links, _pinned, _policy = await service.get_metadata(
             artifact_id=artifact_id,
-            principal=principal,
-            allow_restricted_raw=True,
+            access=access._with_verified_inputs(_artifact_ids(refs)),
         )
-    return refs, attachments, principal
+        service._assert_not_quarantined(artifact)
+        if str(getattr(artifact.status, "value", artifact.status)) != "complete":
+            raise OmnigentArtifactError("frozen input artifact is not readable")
+    return refs, attachments, access._with_verified_inputs(_artifact_ids(refs))
 
 
 def _execution_plan_input_refs(plan, binding) -> set[str]:
@@ -417,20 +439,21 @@ async def _skill_content_ids(
     manifest_id: str,
     *,
     workflow_id: str | None = None,
-    principal: str = _GATEWAY_PRINCIPAL,
+    access: ArtifactAccessContext,
     expected_digest: str | None = None,
 ):
     """Content refs named by an admitted, immutable resolved Skill manifest."""
 
     _artifact, payload = await service.read(
         artifact_id=manifest_id,
-        principal=principal,
-        admitted_principal=f"workflow:{workflow_id}" if workflow_id else None,
+        access=access,
     )
     if workflow_id is not None:
         # Original-input authority permits discovery, but may not relax the
         # prospective execution's raw-byte protection.
-        service._assert_raw_access(_artifact, principal=f"workflow:{workflow_id}")
+        await service._assert_artifact_raw_access(
+            _artifact, access=ArtifactAccessContext.for_execution(workflow_id)
+        )
     if hashlib.sha256(payload).hexdigest() != _artifact.sha256:
         raise OmnigentArtifactError("admitted Skill manifest byte integrity mismatch")
     try:
@@ -549,9 +572,13 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
         session_factory: Any,
         *,
         principal: str = _GATEWAY_PRINCIPAL,
+        access: ArtifactAccessContext | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._principal = principal
+        self._read_access = (
+            ArtifactAccessContext.require(access) if access is not None else None
+        )
 
     async def admit_execution_plan_inputs(self, *, request, plan) -> None:
         identity = request.step_execution
@@ -577,6 +604,9 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
             binding=binding,
             workflow_id=identity.workflow_id,
             run_id=identity.run_id,
+            access=ArtifactAccessContext.for_execution(
+                identity.workflow_id, principal=self._principal
+            ),
         )
 
     @staticmethod
@@ -657,12 +687,11 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
         link_type: str,
         content_type: str = "application/octet-stream",
     ) -> str:
+        from moonmind.schemas.saved_work_models import saved_work_artifact_metadata
         from moonmind.workflows.temporal.artifacts import (
             TemporalArtifactRepository,
             TemporalArtifactService,
         )
-
-        from moonmind.schemas.saved_work_models import saved_work_artifact_metadata
 
         saved_metadata = {}
         if (
@@ -696,7 +725,8 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
                     namespace=execution_link.namespace,
                     workflow_id=execution_link.workflow_id,
                     run_id=execution_link.run_id,
-                    principal=self._principal,
+                    access=self._read_access
+                    or ArtifactAccessContext.for_service(self._principal),
                     link_type=link_type,
                 )
                 for candidate in existing:
@@ -711,8 +741,9 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
                         and str(getattr(candidate.status, "value", candidate.status)).lower() == "complete"
                     ):
                         _artifact, restored = await service.read(
-                            artifact_id=candidate.artifact_id, principal=self._principal,
-                            allow_restricted_raw=True,
+                            artifact_id=candidate.artifact_id,
+                            access=self._read_access
+                            or ArtifactAccessContext.for_service(self._principal),
                         )
                         if restored != payload:
                             raise OmnigentArtifactError("Remote checkpoint differs from the saved candidate")
@@ -733,8 +764,9 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
                     },
                 )
                 _artifact, restored = await service.read(
-                    artifact_id=completed.artifact_id, principal=self._principal,
-                    allow_restricted_raw=True,
+                    artifact_id=completed.artifact_id,
+                    access=self._read_access
+                    or ArtifactAccessContext.for_service(self._principal),
                 )
                 if restored != payload:
                     raise OmnigentArtifactError("Remote checkpoint differs from the saved candidate")
@@ -768,15 +800,43 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
     async def read_text(self, artifact_ref: str) -> str:
         return (await self.read_bytes(artifact_ref)).decode("utf-8")
 
-    async def restore_checkpoint(self, *, restore_request, authority_root):
-        from moonmind.workflows.temporal.artifacts import TemporalArtifactRepository, TemporalArtifactService
-        from moonmind.workflows.temporal.runtime.checkpoint_restore import ManagedCheckpointRestoreService
+    async def restore_checkpoint(
+        self, *, restore_request, authority_root, access: ArtifactAccessContext
+    ):
+        from moonmind.schemas.checkpoint_restore_models import (
+            ManagedWorkspaceRestoreRequest,
+        )
+        from moonmind.workflows.temporal.artifacts import (
+            TemporalArtifactAuthorizationError,
+            TemporalArtifactRepository,
+            TemporalArtifactService,
+        )
+        from moonmind.workflows.temporal.runtime.checkpoint_restore import (
+            ManagedCheckpointRestoreService,
+        )
+
+        request = (
+            restore_request
+            if isinstance(restore_request, ManagedWorkspaceRestoreRequest)
+            else ManagedWorkspaceRestoreRequest.model_validate(restore_request)
+        )
+        access = ArtifactAccessContext.require(access)
+        if (
+            access.execution_principal
+            != f"workflow:{request.recovery_identity.workflow_id}"
+        ):
+            raise TemporalArtifactAuthorizationError(
+                "restore context differs from its admitted execution"
+            )
         async with self._session_factory() as session:
             service = ManagedCheckpointRestoreService(
                 authority_root=authority_root,
                 artifact_service=TemporalArtifactService(TemporalArtifactRepository(session)),
             )
-            return await service.restore(restore_request, admitted_principal=self._principal)
+            return await service.restore(
+                request,
+                access=access,
+            )
 
     async def read_bytes(self, artifact_ref: str) -> bytes:
         from moonmind.workflows.temporal.artifacts import (
@@ -788,8 +848,8 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
             service = TemporalArtifactService(TemporalArtifactRepository(session))
             _artifact, payload = await service.read(
                 artifact_id=self._artifact_id(artifact_ref),
-                principal=self._principal,
-                allow_restricted_raw=True,
+                access=self._read_access
+                or ArtifactAccessContext.for_service(self._principal),
             )
         return payload
 
@@ -853,8 +913,9 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
             service = TemporalArtifactService(TemporalArtifactRepository(session))
             _artifact, payload = await service.read(
                 artifact_id=artifact_id,
-                principal=self._principal,
-                admitted_principal=f"workflow:{workflow_id}",
+                access=ArtifactAccessContext.for_execution(
+                    workflow_id, principal=self._principal
+                ),
             )
         return payload
 
@@ -908,6 +969,9 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
                     TemporalArtifactService(TemporalArtifactRepository(session)),
                     manifest_id,
                     workflow_id=identity.workflow_id,
+                    access=ArtifactAccessContext.for_execution(
+                        identity.workflow_id, principal=self._principal
+                    ),
                 )
         if artifact_id not in admitted_ids:
             raise OmnigentArtifactError(
@@ -989,9 +1053,7 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
         self,
         *,
         artifact_id: str,
-        principal: str,
-        admitted_principal: str | None = None,
-        allow_restricted_raw: bool = False,
+        access: ArtifactAccessContext,
         chunk_size: int,
     ) -> tuple[Any, Any]:
         """Expose the bounded artifact stream used by workspace projection."""
@@ -1005,9 +1067,7 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
             service = TemporalArtifactService(TemporalArtifactRepository(session))
             return await service.read_chunks(
                 artifact_id=self._artifact_id(artifact_id),
-                principal=principal,
-                admitted_principal=admitted_principal,
-                allow_restricted_raw=allow_restricted_raw,
+                access=access,
                 chunk_size=chunk_size,
             )
 
@@ -1015,8 +1075,7 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
         self,
         *,
         artifact_id: str,
-        principal: str,
-        admitted_principal: str | None = None,
+        access: ArtifactAccessContext,
     ) -> tuple[Any, ...]:
         """Expose artifact links so attachment authority is verified pre-launch."""
 
@@ -1029,8 +1088,7 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
             service = TemporalArtifactService(TemporalArtifactRepository(session))
             return await service.get_metadata(
                 artifact_id=self._artifact_id(artifact_id),
-                principal=principal,
-                admitted_principal=admitted_principal,
+                access=access,
             )
 
 

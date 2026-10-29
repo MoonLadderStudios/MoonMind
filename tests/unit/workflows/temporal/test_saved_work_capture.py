@@ -59,6 +59,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactService,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+from tests.artifact_access import access_for_test
 
 
 def _request(*, digest: str, key: str = "saved-work-1:capture") -> dict[str, object]:
@@ -261,18 +262,21 @@ async def test_failed_capture_preserves_uploads_without_listing_saved_work(
         for artifact in uploaded:
             assert artifact.status is TemporalArtifactStatus.COMPLETE
             _metadata, payload = await service.read(
-                artifact_id=artifact.artifact_id, principal="system"
+                artifact_id=artifact.artifact_id, access=access_for_test("system")
             )
             assert payload
         record_root = activities._run_store.store_root / "checkpoint_captures"
         assert not list(record_root.glob("*.json"))
         # COMPLETE upload identity is not evidence of a committed saved result.
-        assert await service.list_for_execution(
-            namespace="saved-work-capture-test",
-            workflow_id="wf-1",
-            run_id="run-1",
-            principal="system",
-        ) == []
+        assert (
+            await service.list_for_execution(
+                namespace="saved-work-capture-test",
+                workflow_id="wf-1",
+                run_id="run-1",
+                access=access_for_test("system"),
+            )
+            == []
+        )
 
 
 @pytest.mark.asyncio
@@ -305,7 +309,7 @@ async def test_capture_links_manifest_last_and_retries_failed_linking(
             namespace="saved-work-capture-test",
             workflow_id="wf-1",
             run_id="run-1",
-            principal="system",
+            access=access_for_test("system"),
         )
         assert listed
         assert all(
@@ -319,7 +323,7 @@ async def test_capture_links_manifest_last_and_retries_failed_linking(
             namespace="saved-work-capture-test",
             workflow_id="wf-1",
             run_id="run-1",
-            principal="system",
+            access=access_for_test("system"),
         )
         ids = {artifact.artifact_id for artifact in listed}
         assert result["savedWorkRef"] in ids
@@ -328,7 +332,7 @@ async def test_capture_links_manifest_last_and_retries_failed_linking(
         # Retry preserves the original failed attempt's recoverable content.
         for artifact in uploaded:
             _metadata, payload = await service.read(
-                artifact_id=artifact.artifact_id, principal="system"
+                artifact_id=artifact.artifact_id, access=access_for_test("system")
             )
             assert payload
         assert (

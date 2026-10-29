@@ -2,12 +2,15 @@
 
 import hashlib
 import json
+from dataclasses import replace
 from unittest.mock import AsyncMock
 
 import pytest
+from temporalio.testing import ActivityEnvironment
 
 from moonmind.workflows.skills.acceptance_contract import acceptance_evidence
 from moonmind.workflows.temporal import agent_result_payloads as payloads
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.workflows import run as run_module
 from tests.unit.workflows.skills.test_acceptance_source_binding import (  # noqa: F401
     _disclose_unverified,
@@ -59,14 +62,28 @@ async def test_large_projection_is_read_before_parent_acceptance(
     parent._execute_kwargs_for_route = lambda _: {}
 
     async def read(_name, request, **_kwargs):
-        assert request.principal == "workflow:owner"
+        assert _name == "artifact.read"
+        assert "principal" not in request.model_dump()
+        assert ArtifactAccessContext.for_activity().execution_principal == "workflow:owner"
         if failure == "unreadable":
             raise ValueError("Report is unreadable")
         if failure == "reference":
             raise ValueError("Wrong report reference is inaccessible")
         return raw + b" " if failure == "bytes" else raw
 
-    activity = AsyncMock(side_effect=read)
+    environment = ActivityEnvironment()
+    environment.info = replace(
+        environment.info,
+        namespace="default",
+        workflow_namespace="default",
+        workflow_id="owner",
+        workflow_run_id="owner-run",
+    )
+
+
+    async def dispatch(name, request, **kwargs):
+        return await environment.run(read, name, request, **kwargs)
+    activity = AsyncMock(side_effect=dispatch)
     monkeypatch.setattr(run_module, "execute_typed_activity", activity)
     if failure:
         with pytest.raises(ValueError):

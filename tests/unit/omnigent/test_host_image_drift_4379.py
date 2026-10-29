@@ -2,6 +2,8 @@
 
 import pytest
 
+from tests.artifact_access import access_for_test
+
 
 @pytest.mark.asyncio
 async def test_foreign_repository_compile_fails_with_actionable_evidence(
@@ -59,6 +61,7 @@ async def test_foreign_repository_compile_fails_with_actionable_evidence(
             task_input_snapshot_ref="art_request_1",
             task_input_snapshot_digest="sha256:" + "1" * 64,
             execution_plan_store=_PlanStore(object()),
+            access=access_for_test("user-1"),
         )
     message = str(exc.value)
     assert old_ref[:32] in message

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call
@@ -39,6 +40,7 @@ from api_service.services.recurring_workflows_service import (
     RecurringWorkflowsService,
     RecurringWorkflowValidationError,
 )
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal.client import ScheduleTriggerResult
 from moonmind.workflows.temporal.schedule_mapping import make_scheduled_workflow_id_base
 from moonmind.workflows.temporal.schedule_errors import ScheduleNotFoundError
@@ -374,7 +376,7 @@ async def test_create_definition_compiles_agent_profile_snapshot_separately(
                 if explicit_configuration
                 else None
             ),
-            actor=SimpleNamespace(id=uuid4()),
+            actor=OperatorAdmission(via="loopback"),
         )
 
     # The created target is provenance, not a pin: fresh occurrences follow
@@ -505,7 +507,7 @@ async def test_create_definition_compiles_a_plan_for_a_default_omnigent_runtime(
                 },
             },
             policy=None,
-            actor=SimpleNamespace(id=uuid4()),
+            actor=OperatorAdmission(via="loopback"),
         )
 
     default_resolver.assert_awaited_once()
@@ -623,7 +625,7 @@ async def test_create_definition_failure_after_admission_leaves_no_definition(
                         },
                     },
                     policy=None,
-                    actor=SimpleNamespace(id=uuid4()),
+                    actor=OperatorAdmission(via="loopback"),
                 )
             await session.rollback()
 
@@ -828,7 +830,7 @@ async def test_update_definition_admits_an_omnigent_edit_through_the_plan_owner(
                 "initialParameters": edited_parameters,
             },
             expected_version=definition.version,
-            actor=SimpleNamespace(id=uuid4()),
+            actor=OperatorAdmission(via="loopback"),
         )
 
     admission.default_resolver.assert_awaited_once()
@@ -872,7 +874,7 @@ async def test_update_definition_leaves_a_managed_default_edit_plan_free(
                 "workflowType": "MoonMind.UserWorkflow",
                 "initialParameters": {"task": {"instructions": "Edited job"}},
             },
-            actor=SimpleNamespace(id=uuid4()),
+            actor=OperatorAdmission(via="loopback"),
         )
 
     admission.default_resolver.assert_not_awaited()
@@ -917,7 +919,7 @@ async def test_update_definition_rejects_an_unadmittable_omnigent_edit_unchanged
                     "workflowType": "MoonMind.UserWorkflow",
                     "initialParameters": {"task": {"instructions": "Edited"}},
                 },
-                actor=SimpleNamespace(id=uuid4()),
+                actor=OperatorAdmission(via="loopback"),
             )
 
         mock_temporal_adapter.update_schedule.assert_not_called()
@@ -981,14 +983,14 @@ async def test_authored_omnigent_snapshot_without_plan_cannot_bypass_admission(
                     owner_user_id=None,
                     target=target,
                     policy=None,
-                    actor=SimpleNamespace(id=uuid4()),
+                    actor=OperatorAdmission(via="loopback"),
                 )
             else:
                 await service.update_definition(
                     definition,
                     name="Rejected edit",
                     target=target,
-                    actor=SimpleNamespace(id=uuid4()),
+                    actor=OperatorAdmission(via="loopback"),
                 )
 
         mock_temporal_adapter.create_schedule.assert_not_awaited()
@@ -1053,14 +1055,14 @@ async def test_snapshot_only_schedule_edit_preserves_verified_frozen_authority(
             )
             with pytest.raises(RecurringWorkflowValidationError, match="snapshot"):
                 await service.update_definition(
-                    definition, target=target, actor=SimpleNamespace(id=uuid4())
+                    definition, target=target, actor=OperatorAdmission(via="loopback")
                 )
             admission.compile_plan.assert_not_awaited()
             assert definition.target == stored_target
             mock_temporal_adapter.update_schedule.assert_not_awaited()
         else:
             updated = await service.update_definition(
-                definition, target=target, actor=SimpleNamespace(id=uuid4())
+                definition, target=target, actor=OperatorAdmission(via="loopback")
             )
             admission.compile_plan.assert_awaited_once()
             compiled = admission.compile_plan.await_args.kwargs
@@ -3028,13 +3030,26 @@ async def test_mm3788_update_definition_accepts_a_target_owned_by_its_runtime(
 # ---- #3833: schedules pin their runtime-provider target ----
 
 
+@lru_cache
+def _schedule_plan(digest_char: str):
+    from moonmind.omnigent.harness_platform.planner import compile_execution_plan
+    from tests.unit.omnigent.test_plan_and_realizer_dispatch import _codex_plan_inputs
+
+    inputs = _codex_plan_inputs()
+    inputs["model_qualified_id"] = f"schedule-fixture-{digest_char}"
+    inputs["resolved_skills"] = inputs["resolved_skills"].model_copy(
+        update={"resolvedSkillSetRef": "artifact:art_skills"}
+    )
+    return compile_execution_plan(**inputs)
+
+
 def _schedule_plan_binding(digest_char: str) -> dict[str, object]:
-    digest = digest_char * 64
+    plan = _schedule_plan(digest_char)
     return {
-        "planRef": f"omnigent-execution-plan:sha256:{digest}",
-        "planDigest": f"sha256:{digest}",
-        "planArtifactRef": "artifact:plan",
-        "taskInputSnapshotRef": "artifact:task-input",
+        "planRef": plan.planRef,
+        "planDigest": "sha256:" + plan.planRef.rsplit(":", 1)[-1],
+        "planArtifactRef": "artifact:art_plan",
+        "taskInputSnapshotRef": "artifact:art_task_input",
         "taskInputSnapshotDigest": "sha256:" + "a" * 64,
     }
 
@@ -3066,8 +3081,8 @@ def _stub_compiled_plan(
     compiled = SimpleNamespace(
         envelope=SimpleNamespace(payload=SimpleNamespace()),
         binding=OmnigentExecutionPlanBinding.model_validate(binding),
-        artifact_refs=("artifact:plan",),
-        resolved_skillset_ref="artifact:skills",
+        artifact_refs=("artifact:art_plan",),
+        resolved_skillset_ref="artifact:art_skills",
         runtime_provider_rollout=dict(rollout) if rollout is not None else None,
     )
     compile_mock = AsyncMock(return_value=compiled)
@@ -3086,12 +3101,39 @@ def _pinned_schedule_service(
 ):
     target["initialParameters"]["agentProfileSnapshot"] = target["agentProfileSnapshot"]
     session = AsyncMock(spec=AsyncSession)
+    artifacts = {
+        artifact_id: TemporalArtifact(
+            artifact_id=artifact_id,
+            created_by_principal="system",
+            sha256="a" * 64,
+            status=TemporalArtifactStatus.COMPLETE,
+            hard_deleted_at=None,
+        )
+        for artifact_id in ("art_plan", "art_task_input", "art_skills")
+    }
 
-    async def get_record(model, _record_id):
-        from api_service.db.models import TemporalArtifact
+    async def execute(statement):
+        artifact_id = statement.compile().params.get("artifact_id_1")
+        return SimpleNamespace(
+            scalars=lambda: SimpleNamespace(first=lambda: artifacts.get(artifact_id))
+        )
+
+    session.execute = AsyncMock(side_effect=execute)
+
+    async def get_record(model, record_id):
+        from api_service.db.models import OmnigentExecutionPlanRecord, TemporalArtifact
 
         if model is TemporalArtifact:
-            return SimpleNamespace(created_by_principal="system", sha256="a" * 64)
+            return artifacts.get(record_id)
+        if model is OmnigentExecutionPlanRecord:
+            plan = _schedule_plan("1")
+            if record_id != plan.planRef:
+                return None
+            return OmnigentExecutionPlanRecord(
+                schema_version=plan.schemaVersion,
+                plan_ref=plan.planRef,
+                payload_json=plan.payload.model_dump(mode="json", by_alias=True),
+            )
         return SimpleNamespace(profile_id="codex_openai_oauth")
 
     session.get = AsyncMock(side_effect=get_record)

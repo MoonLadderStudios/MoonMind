@@ -39,6 +39,7 @@ from moonmind.workflows.temporal.artifacts import (
 )
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from moonmind.workflows.temporal.worker_runtime import _container_job_evidence_publisher
+from tests.artifact_access import access_for_test
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -82,7 +83,9 @@ async def test_long_owner_publishes_and_reads_job_evidence(
                 TemporalArtifactRepository(session),
                 store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
             )
-            jobs = ContainerJobService(session, artifacts=artifacts)
+            jobs = ContainerJobService(
+                session, artifacts=artifacts, artifact_access=access_for_test(principal)
+            )
             record, _ = await jobs.repository.create_or_replay(
                 owner=request.owner, request=request.request
             )
@@ -124,7 +127,9 @@ async def test_long_owner_publishes_and_reads_job_evidence(
                 TemporalArtifactRepository(session),
                 store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
             )
-            jobs = ContainerJobService(session, artifacts=artifacts)
+            jobs = ContainerJobService(
+                session, artifacts=artifacts, artifact_access=access_for_test(principal)
+            )
             logs = await jobs.logs(owner=request.owner, job_id=request.job_id)
             assert any("1 passed" in line.text for line in logs.entries)
             outputs = await jobs.artifacts(owner=request.owner, job_id=request.job_id)

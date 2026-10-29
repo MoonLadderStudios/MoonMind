@@ -2,7 +2,6 @@
 
 import asyncio
 from datetime import timedelta
-from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
@@ -28,6 +27,7 @@ from api_service.db.models import (
     TemporalExecutionCanonicalRecord,
     TemporalExecutionRecord,
 )
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal import github_issue_claim_lease as claim_leases
 from moonmind.workflows.temporal import retry_from_step, story_output_tools
 from moonmind.workflows.temporal.client import TemporalClientAdapter
@@ -172,7 +172,7 @@ async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
             await register_deployment_search_attributes(env)
             owner = str(uuid4())
             workflow_id = f"mm:{uuid4()}"
-            user = SimpleNamespace(id=owner, is_superuser=False)
+            user = OperatorAdmission(via="loopback")
             if expired_claim:
                 state, github, _ = journey
                 claims = IssueClaimStore(
@@ -362,7 +362,7 @@ async def test_retry_is_refused_when_installed_code_cannot_replay_the_kept_histo
             await register_deployment_search_attributes(env)
             owner = str(uuid4())
             workflow_id = f"mm:{uuid4()}"
-            user = SimpleNamespace(id=owner, is_superuser=False)
+            user = OperatorAdmission(via="loopback")
             service = TemporalExecutionService(
                 session, client_adapter=TemporalClientAdapter(env.client)
             )

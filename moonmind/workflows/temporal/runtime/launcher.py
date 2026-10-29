@@ -18,18 +18,17 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, cast
 
+from moonmind.auth.github_credentials import GitHubCredentialSource
 from moonmind.repositories.lore_adapter import LoreRepositoryProviderAdapter
-from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
-
 from moonmind.schemas.agent_runtime_models import (
+    TERMINAL_AGENT_RUN_STATES,
     AgentExecutionRequest,
     AgentTerminalContract,
     ManagedRunRecord,
     ManagedRuntimeProfile,
-    TERMINAL_AGENT_RUN_STATES,
     resolve_execution_budget,
 )
-from moonmind.auth.github_credentials import GitHubCredentialSource
+from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
 from moonmind.security.execution_fanout_capabilities import (
     EXECUTION_FANOUT_REQUIRED_CAPABILITY,
     ExecutionFanoutCapabilityError,
@@ -42,13 +41,21 @@ from moonmind.security.mcp_tool_capabilities import (
     mint_mcp_tool_capability,
     requires_jira_tools,
 )
+from moonmind.utils.logging import SecretRedactor, redact_sensitive_text
+from moonmind.utils.workspace_paths import (
+    atomic_write_text,
+    chown_tree,
+    ensure_directory,
+    open_directory,
+    read_regular_file,
+)
 from moonmind.workflows.executions.repository_contract import (
-    AuthoredLoreRepositoryTarget,
-    AuthoredRepositoryTarget,
-    CapabilityReadinessRegistry,
     DEFAULT_GIT_CONNECTION_REF,
     REPOSITORY_CREDENTIAL_UNAVAILABLE,
     REPOSITORY_REMOTE_TIP_MISMATCH,
+    AuthoredLoreRepositoryTarget,
+    AuthoredRepositoryTarget,
+    CapabilityReadinessRegistry,
     RepositoryClientEvidence,
     RepositoryClientPolicy,
     RepositoryConnection,
@@ -61,21 +68,17 @@ from moonmind.workflows.executions.repository_contract import (
     repository_name_from_value,
     resolve_selected_git_credential,
 )
-from moonmind.utils.logging import SecretRedactor, redact_sensitive_text
-from moonmind.utils.workspace_paths import atomic_write_text, chown_tree, ensure_directory, open_directory
-from moonmind.utils.workspace_paths import read_regular_file
 from moonmind.workflows.skills.run_projection import (
     append_remediation_attempt_context,
     load_resolved_skillset,
     materialize_run_skill_snapshot,
     prepend_skill_activation_summary,
-    step_execution_read_principal,
+    step_execution_artifact_access,
     verify_skill_projection,
 )
-from moonmind.workflows.temporal.jira_tool_hints import (
-    append_selected_jira_tool_hint,
-)
+from moonmind.workflows.temporal.jira_tool_hints import append_selected_jira_tool_hint
 
+from .git_auth import build_github_token_git_environment
 from .github_auth_broker import (
     GitHubAuthBrokerManager,
     build_github_socket_path,
@@ -83,8 +86,6 @@ from .github_auth_broker import (
     render_gh_wrapper_script,
     render_git_credential_helper_script,
 )
-from .git_auth import build_github_token_git_environment
-from .store import ManagedRunStore
 from .log_streamer import RuntimeLogStreamer
 from .managed_api_key_resolve import (
     SelectedGitHubAccess,
@@ -92,6 +93,7 @@ from .managed_api_key_resolve import (
     select_git_connection_for_launch,
     select_github_access_for_launch,
 )
+from .store import ManagedRunStore
 
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 #: Ambient GitHub token variables a worker environment may carry. Launches
@@ -2359,11 +2361,11 @@ class ManagedRuntimeLauncher:
         from moonmind.config.settings import settings as _mm_settings
 
         run_root = Path(resolved_workspace_path).absolute().parent
-        admitted_principal = step_execution_read_principal(request)
+        access = await step_execution_artifact_access(request)
         resolved_skillset = await load_resolved_skillset(
             self._artifact_service,
             skillset_ref,
-            admitted_principal=admitted_principal,
+            access=access,
         )
         params = request.parameters if isinstance(request.parameters, Mapping) else {}
         from moonmind.workflows.agent_skills.selection import selected_agent_skill
@@ -2395,7 +2397,7 @@ class ManagedRuntimeLauncher:
             projection_owner_uid=1000,
             projection_owner_gid=1000,
             project_adapter_aliases=selected_skill_name != "moonspec-verify",
-            admitted_principal=admitted_principal,
+            access=access,
         )
 
         await verify_skill_projection(
@@ -2689,7 +2691,9 @@ class ManagedRuntimeLauncher:
                 isinstance(parameters, Mapping)
                 and parameters.get("modelTier") is not None
             ):
-                from moonmind.workflows.executions.model_resolver import resolve_model_effort
+                from moonmind.workflows.executions.model_resolver import (
+                    resolve_model_effort,
+                )
 
                 launch_resolution = resolve_model_effort(
                     runtime_id=profile.runtime_id,

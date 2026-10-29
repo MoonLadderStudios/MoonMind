@@ -18,9 +18,11 @@ import subprocess
 import sys
 import tarfile
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from temporalio import activity
 
 from api_service.services.container_jobs import (
     ContainerJobAuthorizationError,
@@ -43,11 +45,17 @@ from moonmind.schemas.container_job_models import (
     ContainerJobFailureClass,
     ContainerJobSubmitRequest,
     OwnerIdentity,
+    container_job_workflow_id,
 )
 from moonmind.schemas.repository_scanner_models import ImageAssessment
 from moonmind.security.image_assessment_runner import run_image_assessment
 from moonmind.security.image_assessments import build_image_assessment_job
 from moonmind.security.scanner_feeds import publish_snapshot
+from moonmind.workflows.temporal import worker_runtime
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    TemporalArtifactService,
+)
 from moonmind.workflows.temporal.container_job_attachments import storage_for
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from moonmind.workflows.temporal.runtime.registry_auth_resolve import (
@@ -340,6 +348,20 @@ class Harness:
             artifacts=environment.service,
             authorizer=AUTHORIZER,
             backend_settings=settings(),
+            artifact_access=ArtifactAccessContext.for_service(
+                owner_artifact_principal(OWNER)
+            ),
+        )
+        # Inputs are read as the worker does: under the job's durable admission.
+        monkeypatch.setattr(
+            worker_runtime, "get_async_session_context", environment.sessions
+        )
+        monkeypatch.setattr(
+            worker_runtime,
+            "TemporalArtifactService",
+            lambda repo: TemporalArtifactService(
+                repo, store=environment.service._store
+            ),
         )
         self.published: dict[str, bytes] = {}
         self.commands: list[tuple] = []
@@ -413,7 +435,9 @@ class Harness:
             workspace_root=self.tmp_path,
             command_runner=daemon,
             evidence_publisher=self.publish,
-            artifact_reader=_container_job_artifact_reader(self.environment.service),
+            artifact_reader=_container_job_artifact_reader(
+                worker_runtime._ArtifactServiceProxy()
+            ),
             registry_auth_resolver=resolve,
             log_spool_root=self.tmp_path / "live",
             settings=settings(),
@@ -428,7 +452,15 @@ class Harness:
             resolvedWorkspaceRef=str(workspace),
             resolvedImageRef="sha256:" + "a" * 64,
         )
-        await backend.create_container(request)
+        # Inputs are captured inside the job's own Activity.
+        workflow_id = container_job_workflow_id(accepted.job_id)
+        with (
+            patch.object(activity, "in_activity", lambda: True),
+            patch.object(
+                activity, "info", lambda: SimpleNamespace(workflow_id=workflow_id)
+            ),
+        ):
+            await backend.create_container(request)
         create = [c for c in self.commands if c[0] == "create"][-1]
         # The runner sees the container environment the launch declared.
         for key in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"):
@@ -676,7 +708,8 @@ async def test_generated_sbom_is_retained_reloaded_and_reassessed_with_newer_dat
     assert "Trivy inventories packages" in generated["inventoryScope"]
     # Reload the retained standard SBOM through the owner's artifact authority.
     _, reloaded = await environment.service.read(
-        artifact_id=retained["artifactRef"], principal=owner_artifact_principal(OWNER)
+        artifact_id=retained["artifactRef"],
+        access=ArtifactAccessContext.for_service(owner_artifact_principal(OWNER)),
     )
     document = json.loads(reloaded)
     assert document["bomFormat"] == "CycloneDX"

@@ -15,6 +15,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from tests.artifact_access import access_for_test
 
 
 class ArtifactWorkers:
@@ -48,8 +49,7 @@ class ArtifactWorkers:
         async with self.sessions() as session:
             _, content = await self.service(session).read(
                 artifact_id=ref.removeprefix("artifact://"),
-                principal=principal,
-                allow_restricted_raw=True,
+                access=access_for_test(principal),
             )
             return content
 

@@ -13,6 +13,7 @@ from moonmind.schemas.container_job_models import (
 )
 from moonmind.security import repository_scanner_runner
 from moonmind.security.repository_scanners import RepositoryScan, build_scanner_job
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 
 OWNER = OwnerIdentity(principalType="user", principalId="operator")
 
@@ -23,14 +24,15 @@ class _Artifacts:
         self.status = status
         self.size = size
 
-    async def get_metadata(self, *, artifact_id, principal):
+    async def get_metadata(self, *, artifact_id, access):
+        (principal,) = access.candidates
         self.calls.append((artifact_id, principal))
         if principal != "user:operator" or artifact_id != "art_01OWNED":
             raise PermissionError("artifact is not readable")
         artifact = SimpleNamespace(
             status=SimpleNamespace(value=self.status), size_bytes=self.size
         )
-        return artifact, [], False, None
+        return artifact, [], False, SimpleNamespace(raw_access_allowed=True)
 
 
 def _submission(*attachments) -> ContainerJobSubmitRequest:
@@ -48,9 +50,12 @@ def _submission(*attachments) -> ContainerJobSubmitRequest:
     )
 
 
-def _service(artifacts) -> ContainerJobService:
+def _service(artifacts, owner=OWNER) -> ContainerJobService:
     service = ContainerJobService.__new__(ContainerJobService)
     service._artifacts = artifacts
+    service._artifact_access = ArtifactAccessContext.for_service(
+        f"{owner.principal_type}:{owner.principal_id}"
+    )
     service._capability = None
     service._backend_settings = SimpleNamespace(workload_profiles=())
     return service
@@ -88,7 +93,7 @@ async def test_owner_readable_complete_artifact_is_admitted():
 async def test_unreadable_or_unusable_artifacts_are_refused_before_side_effects(
     artifacts, owner, ref, match
 ):
-    service = _service(artifacts)
+    service = _service(artifacts, owner)
     # Refusal happens before durable identity: no repository or Temporal
     # dependency exists on this service.
     with pytest.raises(ValueError, match=match):
@@ -133,6 +138,8 @@ async def test_temporal_submission_admits_artifacts_with_the_artifact_store(
 ):
     from contextlib import asynccontextmanager
 
+    from temporalio import activity
+
     import api_service.db.base as db_base
     import moonmind.workflows as workflows
     from moonmind.workflows.temporal.activity_runtime import (
@@ -169,6 +176,10 @@ async def test_temporal_submission_admits_artifacts_with_the_artifact_store(
     monkeypatch.setattr(db_base, "get_async_session_context", session_context)
     monkeypatch.setattr(workflows, "get_temporal_artifact_service", artifact_service)
     monkeypatch.setattr(ContainerJobService, "submit", submit)
+    monkeypatch.setattr(activity, "in_activity", lambda: True)
+    monkeypatch.setattr(
+        activity, "info", lambda: SimpleNamespace(workflow_id="submitter")
+    )
     request = _submission({"name": "image", "artifactRef": "art_01OWNED"})
 
     await TemporalAgentRuntimeActivities.container_job_submit(

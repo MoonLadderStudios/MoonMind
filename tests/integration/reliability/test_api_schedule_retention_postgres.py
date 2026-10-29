@@ -23,6 +23,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactService,
 )
 from moonmind.workflows.temporal.service import TemporalExecutionService
+from tests.artifact_access import access_for_test
 from tests.integration import test_execution_input_admission_postgres as admission
 from tests.integration.test_execution_start_admission import _submit
 from tests.unit.omnigent.test_admitted_input_authority import _put
@@ -122,6 +123,7 @@ async def test_api_create_and_saved_schedule_edit_share_inputs_without_deadlock(
             payload=plan.model_dump(mode="json", by_alias=True),
         )
         return plans.PersistedOmnigentExecutionPlan(
+            artifact_access=kwargs["access"],
             envelope=plan,
             binding=OmnigentExecutionPlanBinding(
                 planRef=plan.planRef,
@@ -282,7 +284,8 @@ async def test_api_create_and_saved_schedule_edit_share_inputs_without_deadlock(
             (skill_id, skill_body),
         ):
             _artifact, body = await reader.read(
-                artifact_id=artifact_id, principal=f"workflow:{execution.workflow_id}"
+                artifact_id=artifact_id,
+                access=access_for_test(f"workflow:{execution.workflow_id}"),
             )
             assert body == expected_body
             assert (

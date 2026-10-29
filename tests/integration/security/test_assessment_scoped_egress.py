@@ -38,6 +38,7 @@ from moonmind.security import scoped_egress
 from moonmind.security.repository_scanner_runner import run_scanner
 from moonmind.security.repository_scanners import RepositoryScan, build_scanner_job
 from moonmind.security.scoped_egress import render_scoped_proxy
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.container_job_attachments import storage_for
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 from moonmind.workflows.temporal.worker_runtime import _container_job_artifact_reader
@@ -262,8 +263,7 @@ async def test_web_assessment_reaches_only_its_admitted_origin(
     report = web.artifact_names(harness, accepted)["report"]["artifactRef"]
     _, body = await environment.service.read(
         artifact_id=report,
-        principal=web.owner_artifact_principal(web.OWNER),
-        allow_restricted_raw=True,
+        access=ArtifactAccessContext.for_execution("assessment"),
     )
     assert json.loads(body)["site"]
     # The job-owned gateway and networks are gone; the denial stays in evidence.
@@ -395,7 +395,7 @@ async def test_repository_job_stopped_through_its_admitted_path_keeps_evidence(
     # The finished native report survives the stop and the storage release.
     history = summary["nativeRefs"]["history"]
     _, body = await environment.service.read(
-        artifact_id=history, principal="workflow:assessment", allow_restricted_raw=True
+        artifact_id=history, access=ArtifactAccessContext.for_execution("assessment")
     )
     assert body and repo.MARKER.encode() not in body
     assert summary["results"]["history"]["findings"]

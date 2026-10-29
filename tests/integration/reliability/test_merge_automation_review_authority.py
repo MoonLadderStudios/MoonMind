@@ -1,30 +1,34 @@
 """Direct review Activities consume their owning execution's admitted connection."""
 
 from contextlib import asynccontextmanager
-from types import SimpleNamespace
+from dataclasses import replace
 from unittest.mock import AsyncMock
 
 import pytest
+from temporalio.testing import ActivityEnvironment
 
 from api_service.db import base, models
+from moonmind.omnigent.host_services.github_credentials import (
+    OmnigentGithubCredentialService,
+)
 from moonmind.workflows.adapters.github_service import (
     AutomatedReviewRequestResult,
     GitHubService,
     PullRequestReadinessResult,
 )
-from moonmind.workflows.temporal import activity_runtime
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalActivityRuntimeError,
     TemporalIntegrationActivities,
 )
-from moonmind.omnigent.host_services.github_credentials import OmnigentGithubCredentialService
 from tests.integration.reliability.test_repository_access_consumers_4676 import (
     _REPOSITORY,
     _WORKFLOW,
+)
+from tests.integration.reliability.test_repository_access_consumers_4676 import (
     repository_consumers as _repository_consumers,
 )
-from tests.unit.services.test_omnigent_execution_plan_service import (
-    _ready_opencode_image_pair,  # noqa: F401
+from tests.unit.services.test_omnigent_execution_plan_service import (  # noqa: F401
+    _ready_opencode_image_pair,
 )
 
 repository_consumers = _repository_consumers
@@ -42,6 +46,18 @@ _CONFIG = {
         "requireFreshReviewForEveryHead": True,
     },
 }
+
+
+@pytest.fixture
+def review_activity():
+    environment = ActivityEnvironment()
+    environment.info = replace(
+        environment.info,
+        activity_id="review-activity",
+        workflow_id=_GATE,
+        workflow_run_id="gate-run-1",
+    )
+    return environment
 
 
 async def _admit(context, monkeypatch, *, owner_id="user-1"):
@@ -63,9 +79,6 @@ async def _admit(context, monkeypatch, *, owner_id="user-1"):
             yield session
 
     monkeypatch.setattr(base, "get_async_session_context", session_context)
-    monkeypatch.setattr(activity_runtime.temporal_activity, "info", lambda: SimpleNamespace(
-        activity_id="review-activity", workflow_id=_GATE, workflow_run_id="gate-run-1",
-    ))
     return {
         "finishMode": "review_only",
         "parentWorkflowId": _GATE,
@@ -94,7 +107,10 @@ def _install_github(monkeypatch):
 
 @pytest.mark.parametrize("owner_id", ["user-1", "system"])
 async def test_direct_review_request_and_readiness_use_admitted_connection(
-    repository_consumers, monkeypatch, owner_id,
+    repository_consumers,
+    monkeypatch,
+    owner_id,
+    review_activity,
 ):
     context = repository_consumers
     payload = await _admit(context, monkeypatch, owner_id=owner_id)
@@ -110,16 +126,22 @@ async def test_direct_review_request_and_readiness_use_admitted_connection(
 
     monkeypatch.setattr(OmnigentGithubCredentialService, "acquire_repository_use", capture)
 
-    result = await activities.merge_automation_request_automated_review(payload)
+    result = await review_activity.run(
+        activities.merge_automation_request_automated_review, payload
+    )
     assert result["status"] == "requested"
     assert post.await_args.kwargs["github_token"] == "selected-credential-canary"
     assert "credential-canary" not in str(result)
 
-    readiness = await activities.merge_automation_evaluate_readiness({
-        **payload, "parentWorkflowId": _WORKFLOW,
-        "pullRequest": {"repo": _REPOSITORY, "number": 4719, "headSha": _HEAD},
-        "mergeAutomationConfig": _CONFIG,
-    })
+    readiness = await review_activity.run(
+        activities.merge_automation_evaluate_readiness,
+        {
+            **payload,
+            "parentWorkflowId": _WORKFLOW,
+            "pullRequest": {"repo": _REPOSITORY, "number": 4719, "headSha": _HEAD},
+            "mergeAutomationConfig": _CONFIG,
+        },
+    )
     assert read.await_args.kwargs["github_token"] == "selected-credential-canary"
     assert "credential-canary" not in str(readiness)
     assert [operation for operation, _value in acquired] == ["review_request", "read"]
@@ -127,14 +149,18 @@ async def test_direct_review_request_and_readiness_use_admitted_connection(
     assert all(value.binding.execution_owner == _GATE for _operation, value in acquired)
 
     # Reconciled ledger success still validates the immutable parent authority.
-    recorded = await activities.merge_automation_request_automated_review(payload)
+    recorded = await review_activity.run(
+        activities.merge_automation_request_automated_review, payload
+    )
     assert recorded["status"] == "recorded"
     assert post.await_count == 1
     forged = {**payload, "parentExecutionPlan": {
         **payload["parentExecutionPlan"], "planArtifactRef": "artifact:unrelated",
     }}
     with pytest.raises((TemporalActivityRuntimeError, ValueError)):
-        await activities.merge_automation_request_automated_review(forged)
+        await review_activity.run(
+            activities.merge_automation_request_automated_review, forged
+        )
     assert post.await_count == 1
 
 
@@ -143,26 +169,40 @@ async def test_direct_review_request_and_readiness_use_admitted_connection(
     ("ledger_owner", "request"),
 ])
 async def test_review_authority_is_bound_to_actual_activity_gate(
-    repository_consumers, monkeypatch, mismatch, operation,
+    repository_consumers,
+    monkeypatch,
+    mismatch,
+    operation,
+    review_activity,
 ):
     context = repository_consumers
     payload = await _admit(context, monkeypatch)
     post, read = _install_github(monkeypatch)
     if mismatch == "actual_gate":
-        monkeypatch.setattr(activity_runtime.temporal_activity, "info", lambda: SimpleNamespace(
-            activity_id="review-activity", workflow_id="unrelated-gate", workflow_run_id="gate-run-1",
-        ))
+        review_activity.info = replace(
+            review_activity.info, workflow_id="unrelated-gate"
+        )
     else:
         payload["parentWorkflowId"] = "unrelated-ledger-owner"
     activities = TemporalIntegrationActivities()
     with pytest.raises((TemporalActivityRuntimeError, ValueError)):
         if operation == "request":
-            await activities.merge_automation_request_automated_review(payload)
+            await review_activity.run(
+                activities.merge_automation_request_automated_review, payload
+            )
         else:
-            await activities.merge_automation_evaluate_readiness({
-                **payload, "pullRequest": {"repo": _REPOSITORY, "number": 4719, "headSha": _HEAD},
-                "mergeAutomationConfig": _CONFIG,
-            })
+            await review_activity.run(
+                activities.merge_automation_evaluate_readiness,
+                {
+                    **payload,
+                    "pullRequest": {
+                        "repo": _REPOSITORY,
+                        "number": 4719,
+                        "headSha": _HEAD,
+                    },
+                    "mergeAutomationConfig": _CONFIG,
+                },
+            )
     post.assert_not_awaited()
     read.assert_not_awaited()
     async with context.sessions() as session:
@@ -177,22 +217,35 @@ async def test_review_authority_is_bound_to_actual_activity_gate(
     ("parentRunId", "another-run"),
 ])
 async def test_review_request_rejects_unadmitted_authority_before_ledger(
-    repository_consumers, monkeypatch, field, value,
+    repository_consumers,
+    monkeypatch,
+    field,
+    value,
+    review_activity,
 ):
     context = repository_consumers
     payload = await _admit(context, monkeypatch)
     post, _read = _install_github(monkeypatch)
     with pytest.raises((TemporalActivityRuntimeError, ValueError)):
-        await TemporalIntegrationActivities().merge_automation_request_automated_review(
+        await review_activity.run(
+            TemporalIntegrationActivities().merge_automation_request_automated_review,
             {**payload, field: value, "githubToken": "caller-token-canary"},
         )
     post.assert_not_awaited()
     bad = {**payload, field: value, "githubToken": "caller-token-canary"}
     with pytest.raises((TemporalActivityRuntimeError, ValueError)):
-        await TemporalIntegrationActivities().merge_automation_evaluate_readiness({
-            **bad, "pullRequest": {"repo": bad["repository"], "number": 4719, "headSha": _HEAD},
-            "mergeAutomationConfig": _CONFIG,
-        })
+        await review_activity.run(
+            TemporalIntegrationActivities().merge_automation_evaluate_readiness,
+            {
+                **bad,
+                "pullRequest": {
+                    "repo": bad["repository"],
+                    "number": 4719,
+                    "headSha": _HEAD,
+                },
+                "mergeAutomationConfig": _CONFIG,
+            },
+        )
     _read.assert_not_awaited()
     async with context.sessions() as session:
         from sqlalchemy import select
@@ -201,28 +254,82 @@ async def test_review_request_rejects_unadmitted_authority_before_ledger(
 
 @pytest.mark.parametrize("repository_consumers", ["https://github.example.com"], indirect=True)
 async def test_review_activity_rejects_enterprise_binding_before_public_api(
-    repository_consumers, monkeypatch,
+    repository_consumers,
+    monkeypatch,
+    review_activity,
 ):
     payload = await _admit(repository_consumers, monkeypatch)
     post, read = _install_github(monkeypatch)
     with pytest.raises((TemporalActivityRuntimeError, ValueError)):
-        await TemporalIntegrationActivities().merge_automation_request_automated_review(payload)
+        await review_activity.run(
+            TemporalIntegrationActivities().merge_automation_request_automated_review,
+            payload,
+        )
     post.assert_not_awaited()
     read.assert_not_awaited()
 
 
 async def test_recorded_review_request_rechecks_selected_connection_revocation(
-    repository_consumers, monkeypatch,
+    repository_consumers,
+    monkeypatch,
+    review_activity,
 ):
     context = repository_consumers
     payload = await _admit(context, monkeypatch)
     post, _read = _install_github(monkeypatch)
     activities = TemporalIntegrationActivities()
-    await activities.merge_automation_request_automated_review(payload)
+    await review_activity.run(
+        activities.merge_automation_request_automated_review, payload
+    )
     async with context.sessions() as session:
         connection = await session.get(models.RepositoryConnectionRecord, "selected-repository")
         connection.lifecycle = "disabled"
         await session.commit()
     with pytest.raises((TemporalActivityRuntimeError, ValueError)):
-        await activities.merge_automation_request_automated_review(payload)
+        await review_activity.run(
+            activities.merge_automation_request_automated_review, payload
+        )
     assert post.await_count == 1
+
+
+@pytest.mark.parametrize("principal", ["user-1", "system", "operator"])
+@pytest.mark.parametrize("operation", ["request", "readiness"])
+async def test_direct_review_without_activity_admission_has_no_effects(
+    repository_consumers,
+    monkeypatch,
+    principal,
+    operation,
+):
+    payload = {
+        **await _admit(repository_consumers, monkeypatch),
+        "principal": principal,
+    }
+    post, read = _install_github(monkeypatch)
+    activities = TemporalIntegrationActivities()
+    with pytest.raises(RuntimeError, match="Not in activity context"):
+        if operation == "request":
+            await activities.merge_automation_request_automated_review(payload)
+        else:
+            await activities.merge_automation_evaluate_readiness(
+                {
+                    **payload,
+                    "pullRequest": {
+                        "repo": _REPOSITORY,
+                        "number": 4719,
+                        "headSha": _HEAD,
+                    },
+                    "mergeAutomationConfig": _CONFIG,
+                }
+            )
+    post.assert_not_awaited()
+    read.assert_not_awaited()
+    async with repository_consumers.sessions() as session:
+        from sqlalchemy import select
+
+        assert (
+            not (
+                await session.execute(select(models.MergeAutomationReviewRequestRecord))
+            )
+            .scalars()
+            .all()
+        )

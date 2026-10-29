@@ -34,6 +34,8 @@ from api_service.services.presets.catalog import (
 )
 from api_service.services.presets.save import PresetSaveService
 from moonmind.config.settings import settings
+from moonmind.security.operator_admission import OperatorAdmission
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.service import TemporalExecutionService
 from tests.helpers.step_type_payloads import preset_step, skill_step, tool_step
 
@@ -172,7 +174,6 @@ async def test_mm1171_preset_runtime_tier_intent_is_validated_and_preserved(tmp_
 
 async def test_github_issue_3796_preset_tier_resolves_per_profile_policy(tmp_path):
     """MoonLadderStudios/MoonMind#3796: prove one preset is tier-portable."""
-    user_id = uuid4()
     profiles = [
         ManagedAgentProviderProfile(
             profile_id="portable-codex",
@@ -264,13 +265,7 @@ async def test_github_issue_3796_preset_tier_resolves_per_profile_policy(tmp_pat
                         SimpleNamespace(run_id="run-portable-claude"),
                     ]
                 )
-                user = SimpleNamespace(
-                    id=user_id,
-                    email="mm3796@example.com",
-                    is_active=True,
-                    is_superuser=False,
-                    roles=[],
-                )
+                user = OperatorAdmission(via="preset-test")
                 outcomes = []
                 for profile in profiles:
                     created = (
@@ -289,6 +284,7 @@ async def test_github_issue_3796_preset_tier_resolves_per_profile_policy(tmp_pat
                             user=user,
                             session=session,
                             principal_context={},
+                            access=ArtifactAccessContext.for_operator(user),
                         )
                     )
                     launch_runtime = created.input_parameters["workflow"]["steps"][0][

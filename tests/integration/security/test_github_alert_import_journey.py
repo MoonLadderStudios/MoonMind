@@ -15,6 +15,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from tests.artifact_access import access_for_test
 from tests.helpers.repository_connections import (
     github_pat_connection,
     github_repository_assignment,
@@ -143,19 +144,13 @@ def request(**alerts):
 
 
 async def execution_bytes(service, workflow_id="assessment"):
+    access = access_for_test(f"workflow:{workflow_id}")
     rows = await service.list_for_execution(
-        namespace="default",
-        workflow_id=workflow_id,
-        run_id="run",
-        principal=f"workflow:{workflow_id}",
+        namespace="default", workflow_id=workflow_id, run_id="run", access=access
     )
     bodies = []
     for row in rows:
-        _, body = await service.read(
-            artifact_id=row.artifact_id,
-            principal=f"workflow:{workflow_id}",
-            allow_restricted_raw=True,
-        )
+        _, body = await service.read(artifact_id=row.artifact_id, access=access)
         bodies.append(body)
     return bodies
 

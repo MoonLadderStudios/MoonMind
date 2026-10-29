@@ -23,6 +23,7 @@ from api_service.db.models import (
 from moonmind.config.settings import settings
 from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal.activity_catalog import publication_task_queue
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.service import TemporalExecutionService
 from tests.integration import (
@@ -68,15 +69,17 @@ async def _submit(sessions, adapter, payload, *, fail_confirmation=False):
         service = TemporalExecutionService(session, client_adapter=adapter)
         service._enforce_worker_code_freshness = AsyncMock()
         service._sync_projection_best_effort = AsyncMock(side_effect=lambda r: r)
+        admission = OperatorAdmission(via="loopback")
         return await executions.create_execution(
             payload=deepcopy(payload),
             service=service,
             session=session,
-            user=OperatorAdmission(via="loopback"),
+            user=admission,
             _submit_enabled=None,
             principal_context={},
             authorization=None,
             execution_fanout=None,
+            access=ArtifactAccessContext.for_operator(admission),
         )
 
 
@@ -332,16 +335,19 @@ async def test_admitted_create_recovers_one_original_temporal_start(
                 )
                 assert links and {link.run_id for link in links} == {actual_run_id}
                 service = TemporalExecutionService(session, client_adapter=adapter)
+                admission = OperatorAdmission(via="loopback")
+                access = ArtifactAccessContext.for_operator(admission)
                 detail = await executions.describe_execution(
                     workflow_id=workflow_id,
                     response=Response(),
                     source="temporal",
                     service=service,
                     session=session,
-                    user=OperatorAdmission(via="loopback"),
+                    user=admission,
                     temporal_client=env.client,
                     authorization=None,
                     execution_fanout=None,
+                    access=access,
                 )
                 assert detail.actions.can_rerun
                 assert detail.actions.can_edit_for_rerun
@@ -351,8 +357,9 @@ async def test_admitted_create_recovers_one_original_temporal_start(
                 )
                 restored = await executions._exact_rerun_parameters_from_snapshot(
                     session=session,
-                    user=OperatorAdmission(via="loopback"),
+                    user=admission,
                     record=record,
+                    access=access,
                 )
                 assert restored["workflow"]["instructions"] == "Keep original inputs"
                 assert restored["workflow"]["title"] == "Original admission"

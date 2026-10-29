@@ -34,6 +34,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from tests.artifact_access import access_for_test
 
 
 @pytest.mark.asyncio
@@ -166,7 +167,7 @@ async def test_mixed_plan_provisions_only_model_credentials(
             )
             _, payload = await artifact_service.read(
                 artifact_id=handles[0].attestationRef.removeprefix("artifact:"),
-                principal="service:credential-test",
+                access=access_for_test("service:credential-test"),
             )
             assert json.loads(payload)["secretCopied"] is False
         await service.cleanup_all(handles)

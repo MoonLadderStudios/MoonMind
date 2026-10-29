@@ -12,7 +12,9 @@ from api_service.services.checkpoint_branch_turn_execution import (
     build_branch_turn_execution_identity,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
-from moonmind.workflows.temporal.activity_runtime import _verified_artifact_parent_scope
+from moonmind.workflows.temporal.activity_runtime import (
+    _verified_artifact_parent_access,
+)
 from moonmind.workflows.temporal.workflows.agent_run import (
     TEMPORAL_PARENT_ARTIFACT_HANDOFF_PATCH_ID,
     MoonMindAgentRun,
@@ -21,13 +23,18 @@ from moonmind.workflows.temporal.workflows.agent_run import (
 
 @activity.defn(name="test.parent_artifact_scope")
 async def _parent_scope(metadata: dict) -> dict:
-    scope = await _verified_artifact_parent_scope(
+    scope = await _verified_artifact_parent_access(
         info=activity.info(),
         parent_workflow_id=metadata["parentWorkflowId"],
         parent_run_id=metadata["parentRunId"],
         parent_temporal_run_id=metadata.get("parentTemporalRunId"),
     )
-    return {**metadata, "verifiedScope": scope}
+    return {
+        **metadata,
+        "verifiedScope": scope.execution_principal,
+        "operator": scope.is_operator,
+        "recovery": scope.operator_recovery,
+    }
 
 
 async def _publish(request_payload: dict, *, legacy: bool = False) -> dict:
@@ -131,15 +138,19 @@ async def test_parent_uuid_and_semantic_identity_replay_without_ancestry_relaxat
                 if generation == "current":
                     assert result["parentTemporalRunId"] == actual_run_id
                     assert result["verifiedScope"] == f"workflow:{identity.workflow_id}"
+                    assert not result["operator"] and not result["recovery"]
                 else:
                     assert "parentTemporalRunId" not in result
                     assert result["verifiedScope"] == f"workflow:{identity.workflow_id}"
+                    assert not result["operator"] and not result["recovery"]
                 child_handle = env.client.get_workflow_handle(f"{identity.workflow_id}:agent")
                 history = await child_handle.fetch_history()
                 (tmp_path / f"{generation}-child.json").write_text(history.to_json())
                 histories.append(history)
                 if semantic_identity and generation == "retained":
-                    from temporalio.api.workflowservice.v1 import ResetWorkflowExecutionRequest
+                    from temporalio.api.workflowservice.v1 import (
+                        ResetWorkflowExecutionRequest,
+                    )
 
                     finish_id = next(
                         event.event_id for event in history.events
@@ -158,6 +169,7 @@ async def test_parent_uuid_and_semantic_identity_replay_without_ancestry_relaxat
                     reset_handle = env.client.get_workflow_handle(history.workflow_id, run_id=reset.run_id)
                     reset_result = await reset_handle.result()
                     assert reset_result["verifiedScope"] == f"workflow:{identity.workflow_id}"
+                    assert not reset_result["operator"] and not reset_result["recovery"]
                     assert reset_result["parentRunId"] == identity.semantic_run_id
                     reset_history = await reset_handle.fetch_history()
                     assert reset_history.events[0].workflow_execution_started_event_attributes.original_execution_run_id != reset.run_id
@@ -183,12 +195,15 @@ async def test_retained_semantic_parent_requires_exact_recorded_step(monkeypatch
 
     from temporalio.api.history.v1 import History, HistoryEvent
     from temporalio.api.workflowservice.v1 import (
-        DescribeNamespaceResponse, DescribeWorkflowExecutionResponse,
+        DescribeNamespaceResponse,
+        DescribeWorkflowExecutionResponse,
         GetWorkflowExecutionHistoryResponse,
     )
     from temporalio.converter import DataConverter
 
-    from moonmind.workflows.temporal.activity_runtime import ArtifactParentAuthorityUnavailable
+    from moonmind.workflows.temporal.activity_runtime import (
+        ArtifactParentAuthorityUnavailable,
+    )
 
     identity = build_branch_turn_execution_identity(
         branch_id="branch", branch_turn_id="retained", logical_step_id="verify", ordinal=1,
@@ -247,12 +262,17 @@ async def test_retained_semantic_parent_requires_exact_recorded_step(monkeypatch
         namespace="default", workflow_service=service, data_converter=converter,
     ))
     async def lookup():
-        return await _verified_artifact_parent_scope(
-            info=SimpleNamespace(namespace="default", workflow_id=identity.agent_run_workflow_id,
-                                 workflow_run_id="child-run"),
-            parent_workflow_id=identity.workflow_id, parent_run_id=identity.semantic_run_id,
+        return await _verified_artifact_parent_access(
+            info=SimpleNamespace(
+                namespace="default",
+                workflow_id=identity.agent_run_workflow_id,
+                workflow_run_id="child-run",
+            ),
+            parent_workflow_id=identity.workflow_id,
+            parent_run_id=identity.semantic_run_id,
             parent_temporal_run_id=(
-                "wrong-temporal-run" if case == "explicit_temporal_mismatch"
+                "wrong-temporal-run"
+                if case == "explicit_temporal_mismatch"
                 else "parent-uuid" if explicit_uuid else None
             ),
         )
@@ -260,9 +280,12 @@ async def test_retained_semantic_parent_requires_exact_recorded_step(monkeypatch
         with pytest.raises(ArtifactParentAuthorityUnavailable):
             await lookup()
     else:
-        assert await lookup() == (
-            f"workflow:{identity.workflow_id}" if case in {"own", "reset_origin"} else None
-        )
+        access = await lookup()
+        if case in {"own", "reset_origin"}:
+            assert access.execution_principal == f"workflow:{identity.workflow_id}"
+            assert not access.is_operator and not access.operator_recovery
+        else:
+            assert access is None
     if case == "explicit_temporal_mismatch":
         service.get_workflow_execution_history.assert_not_awaited()
     if case == "own":
@@ -275,6 +298,7 @@ async def test_retained_semantic_parent_requires_exact_recorded_step(monkeypatch
 @pytest.mark.parametrize("parent_case", ["own", "different_workflow", "different_namespace", "none"])
 def test_temporal_parent_metadata_comes_only_from_workflow_history(monkeypatch, parent_case):
     from types import SimpleNamespace
+
     from temporalio.workflow import ParentInfo
 
     request = AgentExecutionRequest.model_validate({

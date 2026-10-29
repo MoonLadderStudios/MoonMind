@@ -15,6 +15,7 @@ from moonmind.omnigent.settings import (
     omnigent_admission_mode,
     omnigent_requires_certification,
 )
+from tests.artifact_access import access_for_test
 
 
 def test_omitted_blank_and_shipped_default_are_ordinary() -> None:
@@ -260,8 +261,8 @@ def test_ordinary_rollout_ignores_missing_evidence(monkeypatch: pytest.MonkeyPat
 
     from moonmind.omnigent.runtime_provider_rollout import (
         RolloutReason,
-        RolloutSelectionContext,
         RolloutRule,
+        RolloutSelectionContext,
         _readiness_denials,
     )
 
@@ -284,8 +285,8 @@ def test_ordinary_rollout_ignores_missing_evidence(monkeypatch: pytest.MonkeyPat
 def test_strict_rollout_still_denies_missing_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
     from moonmind.omnigent.runtime_provider_rollout import (
         RolloutReason,
-        RolloutSelectionContext,
         RolloutRule,
+        RolloutSelectionContext,
         _readiness_denials,
     )
 
@@ -311,7 +312,9 @@ async def test_ordinary_plan_loader_does_not_require_certificate() -> None:
 
     from types import SimpleNamespace
 
-    from moonmind.workflows.temporal.activities import omnigent_session_activities as activities
+    from moonmind.workflows.temporal.activities import (
+        omnigent_session_activities as activities,
+    )
 
     generations = _generations()
     persisted = SimpleNamespace(
@@ -329,7 +332,9 @@ async def test_ordinary_plan_loader_does_not_require_certificate() -> None:
         )
     )
     # No certificate artifacts exist; ordinary load must still succeed.
-    await activities._validate_plan_admission_authority(persisted)
+    await activities._validate_plan_admission_authority(
+        persisted, access=access_for_test("service:omnigent-session")
+    )
 
 
 def _support_identity(*, materializer_ref: str, build_tag: str) -> dict:
@@ -417,6 +422,7 @@ def test_unknown_image_fails_at_runtime_launch_boundaries_not_certificate_matchi
     verdicts consults certificate matching.
     """
 
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
     from moonmind.omnigent.harness_platform.support import validate_realizer
     from moonmind.omnigent.host_image_drift import (
         compatible_deployed_fallback,
@@ -425,7 +431,6 @@ def test_unknown_image_fails_at_runtime_launch_boundaries_not_certificate_matchi
     from moonmind.omnigent.opencode_runtime_validation import (
         OpenCodeProviderRuntimeValidationService,
     )
-    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 
     requested = "ghcr.io/moonmind/omnigent-host@sha256:" + "a1" * 32
     rebuilt = "ghcr.io/moonmind/omnigent-host@sha256:" + "b2" * 32
@@ -657,7 +662,9 @@ async def test_plan_reader_distinguishes_history_from_new_effect(
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
-    from moonmind.workflows.temporal.activities import omnigent_session_activities as activities
+    from moonmind.workflows.temporal.activities import (
+        omnigent_session_activities as activities,
+    )
 
     generations = _generations()
 
@@ -680,11 +687,13 @@ async def test_plan_reader_distinguishes_history_from_new_effect(
     # History load: the artifact store must not even be consulted.
     forbidden_reader = AsyncMock(side_effect=AssertionError("certificate must not be read"))
     monkeypatch.setattr(activities, "_read_json_artifact", forbidden_reader)
-    await activities._validate_plan_admission_authority(_persisted(mode="ordinary"))
+    await activities._validate_plan_admission_authority(
+        _persisted(mode="ordinary"), access=access_for_test("service:omnigent-session")
+    )
     forbidden_reader.assert_not_awaited()
 
     # New effect under strict semantics: tampered evidence still fails.
-    async def _tampered(_ref: str) -> dict:
+    async def _tampered(_ref: str, *, access) -> dict:
         return {"tampered": True}
 
     monkeypatch.setattr(activities, "_read_json_artifact", _tampered)
@@ -695,14 +704,17 @@ async def test_plan_reader_distinguishes_history_from_new_effect(
                 ref="artifact:art_strict",
                 digest="sha256:" + "00" * 32,
                 tier="supported",
-            )
+            ),
+            access=access_for_test("service:omnigent-session"),
         )
 
     # Substantive gates still apply to ordinary history loads.
     stale = _persisted(mode="ordinary")
     stale.payload.admissionAuthority.featureGeneration = "ancient-generation"
     with pytest.raises(ValueError, match="feature generation"):
-        await activities._validate_plan_admission_authority(stale)
+        await activities._validate_plan_admission_authority(
+            stale, access=access_for_test("service:omnigent-session")
+        )
 
 
 @pytest.mark.asyncio
@@ -719,7 +731,9 @@ async def test_strict_certificate_failure_is_distinguishable_for_resume(
 
     from types import SimpleNamespace
 
-    from moonmind.workflows.temporal.activities import omnigent_session_activities as activities
+    from moonmind.workflows.temporal.activities import (
+        omnigent_session_activities as activities,
+    )
 
     generations = _generations()
     persisted = SimpleNamespace(
@@ -737,12 +751,14 @@ async def test_strict_certificate_failure_is_distinguishable_for_resume(
         )
     )
 
-    async def _missing(_ref: str) -> dict:
+    async def _missing(_ref: str, *, access) -> dict:
         raise ValueError("artifact unavailable")
 
     monkeypatch.setattr(activities, "_read_json_artifact", _missing)
     with pytest.raises(activities._AdmissionCertificateError) as excinfo:
-        await activities._validate_plan_admission_authority(persisted)
+        await activities._validate_plan_admission_authority(
+            persisted, access=access_for_test("service:omnigent-session")
+        )
     assert isinstance(excinfo.value, ValueError)
 
 
@@ -758,7 +774,9 @@ async def test_resume_migration_refuses_strict_settings_and_explicit_strict(
 
     from types import SimpleNamespace
 
-    from moonmind.workflows.temporal.activities import omnigent_session_activities as activities
+    from moonmind.workflows.temporal.activities import (
+        omnigent_session_activities as activities,
+    )
 
     original = activities._AdmissionCertificateError("historical certificate gone")
 
@@ -806,6 +824,10 @@ async def test_resume_migrates_stranded_pre_upgrade_plan(
     repeated resume reissues the identical envelope instead of diverging.
     """
 
+    from moonmind.omnigent.harness_platform.stores import InMemoryExecutionPlanStore
+    from moonmind.workflows.temporal.activities import (
+        omnigent_session_activities as activities,
+    )
     from tests.unit.services.test_omnigent_execution_plan_service import (
         _OPENCODE_ALLOWED_LAUNCH_POLICIES,
         _ArtifactService,
@@ -814,8 +836,6 @@ async def test_resume_migrates_stranded_pre_upgrade_plan(
         _protected_support_evidence,
         default_launch_policy_ref,
     )
-    from moonmind.omnigent.harness_platform.stores import InMemoryExecutionPlanStore
-    from moonmind.workflows.temporal.activities import omnigent_session_activities as activities
 
     _ready_opencode_host_pair(monkeypatch)
     # Compile a strict plan, as the pre-upgrade fleet did.
@@ -850,7 +870,7 @@ async def test_resume_migrates_stranded_pre_upgrade_plan(
 
     import json
 
-    async def _read_artifact(ref: str) -> dict:
+    async def _read_artifact(ref: str, *, access) -> dict:
         try:
             return json.loads(artifacts.payloads[ref])
         except KeyError:
@@ -869,7 +889,9 @@ async def test_resume_migrates_stranded_pre_upgrade_plan(
     # After the upgrade the deployment is ordinary but the historical
     # certificate artifact is gone.
     monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "either")
-    migrated = await activities._load_verified_execution_plan(compiled.binding)
+    migrated = await activities._load_verified_execution_plan(
+        compiled.binding, access=access_for_test("service:omnigent-session")
+    )
 
     authority = migrated.payload.admissionAuthority
     assert authority.admissionMode == "ordinary"
@@ -887,7 +909,12 @@ async def test_resume_migrates_stranded_pre_upgrade_plan(
     assert await store.load(migrated.planRef) == migrated
     assert await store.load(compiled.envelope.planRef) == compiled.envelope
     # A repeated resume reissues the identical envelope (no divergence).
-    assert await activities._load_verified_execution_plan(compiled.binding) == migrated
+    assert (
+        await activities._load_verified_execution_plan(
+            compiled.binding, access=access_for_test("service:omnigent-session")
+        )
+        == migrated
+    )
 
 
 @pytest.mark.asyncio
@@ -896,6 +923,10 @@ async def test_resume_keeps_strict_failure_closed(
 ) -> None:
     """Explicit strict certification strands nothing silently -- it fails."""
 
+    from moonmind.omnigent.harness_platform.stores import InMemoryExecutionPlanStore
+    from moonmind.workflows.temporal.activities import (
+        omnigent_session_activities as activities,
+    )
     from tests.unit.services.test_omnigent_execution_plan_service import (
         _OPENCODE_ALLOWED_LAUNCH_POLICIES,
         _ArtifactService,
@@ -904,8 +935,6 @@ async def test_resume_keeps_strict_failure_closed(
         _protected_support_evidence,
         default_launch_policy_ref,
     )
-    from moonmind.omnigent.harness_platform.stores import InMemoryExecutionPlanStore
-    from moonmind.workflows.temporal.activities import omnigent_session_activities as activities
 
     _ready_opencode_host_pair(monkeypatch)
     monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "protected")
@@ -932,7 +961,7 @@ async def test_resume_keeps_strict_failure_closed(
         lambda _session_factory: store,
     )
 
-    async def _read_artifact(ref: str) -> dict:
+    async def _read_artifact(ref: str, *, access) -> dict:
         if ref == compiled.binding.plan_artifact_ref:
             return artifact_wire
         raise ValueError(f"artifact {ref} is unavailable")
@@ -940,7 +969,9 @@ async def test_resume_keeps_strict_failure_closed(
     monkeypatch.setattr(activities, "_read_json_artifact", _read_artifact)
 
     with pytest.raises(ValueError):
-        await activities._load_verified_execution_plan(compiled.binding)
+        await activities._load_verified_execution_plan(
+            compiled.binding, access=access_for_test("service:omnigent-session")
+        )
     # No migration attempt was persisted.
     assert await store.load(compiled.envelope.planRef) == compiled.envelope
 
@@ -1009,8 +1040,8 @@ def test_restart_queue_and_lost_ack_reconcile_without_duplication(
     from moonmind.omnigent.realizers.turn_delivery import canonical_turn_idempotency_key
     from moonmind.omnigent.runtime_provider_rollout import (
         RolloutReason,
-        RolloutSelectionContext,
         RolloutRule,
+        RolloutSelectionContext,
         _readiness_denials,
     )
     from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
@@ -1146,4 +1177,3 @@ def test_primary_failure_survives_reporting_and_cleanup_failure(
     evidence, tier = resolver.resolve_execution_evidence(object())
     assert evidence is None
     assert tier == "uncertified"
-

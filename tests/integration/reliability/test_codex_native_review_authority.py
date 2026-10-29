@@ -4,20 +4,29 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import select
 from temporalio.testing import ActivityEnvironment
 
 from api_service.db import models
 from api_service.services import omnigent_execution_plan_service as compiler
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.workflows.temporal.activities import omnigent_session_activities as reader
+from moonmind.workflows.temporal.artifacts import (
+    TemporalArtifactAuthorizationError,
+    TemporalArtifactRepository,
+    TemporalArtifactService,
+)
 from moonmind.workflows.temporal.merge_automation_repository_access import (
     acquire_merge_automation_repository_credential,
 )
-from tests.integration.reliability.test_repository_access_consumers_4676 import (
+from tests.artifact_access import access_for_test
+from tests.integration.reliability.test_repository_access_consumers_4676 import (  # noqa: F401
     _REPOSITORY,
     _WORKFLOW,
-    _ready_opencode_image_pair,  # noqa: F401
+    _ready_opencode_image_pair,
     _target,
+)
+from tests.integration.reliability.test_repository_access_consumers_4676 import (
     repository_consumers as _repository_consumers,
 )
 from tests.unit.services.test_omnigent_execution_plan_service import (
@@ -91,6 +100,7 @@ async def _compile_native_review_plan(context, monkeypatch, tmp_path):
         authored_request_digest=digest,
         task_input_snapshot_ref=snapshot_ref,
         task_input_snapshot_digest=digest,
+        access=access_for_test("user-1"),
     )
     return compiled, parameters
 
@@ -182,6 +192,7 @@ async def test_native_authority_validates_effective_executable_plan(
 ):
     import copy
     import json
+
     from moonmind.workflows.temporal.activity_runtime import (
         TemporalActivityRuntimeError,
         TemporalPlanActivities,
@@ -195,11 +206,21 @@ async def test_native_authority_validates_effective_executable_plan(
     activities = TemporalPlanActivities(
         artifact_service=context.artifacts, planner=_build_runtime_planner()
     )
+    execution = {
+        "namespace": "default",
+        "workflow_id": _WORKFLOW,
+        "run_id": "native-run",
+        "link_type": "plan",
+    }
+    # Real planning receives this execution link from its workflow. Keep the
+    # same producer admission when invoking the implementation directly here.
     generated = await activities.plan_generate(
-        principal="user-1", parameters=parameters
+        principal="user-1", parameters=parameters, execution_ref=execution
     )
     ref = generated.plan_ref.artifact_id
-    _artifact, body = await context.artifacts.read(artifact_id=ref, principal="user-1")
+    _artifact, body = await context.artifacts.read(
+        artifact_id=ref, access=access_for_test("user-1")
+    )
     payload = json.loads(body)
     if change == "tool":
         payload["nodes"][0]["tool"]["name"] = "github.update_issue_status"
@@ -226,6 +247,16 @@ async def test_native_authority_validates_effective_executable_plan(
             artifact_class="workflow.plan",
             payload=payload,
         )
+        # Admit the fixture's replacement plan to the same execution so these
+        # cases reach executable-graph validation, rather than failing earlier
+        # on an unrelated artifact read. This is a producer-owned metadata link,
+        # not a permission inferred from the plan or its principal payload.
+        async with context.sessions() as session:
+            await TemporalArtifactService(
+                TemporalArtifactRepository(session)
+            ).link_artifact(
+                artifact_id=ref, principal="user-1", execution_ref=execution
+            )
     elif change == "prefixed_ref":
         ref = "artifact:" + ref
     elif change == "double_prefixed_ref":
@@ -252,6 +283,61 @@ async def test_native_authority_validates_effective_executable_plan(
             await environment.run(activities.plan_validate, **kwargs)
     else:
         assert await environment.run(activities.plan_validate, **kwargs) == ref
+
+
+@pytest.mark.parametrize("principal", ("user-1", "system", "operator"))
+@pytest.mark.parametrize("linked_workflow", (None, "unrelated-native-run"))
+async def test_native_plan_read_requires_actual_execution_admission(
+    repository_consumers, monkeypatch, tmp_path, principal, linked_workflow
+):
+    from moonmind.workflows.temporal.activity_runtime import TemporalPlanActivities
+    from moonmind.workflows.temporal.worker_runtime import _build_runtime_planner
+
+    context = repository_consumers
+    compiled, parameters = await _compile_native_review_plan(
+        context, monkeypatch, tmp_path
+    )
+    activities = TemporalPlanActivities(
+        artifact_service=context.artifacts, planner=_build_runtime_planner()
+    )
+    generated = await activities.plan_generate(
+        principal="user-1",
+        parameters=parameters,
+        execution_ref=(
+            {
+                "namespace": "default",
+                "workflow_id": linked_workflow,
+                "run_id": "unrelated-run",
+                "link_type": "plan",
+            }
+            if linked_workflow
+            else None
+        ),
+    )
+    environment = ActivityEnvironment()
+    environment.info = replace(
+        environment.info, workflow_id=_WORKFLOW, workflow_run_id="native-run"
+    )
+    with pytest.raises(TemporalArtifactAuthorizationError, match="cannot read"):
+        await environment.run(
+            activities.plan_validate,
+            plan_ref=generated.plan_ref,
+            principal=principal,
+            omnigent_execution_plan=compiled.binding.model_dump(by_alias=True),
+            execution_parameters=parameters,
+        )
+    async with context.sessions() as session:
+        row = await session.get(models.TemporalArtifact, generated.plan_ref.artifact_id)
+        assert row.created_by_principal == "user-1"
+        links = await session.scalars(
+            select(models.TemporalArtifactLink).where(
+                models.TemporalArtifactLink.artifact_id
+                == generated.plan_ref.artifact_id
+            )
+        )
+        assert [link.workflow_id for link in links] == (
+            [linked_workflow] if linked_workflow else []
+        )
 
 
 async def test_agent_binding_keeps_existing_effective_plan_behavior(

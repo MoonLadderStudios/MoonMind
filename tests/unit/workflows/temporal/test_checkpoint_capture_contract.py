@@ -25,6 +25,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from tests.artifact_access import access_for_test
 
 
 @pytest_asyncio.fixture
@@ -157,8 +158,7 @@ async def test_durable_capture_keeps_verified_bytes_and_execution_scope(
     ).step_checkpoint_create(request)
     artifact_id = result["checkpointRef"].removeprefix("artifact://")
     artifact, checkpoint_bytes = await service.read(
-        artifact_id=artifact_id,
-        principal="workflow:" + info.workflow_id,
+        artifact_id=artifact_id, access=access_for_test("workflow:" + info.workflow_id)
     )
     checkpoint = json.loads(checkpoint_bytes)
     identity = checkpoint["omnigentCheckpoint"]
@@ -189,7 +189,7 @@ async def test_durable_capture_keeps_verified_bytes_and_execution_scope(
         artifact_id=request["omnigentCheckpointCapture"]["externalStateRef"]
         .removeprefix("artifact:")
         .removeprefix("//"),
-        principal="workflow:" + info.workflow_id,
+        access=access_for_test("workflow:" + info.workflow_id),
     )
     assert original == external_bytes
 
@@ -207,7 +207,7 @@ async def test_capture_digest_adaptation_does_not_accept_malformed_evidence(
     ).step_checkpoint_create(request)
     _, raw = await service.read(
         artifact_id=result["checkpointRef"].removeprefix("artifact://"),
-        principal="workflow:" + info.workflow_id,
+        access=access_for_test("workflow:" + info.workflow_id),
     )
     checkpoint = json.loads(raw)
     if first_digest.startswith("sha256:"):
@@ -228,7 +228,7 @@ async def test_capture_cannot_read_another_workflows_artifacts(capture_artifacts
     ).step_checkpoint_create(request)
     _, raw = await service.read(
         artifact_id=result["checkpointRef"].removeprefix("artifact://"),
-        principal="workflow:" + info.workflow_id,
+        access=access_for_test("workflow:" + info.workflow_id),
     )
     checkpoint = json.loads(raw)
     assert "omnigentCheckpoint" not in checkpoint
@@ -264,7 +264,7 @@ async def test_checkpoint_keeps_structured_plan_identity(capture_artifacts):
     ).step_checkpoint_create(request)
     _, raw = await service.read(
         artifact_id=result["checkpointRef"].removeprefix("artifact://"),
-        principal="workflow:" + info.workflow_id,
+        access=access_for_test("workflow:" + info.workflow_id),
     )
     checkpoint = json.loads(raw)
     assert checkpoint["planRef"] == "art_plan"

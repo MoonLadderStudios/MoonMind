@@ -36,6 +36,7 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecordStore,
 )
 from moonmind.workflows.temporal.workflows import run as run_module
+from tests.artifact_access import access_for_test
 from tests.integration.reliability.helpers import load_replay
 
 pytestmark = [
@@ -135,14 +136,14 @@ async def test_verifier_stop_survives_publication_and_both_controllers(
             assert "remainingWork" not in projected
             _, persisted = await service.read(
                 artifact_id=projected["gateResultRef"],
-                principal="system:agent_runtime",
+                access=access_for_test("system:agent_runtime"),
             )
             assert json.loads(persisted)["recommendedNextAction"] == action
             assert json.loads(persisted)["remainingWork"] == payload["remainingWork"]
             assert projected["remainingWorkRef"] == projected["gateResultRef"]
             _, remaining_work_bytes = await service.read(
                 artifact_id=projected["remainingWorkRef"],
-                principal="system:agent_runtime",
+                access=access_for_test("system:agent_runtime"),
             )
             assert (
                 json.loads(remaining_work_bytes)["remainingWork"]
@@ -229,7 +230,7 @@ async def test_verifier_stop_survives_publication_and_both_controllers(
                 == "artifact://" + projected["gateResultRef"]
             )
             _, decision_bytes = await service.read(
-                artifact_id=decisions[0], principal="system:agent_runtime"
+                artifact_id=decisions[0], access=access_for_test("system:agent_runtime")
             )
             decision = json.loads(decision_bytes)
             assert decision["reason"] == f"verification_requested_{action}"
