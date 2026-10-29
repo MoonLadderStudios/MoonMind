@@ -20,6 +20,7 @@ from moonmind.workflows.temporal.activities import (
     omnigent_session_activities as admission,
 )
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
+from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from tests.artifact_access import access_for_test
 from tests.unit.services.test_omnigent_execution_plan_service import (  # noqa: F401 -- isolated deployment observation
     _ready_opencode_image_pair,
@@ -123,7 +124,8 @@ async def test_new_plan_reaches_registered_admission_without_writer_reader_sha_m
                 retained_reader.verify_execution_plan_envelope,
             )
 
-        async def read_artifact(ref):
+        async def read_artifact(ref, *, access: ArtifactAccessContext):
+            assert isinstance(access, ArtifactAccessContext)
             return json.loads(artifacts.payloads[ref])
 
         monkeypatch.setattr(admission, "_read_json_artifact", read_artifact)
@@ -257,7 +259,8 @@ async def test_stable_upstream_agent_source_survives_admission(tmp_path, monkeyp
 
         monkeypatch.setattr(base, "async_session_maker", maker)
 
-        async def read_artifact(ref):
+        async def read_artifact(ref, *, access: ArtifactAccessContext):
+            assert isinstance(access, ArtifactAccessContext)
             return json.loads(artifacts.payloads[ref])
 
         monkeypatch.setattr(admission, "_read_json_artifact", read_artifact)
@@ -338,7 +341,8 @@ async def test_plan_compiled_by_the_previous_writer_still_admits(tmp_path, monke
 
         monkeypatch.setattr(base, "async_session_maker", maker)
 
-        async def read_artifact(ref):
+        async def read_artifact(ref, *, access: ArtifactAccessContext):
+            assert isinstance(access, ArtifactAccessContext)
             return json.loads(artifacts.payloads[ref])
 
         monkeypatch.setattr(admission, "_read_json_artifact", read_artifact)

@@ -16046,7 +16046,7 @@ def test_describe_execution_includes_report_projection_when_latest_report_artifa
         rollback=AsyncMock(),
     )
     _override_temporal_client(app)
-    user = _override_user_dependencies(app, is_superuser=True)
+    _override_user_dependencies(app, is_superuser=True)
 
     primary_artifact = SimpleNamespace(
         artifact_id='art-primary',
@@ -16123,7 +16123,7 @@ def test_describe_execution_includes_report_projection_when_latest_report_artifa
             namespace='moonmind',
             workflow_id='mm:wf-1',
             run_id='run-2',
-            principal=str(user.id),
+            access=access_for_test("operator"),
             link_type='report.primary',
             latest_only=True,
         ),
@@ -16131,7 +16131,7 @@ def test_describe_execution_includes_report_projection_when_latest_report_artifa
             namespace='moonmind',
             workflow_id='mm:wf-1',
             run_id='run-2',
-            principal=str(user.id),
+            access=access_for_test("operator"),
             link_type='report.summary',
             latest_only=True,
         ),
@@ -16139,7 +16139,7 @@ def test_describe_execution_includes_report_projection_when_latest_report_artifa
             namespace='moonmind',
             workflow_id='mm:wf-1',
             run_id='run-2',
-            principal=str(user.id),
+            access=access_for_test("operator"),
             link_type='report.structured',
             latest_only=True,
         ),
@@ -16147,7 +16147,7 @@ def test_describe_execution_includes_report_projection_when_latest_report_artifa
             namespace='moonmind',
             workflow_id='mm:wf-1',
             run_id='run-2',
-            principal=str(user.id),
+            access=access_for_test("operator"),
             link_type='report.evidence',
             latest_only=True,
         ),
@@ -16198,7 +16198,7 @@ def test_describe_execution_report_projection_degrades_safely_when_no_report_exi
         rollback=AsyncMock(),
     )
     _override_temporal_client(app)
-    user = _override_user_dependencies(app, is_superuser=True)
+    _override_user_dependencies(app, is_superuser=True)
 
     artifact_service = SimpleNamespace(list_for_execution=AsyncMock(return_value=[]))
 
@@ -16216,7 +16216,7 @@ def test_describe_execution_report_projection_degrades_safely_when_no_report_exi
             namespace='moonmind',
             workflow_id='mm:wf-1',
             run_id='run-2',
-            principal=str(user.id),
+            access=access_for_test("operator"),
             link_type='report.primary',
             latest_only=True,
         ),
@@ -16224,7 +16224,7 @@ def test_describe_execution_report_projection_degrades_safely_when_no_report_exi
             namespace='moonmind',
             workflow_id='mm:wf-1',
             run_id='run-2',
-            principal=str(user.id),
+            access=access_for_test("operator"),
             link_type='report.summary',
             latest_only=True,
         ),
@@ -16232,7 +16232,7 @@ def test_describe_execution_report_projection_degrades_safely_when_no_report_exi
             namespace='moonmind',
             workflow_id='mm:wf-1',
             run_id='run-2',
-            principal=str(user.id),
+            access=access_for_test("operator"),
             link_type='report.structured',
             latest_only=True,
         ),
@@ -16240,7 +16240,7 @@ def test_describe_execution_report_projection_degrades_safely_when_no_report_exi
             namespace='moonmind',
             workflow_id='mm:wf-1',
             run_id='run-2',
-            principal=str(user.id),
+            access=access_for_test("operator"),
             link_type='report.evidence',
             latest_only=True,
         ),
@@ -16259,7 +16259,7 @@ def test_describe_execution_report_projection_ignores_incomplete_report_artifact
         rollback=AsyncMock(),
     )
     _override_temporal_client(app)
-    user = _override_user_dependencies(app, is_superuser=True)
+    _override_user_dependencies(app, is_superuser=True)
 
     pending_primary = SimpleNamespace(
         artifact_id='art-primary-pending',
@@ -16299,7 +16299,7 @@ def test_describe_execution_report_projection_ignores_incomplete_report_artifact
             namespace='moonmind',
             workflow_id='mm:wf-1',
             run_id='run-2',
-            principal=str(user.id),
+            access=access_for_test("operator"),
             link_type='report.primary',
             latest_only=True,
         ),
@@ -16307,7 +16307,7 @@ def test_describe_execution_report_projection_ignores_incomplete_report_artifact
             namespace='moonmind',
             workflow_id='mm:wf-1',
             run_id='run-2',
-            principal=str(user.id),
+            access=access_for_test("operator"),
             link_type='report.summary',
             latest_only=True,
         ),
@@ -16315,7 +16315,7 @@ def test_describe_execution_report_projection_ignores_incomplete_report_artifact
             namespace='moonmind',
             workflow_id='mm:wf-1',
             run_id='run-2',
-            principal=str(user.id),
+            access=access_for_test("operator"),
             link_type='report.structured',
             latest_only=True,
         ),
@@ -16323,7 +16323,7 @@ def test_describe_execution_report_projection_ignores_incomplete_report_artifact
             namespace='moonmind',
             workflow_id='mm:wf-1',
             run_id='run-2',
-            principal=str(user.id),
+            access=access_for_test("operator"),
             link_type='report.evidence',
             latest_only=True,
         ),
@@ -16716,6 +16716,9 @@ def test_exact_rerun_restores_publish_policy_from_authoritative_snapshot(
     app.dependency_overrides[get_instance_access] = lambda: OperatorAdmission(
         via="loopback"
     )
+    app.dependency_overrides[executions_module.get_artifact_access] = (
+        lambda: access_for_test("operator")
+    )
     session = AsyncMock()
     app.dependency_overrides[get_async_session] = lambda: session
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
@@ -16790,8 +16793,7 @@ def test_exact_rerun_restores_publish_policy_from_authoritative_snapshot(
     }
     artifact_service.read.assert_awaited_once_with(
         artifact_id="art-snapshot-source",
-        principal=instance_operator_principal(),
-        allow_restricted_raw=True,
+        access=access_for_test("operator"),
     )
     reuse_snapshot.assert_awaited_once()
 
@@ -16870,7 +16872,7 @@ def test_exact_rerun_rejects_incomplete_dynamic_skill_snapshot(
     service.describe_execution.return_value = source_record
     app.dependency_overrides[_get_service] = lambda: service
     _override_temporal_client(app)
-    user = _override_user_dependencies(app, is_superuser=True)
+    _override_user_dependencies(app, is_superuser=True)
     session = AsyncMock()
     app.dependency_overrides[get_async_session] = lambda: session
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
@@ -16928,8 +16930,7 @@ def test_exact_rerun_rejects_incomplete_dynamic_skill_snapshot(
     }
     artifact_service.read.assert_awaited_once_with(
         artifact_id="art_authoritative_input",
-        principal=str(user.id),
-        allow_restricted_raw=True,
+        access=access_for_test("operator"),
     )
     service.update_execution.assert_awaited_once()
     assert service.update_execution.await_args.kwargs["parameters_patch"][
