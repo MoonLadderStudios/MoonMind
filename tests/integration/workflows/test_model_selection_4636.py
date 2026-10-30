@@ -38,6 +38,7 @@ from moonmind.workflows.temporal.artifacts import (
     ArtifactAccessContext,
     ArtifactTransactionOwnership,
     LocalTemporalArtifactStore,
+    TemporalArtifactAuthorizationError,
 )
 from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.strategies.codex_cli import CodexCliStrategy
@@ -516,8 +517,23 @@ async def test_4636_schedule_artifact_cutoff_and_saved_reference_survive_restart
             )
             target = deepcopy(definition.target)
             target["initialParameters"]["workflow"]["title"] = "Unrelated saved edit"
+            # A direct service call without the router's admitted operator
+            # cannot adopt an unlinked legacy system-owned artifact.
+            before = deepcopy(definition.target)
+            with pytest.raises(
+                RecurringWorkflowValidationError, match="Cannot retain schedule input"
+            ) as rejected:
+                await service.update_definition(definition, target=target)
+            assert isinstance(
+                rejected.value.__cause__, TemporalArtifactAuthorizationError
+            )
+            assert definition.target == before
+            adapter.update_schedule.assert_not_awaited()
             await service.update_definition(
-                definition, name="Unrelated rename", target=target
+                definition,
+                name="Unrelated rename",
+                target=target,
+                actor=OperatorAdmission(via="model-selection-fixture"),
             )
             assert definition.target["inputArtifactRef"] == artifact.artifact_id
             _artifact, body = await artifacts.read(
@@ -800,6 +816,7 @@ async def test_4636_schedule_replaces_missing_artifact_and_reloads_new_launch_in
             await service.update_definition(
                 definition,
                 target={**definition.target, "inputArtifactRef": artifact.artifact_id},
+                actor=OperatorAdmission(via="model-selection-fixture"),
             )
             await session.commit()
         async with sessions() as session:
