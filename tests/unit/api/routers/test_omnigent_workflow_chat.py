@@ -19,32 +19,35 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.requests import ClientDisconnect, Request
 from starlette.websockets import WebSocketDisconnect
 
 from api_service.api.routers.omnigent_bridge import (
     CODE_SESSION_NOT_READY,
     WORKFLOW_CHAT_BINDINGS_MOUNT_PATH,
+    _claim_facade_message,
     _get_bridge_proxy,
     _get_bridge_store,
     _get_create_embedded_facade,
     _get_execution_service,
-    _claim_facade_message,
+    _read_bounded_facade_body,
+    _read_facade_json_body,
     _require_bridge_enabled,
     _validate_native_resource_path,
+    get_capability_registry,
     workflow_chat_router,
 )
-from api_service.api.routers.omnigent_bridge import get_capability_registry
 from api_service.api.workflow_chat_access import get_workflow_chat_access
 from moonmind.omnigent import native_ui_compat
 from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
     HOST_PROTOCOL_MODE_PROXY,
 )
-from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
 from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
 from moonmind.omnigent.control_plane.turn_admission import (
     CanonicalTurnAdmissionRejected,
 )
+from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
 from moonmind.omnigent.resume_decision import (
     SessionResumeDecision,
     SessionResumeOutcome,
@@ -1385,6 +1388,68 @@ def test_oversized_body_is_rejected() -> None:
 
     assert response.status_code == 413
     assert response.json()["detail"]["code"] == "omnigent_chat_payload_too_large"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reader", [_read_bounded_facade_body, _read_facade_json_body])
+async def test_interrupted_chat_body_is_a_client_error(reader) -> None:
+    messages = iter(
+        [
+            {
+                "type": "http.request",
+                "body": b'{"message":"private partial text',
+                "more_body": True,
+            },
+            {"type": "http.disconnect"},
+        ]
+    )
+
+    async def receive():
+        return next(messages)
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "headers": [(b"content-type", b"application/json")],
+        },
+        receive=receive,
+    )
+    with pytest.raises(WorkflowChatFacadeError) as raised:
+        await reader(request)
+
+    assert raised.value.status_code == 400
+    assert raised.value.code == "omnigent_chat_malformed_payload"
+    assert "interrupted" in str(raised.value)
+    assert "private partial text" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "suffix", ["events", "resources/environments/default/shell"]
+)
+def test_interrupted_chat_request_does_not_dispatch(monkeypatch, suffix) -> None:
+    async def interrupted_stream(_request):
+        yield b'{"message":"private partial text'
+        raise ClientDisconnect()
+
+    def forbidden_client(**_kwargs):
+        pytest.fail("incomplete request reached upstream transport")
+
+    monkeypatch.setattr(Request, "stream", interrupted_stream)
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.aiohttp.ClientSession", forbidden_client
+    )
+    client, proxy, store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/{suffix}"), json={"message": "hello"}
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "omnigent_chat_malformed_payload"
+    assert "private partial text" not in response.text
+    assert proxy.posted == []
+    assert not any(entry["kind"] == "claim" for entry in store.lifecycle)
 
 
 # --- Resources ---------------------------------------------------------------

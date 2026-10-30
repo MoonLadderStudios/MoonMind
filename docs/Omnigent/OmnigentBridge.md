@@ -260,7 +260,7 @@ Authentication is layered: the MoonMind user is authorized by MoonMind, the scop
 | Capability or policy denial; scan blocked or unavailable | typed rejection | Redacted findings; no provider send. |
 | Native boot or render failure; required transcript denied | visible unavailable state | Never an empty transcript; optional denials stay feature-local. |
 | Upstream unavailable, unreachable host, upstream auth failure | `integration_error` (auth non-retryable until fixed) | Requests that never connected are re-sent for up to 120s; answered requests are never replayed. |
-| Invalid create payload; first-message digest mismatch | `user_error` | |
+| Invalid payload; interrupted request body; first-message digest mismatch | `user_error` | Incomplete Workflow Chat bodies fail with 400 and are never forwarded. |
 | Ambiguous `posting`; stream disconnect | `integration_error` | Reconcile instead of reposting. |
 | Turn never started | `OMNIGENT_CURRENT_TURN_NOT_STARTED` | `retry_step_execution` (§9.3). |
 | Harness never started | Omnigent's code, e.g. `agent_startup_pending` | Ended Codex login becomes `reauthenticate`. |
