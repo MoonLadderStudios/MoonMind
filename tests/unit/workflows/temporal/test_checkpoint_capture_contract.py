@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
-from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from temporalio.testing import ActivityEnvironment
 
 from api_service.db.models import Base
 from moonmind.schemas.temporal_models import StepCheckpointCreateInput
-from moonmind.workflows.temporal import activity_runtime
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalActivityRuntimeError,
     TemporalCheckpointActivities,
@@ -22,6 +22,7 @@ from moonmind.workflows.temporal.activity_runtime import (
 from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
     LocalTemporalArtifactStore,
+    TemporalArtifactAuthorizationError,
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
@@ -29,18 +30,20 @@ from tests.artifact_access import access_for_test
 
 
 @pytest_asyncio.fixture
-async def capture_artifacts(tmp_path, monkeypatch):
+async def capture_artifacts(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/capture.db")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    info = SimpleNamespace(
+    environment = ActivityEnvironment()
+    environment.info = dataclasses.replace(
+        environment.info,
         namespace="default",
         workflow_id="mm:capture-owner",
         workflow_run_id="capture-run",
         activity_type="step_checkpoint.create_v2",
     )
-    monkeypatch.setattr(activity_runtime.temporal_activity, "info", lambda: info)
+    info = environment.info
     async with factory() as session:
         service = TemporalArtifactService(
             TemporalArtifactRepository(session),
@@ -66,7 +69,7 @@ async def capture_artifacts(tmp_path, monkeypatch):
             )
             return artifact.artifact_id
 
-        yield service, write, info
+        yield service, write, environment
     await engine.dispose()
 
 
@@ -91,6 +94,12 @@ async def capture_request(
     external_id = await write(external_bytes, workflow_id=evidence_workflow)
     manifest_bytes = b'{"status":"complete"}'
     manifest_id = await write(manifest_bytes, workflow_id=evidence_workflow)
+    # Foreign optional session evidence must not make the independently valid
+    # workspace unreadable. Required workspace/input dependencies remain owned.
+    workspace_manifest_id = await write(manifest_bytes)
+    task_id = await write(b'{"instructions":"Preserve captured request"}')
+    plan_id = await write(b'{"plan":"captured plan"}')
+    instruction_id = await write(b"captured instructions")
     workspace_bytes = b"captured workspace bytes"
     workspace_id = await write(workspace_bytes)
     request = {
@@ -101,14 +110,14 @@ async def capture_request(
             "executionOrdinal": 1,
         },
         "boundary": "after_execution",
-        "taskInputSnapshotRef": "art_task_input",
-        "planRef": "art_plan",
+        "taskInputSnapshotRef": task_id,
+        "planRef": plan_id,
         "workspace": {
             "kind": "worktree_archive",
             "baseCommit": "a" * 40,
             "headCommit": "a" * 40,
             "archiveRef": workspace_id,
-            "manifestRef": manifest_id,
+            "manifestRef": workspace_manifest_id,
             "archiveDigest": "sha256:" + hashlib.sha256(workspace_bytes).hexdigest(),
             "archiveBytes": len(workspace_bytes),
             "createdAt": "2026-10-09T04:18:00Z",
@@ -135,7 +144,7 @@ async def capture_request(
                 "workspaceId": "workspace-1",
                 "relativePath": "repo",
             },
-            "instructionRefs": ["artifact:art_instructions"],
+            "instructionRefs": ["artifact:" + instruction_id],
         },
         "createdAt": "2026-10-09T04:18:00Z",
         "idempotencyKey": "capture:after_execution",
@@ -149,13 +158,15 @@ async def test_durable_capture_keeps_verified_bytes_and_execution_scope(
     capture_artifacts,
     ref_prefix,
 ):
-    service, write, info = capture_artifacts
+    service, write, environment = capture_artifacts
+    info = environment.info
     request, external_bytes, manifest_bytes = await capture_request(
         write, ref_prefix=ref_prefix
     )
-    result = await TemporalCheckpointActivities(
-        artifact_service=service
-    ).step_checkpoint_create(request)
+    result = await environment.run(
+        TemporalCheckpointActivities(artifact_service=service).step_checkpoint_create,
+        request,
+    )
     artifact_id = result["checkpointRef"].removeprefix("artifact://")
     artifact, checkpoint_bytes = await service.read(
         artifact_id=artifact_id, access=access_for_test("workflow:" + info.workflow_id)
@@ -178,7 +189,12 @@ async def test_durable_capture_keeps_verified_bytes_and_execution_scope(
     )
     assert identity["terminalRef"] == "artifact://art_terminal"
     assert identity["diagnosticsRef"] == "artifact://art_diagnostics"
-    assert identity["instructionRefs"] == ["artifact://art_instructions"]
+    assert identity["instructionRefs"] == [
+        "artifact://"
+        + request["omnigentCheckpointCapture"]["instructionRefs"][0].removeprefix(
+            "artifact:"
+        )
+    ]
     assert identity["validation"]["valid"] is True
     links = await service._repository.list_links(artifact.artifact_id)
     assert [(link.workflow_id, link.run_id) for link in links] == [
@@ -200,11 +216,13 @@ async def test_capture_digest_adaptation_does_not_accept_malformed_evidence(
     capture_artifacts,
     first_digest,
 ):
-    service, write, info = capture_artifacts
+    service, write, environment = capture_artifacts
+    info = environment.info
     request, _, _ = await capture_request(write, first_digest=first_digest)
-    result = await TemporalCheckpointActivities(
-        artifact_service=service
-    ).step_checkpoint_create(request)
+    result = await environment.run(
+        TemporalCheckpointActivities(artifact_service=service).step_checkpoint_create,
+        request,
+    )
     _, raw = await service.read(
         artifact_id=result["checkpointRef"].removeprefix("artifact://"),
         access=access_for_test("workflow:" + info.workflow_id),
@@ -221,11 +239,13 @@ async def test_capture_digest_adaptation_does_not_accept_malformed_evidence(
 
 @pytest.mark.asyncio
 async def test_capture_cannot_read_another_workflows_artifacts(capture_artifacts):
-    service, write, info = capture_artifacts
+    service, write, environment = capture_artifacts
+    info = environment.info
     request, _, _ = await capture_request(write, evidence_workflow="mm:other-owner")
-    result = await TemporalCheckpointActivities(
-        artifact_service=service
-    ).step_checkpoint_create(request)
+    result = await environment.run(
+        TemporalCheckpointActivities(artifact_service=service).step_checkpoint_create,
+        request,
+    )
     _, raw = await service.read(
         artifact_id=result["checkpointRef"].removeprefix("artifact://"),
         access=access_for_test("workflow:" + info.workflow_id),
@@ -240,36 +260,68 @@ async def test_capture_cannot_read_another_workflows_artifacts(capture_artifacts
 async def test_capture_rejects_caller_identity_outside_actual_activity(
     capture_artifacts, field
 ):
-    service, write, _ = capture_artifacts
+    service, write, environment = capture_artifacts
     request, _, _ = await capture_request(write)
     request["identity"][field] = "other-execution"
     with pytest.raises(TemporalActivityRuntimeError, match="checkpoint.*identity"):
+        await environment.run(
+            TemporalCheckpointActivities(
+                artifact_service=service
+            ).step_checkpoint_create,
+            request,
+        )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_keeps_structured_plan_identity(capture_artifacts):
+    service, write, environment = capture_artifacts
+    info = environment.info
+    request, _, _ = await capture_request(write)
+    plan_id = request["planRef"]
+    request["planRef"] = {
+        "artifact_ref_v": 1,
+        "artifact_id": plan_id,
+        "sha256": "3" * 64,
+        "encryption": "none",
+    }
+    result = await environment.run(
+        TemporalCheckpointActivities(artifact_service=service).step_checkpoint_create,
+        request,
+    )
+    _, raw = await service.read(
+        artifact_id=result["checkpointRef"].removeprefix("artifact://"),
+        access=access_for_test("workflow:" + info.workflow_id),
+    )
+    checkpoint = json.loads(raw)
+    assert checkpoint["planRef"] == plan_id
+    assert checkpoint["planDigest"] == "sha256:" + "3" * 64
+    assert checkpoint["taskInputSnapshotRef"] == request["taskInputSnapshotRef"]
+    request["planRef"] = {"sha256": "3" * 64}
+    with pytest.raises(ValidationError, match="planRef.*artifact_id"):
+        StepCheckpointCreateInput.model_validate(request)
+
+
+@pytest.mark.asyncio
+async def test_durable_capture_requires_actual_activity_admission(capture_artifacts):
+    service, write, _ = capture_artifacts
+    request, _, _ = await capture_request(write)
+    with pytest.raises(TemporalArtifactAuthorizationError, match="Activity admission"):
         await TemporalCheckpointActivities(
             artifact_service=service
         ).step_checkpoint_create(request)
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_keeps_structured_plan_identity(capture_artifacts):
-    service, write, info = capture_artifacts
+async def test_durable_capture_cannot_seal_foreign_required_input(capture_artifacts):
+    service, write, environment = capture_artifacts
     request, _, _ = await capture_request(write)
-    request["planRef"] = {
-        "artifact_ref_v": 1,
-        "artifact_id": "art_plan",
-        "sha256": "3" * 64,
-        "encryption": "none",
-    }
-    result = await TemporalCheckpointActivities(
-        artifact_service=service
-    ).step_checkpoint_create(request)
-    _, raw = await service.read(
-        artifact_id=result["checkpointRef"].removeprefix("artifact://"),
-        access=access_for_test("workflow:" + info.workflow_id),
+    request["taskInputSnapshotRef"] = await write(
+        b"foreign task snapshot", workflow_id="mm:other-owner"
     )
-    checkpoint = json.loads(raw)
-    assert checkpoint["planRef"] == "art_plan"
-    assert checkpoint["planDigest"] == "sha256:" + "3" * 64
-    assert checkpoint["taskInputSnapshotRef"] == request["taskInputSnapshotRef"]
-    request["planRef"] = {"sha256": "3" * 64}
-    with pytest.raises(ValidationError, match="planRef.*artifact_id"):
-        StepCheckpointCreateInput.model_validate(request)
+    with pytest.raises(TemporalArtifactAuthorizationError):
+        await environment.run(
+            TemporalCheckpointActivities(
+                artifact_service=service
+            ).step_checkpoint_create,
+            request,
+        )
