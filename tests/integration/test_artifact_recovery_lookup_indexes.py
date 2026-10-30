@@ -314,13 +314,11 @@ async def test_retained_history_startup_admission_and_retention(
     from moonmind.config.settings import settings
     from tests.integration.reliability.test_schedule_input_retention_postgres import (
         adapter,
+        expired_input,
         write_schedule,
     )
     from tests.unit.workflows.temporal.test_saved_work_retention_4017 import _service
-    from tests.unit.workflows.temporal.test_schedule_input_retention import (
-        FUTURE,
-        expired_input,
-    )
+    from tests.unit.workflows.temporal.test_schedule_input_retention import FUTURE
 
     monkeypatch.setenv("AUTH_PROVIDER", "disabled")
     monkeypatch.delenv("DEFAULT_USER_ID", raising=False)
