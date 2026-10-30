@@ -31,7 +31,7 @@ A remediation often ends by recommending a retry: once its fix lands, retrying t
 
 ## 4. Creating a remediation
 
-**Remediate** on a failed, stuck, or intervention-required workflow opens the Create page with a remediation draft: the pinned target workflow and run, the target's repository, branch, Runtime, and Profile, publication (`pr` when there is a repository, otherwise save-only), the `remediate-workflow` skill, and default instructions. Everything remains editable before submit. The tab-scoped draft survives Create reloads until confirmed creation, discard, or its two-hour expiry; a missing, altered, cross-tab, or expired draft is refused rather than partially submitted.
+**Remediate** on a failed, stuck, or intervention-required workflow opens Create with the pinned target workflow and run, repository, branch, Runtime, Profile, publication (`pr` with a repository, otherwise save-only), the `remediate-workflow` skill and default instructions. Everything remains editable before submit. The tab-scoped draft saves the authored submission so reload can reconcile a lost acknowledgment without duplicating the repair. It lasts until confirmed creation, discard or its original two-hour expiry; missing, altered, cross-tab or expired drafts are refused rather than partially submitted.
 
 Choose the repository for the fix you want: the target's repository to repair the target's work, or `MoonLadderStudios/MoonMind` to change MoonMind so the failure does not recur. One remediation works in one repository.
 

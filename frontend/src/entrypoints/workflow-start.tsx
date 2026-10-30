@@ -56,6 +56,7 @@ import { WORKFLOW_START_ROUTE_CHANGE_REQUEST_EVENT } from "../lib/workflowStartR
 import {
   clearRemediationCreateDraft,
   inspectRemediationCreateDraft,
+  updateRemediationCreateDraft,
   type RemediationCreateDraft,
   type RemediationCreateDraftReadResult,
 } from "../lib/remediationCreateDraft";
@@ -6246,6 +6247,7 @@ function WorkflowStartPageContent({
     status: Exclude<RemediationCreateDraftReadResult["status"], "valid">;
   } | null>(null);
   const remediationDraftIdRef = useRef<string | null>(null);
+  const retainedRemediationSubmissionRef = useRef<RemediationCreateDraft | null>(null);
   const [dependencyMessage, setDependencyMessage] = useState<string | null>(null);
   const [selectedPresetKey, setSelectedPresetKey] = useState("");
   const [templateMessage, setTemplateMessage] = useState<string | null>(null);
@@ -6427,6 +6429,13 @@ function WorkflowStartPageContent({
     const markDraftDirty = (event: Event) => {
       const target = event.target;
       if (target instanceof Element && target.closest("#queue-submit-form")) {
+        if (target instanceof HTMLInputElement && (target.name === "createExpertMode" || target.type === "file")) {
+          // Visibility is a preference; accepted files mark their own authored
+          // mutation. Neither an unchanged view nor a rejected file replaces
+          // the retained request after an uncertain admission.
+          createDraftRevisionRef.current += 1;
+          return;
+        }
         markDraftEdited();
       }
     };
@@ -7085,6 +7094,7 @@ function WorkflowStartPageContent({
       setRemediationDraftFailure(null);
       remediationDraftAppliedRef.current = null;
       remediationDraftIdRef.current = null;
+      retainedRemediationSubmissionRef.current = null;
       return;
     }
     const draftId = String(params.get("draftId") || "").trim();
@@ -7097,14 +7107,36 @@ function WorkflowStartPageContent({
       setRemediationDraft(null);
       remediationDraftAppliedRef.current = draftLoadKey;
       remediationDraftIdRef.current = null;
+      retainedRemediationSubmissionRef.current = null;
       setRemediationDraftFailure({ draftId, status: draftResult.status });
       setSubmitMessage(REMEDIATION_DRAFT_LOAD_MESSAGES[draftResult.status]);
       return;
     }
     const draft = draftResult.draft;
+    let submitted: ReturnType<typeof buildTemporalSubmissionDraftFromExecution> | null = null;
+    let reconstructedSteps: StepState[] = [];
+    if (draft.authoring) {
+      try {
+        submitted = buildTemporalSubmissionDraftFromExecution({
+          workflowId: draft.target.workflowId,
+          inputParameters: recordValue(draft.authoring.request.payload),
+        });
+        reconstructedSteps = createStepStateEntriesFromTemporalDraft(submitted);
+      } catch {
+        // Decode the entire saved submission before applying any prefill.
+        setRemediationDraft(null);
+        remediationDraftAppliedRef.current = draftLoadKey;
+        remediationDraftIdRef.current = null;
+        retainedRemediationSubmissionRef.current = null;
+        setRemediationDraftFailure({ draftId, status: "malformed" });
+        setSubmitMessage(REMEDIATION_DRAFT_LOAD_MESSAGES.malformed);
+        return;
+      }
+    }
 
     remediationDraftAppliedRef.current = draftLoadKey;
     remediationDraftIdRef.current = draftId;
+    retainedRemediationSubmissionRef.current = draft.authoring ? draft : null;
     setRemediationDraftFailure(null);
     setRemediationDraft(draft);
     setRepository(draft.repository || "");
@@ -7152,6 +7184,32 @@ function WorkflowStartPageContent({
         }),
       ]);
       setNextStepNumber(2);
+    }
+    if (draft.authoring && submitted) {
+      const request = draft.authoring.request;
+      setSteps(reconstructedSteps);
+      setNextStepNumber(reconstructedSteps.length + 1);
+      setPersistedObjectiveAttachments(submitted.inputAttachments.map(stepAttachmentRefFromTemporal));
+      setSelectedObjectiveAttachmentFiles([]);
+      setSelectedStepAttachmentFiles({});
+      setAppliedTemplates(submitted.appliedTemplates);
+      setAppliedTemplateFeatureRequest("");
+      setProduceReport(submitted.reportOutputEnabled);
+      setAnonymousRead(isAnonymousWorkspace(submitted.workspace));
+      setPriority(Number(request.priority));
+      setMaxAttempts(Number(request.maxAttempts));
+      setSelectedDependencies((recordValue(request.payload).task as { dependsOn?: string[] }).dependsOn || []);
+      setPublishMode(draft.authoring.publishMode);
+      setPublishModeTouched(true);
+      syncBranchDraft(draft.branch || "", true);
+      setScheduleMode(draft.authoring.schedule.mode);
+      setScheduledFor(draft.authoring.schedule.scheduledFor);
+      setScheduleDeferredMinutes(draft.authoring.schedule.deferredMinutes);
+      setScheduleCron(draft.authoring.schedule.cron);
+      setScheduleTimezone(draft.authoring.schedule.timezone);
+      setScheduleName(draft.authoring.schedule.name);
+      setShowAdvancedStepOptions((current) => current || hasAdvancedStepOptionValues(reconstructedSteps) ||
+        Boolean(draft.executionProfileRef) || Boolean(draft.launchPolicyRef));
     }
     // Importing only opens an editable form. Keep the tab-scoped transport
     // until confirmed submission or explicit discard so a reload/remount can
@@ -7559,12 +7617,14 @@ function WorkflowStartPageContent({
       );
       return;
     }
+    markDraftEdited();
     setSelectedDependencies((current) => [...current, normalizedId]);
     setSelectedDependencyWorkflowId("");
     setDependencyMessage(null);
   }
 
   function removeDependency(workflowId: string) {
+    markDraftEdited();
     setSelectedDependencies((current) =>
       current.filter((item) => item !== workflowId),
     );
@@ -7702,12 +7762,14 @@ function WorkflowStartPageContent({
   }
 
   function removePersistedObjectiveAttachment(artifactId: string) {
+    markDraftEdited();
     setPersistedObjectiveAttachments((current) =>
       current.filter((attachment) => attachment.artifactId !== artifactId),
     );
   }
 
   function removePersistedStepAttachment(localId: string, artifactId: string) {
+    markDraftEdited();
     setSteps((current) =>
       current.map((step) =>
         step.localId === localId
@@ -7723,6 +7785,7 @@ function WorkflowStartPageContent({
   }
 
   function removeObjectiveAttachment(fileToRemove: File) {
+    markDraftEdited();
     clearAttachmentTargetError(attachmentTargetKey("objective"));
     const nextFiles = selectedObjectiveAttachmentFiles.filter(
       (file) => file !== fileToRemove,
@@ -7732,6 +7795,7 @@ function WorkflowStartPageContent({
   }
 
   function removeStepAttachment(localId: string, fileToRemove: File) {
+    markDraftEdited();
     const targetKey = attachmentTargetKey(localId);
     setAttachmentTargetErrors((current) => {
       const next = { ...current };
@@ -8392,6 +8456,7 @@ function WorkflowStartPageContent({
     if (normalized.length === 0) {
       return;
     }
+    markDraftEdited();
     setSteps((current) =>
       current.map((step) =>
         step.localId === localId
@@ -8408,6 +8473,7 @@ function WorkflowStartPageContent({
   }
 
   function removeStepCapability(localId: string, token: string) {
+    markDraftEdited();
     const normalized = normalizeCapabilityToken(token);
     setSteps((current) =>
       current.map((step) =>
@@ -8449,6 +8515,7 @@ function WorkflowStartPageContent({
   }
 
   function selectTrustedTool(localId: string, toolId: string) {
+    markDraftEdited();
     const tool =
       (trustedToolsQuery.data || []).find(
         (candidate) => toolDefinitionId(candidate) === toolId,
@@ -8484,6 +8551,7 @@ function WorkflowStartPageContent({
   }
 
   function updateToolInputValue(localId: string, name: string, value: unknown) {
+    markDraftEdited();
     const step = stepsRef.current.find((item) => item.localId === localId);
     const nextValues = { ...(step?.toolInputValues || {}), [name]: value };
     updateStep(localId, { toolInputValues: nextValues });
@@ -8674,6 +8742,7 @@ function WorkflowStartPageContent({
     definition: Pick<PresetInputDefinition, "name">,
     value: unknown,
   ) {
+    markDraftEdited();
     setSteps((current) =>
       current.map((step) => {
         if (step.localId !== localId) {
@@ -8698,6 +8767,7 @@ function WorkflowStartPageContent({
   function markDraftEdited() {
     routeGuardDirtyRef.current = true;
     createDraftRevisionRef.current += 1;
+    retainedRemediationSubmissionRef.current = null;
   }
 
   function addStep() {
@@ -11141,7 +11211,7 @@ function WorkflowStartPageContent({
           (profile) => profile.profile_id === providerProfile,
         );
     const selectedProviderId = selectedProviderProfile?.provider_id?.trim?.() || "";
-    const taskPayload: Record<string, unknown> = {
+    let taskPayload: Record<string, unknown> = {
       instructions: objectiveInstructionsForSubmit,
       tool: resolvedTool,
       skill: resolvedSkill,
@@ -11264,7 +11334,7 @@ function WorkflowStartPageContent({
             ...(keptRevision ? { revision: keptRevision } : {}),
           }
         : normalizedRepository;
-    const requestBody: Record<string, unknown> = {
+    let requestBody: Record<string, unknown> = {
       type: "task",
       priority,
       maxAttempts,
@@ -11333,6 +11403,56 @@ function WorkflowStartPageContent({
     if (schedulePayload) {
       (requestBody.payload as Record<string, unknown>).schedule =
         schedulePayload;
+    }
+
+    const retainedSubmission = remediationDraft ? retainedRemediationSubmissionRef.current : null;
+    if (retainedSubmission?.authoring) {
+      const proposedScheduledFor = schedulePayload?.scheduledFor;
+      // Replay the retained authored request until an operator edit replaces
+      // it. Catalog/default refreshes must not manufacture a new admission.
+      requestBody = JSON.parse(JSON.stringify(retainedSubmission.authoring.request)) as Record<string, unknown>;
+      const retainedPayload = recordValue(requestBody.payload);
+      taskPayload = recordValue(retainedPayload.task);
+      schedulePayload = retainedPayload.schedule ? recordValue(retainedPayload.schedule) : null;
+      if (scheduleMode === "deferred_minutes" && schedulePayload) {
+        // The intent owner preserves uncertain times and refreshes a delay
+        // only after a proven pre-admission rejection.
+        schedulePayload.scheduledFor = proposedScheduledFor;
+      }
+    }
+
+    // Snapshot authoring before admission adds identity/artifact references.
+    // The existing Create intent store still owns those effects and retries.
+    const remediationSubmission: RemediationCreateDraft | null = retainedSubmission || (remediationDraft ? {
+      ...remediationDraft,
+      repository: normalizedRepository,
+      branch: submissionBranch,
+      startingBranch: submissionBranch,
+      publishMode,
+      instructions: objectiveInstructionsForSubmit,
+      runtime: { mode: normalizedRuntime, ...modelSelection, profileId: providerProfile },
+      authoring: {
+        request: JSON.parse(JSON.stringify(requestBody)) as Record<string, unknown>,
+        publishMode,
+        schedule: {
+          mode: scheduleMode, scheduledFor, deferredMinutes: scheduleDeferredMinutes,
+          cron: scheduleCron, timezone: scheduleTimezone, name: scheduleName,
+        },
+      },
+    } : null);
+    if (remediationSubmission && !retainedSubmission) {
+      delete remediationSubmission.agentProfile;
+      delete remediationSubmission.executionProfileRef;
+      delete remediationSubmission.launchPolicyRef;
+      if (agentProfile && providerProfile) {
+        remediationSubmission.agentProfile = {
+          profileId: agentProfile,
+          ...(effectiveOmnigentAgentProfileVersion ? { version: effectiveOmnigentAgentProfileVersion } : {}),
+          providerProfileRef: providerProfile,
+        };
+      }
+      if (effectiveOmnigentExecutionTargetRef) remediationSubmission.executionProfileRef = effectiveOmnigentExecutionTargetRef;
+      if (submittedOmnigentLaunchPolicyRef) remediationSubmission.launchPolicyRef = submittedOmnigentLaunchPolicyRef;
     }
 
     let createIntent: CreateSubmissionIntent | null = null;
@@ -11551,6 +11671,10 @@ function WorkflowStartPageContent({
         return;
       }
 
+      if (remediationSubmission && remediationDraftIdRef.current) {
+        updateRemediationCreateDraft(remediationDraftIdRef.current, remediationSubmission);
+        retainedRemediationSubmissionRef.current = remediationSubmission;
+      }
       const createAttempt = createIntent
         ? createIntentStore?.beginSubmission(createIntent, scheduleMode === "recurring") : null;
       let created = createIntent?.accepted;
@@ -11894,6 +12018,7 @@ function WorkflowStartPageContent({
                 type="button"
                 onClick={() => {
                   clearRemediationCreateDraft(remediationDraftFailure.draftId);
+                  retainedRemediationSubmissionRef.current = null;
                   setRemediationDraftFailure(null);
                   remediationDraftAppliedRef.current = null;
                   const url = new URL(window.location.href);
@@ -11935,6 +12060,7 @@ function WorkflowStartPageContent({
                   clearRemediationCreateDraft(remediationDraftIdRef.current);
                   remediationDraftAppliedRef.current = null;
                   remediationDraftIdRef.current = null;
+                  retainedRemediationSubmissionRef.current = null;
                   setRemediationDraft(null);
                   const url = new URL(window.location.href);
                   url.searchParams.delete("intent");
@@ -13278,7 +13404,10 @@ function WorkflowStartPageContent({
                         preview={modelTierPreviewsQuery.data?.previews[`step:${step.localId}`]}
                         modelList={MODEL_OPTIONS_DATALIST_ID}
                         effortList={EFFORT_OPTIONS_DATALIST_ID}
-                        onChange={(runtimeSelection) => updateStep(step.localId, { runtimeSelection })}
+                        onChange={(runtimeSelection) => {
+                          markDraftEdited();
+                          updateStep(step.localId, { runtimeSelection });
+                        }}
                       />
                     </div>
                   ) : null}
@@ -13946,6 +14075,7 @@ function WorkflowStartPageContent({
             <label className="checkbox queue-advanced-checkbox">
               <input
                 type="checkbox"
+                name="createExpertMode"
                 checked={showAdvancedStepOptions}
                 onChange={(event) => {
                   const advancedEnabled = event.target.checked;

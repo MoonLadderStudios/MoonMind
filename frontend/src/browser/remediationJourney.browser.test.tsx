@@ -312,6 +312,7 @@ beforeEach(() => {
       if (url === '/api/ui/info') return jsonResponse(uiInfo);
       if (url === '/api/executions' && init?.method === 'POST') {
         createRequests.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        if (createRequests.length === 1) throw new Error('Create acknowledgment lost.');
         return jsonResponse({
           workflowId: 'mm:remediation-created',
           runId: 'remediation-run',
@@ -413,7 +414,7 @@ afterEach(async () => {
 
 describe('routed remediation operator journey', () => {
   for (const viewport of [DESKTOP, MOBILE]) {
-    it(`authors through normal Create and inspects the created lifecycle at ${viewport.width}px`, async () => {
+    it(`recovers authored Create after acknowledgment loss and inspects its lifecycle at ${viewport.width}px`, async () => {
       // Even a positive optional report cannot grant autonomous authority.
       readyOmnigentCatalog.remediationRelease.autonomousRolloutAuthorized = viewport === DESKTOP;
       await page.viewport(viewport.width, viewport.height);
@@ -492,11 +493,26 @@ describe('routed remediation operator journey', () => {
       expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
       await userEvent.click(createButton);
 
+      expect(await screen.findByText('Create acknowledgment lost.')).toBeTruthy();
+      cleanupRender?.();
+      cleanupRender = renderWithClient(<DashboardApp payload={payload} />).unmount;
+      expect(await screen.findByText('Remediation Draft', {}, { timeout: 10_000 })).toBeTruthy();
+      expect((screen.getByLabelText('Instructions') as HTMLTextAreaElement).value)
+        .toBe('Repair the routed browser failure with bounded evidence.');
+      expect((screen.getByLabelText('Checkpoint work branch') as HTMLInputElement).value)
+        .toBe('remediation/routed-browser-edited');
+      expect((screen.getByLabelText('Publish Mode') as HTMLSelectElement).value).toBe('branch');
+      const retryButton = screen.getByRole('button', { name: 'Start Workflow' });
+      await waitFor(() => expect((retryButton as HTMLButtonElement).disabled).toBe(false), {
+        timeout: 10_000,
+      });
+      await userEvent.click(retryButton);
       await waitFor(
         () => expect(window.location.pathname).toBe('/workflows/mm%3Aremediation-created/evidence'),
         { timeout: 10_000 },
       );
-      expect(createRequests).toHaveLength(1);
+      expect(createRequests).toHaveLength(2);
+      expect(createRequests[1]).toEqual(createRequests[0]);
       expect(createRequests[0]).toMatchObject({
         payload: {
           targetRuntime: 'omnigent',
