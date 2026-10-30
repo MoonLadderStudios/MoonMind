@@ -29,6 +29,7 @@ from tests.unit.api.routers.test_executions import (
 from tests.unit.services.test_omnigent_agent_profile_selection import _Session
 from tests.unit.services.test_omnigent_execution_plan_service import (
     _ArtifactService,
+    _compiler_dependency_owner,  # noqa: F401 - pytest fixture import
     _PlanStore,
     _policy_snapshot,
     _protected_support_evidence,

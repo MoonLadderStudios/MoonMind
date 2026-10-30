@@ -23,9 +23,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from api_service.api.routers import executions
 from api_service.api.routers.temporal_artifacts import (
@@ -33,6 +35,9 @@ from api_service.api.routers.temporal_artifacts import (
 )
 from api_service.api.routers.temporal_artifacts import router as artifact_router
 from api_service.auth_providers import get_artifact_access
+from api_service.db import base
+from api_service.db.models import Base
+from api_service.services import omnigent_execution_plan_service as writer
 from api_service.services.omnigent_execution_plan_service import persist_json_artifact
 from moonmind.auth import bound_acquisition, github_credentials
 from moonmind.omnigent import production
@@ -48,6 +53,9 @@ from moonmind.omnigent.runtime_bindings import (
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.workflows.executions.repository_contract import DEFAULT_GIT_CONNECTION_REF
 from moonmind.workflows.temporal.activities import omnigent_session_activities as reader
+from moonmind.workflows.temporal.activities.omnigent_activities import (
+    _OnDemandTemporalArtifactService,
+)
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
@@ -61,10 +69,9 @@ from tests.helpers.repository_connections import (
     github_repository_assignment,
     record_repository_connections,
 )
-from tests.integration.reliability.test_repository_authority_handoffs_4009 import (  # noqa: F401
+from tests.integration.reliability.test_repository_authority_handoffs_4009 import (
     _WORKFLOW,
     _compile,
-    authority_context,
 )
 from tests.support.saved_work_capture import CapturedSavedWork
 from tests.unit.api.routers.test_executions import _saved_work_app
@@ -87,6 +94,41 @@ pytestmark = [
 _STEP = f"{_WORKFLOW}:run-1:implement:execution:1"
 _WORKSPACE_ID = hashlib.sha256(f"{_WORKFLOW}:{_STEP}".encode()).hexdigest()[:24]
 _GENERATED = b"# Generated report\n\nNo repository was needed.\n"
+
+
+@pytest_asyncio.fixture
+async def authority_context(tmp_path, monkeypatch):
+    """Real plan/blob authority, retaining competing ambient repository setup."""
+    monkeypatch.setenv("SELECTED_REPOSITORY_PAT", "selected-secret-canary")
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-secret-canary")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "either")
+    engine = await record_repository_connections(
+        monkeypatch,
+        tmp_path,
+        github_pat_connection("selected-repository", "SELECTED_REPOSITORY_PAT"),
+        assignments=[
+            github_repository_assignment(
+                "selected-repository", "MoonLadderStudios/MoonMind"
+            )
+        ],
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(base, "async_session_maker", sessions)
+    monkeypatch.setattr(
+        writer, "_try_load_real_harness_config", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        writer,
+        "resolve_execution_evidence",
+        lambda *_args, **_kwargs: (None, "uncertified"),
+    )
+    try:
+        yield sessions, _OnDemandTemporalArtifactService(sessions), None
+    finally:
+        await production.close_omnigent_transport_pool()
+        await engine.dispose()
 
 
 def _forbid_repository_credentials(monkeypatch) -> list[str]:
@@ -137,7 +179,7 @@ async def _serialize_finalization_on_sqlite(sessions) -> None:
 
 
 async def test_scratch_output_is_saved_and_downloaded_after_host_loss(
-    authority_context, monkeypatch, tmp_path, request  # noqa: F811
+    authority_context, monkeypatch, tmp_path, request
 ):
     sessions, _plan_artifacts, _plan_reader = authority_context
     await _serialize_finalization_on_sqlite(sessions)
@@ -175,7 +217,10 @@ async def test_scratch_output_is_saved_and_downloaded_after_host_loss(
         task_input_snapshot_digest=task_input_digest,
     )
     plan = await reader._load_verified_execution_plan(
-        compiled.binding, access=access_for_test("service:omnigent-session")
+        compiled.binding,
+        workflow_id=_WORKFLOW,
+        run_id="run-1",
+        access=access_for_test("user-1"),
     )
     assert set(plan.payload.credentialBindings) == {"primary-model"}
     assert not plan.payload.resolvedTools.get("repositoryAccess")
@@ -411,6 +456,7 @@ async def test_scratch_output_is_saved_and_downloaded_after_host_loss(
                 app, adapter, record, user = _saved_work_app(
                     monkeypatch, service, connection
                 )
+                record.namespace = "default"
                 record.workflow_id = _WORKFLOW
                 record.run_id = "run-1"
                 record.search_attributes["mm_owner_id"] = str(user.id)
