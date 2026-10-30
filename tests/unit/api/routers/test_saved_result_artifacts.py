@@ -383,6 +383,7 @@ async def test_publication_admission_requires_raw_readable_saved_closure(
         with pytest.raises(HTTPException) as exc:
             await _admit_saved_work_publication(
                 canonical=SimpleNamespace(
+                    namespace=settings.temporal.namespace,
                     workflow_id="mm:source",
                     run_id="source-run",
                     created_at=datetime.now(UTC),
@@ -432,6 +433,7 @@ async def test_publication_admits_selected_saved_closure_without_downloading_par
         monkeypatch.setattr(service, "read", read)
         contract, admitted_inputs = await _admit_saved_work_publication(
             canonical=SimpleNamespace(
+                namespace=settings.temporal.namespace,
                 workflow_id="mm:source",
                 run_id="source-next",
                 created_at=datetime.now(UTC),
