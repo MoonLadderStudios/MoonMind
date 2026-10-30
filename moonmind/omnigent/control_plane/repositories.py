@@ -25,6 +25,7 @@ from api_service.db.models import (
     OmnigentChatBindingAlias,
     OmnigentCleanupAuthority,
     OmnigentCommand,
+    OmnigentExecutionPlanRecord,
     OmnigentObservation,
     OmnigentReconciliationDecision,
     OmnigentRuntimeBindingRecord,
@@ -288,7 +289,9 @@ def _cleanup_record(row: OmnigentCleanupAuthority) -> CleanupAuthorityRecord:
 
 
 def _decision_record(row: OmnigentReconciliationDecision) -> DecisionRecord:
-    ensure_supported_schema_version("OmnigentReconciliationDecision", row.schema_version)
+    ensure_supported_schema_version(
+        "OmnigentReconciliationDecision", row.schema_version
+    )
     return DecisionRecord(
         decision_id=row.decision_id,
         session_id=row.session_id,
@@ -357,6 +360,18 @@ class _RepositoryBase:
 
 
 # --- SessionRepository -------------------------------------------------------
+
+
+def _agent_run_owns_session_lifecycle():
+    return (
+        select(OmnigentExecutionPlanRecord.plan_ref)
+        .where(
+            OmnigentExecutionPlanRecord.plan_ref == OmnigentSession.execution_plan_ref,
+            OmnigentExecutionPlanRecord.execution_realizer_ref
+            == "generic-omnigent-host@1",
+        )
+        .exists()
+    )
 
 
 class SessionRepository(_RepositoryBase):
@@ -435,6 +450,17 @@ class SessionRepository(_RepositoryBase):
         row = await self._load(session_id)
         return _session_record(row) if row is not None else None
 
+    async def has_agent_run_lifecycle_owner(self, session_id: str) -> bool:
+        """Use the admitted plan's realizer to identify the lifecycle owner."""
+
+        return bool(
+            await self._session.scalar(
+                select(_agent_run_owns_session_lifecycle())
+                .select_from(OmnigentSession)
+                .where(OmnigentSession.session_id == session_id)
+            )
+        )
+
     async def list_reconciliation_candidates(
         self, *, limit: int = 100, offset: int = 0
     ) -> list[SessionRecord]:
@@ -443,6 +469,8 @@ class SessionRepository(_RepositoryBase):
         Quarantined sessions remain readable but interactive mutation is disabled,
         so the operational stuck-state sweep must not repeatedly act on them.
         Terminal sessions stay eligible until cleanup is durably complete.
+        Generic AgentRun executions use their realizer's progress limits and
+        janitor; they have no OmnigentSession supervisor to receive this sweep.
 
         A bounded ``offset`` rotates the stable ordering so a large eligible
         population does not permanently monopolize the first ``limit`` rows when
@@ -454,6 +482,7 @@ class SessionRepository(_RepositoryBase):
         stmt = (
             select(OmnigentSession)
             .where(
+                ~_agent_run_owns_session_lifecycle(),
                 OmnigentSession.historical_read_state != "quarantined",
                 or_(
                     OmnigentSession.terminal_state.is_(None),
@@ -555,7 +584,9 @@ class SessionRepository(_RepositoryBase):
         row = (await self._session.execute(stmt)).scalars().first()
         return _session_record(row) if row is not None else None
 
-    async def get_by_chat_binding(self, chat_binding_id: str) -> Optional[SessionRecord]:
+    async def get_by_chat_binding(
+        self, chat_binding_id: str
+    ) -> Optional[SessionRecord]:
         stmt = select(OmnigentSession).where(
             OmnigentSession.chat_binding_id == chat_binding_id
         )
@@ -640,8 +671,7 @@ class SessionRepository(_RepositoryBase):
             )
         if conflict is ControlPlaneOutcome.REVISION_CONFLICT:
             raise RevisionConflictError(
-                f"Session {session_id!r} revision changed before provider "
-                "attachment"
+                f"Session {session_id!r} revision changed before provider " "attachment"
             )
         row.provider_session_ref = provider_session_ref
         row.revision = row.revision + 1
@@ -690,8 +720,7 @@ class SessionRepository(_RepositoryBase):
             binding = (
                 await self._session.execute(
                     select(OmnigentRuntimeBindingRecord).where(
-                        OmnigentRuntimeBindingRecord.binding_id
-                        == runtime_binding_ref
+                        OmnigentRuntimeBindingRecord.binding_id == runtime_binding_ref
                     )
                 )
             ).scalar_one_or_none()
@@ -730,7 +759,9 @@ class SessionRepository(_RepositoryBase):
             if value is not _UNSET
         }
         metadata_patch = dict(metadata_patch or {})
-        already_applied = all(getattr(row, name) == value for name, value in provided.items())
+        already_applied = all(
+            getattr(row, name) == value for name, value in provided.items()
+        )
         if metadata_patch:
             already_applied = already_applied and all(
                 (row.metadata_ or {}).get(key) == value
@@ -775,7 +806,10 @@ class SessionRepository(_RepositoryBase):
             metadata = dict(row.metadata_ or {})
             next_binding_revision = metadata_patch.get("runtimeBindingRevision")
             current_binding_revision = metadata.get("runtimeBindingRevision")
-            if next_binding_revision is not None and current_binding_revision is not None:
+            if (
+                next_binding_revision is not None
+                and current_binding_revision is not None
+            ):
                 if int(next_binding_revision) < int(current_binding_revision):
                     raise FencingConflictError(
                         f"Session {session_id!r} received a stale runtime binding revision"
@@ -832,9 +866,7 @@ class SessionRepository(_RepositoryBase):
             row,
             expected_revision=expected_revision,
             expected_fencing_generation=expected_fencing_generation,
-            expected_provider_profile_generation=(
-                expected_provider_profile_generation
-            ),
+            expected_provider_profile_generation=(expected_provider_profile_generation),
             expected_host_lease_generation=None,
         )
         if conflict is ControlPlaneOutcome.FENCING_CONFLICT:
@@ -864,15 +896,11 @@ class SessionRepository(_RepositoryBase):
             )
 
         metadata = dict(row.metadata_ or {})
-        current_binding_revision = int(
-            metadata.get("runtimeBindingRevision") or 0
-        )
+        current_binding_revision = int(metadata.get("runtimeBindingRevision") or 0)
         current_binding_fence = int(
             metadata.get("runtimeBindingFencingGeneration") or 0
         )
-        next_binding_revision = int(
-            metadata_patch.get("runtimeBindingRevision") or 0
-        )
+        next_binding_revision = int(metadata_patch.get("runtimeBindingRevision") or 0)
         next_binding_fence = int(
             metadata_patch.get("runtimeBindingFencingGeneration") or 0
         )
@@ -1406,10 +1434,12 @@ class TurnAttemptRepository(_RepositoryBase):
         )
         await self._insert(
             row,
-            on_conflict=lambda exc: exc
-            if _is_check_violation(exc)
-            else TurnIdempotencyConflictError(
-                f"Idempotency key {idempotency_key!r} already exists"
+            on_conflict=lambda exc: (
+                exc
+                if _is_check_violation(exc)
+                else TurnIdempotencyConflictError(
+                    f"Idempotency key {idempotency_key!r} already exists"
+                )
             ),
         )
         return _turn_record(row)
@@ -1467,9 +1497,7 @@ class TurnAttemptRepository(_RepositoryBase):
         )
         return int((await self._session.execute(stmt)).scalar_one())
 
-    async def _load_turn_for_update(
-        self, turn_attempt_id: str
-    ) -> OmnigentTurnAttempt:
+    async def _load_turn_for_update(self, turn_attempt_id: str) -> OmnigentTurnAttempt:
         row = await self._session.get(
             OmnigentTurnAttempt, turn_attempt_id, with_for_update=True
         )
@@ -1565,9 +1593,7 @@ class TurnAttemptRepository(_RepositoryBase):
             # already-advanced authority intact (re-asserting the current state
             # is still allowed to refresh provider markers).
             if TURN_STATE_ORDER[state] < TURN_STATE_ORDER.get(row.state, -1):
-                return CasResult(
-                    ControlPlaneOutcome.ALREADY_APPLIED, _turn_record(row)
-                )
+                return CasResult(ControlPlaneOutcome.ALREADY_APPLIED, _turn_record(row))
             row.state = state
         # A guarded turn write always advances against the live session
         # generation; stamp it so the record reflects the guarding authority.
@@ -1670,15 +1696,18 @@ class ObservationRepository(_RepositoryBase):
         span_name = (
             spans.PROVIDER_OBSERVE_SNAPSHOT
             if observation_type in {"snapshot", "provider_snapshot"}
-            else spans.PROVIDER_READ_EVENT_BATCH
-            if observation_type in {
-                "event",
-                "event_frontier",
-                "event_batch",
-                "provider_event",
-                "provider_event_batch",
-            }
-            else spans.OBSERVATION_LOAD
+            else (
+                spans.PROVIDER_READ_EVENT_BATCH
+                if observation_type
+                in {
+                    "event",
+                    "event_frontier",
+                    "event_batch",
+                    "provider_event",
+                    "provider_event_batch",
+                }
+                else spans.OBSERVATION_LOAD
+            )
         )
         schema_value = (bounded_index or {}).get("schemaVersion")
         if schema_value not in (None, 1, "1"):
@@ -2016,16 +2045,18 @@ class CommandRepository(_RepositoryBase):
                     [COMMAND_STATE_DELIVERY_UNKNOWN, COMMAND_STATE_CLAIMED]
                 ),
             )
-            .order_by(precedence, OmnigentCommand.updated_at.desc(), OmnigentCommand.command_id)
+            .order_by(
+                precedence,
+                OmnigentCommand.updated_at.desc(),
+                OmnigentCommand.command_id,
+            )
             .limit(1)
         )
         row = (await self._session.execute(stmt)).scalars().first()
         return _command_record(row) if row is not None else None
 
     async def _load_command_for_update(self, command_id: str) -> OmnigentCommand:
-        row = await self._session.get(
-            OmnigentCommand, command_id, with_for_update=True
-        )
+        row = await self._session.get(OmnigentCommand, command_id, with_for_update=True)
         if row is None:
             raise KeyError(f"Unknown command {command_id!r}")
         return row
@@ -2072,9 +2103,7 @@ class CommandRepository(_RepositoryBase):
                 session_row is not None
                 and row.fencing_generation < session_row.fencing_generation
             ):
-                telemetry.record_fencing_conflict(
-                    scope=FencingScope.SESSION_SUPERVISOR
-                )
+                telemetry.record_fencing_conflict(scope=FencingScope.SESSION_SUPERVISOR)
                 return CasResult(
                     ControlPlaneOutcome.FENCING_CONFLICT, _command_record(row)
                 )
@@ -2116,9 +2145,11 @@ class CommandRepository(_RepositoryBase):
             delivery_unknown_outcome=(
                 "created"
                 if outcome is ControlPlaneOutcome.DELIVERY_UNKNOWN
-                else "reconciled"
-                if existing is not None and existing.delivery_ambiguous
-                else "none"
+                else (
+                    "reconciled"
+                    if existing is not None and existing.delivery_ambiguous
+                    else "none"
+                )
             ),
         ):
             return await self._record_command_delivery(
@@ -2241,9 +2272,7 @@ class CommandRepository(_RepositoryBase):
 
         row = await self._load_command_for_update(command_id)
         if row.status == COMMAND_STATE_APPLIED:
-            return CasResult(
-                ControlPlaneOutcome.ALREADY_APPLIED, _command_record(row)
-            )
+            return CasResult(ControlPlaneOutcome.ALREADY_APPLIED, _command_record(row))
         if row.status == COMMAND_STATE_FAILED:
             if row.result_ref not in {None, result_ref}:
                 return CasResult(
@@ -2255,18 +2284,14 @@ class CommandRepository(_RepositoryBase):
                 row.revision = row.revision + 1
                 await self._session.flush()
                 await self._session.refresh(row)
-            return CasResult(
-                ControlPlaneOutcome.ALREADY_APPLIED, _command_record(row)
-            )
+            return CasResult(ControlPlaneOutcome.ALREADY_APPLIED, _command_record(row))
         if row.status == COMMAND_STATE_DELIVERY_UNKNOWN:
             if row.result_ref is None:
                 row.result_ref = result_ref
                 row.revision = row.revision + 1
                 await self._session.flush()
                 await self._session.refresh(row)
-            return CasResult(
-                ControlPlaneOutcome.DELIVERY_UNKNOWN, _command_record(row)
-            )
+            return CasResult(ControlPlaneOutcome.DELIVERY_UNKNOWN, _command_record(row))
         if row.status == COMMAND_STATE_CLAIMED and (
             row.owner_class != owner_class or row.claim_token != claim_token
         ):
@@ -2321,22 +2346,31 @@ class DecisionRepository(_RepositoryBase):
         reason_class = (
             "ambiguous"
             if "quarantine" in decision_code or "ambiguous" in str(reason_code or "")
-            else "cleanup"
-            if "cleanup" in decision_code or "release" in decision_code
-            else "terminal"
-            if "terminal" in decision_code
-            else "failed"
-            if "fail" in decision_code
-            else "compatibility"
-            if "compatibility" in decision_code
-            else "provisioning"
-            if decision_code.startswith("ensure_")
-            else "awaiting"
+            else (
+                "cleanup"
+                if "cleanup" in decision_code or "release" in decision_code
+                else (
+                    "terminal"
+                    if "terminal" in decision_code
+                    else (
+                        "failed"
+                        if "fail" in decision_code
+                        else (
+                            "compatibility"
+                            if "compatibility" in decision_code
+                            else (
+                                "provisioning"
+                                if decision_code.startswith("ensure_")
+                                else "awaiting"
+                            )
+                        )
+                    )
+                )
+            )
         )
         metric_decision_class = (
             decision_code
-            if decision_code
-            in metrics.BOUNDED_LABEL_VALUES["decision_class"]
+            if decision_code in metrics.BOUNDED_LABEL_VALUES["decision_class"]
             else "await_observation"
         )
         with spans.omnigent_span(
@@ -2508,16 +2542,12 @@ class DecisionRepository(_RepositoryBase):
         row = (await self._session.execute(stmt)).scalars().first()
         return _decision_record(row) if row is not None else None
 
-    async def for_resulting_command(
-        self, command_id: str
-    ) -> Optional[DecisionRecord]:
+    async def for_resulting_command(self, command_id: str) -> Optional[DecisionRecord]:
         """Return the unique decision that authorized a durable command."""
 
         stmt = (
             select(OmnigentReconciliationDecision)
-            .where(
-                OmnigentReconciliationDecision.resulting_command_id == command_id
-            )
+            .where(OmnigentReconciliationDecision.resulting_command_id == command_id)
             .limit(1)
         )
         row = (await self._session.execute(stmt)).scalars().first()
@@ -2701,9 +2731,7 @@ class CleanupAuthorityRepository(_RepositoryBase):
             OmnigentSession, session_id, with_for_update=True
         )
         cur_host = session_row.host_lease_generation if session_row else None
-        cur_profile = (
-            session_row.provider_profile_generation if session_row else None
-        )
+        cur_profile = session_row.provider_profile_generation if session_row else None
         cur_epoch = session_row.provider_session_ref if session_row else None
         if row.state == CLEANUP_STATE_CLAIMED:
             if row.claim_token == claim_token:
@@ -2724,9 +2752,7 @@ class CleanupAuthorityRepository(_RepositoryBase):
             )
             if not stale:
                 telemetry.record_cleanup_claim_conflict()
-                return CasResult(
-                    ControlPlaneOutcome.NOT_OWNER, _cleanup_record(row)
-                )
+                return CasResult(ControlPlaneOutcome.NOT_OWNER, _cleanup_record(row))
             # else: the prior claim was fenced out by a newer generation; fall
             # through to re-own it as a fenced takeover (advances generation).
         row.state = CLEANUP_STATE_CLAIMED
@@ -2869,9 +2895,7 @@ class CleanupAuthorityRepository(_RepositoryBase):
             ):
                 # The provider session captured at claim time was replaced; a new
                 # provider epoch owns cleanup and the former janitor is fenced.
-                telemetry.record_fencing_conflict(
-                    scope=FencingScope.SESSION_SUPERVISOR
-                )
+                telemetry.record_fencing_conflict(scope=FencingScope.SESSION_SUPERVISOR)
                 return CasResult(
                     ControlPlaneOutcome.FENCING_CONFLICT, _cleanup_record(row)
                 )

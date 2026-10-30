@@ -10,10 +10,12 @@ from __future__ import annotations
 # Imported pytest fixtures are consumed by dependency name.
 # ruff: noqa: F811
 import copy
+import importlib
 import os
 from datetime import UTC, datetime, timedelta
 from time import monotonic
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import httpx
@@ -40,6 +42,10 @@ from api_service.services.single_user_conversion import run_guarded_upgrade
 from moonmind.omnigent.bridge_proxy import OmnigentBridgeSessionProxy
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.control_plane.identities import canonical_turn_command_key
+from moonmind.omnigent.control_plane.stuck_state_reconciliation import (
+    StuckStateReconciliationService,
+    inspect_stuck_state,
+)
 from moonmind.omnigent.runtime_bindings import RuntimeBindingState
 from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
@@ -66,6 +72,7 @@ def _application(store, base_url, *, account_free=False, caller=None):
     )
     app.include_router(ui.native_ui_router, prefix=ui.NATIVE_UI_MOUNT_PATH)
     if account_free:
+
         async def sessions():
             async with store._session_factory() as session:
                 original_get = session.get
@@ -108,7 +115,9 @@ async def _during_active_session(journey, callback, *, execute=None):
         called.append(True)
         try:
             await callback()
-        except Exception as exc:  # noqa: BLE001 - preserve lifecycle cleanup before surfacing callback failures
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - preserve lifecycle cleanup before surfacing callback failures
             errors.append(exc)
 
     journey.server.on_first_message = active
@@ -169,16 +178,16 @@ async def assert_bound_native_round_trip(journey, *, account_free=False):
     row = await store.resolve_projection_session(
         idempotency_key=journey.request.idempotency_key
     )
-    resolution = await store.resolve_chat_binding(
-        workflow_id=row.moonmind_workflow_id
-    )
+    resolution = await store.resolve_chat_binding(workflow_id=row.moonmind_workflow_id)
     assert resolution.read_only is False
     assert resolution.capabilities["viewTranscript"] is True
     assert resolution.capabilities["sendMessage"] is True
     binding_id = row.chat_binding_id
     base_url = os.environ["OMNIGENT_SERVER_URL"]
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=_application(store, base_url, account_free=account_free)),
+        transport=httpx.ASGITransport(
+            app=_application(store, base_url, account_free=account_free)
+        ),
         base_url="http://localhost" if account_free else "http://moonmind.test",
     ) as client:
         document = await client.get(
@@ -209,8 +218,7 @@ async def assert_bound_native_round_trip(journey, *, account_free=False):
         user_item = next(
             item
             for item in items
-            if item["data"]
-            == {"role": "user", "content": follow_up["data"]["content"]}
+            if item["data"] == {"role": "user", "content": follow_up["data"]["content"]}
         )
         answers = [item for item in items if item["data"]["role"] == "assistant"]
         assert len(answers) == 1, "queued follow-up produced no distinct answer"
@@ -282,7 +290,62 @@ async def _authority_records(store, row):
     return result
 
 
-@pytest.mark.parametrize("native_journey", ["opencode-native"], indirect=True)
+async def _assert_no_session_supervisor_intervention(journey):
+    store = OmnigentBridgeSessionStore(journey.session_factory)
+    row = await store.resolve_projection_session(
+        idempotency_key=journey.request.idempotency_key
+    )
+    # A generic AgentRun has its own durable progress limits and janitor. The
+    # session supervisor has no observations or workflow to reconcile here.
+    dispatcher = SimpleNamespace(request_reconcile=AsyncMock())
+    publisher = SimpleNamespace(publish=AsyncMock(return_value="artifact:diagnostic"))
+    checker = StuckStateReconciliationService(
+        session_factory=journey.session_factory,
+        dispatcher=dispatcher,
+        diagnostic_publisher=publisher,
+    )
+    for tick in range(4):
+        sweep = await checker.sweep(
+            now=datetime.now(UTC) + timedelta(hours=1, minutes=10 * tick)
+        )
+        assert sweep.scanned == 0
+        assert sweep.findings_recorded == 0
+        assert sweep.quarantined == 0
+        assert sweep.failures == 0
+    dispatcher.request_reconcile.assert_not_awaited()
+    publisher.publish.assert_not_awaited()
+    async with store._control_plane_store.transaction() as repos:
+        inspection = await inspect_stuck_state(
+            repos,
+            session_id=row.metadata_["runtimeAuthority"]["canonicalSessionId"],
+            now=datetime.now(UTC) + timedelta(hours=2),
+        )
+        assert inspection.findings == ()
+        assert inspection.response is None
+
+
+@pytest.mark.parametrize(
+    "native_journey",
+    ["codex-native", "claude-native", "opencode-native"],
+    indirect=True,
+)
+async def test_agent_run_owned_live_chat_survives_session_supervisor_sweeps(
+    native_journey,
+):
+    journey = native_journey
+
+    async def active():
+        await _assert_no_session_supervisor_intervention(journey)
+        await assert_bound_native_round_trip(journey)
+
+    await _during_active_session(journey, active)
+
+
+@pytest.mark.parametrize(
+    "native_journey",
+    ["codex-native", "claude-native", "opencode-native"],
+    indirect=True,
+)
 async def test_cleaned_runtime_keeps_only_its_captured_transcript_readable(
     native_journey, monkeypatch
 ):
@@ -295,6 +358,7 @@ async def test_cleaned_runtime_keeps_only_its_captured_transcript_readable(
         idempotency_key=journey.request.idempotency_key
     )
     assert row.final_snapshot_ref.startswith("artifact:art_")
+    await _assert_no_session_supervisor_intervention(journey)
     binding = await store.resolve_chat_binding(workflow_id=row.moonmind_workflow_id)
     assert binding.state == "ended"
     assert binding.capabilities == {"viewTranscript": True}
@@ -363,6 +427,79 @@ async def _restore_authority(store, records):
         await session.commit()
 
 
+@pytest.mark.parametrize(
+    "native_journey",
+    ["codex-native", "claude-native", "opencode-native"],
+    indirect=True,
+)
+async def test_upgrade_restores_existing_quarantined_transcript(
+    native_journey, monkeypatch
+):
+    journey = native_journey
+    result = await journey.realizer.execute(journey.request, journey.plan)
+    assert result.failure_class is None, result
+    store = OmnigentBridgeSessionStore(journey.session_factory)
+    row = await store.resolve_projection_session(
+        idempotency_key=journey.request.idempotency_key
+    )
+    canonical_id = row.metadata_["runtimeAuthority"]["canonicalSessionId"]
+    async with store._control_plane_store.transaction() as repos:
+        canonical = await repos.sessions.get(canonical_id)
+        await repos.decisions.append(
+            decision_id="old-supervisor-quarantine",
+            session_id=canonical_id,
+            decision_code="quarantine_ambiguous_state",
+            reason_code="compatibility_unknown_after_admission",
+            expected_revision=canonical.revision,
+            fencing_generation=canonical.fencing_generation,
+        )
+        await repos.sessions.update_lifecycle(
+            canonical_id,
+            expected_revision=canonical.revision,
+            expected_fencing_generation=canonical.fencing_generation,
+            historical_read_state="quarantined",
+            reconciled_state="quarantined",
+            last_decision_ref="old-supervisor-quarantine",
+        )
+    monkeypatch.setattr(bridge, "async_session_maker", journey.session_factory)
+    path = f"/api/workflow-chat-bindings/{row.chat_binding_id}/omnigent/v1/sessions/{row.chat_binding_id}"
+    app = _application(store, os.environ["OMNIGENT_SERVER_URL"])
+    original_events = len(journey.server.events)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://moonmind.test"
+    ) as client:
+        denied = await client.get(path)
+        assert denied.status_code == 403
+        assert denied.json()["detail"]["disabledReason"] == "immutable_authority_stale"
+        migration = importlib.import_module(
+            "api_service.migrations.versions.406_omnigent_chat_ownership"
+        )
+
+        def upgrade(connection):
+            monkeypatch.setattr(
+                migration, "op", SimpleNamespace(get_bind=lambda: connection)
+            )
+            migration.upgrade()
+
+        async with journey.session_factory() as session:
+            connection = await session.connection()
+            await connection.run_sync(upgrade)
+            await session.commit()
+        await _assert_no_session_supervisor_intervention(journey)
+        restored = await client.get(path)
+        assert restored.status_code == 200, restored.text
+        assert restored.json()["readOnly"] is True
+        transcript = await client.get(path + "/items")
+        assert transcript.status_code == 200, transcript.text
+        assert transcript.json()["data"]
+        assert row.omnigent_session_id not in restored.text + transcript.text
+        mutation = await client.post(
+            path + "/events", json=_message("must not restart")
+        )
+        assert mutation.status_code in {403, 409}
+        assert len(journey.server.events) == original_events
+
+
 async def _invalidate_authority(store, row, fault):
     from moonmind.omnigent.runtime_bindings import DbRuntimeBindingStore
 
@@ -383,9 +520,11 @@ async def _invalidate_authority(store, row, fault):
             expected_revision=binding.revision,
             expected_fencing_generation=binding.fencingGeneration,
             increment_fence=fault == "runtime_fence",
-            state=RuntimeBindingState.cleanup_pending
-            if fault == "runtime_cleanup"
-            else None,
+            state=(
+                RuntimeBindingState.cleanup_pending
+                if fault == "runtime_cleanup"
+                else None
+            ),
             updates=updates,
         )
         return
@@ -879,9 +1018,9 @@ async def test_generic_native_denies_cleanup_during_command_claim(
                         OmnigentBridgeSession, row.bridge_session_id
                     )
                     metadata = copy.deepcopy(stored.metadata_)
-                    metadata["capabilityAuthority"]["state"]["activeTurnId"] = (
-                        "replaced-turn"
-                    )
+                    metadata["capabilityAuthority"]["state"][
+                        "activeTurnId"
+                    ] = "replaced-turn"
                     stored.metadata_ = metadata
                     await session.commit()
             elif fault == "caller_revoke":
