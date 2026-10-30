@@ -1,6 +1,7 @@
 """GH4354: historical Alembic, populated conversion and real API process restart."""
 
 import asyncio
+import hashlib
 import json
 import os
 import socket
@@ -27,7 +28,6 @@ from api_service.services.single_user_conversion import SingleUserConversionRun
 from moonmind.schemas.container_job_models import (
     ContainerJobArtifactPage,
     ContainerJobSubmitRequest,
-    ContainerJobWorkflowInput,
     OwnerIdentity,
 )
 from moonmind.workflows.temporal.artifacts import (
@@ -35,7 +35,6 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
-from moonmind.workflows.temporal.worker_runtime import _container_job_evidence_publisher
 from tests.helpers.account_source import User, UserProfile
 from tests.integration import test_single_user_conversion_postgres_4346 as source_pg
 from tests.unit.api.test_container_jobs_transport import _submit_arguments
@@ -158,21 +157,45 @@ async def test_historical_upgrade_and_process_restart_preserve_state(
                         openai_api_key_encrypted="retained-test-credential",
                     )
                 )
-                publisher = _container_job_evidence_publisher(
-                    TemporalArtifactService(
-                        TemporalArtifactRepository(session),
-                        store=LocalTemporalArtifactStore(tmp_path / "job-evidence"),
+
+                async def publish_historical_evidence(name, payload, content_type):
+                    # Seed the predecessor wire/storage shape, not today's ORM:
+                    # dependency-admission columns do not exist until upgrade.
+                    artifact_id = "art_" + uuid4().hex
+                    storage_key = "historical/" + artifact_id
+                    LocalTemporalArtifactStore(tmp_path / "job-evidence").write_bytes(
+                        storage_key, payload, content_type=content_type
                     )
-                )
-                job_input = ContainerJobWorkflowInput(
-                    jobId=retained_job_id,
-                    owner=OwnerIdentity(
-                        principalId=str(owners[0]), principalType="user"
-                    ),
-                    request=submission,
-                )
-                logs_ref = await publisher(
-                    job_input, "retained.log", b"retained job output\n"
+                    await session.execute(
+                        text("""
+                            INSERT INTO temporal_artifacts
+                                (artifact_id, created_by_principal, content_type,
+                                 size_bytes, sha256, storage_backend, storage_key,
+                                 status, metadata)
+                            VALUES (:id, :owner, :content_type, :size, :sha256,
+                                    'local_fs', :storage_key, 'complete',
+                                    CAST(:metadata AS jsonb))
+                        """),
+                        {
+                            "id": artifact_id,
+                            "owner": f"user:{owners[0]}",
+                            "content_type": content_type,
+                            "size": len(payload),
+                            "sha256": hashlib.sha256(payload).hexdigest(),
+                            "storage_key": storage_key,
+                            "metadata": json.dumps(
+                                {
+                                    "artifact_type": "container_job.evidence",
+                                    "name": name,
+                                    "container_job_id": retained_job_id,
+                                }
+                            ),
+                        },
+                    )
+                    return artifact_id
+
+                logs_ref = await publish_historical_evidence(
+                    "retained.log", b"retained job output\n", "application/octet-stream"
                 )
                 manifest = ContainerJobArtifactPage.model_validate(
                     {
@@ -183,15 +206,14 @@ async def test_historical_upgrade_and_process_restart_preserve_state(
                         "publication": {"state": "succeeded"},
                     }
                 )
-                artifacts_ref = await publisher(
-                    job_input,
+                artifacts_ref = await publish_historical_evidence(
                     "outputs.json",
                     manifest.model_dump_json(by_alias=True).encode(),
+                    "application/json",
                 )
                 # Seed the predecessor schema before the new grant column exists.
                 await session.execute(
-                    text(
-                        """
+                    text("""
                     INSERT INTO container_jobs
                         (job_id, contract_version, owner_id, owner_type, idempotency_key,
                          source_json, request_json, state, terminal_outcome_json,
@@ -199,8 +221,7 @@ async def test_historical_upgrade_and_process_restart_preserve_state(
                     VALUES (:job, 'v1', :owner, 'user', :key, CAST(:source AS jsonb),
                             CAST(:request AS jsonb), 'succeeded', CAST(:terminal AS jsonb),
                             '{"state":"succeeded"}', '{"state":"not_attempted"}', :logs, :artifacts)
-                """
-                    ),
+                """),
                     {
                         "job": retained_job_id,
                         "owner": str(owners[0]),
@@ -212,12 +233,13 @@ async def test_historical_upgrade_and_process_restart_preserve_state(
                         "terminal": json.dumps({"exitCode": 0}),
                     },
                 )
-                session.add(
-                    TemporalArtifact(
-                        artifact_id="retained",
-                        storage_key="unchanged-key",
-                        created_by_principal=str(owners[0]),
-                    )
+                await session.execute(
+                    text("""
+                        INSERT INTO temporal_artifacts
+                            (artifact_id, storage_key, created_by_principal, metadata)
+                        VALUES ('retained', 'unchanged-key', :owner, '{}')
+                    """),
+                    {"owner": str(owners[0])},
                 )
             if owners:
                 session.add(
