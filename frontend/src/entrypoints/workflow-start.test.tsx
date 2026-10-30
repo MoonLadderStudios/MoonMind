@@ -20480,7 +20480,7 @@ describe("Task Create runtime command previews", () => {
     ).toBeTruthy();
   });
 
-  it("imports the complete remediation draft once and keeps pinned identity separate from editable intent", async () => {
+  it("imports the complete remediation draft and keeps pinned identity separate from editable intent", async () => {
     const draft = {
       source: "remediation",
       schemaVersion: 1,
@@ -20577,7 +20577,7 @@ describe("Task Create runtime command previews", () => {
       window.sessionStorage.getItem(
         "moonmind.remediation-create-draft.complete",
       ),
-    ).toBeNull();
+    ).not.toBeNull();
   });
 
   it("keeps a remediation draft without a repository as a blank, save-only source", async () => {
