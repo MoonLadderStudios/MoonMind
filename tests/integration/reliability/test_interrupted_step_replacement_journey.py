@@ -122,6 +122,7 @@ from moonmind.workflows.temporal.activity_runtime import (
     build_activity_bindings,
 )
 from moonmind.workflows.temporal.artifacts import (
+    ExecutionRef,
     LocalTemporalArtifactStore,
     TemporalArtifactActivities,
     TemporalArtifactAuthorizationError,
@@ -964,7 +965,7 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
             await connection.run_sync(Base.metadata.create_all)
         monkeypatch.setattr("api_service.db.base.async_session_maker", sessions)
 
-        async def put(payload: bytes, metadata=None) -> str:
+        async def put(payload: bytes, metadata=None, *, execution_input=False) -> str:
             async with sessions() as session:
                 service = TemporalArtifactService(TemporalArtifactRepository(session))
                 artifact, _ = await service.create(
@@ -972,6 +973,16 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
                     content_type="application/json",
                     size_bytes=len(payload),
                     metadata_json=metadata,
+                    link=(
+                        ExecutionRef(
+                            namespace=client.namespace,
+                            workflow_id=queue,
+                            run_id="",
+                            link_type="input",
+                        )
+                        if execution_input
+                        else None
+                    ),
                 )
                 await service.write_complete(
                     artifact_id=artifact.artifact_id,
@@ -1002,9 +1013,9 @@ async def _interrupted_step_journey(tmp_path, monkeypatch, fleet) -> dict:
             ).encode(),
             {"artifact_class": "omnigent.execution_plan"},
         )
-        plan_ref = "artifact:" + await put(json.dumps(_plan_document()).encode())
+        plan_ref = "artifact:" + await put(_plan_document(), execution_input=True)
         task_input = b'{"task":"interrupted step journey"}'
-        task_input_ref = "artifact:" + await put(task_input)
+        task_input_ref = "artifact:" + await put(task_input, execution_input=True)
         artifacts = TemporalOmnigentArtifactGateway(sessions)
 
         def build_realizer():
@@ -1460,8 +1471,6 @@ async def test_checkpoint_activity_composes_one_durable_transaction(
     """The journey adapter must not split or copy a per-method service proxy."""
     from temporalio.testing import ActivityEnvironment
 
-    from moonmind.workflows.temporal.artifacts import ExecutionRef
-
     info = SimpleNamespace(
         namespace="default",
         workflow_id="checkpoint-composition",
@@ -1480,50 +1489,62 @@ async def test_checkpoint_activity_composes_one_durable_transaction(
         async with sessions() as session:
             service = TemporalArtifactService(TemporalArtifactRepository(session))
             artifact, _ = await service.create(
-                principal="system",
+                principal="operator",
                 content_type="application/json",
-                link=ExecutionRef(
-                    namespace=info.namespace,
-                    workflow_id=info.workflow_id,
-                    run_id=info.workflow_run_id,
-                    link_type="input",
-                ),
             )
             await service.write_complete(
                 artifact_id=artifact.artifact_id,
-                principal="system",
+                principal="operator",
                 payload=b"{}",
                 content_type="application/json",
             )
             input_ref = artifact.artifact_id
+        request = {
+            "identity": {
+                "workflowId": info.workflow_id,
+                "runId": info.workflow_run_id,
+                "logicalStepId": "implement",
+                "executionOrdinal": 1,
+            },
+            "boundary": "after_execution",
+            "taskInputSnapshotRef": (
+                f"temporal://{info.workflow_id}/{info.workflow_run_id}/task-input"
+                if history_inputs
+                else input_ref
+            ),
+            "planRef": (
+                f"temporal://{info.workflow_id}/{info.workflow_run_id}/plan"
+                if history_inputs
+                else input_ref
+            ),
+            "workspace": {
+                "kind": "git_commit",
+                "baseCommit": "abc",
+                "headCommit": "def",
+            },
+            "createdAt": "2026-10-29T23:00:00Z",
+            "idempotencyKey": "checkpoint-composition",
+        }
+        if not history_inputs:
+            # An operator-owned row is not automatically readable by a workflow.
+            with pytest.raises(TemporalArtifactAuthorizationError):
+                await ActivityEnvironment().run(
+                    _ArtifactActivities(sessions).step_checkpoint_create, request
+                )
+            async with sessions() as session:
+                service = TemporalArtifactService(TemporalArtifactRepository(session))
+                await service.link_artifact(
+                    artifact_id=input_ref,
+                    principal="operator",
+                    execution_ref=ExecutionRef(
+                        namespace=info.namespace,
+                        workflow_id=info.workflow_id,
+                        run_id="",
+                        link_type="input",
+                    ),
+                )
         result = await ActivityEnvironment().run(
-            _ArtifactActivities(sessions).step_checkpoint_create,
-            {
-                "identity": {
-                    "workflowId": info.workflow_id,
-                    "runId": info.workflow_run_id,
-                    "logicalStepId": "implement",
-                    "executionOrdinal": 1,
-                },
-                "boundary": "after_execution",
-                "taskInputSnapshotRef": (
-                    f"temporal://{info.workflow_id}/{info.workflow_run_id}/task-input"
-                    if history_inputs
-                    else input_ref
-                ),
-                "planRef": (
-                    f"temporal://{info.workflow_id}/{info.workflow_run_id}/plan"
-                    if history_inputs
-                    else input_ref
-                ),
-                "workspace": {
-                    "kind": "git_commit",
-                    "baseCommit": "abc",
-                    "headCommit": "def",
-                },
-                "createdAt": "2026-10-29T23:00:00Z",
-                "idempotencyKey": "checkpoint-composition",
-            }
+            _ArtifactActivities(sessions).step_checkpoint_create, request
         )
         # Reopen metadata and blob storage, as the cold successor does.
         async with sessions() as session:
