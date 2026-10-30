@@ -18,6 +18,7 @@ from moonmind.omnigent.workspace_publication import OmnigentWorkspacePublication
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.artifacts import (
     ArtifactAccessContext,
+    ArtifactTransactionOwnership,
     LocalTemporalArtifactStore,
     S3TemporalArtifactStore,
     TemporalArtifactRepository,
@@ -37,11 +38,12 @@ pytestmark = [
 
 
 @pytest.mark.parametrize(
-    ("backend", "multipart"),
+    ("backend", "large_archive"),
     [("local_fs", False), ("s3", False), ("s3", True)],
+    ids=["local-small", "s3-small", "s3-large-save-and-standalone-multipart"],
 )
 async def test_saved_candidate_is_readable_after_worker_and_workspace_loss(
-    tmp_path, monkeypatch, backend, multipart
+    tmp_path, monkeypatch, backend, large_archive
 ):
     root = tmp_path / "worker"
     workflow_id = "saved-workflow"
@@ -71,10 +73,11 @@ async def test_saved_candidate_is_readable_after_worker_and_workspace_loss(
     git("add", "file.txt")
     (workspace / "file.txt").write_text("validated candidate\n")
     (workspace / "new.bin").write_bytes(b"\x00\xff\x80")
-    if multipart:
-        # Minimized replay of host cleanup retaining capacity when a saved
-        # workspace exceeds the artifact gateway's single-put limit. Random
-        # bytes keep the compressed archive large enough to cross two S3 parts.
+    if large_archive:
+        # Caller-owned saves use a bounded single PUT, independent of the public
+        # direct-upload limit. Preserve a large cold-recovery candidate and also
+        # exercise standalone multipart transport of the same archive bytes.
+        # Random data keeps the compressed archive above two S3 parts.
         large_payload = random.Random(0).randbytes(9 * 1024 * 1024)
         (workspace / "large.bin").write_bytes(large_payload)
         monkeypatch.setattr(
@@ -185,13 +188,52 @@ async def test_saved_candidate_is_readable_after_worker_and_workspace_loss(
         service = OmnigentWorkspacePublicationService(root, artifact_gateway=gateway)
         evidence = await service.save_request_workspace(request)
         assert evidence["archiveRef"].startswith("artifact://art_")
-        if multipart:
+        multipart_ref = None
+        if large_archive:
+            archive_payload = await gateway.read_bytes(evidence["archiveRef"])
             async with sessions() as session:
-                artifact = await TemporalArtifactRepository(session).get_artifact(
+                repository = TemporalArtifactRepository(session)
+                artifact = await repository.get_artifact(
                     gateway._artifact_id(evidence["archiveRef"])
                 )
-                assert artifact.upload_mode is models.TemporalArtifactUploadMode.MULTIPART
+                assert artifact.size_bytes == len(archive_payload)
+                assert (
+                    artifact.size_bytes
+                    > settings.workflow.temporal_artifact_direct_upload_max_bytes
+                )
+                assert (
+                    artifact.upload_mode is models.TemporalArtifactUploadMode.SINGLE_PUT
+                )
                 assert artifact.status is models.TemporalArtifactStatus.COMPLETE
+                # A distinct logical/storage object ensures a genuine multipart
+                # upload, not reuse of the caller's content-addressed blob.
+                standalone = TemporalArtifactService(
+                    repository,
+                    transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
+                )
+                multipart_artifact, _ = await standalone.create(
+                    principal="multipart-replay",
+                    content_type=artifact.content_type,
+                    size_bytes=len(archive_payload),
+                    sha256=hashlib.sha256(archive_payload).hexdigest(),
+                )
+                assert (
+                    multipart_artifact.upload_mode
+                    is models.TemporalArtifactUploadMode.MULTIPART
+                )
+                assert multipart_artifact.storage_key != artifact.storage_key
+                assert multipart_artifact.upload_id
+                completed = await standalone.write_payload_complete(
+                    artifact_id=multipart_artifact.artifact_id,
+                    principal="multipart-replay",
+                    payload=archive_payload,
+                    content_type=artifact.content_type,
+                )
+                assert (
+                    completed.upload_mode is models.TemporalArtifactUploadMode.MULTIPART
+                )
+                assert completed.status is models.TemporalArtifactStatus.COMPLETE
+                multipart_ref = completed.artifact_id
         from moonmind.schemas.checkpoint_restore_models import CheckpointRestoreError
 
         # A still-present directory has no authority merely by existing. Both
@@ -246,7 +288,7 @@ async def test_saved_candidate_is_readable_after_worker_and_workspace_loss(
         )
         assert git("rev-parse", "HEAD") == head
         assert (workspace / "committed.txt").read_text() == "unpublished work\n"
-        if multipart:
+        if large_archive:
             assert (workspace / "large.bin").read_bytes() == large_payload
         repeated = await replacement.restore_saved_request_workspace(request, evidence)
         assert repeated == restored_original
@@ -255,6 +297,26 @@ async def test_saved_candidate_is_readable_after_worker_and_workspace_loss(
         assert (
             "sha256:" + hashlib.sha256(archive).hexdigest() == evidence["archiveDigest"]
         )
+        if multipart_ref is not None:
+            # Fresh service/store after source deletion, separate from both
+            # the original multipart writer and the saved-work gateway.
+            async with sessions() as session:
+                cold_reader = TemporalArtifactService(
+                    TemporalArtifactRepository(session)
+                )
+                metadata, multipart_archive = await cold_reader.read(
+                    artifact_id=multipart_ref,
+                    access=ArtifactAccessContext.for_service("multipart-replay"),
+                )
+                assert (
+                    metadata.upload_mode is models.TemporalArtifactUploadMode.MULTIPART
+                )
+                assert metadata.status is models.TemporalArtifactStatus.COMPLETE
+                assert multipart_archive == archive
+                assert (
+                    "sha256:" + hashlib.sha256(multipart_archive).hexdigest()
+                    == evidence["archiveDigest"]
+                )
         manifest = json.loads(await gateway.read_bytes(evidence["manifestRef"]))
         with tarfile.open(fileobj=io.BytesIO(archive)) as files:
             assert files.extractfile("file.txt").read() == b"validated candidate\n"
