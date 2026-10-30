@@ -56,6 +56,19 @@ export type RemediationCreateDraft = {
     providerProfileRef: string;
   };
   instructions?: string;
+  /** Last authored submission, retained so a lost acknowledgment can be replayed. */
+  authoring?: {
+    request: Record<string, unknown>;
+    publishMode: string;
+    schedule: {
+      mode: 'immediate' | 'once' | 'deferred_minutes' | 'recurring';
+      scheduledFor: string;
+      deferredMinutes: string;
+      cron: string;
+      timezone: string;
+      name: string;
+    };
+  };
   /** Skill for the remediation step; the operator may change it before submit. */
   skill?: string;
   remediation: {
@@ -420,6 +433,34 @@ function createdAtMillis(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function authoringIsValid(value: unknown, remediation: Record<string, unknown>): boolean {
+  if (value === undefined) return true;
+  if (!isRecordValue(value) || !isRecordValue(value.request) || !isRecordValue(value.schedule)) return false;
+  const request = value.request;
+  const schedule = value.schedule;
+  const payload = asRecord(request.payload);
+  const task = asRecord(payload.task);
+  return request.type === 'task' &&
+    typeof request.priority === 'number' && Number.isFinite(request.priority) &&
+    typeof request.maxAttempts === 'number' && Number.isFinite(request.maxAttempts) &&
+    isNonEmptyText(payload.targetRuntime) &&
+    typeof task.instructions === 'string' &&
+    optionalRecordIsValid(task.runtime) &&
+    optionalRecordIsValid(task.tool) && optionalRecordIsValid(task.skill) &&
+    (task.steps === undefined || (Array.isArray(task.steps) && task.steps.every((step) =>
+      isRecordValue(step) && optionalTextIsValid(step.instructions) && optionalTextIsValid(step.title) &&
+      optionalTextIsValid(step.id) && optionalRecordIsValid(step.runtime) &&
+      optionalRecordIsValid(step.tool) && optionalRecordIsValid(step.skill),
+    ))) &&
+    (task.dependsOn === undefined || (Array.isArray(task.dependsOn) && task.dependsOn.every(isNonEmptyText))) &&
+    JSON.stringify(task.remediation) === JSON.stringify(remediation) &&
+    typeof value.publishMode === 'string' &&
+    ['immediate', 'once', 'deferred_minutes', 'recurring'].includes(cleanText(schedule.mode)) &&
+    ['scheduledFor', 'deferredMinutes', 'cron', 'timezone', 'name'].every(
+      (key) => typeof schedule[key] === 'string',
+    );
+}
+
 function draftIsStructurallyValid(value: unknown): value is RemediationCreateDraft {
   const draft = asRecord(value);
   const target = asRecord(draft.target);
@@ -447,6 +488,7 @@ function draftIsStructurallyValid(value: unknown): value is RemediationCreateDra
     optionalTextIsValid(draft.executionProfileRef) &&
     optionalTextIsValid(draft.launchPolicyRef) &&
     optionalTextIsValid(draft.skill) &&
+    authoringIsValid(draft.authoring, remediation) &&
     (
       remediation.actionPolicyRef === undefined ||
       remediation.actionPolicyRef === DEFAULT_REMEDIATION_ACTION_POLICY
@@ -533,6 +575,23 @@ export function readRemediationCreateDraft(
 ): RemediationCreateDraft | null {
   const result = inspectRemediationCreateDraft(draftId);
   return result.status === 'valid' ? result.draft : null;
+}
+
+export function updateRemediationCreateDraft(draftId: string, draft: RemediationCreateDraft): void {
+  const previous = inspectRemediationCreateDraft(draftId);
+  if (previous.status !== 'valid' || !draftIsStructurallyValid(draft) ||
+    previous.draft.target.workflowId !== draft.target.workflowId ||
+    previous.draft.target.runId !== draft.target.runId ||
+    previous.draft.createdAt !== draft.createdAt) {
+    throw new Error('The remediation draft is unavailable or changed. Open Remediate again before submitting.');
+  }
+  // Keep the original target pin, tab and expiry. A failed write stops before
+  // admission rather than letting reload repeat an uncertain effect as new work.
+  try {
+    window.sessionStorage.setItem(storageKey(draftId), JSON.stringify(draft));
+  } catch (cause) {
+    throw new Error('The remediation draft could not be saved. Submission was not sent.', { cause });
+  }
 }
 
 export function clearRemediationCreateDraft(draftId: string | null | undefined): void {
