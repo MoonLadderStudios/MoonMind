@@ -9,7 +9,6 @@ import pytest_asyncio
 from api_service.services import omnigent_execution_plan_service as service
 from moonmind.omnigent.harness_platform.catalog import TrustState
 from tests.unit.services.test_omnigent_execution_plan_service import (
-    _ArtifactService,
     _compile_opencode_plan,
     _ready_opencode_image_pair,  # noqa: F401 - pytest discovers the autouse fixture.
 )
@@ -92,11 +91,15 @@ async def test_stock_harness_http_auth_survives_catalog_and_plan_compilation(
     from api_service.services.omnigent_agent_profile_service import (
         _overlay_native_harnesses,
     )
+    from moonmind.config.settings import settings
     from moonmind.omnigent.harness_platform.catalog_service import (
         DbHarnessCatalogRepository,
         OmnigentHarnessCatalogService,
     )
     from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
+    from moonmind.workflows.temporal.activities.omnigent_activities import (
+        _OnDemandTemporalArtifactService,
+    )
 
     inventory = stock_harness_http_inventory
     # These are synthetic credential values, not public capability metadata.
@@ -151,10 +154,25 @@ async def test_stock_harness_http_auth_survives_catalog_and_plan_compilation(
             "resolve_execution_evidence",
             lambda *_args, **_kwargs: (None, "uncertified"),
         )
+        # Exercise compilation with real, readable dependency artifacts rather
+        # than the unit compiler double's write-only payload dictionary.
+        monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
+        monkeypatch.setattr(
+            settings.workflow, "temporal_artifact_root", str(tmp_path / "blobs")
+        )
+        artifacts = _OnDemandTemporalArtifactService(sessions)
+        input_ref, input_digest = await service.persist_json_artifact(
+            artifact_service=artifacts,
+            principal="user-1",
+            artifact_class="workflow.task_input_snapshot",
+            payload={"draft": {"workflow": {"instructions": "Use durable refs only."}}},
+        )
         plans = DbExecutionPlanStore(sessions)
         compiled = await _compile_opencode_plan(
             monkeypatch,
-            artifacts=_ArtifactService(),
+            artifacts=artifacts,
+            task_input_snapshot_ref=input_ref,
+            task_input_snapshot_digest=input_digest,
             launch_policy_ref="opencode-on-demand@1",
             plan_store=plans,
             session_factory=sessions,
