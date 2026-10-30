@@ -440,6 +440,12 @@ describe('routed remediation operator journey', () => {
 
       await waitFor(() => expect(window.location.pathname).toBe('/workflows/new'));
       expect(await screen.findByText('Remediation Draft', {}, { timeout: 10_000 })).toBeTruthy();
+      // Rebuild the real routed application as a reload would, keeping the
+      // same tab's URL and storage. Opening Create must not consume the draft.
+      unmount();
+      cleanupRender = renderWithClient(<DashboardApp payload={payload} />).unmount;
+      expect(await screen.findByText('Remediation Draft', {}, { timeout: 10_000 })).toBeTruthy();
+      expect(createRequests).toHaveLength(0);
       const pinned = screen.getByLabelText('Pinned target identity');
       const editable = screen.getByLabelText('Editable repair intent');
       expect(pinned).toBeTruthy();

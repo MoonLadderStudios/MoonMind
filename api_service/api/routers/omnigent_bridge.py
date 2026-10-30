@@ -49,6 +49,7 @@ from fastapi import (
 from fastapi.responses import Response, StreamingResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.requests import ClientDisconnect
 
 from api_service.api.execution_principal import (
     execution_principal_dependency,
@@ -3794,17 +3795,7 @@ async def _read_facade_json_body(request: Request) -> dict[str, Any]:
                 code=CODE_MALFORMED_PAYLOAD,
             ) from exc
 
-    # Consume the ASGI body incrementally with a hard byte cap so a chunked or
-    # length-underdeclared upload is aborted as soon as it crosses the limit
-    # rather than after the whole payload is resident in memory.
-    chunks: list[bytes] = []
-    received = 0
-    async for chunk in request.stream():
-        received += len(chunk)
-        if received > _FACADE_MAX_BODY_BYTES:
-            raise _too_large()
-        chunks.append(chunk)
-    raw = b"".join(chunks)
+    raw = await _read_bounded_facade_body(request)
     try:
         parsed = json.loads(raw or b"{}")
     except (json.JSONDecodeError, ValueError) as exc:
@@ -4921,7 +4912,7 @@ async def workflow_chat_binding_facade(
 
 
 async def _read_bounded_facade_body(request: Request) -> bytes:
-    """Read any reviewed native payload without allowing unbounded buffering."""
+    """Read a complete facade body with a hard cap on streamed bytes."""
 
     declared = request.headers.get("content-length")
     if declared is not None:
@@ -4938,16 +4929,26 @@ async def _read_bounded_facade_body(request: Request) -> bytes:
             ) from exc
     chunks: list[bytes] = []
     received = 0
-    async for chunk in request.stream():
-        received += len(chunk)
-        if received > _FACADE_MAX_BODY_BYTES:
-            raise WorkflowChatFacadeError(
-                "The request body exceeds the Workflow Chat facade limit.",
-                failure_class="user_error",
-                status_code=413,
-                code=CODE_PAYLOAD_TOO_LARGE,
-            )
-        chunks.append(chunk)
+    try:
+        async for chunk in request.stream():
+            received += len(chunk)
+            if received > _FACADE_MAX_BODY_BYTES:
+                raise WorkflowChatFacadeError(
+                    "The request body exceeds the Workflow Chat facade limit.",
+                    failure_class="user_error",
+                    status_code=413,
+                    code=CODE_PAYLOAD_TOO_LARGE,
+                )
+            chunks.append(chunk)
+    except ClientDisconnect as exc:
+        # Navigation or an aborted upload is not an API failure. Never parse
+        # or forward the partial body, and keep its contents out of diagnostics.
+        raise WorkflowChatFacadeError(
+            "The request body was interrupted before it finished.",
+            failure_class="user_error",
+            status_code=400,
+            code=CODE_MALFORMED_PAYLOAD,
+        ) from exc
     return b"".join(chunks)
 
 

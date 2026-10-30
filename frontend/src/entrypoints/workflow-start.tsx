@@ -93,7 +93,7 @@ const REMEDIATION_DRAFT_LOAD_MESSAGES: Record<
   string
 > = {
   missing:
-    "This remediation draft is missing or was already imported. Return to the target workflow and choose Remediate again.",
+    "This remediation draft is missing, was submitted, or was discarded. Return to the target workflow and choose Remediate again.",
   cross_tab:
     "This remediation draft belongs to another browser tab. Return to the target workflow in this tab and choose Remediate again; draft contents are intentionally tab-scoped.",
   malformed:
@@ -7153,11 +7153,9 @@ function WorkflowStartPageContent({
       ]);
       setNextStepNumber(2);
     }
-    // The draft has now crossed its single-hop authority boundary into React
-    // state. Remove both storage markers so it cannot be imported again from a
-    // copied URL; the visible form remains editable until ordinary submission.
-    clearRemediationCreateDraft(draftId);
-    remediationDraftIdRef.current = null;
+    // Importing only opens an editable form. Keep the tab-scoped transport
+    // until confirmed submission or explicit discard so a reload/remount can
+    // reconstruct the pinned target instead of losing the remediation.
   }, [pageMode.mode, setSubmitMessage]);
 
   const remediationTargetFreshnessQuery = useQuery({

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BootPayload } from "../boot/parseBootPayload";
 import { createSubmissionScope } from "../lib/createSubmissionIntent";
 import { navigateTo } from "../lib/navigation";
+import { buildRemediationCreateDraft, readRemediationCreateDraft, storeRemediationCreateDraft } from "../lib/remediationCreateDraft";
 import { renderWithClient } from "../utils/test-utils";
 import { WorkflowStartPage } from "./workflow-start";
 
@@ -63,6 +64,46 @@ describe("Create history identity after discarding remediation", () => {
   });
 
   afterEach(() => vi.restoreAllMocks());
+
+  it.each([false, true])("retains remediation across remount and admission uncertainty (%s)", async (loseAcknowledgment) => {
+    const draft = buildRemediationCreateDraft({
+      workflowId: "mm:target", runId: "target-run", targetRuntime: "codex_cli",
+      profileId: "profile:codex-default",
+    });
+    const draftId = storeRemediationCreateDraft(draft);
+    window.history.replaceState(window.history.state, "", `/workflows/new?intent=remediate&draftId=${draftId}`);
+    const originalFetch = vi.mocked(window.fetch).getMockImplementation()!;
+    const requests: unknown[] = [];
+    vi.mocked(window.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) !== "/api/executions" || init?.method !== "POST") return originalFetch(input, init);
+      requests.push(JSON.parse(String(init.body)));
+      if (loseAcknowledgment && requests.length === 1) throw new Error("Create acknowledgment lost.");
+      return response({ workflowId: "mm:repair" });
+    });
+
+    const first = renderCreate();
+    await screen.findByRole("button", { name: "Discard remediation draft" });
+    if (loseAcknowledgment) {
+      fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+      await screen.findByText("Create acknowledgment lost.");
+    }
+    first.unmount();
+    renderCreate();
+
+    await screen.findByRole("button", { name: "Discard remediation draft" });
+    expect(screen.queryByText(/This remediation draft is missing/)).toBeNull();
+    expect((screen.getByLabelText("Pinned run") as HTMLInputElement).value).toBe("target-run");
+    expect((screen.getByLabelText("Instructions") as HTMLTextAreaElement).value).toBe(draft.instructions);
+    expect(requests).toHaveLength(loseAcknowledgment ? 1 : 0);
+    expect(readRemediationCreateDraft(draftId)).toEqual(draft);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/workflows/mm%3Arepair?source=temporal"));
+    expect(requests).toHaveLength(loseAcknowledgment ? 2 : 1);
+    if (loseAcknowledgment) expect(requests[1]).toEqual(requests[0]);
+    expect(requests[0]).toMatchObject({ payload: { task: { remediation: draft.remediation } } });
+    expect(readRemediationCreateDraft(draftId)).toBeNull();
+  });
 
   it.each([
     ["imported draft", "Discard remediation draft"],
