@@ -34,6 +34,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Mapping
 
+from moonmind.schemas.saved_work_models import SAVED_WORK_FORMAT_SIZE_LIMITS
+
 WorkspaceSourceKind = Literal[
     "scratch", "repository", "artifact", "checkpoint", "existing_workspace"
 ]
@@ -54,13 +56,12 @@ SUPPORTED_SOURCE_RUNTIMES: dict[str, tuple[str, ...]] = {
 OVERLAY_AUTHORITATIVE = "authoritative_restore"
 OVERLAY_ADDITIVE = "additive_overlay"
 
-# Resource budgets shared by the compiler (authored claims) and the
-# materializer (enforced streamed/expanded limits). Kept in one place so a
-# test can assert the advertised bound equals the enforced bound.
-MAX_EXPANDED_BYTES = 512 * 1024 * 1024
-MAX_COMPRESSED_BYTES = 256 * 1024 * 1024
+# Snapshot admission and extraction must accept the saved-work producer's
+# supported exports; attachment bundles have their own smaller byte budget.
+MAX_EXPANDED_BYTES = SAVED_WORK_FORMAT_SIZE_LIMITS["max_total_bytes"]
+MAX_COMPRESSED_BYTES = SAVED_WORK_FORMAT_SIZE_LIMITS["max_total_bytes"]
 MAX_FILE_COUNT = 50_000
-MAX_FILE_BYTES = 64 * 1024 * 1024
+MAX_FILE_BYTES = SAVED_WORK_FORMAT_SIZE_LIMITS["max_file_bytes"]
 MAX_PATH_DEPTH = 32
 MAX_PROCESSING_SECONDS = 300.0
 

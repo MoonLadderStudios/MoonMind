@@ -54,7 +54,6 @@ from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 MAX_INPUT_REFS = 64
 MAX_INPUT_BYTES = 64 * 1024 * 1024
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
-MAX_CHECKPOINT_BYTES = MAX_TOTAL_BYTES
 STREAM_CHUNK_BYTES = 1024 * 1024
 RESTORE_PRINCIPAL = "service:omnigent_workspace_restore"
 
@@ -517,7 +516,7 @@ class WorkspaceArtifactProjector:
         admitted = await self._validate_metadata(
             service,
             artifact_id=artifact_id,
-            budget_bytes=min(MAX_CHECKPOINT_BYTES, MAX_COMPRESSED_BYTES),
+            budget_bytes=MAX_COMPRESSED_BYTES,
             access=access,
             required_workflow_id=required_workflow_id,
             expected_digest=expected_digest,
@@ -547,7 +546,7 @@ class WorkspaceArtifactProjector:
                 service,
                 artifact_id=artifact_id,
                 target=archive_path,
-                budget_bytes=min(MAX_CHECKPOINT_BYTES, MAX_COMPRESSED_BYTES),
+                budget_bytes=MAX_COMPRESSED_BYTES,
                 access=access,
                 expected_digest=admitted.digest or expected_digest,
             )

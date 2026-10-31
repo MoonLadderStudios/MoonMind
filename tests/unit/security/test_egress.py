@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime
 
@@ -284,7 +285,16 @@ def test_profile_is_immutable_digest_stable_and_has_no_execution_fields():
 
 @pytest.mark.asyncio
 async def test_attestation_proves_internal_ipv4_network_and_exact_gateway():
+    from moonmind.security import egress
+
     calls = []
+    observed_digests = {
+        **EGRESS_FILE_DIGESTS,
+        "squid.conf": "sha256:"
+        + hashlib.sha256(
+            (egress.EGRESS_BUNDLED_POLICY_DIRECTORY / "squid.conf").read_bytes()
+        ).hexdigest(),
+    }
 
     async def runner(args):
         calls.append(tuple(args))
@@ -315,7 +325,7 @@ async def test_attestation_proves_internal_ipv4_network_and_exact_gateway():
         return (
             0,
             "".join(
-                f"{EGRESS_FILE_DIGESTS[path.rsplit('/', 1)[-1]].removeprefix('sha256:')}  {path}\n"
+                f"{observed_digests[path.rsplit('/', 1)[-1]].removeprefix('sha256:')}  {path}\n"
                 for path in args[3:]
             ).encode(),
             b"",
@@ -923,6 +933,33 @@ def _squid_dstdomain_matches(entry: str, host: str) -> bool:
     if entry.startswith("."):
         return host == entry[1:] or host.endswith(entry)
     return host == entry
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["sdmntprukwest.oaiusercontent.com", "sdmntprsouthcentralus.oaiusercontent.com"],
+)
+def test_connected_tool_diagnostic_download_hosts_are_allowed(host):
+    from moonmind.security import egress
+
+    assert any(
+        _squid_dstdomain_matches(entry, host) for entry in _enforced_sandbox_domains()
+    )
+    for profile in (egress.DEFAULT_EGRESS_PROFILE, egress.OMNIGENT_EGRESS_PROFILE):
+        assert any(
+            destination.ports == (443,)
+            and _squid_dstdomain_matches("." + destination.dns_name, host)
+            for destination in profile.destinations
+        )
+
+
+@pytest.mark.parametrize(
+    "host", ["oaiusercontent.com.evil.example", "eviloaiusercontent.com"]
+)
+def test_connected_tool_download_allowlist_rejects_lookalikes(host):
+    assert not any(
+        _squid_dstdomain_matches(entry, host) for entry in _enforced_sandbox_domains()
+    )
 
 
 @pytest.mark.parametrize(
