@@ -19,6 +19,8 @@ from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunResult,
     AgentRunStatus,
+    ExecutionBudgetContext,
+    resolve_execution_budget,
 )
 from moonmind.workflows.temporal.workflows import agent_run
 from tests.integration.services.temporal.workflows import test_agent_run as harness
@@ -63,6 +65,88 @@ def _status(status):
     return AgentRunStatus(
         runId="run", agentKind="managed", agentId="claude_code", status=status
     )
+
+
+@pytest.mark.parametrize(
+    "accounting", ["capacity_wait", "progress_extension", "successor"]
+)
+async def test_no_progress_reconciliation_uses_the_admitted_clock(
+    monkeypatch, accounting
+):
+    now = _clock(monkeypatch)
+    started = now[0] - timedelta(
+        seconds=11 if accounting == "progress_extension" else 103
+    )
+    budget = ExecutionBudgetContext(
+        budget=resolve_execution_budget(
+            timeout_policy={
+                "timeout_seconds": 10,
+                "max_timeout_seconds": 30,
+                "progress_stall_seconds": 5,
+            }
+        ),
+        logicalStepId="step",
+        attemptId="first",
+        admittedAt=started,
+        excludedSeconds=100 if accounting != "progress_extension" else 0,
+        lastProgressSeconds=8 if accounting == "progress_extension" else None,
+    )
+    if accounting == "successor":
+        budget = budget.successor(
+            now=now[0] - timedelta(seconds=1), attempt_id="second"
+        )
+    run = agent_run.MoonMindAgentRun()
+    run._execution_budget = budget
+    run._poll_managed_status = AsyncMock(return_value=_status("completed"))
+    expected = AgentRunResult(summary="confirmed completion")
+    run._fetch_managed_result = AsyncMock(return_value=expected)
+
+    actual = await run._reconcile_managed_no_progress(
+        request=_request(),
+        adapter=object(),
+        uses_codex_session_adapter=False,
+        use_managed_status_activity=True,
+        resiliency_policy={"noProgressGraceSeconds": 1},
+        poll_interval=1,
+        initial_status=_status("running"),
+        overall_start=started,
+        timeout_seconds=10,
+    )
+
+    assert actual is expected
+    run._poll_managed_status.assert_awaited_once()
+    run._fetch_managed_result.assert_awaited_once()
+
+
+async def test_expired_automatic_successor_has_no_reconciliation_work_allowance(
+    monkeypatch,
+):
+    now = _clock(monkeypatch)
+    started = now[0] - timedelta(seconds=11)
+    budget = ExecutionBudgetContext(
+        budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 10}),
+        logicalStepId="step",
+        attemptId="first",
+        admittedAt=started,
+    ).successor(now=started + timedelta(seconds=9), attempt_id="second")
+    run = agent_run.MoonMindAgentRun()
+    run._execution_budget = budget
+    run._poll_managed_status = AsyncMock(return_value=_status("completed"))
+    run._fetch_managed_result = AsyncMock()
+    result = await run._reconcile_managed_no_progress(
+        request=_request(),
+        adapter=object(),
+        uses_codex_session_adapter=False,
+        use_managed_status_activity=True,
+        resiliency_policy={"noProgressGraceSeconds": 1},
+        poll_interval=1,
+        initial_status=_status("running"),
+        overall_start=started + timedelta(seconds=9),
+        timeout_seconds=10,
+    )
+    assert result is None
+    run._poll_managed_status.assert_not_awaited()
+    run._fetch_managed_result.assert_not_awaited()
 
 
 @pytest.mark.parametrize("status", ["completed", "running"])

@@ -761,11 +761,8 @@ managed supervision inherits consumed time. Older histories retain named replay 
 | `progress_stall_seconds` | How long observed progress may go stale before an over-base run is treated as stuck. |
 | `execution_budget_mode` | `progress_aware` or `flat`. |
 
-Omitted fields resolve to kind-specific defaults; the ceiling defaults to a
-multiple of the base window, so a tight requested budget keeps a tight ceiling.
-The stall window never exceeds the base window (a run's own start counts as an
-observation, so a wider stall window would erase the base window), and the base
-window is bound by the same absolute cap as the ceiling.
+Omitted fields use kind-specific defaults and a ceiling scaled to the base window.
+The stall window cannot exceed the base; both base and ceiling obey the absolute cap.
 
 Pre-progress histories retain flat deadlines.
 Initial capacity queueing and explicit safe-boundary pauses exclude only their
@@ -773,21 +770,23 @@ recorded intervals. Cooldown and automatic retries consume the original allowanc
 An explicit full retry admits a new, recorded allowance.
 
 **Elapsed wall-clock alone is not evidence that a run is stuck.** A run ends for
-budget only when the base window has elapsed with no progress observed within
-`progress_stall_seconds` (or ever), or when the hard ceiling is reached. The two
-outcomes are reported distinctly, because the operator responses differ (raise
-the ceiling versus investigate a wedged runtime), and the result records the
-budget and the condition that ended it.
+budget when the base window has elapsed without recent progress, or at the hard
+ceiling. The result records the budget and distinguishes stale progress from
+reaching the ceiling, so the operator can investigate or adjust the limit.
 
 Monotonic intervals resist host clock changes; persisted wall-clock timestamps
 correlate runtime evidence. Before ending for lack of progress, the supervisor
 samples CPU/workspace activity and the workflow checks fresh canonical status.
-Recovery preserves confirmed completion and bounds polling, result fetching and
-saving to the remaining allowance. Expiry stops task work. Observation, cancellation,
+No-progress grace and cancellation reconciliation use the admitted productive-time
+clock, including excluded waits, earned progress and previous attempts. Expiry
+stops task work. Observation, cancellation,
 terminal saving and cleanup may share one explicit 60-second finishing deadline,
 carried across retries and Continue-As-New; they cannot start another turn or new
 repository publication. Expiry of that allowance preserves readable confirmed
 results and reports incomplete saving/cleanup to the existing recovery owner.
+An unconfirmed terminal artifact save also stops with that diagnostic: its
+non-idempotent writes may already be durable, so a lost reply cannot authorize
+repeating them or replacing a confirmed execution result.
 Quota and non-retryable failure decisions retain their structured meanings.
 
 ### Progress evidence
