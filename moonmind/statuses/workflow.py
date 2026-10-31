@@ -66,7 +66,17 @@ def workflow_objective_outcome(
     memo: Mapping[str, Any],
     finish_summary: Mapping[str, Any] | None,
 ) -> ObjectiveOutcomeValue | None:
-    """Settle a completed projection whose memo predates its terminal Activity."""
+    """Project the workflow objective separately from its last agent turn."""
+    primary = finish_summary.get("primaryOutcome") if finish_summary else None
+    if (
+        state == "failed"
+        and isinstance(primary, Mapping)
+        and primary.get("kind") == "workflow_gate"
+        and primary.get("terminalDisposition") == "failed_with_remaining_work"
+    ):
+        # A verifier can finish its turn successfully while rejecting the
+        # enclosing objective. Its settled memo must not erase that rejection.
+        return "failed"
     value = memo.get("objectiveOutcome")
     outcome = (
         cast(ObjectiveOutcomeValue, value)
