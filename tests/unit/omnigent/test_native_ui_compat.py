@@ -359,8 +359,8 @@ def test_native_request_fields_are_consumed_by_the_pinned_runner() -> None:
     fixture = json.loads(
         (_CONTRACT_FIXTURE.parent / "native_http_ownership_3954.json").read_text()
     )
-    tree = ast.parse((_REPO_ROOT / "omnigent/omnigent/runner/app.py").read_text())
     for shape in fixture["requestShapes"]:
+        tree = ast.parse((_REPO_ROOT / shape["sourcePath"]).read_text())
         entry = next(
             node for node in ast.walk(tree)
             if isinstance(node, ast.AsyncFunctionDef)

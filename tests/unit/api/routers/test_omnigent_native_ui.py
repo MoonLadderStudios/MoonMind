@@ -22,8 +22,6 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from tests.support.native_ui import read_native_ui_bootstrap as _bootstrap
-
 from api_service.api.routers.omnigent_bridge import (
     _get_bridge_store,
     _get_execution_service,
@@ -40,17 +38,18 @@ from api_service.api.routers.omnigent_native_ui import (
     native_ui_router,
 )
 from api_service.api.workflow_chat_access import get_workflow_chat_access
-from moonmind.omnigent.native_ui import scoped_ui_base
 from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
+from moonmind.omnigent.native_ui import scoped_ui_base
+from tests.support.native_ui import read_native_ui_bootstrap as _bootstrap
 
 _USER_ID = uuid4()
 _CHAT_BINDING_ID = "chatb_opaque123"
 _PROVIDER_SESSION_ID = "prov-sess-secret-1"
 
 _INDEX_HTML = (
-    "<!doctype html><html><head><meta charset=\"utf-8\">"
+    '<!doctype html><html><head><meta charset="utf-8">'
     '<script type="module" src="/assets/index-abc.js"></script>'
-    "</head><body><div id=\"root\"></div></body></html>"
+    '</head><body><div id="root"></div></body></html>'
 ).encode("utf-8")
 
 
@@ -96,7 +95,7 @@ def _row(**overrides: Any) -> SimpleNamespace:
                 "agentProfile": grants,
                 "launchPolicy": grants,
                 "state": {"sessionEpoch": 2, "capabilities": grants},
-            }
+            },
         },
     )
     values.update(overrides)
@@ -183,6 +182,72 @@ def _url(suffix: str = "", *, binding: str = _CHAT_BINDING_ID) -> str:
 
 
 # --- Embedded document -------------------------------------------------------
+
+
+def test_bundled_native_assets_serve_through_the_authorized_default_source(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from api_service.api.routers import omnigent_native_ui as native_ui_module
+
+    (tmp_path / "index.html").write_bytes(_INDEX_HTML)
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets/index-abc.js").write_bytes(b"compiled native application")
+    monkeypatch.setattr(native_ui_module, "_NATIVE_UI_ASSET_ROOT", tmp_path)
+
+    def unexpected_network(*_args, **_kwargs):
+        pytest.fail("A bundled UI must not fetch assets from the upstream server")
+
+    monkeypatch.setattr(httpx, "AsyncClient", unexpected_network)
+    upstream = get_native_ui_upstream(SimpleNamespace(enabled=True))
+    client, _ = _build(upstream=upstream)
+    for suffix in ("", "c/bound-session"):
+        response = client.get(
+            _url(suffix), params={"embedded": "1", "sidebar": "closed"}
+        )
+        assert response.status_code == 200
+        assert _bootstrap(response.text)["chatBindingId"] == _CHAT_BINDING_ID
+        assert (
+            scoped_ui_base(_CHAT_BINDING_ID) + "/assets/index-abc.js" in response.text
+        )
+    response = client.get(_url("assets/index-abc.js"))
+    assert response.status_code == 200
+    assert response.content == b"compiled native application"
+    assert "javascript" in response.headers["content-type"]
+    assert client.get(_url("assets/missing.js")).status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path", ["/../private.js", "/%2e%2e/private.js", "/assets/escape.js"]
+)
+async def test_bundled_asset_root_rejects_traversal_and_symlink_escape(
+    tmp_path, path
+) -> None:
+    root = tmp_path / "bundle"
+    root.mkdir()
+    (root / "assets").mkdir()
+    secret = tmp_path / "private.js"
+    secret.write_bytes(b"not a UI asset")
+    (root / "assets/escape.js").symlink_to(secret)
+    source = NativeUiUpstream(base_url="", asset_root=root)
+
+    response = await source.fetch(path)
+    assert response.status_code == 404
+    assert response.content != secret.read_bytes()
+
+
+@pytest.mark.asyncio
+async def test_bundled_assets_keep_the_native_asset_size_limit(
+    tmp_path, monkeypatch
+) -> None:
+    from api_service.api.routers import omnigent_native_ui as native_ui_module
+
+    monkeypatch.setattr(native_ui_module, "_NATIVE_UI_MAX_ASSET_BYTES", 4)
+    (tmp_path / "index.html").write_bytes(b"larger than four bytes")
+    source = NativeUiUpstream(base_url="", asset_root=tmp_path)
+    with pytest.raises(NativeUiUpstreamError, match="exceeds the limit"):
+        await source.fetch("/")
 
 
 def test_embedded_document_serves_native_app_with_bootstrap() -> None:
@@ -457,9 +522,7 @@ def test_relative_redirect_traversal_fails_closed_to_scope() -> None:
     # verbatim (the browser would normalize it to an out-of-scope same-origin
     # path); it collapses to the scoped root instead.
     assert (
-        _rewrite_upstream_location(
-            "../../../../api/executions", scoped_base=base
-        )
+        _rewrite_upstream_location("../../../../api/executions", scoped_base=base)
         == base + "/"
     )
     # A benign relative redirect stays under the scoped base.
@@ -545,15 +608,11 @@ def test_encoded_dot_traversal_fails_closed_to_scope() -> None:
     # Browsers decode %2e segments into traversal while urlsplit/normpath do
     # not, so an encoded escape must fail closed just like a literal one.
     assert (
-        _rewrite_upstream_location(
-            "/%2e%2e/%2e%2e/api/executions", scoped_base=base
-        )
+        _rewrite_upstream_location("/%2e%2e/%2e%2e/api/executions", scoped_base=base)
         == base + "/"
     )
     assert (
-        _rewrite_upstream_location(
-            "/%2E%2E/%2E%2E/api/executions", scoped_base=base
-        )
+        _rewrite_upstream_location("/%2E%2E/%2E%2E/api/executions", scoped_base=base)
         == base + "/"
     )
     assert (
@@ -573,10 +632,6 @@ def test_sink_rejects_encoded_dot_traversal() -> None:
     base = scoped_ui_base(_CHAT_BINDING_ID)
     assert _is_safe_scoped_redirect(f"{base}/assets/x.js", scoped_base=base)
     assert _is_safe_scoped_redirect(base, scoped_base=base)
-    assert not _is_safe_scoped_redirect(
-        f"{base}/%2e%2e/evil", scoped_base=base
-    )
+    assert not _is_safe_scoped_redirect(f"{base}/%2e%2e/evil", scoped_base=base)
     assert not _is_safe_scoped_redirect(f"{base}/../evil", scoped_base=base)
-    assert not _is_safe_scoped_redirect(
-        "https://evil.test/x", scoped_base=base
-    )
+    assert not _is_safe_scoped_redirect("https://evil.test/x", scoped_base=base)

@@ -149,7 +149,7 @@ export function resolveSameOriginChatUrl(
 
 /**
  * Derive the MoonMind-scoped full-page "Open in Omnigent" href from the
- * server-generated embedded chat URL. The `embedded` presentational flag is
+ * server-generated embedded chat URL. Embed presentation flags are
  * dropped so the full-page surface renders native chrome, but the path stays
  * within the same MoonMind origin — the browser never navigates directly to the
  * upstream server.
@@ -171,6 +171,7 @@ export function fullPageChatHref(
     return null;
   }
   url.searchParams.delete('embedded');
+  url.searchParams.delete('sidebar');
   return `${url.pathname}${url.search}${url.hash}`;
 }
 

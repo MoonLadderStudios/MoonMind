@@ -20,8 +20,9 @@ class OmnigentSessionCleanupService:
         try:
             await self._client.stop_session(session_id)
         except Exception as exc:
-            # A host may not be removed while its session could still consume
-            # mounted credentials. Preserve this as janitor-retryable cleanup.
+            # A failed stop does not prove credential consumers are gone. The
+            # caller must retain cleanup or confirm its fenced host removal
+            # before releasing credentials and provider capacity.
             raise HarnessPlatformError(
                 "Omnigent session could not be drained before host cleanup",
                 code=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED,
