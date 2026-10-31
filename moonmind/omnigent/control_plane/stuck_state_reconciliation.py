@@ -36,7 +36,6 @@ from .stuck_state import (
     plan_response,
 )
 
-
 _EVENT_OBSERVATION_TYPES = (
     "event",
     "event_frontier",
@@ -251,10 +250,17 @@ async def inspect_stuck_state(
 ) -> Optional[StuckStateInspection]:
     """Load bounded durable evidence and evaluate one canonical session."""
 
-    with spans.omnigent_span(spans.OBSERVATION_LOAD, observation_source="durable_index"):
+    with spans.omnigent_span(
+        spans.OBSERVATION_LOAD, observation_source="durable_index"
+    ):
         session = await repos.sessions.get(session_id)
         if session is None or session.historical_read_state == "quarantined":
             return None
+        if await repos.sessions.has_agent_run_lifecycle_owner(session_id):
+            # Generic AgentRuns already own progress, recovery and cleanup.
+            # Their command journal is not a Session supervisor's observation
+            # stream, and dispatching to that absent supervisor cannot repair it.
+            return StuckStateInspection(session, (), None)
         active_turn = (
             await repos.turn_attempts.get(session.active_turn_attempt_id)
             if session.active_turn_attempt_id is not None
@@ -317,7 +323,9 @@ async def inspect_stuck_state(
         last_snapshot_at=(
             latest_snapshot.observed_at if latest_snapshot is not None else None
         ),
-        active_turn_started_at=(active_turn.created_at if active_turn is not None else None),
+        active_turn_started_at=(
+            active_turn.created_at if active_turn is not None else None
+        ),
         liveness_only_since=liveness_only_since,
         provider_terminal=provider_terminal,
         provider_active=provider_active,
@@ -357,9 +365,7 @@ async def inspect_stuck_state(
         status=(
             "ok"
             if compatibility_known is True
-            else "drift"
-            if compatibility_known is False
-            else "unknown"
+            else "drift" if compatibility_known is False else "unknown"
         ),
     )
     _increment_metric(
@@ -371,9 +377,7 @@ async def inspect_stuck_state(
         status=(
             "ok"
             if runner_available is True
-            else "degraded"
-            if runner_available is False
-            else "unknown"
+            else "degraded" if runner_available is False else "unknown"
         ),
     )
     with spans.omnigent_span(
@@ -443,7 +447,9 @@ class StuckStateReconciliationService:
         result = StuckStateSweepResult()
         async with self._session_factory() as db:
             repos = ControlPlaneRepositories.bind(db)
-            candidates = await repos.sessions.list_reconciliation_candidates(limit=limit)
+            candidates = await repos.sessions.list_reconciliation_candidates(
+                limit=limit
+            )
         for candidate in candidates:
             result.scanned += 1
             try:
@@ -483,7 +489,9 @@ class StuckStateReconciliationService:
             command = await repos.commands.get(request_id)
             decision = await repos.decisions.for_resulting_command(request_id)
             if session is None or session.moonmind_workflow_id != workflow_id:
-                raise ValueError("reconcile request does not own canonical workflow scope")
+                raise ValueError(
+                    "reconcile request does not own canonical workflow scope"
+                )
             if (
                 session.revision != expected_revision
                 or session.fencing_generation != expected_fencing_generation
@@ -588,9 +596,11 @@ class StuckStateReconciliationService:
         response_class = (
             "quarantine"
             if inspection.response and inspection.response.quarantine
-            else "reconcile"
-            if inspection.response and inspection.response.reconcile
-            else "observe"
+            else (
+                "reconcile"
+                if inspection.response and inspection.response.reconcile
+                else "observe"
+            )
         )
         async with self._session_factory() as db:
             repos = ControlPlaneRepositories.bind(db)
@@ -616,11 +626,11 @@ class StuckStateReconciliationService:
                 bounded_index={
                     "reason": reason,
                     "response": response_class,
-                    "detectionCount": inspection.response.diagnostics.get(
-                        "detection_count"
-                    )
-                    if inspection.response
-                    else 0,
+                    "detectionCount": (
+                        inspection.response.diagnostics.get("detection_count")
+                        if inspection.response
+                        else 0
+                    ),
                 },
             )
             # The production decision writer must supply a frontier digest

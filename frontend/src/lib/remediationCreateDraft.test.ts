@@ -8,7 +8,22 @@ import {
   remediationCreateDraftHref,
   readRemediationCreateDraft,
   storeRemediationCreateDraft,
+  updateRemediationCreateDraft,
+  type RemediationCreateDraft,
 } from './remediationCreateDraft';
+
+function authoredDraft(): RemediationCreateDraft {
+  const draft = buildRemediationCreateDraft({ workflowId: 'mm:target', runId: 'run-target' });
+  draft.authoring = {
+    request: {
+      type: 'task', priority: 5, maxAttempts: 3,
+      payload: { targetRuntime: 'codex_cli', task: { instructions: 'Edited repair.', remediation: draft.remediation } },
+    },
+    publishMode: 'none',
+    schedule: { mode: 'immediate', scheduledFor: '', deferredMinutes: '', cron: '', timezone: 'UTC', name: '' },
+  };
+  return draft;
+}
 
 describe('remediationCreateDraft', () => {
   beforeEach(() => {
@@ -137,6 +152,46 @@ describe('remediationCreateDraft', () => {
 
     clearRemediationCreateDraft(draftId);
     expect(readRemediationCreateDraft(draftId)).toBeNull();
+  });
+
+  it('updates authored submission without changing target, tab scope or expiry', () => {
+    const draft = authoredDraft();
+    const draftId = storeRemediationCreateDraft(draft);
+    updateRemediationCreateDraft(draftId, { ...draft, instructions: 'Edited repair.' });
+    expect(readRemediationCreateDraft(draftId)?.authoring).toEqual(draft.authoring);
+    const raw = window.sessionStorage.getItem(`moonmind.remediation-create-draft.${draftId}`)!;
+    window.sessionStorage.removeItem(`moonmind.remediation-create-draft.${draftId}`);
+    expect(inspectRemediationCreateDraft(draftId).status).toBe('cross_tab');
+    window.sessionStorage.setItem(`moonmind.remediation-create-draft.${draftId}`, raw);
+    expect(inspectRemediationCreateDraft(draftId, Date.parse(draft.createdAt) + REMEDIATION_CREATE_DRAFT_TTL_MS + 1).status).toBe('expired');
+    expect(window.sessionStorage.getItem(`moonmind.remediation-create-draft.${draftId}`)).toBeNull();
+  });
+
+  it('rejects replacing the original target or extending its expiry', () => {
+    const draft = authoredDraft();
+    const draftId = storeRemediationCreateDraft(draft);
+    expect(() => updateRemediationCreateDraft(draftId, { ...draft, createdAt: new Date(Date.now() + 1000).toISOString() })).toThrow(/unavailable or changed/);
+    const changed = authoredDraft();
+    changed.target = { workflowId: 'mm:other', runId: 'other-run' };
+    changed.remediation.target = changed.target;
+    expect(() => updateRemediationCreateDraft(draftId, changed)).toThrow(/unavailable or changed/);
+    expect(readRemediationCreateDraft(draftId)).toEqual(draft);
+  });
+
+  it.each([
+    ['instructions', (draft: RemediationCreateDraft) => { (draft.authoring!.request.payload as { task: Record<string, unknown> }).task.instructions = 42; }],
+    ['steps', (draft: RemediationCreateDraft) => { (draft.authoring!.request.payload as { task: Record<string, unknown> }).task.steps = ['bad-step']; }],
+    ['runtime', (draft: RemediationCreateDraft) => { (draft.authoring!.request.payload as { task: Record<string, unknown> }).task.runtime = 'bad-runtime'; }],
+    ['target', (draft: RemediationCreateDraft) => { (draft.authoring!.request.payload as { task: Record<string, unknown> }).task.remediation = { ...draft.remediation, target: { workflowId: 'mm:other', runId: 'other-run' } }; }],
+    ['priority', (draft: RemediationCreateDraft) => { draft.authoring!.request.priority = 'high'; }],
+    ['schedule', (draft: RemediationCreateDraft) => { delete (draft.authoring!.schedule as { deferredMinutes?: string }).deferredMinutes; }],
+  ] as const)('refuses malformed saved %s before returning any draft', (_field, corrupt) => {
+    const draft = authoredDraft();
+    // Break the serialized request independently of the pinned prefill.
+    draft.authoring = structuredClone(draft.authoring!);
+    corrupt(draft);
+    window.sessionStorage.setItem('moonmind.remediation-create-draft.corrupt-authoring', JSON.stringify(draft));
+    expect(inspectRemediationCreateDraft('corrupt-authoring')).toEqual({ status: 'malformed', draft: null });
   });
 
   it('preserves the immutable agent and Provider Profile selection', () => {

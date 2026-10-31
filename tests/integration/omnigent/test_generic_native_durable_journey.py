@@ -50,6 +50,7 @@ from api_service.services.provider_profile_readiness import (
     provider_profile_launch_ready,
 )
 from moonmind.omnigent import credential_materializers, production
+from moonmind.omnigent.codex_login import CODEX_ACCOUNT_READ_PROBE
 from moonmind.omnigent.harness_platform.catalog_service import (
     DbHarnessCatalogRepository,
 )
@@ -792,6 +793,10 @@ class NativeDocker(StaticCodexDocker):
                 ["claude", "auth", "status"],
             ):
                 return 0, "", ""
+            if CODEX_ACCOUNT_READ_PROBE in argv:
+                assert self.server.harness == "codex-native"
+                assert self.mounts[argv[-1]]["src"] == "journey_oauth"
+                return 0, "ready\n", ""
             if 'cat "$1/.moonmind-generation"' in " ".join(argv):
                 return 0, self.generations[self.mounts[argv[-1]]["src"]], ""
             # Image-local shell/runner probes are explicitly controlled here.
