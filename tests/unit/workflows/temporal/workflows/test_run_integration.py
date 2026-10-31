@@ -10133,3 +10133,50 @@ def test_native_disclosure_labels_initial_snapshot_and_current_comment(
     assert 'AC-2' in body
     assert ('Initial verification snapshot for revision abc.' in body) is current
     assert ('latest MoonMind verification-disclosure comment' in body) is current
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("current", [True, False], ids=["current", "retained-history"])
+async def test_issue_handoff_accepts_same_repository_alias_on_landed_target(
+    mock_run_workflow, monkeypatch, unverified_publication_gate, current,
+):
+    owner = mock_run_workflow
+    owner._repo = "org/repo"
+    owner._canonical_no_commit_outcome_enabled = True
+    owner._assessment_context = {"assessmentVerdict": "PARTIALLY_IMPLEMENTED"}
+    gate = unverified_publication_gate
+    binding = gate["validatedRefs"]["acceptance"]
+    binding["subject"]["repository"] = "https://github.com/org/repo.git"
+    binding["completionTarget"] = {
+        "ref": "refs/heads/main", "revision": "abc", "contentDigest": "git-tree:abc",
+    }
+    original_gate = json.loads(json.dumps(gate))
+    owner._publish_context["moonSpecGate"] = gate
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "patched",
+        lambda key: current if key == "run-acceptance-repository-identity-v1"
+        else _all_patches_except_empty_skillset(key),
+    )
+    execute = AsyncMock()
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", execute)
+    parameters = {
+        "publishMode": "pr", "workflow": {"appliedStepTemplates": [
+            {"slug": "github-issue-implement", "version": "1.0.0"},
+        ]},
+    }
+    owner._record_publish_result(
+        parameters=parameters, execution_result={"outputs": {"push_status": "no_commits"}},
+    )
+    node = {"annotations": {"issueImplementRole": "code-review-handoff"}}
+    if current:
+        assert await owner._ensure_issue_implement_pr_before_status(
+            node=node, parameters=parameters,
+        ) is None
+        assert owner._publish_status == "not_required"
+        assert owner._target_acceptance_evidence() is gate
+    else:
+        with pytest.raises(ValueError, match="remotely verified branch"):
+            await owner._ensure_issue_implement_pr_before_status(node=node, parameters=parameters)
+    execute.assert_not_awaited()
+    assert gate == original_gate
+    assert owner._assessment_context["assessmentVerdict"] == "PARTIALLY_IMPLEMENTED"
