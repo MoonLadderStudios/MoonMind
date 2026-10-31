@@ -102,6 +102,7 @@ async def test_explicit_selected_artifact_review_uses_existing_admission(review_
     assert workflow["reportOutput"]["required"] is False
     assert workflow["reportOutput"]["subject"]["source"]["workflowId"] == "source"
     assert workflow["steps"][0]["timeoutPolicy"]["timeout_seconds"] == 120
+    assert workflow["steps"][0]["annotations"] == {"optionalReview": True}
     assert "untrusted" in workflow["instructions"]
     assert "artifact://art_selected" in workflow["instructions"]
     assert hashlib.sha256(body).hexdigest() in workflow["instructions"]

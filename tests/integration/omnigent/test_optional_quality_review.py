@@ -8,6 +8,8 @@ report publication use their production owners. No paid provider or deployment.
 from __future__ import annotations
 
 import hashlib
+import json
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -81,11 +83,22 @@ def verifier_skill(monkeypatch):
 
 
 @pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
-@pytest.mark.parametrize("review_kind", ["findings", "unavailable"])
+@pytest.mark.parametrize(
+    "review_kind",
+    [
+        "findings",
+        "unavailable",
+        "partial",
+        "missing_report",
+        "provider_failed",
+        "provider_failed_report_pending",
+    ],
+)
 async def test_explicit_review_native_journey_and_report_only_recovery(
-    native_journey, monkeypatch, review_kind
+    native_journey, monkeypatch, review_kind, tmp_path
 ):
     journey = native_journey
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path / "runtime-store"))
     monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
     inventory = await OmnigentHttpClient(base_url=resolved_server_url()).list_agents()
     operator = OperatorAdmission(via="loopback")
@@ -208,10 +221,27 @@ async def test_explicit_review_native_journey_and_report_only_recovery(
     monkeypatch.setattr(run_module.workflow, "info", lambda: info)
     monkeypatch.setattr(run_module.workflow, "now", lambda: datetime.now(UTC))
     monkeypatch.setattr(run_module.workflow, "patched", lambda _: True)
+    async with journey.session_factory() as session:
+        registry_artifacts = TemporalArtifactService(
+            TemporalArtifactRepository(session)
+        )
+        registry, _ = await registry_artifacts.create(
+            principal=access.principal, content_type="application/json"
+        )
+        await registry_artifacts.write_complete(
+            artifact_id=registry.artifact_id,
+            principal=access.principal,
+            payload=b'{"skills": []}',
+            content_type="application/json",
+        )
     planned = _build_runtime_planner()(
         inputs={"workflow": parameters["workflow"]},
         parameters=parameters,
-        snapshot=SimpleNamespace(digest="reg:sha256:test", artifact_ref="art_registry"),
+        snapshot=run_module.ToolRegistrySnapshot(
+            digest=run_module.compute_registry_digest(skills=()),
+            artifact_ref=registry.artifact_id,
+            skills=(),
+        ),
     )
     assert len(planned["nodes"]) == 1
     node = planned["nodes"][0]
@@ -222,211 +252,367 @@ async def test_explicit_review_native_journey_and_report_only_recovery(
     }
     parent = run_module.MoonMindRunWorkflow()
     assert parent._moonspec_step_role(node) == ""
-    request = parent._build_agent_execution_request(
-        node_inputs=node["inputs"],
-        node_id=node["id"],
-        tool_name=node["tool"]["name"],
-        workflow_parameters=parameters,
-        resolved_skillset_ref=parameters["resolvedSkillsetRef"],
-    )
-    assert request.timeout_policy["timeout_seconds"] == 120
-    assert request.skill["name"] == "moonspec-verify"
-    data = request.model_dump(by_alias=True, mode="json")
-    # Workflow provider-capacity RPC is controlled; preserve its actual SQL grant
-    # while binding it to the plan admitted by the API above.
-    capacity = journey.request.admitted_provider_capacity.model_dump(
-        by_alias=True, mode="json"
-    )
-    capacity.update(
-        executionPlanRef=plan.planRef,
-        stepExecutionId=request.step_execution.step_execution_id,
-        idempotencyKey=request.idempotency_key,
-    )
-    data["admittedProviderCapacity"] = capacity
-    request = AgentExecutionRequest.model_validate(data)
-    async with journey.session_factory() as session:
-        lease = await session.get(ProviderProfileSlotLease, journey.provider_lease_id)
-        lease.execution_plan_ref = plan.planRef
-        lease.step_execution_id = request.step_execution.step_execution_id
-        lease.idempotency_key = request.idempotency_key
-        await session.commit()
-    journey.manager.plan, journey.manager.request = plan, request
-    await journey.gateway.admit_execution_plan_inputs(request=request, plan=plan)
-    journey.docker.host_class, _ = await journey.services.planned_host_resolver(
-        plan, request=request
-    )
-    report = (
-        f"Advisory review of {source.workflow_id}/{source.run_id}\n"
-        f"Candidate sha256:{digest}; scope: selected output only.\n"
-        f"Finding: test claim lacks evidence [{artifact.artifact_id}](artifact://{artifact.artifact_id}).\n"
-        "Confidence: limited to supplied output. Required tests remain failed.\n"
-        "Recommendation: supply actual test results. No authority granted."
-    )
-    if review_kind == "unavailable":
-        journey.server.terminal_status = "failed"
+    assert not parent._is_moonspec_verify_step(
+        tool_name=node["tool"]["name"], node_inputs=node["inputs"]
+    ), "The explicitly optional review must not become a parent completion gate"
+
+    async def recover_and_present(restored, computed, report):
+        async with journey.session_factory() as session:
+            artifacts = TemporalArtifactService(TemporalArtifactRepository(session))
+            recovered_publisher = TemporalAgentRuntimeActivities(
+                artifact_service=artifacts
+            )
+            monkeypatch.setattr(
+                recovered_publisher,
+                "execution_notify_completion",
+                AsyncMock(return_value={"status": "skipped"}),
+            )
+            saved = await recovered_publisher.agent_runtime_publish_artifacts(restored)
+            report_id = saved.metadata["primaryReportRef"]
+            metadata, _, _, read_policy = await artifacts.get_metadata(
+                artifact_id=report_id, access=access
+            )
+            assert (
+                metadata.metadata_json["subject"]
+                == parameters["reportOutput"]["subject"]
+            )
+            assert read_policy.preview_artifact_ref is not None
+            rendered = (
+                (
+                    await artifacts.read(
+                        artifact_id=read_policy.default_read_ref.artifact_id,
+                        access=access,
+                    )
+                )[1]
+                .decode()
+                .strip()
+            )
+            expected_body = (
+                report or "Review unavailable: no textual assessment was produced."
+            )
+            if computed.failure_class:
+                expected_body += (
+                    "\n\nPartial review: provider execution failed "
+                    f"({computed.failure_class}); observations may be incomplete."
+                )
+            assert rendered == "# Final report\n\n" + expected_body
+            assert (
+                await artifacts.read(artifact_id=artifact.artifact_id, access=access)
+            )[1] == candidate
+            persisted_source = await session.get(
+                TemporalExecutionCanonicalRecord, source.workflow_id
+            )
+            assert persisted_source.parameters["requiredTests"] == "failed"
+            assert persisted_source.parameters["approvalRequired"] is True
+            assert persisted_source.state == MoonMindWorkflowState.COMPLETED
+            presented_service = TemporalExecutionService(session)
+            presented_service._client_adapter.describe_workflow = AsyncMock(
+                return_value=None
+            )
+            app.dependency_overrides[executions._get_service] = (
+                lambda: presented_service
+            )
+            app.dependency_overrides[get_async_session] = lambda: session
+            app.dependency_overrides[get_instance_access_optional] = lambda: operator
+            app.dependency_overrides[executions.get_temporal_client] = (
+                lambda: SimpleNamespace(
+                    get_workflow_handle=lambda _id: SimpleNamespace(
+                        describe=AsyncMock(return_value=None),
+                        query=AsyncMock(return_value=None),
+                    )
+                )
+            )
+            app.dependency_overrides[executions._execution_request_artifact_access] = (
+                lambda: access
+            )
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                displayed = await client.get(f"/api/executions/{record.workflow_id}")
+            assert displayed.status_code == 200, displayed.text
+            assert displayed.json()["reportProjection"]["hasReport"] is True
+            assert (
+                displayed.json()["reportProjection"]["latestReportRef"]["artifact_id"]
+                == report_id
+            )
+        return saved
+
+    child_calls = []
+    pending_report = {}
+
+    async def execute_review_child(workflow_name, request, **kwargs):
+        assert workflow_name == "MoonMind.AgentRun"
+        child_calls.append(kwargs["id"])
+        assert len(child_calls) == 1, "Parent repeated completed advisory compute"
+        assert request.timeout_policy["timeout_seconds"] == 120
+        assert request.skill["name"] == "moonspec-verify"
+        assert "verify_artifact_path" not in request.parameters
+        data = request.model_dump(by_alias=True, mode="json")
+        # Workflow provider-capacity RPC is controlled; preserve its actual SQL grant
+        # while binding it to the plan admitted by the API above.
+        capacity = journey.request.admitted_provider_capacity.model_dump(
+            by_alias=True, mode="json"
+        )
+        capacity.update(
+            executionPlanRef=plan.planRef,
+            stepExecutionId=request.step_execution.step_execution_id,
+            idempotencyKey=request.idempotency_key,
+        )
+        data["admittedProviderCapacity"] = capacity
+        request = AgentExecutionRequest.model_validate(data)
+        async with journey.session_factory() as session:
+            lease = await session.get(
+                ProviderProfileSlotLease, journey.provider_lease_id
+            )
+            lease.execution_plan_ref = plan.planRef
+            lease.step_execution_id = request.step_execution.step_execution_id
+            lease.idempotency_key = request.idempotency_key
+            await session.commit()
+        journey.manager.plan, journey.manager.request = plan, request
+        await journey.gateway.admit_execution_plan_inputs(request=request, plan=plan)
+        journey.docker.host_class, _ = await journey.services.planned_host_resolver(
+            plan, request=request
+        )
         report = (
-            f"Review unavailable for {source.workflow_id}/{source.run_id}; "
-            f"candidate sha256:{digest}; scope: selected output only. "
-            "Provider observations were unavailable. This is not a clean bill of health."
+            f"Advisory review of {source.workflow_id}/{source.run_id}\n"
+            f"Candidate sha256:{digest}; scope: selected output only.\n"
+            f"Finding: test claim lacks evidence [{artifact.artifact_id}](artifact://{artifact.artifact_id}).\n"
+            "Confidence: limited to supplied output. Required tests remain failed.\n"
+            "Recommendation: supply actual test results. No authority granted."
         )
-    original_response = journey.server.append_assistant_response
+        if review_kind in {
+            "unavailable",
+            "provider_failed",
+            "provider_failed_report_pending",
+        }:
+            if review_kind.startswith("provider_failed"):
+                journey.server.terminal_status = "failed"
+            report = (
+                f"Review unavailable for {source.workflow_id}/{source.run_id}; "
+                f"candidate sha256:{digest}; scope: selected output only. "
+                "Provider observations were unavailable. This is not a clean bill of health."
+            )
+        if review_kind == "partial":
+            report = (
+                f"Partial review for {source.workflow_id}/{source.run_id}; "
+                f"candidate sha256:{digest}; scope: selected output only. "
+                "The supplied output was reviewed; required test evidence was unavailable."
+            )
+        original_response = journey.server.append_assistant_response
 
-    def respond(_text):
-        assert b"private-value" not in journey.server.delivered_skill
-        (journey.server.workspace / native_fixture.RESULT_PATH).write_text(report)
-        original_response(report)
+        def respond(_text):
+            assert b"private-value" not in journey.server.delivered_skill
+            (journey.server.workspace / native_fixture.RESULT_PATH).write_text(report)
+            original_response(report)
 
-    monkeypatch.setattr(journey.server, "append_assistant_response", respond)
-    computed = await journey.realizer.execute(request, plan)
-    assert (computed.failure_class is None) == (review_kind == "findings"), computed
-    turns = [e for e in journey.server.events if e.get("type") == "message"]
-    assert len(turns) == 1
-    assert "private-value" not in turns[0]["data"]["content"][0]["text"]
-    assert artifact.artifact_id in turns[0]["data"]["content"][0]["text"]
+        monkeypatch.setattr(journey.server, "append_assistant_response", respond)
+        computed = await journey.realizer.execute(request, plan)
+        assert (computed.failure_class is None) == (
+            not review_kind.startswith("provider_failed")
+        ), computed
+        turns = [e for e in journey.server.events if e.get("type") == "message"]
+        assert len(turns) == 1
+        assert "private-value" not in turns[0]["data"]["content"][0]["text"]
+        assert artifact.artifact_id in turns[0]["data"]["content"][0]["text"]
 
-    # The existing publisher receives the committed AgentRun result. A lost
-    # report transport is retried through this owner with no new native turn.
-    child = MoonMindAgentRun()
-    child_id = f"{record.workflow_id}:agent:review"
-    monkeypatch.setattr(
-        run_module.workflow,
-        "info",
-        lambda: SimpleNamespace(
-            namespace=record.namespace,
-            workflow_id=child_id,
-            run_id="child-run",
-            parent=ParentInfo(
+        # The existing publisher receives the committed AgentRun result. A lost
+        # report transport is retried through this owner with no new native turn.
+        child = MoonMindAgentRun()
+        child_id = kwargs["id"]
+        monkeypatch.setattr(
+            run_module.workflow,
+            "info",
+            lambda: SimpleNamespace(
                 namespace=record.namespace,
-                workflow_id=record.workflow_id,
-                run_id=record.run_id,
+                workflow_id=child_id,
+                run_id="child-run",
+                parent=ParentInfo(
+                    namespace=record.namespace,
+                    workflow_id=record.workflow_id,
+                    run_id=record.run_id,
+                ),
             ),
-        ),
-    )
-    completed = child._enrich_result_metadata(
-        request=request, result=computed, include_parent_execution=True
-    )
-    monkeypatch.setattr(
-        activity,
-        "info",
-        lambda: SimpleNamespace(
-            namespace=record.namespace,
-            workflow_id=child_id,
-            workflow_run_id="child-run",
-        ),
-    )
-    temporal_server, _ = _recorded_server(
-        DescribeWorkflowExecutionResponse(
-            workflow_execution_info={
-                "execution": {"workflow_id": child_id, "run_id": "child-run"},
-                "parent_execution": {
-                    "workflow_id": record.workflow_id,
-                    "run_id": record.run_id,
-                },
-                "parent_namespace_id": "namespace-default",
-            }
         )
+        completed = child._enrich_result_metadata(
+            request=request, result=computed, include_parent_execution=True
+        )
+        monkeypatch.setattr(
+            activity,
+            "info",
+            lambda: SimpleNamespace(
+                namespace=record.namespace,
+                workflow_id=child_id,
+                workflow_run_id="child-run",
+            ),
+        )
+        temporal_server, _ = _recorded_server(
+            DescribeWorkflowExecutionResponse(
+                workflow_execution_info={
+                    "execution": {"workflow_id": child_id, "run_id": "child-run"},
+                    "parent_execution": {
+                        "workflow_id": record.workflow_id,
+                        "run_id": record.run_id,
+                    },
+                    "parent_namespace_id": "namespace-default",
+                }
+            )
+        )
+        monkeypatch.setattr(
+            activity,
+            "client",
+            lambda: SimpleNamespace(
+                namespace=record.namespace, workflow_service=temporal_server
+            ),
+        )
+        async with journey.session_factory() as session:
+            artifacts = TemporalArtifactService(TemporalArtifactRepository(session))
+            publisher = TemporalAgentRuntimeActivities(artifact_service=artifacts)
+            monkeypatch.setattr(
+                publisher,
+                "execution_notify_completion",
+                AsyncMock(return_value={"status": "skipped"}),
+            )
+            publish = artifacts.publish_report_bundle
+            monkeypatch.setattr(
+                artifacts,
+                "publish_report_bundle",
+                AsyncMock(side_effect=RuntimeError("report transport interrupted")),
+            )
+            # No forged parent handoff is needed: the report's executionRef is the
+            # original API-admitted review run and the producer remains service-owned.
+            with pytest.raises(RuntimeError, match="report transport interrupted"):
+                await publisher.agent_runtime_publish_artifacts(completed)
+            monkeypatch.setattr(artifacts, "publish_report_bundle", publish)
+            result_access = ArtifactAccessContext.for_service("system:agent_runtime")
+            committed = await artifacts.list_for_execution(
+                namespace=record.namespace,
+                workflow_id=child_id,
+                run_id="child-run",
+                link_type="output.agent_result",
+                latest_only=True,
+                access=result_access,
+            )
+            assert committed
+            _, committed_bytes = await artifacts.read(
+                artifact_id=committed[0].artifact_id,
+                access=result_access,
+            )
+            restored = AgentRunResult.model_validate_json(committed_bytes)
+            assert not journey.server.host_alive
+        if review_kind in {"missing_report", "provider_failed_report_pending"}:
+            pending_report.update(restored=restored, computed=computed, report=report)
+            saved = restored
+            assert "primaryReportRef" not in saved.metadata
+        else:
+            saved = await recover_and_present(restored, computed, report)
+        assert (
+            len([e for e in journey.server.events if e.get("type") == "message"]) == 1
+        )
+        monkeypatch.setattr(run_module.workflow, "info", lambda: info)
+        return saved
+
+    # The parent reads its actual persisted planner output and writes its ordinary
+    # step manifests through the artifact owner. Only Temporal RPC is controlled;
+    # child results come from native compute and interrupted report recovery above.
+    enabled = {
+        run_module.RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+        run_module.RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
+        run_module.RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH,
+        run_module.RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH,
+        run_module.RUN_MOONSPEC_GATE_CONTRACT_REPAIR_PATCH,
+        run_module.RUN_MOONSPEC_GATE_CONTRACT_SINGLE_REPAIR_PATCH,
+        run_module.RUN_MOONSPEC_VERIFY_REPORT_RECOVERY_PATCH,
+        run_module.RUN_ADVISORY_ARTIFACT_REVIEW_PATCH,
+        run_module.RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH,
+        run_module.RUN_EXECUTION_SCOPED_PRINCIPAL_PATCH,
+        run_module.RUN_STEP_PROFILE_SELECTION_INHERITANCE_PATCH,
+        run_module.RUN_ACCOUNT_INTENT_NORMALIZATION_PATCH,
+        run_module.RUN_WORKFLOW_PREPARED_INPUTS_PATCH,
+        run_module.RUN_DEFER_WORKFLOW_SCOPED_SESSION_UNTIL_SLOT_PATCH,
+        run_module.RUN_LOGICAL_STEP_EXECUTION_BUDGET_PATCH,
+        "run-typed-agent-outcomes-v1",
+    }
+    monkeypatch.setattr(run_module.workflow, "logger", logging.getLogger(__name__))
+    monkeypatch.setattr(run_module.workflow, "patched", lambda name: name in enabled)
+    monkeypatch.setattr(run_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_module.workflow, "upsert_search_attributes", lambda _attrs: None
     )
     monkeypatch.setattr(
-        activity,
-        "client",
-        lambda: SimpleNamespace(
-            namespace=record.namespace, workflow_service=temporal_server
-        ),
+        run_module.workflow, "execute_child_workflow", execute_review_child
     )
+
+    async def wait_condition(predicate, **_kwargs):
+        assert predicate(), "Unexpected parent wait in the controlled scheduler"
+
+    monkeypatch.setattr(run_module.workflow, "wait_condition", wait_condition)
+    activity_calls = []
     async with journey.session_factory() as session:
         artifacts = TemporalArtifactService(TemporalArtifactRepository(session))
-        publisher = TemporalAgentRuntimeActivities(artifact_service=artifacts)
-        monkeypatch.setattr(
-            publisher,
-            "execution_notify_completion",
-            AsyncMock(return_value={"status": "skipped"}),
+        plan_artifact, _ = await artifacts.create(
+            principal=access.principal, content_type="application/json"
         )
-        publish = artifacts.publish_report_bundle
-        monkeypatch.setattr(
-            artifacts,
-            "publish_report_bundle",
-            AsyncMock(side_effect=RuntimeError("report transport interrupted")),
+        await artifacts.write_complete(
+            artifact_id=plan_artifact.artifact_id,
+            principal=access.principal,
+            payload=json.dumps(planned).encode(),
+            content_type="application/json",
         )
-        # No forged parent handoff is needed: the report's executionRef is the
-        # original API-admitted review run and the producer remains service-owned.
-        with pytest.raises(RuntimeError, match="report transport interrupted"):
-            await publisher.agent_runtime_publish_artifacts(completed)
-        monkeypatch.setattr(artifacts, "publish_report_bundle", publish)
-        result_access = ArtifactAccessContext.for_service("system:agent_runtime")
-        committed = await artifacts.list_for_execution(
-            namespace=record.namespace,
-            workflow_id=child_id,
-            run_id="child-run",
-            link_type="output.agent_result",
-            latest_only=True,
-            access=result_access,
-        )
-        assert committed
-        _, committed_bytes = await artifacts.read(
-            artifact_id=committed[0].artifact_id,
-            access=result_access,
-        )
-        restored = AgentRunResult.model_validate_json(committed_bytes)
-        assert not journey.server.host_alive
-        recovered_publisher = TemporalAgentRuntimeActivities(artifact_service=artifacts)
-        monkeypatch.setattr(
-            recovered_publisher,
-            "execution_notify_completion",
-            AsyncMock(return_value={"status": "skipped"}),
-        )
-        saved = await recovered_publisher.agent_runtime_publish_artifacts(restored)
-        report_id = saved.metadata["primaryReportRef"]
-        metadata, _, _, read_policy = await artifacts.get_metadata(
-            artifact_id=report_id, access=access
-        )
-        assert (
-            metadata.metadata_json["subject"] == parameters["reportOutput"]["subject"]
-        )
-        assert read_policy.preview_artifact_ref is not None
-        rendered = (
-            (
-                await artifacts.read(
-                    artifact_id=read_policy.default_read_ref.artifact_id, access=access
+
+        async def artifact_activity(name, payload, **_kwargs):
+            activity_calls.append(name)
+            if name == "artifact.read":
+                return (
+                    await artifacts.read(
+                        artifact_id=payload.artifact_ref, access=access
+                    )
+                )[1]
+            if name == "artifact.create":
+                created, _ = await artifacts.create(
+                    principal=payload["principal"],
+                    content_type=payload["content_type"],
+                    metadata_json={
+                        **payload.get("metadata_json", {}),
+                        "name": payload["name"],
+                    },
                 )
-            )[1]
-            .decode()
-            .strip()
-        )
-        expected_body = report
-        if computed.failure_class:
-            expected_body += (
-                "\n\nPartial review: provider execution failed "
-                f"({computed.failure_class}); observations may be incomplete."
+                return {"artifact_id": created.artifact_id}
+            if name == "artifact.write_complete":
+                return await artifacts.write_complete(
+                    artifact_id=payload.artifact_id,
+                    principal=payload.principal,
+                    payload=payload.payload,
+                    content_type=payload.content_type,
+                )
+            pytest.fail(f"Unexpected parent side effect: {name}")
+
+        monkeypatch.setattr(run_module, "execute_typed_activity", artifact_activity)
+        monkeypatch.setattr(run_module.workflow, "execute_activity", artifact_activity)
+        if review_kind.startswith("provider_failed"):
+            with pytest.raises(ValueError, match="controlled_native_failure"):
+                await parent._run_execution_stage(
+                    parameters=parameters, plan_ref=plan_artifact.artifact_id
+                )
+        else:
+            await parent._run_execution_stage(
+                parameters=parameters, plan_ref=plan_artifact.artifact_id
             )
-        assert rendered == "# Final report\n\n" + expected_body
-        assert (await artifacts.read(artifact_id=artifact.artifact_id, access=access))[
-            1
-        ] == candidate
-        persisted_source = await session.get(
-            TemporalExecutionCanonicalRecord, source.workflow_id
-        )
-        assert persisted_source.parameters["requiredTests"] == "failed"
-        assert persisted_source.parameters["approvalRequired"] is True
-        assert persisted_source.state == MoonMindWorkflowState.COMPLETED
-        presented_service = TemporalExecutionService(session)
-        presented_service._client_adapter.describe_workflow = AsyncMock(
-            return_value=None
-        )
-        app.dependency_overrides[executions._get_service] = lambda: presented_service
-        app.dependency_overrides[get_async_session] = lambda: session
-        app.dependency_overrides[get_instance_access_optional] = lambda: operator
-        app.dependency_overrides[executions.get_temporal_client] = lambda: AsyncMock()
-        app.dependency_overrides[executions._execution_request_artifact_access] = (
-            lambda: access
-        )
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            displayed = await client.get(f"/api/executions/{record.workflow_id}")
-        assert displayed.status_code == 200, displayed.text
-        assert displayed.json()["reportProjection"]["hasReport"] is True
-        assert (
-            displayed.json()["reportProjection"]["latestReportRef"]["artifact_id"]
-            == report_id
-        )
+            assert parent._step_ledger_row_for(node["id"])["status"] == "completed"
+            assert parent._plan_blocked_message is None
+            assert (
+                parent._determine_publish_completion(parameters=parameters)[0]
+                == "success"
+            )
+    if pending_report:
+        await recover_and_present(**pending_report)
+    assert len(child_calls) == 1
+    assert set(activity_calls) <= {
+        "artifact.read",
+        "artifact.create",
+        "artifact.write_complete",
+    }
+    assert parent._moonspec_gate_verdict is None
+    assert "moonSpecGate" not in parent._publish_context
+    assert parent._publish_context.get("publicationBlockedBy") is None
+    assert parent._step_ledger_row_for(node["id"])["checks"] == []
     assert len([e for e in journey.server.events if e.get("type") == "message"]) == 1
