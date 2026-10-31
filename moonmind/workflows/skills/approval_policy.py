@@ -13,8 +13,10 @@ import json
 import math
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
+from moonmind.core.artifacts import durable_artifact_ref
+from moonmind.utils.logging import scrub_github_tokens
 from moonmind.workflows.skills.tool_plan_contracts import (
     ContractValidationError,
     REVIEW_VERDICTS,
@@ -32,6 +34,122 @@ _VERDICT_SYNONYMS = {
     "FAIL": "ADDITIONAL_WORK_NEEDED",
     "INCONCLUSIVE": "NO_DETERMINATION",
 }
+
+_GATE_VERDICT_KEYS = (
+    "verdict", "gateVerdict", "gate_verdict", "moonSpecVerdict",
+    "moonspecVerdict", "verificationVerdict", "verification_verdict",
+)
+_RETAINED_GATE_CONTAINERS = (
+    "moonspecVerify", "moonspec_verify", "verification", "verificationResult",
+    "verification_result", "gate", "review",
+)
+
+
+def step_gate_sources(outputs: Mapping[str, Any]) -> Iterator[Mapping[str, Any]]:
+    """Read the publisher envelope, then retained result shapes in recorded order.
+
+    Old Activity results and saved step outputs can carry the other containers.
+    Keep that decoder here until those histories and restart inputs are drained.
+    """
+    canonical = outputs.get("moonSpecVerify")
+    if isinstance(canonical, Mapping):
+        yield canonical
+    for key in _RETAINED_GATE_CONTAINERS:
+        candidate = outputs.get(key)
+        if isinstance(candidate, Mapping):
+            yield candidate
+    yield outputs
+
+
+def step_gate_payload(outputs: Mapping[str, Any]) -> dict[str, Any]:
+    """Select a structured verdict; prose never supplies a gate decision."""
+    for source in step_gate_sources(outputs):
+        for key in _GATE_VERDICT_KEYS:
+            if source.get(key):
+                return {**source, "verdict": source[key]}
+    return {}
+
+
+def normalize_step_gate_verdict(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().upper().replace("-", "_").replace(" ", "_")
+    if normalized in {"PASS", "FAIL"}:
+        normalized = _VERDICT_SYNONYMS[normalized]
+    # The historical display projection recognizes this terminal value even
+    # though it is deliberately not a valid canonical verifier verdict.
+    if normalized in REVIEW_VERDICTS or normalized == "ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION":
+        return normalized
+    return None
+
+
+def step_gate_result_ref(outputs: Mapping[str, Any]) -> str | None:
+    for source in step_gate_sources(outputs):
+        for key in (
+            "gateResultRef", "gate_result_ref", "stepGateResultRef",
+            "step_gate_result_ref", "artifactRef", "artifact_ref",
+            "diagnosticsRef", "diagnostics_ref",
+        ):
+            ref = _gate_text(source.get(key), max_chars=400)
+            if ref:
+                return ref
+    return None
+
+
+def _gate_text(value: Any, *, max_chars: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return " ".join(value.split())[:max_chars].rstrip() or None
+
+
+def _has_gate_report(outputs: Mapping[str, Any]) -> bool:
+    for source in step_gate_sources(outputs):
+        values = [source.get(key) for key in (
+            "moonSpecVerifyReport", "moonspecVerifyReport", "verificationReport",
+            "verification_report", "lastAssistantText", "assistantText", "summary", "message",
+        )]
+        metadata = source.get("turnMetadata")
+        if isinstance(metadata, Mapping):
+            values.extend(metadata.get(key) for key in ("assistantText", "lastAssistantText"))
+        if any(
+            isinstance(value, str)
+            and "# MoonSpec Verification Report" in value
+            and "**Verdict**" in value
+            for value in values
+        ):
+            return True
+    return False
+
+
+def canonicalize_step_gate_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve the Skill's explicit action at artifact publication."""
+    canonical = dict(payload)
+    recoverable_raw = (
+        canonical.get("recoverableInCurrentRuntime")
+        if "recoverableInCurrentRuntime" in canonical
+        else canonical.get("recoverable_in_current_runtime")
+    )
+    recoverable = str(recoverable_raw).strip().lower() in {"1", "true", "yes", "on"}
+    action = recommended_next_action_for_verdict(
+        canonical.get("verdict"), recoverable_in_current_runtime=recoverable,
+    )
+    if not action:
+        return canonical
+    raw_action = canonical.get("recommendedNextAction")
+    if raw_action is None:
+        raw_action = canonical.get("recommended_next_action")
+    text = raw_action.strip() if isinstance(raw_action, str) else None
+    if text in recommended_next_actions():
+        canonical["recommendedNextAction"] = text
+    else:
+        if raw_action is not None and text != action:
+            canonical.setdefault(
+                "rawRecommendedNextAction",
+                raw_action if isinstance(raw_action, str) else str(raw_action),
+            )
+        canonical["recommendedNextAction"] = action
+    canonical.pop("recommended_next_action", None)
+    return canonical
 
 
 def recommended_next_actions(verdict: Any = None) -> tuple[str, ...]:
@@ -428,6 +546,138 @@ class StepGateResult:
             downgrade_reason=self.downgrade_reason,
         )
 
+@dataclass(frozen=True, slots=True)
+class PreparedStepGate:
+    """One owner-prepared decision and its durable workflow projection."""
+
+    result: StepGateResult
+    result_ref: str | None
+    context: Mapping[str, Any]
+
+
+def prepare_step_gate_record(
+    outputs: Mapping[str, Any],
+    *,
+    logical_step_id: str,
+    result: StepGateResult,
+    remaining_work_evidence_enabled: bool,
+    evidence_continuation_enabled: bool,
+) -> PreparedStepGate:
+    """Prepare continuation evidence without changing workflow state or commands."""
+    reason = (
+        "MoonSpec verification report was present but structured gate output "
+        "was missing."
+        if result.degraded and _has_gate_report(outputs)
+        else None
+    )
+    if reason is None:
+        for source in step_gate_sources(outputs):
+            reason = _gate_text(
+                source.get("operator_summary") or source.get("operatorSummary")
+                or source.get("summary") or source.get("message"),
+                max_chars=700,
+            )
+            if reason:
+                reason = scrub_github_tokens(reason).strip() or None
+            if reason:
+                break
+    diagnostics_ref = None
+    for source in step_gate_sources(outputs):
+        diagnostics_ref = _gate_text(
+            source.get("diagnostics_ref") or source.get("diagnosticsRef")
+            or source.get("verificationReportRef") or source.get("verification_report_ref")
+            or source.get("reportRef"), max_chars=400,
+        )
+        if diagnostics_ref:
+            break
+    declared_verdict = None
+    for source in step_gate_sources(outputs):
+        declared_verdict = normalize_step_gate_verdict(source.get("verdict"))
+        if declared_verdict:
+            break
+    result_ref = step_gate_result_ref(outputs)
+    remaining_work_ref = result.remaining_work_ref
+    if remaining_work_evidence_enabled:
+        remaining_work_ref = durable_artifact_ref(remaining_work_ref) or (
+            durable_artifact_ref(result_ref)
+            if result.verdict == "ADDITIONAL_WORK_NEEDED" else None
+        )
+    context: dict[str, Any] = {
+        "logicalStepId": logical_step_id,
+        "verdict": result.verdict,
+        "declaredVerdict": declared_verdict,
+        "confidence": result.confidence,
+        "validatedRefs": dict(result.validated_refs or {}),
+        "invalidatedRefs": list(result.invalidated_refs),
+        "remainingWorkRef": remaining_work_ref,
+        "recommendedNextAction": result.recommended_next_action,
+        "targetLogicalStepId": result.target_logical_step_id,
+        "workspacePolicyRecommendation": result.workspace_policy_recommendation,
+        "recoverableInCurrentRuntime": result.recoverable_in_current_runtime,
+        "invalid": result.invalid,
+        "degraded": result.degraded,
+    }
+    if evidence_continuation_enabled:
+        projection = context["validatedRefs"].get("acceptanceProjection")
+        for source in step_gate_sources(outputs):
+            remaining = source.get("remainingWork")
+            if isinstance(remaining, list) and remaining:
+                context["evidenceContinuationEligible"] = bool(
+                    isinstance(projection, Mapping) and not result.invalid
+                    and not result.degraded and result.recommended_next_action != "needs_human"
+                    and all(
+                        isinstance(item, Mapping)
+                        and item.get("gapType") in {"evidence", "verification", "environment"}
+                        for item in remaining
+                    )
+                )
+                break
+    for key, value in (
+        ("downgradeReason", result.downgrade_reason), ("gateResultRef", result_ref),
+        ("summary", reason), ("diagnosticsRef", diagnostics_ref),
+    ):
+        if value:
+            context[key] = value
+    return PreparedStepGate(result=result, result_ref=result_ref, context=context)
+
+
+def step_gate_repair_issues(
+    outputs: Mapping[str, Any], result: StepGateResult,
+) -> tuple[Mapping[str, Any], ...]:
+    """Keep bounded findings as untrusted repair data, never as approval."""
+    if not (result.invalid or result.degraded):
+        return ()
+    if result.issues:
+        return tuple(result.issues)
+    for source in step_gate_sources(outputs):
+        raw = source.get("issues")
+        if isinstance(raw, list):
+            issues = tuple(issue for issue in raw[:20] if isinstance(issue, dict))
+            if issues:
+                return issues
+    return ()
+
+
+def step_gate_repair_feedback(result: StepGateResult) -> str | None:
+    """Request report repair without granting another implementation attempt."""
+    if not (result.invalid or result.degraded):
+        return None
+    detail = result.downgrade_reason or (
+        "the structured verifier JSON was missing or failed contract validation"
+    )
+    verdicts = ", ".join(sorted(REVIEW_VERDICTS))
+    actions = ", ".join(recommended_next_actions())
+    return (
+        "MoonSpec verify gate contract repair required: "
+        f"{detail}. Rewrite the structured verifier JSON at the "
+        "instructed verify artifact path using only canonical field "
+        f"values (verdict one of: {verdicts}; recommendedNextAction one "
+        f"of: {actions}), re-verify against the current workspace "
+        "state, and finish with the Markdown MoonSpec Verification "
+        "Report. Do not modify implementation source in this attempt."
+    )
+
+
 def parse_review_verdict(payload: Mapping[str, Any]) -> ReviewVerdict:
     """Parse an LLM response payload into a ``ReviewVerdict``."""
     return parse_step_gate_result(payload).to_review_verdict()
@@ -737,16 +987,25 @@ def build_review_prompt(request: ReviewRequest) -> str:
     )
 
 __all__ = [
+    "PreparedStepGate",
     "ReviewRequest",
     "ReviewVerdict",
     "StepGateResult",
     "build_feedback_input",
     "build_feedback_instruction",
     "build_review_prompt",
+    "canonicalize_step_gate_payload",
+    "normalize_step_gate_verdict",
     "parse_step_gate_result",
     "parse_review_verdict",
+    "prepare_step_gate_record",
     "recommended_next_actions",
     "step_gate_contract_violations",
+    "step_gate_payload",
+    "step_gate_repair_feedback",
+    "step_gate_repair_issues",
+    "step_gate_result_ref",
+    "step_gate_sources",
 ]
 
 
