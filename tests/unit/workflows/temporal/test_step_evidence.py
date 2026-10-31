@@ -89,10 +89,28 @@ def test_receipt_refs_survive_publisher_metadata_overflow():
 
 
 @pytest.mark.asyncio
-async def test_receipt_bytes_remain_readable_after_workspace_loss(tmp_path):
+@pytest.mark.parametrize("different_owner", [False, True])
+async def test_receipt_bytes_remain_readable_after_workspace_loss(
+    tmp_path, monkeypatch, different_owner
+):
     from moonmind.workflows.temporal.step_evidence import publish_step_evidence
 
     root, manifest, body = candidate(tmp_path)
+    global_config = tmp_path / "global.gitconfig"
+    if different_owner:
+        # Git's ownership test switch covers shared checkouts without chown or root.
+        global_config.write_text("")
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_config))
+        monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+        monkeypatch.setenv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
+        monkeypatch.delenv("GIT_CONFIG_COUNT", raising=False)
+        monkeypatch.delenv("GIT_CONFIG_PARAMETERS", raising=False)
+        rejected = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+        )
+        assert rejected.returncode != 0 and "dubious ownership" in rejected.stderr
     async with temporal_db(tmp_path) as sessions, sessions() as session:
         service = TemporalArtifactService(
             TemporalArtifactRepository(session),
@@ -125,6 +143,14 @@ async def test_receipt_bytes_remain_readable_after_workspace_loss(tmp_path):
         assert receipt == body
         assert saved["files"][0]["sha256"] == manifest["files"][0]["sha256"]
         assert ref in result["stepEvidenceRefs"]
+    if different_owner:
+        assert global_config.read_bytes() == b""
+        assert (
+            subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True
+            ).returncode
+            != 0
+        )
 
 
 @pytest.mark.asyncio

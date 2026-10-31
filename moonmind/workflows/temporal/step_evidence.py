@@ -86,7 +86,15 @@ def _path(root: Path, relative: object) -> Path:
 def _git(root: Path, *args: str) -> str:
     try:
         result = subprocess.run(
-            ["git", "--no-optional-locks", "-C", str(root), *args],
+            [
+                "git",
+                "--no-optional-locks",
+                "-c",
+                f"safe.directory={root}",
+                "-C",
+                str(root),
+                *args,
+            ],
             capture_output=True,
             text=True,
             timeout=15,
