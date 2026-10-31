@@ -927,6 +927,33 @@ def _squid_dstdomain_matches(entry: str, host: str) -> bool:
 
 @pytest.mark.parametrize(
     "host",
+    ["sdmntprukwest.oaiusercontent.com", "sdmntprsouthcentralus.oaiusercontent.com"],
+)
+def test_connected_tool_diagnostic_download_hosts_are_allowed(host):
+    from moonmind.security import egress
+
+    assert any(
+        _squid_dstdomain_matches(entry, host) for entry in _enforced_sandbox_domains()
+    )
+    for profile in (egress.DEFAULT_EGRESS_PROFILE, egress.OMNIGENT_EGRESS_PROFILE):
+        assert any(
+            destination.ports == (443,)
+            and _squid_dstdomain_matches("." + destination.dns_name, host)
+            for destination in profile.destinations
+        )
+
+
+@pytest.mark.parametrize(
+    "host", ["oaiusercontent.com.evil.example", "eviloaiusercontent.com"]
+)
+def test_connected_tool_download_allowlist_rejects_lookalikes(host):
+    assert not any(
+        _squid_dstdomain_matches(entry, host) for entry in _enforced_sandbox_domains()
+    )
+
+
+@pytest.mark.parametrize(
+    "host",
     (
         # Claude Code refreshes its OAuth access token here; blocking it leaves
         # an enrolled Anthropic Provider Profile unable to run past expiry.
