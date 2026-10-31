@@ -11,6 +11,7 @@ import sys
 from moonmind.schemas.agent_runtime_models import (
     MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
     ManagedRunRecord,
+    ExecutionBudgetContext,
     resolve_execution_budget,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
@@ -1127,5 +1128,43 @@ async def test_wedged_process_is_still_killed_at_its_base_budget(supervisor_env)
     assert "execution_budget_extended_for_progress" not in _annotation_types(
         artifact_storage, record
     )
+
+
+@pytest.mark.asyncio
+async def test_successor_process_inherits_consumed_logical_budget(supervisor_env):
+    """A restarted managed process must not outlive its Step allowance (#4986)."""
+    store, _, _, supervisor = supervisor_env
+    _make_record(store, "run-successor-budget", "launching")
+    budget = _budget(timeout_seconds=10, max_timeout_seconds=10)
+    context = ExecutionBudgetContext(
+        budget=budget,
+        logicalStepId="step",
+        attemptId="attempt-2",
+        admittedAt=datetime.now(UTC),
+        consumedSeconds=9,
+        recoveryCount=1,
+    )
+    process = await asyncio.create_subprocess_exec(
+        "sleep",
+        "60",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
+    )
+    started = asyncio.get_running_loop().time()
+    try:
+        record = await supervisor.supervise(
+            run_id="run-successor-budget",
+            process=process,
+            budget=budget,
+            execution_budget=context,
+        )
+        assert record.status == "timed_out"
+        assert process.returncode is not None
+        assert asyncio.get_running_loop().time() - started < 4
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
     # Ended at the base budget, nowhere near the 30s ceiling.
     assert (record.finished_at - record.started_at).total_seconds() < 15

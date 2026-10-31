@@ -32,7 +32,11 @@ with workflow.unsafe.imports_passed_through():
         CompiledSessionIntent,
         reconcile,
     )
-    from moonmind.schemas.agent_runtime_models import AgentRunResult
+    from moonmind.schemas.agent_runtime_models import (
+        AgentRunResult,
+        ExecutionBudgetContext,
+        ExecutionBudgetExhausted,
+    )
     from moonmind.schemas.omnigent_session_models import (
         OmnigentPersistDecisionRequest,
         OmnigentPersistFailureRequest,
@@ -122,6 +126,14 @@ _CLEANUP_ACTIVITIES = frozenset(
         "omnigent.release_leases",
     }
 )
+_TASK_ACTIVITIES = frozenset(
+    {
+        "omnigent.ensure_provider_profile_lease",
+        "omnigent.ensure_host",
+        "omnigent.ensure_provider_session",
+        "omnigent.submit_turn",
+    }
+)
 _PROVIDER_INTEGRATION_ACTIVITIES = frozenset(
     {
         "omnigent.ensure_provider_profile_lease",
@@ -207,11 +219,15 @@ class MoonMindOmnigentSessionWorkflow:
         self._segment_observation_count = 0
         self._session_started_at: datetime | None = None
         self._segment_started_at: datetime | None = None
+        self._execution_budget: ExecutionBudgetContext | None = None
+        self._confirmed_terminal: AgentRunResult | None = None
 
     def _initialize(self, session_input: OmnigentSessionWorkflowInput) -> None:
         self._input = session_input
+        self._execution_budget = session_input.execution_budget
         carried = session_input.resume_state
         if carried is not None:
+            self._execution_budget = carried.execution_budget or self._execution_budget
             self._continue_as_new_count = carried.continue_as_new_count
             self._decision_count = carried.decision_count
             self._observation_count = carried.observation_count
@@ -238,6 +254,13 @@ class MoonMindOmnigentSessionWorkflow:
     async def _execute_activity(
         self, activity_name: str, payload: Mapping[str, Any]
     ) -> object:
+        capacity_wait = (
+            activity_name == "omnigent.ensure_provider_profile_lease"
+            and self._execution_budget is not None
+            and self._execution_budget.remaining_seconds(workflow.now()) > 0
+        )
+        if capacity_wait:
+            self._execution_budget = self._execution_budget.suspend(workflow.now())
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(activity_name)
         start_to_close_seconds = route.timeouts.start_to_close_seconds
         schedule_to_close_seconds = route.timeouts.schedule_to_close_seconds
@@ -263,6 +286,32 @@ class MoonMindOmnigentSessionWorkflow:
             kwargs["heartbeat_timeout"] = timedelta(
                 seconds=route.timeouts.heartbeat_timeout_seconds
             )
+        if self._execution_budget is not None:
+            now = workflow.now()
+            finishing = activity_name not in _TASK_ACTIVITIES
+            if finishing and self._execution_budget.remaining_seconds(now) <= 0:
+                self._execution_budget = self._execution_budget.begin_finishing(now)
+            if not capacity_wait:
+                kwargs.update(
+                    self._execution_budget.activity_timeouts(
+                        now=now,
+                        start_to_close_seconds=start_to_close_seconds,
+                        schedule_to_close_seconds=schedule_to_close_seconds,
+                        finishing=finishing
+                        and self._execution_budget.finishing_deadline is not None,
+                    )
+                )
+            heartbeat = kwargs.get("heartbeat_timeout")
+            if heartbeat is not None:
+                kwargs["heartbeat_timeout"] = min(
+                    heartbeat, kwargs["start_to_close_timeout"]
+                )
+            payload = {
+                **payload,
+                "executionBudget": self._execution_budget.model_dump(
+                    mode="json", by_alias=True
+                ),
+            }
         self._active_activity = activity_name
         try:
             result = await workflow.execute_activity(
@@ -278,6 +327,8 @@ class MoonMindOmnigentSessionWorkflow:
             raise
         finally:
             self._active_activity = None
+            if capacity_wait:
+                self._execution_budget = self._execution_budget.resume(workflow.now())
 
     def _require_input(self) -> OmnigentSessionWorkflowInput:
         if self._input is None:
@@ -293,6 +344,7 @@ class MoonMindOmnigentSessionWorkflow:
         command = decision.command if decision is not None else None
         return OmnigentSessionActivityRequest(
             sessionId=session_input.session_id,
+            executionBudget=self._execution_budget,
             compiledExecutionIntentRef=session_input.compiled_execution_intent_ref,
             compiledExecutionIntentDigest=(
                 session_input.compiled_execution_intent_digest
@@ -519,6 +571,13 @@ class MoonMindOmnigentSessionWorkflow:
         snapshot = await self._execute_activity("omnigent.observe_snapshot", request)
         for result in (batch, snapshot):
             if isinstance(result, Mapping):
+                if (
+                    result.get("progressObserved") is True
+                    and self._execution_budget is not None
+                ):
+                    self._execution_budget = self._execution_budget.observe_progress(
+                        workflow.now()
+                    )
                 count = int(result.get("observationCount") or 0)
                 self._observation_count += max(0, count)
                 self._segment_observation_count += max(0, count)
@@ -550,6 +609,15 @@ class MoonMindOmnigentSessionWorkflow:
                 (deadline - now).total_seconds(),
             ),
         )
+        if self._execution_budget is not None:
+            remaining = self._execution_budget.remaining_seconds(
+                now, finishing=self._execution_budget.finishing_deadline is not None
+            )
+            if remaining <= 0:
+                raise ExecutionBudgetExhausted(
+                    "session observation allowance exhausted"
+                )
+            wait_seconds = min(wait_seconds, remaining)
         try:
             await workflow.wait_condition(
                 lambda: self._wake_sequence > consumed,
@@ -603,6 +671,7 @@ class MoonMindOmnigentSessionWorkflow:
             lastSnapshotFrontier=self._last_snapshot_frontier,
             terminalResultRef=self._terminal_result_ref,
             sessionStartedAt=self._session_started_at,
+            executionBudget=self._execution_budget,
         )
         return session_input.model_copy(update={"resume_state": carried})
 
@@ -618,7 +687,8 @@ class MoonMindOmnigentSessionWorkflow:
 
         while True:
             try:
-                return await self._run_until_terminal(session_input)
+                result = await self._run_until_terminal(session_input)
+                return self._with_execution_budget(result)
             except (CancelledError, asyncio.CancelledError):
                 await self._resume_cancelled_session(session_input)
                 continue
@@ -626,6 +696,34 @@ class MoonMindOmnigentSessionWorkflow:
                 if _is_cancellation_failure(exc):
                     await self._resume_cancelled_session(session_input)
                     continue
+                if self._execution_budget is not None:
+                    now = workflow.now()
+                    if (
+                        self._execution_budget.finishing_deadline is not None
+                        and self._execution_budget.remaining_seconds(
+                            now, finishing=True
+                        )
+                        <= 0
+                    ):
+                        # No more commands, including diagnostic writes, may
+                        # obtain another allowance. Retain confirmed results
+                        # and leave resource reclamation to the existing janitor.
+                        result = self._confirmed_terminal or AgentRunResult(
+                            summary="Execution allowance expired; bounded reconciliation could not finish",
+                            failureClass="timed_out",
+                        )
+                        return self._with_execution_budget(
+                            result, cleanup_incomplete=True
+                        )
+                    if (
+                        self._execution_budget.remaining_seconds(now) <= 0
+                        and self._execution_budget.finishing_deadline is None
+                    ):
+                        self._execution_budget = self._execution_budget.begin_finishing(
+                            now
+                        )
+                        self._last_failed_activity = None
+                        continue
                 failed_activity = self._last_failed_activity
                 if failed_activity is None:
                     raise
@@ -667,11 +765,33 @@ class MoonMindOmnigentSessionWorkflow:
                     self._last_failed_activity = None
                     continue
                 if terminal.status == "cleanup_incomplete":
-                    return terminal.result
+                    return self._with_execution_budget(
+                        terminal.result, cleanup_incomplete=True
+                    )
                 # The failure Activity attached compact terminal evidence. Run
                 # the normal reconciler again so cleanup and release remain
                 # distinct durable commands rather than exception unwinding.
                 self._last_failed_activity = None
+
+    def _with_execution_budget(
+        self,
+        result: AgentRunResult,
+        *,
+        cleanup_incomplete: bool = False,
+    ) -> AgentRunResult:
+        if self._execution_budget is None:
+            return result
+        return result.model_copy(
+            update={
+                "metadata": {
+                    **result.metadata,
+                    "executionBudget": self._execution_budget.model_dump(
+                        mode="json", by_alias=True
+                    ),
+                    **({"cleanupIncomplete": True} if cleanup_incomplete else {}),
+                }
+            }
+        )
 
     async def _resume_cancelled_session(
         self, session_input: OmnigentSessionWorkflowInput
@@ -683,6 +803,10 @@ class MoonMindOmnigentSessionWorkflow:
         if callable(uncancel):
             uncancel()
         self._cancel_requested = True
+        if self._execution_budget is not None:
+            self._execution_budget = self._execution_budget.begin_finishing(
+                workflow.now()
+            )
         if not any(
             item.get("kind") == "cancel_or_interrupt_requested"
             for item in self._pending_signal_intents
@@ -722,6 +846,15 @@ class MoonMindOmnigentSessionWorkflow:
                         if session_input.omnigent_execution_plan is not None
                         else None
                     ),
+                    **(
+                        {
+                            "executionBudget": self._execution_budget.model_dump(
+                                mode="json", by_alias=True
+                            )
+                        }
+                        if self._execution_budget is not None
+                        else {}
+                    ),
                 },
             )
             if not isinstance(loaded, Mapping):
@@ -738,10 +871,20 @@ class MoonMindOmnigentSessionWorkflow:
             self._turn_attempt_count = max(
                 self._turn_attempt_count, durable.turn_attempts
             )
+            if isinstance(loaded.get("terminalResult"), Mapping):
+                self._confirmed_terminal = self._coerce_terminal_result(
+                    loaded,
+                    fallback_status="execution_failed",
+                    fallback_summary="Terminal evidence unavailable",
+                ).result
 
             timeout_elapsed = False
             timeout_at_raw = loaded.get("timeoutAt")
-            if timeout_at_raw and durable.terminal_outcome is None:
+            if self._execution_budget is not None and durable.terminal_outcome is None:
+                timeout_elapsed = (
+                    self._execution_budget.remaining_seconds(workflow.now()) <= 0
+                )
+            elif timeout_at_raw and durable.terminal_outcome is None:
                 timeout_at = datetime.fromisoformat(
                     str(timeout_at_raw).replace("Z", "+00:00")
                 )
@@ -784,6 +927,10 @@ class MoonMindOmnigentSessionWorkflow:
                     *_TERMINAL_FAILURE_DECISIONS,
                 }
             ):
+                if self._execution_budget is not None:
+                    self._execution_budget = self._execution_budget.begin_finishing(
+                        workflow.now()
+                    )
                 if not self._timeout_snapshot_observed:
                     self._timeout_snapshot_attempt_count += 1
                     self._timeout_snapshot_observed = (
@@ -974,6 +1121,10 @@ class MoonMindOmnigentSessionWorkflow:
     @workflow.signal(name="cancel_or_interrupt_requested")
     def cancel_or_interrupt_requested(self, payload: OmnigentSessionSignal) -> None:
         self._cancel_requested = True
+        if self._execution_budget is not None:
+            self._execution_budget = self._execution_budget.begin_finishing(
+                workflow.now()
+            )
         self._queue_signal_intent("cancel_or_interrupt_requested", payload)
 
     @workflow.signal(name="approval_or_intervention_changed")
@@ -985,6 +1136,10 @@ class MoonMindOmnigentSessionWorkflow:
     @workflow.signal(name="cleanup_requested")
     def cleanup_requested(self, payload: OmnigentSessionSignal) -> None:
         self._cleanup_requested = True
+        if self._execution_budget is not None:
+            self._execution_budget = self._execution_budget.begin_finishing(
+                workflow.now()
+            )
         self._queue_signal_intent("cleanup_requested", payload)
 
     @workflow.signal(name="operator_reconcile_requested")
@@ -1007,6 +1162,11 @@ class MoonMindOmnigentSessionWorkflow:
             "stepExecutionId": session_input.step_execution_id,
             "agentRunId": session_input.agent_run_id,
             "featureGeneration": session_input.admitted_feature_generation,
+            "executionBudget": (
+                self._execution_budget.model_dump(mode="json", by_alias=True)
+                if self._execution_budget is not None
+                else None
+            ),
             "compatibilityVersion": session_input.compatibility_version,
             "phase": self._phase,
             "lastDecisionKind": self._last_decision_kind,

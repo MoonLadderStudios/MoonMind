@@ -284,6 +284,48 @@ async def test_interrupted_step_pre_and_post_patch_histories_replay(
 
 
 @pytest.mark.asyncio
+async def test_parent_successor_carries_logical_budget_instead_of_new_base(monkeypatch):
+    """The real parent retry owner must carry its admitted clock (#4986)."""
+    _patch_environment(monkeypatch)
+    _ADMISSION_RESULT.clear()
+    _ADMISSION_RESULT.update(
+        disposition="admitted",
+        omnigentExecutionPlan=dict(_INSTALLED),
+        resolvedSkillsetRef="art_skills_installed",
+    )
+    patches = _CURRENT_PATCHES | {"run-logical-step-execution-budget-v1"}
+    async with await WorkflowEnvironment.start_time_skipping(
+        data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER
+    ) as env:
+        agent_worker, admission_worker = _workers(env)
+        async with agent_worker, admission_worker:
+            history, requests = await _record(
+                env, monkeypatch, patches, "logical-step-budget"
+            )
+    first, second = requests
+    assert first.execution_budget is not None
+    assert second.execution_budget is not None
+    assert (
+        first.execution_budget.logical_step_id
+        == second.execution_budget.logical_step_id
+    )
+    assert first.execution_budget.budget == second.execution_budget.budget
+    assert 1800 <= second.execution_budget.consumed_seconds <= 1810
+    assert second.execution_budget.recovery_count == 1
+    assert second.execution_budget.budget.base_seconds == 3600
+    assert (
+        second.execution_budget.remaining_seconds(second.execution_budget.admitted_at)
+        <= 1800
+    )
+    _enable(monkeypatch, patches)
+    await Replayer(
+        workflows=[_InterruptedStepFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+        data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
+    ).replay_workflow(history)
+
+
+@pytest.mark.asyncio
 async def test_successor_keeps_the_recorded_plan_when_admission_is_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

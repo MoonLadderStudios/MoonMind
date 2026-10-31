@@ -749,10 +749,10 @@ expiry grants no workspace-deletion or completion authority.
 
 ## 15.1 Execution budget
 
-An agent run has one execution budget, resolved from `timeoutPolicy` by a single
-authority and enforced identically by the `MoonMind.AgentRun` poll loop and the
-managed process supervisor. The workflow publishes the resolved budget into the
-launch request, so the two deadlines cannot diverge.
+The workflow admits one `executionBudget` from `timeoutPolicy` per logical step.
+Its clock, consumption, progress and attempt identities travel through AgentRun,
+OmnigentSession, Activities and successors. Activity timeouts derive centrally;
+managed supervision inherits consumed time. Older histories retain named replay paths.
 
 | Field | Meaning |
 |---|---|
@@ -767,11 +767,10 @@ The stall window never exceeds the base window (a run's own start counts as an
 observation, so a wider stall window would erase the base window), and the base
 window is bound by the same absolute cap as the ceiling.
 
-**Mode travels with the numbers.** A history that predates progress-awareness
-publishes its flat decision, not just its base window. Otherwise a re-resolving
-callee (every launch and retry) could derive a ceiling the workflow never
-granted, and the supervisor would keep a process running after the workflow had
-timed out and released its provider slot.
+Pre-progress histories retain flat deadlines.
+Initial capacity queueing and explicit safe-boundary pauses exclude only their
+recorded intervals. Cooldown and automatic retries consume the original allowance.
+An explicit full retry admits a new, recorded allowance.
 
 **Elapsed wall-clock alone is not evidence that a run is stuck.** A run ends for
 budget only when the base window has elapsed with no progress observed within
@@ -783,11 +782,13 @@ budget and the condition that ended it.
 Monotonic intervals resist host clock changes; persisted wall-clock timestamps
 correlate runtime evidence. Before ending for lack of progress, the supervisor
 samples CPU/workspace activity and the workflow checks fresh canonical status.
-Managed recovery preserves confirmed completion and bounds cancellation, polling
-and result fetching to the remaining budget. A fetch timeout at that deadline
-produces the normal budget result and retains its original diagnostics; other
-Activity errors keep their failure behavior. Provider quota classification still
-enters cooldown recovery. The hard ceiling ends execution without further reconciliation.
+Recovery preserves confirmed completion and bounds polling, result fetching and
+saving to the remaining allowance. Expiry stops task work. Observation, cancellation,
+terminal saving and cleanup may share one explicit 60-second finishing deadline,
+carried across retries and Continue-As-New; they cannot start another turn or new
+repository publication. Expiry of that allowance preserves readable confirmed
+results and reports incomplete saving/cleanup to the existing recovery owner.
+Quota and non-retryable failure decisions retain their structured meanings.
 
 ### Progress evidence
 

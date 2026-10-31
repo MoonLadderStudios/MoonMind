@@ -25,6 +25,7 @@ CompletionCallback = Callable[[dict[str, Any]], Awaitable[None]]
 from moonmind.schemas.agent_runtime_models import (
     MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
     ExecutionBudget,
+    ExecutionBudgetContext,
     ExecutionBudgetVerdict,
     ManagedRunRecord,
     evaluate_execution_budget,
@@ -68,6 +69,7 @@ class ManagedRunSupervisor:
         run_id: str,
         process: asyncio.subprocess.Process,
         budget: ExecutionBudget,
+        execution_budget: ExecutionBudgetContext | None = None,
         exit_code_path: str | None = None,
         cleanup_paths: list[str] | None = None,
         deferred_cleanup_paths: list[str] | None = None,
@@ -99,6 +101,11 @@ class ManagedRunSupervisor:
         # step backward would let it run past the ceiling the AgentRun workflow
         # is enforcing — the two deadlines must stay the same boundary.
         start_monotonic = time.monotonic()
+        if execution_budget is not None:
+            budget = execution_budget.budget
+            # Preserve the admitted productive-time origin while measuring new
+            # intervals monotonically. A successor starts only its process.
+            start_monotonic -= execution_budget.elapsed_seconds(start_time)
 
         try:
             # Resolve strategy output parser for this runtime
@@ -130,7 +137,12 @@ class ManagedRunSupervisor:
             # monotonic anchor so a clock adjustment cannot manufacture or erase
             # an idle window. The anchor only ever moves forward: nothing but
             # observed progress may reduce measured idle time.
-            latest_progress_monotonic: float | None = None
+            latest_progress_monotonic: float | None = (
+                start_monotonic + execution_budget.last_progress_seconds
+                if execution_budget is not None
+                and execution_budget.last_progress_seconds is not None
+                else None
+            )
             # Runtime-neutral activity evidence. Output and workspace mutation
             # both go quiet during legitimate work (a buffered one-shot CLI, or a
             # test run that only writes ignored directories), while a wedged
@@ -202,16 +214,16 @@ class ManagedRunSupervisor:
                     )
                 if stream_name != "stderr":
                     return
-                
+
                 stderr_buffer += text
                 if "\n" not in stderr_buffer:
                     return
-                
+
                 lines = stderr_buffer.split("\n")
                 # The last element is either an empty string (if text ended with \n)
                 # or a partial line that we need to buffer.
                 stderr_buffer = lines.pop()
-                
+
                 for raw_line in lines:
                     line = raw_line.strip()
                     if not line:
