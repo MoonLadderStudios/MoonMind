@@ -289,6 +289,7 @@ class ExecutionBudgetContext(BaseModel):
     def begin_finishing(
         self, now: datetime, *, deadline: datetime | None = None
     ) -> "ExecutionBudgetContext":
+        """Commit finishing once, retaining any earlier observation deadline."""
         if self.finishing_deadline is not None:
             return self
         finishing_deadline = now + timedelta(

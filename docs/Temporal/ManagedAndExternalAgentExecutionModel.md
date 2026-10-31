@@ -774,23 +774,19 @@ budget when the base window has elapsed without recent progress, or at the hard
 ceiling. The result records the budget and distinguishes stale progress from
 reaching the ceiling, so the operator can investigate or adjust the limit.
 
-Monotonic intervals resist host clock changes; persisted wall-clock timestamps
-correlate runtime evidence. Before ending for lack of progress, the supervisor
-samples CPU/workspace activity and the workflow checks fresh canonical status.
-The final status read uses a bounded observation window before committing to
-finishing. Fresh progress can extend execution only under the original ceiling;
-a stale, failed or canceled read shares its deadline with terminal cleanup.
+Before ending for lack of progress, the supervisor samples CPU/workspace activity
+and the workflow checks fresh canonical status. This bounded final read can extend
+execution only under the original ceiling; a stale, failed or canceled read shares
+its deadline with terminal cleanup.
 No-progress grace and cancellation reconciliation use the admitted productive-time
-clock, including excluded waits, earned progress and previous attempts. Expiry
-stops task work. Observation, cancellation,
-terminal saving and cleanup may share one explicit 60-second finishing deadline,
-carried across retries and Continue-As-New; they cannot start another turn or new
-repository publication. Expiry of that allowance preserves readable confirmed
-results and reports incomplete saving/cleanup to the existing recovery owner.
-An unconfirmed terminal artifact save also stops with that diagnostic: its
-non-idempotent writes may already be durable, so a lost reply cannot authorize
-repeating them or replacing a confirmed execution result.
-Quota and non-retryable failure decisions retain their structured meanings.
+clock, including excluded waits, earned progress and previous attempts. Once
+execution expires, observation, cancellation, saving and cleanup share one
+60-second finishing deadline across retries and Continue-As-New. Finishing cannot
+start another turn or publication. If saving or cleanup remains incomplete, retain
+confirmed results and report the gap to the recovery owner. Unconfirmed artifact
+writes may already be durable; a lost reply cannot authorize repeating them or
+replacing a confirmed result. Quota and non-retryable failures retain their
+structured meanings.
 
 ### Progress evidence
 
