@@ -163,6 +163,216 @@ async def test_managed_capture_publishes_only_sealed_output_dependencies(tmp_pat
         assert links and all(link.workflow_id == "wf-1" for link in links)
 
 
+@pytest.mark.parametrize("historical_git_only", [False, True])
+async def test_retained_saved_work_keeps_optional_delta_needed_for_publication(
+    tmp_path, historical_git_only
+):
+    from datetime import UTC, datetime, timedelta
+
+    from api_service.db.models import TemporalArtifact
+    from moonmind.publish.saved_work_source import (
+        SAVED_WORK_MANIFEST_CONTENT_TYPE,
+        materialize_saved_work,
+        parse_saved_work_publication_manifest,
+        saved_work_artifact_id,
+    )
+    from moonmind.workflows.temporal.artifacts import (
+        ArtifactAccessContext,
+        TemporalArtifactStateError,
+    )
+    from moonmind.workflows.temporal.saved_work_dependencies import (
+        verify_saved_work_dependencies,
+    )
+    from tests.unit.workflows.temporal.test_saved_work_capture import (
+        _artifact_capture_harness,
+        _request,
+    )
+
+    access = ArtifactAccessContext.for_service("system")
+    async with _artifact_capture_harness(tmp_path) as (
+        repo,
+        activities,
+        service,
+        session,
+        digest,
+    ):
+        (repo / "tracked.txt").unlink()
+        (repo / "added.txt").write_text("retained output\n")
+        result = await activities.agent_runtime_capture_workspace_checkpoint(
+            _request(digest=digest)
+        )
+        root_id = saved_work_artifact_id(result["savedWorkRef"])
+        root, payload = await service.read(artifact_id=root_id, access=access)
+        manifest = json.loads(payload)
+        assert "exact_baseline_delta" not in manifest["requiredFormats"]
+        assert manifest["git"]["deltaRef"]
+        if historical_git_only:
+            manifest["outputs"] = [
+                item
+                for item in manifest["outputs"]
+                if item["format"] != "exact_baseline_delta"
+            ]
+            payload = json.dumps(manifest).encode()
+            root = await _complete_artifact(
+                service,
+                principal="system",
+                payload=payload,
+                content_type=SAVED_WORK_MANIFEST_CONTENT_TYPE,
+            )
+            root_id = root.artifact_id
+        closure = await verify_saved_work_dependencies(
+            service, artifact=root, payload=payload, access=access
+        )
+        _, required_objects = parse_saved_work_publication_manifest(payload)
+        assert len(required_objects) == 2
+        for item in required_objects:
+            assert any(
+                entry.artifact_id == saved_work_artifact_id(item.ref)
+                and entry.required
+                and entry.sha256 == item.digest.removeprefix("sha256:")
+                for entry in closure.dependencies
+            )
+        delta_id = saved_work_artifact_id(manifest["git"]["deltaRef"])
+        delta = await session.get(TemporalArtifact, delta_id)
+        delta.expires_at = datetime.now(UTC) - timedelta(days=1)
+        await session.commit()
+        with pytest.raises(TemporalArtifactStateError, match="retained"):
+            await service.soft_delete(artifact_id=delta_id, principal="system")
+
+        async def read(ref, content_types):
+            artifact, body = await service.read(
+                artifact_id=saved_work_artifact_id(ref), access=access
+            )
+            assert artifact.content_type in content_types
+            return body
+
+        content = await materialize_saved_work(
+            read=read,
+            saved_work_ref=f"artifact:{root_id}",
+            saved_work_digest="sha256:" + root.sha256,
+            root=tmp_path / "materialized",
+        )
+        assert content.recorded_deletions == ("tracked.txt",)
+        assert (content.root / "added.txt").read_text() == "retained output\n"
+
+
+@pytest.mark.parametrize("nested", [False, True])
+async def test_retained_checkpoint_restores_expired_submodule_objects(tmp_path, nested):
+    import shutil
+    from datetime import UTC, datetime, timedelta
+
+    from api_service.db.models import TemporalArtifact
+    from moonmind.publish.saved_work_source import saved_work_artifact_id
+    from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
+    from moonmind.workflows.temporal.activity_runtime import TemporalSandboxActivities
+    from moonmind.workflows.temporal.artifacts import (
+        ArtifactAccessContext,
+        TemporalArtifactStateError,
+    )
+    from moonmind.workflows.temporal.runtime.checkpoint_restore import (
+        ManagedCheckpointRestoreService,
+    )
+    from tests.unit.workflows.temporal.test_checkpoint_restore import _request
+    from tests.unit.workflows.temporal.test_checkpoint_submodules import (
+        capture_checkpoint,
+        git,
+        initialize_submodule,
+        repository_with_submodule,
+    )
+
+    remote, source = repository_with_submodule(tmp_path)
+    module = initialize_submodule(source, tmp_path / "module-origin")
+    repositories = [module]
+    if nested:
+        git(
+            module,
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            str(tmp_path / "module-origin"),
+            "nested",
+        )
+        git(
+            module,
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-am",
+            "Nested dependency",
+        )
+        repositories.append(module / "nested")
+    for repo in repositories:
+        (repo / "tracked.txt").write_text("staged recovery bytes\n")
+        git(repo, "add", "tracked.txt")
+        (repo / "tracked.txt").write_text("unstaged recovery bytes\n")
+    base = git(source, "rev-parse", "HEAD")
+    access = ArtifactAccessContext.for_service("system")
+    async with temporal_db(tmp_path) as sessions, sessions() as session:
+        service = _service(session, tmp_path)
+        activities = TemporalSandboxActivities(
+            artifact_service=service, workspace_root=source.parent.parent
+        )
+        capture = await capture_checkpoint(source, InMemoryArtifactStore(), activities)
+        assert capture["status"] == "captured", capture
+        _, payload = await service.read(
+            artifact_id=saved_work_artifact_id(capture["workspace"]["manifestRef"]),
+            access=access,
+        )
+        manifest = json.loads(payload)
+        modules = manifest["git"]["submodules"]
+        assert len(modules) == len(repositories)
+        checkpoint_ref = await activities._put_checkpoint_bytes(
+            json.dumps(
+                {
+                    "contentType": "application/vnd.moonmind.step-execution-checkpoint+json;version=1",
+                    "source": {
+                        "workflowId": "source",
+                        "runId": "source-run",
+                        "logicalStepId": "implement",
+                        "executionOrdinal": 1,
+                    },
+                    "boundary": "before_execution",
+                    "workspace": capture["workspace"],
+                }
+            ).encode(),
+            content_type="application/vnd.moonmind.step-execution-checkpoint+json;version=1",
+            metadata={"artifact_kind": "step_execution_checkpoint"},
+        )
+        parts = [
+            part
+            for module in modules
+            for part in (module["gitHistory"], module["git"]["indexPatch"])
+        ]
+        for part in parts:
+            row = await session.get(
+                TemporalArtifact, saved_work_artifact_id(part["ref"])
+            )
+            row.expires_at = datetime.now(UTC) - timedelta(days=1)
+        await session.commit()
+        for part in parts:
+            with pytest.raises(TemporalArtifactStateError, match="retained"):
+                await service.soft_delete(
+                    artifact_id=saved_work_artifact_id(part["ref"]), principal="system"
+                )
+        request = _request(checkpoint_ref=checkpoint_ref, capture=capture, base=base)
+        shutil.rmtree(source)
+        shutil.rmtree(tmp_path / "module-origin")
+        restore = ManagedCheckpointRestoreService(
+            authority_root=tmp_path / "authority",
+            artifact_service=service,
+            repository_source_root=remote,
+        )
+        await restore.restore(request, access=access)
+        for module in modules:
+            restored = tmp_path / "authority" / "new-run" / "repo" / module["path"]
+            assert git(restored, "rev-parse", "HEAD") == module["baseCommit"]
+            assert git(restored, "show", ":tracked.txt") == "staged recovery bytes"
+            assert (restored / "tracked.txt").read_text() == "unstaged recovery bytes\n"
+
+
 @pytest.mark.parametrize("admitted", [False, True])
 @pytest.mark.parametrize("caller_owned", [False, True])
 @pytest.mark.parametrize("restricted", [False, True])
