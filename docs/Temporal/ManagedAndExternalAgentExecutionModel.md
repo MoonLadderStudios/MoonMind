@@ -774,8 +774,8 @@ budget when the base window has elapsed without recent progress, or at the hard
 ceiling. The result records the budget and distinguishes stale progress from
 reaching the ceiling, so the operator can investigate or adjust the limit.
 
-Before ending for lack of progress, the supervisor samples CPU/workspace activity
-and the workflow checks fresh canonical status. This bounded final read can extend
+Before ending for lack of progress, supervisors evaluate fresh status and session
+snapshots before committing to finishing. This bounded final read can extend
 execution only under the original ceiling; a stale, failed or canceled read shares
 its deadline with terminal cleanup.
 No-progress grace and cancellation reconciliation use the admitted productive-time
@@ -786,7 +786,8 @@ start another turn or publication. If saving or cleanup remains incomplete, reta
 confirmed results and report the gap to the recovery owner. Unconfirmed artifact
 writes may already be durable; a lost reply cannot authorize repeating them or
 replacing a confirmed result. Quota and non-retryable failures retain their
-structured meanings.
+structured meanings. A completed run retains success when finishing saves its work
+and repository publication was omitted or set to `none`.
 
 ### Progress evidence
 

@@ -10,6 +10,7 @@ the patches must replay as well.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from typing import Any
 
@@ -80,17 +81,32 @@ async def _admit_successor(payload: dict[str, Any]) -> dict[str, Any]:
 
 @workflow.defn(name="MoonMind.AgentRun")
 class _InterruptedAgentRun:
+    excluded_wait_seconds = 0
+
     @workflow.run
     async def run(self, request: AgentExecutionRequest) -> AgentRunResult:
         _CHILD_REQUESTS.append(request)
         if request.step_execution.execution_ordinal == 1:
-            # The update replaces the host half an hour into the Step.
-            await workflow.sleep(timedelta(seconds=1800))
+            budget = request.execution_budget
+            if self.excluded_wait_seconds:
+                budget = budget.suspend(workflow.now())
+            await workflow.sleep(
+                timedelta(seconds=self.excluded_wait_seconds or 1800)
+            )
+            if self.excluded_wait_seconds:
+                budget = budget.resume(workflow.now()).observe_progress(workflow.now())
             return AgentRunResult(
                 summary="Omnigent session host was replaced.",
                 failureClass="integration_error",
                 providerErrorCode="OMNIGENT_SESSION_HOST_LOST",
                 retryRecommendation="retry_step_execution",
+                metadata=(
+                    {
+                        "executionBudget": budget.model_dump(mode="json", by_alias=True)
+                    }
+                    if budget is not None
+                    else {}
+                ),
             )
         return AgentRunResult(summary="Completed on the successor attempt.")
 
@@ -186,7 +202,7 @@ async def _record(env, monkeypatch, patches, name: str):
         handle = await env.client.start_workflow(
             _InterruptedStepFixture.run, id=name, task_queue=f"{name}-queue"
         )
-        assert await handle.result() == 2
+        assert await asyncio.wait_for(handle.result(), timeout=30) == 2
         return await handle.fetch_history(), list(_CHILD_REQUESTS)
 
 
@@ -284,9 +300,15 @@ async def test_interrupted_step_pre_and_post_patch_histories_replay(
 
 
 @pytest.mark.asyncio
-async def test_parent_successor_carries_logical_budget_instead_of_new_base(monkeypatch):
+@pytest.mark.parametrize("excluded_wait_seconds", [0, 5400])
+async def test_parent_successor_carries_logical_budget_instead_of_new_base(
+    monkeypatch, excluded_wait_seconds
+):
     """The real parent retry owner must carry its admitted clock (#4986)."""
     _patch_environment(monkeypatch)
+    monkeypatch.setattr(
+        _InterruptedAgentRun, "excluded_wait_seconds", excluded_wait_seconds
+    )
     _ADMISSION_RESULT.clear()
     _ADMISSION_RESULT.update(
         disposition="admitted",
@@ -310,13 +332,24 @@ async def test_parent_successor_carries_logical_budget_instead_of_new_base(monke
         == second.execution_budget.logical_step_id
     )
     assert first.execution_budget.budget == second.execution_budget.budget
-    assert 1800 <= second.execution_budget.consumed_seconds <= 1810
+    if excluded_wait_seconds:
+        assert second.execution_budget.consumed_seconds <= 10
+        assert second.execution_budget.last_progress_seconds is not None
+        assert (
+            second.execution_budget.remaining_seconds(
+                second.execution_budget.admitted_at
+            )
+            >= 3590
+        )
+    else:
+        assert 1800 <= second.execution_budget.consumed_seconds <= 1810
     assert second.execution_budget.recovery_count == 1
     assert second.execution_budget.budget.base_seconds == 3600
-    assert (
-        second.execution_budget.remaining_seconds(second.execution_budget.admitted_at)
-        <= 1800
-    )
+    if not excluded_wait_seconds:
+        assert (
+            second.execution_budget.remaining_seconds(second.execution_budget.admitted_at)
+            <= 1800
+        )
     _enable(monkeypatch, patches)
     await Replayer(
         workflows=[_InterruptedStepFixture],

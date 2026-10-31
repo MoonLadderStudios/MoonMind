@@ -241,6 +241,89 @@ async def test_session_capacity_wait_excludes_only_its_own_interval():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("initial_load", [False, True])
+@pytest.mark.parametrize(
+    "elapsed,progress_source,expected_remaining",
+    [
+        (10, "snapshot", 5),
+        (10, "batch", 5),
+        (10, None, 0),
+        (30, "snapshot", 0),
+        (10, "failed_snapshot", 0),
+    ],
+)
+async def test_session_final_observation_evaluates_progress_before_finishing(
+    initial_load, elapsed, progress_source, expected_remaining
+):
+    from moonmind.omnigent.reconciler import DurableSessionState
+    from moonmind.schemas.omnigent_session_models import OmnigentSessionWorkflowInput
+
+    owner = MoonMindOmnigentSessionWorkflow()
+    owner._initialize(
+        OmnigentSessionWorkflowInput(
+            sessionId="session",
+            compiledExecutionIntentRef="art_intent",
+            compiledExecutionIntentDigest="sha256:" + "a" * 64,
+            workflowId="workflow",
+            stepExecutionId="step",
+            agentRunId="agent",
+            initialTurnAttemptId="turn",
+            executionBudget=context(),
+        )
+    )
+    calls = []
+    now = START + timedelta(seconds=elapsed)
+    observation_deadline = now + timedelta(seconds=60)
+
+    async def execute(name, payload, **kwargs):
+        nonlocal now
+        calls.append((name, payload, kwargs))
+        if name == "omnigent.observe_snapshot" and progress_source == "failed_snapshot":
+            now += timedelta(seconds=5)
+            raise TimeoutError("snapshot unavailable")
+        return {
+            "progressObserved": name == {
+                "snapshot": "omnigent.observe_snapshot",
+                "batch": "omnigent.read_event_batch",
+            }.get(progress_source),
+            "readStatus": "available",
+        }
+
+    with (
+        patch(
+            "moonmind.workflows.temporal.workflows.omnigent_session.workflow.now",
+            side_effect=lambda: now,
+        ),
+        patch(
+            "moonmind.workflows.temporal.workflows.omnigent_session.workflow.execute_activity",
+            side_effect=execute,
+        ),
+    ):
+        if initial_load:
+            await owner._execute_activity("omnigent.load_reconciliation_inputs", {})
+        durable = DurableSessionState(
+            sessionId="session",
+            revision=1,
+            ownerToken="owner",
+            fencingGeneration=1,
+        )
+        if progress_source == "failed_snapshot":
+            with pytest.raises(TimeoutError, match="snapshot unavailable"):
+                await owner._observe_after_wait(durable)
+        else:
+            assert await owner._observe_after_wait(durable)
+    assert owner._execution_budget.remaining_seconds(now) == expected_remaining
+    if expected_remaining:
+        assert owner._execution_budget.finishing_deadline is None
+    else:
+        assert owner._execution_budget.finishing_deadline == observation_deadline
+    assert all(
+        now + kwargs["schedule_to_close_timeout"] <= now + timedelta(seconds=60)
+        for _, _, kwargs in calls
+    )
+
+
+@pytest.mark.asyncio
 async def test_agent_run_dispatch_cannot_extend_an_override():
     from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
