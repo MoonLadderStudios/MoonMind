@@ -98,7 +98,14 @@ async function journey({ items = [], readOnly = false, failure = null, delayedRo
     assert.equal(ready().length, 1, 'late transcript/validated empty render must announce ready');
     mutate();
     assert.equal(ready().length, 1);
-    listeners.error();
+    for (const message of [
+      'ResizeObserver loop completed with undelivered notifications.',
+      'ResizeObserver loop limit exceeded',
+    ]) {
+      listeners.error({ message });
+      assert.equal(fatal().length, 0, 'responsive layout diagnostics are not native crashes');
+    }
+    listeners.error({ message: 'Synthetic application crash' });
     assert.equal(fatal().length, 1, 'crash after ready still reaches the parent');
   }
   listeners.pagehide();

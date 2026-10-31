@@ -327,11 +327,42 @@ def wait_for_default_agent_profile(api: Api, *, timeout: float) -> None:
                 and version is not None
                 and (version.get("validationResult") or {}).get("ready") is True
             ):
-                log("deployment default Agent Profile is ready")
+                log("deployment default Agent Profile is validated")
                 return
         time.sleep(min(3, max(0, deadline - time.monotonic())))
     raise JourneyFailure(
         f"default Agent Profile did not become ready within {timeout:.0f}s"
+    )
+
+
+def submit_after_provider_bootstrap(
+    api: Api, submission: dict[str, Any], *, timeout: float
+) -> dict[str, Any]:
+    """Wait for default provider admission without changing the task selection.
+
+    Agent validation can precede Provider Profile bootstrap. Only its specific
+    refusal is retryable here; the unchanged idempotent request must eventually
+    be admitted, and every other admission error remains an immediate failure.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        status, payload = api.request(
+            "POST", "/api/executions", body=submission, expect=(200, 201, 409)
+        )
+        try:
+            response = json.loads(payload or b"null")
+        except json.JSONDecodeError as exc:
+            raise JourneyFailure("POST /api/executions: response is not JSON") from exc
+        if status != 409:
+            return response
+        if not isinstance(response, dict) or response.get("detail") != (
+            "no launch-ready Provider Profile matches the default Omnigent Agent Profile"
+        ):
+            raise JourneyFailure(f"POST /api/executions: HTTP 409: {payload[:800]!r}")
+        log("waiting for deployment default Provider Profile admission")
+        time.sleep(min(3, max(0, deadline - time.monotonic())))
+    raise JourneyFailure(
+        f"default Provider Profile did not become ready within {timeout:.0f}s"
     )
 
 
@@ -432,7 +463,11 @@ def populate(
     # intent, deferred so it stays in flight without a provider credential:
     # Temporal holds the start and the cancellation below is observed on the
     # workflow's first task.
-    scheduled_for = datetime.now(timezone.utc) + timedelta(seconds=defer_seconds)
+    # Preserve the cancellation window even if provider bootstrap uses its full
+    # wait. Every admission retry must still carry this identical future task.
+    scheduled_for = datetime.now(timezone.utc) + timedelta(
+        seconds=defer_seconds + (0 if pre_upgrade_release else timeout)
+    )
     title = f"single-user journey {label}"
     idempotency_key = f"single-user-journey-{label}-{uuid.uuid4().hex}"
     if repository:
@@ -448,7 +483,11 @@ def populate(
             scheduled_for=scheduled_for,
             idempotency_key=idempotency_key,
         )
-    created = api.json("POST", "/api/executions", body=submission, expect=(200, 201))
+    created = (
+        api.json("POST", "/api/executions", body=submission, expect=(200, 201))
+        if pre_upgrade_release
+        else submit_after_provider_bootstrap(api, submission, timeout=timeout)
+    )
     workflow_id = created.get("workflowId") or ""
     if not workflow_id:
         raise JourneyFailure(f"submission returned no workflowId: {created}")

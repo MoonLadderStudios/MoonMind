@@ -1,6 +1,6 @@
 {
   "issue": "MoonLadderStudios/MoonMind#3954",
-  "sourceCommit": "f04b0354fb5344c1ea8b92795ceb6760a9ad7595",
+  "sourceCommit": "ebf63ff916dec81b3e74938dc4e67627dd20642e",
   "httpOperations": [
     {
       "operation": "session_items",
@@ -78,6 +78,7 @@
       "operation": "terminal_create",
       "method": "POST",
       "entrypoint": "create_session_terminal",
+      "sourcePath": "omnigent/omnigent/runner/resource_routes.py",
       "fields": [
         "terminal",
         "session_key"
@@ -87,6 +88,7 @@
       "operation": "terminal_shell",
       "method": "POST",
       "entrypoint": "run_environment_shell",
+      "sourcePath": "omnigent/omnigent/runner/app.py",
       "fields": [
         "command",
         "timeout"
@@ -96,6 +98,7 @@
       "operation": "workspace_edit",
       "method": "PUT",
       "entrypoint": "write_environment_file",
+      "sourcePath": "omnigent/omnigent/runner/resource_routes.py",
       "fields": [
         "content",
         "encoding",
@@ -106,6 +109,7 @@
       "operation": "workspace_edit",
       "method": "PATCH",
       "entrypoint": "edit_environment_file",
+      "sourcePath": "omnigent/omnigent/runner/resource_routes.py",
       "fields": [
         "old_text",
         "new_text",

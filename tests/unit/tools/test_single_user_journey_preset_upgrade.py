@@ -159,6 +159,8 @@ class PresetJourneyApi:
         raise AssertionError((method, path, body))
 
     def request(self, method, path, **_kwargs):
+        if method == "POST" and path == "/api/executions":
+            return 201, json.dumps(self.json(method, path, **_kwargs)).encode()
         assert method == "PUT" and path == "/api/artifacts/artifact-1/content"
         return 200, b""
 
