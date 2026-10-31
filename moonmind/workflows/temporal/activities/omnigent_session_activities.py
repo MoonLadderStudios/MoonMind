@@ -4662,7 +4662,9 @@ async def omnigent_observe_snapshot_activity(
         None,
     )
     progress_observed = (
-        isinstance(signature, tuple) and list(signature) != previous_progress
+        turn_state["progress"]
+        and isinstance(signature, tuple)
+        and list(signature) != previous_progress
     )
     required_quiet_seconds = (
         _MARKED_TURN_QUIET_PERIOD_SECONDS

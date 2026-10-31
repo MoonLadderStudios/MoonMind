@@ -1373,8 +1373,10 @@ def test_reconciliation_input_ignores_bounded_executor_diagnostics() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("has_work", [False, True])
 async def test_snapshot_requires_stable_marked_turn_before_idle_terminal(
     monkeypatch: pytest.MonkeyPatch,
+    has_work: bool,
 ) -> None:
     """A stale idle projection cannot synthesize terminal on its first read."""
 
@@ -1515,6 +1517,15 @@ async def test_snapshot_requires_stable_marked_turn_before_idle_terminal(
         "expectedRevision": 7,
         "fencingGeneration": 1,
     }
+
+    if not has_work:
+        snapshot["items"] = snapshot["items"][:1]
+        observed = await omnigent_session_activities.omnigent_observe_snapshot_activity(
+            request
+        )
+        assert observed["progressObserved"] is False
+        assert "providerTurn" not in writes[-1]["bounded_index"]
+        return
 
     await omnigent_session_activities.omnigent_observe_snapshot_activity(request)
     first_index = dict(writes[-1]["bounded_index"])
