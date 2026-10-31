@@ -25,8 +25,106 @@ except Exception:
 """
 
 
-async def record_ended_codex_login(profile_id: str, credential_generation: int) -> None:
-    """Disable only the enrollment whose mounted login was proven ended.
+# Run on the admitted host, under its credential lease and restricted egress.
+# account/read is the TUI bootstrap check: login status and model/list can both
+# succeed from local state while workspace routing rejects the same login.
+# Use the public CLI protocol, send no turn, and print no account/error bodies.
+CODEX_ACCOUNT_READ_PROBE = """\
+import asyncio, json, os, re, signal, sys
+
+async def main():
+    process = None
+    verdict = "unavailable"
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "codex", "app-server",
+            env={**os.environ, "CODEX_HOME": sys.argv[1]},
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True,
+        )
+
+        async def request(request_id, method, params):
+            process.stdin.write((json.dumps({
+                "id": request_id, "method": method, "params": params,
+            }) + "\\n").encode())
+            await process.stdin.drain()
+            while True:
+                line = await process.stdout.readline()
+                if not line:
+                    raise RuntimeError("account probe stream ended")
+                message = json.loads(line)
+                if isinstance(message, dict) and message.get("id") == request_id:
+                    return message
+
+        async def read_account():
+            initialized = await request(1, "initialize", {
+                "clientInfo": {"name": "moonmind-login-preflight", "version": "1"},
+            })
+            if "error" in initialized or not isinstance(initialized.get("result"), dict):
+                return "unavailable"
+            process.stdin.write(b'{"method":"initialized"}\\n')
+            await process.stdin.drain()
+            response = await request(2, "account/read", {"refreshToken": False})
+
+            def unauthorized(error):
+                return isinstance(error, dict) and (
+                    error.get("code") == 401 or re.search(
+                        r"(?<![0-9])401(?![0-9])", str(error.get("message", ""))
+                    )
+                )
+
+            # The access token can be rejected while its refresh token is
+            # still usable. Let Codex repair it once in the authoritative,
+            # exclusively leased OAuth home before requiring a new sign-in.
+            if unauthorized(response.get("error")):
+                response = await request(3, "account/read", {"refreshToken": True})
+            error = response.get("error")
+            if isinstance(error, dict):
+                if unauthorized(error):
+                    return "unauthorized"
+                return "unavailable"
+            result = response.get("result")
+            if not isinstance(result, dict):
+                return "unavailable"
+            account = result.get("account")
+            if isinstance(account, dict) and account.get("type") == "chatgpt":
+                return "ready"
+            if account is None and result.get("requiresOpenaiAuth") is True:
+                return "missing_login"
+            return "unavailable"
+
+        verdict = await asyncio.wait_for(read_account(), timeout=20)
+    except Exception:
+        pass
+    finally:
+        if process is not None:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(process.wait(), timeout=2)
+            except asyncio.TimeoutError:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                await process.wait()
+    print(verdict)
+
+asyncio.run(main())
+"""
+
+
+async def record_ended_codex_login(
+    profile_id: str,
+    credential_generation: int,
+    *,
+    reason: str = "codex_login_session_ended",
+) -> None:
+    """Disable only the enrollment whose mounted login was proven unusable.
 
     Reuse OAuth validation's Settings and routing state. Lock the profile while
     checking its generation so an old host cannot invalidate a reconnect.
@@ -77,7 +175,7 @@ async def record_ended_codex_login(profile_id: str, credential_generation: int) 
                 mapping=get_first_party_oauth_profile(
                     profile.runtime_id, profile.provider_id
                 ),
-                reason="codex_login_session_ended",
+                reason=reason,
                 failed_at=datetime.now(UTC),
             )
             await session.commit()

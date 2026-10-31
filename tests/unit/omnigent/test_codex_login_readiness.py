@@ -1,5 +1,8 @@
 """Persist proven Codex login expiry without invalidating a new enrollment."""
 
+import os
+import subprocess
+import sys
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
@@ -20,6 +23,108 @@ from api_service.services.provider_profile_readiness import (
     provider_profile_launch_ready,
 )
 from moonmind.omnigent import codex_login
+
+
+@pytest.mark.parametrize(
+    ("reply", "expected"),
+    [
+        (
+            {"result": {"account": {"type": "chatgpt", "email": "private-sentinel"}}},
+            "ready",
+        ),
+        (
+            {
+                "error": {
+                    "code": -32603,
+                    "message": "workspace routing discovery unauthorized (401) private-sentinel",
+                }
+            },
+            "unauthorized",
+        ),
+        ({"error": {"code": 401, "message": "private-sentinel"}}, "unauthorized"),
+        ({"result": {"account": None, "requiresOpenaiAuth": True}}, "missing_login"),
+        (
+            {
+                "error": {
+                    "code": -32603,
+                    "message": "provider outage (503) private-sentinel",
+                }
+            },
+            "unavailable",
+        ),
+        ({"error": {"code": -32601, "message": "method unavailable"}}, "unavailable"),
+        ({"result": {"account": None}}, "unavailable"),
+        ({"result": {"account": {"type": "apiKey"}}}, "unavailable"),
+        (
+            [
+                {"error": {"code": 401}},
+                {"result": {"account": {"type": "chatgpt"}}},
+            ],
+            "ready",
+        ),
+        (
+            [
+                {"error": {"code": 401}},
+                {"error": {"code": -32603, "message": "provider outage (503)"}},
+            ],
+            "unavailable",
+        ),
+    ],
+)
+def test_account_read_probe_checks_provider_without_turns_or_private_output(
+    tmp_path, reply, expected
+):
+    cli = tmp_path / "codex"
+    replies = reply if isinstance(reply, list) else [reply]
+    cli.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, pathlib, sys\n"
+        "assert sys.argv[1:] == ['app-server']\n"
+        f"assert os.environ['CODEX_HOME'] == {str(tmp_path)!r}\n"
+        f"pathlib.Path({str(tmp_path / 'probe.pid')!r}).write_text(str(os.getpid()))\n"
+        f"replies = {replies!r}\n"
+        "account_reads = 0\n"
+        "for line in sys.stdin:\n"
+        "    request = json.loads(line)\n"
+        "    if request['method'] == 'initialized': continue\n"
+        "    if request['method'] == 'initialize':\n"
+        "        response = {'id': request['id'], 'result': {}}\n"
+        "    else:\n"
+        "        assert request['method'] == 'account/read'\n"
+        "        assert account_reads < 2\n"
+        "        assert request['params'] == {'refreshToken': account_reads == 1}\n"
+        "        response = {'id': request['id'], **replies[min(account_reads, len(replies)-1)]}\n"
+        "        account_reads += 1\n"
+        "    print(json.dumps({'method': 'account/updated', 'params': {'email': 'private-sentinel'}}), flush=True)\n"
+        "    print(json.dumps(response), flush=True)\n"
+        "    sys.stderr.write('private-sentinel\\n')\n"
+    )
+    cli.chmod(0o755)
+    completed = subprocess.run(
+        [sys.executable, "-c", codex_login.CODEX_ACCOUNT_READ_PROBE, str(tmp_path)],
+        env={**os.environ, "PATH": f"{tmp_path}:{os.environ.get('PATH', '')}"},
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=True,
+    )
+    assert completed.stdout == expected + "\n"
+    assert completed.stderr == ""
+    with pytest.raises(ProcessLookupError):
+        os.kill(int((tmp_path / "probe.pid").read_text()), 0)
+
+
+def test_account_read_probe_reports_unavailable_when_cli_cannot_start(tmp_path):
+    completed = subprocess.run(
+        [sys.executable, "-c", codex_login.CODEX_ACCOUNT_READ_PROBE, str(tmp_path)],
+        env={**os.environ, "PATH": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=True,
+    )
+    assert completed.stdout == "unavailable\n"
+    assert completed.stderr == ""
 
 
 @pytest_asyncio.fixture
@@ -94,6 +199,26 @@ async def test_ended_login_disables_profile_and_syncs_routing(enrolled_profile):
     async with factory() as session:
         profile = await session.get(ManagedAgentProviderProfile, "codex-oauth")
         assert profile.last_validated_at == failed_at
+
+
+@pytest.mark.asyncio
+async def test_account_rejection_records_specific_reason_without_deleting_login(
+    enrolled_profile,
+):
+    factory, sync = enrolled_profile
+    await codex_login.record_ended_codex_login(
+        "codex-oauth", 4, reason="codex_account_read_unauthorized"
+    )
+    async with factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, "codex-oauth")
+        assert profile.auth_state == ProviderProfileAuthState.VALIDATION_FAILED
+        assert provider_profile_launch_ready(profile) is False
+        assert profile.command_behavior["auth_readiness"]["failure_reason"] == (
+            "codex_account_read_unauthorized"
+        )
+        assert profile.volume_ref == "retained-credential-volume"
+        assert profile.credential_generation == 4
+    sync.assert_awaited_once()
 
 
 @pytest.mark.asyncio
