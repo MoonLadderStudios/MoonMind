@@ -15,12 +15,15 @@ const uiBase = `/omnigent-ui/workflow-chat/${binding}`;
 const apiBase = `/api/workflow-chat-bindings/${binding}/omnigent`;
 const render = (mode) => {
   const rendered = spawnSync(process.env.MOONMIND_TEST_PYTHON || 'python3', ['-c', `
-import sys
+import asyncio, sys
 from pathlib import Path
+from api_service.api.routers.omnigent_native_ui import NativeUiUpstream
 from moonmind.omnigent.native_ui import build_chat_bootstrap,render_native_ui_document
+source=NativeUiUpstream(base_url="",asset_root=Path(sys.argv[1]).parent)
+document=asyncio.run(source.fetch("/")).content.decode("utf-8")
 b=build_chat_bootstrap(chat_binding_id="${binding}", mode=sys.argv[2], read_only=True,
  capabilities={"viewTranscript":True,"sendMessage":False}, state="ended")
-print(render_native_ui_document(Path(sys.argv[1]).read_text(),bootstrap=b,scoped_base=b["uiBase"]))
+print(render_native_ui_document(document,bootstrap=b,scoped_base=b["uiBase"]))
 `, path.join(fixture, 'index.html'), mode], { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
   assert.equal(rendered.status, 0, rendered.stderr);
   return rendered.stdout;

@@ -58,6 +58,21 @@ RUN rm -rf /build/api_service/static/workflow_console/dist \
     && npm run ui:build \
     && python3 /build/tools/verify_vite_manifest.py
 
+# Stock native chat UI, built from the same submodule source used by the API.
+# Browser assets are architecture-independent; build once on the builder host.
+FROM --platform=$BUILDPLATFORM node:22-bookworm AS native-ui-builder
+WORKDIR /build
+COPY omnigent/package.json omnigent/pnpm-workspace.yaml omnigent/pnpm-lock.yaml ./
+COPY omnigent/patches/ ./patches/
+COPY omnigent/web/package.json ./web/
+COPY omnigent/web/electron/package.json ./web/electron/
+RUN --mount=type=cache,target=/root/.npm \
+    npm install --global "$(node --print "require('./package.json').packageManager")"
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile --filter web
+COPY omnigent/web/ ./web/
+RUN pnpm --filter web run build
+
 # ---------------------------------------------------------------------------
 FROM python:3.15-slim-bookworm AS python-requirements
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
@@ -205,6 +220,7 @@ COPY docker/moonmind-egress /opt/moonmind-egress/
 # pinned submodule revision. Keep that immutable source available in every API
 # and worker runtime derived from this stage.
 COPY omnigent/omnigent /app/omnigent/omnigent/
+COPY --from=native-ui-builder /build/omnigent/server/static/web-ui/ /app/omnigent/omnigent/server/static/web-ui/
 COPY pr_resolver_core /app/pr_resolver_core/
 COPY services/omnigent/tools/manifest.lock.json /app/services/omnigent/tools/manifest.lock.json
 COPY services/omnigent/profile/moonmind-tools.sh /app/services/omnigent/profile/moonmind-tools.sh
