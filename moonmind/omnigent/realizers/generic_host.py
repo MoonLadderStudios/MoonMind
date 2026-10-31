@@ -1443,6 +1443,9 @@ class GenericOmnigentHostRealizer:
         if result.failure_class is None:
             from moonmind.utils.logging import redact_sensitive_text
 
+            publish_mode = str(
+                (request.parameters or {}).get("publishMode") or "none"
+            ).strip().lower()
             # Only retry this unfinished boundary. The publisher reconciles
             # remote branch/PR state and verifies the exact head on every call.
             for attempt in range(3):
@@ -1450,7 +1453,7 @@ class GenericOmnigentHostRealizer:
                     continue
                 publication_started = False
                 try:
-                    if context is not None:
+                    if context is not None and publish_mode in {"branch", "pr"}:
                         remaining = context.remaining_seconds(
                             datetime.now(timezone.utc)
                         )

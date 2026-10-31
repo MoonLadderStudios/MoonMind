@@ -14259,8 +14259,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 self._map_agent_run_result(child_result)
                             )
                             if logical_step_budget is not None:
-                                result_metadata = execution_result.get("metadata") or {}
-                                carried_budget = result_metadata.get("executionBudget")
+                                result_outputs = execution_result.get("outputs") or {}
+                                carried_budget = result_outputs.get("executionBudget")
                                 if isinstance(carried_budget, Mapping):
                                     observed_budget = (
                                         ExecutionBudgetContext.model_validate(

@@ -68,6 +68,7 @@ async def test_finishing_saves_work_without_starting_repository_publication():
     )
     request = _finish_request(idempotency_key="finishing-attempt").model_copy(
         update={
+            "parameters": {"publishMode": "branch"},
             "execution_budget": ExecutionBudgetContext(
                 budget=resolve_execution_budget(
                     timeout_policy={"timeout_seconds": 1, "max_timeout_seconds": 1}
@@ -88,6 +89,55 @@ async def test_finishing_saves_work_without_starting_repository_publication():
     publish.assert_not_awaited()
     assert result.failure_class == "timed_out"
     assert result.metadata["workPreserved"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parameters", [{}, {"publishMode": "none"}])
+async def test_finishing_save_preserves_success_when_publication_is_disabled(
+    parameters,
+):
+    from moonmind.omnigent.runtime_bindings import InMemoryStableRuntimeBindingStore
+
+    store = InMemoryStableRuntimeBindingStore()
+    request = _finish_request(idempotency_key="finishing-no-publication").model_copy(
+        update={
+            "parameters": parameters,
+            "execution_budget": ExecutionBudgetContext(
+                budget=resolve_execution_budget(
+                    timeout_policy={"timeout_seconds": 1, "max_timeout_seconds": 1}
+                ),
+                logicalStepId="step",
+                attemptId="attempt",
+                admittedAt=datetime.now(UTC) - timedelta(seconds=10),
+            ),
+        }
+    )
+    binding = await store.create_initial(
+        execution_plan_ref="omnigent-execution-plan:sha256:" + "a" * 64,
+        idempotency_key=request.idempotency_key,
+        provider_leases={},
+    )
+    sink = RuntimeBindingSessionAuthoritySink(store, binding)
+    await sink.record_phase("workspace", {"workspaceId": "saved-work"})
+
+    async def save(bound, authority):
+        await authority.record_phase("saved", {"checkpointRef": "art_saved"})
+
+    realizer = _finish_realizer(store, publish=None)
+    realizer._save = AsyncMock(side_effect=save)
+    # Exercise the real no-op publication path; no publisher is installed.
+    del realizer._publish_repository
+    original = AgentRunResult(summary="work finished", objectiveOutcome="succeeded")
+    result = await realizer._finish_owned_execution(request, sink, original)
+    assert result.failure_class is None
+    assert result.objective_outcome == "succeeded"
+    assert result.summary == original.summary
+    assert result.metadata["savedWorkspaceCheckpoint"] == {"checkpointRef": "art_saved"}
+    realizer._save.assert_awaited_once()
+    assert (
+        AgentRunResult.model_validate(sink.binding.phaseResults["publication"])
+        == result
+    )
 
 
 from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence

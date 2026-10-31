@@ -134,6 +134,14 @@ _TASK_ACTIVITIES = frozenset(
         "omnigent.submit_turn",
     }
 )
+_PROGRESS_OBSERVATION_ACTIVITIES = frozenset(
+    {
+        "omnigent.load_reconciliation_inputs",
+        "omnigent.heartbeat_host_lease",
+        "omnigent.read_event_batch",
+        "omnigent.observe_snapshot",
+    }
+)
 _PROVIDER_INTEGRATION_ACTIVITIES = frozenset(
     {
         "omnigent.ensure_provider_profile_lease",
@@ -220,6 +228,7 @@ class MoonMindOmnigentSessionWorkflow:
         self._session_started_at: datetime | None = None
         self._segment_started_at: datetime | None = None
         self._execution_budget: ExecutionBudgetContext | None = None
+        self._progress_observation_budget: ExecutionBudgetContext | None = None
         self._confirmed_terminal: AgentRunResult | None = None
 
     def _initialize(self, session_input: OmnigentSessionWorkflowInput) -> None:
@@ -288,17 +297,30 @@ class MoonMindOmnigentSessionWorkflow:
             )
         if self._execution_budget is not None:
             now = workflow.now()
+            budget = self._execution_budget
             finishing = activity_name not in _TASK_ACTIVITIES
-            if finishing and self._execution_budget.remaining_seconds(now) <= 0:
-                self._execution_budget = self._execution_budget.begin_finishing(now)
+            if finishing and budget.remaining_seconds(now) <= 0:
+                if (
+                    activity_name in _PROGRESS_OBSERVATION_ACTIVITIES
+                    and budget.finishing_deadline is None
+                ):
+                    # Bound the final observation without discarding progress
+                    # it may reveal. All reads share its first deadline.
+                    self._progress_observation_budget = (
+                        self._progress_observation_budget or budget.begin_finishing(now)
+                    )
+                    budget = self._progress_observation_budget
+                else:
+                    self._commit_finishing(now)
+                    budget = self._execution_budget
             if not capacity_wait:
                 kwargs.update(
-                    self._execution_budget.activity_timeouts(
+                    budget.activity_timeouts(
                         now=now,
                         start_to_close_seconds=start_to_close_seconds,
                         schedule_to_close_seconds=schedule_to_close_seconds,
                         finishing=finishing
-                        and self._execution_budget.finishing_deadline is not None,
+                        and budget.finishing_deadline is not None,
                     )
                 )
             heartbeat = kwargs.get("heartbeat_timeout")
@@ -308,7 +330,7 @@ class MoonMindOmnigentSessionWorkflow:
                 )
             payload = {
                 **payload,
-                "executionBudget": self._execution_budget.model_dump(
+                "executionBudget": budget.model_dump(
                     mode="json", by_alias=True
                 ),
             }
@@ -329,6 +351,17 @@ class MoonMindOmnigentSessionWorkflow:
             self._active_activity = None
             if capacity_wait:
                 self._execution_budget = self._execution_budget.resume(workflow.now())
+
+    def _commit_finishing(self, now: datetime) -> None:
+        self._execution_budget = self._execution_budget.begin_finishing(
+            now,
+            deadline=(
+                self._progress_observation_budget.finishing_deadline
+                if self._progress_observation_budget is not None
+                else None
+            ),
+        )
+        self._progress_observation_budget = None
 
     def _require_input(self) -> OmnigentSessionWorkflowInput:
         if self._input is None:
@@ -566,31 +599,44 @@ class MoonMindOmnigentSessionWorkflow:
         request = self._base_activity_request(durable).model_dump(
             mode="json", by_alias=True, exclude_none=True
         )
-        await self._heartbeat_host_lease(durable)
-        batch = await self._execute_activity("omnigent.read_event_batch", request)
-        snapshot = await self._execute_activity("omnigent.observe_snapshot", request)
-        for result in (batch, snapshot):
-            if isinstance(result, Mapping):
+        observation_complete = False
+        try:
+            await self._heartbeat_host_lease(durable)
+            batch = await self._execute_activity("omnigent.read_event_batch", request)
+            snapshot = await self._execute_activity("omnigent.observe_snapshot", request)
+            for result in (batch, snapshot):
+                if isinstance(result, Mapping):
+                    if (
+                        result.get("progressObserved") is True
+                        and self._execution_budget is not None
+                    ):
+                        self._execution_budget = self._execution_budget.observe_progress(
+                            workflow.now()
+                        )
+                    count = int(result.get("observationCount") or 0)
+                    self._observation_count += max(0, count)
+                    self._segment_observation_count += max(0, count)
+                    cursor = result.get("eventCursor")
+                    frontier = result.get("snapshotFrontier")
+                    if cursor is not None:
+                        self._last_event_cursor = str(cursor)
+                    if frontier is not None:
+                        self._last_snapshot_frontier = str(frontier)
+            observation_complete = True
+            return not (
+                isinstance(snapshot, Mapping)
+                and snapshot.get("readStatus") == "unavailable"
+            )
+        finally:
+            if self._progress_observation_budget is not None:
+                now = workflow.now()
                 if (
-                    result.get("progressObserved") is True
-                    and self._execution_budget is not None
+                    not observation_complete
+                    or self._execution_budget.remaining_seconds(now) <= 0
                 ):
-                    self._execution_budget = self._execution_budget.observe_progress(
-                        workflow.now()
-                    )
-                count = int(result.get("observationCount") or 0)
-                self._observation_count += max(0, count)
-                self._segment_observation_count += max(0, count)
-                cursor = result.get("eventCursor")
-                frontier = result.get("snapshotFrontier")
-                if cursor is not None:
-                    self._last_event_cursor = str(cursor)
-                if frontier is not None:
-                    self._last_snapshot_frontier = str(frontier)
-        return not (
-            isinstance(snapshot, Mapping)
-            and snapshot.get("readStatus") == "unavailable"
-        )
+                    self._commit_finishing(now)
+                else:
+                    self._progress_observation_budget = None
 
     async def _await_wake_or_snapshot_deadline(
         self, decision: ReconciliationDecision
@@ -719,9 +765,7 @@ class MoonMindOmnigentSessionWorkflow:
                         self._execution_budget.remaining_seconds(now) <= 0
                         and self._execution_budget.finishing_deadline is None
                     ):
-                        self._execution_budget = self._execution_budget.begin_finishing(
-                            now
-                        )
+                        self._commit_finishing(now)
                         self._last_failed_activity = None
                         continue
                 failed_activity = self._last_failed_activity
@@ -804,9 +848,7 @@ class MoonMindOmnigentSessionWorkflow:
             uncancel()
         self._cancel_requested = True
         if self._execution_budget is not None:
-            self._execution_budget = self._execution_budget.begin_finishing(
-                workflow.now()
-            )
+            self._commit_finishing(workflow.now())
         if not any(
             item.get("kind") == "cancel_or_interrupt_requested"
             for item in self._pending_signal_intents
@@ -884,6 +926,9 @@ class MoonMindOmnigentSessionWorkflow:
                 timeout_elapsed = (
                     self._execution_budget.remaining_seconds(workflow.now()) <= 0
                 )
+                if not timeout_elapsed:
+                    self._timeout_snapshot_observed = False
+                    self._timeout_snapshot_attempt_count = 0
             elif timeout_at_raw and durable.terminal_outcome is None:
                 timeout_at = datetime.fromisoformat(
                     str(timeout_at_raw).replace("Z", "+00:00")
@@ -927,10 +972,6 @@ class MoonMindOmnigentSessionWorkflow:
                     *_TERMINAL_FAILURE_DECISIONS,
                 }
             ):
-                if self._execution_budget is not None:
-                    self._execution_budget = self._execution_budget.begin_finishing(
-                        workflow.now()
-                    )
                 if not self._timeout_snapshot_observed:
                     self._timeout_snapshot_attempt_count += 1
                     self._timeout_snapshot_observed = (
