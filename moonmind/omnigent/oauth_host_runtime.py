@@ -58,6 +58,9 @@ from moonmind.omnigent.repository_sources import (
     normalize_repository_source,
 )
 from moonmind.omnigent.settings import OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR
+from moonmind.omnigent.workspace_sources import (
+    MAX_COMPRESSED_BYTES as _MAX_WORKSPACE_CHECKPOINT_BYTES,
+)
 from moonmind.repositories.lore_adapter import (
     LORE_UNSUPPORTED_RUNTIME_LANE,
     LoreRepositoryProviderAdapter,
@@ -271,11 +274,6 @@ _SAFE_STEP_EXECUTION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,510}[A-Za-z
 _MAX_RESTORE_INPUT_REFS = 64
 _MAX_RESTORE_INPUT_BYTES = 64 * 1024 * 1024
 _MAX_RESTORE_TOTAL_BYTES = 256 * 1024 * 1024
-# A worktree checkpoint is one complete repository snapshot rather than one
-# member of the generic restore-input bundle. Keep it under the same aggregate
-# hostile-input ceiling while allowing normal repositories to exceed the
-# per-attachment limit.
-_MAX_WORKSPACE_CHECKPOINT_BYTES = _MAX_RESTORE_TOTAL_BYTES
 _HOST_EXEC_PREFLIGHT_ATTEMPTS = 11
 _HOST_EXEC_PREFLIGHT_INTERVAL_SECONDS = 1
 # Restore payloads are read through the durable artifact contract as raw bytes,
