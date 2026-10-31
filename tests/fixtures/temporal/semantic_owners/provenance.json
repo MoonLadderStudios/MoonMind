@@ -1,0 +1,18 @@
+{
+  "repository": "MoonLadderStudios/MoonMind",
+  "revision": "416caf668f36799bd7b35140904aff9afa93275d",
+  "contentDigest": "git-tree:92cd91a656b06f196b1024b0ef70bc3c61e588ba",
+  "files": {
+    "moonmind/workflows/temporal/workflows/run.py": "ff7de786d5a4fbc06b987dfd6d1172ef0042f7b195c04a1a4a985e02b0a43327",
+    "moonmind/runtime_intent.py": "15ca593899bb6dc276c98ebd0d45308a3638d939558362bb30beb6c1db2831af",
+    "moonmind/core/artifacts.py": "69eb4318696ea29130d71b8c125e66c8a96e3f322cae3d136bab4ab156d9033c",
+    "moonmind/workflows/skills/approval_policy.py": "f8664c53e88f4ac7d404c11c6479e38c1a039d798dcefb10bd3d4ed7162db43b",
+    "moonmind/workflows/temporal/publication_recovery.py": "28b31a96dde9efae5d53a97cde39b2ffadf940a5b3b31a2a02006c66c1e169e2",
+    "moonmind/workflows/temporal/activity_runtime.py": "a8dde58cd21288e3c2fc41c752ef9e5d4c5cb9af238a9880088eb586db9cf8d4"
+  },
+  "recordingBoundary": "Original production workflow compilers/consumers; only external capture Activity replaced.",
+  "histories": {
+    "canonical": "8f669920b6b03c1f371e49fd7ed41cff43bf64720b5db9d967f7e0faa89e6c03",
+    "retained": "29e987d99fbc08581620b45072160588e733b03bd7e608442879793886e1b0ae"
+  }
+}

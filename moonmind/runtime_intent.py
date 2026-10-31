@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -78,6 +79,58 @@ def provider_profile_ref_from_mapping(source: Any) -> str | None:
         if text:
             return text
     return None
+
+
+@dataclass(frozen=True, slots=True)
+class StepProfileIntent:
+    profile_ref: str | None
+    inherit_workflow_profile: bool
+
+
+def step_profile_intent(
+    runtime: Mapping[str, Any],
+    inputs: Mapping[str, Any],
+    *,
+    normalized_account_intent: bool,
+    selection_inheritance: bool,
+) -> StepProfileIntent:
+    """Compile account intent before binding the shared execution request.
+
+    The older alias precedence and selector rules serve retained command
+    histories only; current admission uses the canonical profile/selector owner.
+    """
+    sources = (runtime, inputs)
+    if normalized_account_intent:
+        ref = provider_profile_ref_from_mapping(runtime) or provider_profile_ref_from_mapping(inputs)
+        inherit = not any(has_profile_selector(source) for source in sources)
+    elif selection_inheritance:
+        ref = next(
+            (
+                str(value).strip()
+                for source in sources
+                for key in (
+                    "providerProfileRef", "profileId", "providerProfile",
+                    "executionProfileRef", "execution_profile_ref",
+                )
+                if (value := source.get(key)) is not None and str(value).strip()
+            ),
+            None,
+        )
+        inherit = not any(
+            isinstance(source.get("profileSelector"), Mapping) and bool(source["profileSelector"])
+            for source in sources
+        )
+    else:
+        ref = (
+            runtime.get("executionProfileRef") or runtime.get("profileId")
+            or runtime.get("providerProfile") or inputs.get("executionProfileRef")
+            or inputs.get("profileId") or inputs.get("providerProfile")
+        )
+        inherit = True
+    return StepProfileIntent(
+        profile_ref=str(ref).strip() or None if ref is not None else None,
+        inherit_workflow_profile=inherit,
+    )
 
 
 def has_profile_selector(runtime: Mapping[str, Any]) -> bool:
