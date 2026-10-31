@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from moonmind.schemas.saved_work_models import SAVED_WORK_FORMAT_SIZE_LIMITS
 from moonmind.schemas.temporal_models import (
     StepExecutionCheckpointBoundary,
     StepExecutionIdentityModel,
@@ -25,7 +26,9 @@ class ManagedCheckpointCapturePolicy(BaseModel):
     )
     max_file_count: int = Field(20_000, alias="maxFileCount", ge=1, le=100_000)
     max_file_bytes: int = Field(100 * 1024 * 1024, alias="maxFileBytes", ge=1)
-    max_total_bytes: int = Field(1024 * 1024 * 1024, alias="maxTotalBytes", ge=1)
+    max_total_bytes: int = Field(
+        SAVED_WORK_FORMAT_SIZE_LIMITS["max_total_bytes"], alias="maxTotalBytes", ge=1
+    )
 
 
 class ManagedWorkspaceCheckpointCaptureInput(BaseModel):
