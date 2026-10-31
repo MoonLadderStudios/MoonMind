@@ -464,6 +464,9 @@ async def test_lifecycle_sweep_activity_heartbeats_during_slow_page(
                 )
             )
             try:
+                # Parallel CI can spend the heartbeat deadline preparing the
+                # page before it reaches the operation whose liveness we test.
+                assert await asyncio.to_thread(operation_started.wait, timeout=5)
                 await asyncio.wait_for(heartbeat_seen.wait(), timeout=1)
             finally:
                 release_operation.set()

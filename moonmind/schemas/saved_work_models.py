@@ -95,7 +95,7 @@ def saved_work_path_exclusion(path: str) -> str | None:
 SAVED_WORK_FORMAT_SIZE_LIMITS: dict[str, int] = {
     "max_file_count": 20_000,
     "max_file_bytes": 100 * 1024 * 1024,
-    "max_total_bytes": 1024 * 1024 * 1024,
+    "max_total_bytes": 2 * 1024 * 1024 * 1024,
     # Bounded in-process spool for one streamed export chunk/write. Larger
     # exports must stream through the temp-file spool path, never by growing
     # an unbounded in-memory buffer.
