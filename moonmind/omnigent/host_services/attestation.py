@@ -9,6 +9,7 @@ from typing import Any
 
 from moonmind.omnigent.bridge_artifacts import OmnigentArtifactGateway
 from moonmind.omnigent.codex_login import (
+    CODEX_ACCOUNT_READ_PROBE,
     CODEX_LOGIN_SESSION_PROBE,
     record_ended_codex_login,
 )
@@ -18,12 +19,12 @@ from moonmind.omnigent.harness_platform.failures import (
 )
 from moonmind.omnigent.harness_platform.host_classes import HostClass
 from moonmind.omnigent.host_ports import HostLaunchSpec
+from moonmind.omnigent.host_services import upstream_probes
 from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
 from moonmind.omnigent.host_services.github_credentials import (
     github_host_from_endpoint,
     github_repository_from_request,
 )
-from moonmind.omnigent.host_services import upstream_probes
 from moonmind.omnigent.host_services.mounted_tools import classify_tool_attachment
 from moonmind.omnigent.mounted_tool_preflight import (
     MountedToolPreflightError,
@@ -390,11 +391,14 @@ class DockerOmnigentHostAttestor:
         # records the effective digest it created the container from. Falling
         # back to the Host Class ref preserves historical behavior when no
         # drift occurred.
-        inspect_ref = str(
-            (launch_result or {}).get("launchImageRef")
-            or configured_image
+        inspect_ref = (
+            str(
+                (launch_result or {}).get("launchImageRef")
+                or configured_image
+                or host_class.imageRef
+            ).strip()
             or host_class.imageRef
-        ).strip() or host_class.imageRef
+        )
         _code, image_json, _err = await self._backend.run(
             ["docker", "image", "inspect", inspect_ref],
             failure_code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
@@ -913,7 +917,9 @@ class DockerOmnigentHostAttestor:
                         link_type="evidence.github_access",
                     )
                     detail += f" (diagnosticsRef: {failure_ref})"
-                except Exception:  # noqa: BLE001 -- Preserve the original access failure.
+                except (
+                    Exception
+                ):  # noqa: BLE001 -- Preserve the original access failure.
                     logging.getLogger(__name__).warning(
                         "Could not persist GitHub preflight evidence; original failure: %s",
                         exc,
@@ -1039,7 +1045,7 @@ class DockerOmnigentHostAttestor:
             if _declared_access_is_writable(attachment.get("accessMode"))
         ]
 
-        async def verify_codex_login_session() -> None:
+        async def verify_codex_login_session(*, read_account: bool = False) -> None:
             if not oauth_mounts or plan.payload.harnessId != "codex-native":
                 return
             for handle, attachment in oauth_mounts:
@@ -1066,6 +1072,45 @@ class DockerOmnigentHostAttestor:
                         "has ended and cannot be refreshed. Reconnect OAuth in "
                         "Settings, then retry the failed step.",
                         code=HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NEEDS_AUTH,
+                    )
+                if not read_account:
+                    continue
+                code, verdict, _err = await self._backend.run(
+                    [
+                        "docker",
+                        "exec",
+                        launch_result["containerName"],
+                        "/opt/venv/bin/python",
+                        "-c",
+                        CODEX_ACCOUNT_READ_PROBE,
+                        str(attachment["targetPath"]),
+                    ],
+                    timeout_seconds=30.0,
+                    check=False,
+                )
+                if code == 0 and verdict.strip() in {"unauthorized", "missing_login"}:
+                    profile_id = str(handle.get("providerProfileRef") or "")
+                    reason = (
+                        "codex_account_read_unauthorized"
+                        if verdict.strip() == "unauthorized"
+                        else "codex_login_required"
+                    )
+                    await record_ended_codex_login(
+                        profile_id, int(handle["credentialGeneration"]), reason=reason
+                    )
+                    raise HarnessPlatformError(
+                        f"Codex account/read rejected the ChatGPT login for "
+                        f"Provider Profile {profile_id} "
+                        f"({'401' if verdict.strip() == 'unauthorized' else 'login required'}). "
+                        "Reconnect OAuth in Settings, then retry the failed step.",
+                        code=HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NEEDS_AUTH,
+                    )
+                if code != 0 or verdict.strip() != "ready":
+                    raise HarnessPlatformError(
+                        "Codex account/read readiness could not be verified on "
+                        "the exact host; the stored login has not been invalidated.",
+                        code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+                        transient=True,
                     )
 
         if oauth_mounts:
@@ -1095,7 +1140,7 @@ class DockerOmnigentHostAttestor:
                         "OAuth credential login status failed on the exact host",
                         code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
                     )
-        await verify_codex_login_session()
+        await verify_codex_login_session(read_account=True)
         host_id = registration["omnigentHostId"]
         try:
 

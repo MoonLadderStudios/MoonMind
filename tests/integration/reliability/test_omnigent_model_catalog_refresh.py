@@ -6,6 +6,7 @@ import ast
 import asyncio
 import base64
 import json
+import os
 import sys
 import time
 from itertools import product
@@ -149,6 +150,10 @@ def _install_catalog_cli(root: Path, *, fault: str) -> None:
             "oauth_aged",
             "oauth_aged_transient",
             "oauth_reconnected",
+            "oauth_account_unauthorized",
+            "oauth_account_unavailable",
+            "oauth_account_ready",
+            "oauth_account_refreshed",
         )
     ],
 )
@@ -192,6 +197,8 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
         now = int(time.time())
         issued_at = now if fault == "oauth_reconnected" else now - 86400
         expires_at = issued_at if fault == "oauth_ended" else issued_at + 3600
+        if fault.startswith("oauth_account_"):
+            expires_at = now + 3600
         write_login(issued_at=issued_at, expires_at=expires_at)
         credential_handles = [
             {
@@ -209,6 +216,35 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
                 ],
             }
         ]
+        cli = tmp_path / "codex"
+        cli.write_text(
+            f"#!{sys.executable}\n"
+            "import json, sys\n"
+            "assert sys.argv[1:] == ['app-server']\n"
+            "account_reads = 0\n"
+            "for line in sys.stdin:\n"
+            "    message = json.loads(line)\n"
+            "    if message.get('method') == 'initialized': continue\n"
+            "    if message['method'] == 'initialize':\n"
+            "        response = {'id': message['id'], 'result': {}}\n"
+            "    else:\n"
+            "        assert message['method'] == 'account/read'\n"
+            "        assert account_reads < 2\n"
+            "        assert message['params'] == {'refreshToken': account_reads == 1}\n"
+            "        account_reads += 1\n"
+            f"        fault = {fault!r}\n"
+            "        if fault == 'oauth_account_unauthorized' or (fault == 'oauth_account_refreshed' and account_reads == 1):\n"
+            "            response = {'id': message['id'], 'error': {'code': -32603, "
+            "'message': 'workspace routing discovery unauthorized (401) private-token-material'}}\n"
+            "        elif fault == 'oauth_account_unavailable':\n"
+            "            response = {'id': message['id'], 'error': {'code': -32603, "
+            "'message': 'temporary provider outage (503) private-token-material'}}\n"
+            "        else:\n"
+            "            response = {'id': message['id'], 'result': "
+            "{'account': {'type': 'chatgpt', 'email': 'private-token-material'}, 'requiresOpenaiAuth': True}}\n"
+            "    print(json.dumps(response), flush=True)\n"
+        )
+        cli.chmod(0o755)
     if fault.startswith("model_"):
         selected_model = "opencode-go/gemini-4-argon"
         if fault == "model_corrected":
@@ -273,9 +309,20 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
                 return 0, "Logged in using ChatGPT", ""
             assert argv[3:5] == ["/opt/venv/bin/python", "-c"]
             if argv[-1] == "/home/app/.codex":
-                events.append("login_session")
+                events.append(
+                    "account_read"
+                    if argv[5] == attestation.CODEX_ACCOUNT_READ_PROBE
+                    else "login_session"
+                )
                 return await super().run(
-                    [sys.executable, *argv[4:-1], str(credential_home)], **kwargs
+                    [
+                        "env",
+                        f"PATH={tmp_path}:{os.environ.get('PATH', '')}",
+                        sys.executable,
+                        *argv[4:-1],
+                        str(credential_home),
+                    ],
+                    **kwargs,
                 )
             attempts.append(argv[2])
             events.append("catalog")
@@ -488,6 +535,25 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
         prepared=prepared,
         credential_handles=credential_handles,
     )
+    if fault in {"oauth_account_unauthorized", "oauth_account_unavailable"}:
+        with pytest.raises(HarnessPlatformError) as exc:
+            await runtime.realize(**realize_inputs)
+        if fault == "oauth_account_unauthorized":
+            assert exc.value.code == "OMNIGENT_HOST_HARNESS_NEEDS_AUTH"
+            assert remediation_for(exc.value.code) == "reauthenticate"
+            assert "account/read" in str(exc.value)
+            record_ended_login.assert_awaited_once_with(
+                "codex_openai_oauth", 4, reason="codex_account_read_unauthorized"
+            )
+        else:
+            assert exc.value.code == "OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED"
+            record_ended_login.assert_not_awaited()
+        assert "private-token-material" not in str(exc.value)
+        assert attempts == []
+        assert events.count("launch") == 1
+        assert events.count("cleanup") == 1
+        assert candidate.read_text() == "preserved edits"
+        return
     if fault.startswith("oauth_ended"):
         # The stored login passes `codex login status`, but cannot refresh.
         # Its bundled catalog must never become a false model-unavailable error.
@@ -593,6 +659,8 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
                 "model_corrected",
                 "oauth_aged",
                 "oauth_reconnected",
+                "oauth_account_ready",
+                "oauth_account_refreshed",
                 "vendor_release_changed",
             }
             else 2
@@ -600,6 +668,7 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
         if fault.startswith("oauth_"):
             assert events.index("login_session") < events.index("catalog")
             assert events.count("login_session") == len(attempts) + 1
+            assert events.count("account_read") == 1
         if fault == "vendor_release_changed":
             host_evidence = json.loads(
                 (tmp_path / "generic-host-attestation.json").read_text()
