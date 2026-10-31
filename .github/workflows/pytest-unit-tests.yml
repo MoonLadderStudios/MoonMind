@@ -1562,7 +1562,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: omnigent-exact-artifact-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/omnigent-exact-artifact
+          path: |
+            artifacts/omnigent-exact-artifact
+            artifacts/native-chat-sidebar
           if-no-files-found: warn
           retention-days: 14
 
