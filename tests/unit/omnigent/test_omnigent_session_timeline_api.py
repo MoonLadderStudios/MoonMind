@@ -38,13 +38,17 @@ class _FakeUser:
 
 
 class _FakeSessions:
-    def __init__(self, session):
+    def __init__(self, session, *, agent_run_owned=False):
         self._session = session
+        self._agent_run_owned = agent_run_owned
 
     async def get(self, session_id):
         if session_id != self._session.session_id:
             return None
         return self._session
+
+    async def has_agent_run_lifecycle_owner(self, session_id):
+        return session_id == self._session.session_id and self._agent_run_owned
 
 
 class _FakeTurnAttempts:
@@ -120,8 +124,9 @@ class _FakeRepos:
         latest_decision=None,
         reason_counts=None,
         cleanup=None,
+        agent_run_owned=False,
     ):
-        self.sessions = _FakeSessions(session_record)
+        self.sessions = _FakeSessions(session_record, agent_run_owned=agent_run_owned)
         self.turn_attempts = _FakeTurnAttempts(active_turn, turn_count)
         self.observations = _FakeObservations(latest_event, latest_snapshot)
         self.commands = _FakeCommands(active_command)
@@ -153,7 +158,9 @@ def session_record():
 @pytest.mark.asyncio
 async def test_timeline_endpoint_returns_projection(monkeypatch, session_record):
     monkeypatch.setattr(
-        timeline_service.ControlPlaneRepositories, "bind", classmethod(lambda cls, db: _FakeRepos(session_record))
+        timeline_service.ControlPlaneRepositories,
+        "bind",
+        classmethod(lambda cls, db: _FakeRepos(session_record)),
     )
     app = _build_app(session_record, _FakeUser())
     transport = ASGITransport(app=app)
@@ -169,7 +176,9 @@ async def test_timeline_endpoint_returns_projection(monkeypatch, session_record)
 @pytest.mark.asyncio
 async def test_timeline_endpoint_404_for_unknown_session(monkeypatch, session_record):
     monkeypatch.setattr(
-        timeline_service.ControlPlaneRepositories, "bind", classmethod(lambda cls, db: _FakeRepos(session_record))
+        timeline_service.ControlPlaneRepositories,
+        "bind",
+        classmethod(lambda cls, db: _FakeRepos(session_record)),
     )
     app = _build_app(session_record, _FakeUser())
     transport = ASGITransport(app=app)
@@ -214,9 +223,7 @@ async def test_timeline_links_redirect_through_authorized_server_routes(
     async with AsyncClient(
         transport=transport, base_url="http://test", follow_redirects=False
     ) as client:
-        timeline = (
-            await client.get("/api/omnigent/sessions/sess-1/timeline")
-        ).json()
+        timeline = (await client.get("/api/omnigent/sessions/sess-1/timeline")).json()
         trace = await client.get("/api/omnigent/sessions/sess-1/trace")
         logs = await client.get("/api/omnigent/sessions/sess-1/logs")
 
@@ -227,9 +234,7 @@ async def test_timeline_links_redirect_through_authorized_server_routes(
     assert trace.status_code == 307
     assert trace.headers["location"] == "https://telemetry.example/traces/trace%2Fone"
     assert logs.status_code == 307
-    assert logs.headers["location"] == (
-        "https://telemetry.example/logs/wf-1/run%2Fone"
-    )
+    assert logs.headers["location"] == ("https://telemetry.example/logs/wf-1/run%2Fone")
 
 
 #: A durably-old turn start so the absence of observations is aged past the
@@ -258,7 +263,9 @@ async def test_stuck_state_endpoint_returns_findings_and_response(monkeypatch):
     )
     repos = _FakeRepos(active, active_turn=_active_turn(), turn_count=1)
     monkeypatch.setattr(
-        timeline_service.ControlPlaneRepositories, "bind", classmethod(lambda cls, db: repos)
+        timeline_service.ControlPlaneRepositories,
+        "bind",
+        classmethod(lambda cls, db: repos),
     )
     app = _build_app(active, _FakeUser())
     transport = ASGITransport(app=app)
@@ -268,10 +275,41 @@ async def test_stuck_state_endpoint_returns_findings_and_response(monkeypatch):
     body = resp.json()
     # No observations, but the turn started long ago -> absence is aged out ->
     # active-with-no-recent-evidence -> fenced reconcile.
-    assert any(f["reason"] == "moonmind_active_no_recent_evidence" for f in body["findings"])
+    assert any(
+        f["reason"] == "moonmind_active_no_recent_evidence" for f in body["findings"]
+    )
     assert body["response"]["reconcile"] is True
     assert body["response"]["expectedRevision"] == 7
     assert body["response"]["expectedFencingGeneration"] == 3
+
+
+@pytest.mark.asyncio
+async def test_stuck_state_endpoint_skips_agent_run_owned_session(monkeypatch):
+    active = SessionRecord(
+        session_id="sess-1",
+        moonmind_workflow_id="wf-1",
+        provider="omnigent",
+        active_turn_attempt_id="turn-1",
+        revision=7,
+        fencing_generation=3,
+    )
+    repos = _FakeRepos(active, active_turn=_active_turn(), agent_run_owned=True)
+    monkeypatch.setattr(
+        timeline_service.ControlPlaneRepositories,
+        "bind",
+        classmethod(lambda cls, db: repos),
+    )
+    app = _build_app(active, _FakeUser())
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/api/omnigent/sessions/sess-1/stuck-state")
+    assert response.status_code == 200
+    assert response.json() == {
+        "sessionId": "sess-1",
+        "findings": [],
+        "response": None,
+    }
 
 
 @pytest.mark.asyncio
@@ -294,7 +332,9 @@ async def test_stuck_state_endpoint_escalates_with_durable_detection_count(monke
         reason_counts={"moonmind_active_no_recent_evidence": 3},
     )
     monkeypatch.setattr(
-        timeline_service.ControlPlaneRepositories, "bind", classmethod(lambda cls, db: repos)
+        timeline_service.ControlPlaneRepositories,
+        "bind",
+        classmethod(lambda cls, db: repos),
     )
     app = _build_app(active, _FakeUser())
     transport = ASGITransport(app=app)
@@ -333,15 +373,15 @@ async def test_stuck_state_endpoint_projects_provider_and_lease_divergence(monke
     )
     repos = _FakeRepos(active, latest_snapshot=snapshot)
     monkeypatch.setattr(
-        timeline_service.ControlPlaneRepositories, "bind", classmethod(lambda cls, db: repos)
+        timeline_service.ControlPlaneRepositories,
+        "bind",
+        classmethod(lambda cls, db: repos),
     )
     app = _build_app(active, _FakeUser())
     transport = ASGITransport(app=app)
 
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        body = (
-            await client.get("/api/omnigent/sessions/sess-1/stuck-state")
-        ).json()
+        body = (await client.get("/api/omnigent/sessions/sess-1/stuck-state")).json()
 
     reasons = {finding["reason"] for finding in body["findings"]}
     assert "provider_terminal_moonmind_nonterminal" in reasons

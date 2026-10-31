@@ -547,6 +547,13 @@ def provider_failure_event_from_metadata(
             decoded[field.name] = metadata.get(alias, metadata.get(field.name))
     return build_provider_failure_event(**decoded)
 
+
+def provider_auth_failure_markers() -> tuple[str, ...]:
+    """Return canonical authentication markers for portable credential probes."""
+
+    return _AUTH_FAILURE_MARKERS
+
+
 def provider_failure_search_markers() -> tuple[str, ...]:
     """Return the provider-failure markers suitable for coarse log searches."""
 
@@ -578,6 +585,7 @@ __all__ = [
     "ProviderFailureEvent",
     "build_provider_failure_event",
     "classify_provider_failure",
+    "provider_auth_failure_markers",
     "provider_error_class_for_code",
     "provider_error_requires_cooldown",
     "provider_failure_event_from_metadata",

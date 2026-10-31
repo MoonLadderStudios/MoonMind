@@ -141,21 +141,25 @@ Automated response policy (`plan_response`):
 5. Product reads and evidence stay available even when interactive mutation is
    disabled.
 
-The existing durable `MoonMind.ManagedSessionReconcile` schedule is the single
-operational sweep owner. Its activity loads a bounded batch of canonical
-sessions, records each finding as an observation and reconciliation decision,
-journals one revision- and generation-fenced `request_reconcile` command, and
-executes the registered `ReconcileOmnigentSession` Update on the canonical
-`MoonMind.AgentSession` child workflow. The receiving workflow invokes the
-production reconciliation Activity, which reloads the canonical session and
-command journal, confirms that the session belongs to the parent Workflow
-scope, and validates the revision and fencing generation. An ambiguous Update delivery is
-parked as `delivery_unknown` and is never blindly resent. When the bounded
-persistent-ambiguity threshold is reached, the activity first publishes a
-restricted, redacted, long-retention diagnostic artifact and then quarantines
-the session with a fenced compare-and-swap. The read-only
-`GET /api/omnigent/sessions/{session_id}/stuck-state` endpoint projects the same
-pure inspection and response plan without becoming mutation authority.
+The durable `MoonMind.ManagedSessionReconcile` schedule checks sessions owned
+by the `MoonMind.OmnigentSession` supervisor. The admitted execution plan
+identifies that owner: generic-host executions belong to `MoonMind.AgentRun`,
+whose progress limits, runtime heartbeat and janitor own their recovery. Both
+the sweep and read-only inspection exclude those executions; missing Session
+supervisor observations cannot diagnose an AgentRun failure.
+
+For supervised sessions, the activity records findings, journals a revision-
+and generation-fenced `request_reconcile` command and wakes the owning workflow.
+Ambiguous delivery stays `delivery_unknown` and is never blindly resent.
+Persistent ambiguity publishes restricted diagnostics before a fenced
+quarantine. `GET /api/omnigent/sessions/{session_id}/stuck-state` projects the
+same inspection without granting mutation authority.
+
+Upgrade repair can recover an unchanged AgentRun quarantine caused by missing
+supervisor compatibility or event evidence when its admitted plan and attested
+runtime still bind the same provider session. Original decisions and
+diagnostics remain intact. Other quarantines and native chat's current policy,
+binding and artifact-access checks continue to apply.
 
 ## New-admission readiness
 

@@ -10,26 +10,28 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.db.models import Base
 from api_service.db.models import (
+    Base,
     OmnigentCleanupAuthority,
     OmnigentCommand,
+    OmnigentExecutionPlanRecord,
     OmnigentObservation,
     OmnigentSession,
     OmnigentTurnAttempt,
 )
-from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
-from moonmind.omnigent.control_plane import metrics, spans
-from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
-from moonmind.omnigent.control_plane.records import COMMAND_STATE_DELIVERY_UNKNOWN
-from moonmind.omnigent.control_plane.stuck_state_reconciliation import (
-    StuckStateReconciliationService,
-    inspect_stuck_state,
+from moonmind.omnigent.control_plane import OmnigentControlPlaneStore, metrics, spans
+from moonmind.omnigent.control_plane.records import (
+    COMMAND_STATE_DELIVERY_UNKNOWN,
+    ControlPlaneOutcome,
 )
 from moonmind.omnigent.control_plane.repositories import ControlPlaneRepositories
 from moonmind.omnigent.control_plane.stuck_state import (
     StuckStatePolicy,
     StuckStateReason,
+)
+from moonmind.omnigent.control_plane.stuck_state_reconciliation import (
+    StuckStateReconciliationService,
+    inspect_stuck_state,
 )
 
 
@@ -116,7 +118,51 @@ class _FailingDiagnosticPublisher:
 
 
 @pytest.mark.asyncio
-async def test_sweep_records_finding_and_dispatches_one_fenced_reconcile(session_factory) -> None:
+@pytest.mark.parametrize("agent_run_owned", [False, True])
+async def test_admitted_lifecycle_owner_controls_sweep_and_inspection(
+    session_factory, agent_run_owned
+):
+    now = datetime(2026, 8, 19, 12, 0, tzinfo=UTC)
+    store = await _seed_stuck_session(session_factory, session_id="planned", now=now)
+    await _seed_stuck_session(session_factory, session_id="legacy", now=now)
+    plan_ref = "omnigent-execution-plan:sha256:" + "a" * 64
+    async with session_factory() as db:
+        db.add(
+            OmnigentExecutionPlanRecord(
+                plan_ref=plan_ref,
+                schema_version="moonmind.omnigent-execution-plan.v1",
+                payload_json={},
+                harness_id="codex-native",
+                harness_implementation_ref="harness:codex",
+                host_class_ref="host-class",
+                launch_policy_ref="launch-policy",
+                execution_realizer_ref=(
+                    "generic-omnigent-host@1"
+                    if agent_run_owned
+                    else "codex-profile-bound@1"
+                ),
+            )
+        )
+        planned = await db.get(OmnigentSession, "planned")
+        planned.execution_plan_ref = plan_ref
+        # Ownership is already fixed at admission, before a runtime is bound.
+        assert planned.runtime_binding_ref is None
+        planned.updated_at = now - timedelta(days=1)
+        await db.commit()
+    async with store.transaction() as repos:
+        candidates = await repos.sessions.list_reconciliation_candidates(limit=1)
+        assert [row.session_id for row in candidates] == [
+            "legacy" if agent_run_owned else "planned"
+        ]
+        inspection = await inspect_stuck_state(repos, session_id="planned", now=now)
+        assert bool(inspection.findings) is (not agent_run_owned)
+        assert (inspection.response is None) is agent_run_owned
+
+
+@pytest.mark.asyncio
+async def test_sweep_records_finding_and_dispatches_one_fenced_reconcile(
+    session_factory,
+) -> None:
     now = datetime(2026, 8, 19, 12, 0, tzinfo=UTC)
     store = await _seed_stuck_session(session_factory, now=now)
     dispatcher = _Dispatcher()
@@ -136,9 +182,7 @@ async def test_sweep_records_finding_and_dispatches_one_fenced_reconcile(session
     assert len(dispatcher.calls) == 1
     assert dispatcher.calls[0]["session_id"] == "sess-1"
     assert dispatcher.calls[0]["workflow_id"] == "wf-sess-1"
-    assert dispatcher.calls[0]["reason_code"] == (
-        "moonmind_active_no_recent_evidence"
-    )
+    assert dispatcher.calls[0]["reason_code"] == ("moonmind_active_no_recent_evidence")
     assert dispatcher.calls[0]["expected_revision"] == "2"
     assert dispatcher.calls[0]["expected_fencing_generation"] == "0"
     assert publisher.payloads == []
@@ -234,7 +278,9 @@ async def test_receiving_activity_validates_canonical_revision_fence_and_command
 
 
 @pytest.mark.asyncio
-async def test_ambiguous_signal_delivery_is_parked_and_never_resent(session_factory) -> None:
+async def test_ambiguous_signal_delivery_is_parked_and_never_resent(
+    session_factory,
+) -> None:
     now = datetime(2026, 8, 19, 12, 0, tzinfo=UTC)
     store = await _seed_stuck_session(session_factory, now=now)
     dispatcher = _Dispatcher(fail=True)
@@ -257,7 +303,9 @@ async def test_ambiguous_signal_delivery_is_parked_and_never_resent(session_fact
 
 
 @pytest.mark.asyncio
-async def test_persistent_ambiguity_publishes_diagnostics_then_quarantines(session_factory) -> None:
+async def test_persistent_ambiguity_publishes_diagnostics_then_quarantines(
+    session_factory,
+) -> None:
     now = datetime(2026, 8, 19, 12, 0, tzinfo=UTC)
     store = await _seed_stuck_session(session_factory, now=now)
     async with store.transaction() as repos:
@@ -366,7 +414,9 @@ async def test_repository_boundaries_emit_semantic_spans_and_bounded_decision_me
     assert spans.PROVIDER_OBSERVE_SNAPSHOT in names
     assert names.count(spans.COMMAND_EXECUTE) >= 2
     assert spans.SESSION_RECONCILE in names
-    assert all(set(attributes) <= spans.SAFE_SPAN_ATTRIBUTES for _, attributes in emitted)
+    assert all(
+        set(attributes) <= spans.SAFE_SPAN_ATTRIBUTES for _, attributes in emitted
+    )
     metric_snapshot = metrics.snapshot()
     assert any(
         key.startswith(metrics.RECONCILIATION_DECISIONS)
@@ -390,9 +440,7 @@ async def test_sweep_records_resource_and_compatibility_metrics(
     await service.sweep(now=now)
 
     snapshot = metrics.snapshot()
-    assert any(
-        key.startswith(metrics.ORPHANED_LEASES) for key in snapshot["counters"]
-    )
+    assert any(key.startswith(metrics.ORPHANED_LEASES) for key in snapshot["counters"])
     assert any(
         key.startswith(metrics.DEPLOYED_BUILD_COMPATIBILITY)
         for key in snapshot["counters"]
@@ -414,7 +462,10 @@ async def test_service_level_detector_matrix_covers_every_durable_condition(
     store = OmnigentControlPlaneStore(session_factory)
 
     async def create_session(
-        ordinal: int, *, attached: bool = False, compatibility: bool = True,
+        ordinal: int,
+        *,
+        attached: bool = False,
+        compatibility: bool = True,
         metadata=None,
     ):
         async with store.transaction() as repos:
@@ -462,7 +513,9 @@ async def test_service_level_detector_matrix_covers_every_durable_condition(
     await create_session(3, attached=True, metadata=fresh_metadata)
     async with store.transaction() as repos:
         await repos.sessions.mark_terminal(
-            "matrix-3", "success", expected_revision=1,
+            "matrix-3",
+            "success",
+            expected_revision=1,
             expected_fencing_generation=0,
         )
     await snapshot(3, {"providerSession": {"rawStatus": "running"}})
@@ -471,17 +524,23 @@ async def test_service_level_detector_matrix_covers_every_durable_condition(
     await create_session(4)
     async with store.transaction() as repos:
         await repos.turn_attempts.create(
-            turn_attempt_id="matrix-turn-4", session_id="matrix-4",
+            turn_attempt_id="matrix-turn-4",
+            session_id="matrix-4",
             idempotency_key="matrix-turn-4",
         )
         await repos.sessions.update_lifecycle(
-            "matrix-4", expected_revision=1, expected_fencing_generation=0,
+            "matrix-4",
+            expected_revision=1,
+            expected_fencing_generation=0,
             active_turn_attempt_id="matrix-turn-4",
         )
         await repos.observations.append(
-            observation_id="matrix-liveness-4", session_id="matrix-4",
-            observation_type="liveness", source="provider_liveness",
-            observed_at=now, deduplication_key="matrix-liveness-4",
+            observation_id="matrix-liveness-4",
+            session_id="matrix-4",
+            observation_type="liveness",
+            source="provider_liveness",
+            observed_at=now,
+            deduplication_key="matrix-liveness-4",
         )
     await snapshot(4, {"providerSession": {"rawStatus": "running"}}, at=old)
 
@@ -490,7 +549,8 @@ async def test_service_level_detector_matrix_covers_every_durable_condition(
     async with store.transaction() as repos:
         for ordinal in range(3):
             await repos.decisions.append(
-                decision_id=f"matrix-decision-5-{ordinal}", session_id="matrix-5",
+                decision_id=f"matrix-decision-5-{ordinal}",
+                session_id="matrix-5",
                 decision_code="await_observation",
                 expected_revision=session5.revision,
                 observation_frontier_digest="same-frontier",
@@ -510,21 +570,22 @@ async def test_service_level_detector_matrix_covers_every_durable_condition(
         )
 
     # 9: admitted session never established compatibility/actual-build state.
-    await create_session(
-        9, attached=True, compatibility=False, metadata=fresh_metadata
-    )
+    await create_session(9, attached=True, compatibility=False, metadata=fresh_metadata)
     await snapshot(9, {"providerSession": {"rawStatus": "running"}})
 
     # 10: claimed command exceeded the delivery deadline.
     await create_session(10)
     async with store.transaction() as repos:
         await repos.commands.record(
-            command_id="matrix-command-10", session_id="matrix-10",
-            command_type="submit_turn", idempotency_key="matrix-command-10",
+            command_id="matrix-command-10",
+            session_id="matrix-10",
+            command_type="submit_turn",
+            idempotency_key="matrix-command-10",
             payload_digest="sha256:" + "c" * 64,
         )
         await repos.commands.claim_command(
-            "matrix-command-10", owner_class="session_supervisor",
+            "matrix-command-10",
+            owner_class="session_supervisor",
             claim_token="matrix-command-claim-10",
         )
 
@@ -533,9 +594,7 @@ async def test_service_level_detector_matrix_covers_every_durable_condition(
         11,
         attached=True,
         metadata={
-            "protected_live_evidence_at": (
-                now - timedelta(days=2)
-            ).isoformat(),
+            "protected_live_evidence_at": (now - timedelta(days=2)).isoformat(),
             "conformance_runner_available": False,
         },
     )
@@ -782,9 +841,7 @@ async def test_service_response_matrix_is_bounded_idempotent_and_fenced(
             snapshot_row = await db.get(OmnigentObservation, snapshot_id)
             assert session_row is not None and snapshot_row is not None
             session_row.compatibility_ref = None
-            snapshot_row.bounded_index_ = {
-                "providerSession": {"rawStatus": "running"}
-            }
+            snapshot_row.bounded_index_ = {"providerSession": {"rawStatus": "running"}}
             await db.commit()
     elif reason is StuckStateReason.COMMAND_STUCK_CLAIMED_OR_DELIVERY_UNKNOWN:
         async with store.transaction() as repos:
@@ -801,9 +858,7 @@ async def test_service_response_matrix_is_bounded_idempotent_and_fenced(
                 claim_token=f"original-claim-{reason.value}",
             )
         async with session_factory() as db:
-            command = await db.get(
-                OmnigentCommand, f"original-command-{reason.value}"
-            )
+            command = await db.get(OmnigentCommand, f"original-command-{reason.value}")
             assert command is not None
             command.updated_at = baseline_now - timedelta(minutes=9)
             await db.commit()
@@ -816,9 +871,7 @@ async def test_service_response_matrix_is_bounded_idempotent_and_fenced(
             assert session_row is not None
             session_row.metadata_ = {
                 "protected_live_evidence_at": (
-                    trigger_now
-                    - policy.conformance_max_age
-                    + timedelta(seconds=1)
+                    trigger_now - policy.conformance_max_age + timedelta(seconds=1)
                 ).isoformat(),
                 "conformance_runner_available": True,
             }
@@ -881,19 +934,22 @@ async def test_service_response_matrix_is_bounded_idempotent_and_fenced(
         )
     assert after is not None
     assert after.host_lease_ref == before.host_lease_ref == "host-authority"
-    assert after.provider_profile_id == before.provider_profile_id == "profile-authority"
+    assert (
+        after.provider_profile_id == before.provider_profile_id == "profile-authority"
+    )
     assert turns_after == turns_before
-    assert sum(
-        command.command_type == "submit_turn" for command in commands_after
-    ) == submit_count_before
+    assert (
+        sum(command.command_type == "submit_turn" for command in commands_after)
+        == submit_count_before
+    )
     assert after.historical_read_state == "quarantined"
     assert any(
-        decision.decision_code == "quarantine_ambiguous_state"
-        for decision in decisions
+        decision.decision_code == "quarantine_ambiguous_state" for decision in decisions
     )
-    assert sum(
-        command.command_type == "request_reconcile" for command in commands_after
-    ) == 1
+    assert (
+        sum(command.command_type == "request_reconcile" for command in commands_after)
+        == 1
+    )
     assert len(stuck_observations) == 4
 
 
