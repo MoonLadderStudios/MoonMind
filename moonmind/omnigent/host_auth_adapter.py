@@ -7,13 +7,13 @@ verifier used by its stock websocket tunnel route.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import ast
+from dataclasses import dataclass
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from typing import Any, Mapping
 
-PINNED_OMNIGENT_COMMIT = "f04b0354fb5344c1ea8b92795ceb6760a9ad7595"
+PINNED_OMNIGENT_COMMIT = "ebf63ff916dec81b3e74938dc4e67627dd20642e"
 PINNED_PROTOCOL_PROFILE = "omnigent.runner_tunnel.983c93c6"
 
 
@@ -48,7 +48,9 @@ class OmnigentHostAuthAdapter:
         entries = [(str(k), str(v)) for k, v in headers.items()]
         values = [v for k, v in entries if k.lower() == self.token_header.lower()]
         if len(values) != 1:
-            raise UpstreamHostAuthError("runner tunnel credential is required exactly once")
+            raise UpstreamHostAuthError(
+                "runner tunnel credential is required exactly once"
+            )
         normalized = {
             (self.token_header if k.lower() == self.token_header.lower() else k): v
             for k, v in entries
@@ -59,7 +61,9 @@ class OmnigentHostAuthAdapter:
             self._verify(normalized, allowed_tunnel_tokens=self._allowed_tokens)
             runner_id = self._token_bound_runner_id(values[0])
         except (RuntimeError, ValueError) as exc:
-            raise UpstreamHostAuthError("runner tunnel credential was rejected") from exc
+            raise UpstreamHostAuthError(
+                "runner tunnel credential was rejected"
+            ) from exc
         return UpstreamHostIdentity(runner_id=runner_id)
 
     def runner_id_for_binding_token(self, token: str) -> str:
@@ -88,13 +92,17 @@ def _load_pinned_source_entrypoints() -> tuple[Any, Any]:
     identity_path = root / "runner" / "identity.py"
     route_path = root / "server" / "routes" / "runner_tunnel.py"
     try:
-        spec = spec_from_file_location("_moonmind_pinned_omnigent_identity", identity_path)
+        spec = spec_from_file_location(
+            "_moonmind_pinned_omnigent_identity", identity_path
+        )
         if spec is None or spec.loader is None:
             raise ImportError("identity module spec unavailable")
         identity = module_from_spec(spec)
         spec.loader.exec_module(identity)
 
-        tree = ast.parse(route_path.read_text(encoding="utf-8"), filename=str(route_path))
+        tree = ast.parse(
+            route_path.read_text(encoding="utf-8"), filename=str(route_path)
+        )
         node = next(
             item
             for item in tree.body

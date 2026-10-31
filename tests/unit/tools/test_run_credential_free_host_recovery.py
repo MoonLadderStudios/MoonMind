@@ -26,7 +26,8 @@ HARNESS_IDENTITY = {
     "omnigentBuildDigest": "sha256:" + "4" * 64,
     "harnessImplementationRef": _normalize_harness(
         {"id": "opencode-native", "capabilities": {}},
-        omnigent_version="1.2.3", omnigent_build_digest="sha256:" + "4" * 64,
+        omnigent_version="1.2.3",
+        omnigent_build_digest="sha256:" + "4" * 64,
     ).implementation.implementation_ref(),
 }
 
@@ -196,7 +197,9 @@ def test_expected_harness_identity_is_observed_from_exact_image_offline(
     from types import ModuleType
 
     registry = ModuleType("omnigent.harness_plugins")
-    registry.valid_harnesses = lambda: {"opencode-native"} if native_available else set()
+    registry.valid_harnesses = lambda: (
+        {"opencode-native"} if native_available else set()
+    )
     registry.harness_capabilities = lambda: {
         "opencode-native": SimpleNamespace(as_dict=dict)
     }
@@ -371,7 +374,9 @@ def test_compose_render_does_not_modify_canonical_document():
     root = Path(__file__).resolve().parents[3]
     source = yaml.safe_load((root / "docker-compose.yaml").read_text())
     original = copy.deepcopy(source)
-    driver.compose_document(source, root, "test-server@" + IMAGE_ID, moonmind_image=IMAGE_ID)
+    driver.compose_document(
+        source, root, "test-server@" + IMAGE_ID, moonmind_image=IMAGE_ID
+    )
     assert source == original
 
 
@@ -380,6 +385,7 @@ def test_fixture_identity_matches_pinned_upstream_auth_and_strict_registration(
     tmp_path, monkeypatch, transport
 ):
     import importlib.util
+    import sys
 
     import httpx
     from starlette.requests import HTTPConnection
@@ -398,6 +404,7 @@ def test_fixture_identity_matches_pinned_upstream_auth_and_strict_registration(
     assert source.is_file(), "initialize the pinned Omnigent test fixture"
     spec = importlib.util.spec_from_file_location("recovery_upstream_auth", source)
     auth = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, auth)
     spec.loader.exec_module(auth)
     document = driver.compose_document(
         yaml.safe_load((root / "docker-compose.yaml").read_text()),
@@ -413,7 +420,9 @@ def test_fixture_identity_matches_pinned_upstream_auth_and_strict_registration(
 
     def authenticated_owner(header, header_name=b"authorization"):
         headers = [] if header is None else [(header_name, header.encode())]
-        return provider.get_user_id(
+        # This fixture verifies real header extraction; account-database
+        # authority is exercised by the upstream server's separate auth tests.
+        return provider._check_header(
             HTTPConnection({"type": transport, "headers": headers})
         )
 
@@ -671,9 +680,7 @@ def test_readiness_sends_authenticated_absolute_request_through_proxy(
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
-    assert observed == [
-        ("http://omnigent:8000/v1/agents", "Bearer ephemeral-fixture")
-    ]
+    assert observed == [("http://omnigent:8000/v1/agents", "Bearer ephemeral-fixture")]
 
 
 @pytest.mark.parametrize("proxy_image_matches", [False, True])
