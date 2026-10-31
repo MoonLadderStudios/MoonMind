@@ -2808,6 +2808,42 @@ def test_build_omnigent_result_is_compact_terminal_success() -> None:
     assert result.failure_class is None
 
 
+@pytest.mark.parametrize("current_answer", [True, False])
+def test_report_result_projects_only_current_native_answer(current_answer) -> None:
+    request = _request().model_copy(
+        update={"parameters": {"reportOutput": {"enabled": True}}}
+    )
+    answer = {
+        "type": "message",
+        "data": {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "Finding with evidence. password=synthetic-private-value",
+                }
+            ],
+        },
+    }
+    user = {"type": "message", "data": {"role": "user", "content": []}}
+    result = build_omnigent_result(
+        request=request,
+        terminal_status="completed",
+        session_id="sess-1",
+        agent_id="agent-1",
+        final_snapshot={"items": [user, answer] if current_answer else [answer, user]},
+        event_count=2,
+        capture_bundle=_bundle(),
+    )
+    if current_answer:
+        assert (
+            result.metadata["lastAssistantText"]
+            == "Finding with evidence. password=[REDACTED]"
+        )
+    else:
+        assert "lastAssistantText" not in result.metadata
+
+
 def test_build_omnigent_result_exposes_initial_context_pack_ref() -> None:
     request = _request()
     request.parameters = {

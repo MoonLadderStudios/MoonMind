@@ -22,6 +22,12 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 from api_service.auth_providers import get_artifact_access
 from moonmind.core.artifacts import canonical_artifact_ref
 from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+from moonmind.workflows.skills.optional_quality_review import (
+    OptionalReviewRequest,
+    bind_review_selection,
+    optional_review_identity,
+    review_workflow_payload,
+)
 from moonmind.workflows.temporal.workflow_registry import (
     WorkflowProjectionExcluded,
     is_historical_workflow_type,
@@ -336,6 +342,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactStateError,
     TemporalArtifactStorageAccessError,
     TemporalArtifactUnavailableError,
+    TemporalArtifactValidationError,
     build_artifact_ref,
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter, query_workflow
@@ -9685,6 +9692,19 @@ def _normalize_report_output_payload(
             "required": required,
             "reportType": report_type,
         }
+        if "subject" in report_payload:
+            from moonmind.workflows.temporal.report_artifacts import (
+                validate_report_artifact_contract,
+            )
+
+            subject = report_payload["subject"]
+            try:
+                validate_report_artifact_contract(
+                    link_type="report.primary", metadata={"subject": subject}
+                )
+            except TemporalArtifactValidationError as exc:
+                raise _invalid_workflow_request(str(exc)) from exc
+            normalized["subject"] = copy.deepcopy(subject)
         for key in _REPORT_OUTPUT_STRING_KEYS:
             if key in {"reportType", "report_type"}:
                 continue
@@ -14990,6 +15010,56 @@ async def _execution_request_artifact_access(
             capability.parent_workflow_id, principal="service:execution-fanout"
         )
     return await get_artifact_access(request, admission=user)
+
+
+@router.post(
+    "/{workflow_id}/quality-review",
+    response_model=ExecutionModel,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_optional_quality_review(
+    workflow_id: str,
+    payload: OptionalReviewRequest,
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: OperatorAdmission = Depends(get_instance_access),
+    _submit_enabled: None = Depends(_ensure_submit_enabled),
+    *,
+    access: ArtifactAccessContext = Depends(get_artifact_access),
+) -> ExecutionModel:
+    source = await _get_owned_execution(
+        service=service, workflow_id=workflow_id, user=user, allow_historical=True
+    )
+    artifacts = get_temporal_artifact_service(session)
+    try:
+        binding = await bind_review_selection(
+            payload, source=source, artifacts=artifacts, access=access
+        )
+        existing = await service.find_create_execution(
+            idempotency_key=optional_review_identity(binding),
+            owner_id=None,
+            workflow_type="MoonMind.UserWorkflow",
+        )
+        if existing is not None:
+            existing = await service.ensure_create_started(existing)
+            return _serialize_execution(existing, user=user)
+        workflow_payload = await review_workflow_payload(
+            binding, artifacts=artifacts, access=access
+        )
+    except Exception as exc:
+        _raise_temporal_artifact_http(exc)
+        raise
+    return await create_execution(
+        payload={"type": "workflow", "payload": workflow_payload},
+        service=service,
+        session=session,
+        user=user,
+        _submit_enabled=None,
+        principal_context={},
+        authorization=None,
+        execution_fanout=None,
+        access=access,
+    )
 
 
 @router.post(

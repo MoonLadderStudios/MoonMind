@@ -2113,7 +2113,12 @@ def _build_runtime_planner():
                     if is_agent_runtime_step and has_explicit_step_skill
                     else ""
                 )
-                if effective_step_skill_name.lower() != "pr-resolver":
+                # Remove the inherited resolver default, preserving an authored
+                # budget for this step.
+                if (
+                    effective_step_skill_name.lower() != "pr-resolver"
+                    and "timeoutPolicy" not in step_entry
+                ):
                     step_node_inputs.pop("timeoutPolicy", None)
                 if is_agent_runtime_step and has_explicit_step_skill:
                     step_node_inputs["selectedSkill"] = step_tool_name

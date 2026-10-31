@@ -90,7 +90,7 @@ async def test_credential_shaped_projection_owner_is_still_redacted(tmp_path, la
     assert not error
     assert json.loads(output) == {
         **stamp,
-        "ownerRef": f"test:{run_ref}=[REDACTED]",
+        "ownerRef": f"test:{run_ref}:[REDACTED]",
     }
     state = json.loads((tmp_path / ".projection-reservation.json").read_text())
     assert state["reservation"] == stamp

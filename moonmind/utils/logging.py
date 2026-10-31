@@ -18,9 +18,11 @@ _GITHUB_TOKEN_PATTERN = re.compile(
 _CLOUD_TOKEN_PATTERN = re.compile(
     r"\b(?:AIza[A-Za-z0-9_-]{16,}|AKIA[A-Z0-9]{16})\b"
 )
+_SLACK_TOKEN_PATTERN = re.compile(r"\bxox[baprs]-[A-Za-z0-9-]+\b", re.IGNORECASE)
+_COOKIE_HEADER_PATTERN = re.compile(r"(?im)\b((?:set-)?cookie\s*:)\s*[^\r\n]+")
 _SECRET_ASSIGNMENT_PATTERN = re.compile(
-    r"(?i)\b([A-Z0-9_.-]{0,80}(?:token|password|secret|api[_-]?key|credential)"
-    r"[A-Z0-9_.-]{0,80})\s*[:=]\s*"
+    r"(?i)\b([A-Z0-9_.-]{0,80}(?:token|password|passwd|session|cookie|authorization|secret|api[_-]?key|credential)"
+    r"[A-Z0-9_.-]{0,80})(\s*[:=]\s*)"
     r"(?:\"[^\"]*\"|'[^']*'|[^\s,;\"']+)"
 )
 _AUTHORIZATION_PATTERN = re.compile(
@@ -154,9 +156,11 @@ def redact_sensitive_text(text: str | None) -> str:
     if not text:
         return ""
     redacted = scrub_github_tokens(str(text))
+    redacted = _SLACK_TOKEN_PATTERN.sub("[REDACTED]", redacted)
     redacted = _redact_private_key_blocks(redacted)
     redacted = _AUTHORIZATION_PATTERN.sub("[REDACTED_AUTHORIZATION]", redacted)
-    redacted = _SECRET_ASSIGNMENT_PATTERN.sub(r"\1=[REDACTED]", redacted)
+    redacted = _COOKIE_HEADER_PATTERN.sub(r"\1 [REDACTED]", redacted)
+    redacted = _SECRET_ASSIGNMENT_PATTERN.sub(r"\1\2[REDACTED]", redacted)
     redacted = _redact_auth_paths(redacted)
     return redacted
 

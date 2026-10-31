@@ -1345,10 +1345,12 @@ async def test_run_execution_stage_honors_pause_between_managed_session_steps(
     [(True, 2), (False, 1)],
     ids=["new-history", "previous-history"],
 )
+@pytest.mark.parametrize("advisory", [False, True])
 async def test_run_execution_stage_retries_typed_omnigent_turn_failure_at_child_boundary(
     monkeypatch: pytest.MonkeyPatch,
     explicit_retry_patch_enabled: bool,
     expected_child_count: int,
+    advisory: bool,
 ) -> None:
     """Exercise child mapping, retry admission, and fresh Step Execution launch."""
 
@@ -1374,6 +1376,7 @@ async def test_run_execution_stage_retries_typed_omnigent_turn_failure_at_child_
                     "inputs": {
                         "instructions": "Continue the marked Omnigent turn.",
                         "runtime": {"mode": "omnigent"},
+                        "annotations": {"optionalReview": advisory},
                     },
                 }
             ]
@@ -1417,6 +1420,7 @@ async def test_run_execution_stage_retries_typed_omnigent_turn_failure_at_child_
     enabled_patches = {
         RUN_CONDITIONAL_REGISTRY_READ_PATCH,
         RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
+        run_workflow_module.RUN_ADVISORY_ARTIFACT_REVIEW_PATCH,
     }
     if explicit_retry_patch_enabled:
         enabled_patches.add(RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH)
