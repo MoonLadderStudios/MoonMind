@@ -915,6 +915,7 @@ RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
     "run-already-implemented-jira-completion-v1"
 )
 RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH = "run-moonspec-verify-publication-gate-v1"
+RUN_ADVISORY_ARTIFACT_REVIEW_PATCH = "run-advisory-artifact-review-v1"
 RUN_INCOMPLETE_DRAFT_OBJECTIVE_OUTCOME_PATCH = "run-incomplete-draft-objective-outcome-v1"
 RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH = (
     "run-moonspec-gate-previous-outputs-handoff-v1"
@@ -7690,12 +7691,32 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return f"Approved after {retry_count} {retry_label}"
         return "Approved by structured review"
 
+    def _is_advisory_artifact_review_step(
+        self,
+        *,
+        node_inputs: Mapping[str, Any],
+    ) -> bool:
+        # Admission owns this intent; report text cannot opt out of a gate.
+        # Explicit required roles retain authority even with an advisory marker.
+        # Retained histories keep their recorded repair and completion decisions.
+        annotations = self._node_annotations_mapping({"inputs": node_inputs})
+        return bool(
+            annotations.get("optionalReview") is True
+            and not any(
+                annotations.get(key)
+                for key in ("jiraOrchestrateRole", "issueImplementRole")
+            )
+            and workflow.patched(RUN_ADVISORY_ARTIFACT_REVIEW_PATCH)
+        )
+
     def _is_moonspec_verify_step(
         self,
         *,
         tool_name: str,
         node_inputs: Mapping[str, Any],
     ) -> bool:
+        if self._is_advisory_artifact_review_step(node_inputs=node_inputs):
+            return False
         normalized_tool = str(tool_name or "").strip().lower()
         if normalized_tool == "moonspec-verify":
             return True
@@ -14637,6 +14658,27 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 failure_message == "execution_error"
                                 and tool_type == "agent_runtime"
                             )
+                        outputs = self._get_from_result(execution_result, "outputs")
+                        if (
+                            retryable
+                            and self._is_advisory_artifact_review_step(
+                                node_inputs=node_inputs
+                            )
+                            and isinstance(outputs, Mapping)
+                            and any(
+                                outputs.get(key)
+                                for key in (
+                                    "primaryReportRef",
+                                    "lastAssistantText",
+                                    "terminalSaveIncomplete",
+                                )
+                            )
+                        ):
+                            # Retain completed advisory observations, including
+                            # partial provider output and an interrupted save.
+                            # Recovery before observations exist keeps its
+                            # ordinary runtime retry owner and step budget.
+                            retryable = False
                         if (
                             retryable
                             and logical_step_budget is not None
@@ -23733,7 +23775,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             if compact_skill_payload:
                 compact_skill_payload.setdefault("name", selected_skill)
                 parameters["skill"] = dict(compact_skill_payload)
-            if selected_skill.lower() == "moonspec-verify":
+            if (
+                selected_skill.lower() == "moonspec-verify"
+                and self._is_moonspec_verify_step(
+                    tool_name=tool_name, node_inputs=node_inputs
+                )
+            ):
                 self._ensure_moonspec_verify_parameters(
                     parameters=parameters,
                     node_inputs=node_inputs,

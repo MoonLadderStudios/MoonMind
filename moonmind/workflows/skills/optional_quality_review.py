@@ -258,6 +258,7 @@ async def review_workflow_payload(
                     "id": "review",
                     "type": "skill",
                     "skill": {"id": "moonspec-verify"},
+                    "annotations": {"optionalReview": True},
                     "inputs": {"optionalReview": binding},
                     "timeoutPolicy": {
                         "timeout_seconds": binding["timeoutSeconds"],
