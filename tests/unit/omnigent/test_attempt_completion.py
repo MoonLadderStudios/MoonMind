@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -13,7 +15,81 @@ from moonmind.omnigent.runtime_bindings import (
     RuntimeBindingSessionAuthoritySink,
     RuntimeBindingState,
 )
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    AgentRunResult,
+    ExecutionBudgetContext,
+    resolve_execution_budget,
+)
+
+
+@pytest.mark.asyncio
+async def test_live_attempt_cannot_restart_a_turn_after_shared_budget_expires():
+    from moonmind.omnigent.runtime_bindings import InMemoryStableRuntimeBindingStore
+
+    store = InMemoryStableRuntimeBindingStore()
+    binding = await store.create_initial(
+        execution_plan_ref="omnigent-execution-plan:sha256:" + "a" * 64,
+        idempotency_key="expired-attempt",
+        provider_leases={},
+    )
+    request = _finish_request(idempotency_key="expired-attempt").model_copy(
+        update={
+            "execution_budget": ExecutionBudgetContext(
+                budget=resolve_execution_budget(
+                    timeout_policy={"timeout_seconds": 1, "max_timeout_seconds": 1}
+                ),
+                logicalStepId="step",
+                attemptId="attempt",
+                admittedAt=datetime.now(UTC) - timedelta(seconds=10),
+            ),
+        }
+    )
+    driver = AsyncMock(return_value=AgentRunResult(summary="must not run"))
+    with pytest.raises(TimeoutError):
+        await complete_skill_turns(
+            request=request,
+            sink=RuntimeBindingSessionAuthoritySink(store, binding),
+            driver=driver,
+            inspect_terminal=AsyncMock(),
+        )
+    driver.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_finishing_saves_work_without_starting_repository_publication():
+    from moonmind.omnigent.runtime_bindings import InMemoryStableRuntimeBindingStore
+
+    store = InMemoryStableRuntimeBindingStore()
+    binding = await store.create_initial(
+        execution_plan_ref="omnigent-execution-plan:sha256:" + "a" * 64,
+        idempotency_key="finishing-attempt",
+        provider_leases={},
+    )
+    request = _finish_request(idempotency_key="finishing-attempt").model_copy(
+        update={
+            "execution_budget": ExecutionBudgetContext(
+                budget=resolve_execution_budget(
+                    timeout_policy={"timeout_seconds": 1, "max_timeout_seconds": 1}
+                ),
+                logicalStepId="step",
+                attemptId="attempt",
+                admittedAt=datetime.now(UTC) - timedelta(seconds=10),
+            ).begin_finishing(datetime.now(UTC)),
+        }
+    )
+    sink = RuntimeBindingSessionAuthoritySink(store, binding)
+    await sink.record_phase("saved", {"checkpointRef": "art_saved"})
+    publish = AsyncMock(return_value=AgentRunResult(summary="must not publish"))
+    realizer = _finish_realizer(store, publish=publish)
+    result = await realizer._finish_owned_execution(
+        request, sink, AgentRunResult(summary="work finished")
+    )
+    publish.assert_not_awaited()
+    assert result.failure_class == "timed_out"
+    assert result.metadata["workPreserved"] is True
+
+
 from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
 
 

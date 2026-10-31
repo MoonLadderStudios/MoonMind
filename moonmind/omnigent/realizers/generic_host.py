@@ -1406,8 +1406,35 @@ class GenericOmnigentHostRealizer:
         phases = sink.binding.phaseResults or {}
         if "publication" in phases:
             return AgentRunResult.model_validate(phases["publication"])
+        context = request.execution_budget
         if "workspace" in phases and "saved" not in phases:
-            await self._save(request, sink)
+            if context is not None:
+                now = datetime.now(timezone.utc)
+                if context.remaining_seconds(now) <= 0:
+                    from moonmind.schemas.agent_runtime_models import (
+                        ExecutionBudgetContext,
+                    )
+
+                    finishing = phases.get("finishing_budget")
+                    context = (
+                        ExecutionBudgetContext.model_validate(finishing)
+                        if finishing
+                        else context.begin_finishing(now)
+                    )
+                    if finishing is None:
+                        await sink.record_phase(
+                            "finishing_budget",
+                            context.model_dump(mode="json", by_alias=True),
+                        )
+                    request.execution_budget = context
+                async with asyncio.timeout(
+                    context.remaining_seconds(
+                        now, finishing=context.finishing_deadline is not None
+                    )
+                ):
+                    await self._save(request, sink)
+            else:
+                await self._save(request, sink)
         saved = (sink.binding.phaseResults or {}).get("saved")
         if saved:
             result = result.model_copy(update={"metadata": {
@@ -1421,8 +1448,42 @@ class GenericOmnigentHostRealizer:
             for attempt in range(3):
                 if f"publication_failure:{attempt}" in (sink.binding.phaseResults or {}):
                     continue
+                publication_started = False
                 try:
-                    result = await self._publish_repository(request, result)
+                    if context is not None:
+                        remaining = context.remaining_seconds(
+                            datetime.now(timezone.utc)
+                        )
+                        if remaining <= 0:
+                            raise TimeoutError(
+                                "logical step execution allowance exhausted"
+                            )
+                        async with asyncio.timeout(remaining):
+                            publication_started = True
+                            result = await self._publish_repository(request, result)
+                    else:
+                        result = await self._publish_repository(request, result)
+                    break
+                except TimeoutError:
+                    if context is None:
+                        raise
+                    result = result.model_copy(
+                        update={
+                            "failure_class": "timed_out",
+                            "objective_outcome": "failed",
+                            "publication_state": (
+                                "unknown" if publication_started else "not_published"
+                            ),
+                            "retry_disposition": "no_retry",
+                            "summary": "Agent work is saved; publication did not finish within the admitted execution allowance",
+                            "metadata": {
+                                **result.metadata,
+                                "executionBudget": context.model_dump(
+                                    mode="json", by_alias=True
+                                ),
+                            },
+                        }
+                    )
                     break
                 except HarnessPlatformError as exc:
                     if str(exc.code) not in {
@@ -1440,15 +1501,35 @@ class GenericOmnigentHostRealizer:
                         "Repository publication attempt %s/3 failed (transient=%s): %s",
                         attempt + 1, transient, message,
                     )
+                    if context is not None and not transient:
+                        result = result.model_copy(
+                            update={
+                                "failure_class": "integration_error",
+                                "provider_error_code": str(exc.code),
+                                "retry_disposition": "no_retry",
+                                "retry_recommendation": "do_not_retry",
+                                "objective_outcome": "failed",
+                                "summary": message,
+                            }
+                        )
+                        break
                     if attempt < 2:
                         delays = (
                             _TRANSIENT_PUBLICATION_RETRY_DELAYS_SECONDS
                             if transient
                             else _PUBLICATION_RETRY_DELAYS_SECONDS
                         )
-                        await asyncio.sleep(delays[attempt])
+                        delay = delays[attempt]
+                        if context is not None:
+                            delay = min(
+                                delay,
+                                context.remaining_seconds(datetime.now(timezone.utc)),
+                            )
+                        await asyncio.sleep(delay)
             else:
-                last_failure = (sink.binding.phaseResults or {})["publication_failure:2"]
+                last_failure = (sink.binding.phaseResults or {})[
+                    "publication_failure:2"
+                ]
                 summary = "Agent work is saved; repository publication exhausted its retry budget"
                 result = result.model_copy(
                     update={
