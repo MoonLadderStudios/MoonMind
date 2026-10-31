@@ -459,43 +459,42 @@ Log at minimum:
 * timestamp
 * IP/user-agent for user-facing API calls where applicable
 
-## 9.5 App auth mode integration
+## 9.5 HTTP admission
 
-Artifact API auth behavior follows the one app-level selector `AUTH_PROVIDER`
-(`accounts` | `oidc` | `header` | explicitly restricted local `disabled`).
-Retired selectors (`keycloak`, `default`, `google`, `local`) fail at startup with
-migration guidance. Authoritative mode, identity, session, and error semantics
-live in [AuthenticationContracts.md](../Security/AuthenticationContracts.md);
-this section only binds them to artifact routes.
+Artifact routes use the shared operator boundary described in
+[AuthenticationContracts.md](../Security/AuthenticationContracts.md).
+`get_instance_access` requires `OperatorAdmission` from the connecting transport
+or approved ingress and certified completion of the guarded data conversion.
+`get_artifact_access` binds that admission to `ArtifactAccessContext`, carrying
+the separate server-owned recovery proof. Admission does not resolve a person
+or issue an application login session; `AUTH_PROVIDER` does not select a product
+login mode.
 
-| `AUTH_PROVIDER` | Artifact API behavior | Intended environment |
-| --- | --- | --- |
-| `accounts` | Require the MoonMind session for the resolved `User.id`, then execution-linked authorization | fresh installs and shared deployments |
-| `oidc` | Require the MoonMind session minted from the verified `(issuer, subject)` pair, then execution-linked authorization | shared dev/staging/prod behind an external IdP |
-| `header` | Require the MoonMind session minted from the proxy-asserted identity (ingress strips and replaces identity headers; direct bypass blocked), then execution-linked authorization | authenticated ingress only |
-| `disabled` | No end-user credential required at user-facing metadata/presign endpoints, but only behind loopback-only bind or documented trusted ingress (`MOONMIND_TRUSTED_INGRESS=1`); historical artifact owner-check bypass remains, with raw/quarantine protection | one-click local/dev |
+Local loopback, approved publication and trusted-proxy ingress retain their
+transport, Host and mutation-origin checks. Ingress assertions establish boolean
+operator admission, without importing an upstream identity or mapping a UUID.
+Machine credentials authenticate at their owning scoped endpoints. A workflow
+fan-out marker only selects its execution-capability verifier; it grants neither
+operator permission nor recovery access. Service and execution readers retain
+the resource checks in §9.3.
 
-User versus machine credentials at artifact routes:
+Missing or invalid admission returns `401 auth_required` or `401 auth_invalid`;
+Host/origin denials return `403`. Incomplete conversion returns
+`503 conversion_required`, and unavailable admission or completion evidence
+returns `503 unavailable`. These failures grant no fallback access.
+SSE and artifact downloads use the same admission boundary without broad URL
+tokens. Metadata visibility alone does not authorize restricted bytes; downloads
+and presigned blob access also enforce raw and quarantine policy.
 
-| Caller | Accepted credential | Notes |
-| --- | --- | --- |
-| Browser / API user | MoonMind session cookie (`__Host-mm_session` on HTTPS; `mm_session_dev` only for explicitly permitted loopback HTTP), short-lived and purpose-bound | Cookie mutations require CSRF protection and origin validation; conflicting cookie/bearer identities are `401 auth_conflict` |
-| Machine (artifact/worker paths) | Scoped service identity with least privilege (§9.3); container-job bearer on its authorized routes | Succeeds only on authorized routes and resources; the removed legacy worker-token path is `410 worker_token_deprecated` |
-
-Error behavior: missing credential at a strict boundary is `401 auth_required`;
-invalid, expired, wrong-key/issuer/purpose, or reserved-identity credential is
-`401 auth_invalid`; authenticated but inactive or unauthorized is `403`;
-identity-store unavailability is `503` and fails closed. SSE and artifact
-downloads work without placing broad tokens in URLs; blob access is issued only
-after metadata-level authorization succeeds.
-
-This is an API-layer auth choice. It does **not** require public object-storage buckets.
 Native chat and upstream runtime access stay behind the qualified same-origin
 binding facade, not an unrestricted upstream proxy.
 
 ## 9.6 Single-user operation
 
-Artifacts are instance resources for the admitted operator: verified operator admission inspects instance artifacts without a human-owner lookup. Legacy UUIDs remain creator/quota provenance. Execution reads require verified linkage in every authentication mode; service-only reads require their own resource ownership.
+Artifacts are instance resources for the admitted operator: verified operator
+admission inspects instance artifacts without a human-owner lookup. Legacy UUIDs
+remain creator/quota provenance. Execution reads require verified linkage;
+service-only reads require their own resource ownership.
 Restricted raw bytes, quarantine, redaction, and explicit-grant gates are
 enforced independently of ordinary artifact visibility. See
 [Single-User Application Design](../SingleUserApplicationDesign.md).
@@ -503,14 +502,15 @@ enforced independently of ordinary artifact visibility. See
 The guarded upgrade can convert an artifact-only retained dataset after proving
 one human operator (including explicitly attested same-person UUID aliases).
 It records a protected, server-owned recovery disposition on artifacts with a
-proven human creator. Only an operator context carrying the existing server-owned recovery proof may use this disposition for restricted raw recovery. HTTP admission binds this proof separately from creator and consumer-claim provenance; payload strings cannot reconstruct it. Explicit input delegation may preserve a selected permitted raw read for one workflow; it never transfers operator recovery authority. Direct
+proven human creator. Only an operator context carrying the existing server-owned
+recovery proof may use this disposition for restricted raw recovery. HTTP admission
+binds this proof separately from creator and consumer-claim provenance; payload
+strings cannot reconstruct it. Explicit input delegation may preserve a selected
+permitted raw read for one workflow; it never transfers operator recovery authority. Direct
 artifact and durable session-resource reads share this proof and read policy.
 Profile bundle and workflow evidence readers carry it only after their own
-admission and resource-scope checks. Authenticated modes retain their own UUID
-identity: trusted-header reads use the existing ingress and live identity-mapping
-checks, without acquiring disabled-mode recovery authority. An absent proxy
-assertion preserves optional session/machine admission; a presented invalid
-assertion fails closed. Caller metadata or headers cannot grant recovery.
+admission and resource-scope checks. Caller metadata, creator UUIDs and headers
+cannot grant recovery.
 Quarantined bytes remain preview-only, and machine-created artifacts receive no human
 recovery grant. Original creator provenance, quota scopes, links, pins, and
 in-flight claim owners remain unchanged; the operator cannot release a legacy
@@ -528,19 +528,18 @@ artifact mutation until their owning conversion is available. Historical links w
 live execution remain intact and do not invalidate independently proven creator
 attribution. Schema installation itself grants no recovery access. Once recovery grants
 exist, schema downgrade refuses rather than silently losing them; repair forward.
-Default restarts probe for outstanding human or ambiguous artifact creators
-before replaying certified completion. Later artifacts, including OIDC writes
-before an account-free switch, require current guarded attribution and atomic
-conversion. The probe never grants access. Established machine owners and the
-exact disabled-mode creator who already has owner access need no new recovery
-grant. With no pending recovery, startup avoids loading retained histories into
-Python; the bounded-result SQL probe may still scan the artifact table.
-When disabled mode uses its built-in zero UUID and no retained User has that
-ID, exact zero-owned artifacts and active claims remain deployment scope during
-conversion, unchanged and without new recovery grants. A retained zero User still
-counts as a person. Nonzero configured defaults require ordinary attribution
-evidence when mixed with newly pending historical recovery; configuration alone
-does not prove a historical identity or alias.
+Each admission probes indexed owner classifications for outstanding recovery
+before accepting certified completion. Restored human or ambiguous creators
+require current guarded attribution and atomic conversion. The probe never
+grants access; established machine and deployment scopes need no new recovery
+grant. With no pending recovery, completion checks avoid loading retained
+histories into Python.
+Retained disabled-mode data may use the built-in zero UUID. If no retained `User`
+has that ID, exact zero-owned artifacts and active claims remain deployment scope
+during conversion, unchanged and without new recovery grants. A retained zero
+`User` still counts as a person. Historical nonzero configured defaults require
+ordinary attribution evidence when mixed with newly pending historical recovery;
+configuration alone does not prove a historical identity or alias.
 Explicit preflight and apply inspect current source evidence, and unresolved
 aliases or unsupported live parents still require their existing dispositions.
 
