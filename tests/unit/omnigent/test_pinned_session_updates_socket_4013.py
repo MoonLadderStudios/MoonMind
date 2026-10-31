@@ -10,9 +10,8 @@ embedded and full-page presentations.
 * Adapter: extracted from the document rendered by the real
   :func:`moonmind.omnigent.native_ui.render_native_ui_document`, never a copy.
 * Consumer: the real ``SessionUpdatesSocket`` class plus its
-  ``buildUpdatesUrl``/``nextReconnectDelay`` helpers, extracted from the
-  pinned file by brace counting and mechanically de-typed with explicit
-  replacements (any leftover type syntax fails the test). The exact
+  ``buildUpdatesUrl``/``nextReconnectDelay`` helpers, compiled from the
+  pinned TypeScript sources by the real compiler. The exact
   ``sendWatch`` guard quoted in the issue brief is asserted present before
   execution.
 * No network: recording native transports, host-seam stubs, and a real
@@ -41,9 +40,7 @@ from moonmind.omnigent.native_ui import (
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_PINNED_TS = (
-    _REPO_ROOT / "omnigent" / "web" / "src" / "lib" / "sessionUpdatesSocket.ts"
-)
+_PINNED_TS = _REPO_ROOT / "omnigent" / "web" / "src" / "lib" / "sessionUpdatesSocket.ts"
 _PINNED_INDEX_HTML = _REPO_ROOT / "omnigent" / "web" / "index.html"
 
 _BINDING = "chatb_render123"
@@ -99,7 +96,7 @@ globalThis.WebSocket = RecordingNativeWebSocket;
 globalThis.EventSource = RecordingNativeEventSource;
 globalThis.fetch = () => { throw new Error('fetch must not be called here'); };
 globalThis.XMLHttpRequest = class { open() {} };
-globalThis.document = { readyState: 'complete', getElementById: () => null, addEventListener: () => {} };
+globalThis.document = { readyState: 'complete', getElementById: () => null, addEventListener: () => {}, removeEventListener: () => {}, hidden: false };
 globalThis.addEventListener = () => {};
 globalThis.MutationObserver = class { constructor() {} observe() {} disconnect() {} };
 
@@ -112,62 +109,30 @@ assert.ok(tsSrc.includes('if (this.ws?.readyState === WebSocket.OPEN) {'),
 assert.ok(tsSrc.includes('this.ws.send(JSON.stringify({ type: "watch", session_ids: this.watched }));'),
   'pinned file must carry the exact watch send');
 
-function extractBlock(src, startMarker) {
-  const start = src.indexOf(startMarker);
-  assert.ok(start !== -1, `missing ${startMarker}`);
-  let i = src.indexOf('{', start);
-  let depth = 0;
-  for (; i < src.length; i++) {
-    if (src[i] === '{') depth++;
-    else if (src[i] === '}') { depth--; if (depth === 0) { i++; break; } }
-  }
-  return src.slice(start, i);
+// Compile the actual consumer and shared backoff module instead of stripping
+// private fields/types by regex. Only the host routing seam is synthetic.
+const path = require('node:path');
+const vm = require('node:vm');
+const ts = require(require.resolve('typescript', { paths: [process.cwd()] }));
+function loadModule(source, dependencies = {}) {
+  const output = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const module = { exports: {} };
+  const run = vm.runInThisContext('(function(require, module, exports) {\n' + output + '\n})');
+  run((name) => {
+    assert.ok(Object.hasOwn(dependencies, name), `unexpected consumer dependency: ${name}`);
+    return dependencies[name];
+  }, module, module.exports);
+  return module.exports;
 }
-let classSrc = tsSrc.match(/export const HEARTBEAT_WATCHDOG_MS = [\d_]+;/)[0].replace('export const', 'const') + '\n'
-  + tsSrc.match(/const RECONNECT_BASE_MS = [\d_]+;/)[0] + '\n'
-  + tsSrc.match(/const RECONNECT_MAX_MS = [\d_]+;/)[0] + '\n'
-  + extractBlock(tsSrc, 'function nextReconnectDelay')
-  + '\n' + extractBlock(tsSrc, 'function buildUpdatesUrl')
-  + '\n' + extractBlock(tsSrc, 'class SessionUpdatesSocket');
-
-// Mechanical de-typing with explicit replacements; specific field patterns
-// first, generic modifier strips after. Any leftover type syntax fails.
-const reps = [
-  ['private ws: WebSocket | null = null;', 'ws = null;'],
-  ['private watched: string[] = [];', 'watched = [];'],
-  ['private reconnectTimer: ReturnType<typeof setTimeout> | null = null;', 'reconnectTimer = null;'],
-  ['private watchdogTimer: ReturnType<typeof setTimeout> | null = null;', 'watchdogTimer = null;'],
-  ['private readonly ', ''], ['private ', ''], ['readonly ', ''],
-  ['new Set<FrameListener>()', 'new Set()'],
-  ['new Set<() => void>()', 'new Set()'],
-  ['(listener: FrameListener): () => void {', '(listener) {'],
-  ['(listener: () => void): () => void {', '(listener) {'],
-  ['(value: boolean): void {', '(value) {'],
-  ['(ids: string[]): void {', '(ids) {'],
-  ['(event: MessageEvent): void {', '(event) {'],
-  ['(): void {', '() {'],
-  ['(): boolean {', '() {'],
-  ['(failedAttempts: number): number {', '(failedAttempts) {'],
-  ['(): string {', '() {'],
-  ['let ws: WebSocket;', 'let ws;'],
-  ['let frame: SessionUpdatesFrame;', 'let frame;'],
-  [' as SessionUpdatesFrame', ''],
-];
-for (const [a, b] of reps) classSrc = classSrc.split(a).join(b);
-const leftover = classSrc.match(/\bprivate\b|\breadonly\b|string\[\]|:\svoid|:\sboolean|:\sstring\b|ReturnType|FrameListener|SessionListWireItem|MessageEvent/);
-assert.ok(!leftover, `TS remnants left in extracted class: ${leftover && leftover[0]}`);
-
-// Keep the pinned class bytes and explicit host seams in a separate module.
-// Its source cannot accidentally capture the harness's lexical variables.
-const consumerPath = process.argv[2] + '.consumer.cjs';
-fs.writeFileSync(consumerPath,
-  'module.exports = ({ getOmnigentHostConfig, modalHostId, resolveWebSocketUrl }) => {\n'
-  + classSrc + '\nreturn SessionUpdatesSocket;\n};\n');
-const Pinned = require(consumerPath)({
-  getOmnigentHostConfig: () => ({}),
-  modalHostId: () => null,
-  resolveWebSocketUrl: (path) => String(path),
+const backoff = loadModule(fs.readFileSync(path.join(path.dirname(process.argv[3]), 'reconnectBackoff.ts'), 'utf8'));
+const consumer = loadModule(tsSrc, {
+  '@/lib/host': { isHostRoutingEnabled: () => false, resolveWebSocketUrl: (path) => String(path) },
+  '@/lib/reconnectBackoff': backoff,
+  '@/lib/sessionHost': { modalHostId: () => null },
 });
+const Pinned = consumer.sessionUpdatesSocket.constructor;
 
 (async () => {
   const sock = new Pinned();
@@ -275,7 +240,9 @@ def test_pinned_upstream_shell_renders_before_app_script() -> None:
             f"omnigent submodule is not at the pinned commit {PINNED_OMNIGENT_COMMIT}"
         )
 
-    upstream_html = _PINNED_INDEX_HTML.read_text(encoding="utf-8")
+    upstream_html = _PINNED_INDEX_HTML.read_text(encoding="utf-8").replace(
+        "%BASE_URL%", "/"
+    )
     assert '<div id="root">' in upstream_html
     base = scoped_ui_base(_BINDING)
     bootstrap = build_chat_bootstrap(
@@ -321,7 +288,9 @@ def test_pinned_socket_lifecycle_through_served_adapter(tmp_path) -> None:
         in ts_text
     )
 
-    upstream_html = _PINNED_INDEX_HTML.read_text(encoding="utf-8")
+    upstream_html = _PINNED_INDEX_HTML.read_text(encoding="utf-8").replace(
+        "%BASE_URL%", "/"
+    )
     harness_path = tmp_path / "pinned_socket_harness.js"
     harness_path.write_text(_NODE_PINNED_SOCKET_HARNESS, encoding="utf-8")
     for mode in ("embedded", "full_page"):
@@ -350,8 +319,14 @@ def test_pinned_socket_lifecycle_through_served_adapter(tmp_path) -> None:
             encoding="utf-8",
         )
         completed = subprocess.run(
-            [node, str(harness_path), str(adapter_path), str(_PINNED_TS),
-             _BINDING, str(bootstrap_path)],
+            [
+                node,
+                str(harness_path),
+                str(adapter_path),
+                str(_PINNED_TS),
+                _BINDING,
+                str(bootstrap_path),
+            ],
             capture_output=True,
             text=True,
             timeout=90,

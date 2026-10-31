@@ -14,8 +14,8 @@ GET /omnigent-ui/workflow-chat/{chatBindingId}/{ui_path:path}
 
 It is not a copy of the native React app and not an open reverse proxy: the
 browser loads the stock native UI assets and every application request
-exclusively through this MoonMind-scoped route, which reverse-proxies the stock
-UI assets from the upstream server, serves the SPA document with a browser-safe
+exclusively through this MoonMind-scoped route, which serves the bundled stock
+UI (or proxies the upstream server in a source-only checkout), with a browser-safe
 binding-scoped bootstrap injected, and never lets the browser connect directly
 to the upstream Omnigent server.
 
@@ -31,7 +31,9 @@ from __future__ import annotations
 
 import html
 import logging
+import mimetypes
 import posixpath
+from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -87,6 +89,9 @@ native_ui_router = APIRouter(tags=["Omnigent Native UI"])
 # The maximum single upstream asset MoonMind proxies through the scoped route.
 _NATIVE_UI_MAX_ASSET_BYTES = 25 * 1024 * 1024
 _NATIVE_UI_UPSTREAM_TIMEOUT = httpx.Timeout(30.0)
+_NATIVE_UI_ASSET_ROOT = (
+    Path(__file__).resolve().parents[3] / "omnigent/omnigent/server/static/web-ui"
+)
 
 
 class NativeUiUpstreamError(RuntimeError):
@@ -117,7 +122,7 @@ class NativeUiUpstreamResponse:
 
 
 class NativeUiUpstream:
-    """Fetch stock native UI assets/documents from the upstream Omnigent server.
+    """Read bundled native assets, or fetch them from the Omnigent server.
 
     The browser never talks to the upstream server: MoonMind fetches assets with
     the server-side credential and forwards no browser/MoonMind headers upstream
@@ -132,10 +137,36 @@ class NativeUiUpstream:
         base_url: str,
         api_token: str = "",
         transport: httpx.AsyncBaseTransport | None = None,
+        asset_root: Path | None = None,
     ) -> None:
         self._base = str(base_url).rstrip("/")
         self._api_token = api_token
         self._transport = transport
+        self._asset_root = asset_root.resolve() if asset_root is not None else None
+
+    def _fetch_bundled(self, path: str) -> NativeUiUpstreamResponse:
+        assert self._asset_root is not None
+        relative = unquote(urlsplit(path).path).lstrip("/") or "index.html"
+        try:
+            asset = (self._asset_root / relative).resolve()
+            if not asset.is_relative_to(self._asset_root) or not asset.is_file():
+                return NativeUiUpstreamResponse(
+                    status_code=404, content=b"", media_type="text/plain"
+                )
+            with asset.open("rb") as stream:
+                content = stream.read(_NATIVE_UI_MAX_ASSET_BYTES + 1)
+        except (OSError, ValueError) as exc:
+            raise NativeUiUpstreamError(
+                "Bundled native UI asset could not be read."
+            ) from exc
+        if len(content) > _NATIVE_UI_MAX_ASSET_BYTES:
+            raise NativeUiUpstreamError("Native UI asset exceeds the limit.")
+        return NativeUiUpstreamResponse(
+            status_code=200,
+            content=content,
+            media_type=mimetypes.guess_type(asset.name)[0]
+            or "application/octet-stream",
+        )
 
     def _headers(self) -> dict[str, str]:
         # Only the server-side upstream credential is injected; no browser or
@@ -146,8 +177,12 @@ class NativeUiUpstream:
         return headers
 
     async def fetch(self, path: str) -> NativeUiUpstreamResponse:
+        if self._asset_root is not None:
+            return self._fetch_bundled(path)
         if not self._base:
-            raise NativeUiUpstreamError("Upstream Omnigent server URL is not configured.")
+            raise NativeUiUpstreamError(
+                "Upstream Omnigent server URL is not configured."
+            )
         url = f"{self._base}{path}"
         try:
             async with httpx.AsyncClient(
@@ -164,9 +199,7 @@ class NativeUiUpstream:
                 ) as response:
                     location = response.headers.get("location")
                     media_type = (
-                        response.headers.get(
-                            "content-type", "application/octet-stream"
-                        )
+                        response.headers.get("content-type", "application/octet-stream")
                         .split(";")[0]
                         .strip()
                         or "application/octet-stream"
@@ -194,11 +227,16 @@ class NativeUiUpstream:
 def get_native_ui_upstream(
     _config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
 ) -> NativeUiUpstream:
-    """Build the upstream fetcher over the configured stock Omnigent server."""
+    """Use the image's native UI bundle, or the server for an unbuilt checkout."""
 
     return NativeUiUpstream(
         base_url=resolved_server_url(),
         api_token=resolved_api_token(),
+        asset_root=(
+            _NATIVE_UI_ASSET_ROOT
+            if (_NATIVE_UI_ASSET_ROOT / "index.html").is_file()
+            else None
+        ),
     )
 
 
@@ -219,17 +257,15 @@ def _native_chat_unavailable(
         # a future caller-supplied value can never break out of the element.
         safe_reason = html.escape(reason, quote=True)
         body = (
-            "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+            '<!doctype html><html lang="en"><head><meta charset="utf-8">'
             "<title>Workflow Chat unavailable</title></head><body>"
-            "<main role=\"main\"><h1>Workflow chat is unavailable</h1>"
+            '<main role="main"><h1>Workflow chat is unavailable</h1>'
             "<p>The native Omnigent chat could not be served for this workflow.</p>"
-            f"<p data-reason=\"{safe_reason}\">Reason: {safe_reason}</p></body></html>"
+            f'<p data-reason="{safe_reason}">Reason: {safe_reason}</p></body></html>'
         )
         return HTMLResponse(content=body, status_code=status_code, headers=headers)
     return JSONResponse(
-        content={
-            "detail": {"code": CODE_NATIVE_CHAT_UNAVAILABLE, "reason": reason}
-        },
+        content={"detail": {"code": CODE_NATIVE_CHAT_UNAVAILABLE, "reason": reason}},
         status_code=status_code,
         headers=headers,
     )
@@ -379,11 +415,9 @@ async def _serve_native_ui(
         serving_enabled=resolved_native_ui_serving_enabled(),
     )
     if reason is not None:
-        return _native_chat_unavailable(
-            mode=mode, is_document=document, reason=reason
-        )
+        return _native_chat_unavailable(mode=mode, is_document=document, reason=reason)
 
-    # 3. Reverse-proxy the upstream asset or SPA document.
+    # 3. Read the bundled asset or proxy the server's SPA document/asset.
     scoped_base = scoped_ui_base(chat_binding_id)
     try:
         response = await upstream.fetch(upstream_path_for(ui_path))

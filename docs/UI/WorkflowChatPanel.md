@@ -102,7 +102,7 @@ The preferred deployment exposes the native Omnigent web application through the
 
 A same-origin iframe opens the native conversation under the binding-scoped basename. Its deep link stays valid throughout startup, reload and retry. Full-page **Open in Omnigent** uses the same scope. The hosted adapter suppresses the native global conversation-catalog request; bound metadata and transcript reads still use the authorized facade.
 
-Native assets come from the configured Omnigent server image. Updating the source submodule alone does not replace those served assets; the image must include support for the requested presentation parameters.
+MoonMind images build and include the stock native UI from the Omnigent submodule, so normal application updates deliver the presentation behavior. A source-only checkout without a built bundle proxies assets from the configured Omnigent server. Session API and WebSocket traffic still passes through the bound facade to that server.
 
 The integration must provide:
 

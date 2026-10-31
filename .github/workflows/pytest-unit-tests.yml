@@ -1286,11 +1286,6 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - name: Verify the compiled native chat application
-        env:
-          MOONMIND_NATIVE_CHAT_FIXTURE_DIR: omnigent/omnigent/server/static/web-ui
-        run: |
-          node tools/test_native_chat_browser.mjs
       - name: Build the exact deployable image
         id: build
         if: inputs.candidate_image == ''
@@ -1377,6 +1372,17 @@ jobs:
             echo "digest=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
             echo "runnable=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
           fi
+      - name: Verify the native chat application shipped in the image
+        env:
+          CANDIDATE_IMAGE: ${{ steps.digest.outputs.runnable }}
+          MOONMIND_NATIVE_CHAT_FIXTURE_DIR: ${{ runner.temp }}/native-chat-fixture
+        run: |
+          set -euo pipefail
+          native_container=$(docker create "$CANDIDATE_IMAGE")
+          trap 'docker rm "$native_container" >/dev/null' EXIT
+          mkdir -p "$MOONMIND_NATIVE_CHAT_FIXTURE_DIR"
+          docker cp "$native_container:/app/omnigent/omnigent/server/static/web-ui/." "$MOONMIND_NATIVE_CHAT_FIXTURE_DIR/"
+          node tools/test_native_chat_browser.mjs
       - name: Start Temporal for the worker readiness probe
         shell: bash
         run: |
