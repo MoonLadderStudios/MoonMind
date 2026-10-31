@@ -228,7 +228,7 @@ For terminal work the transcript is read-only. `GET /api/executions/{workflowId}
 
 ### 15.1 Serving the native UI through MoonMind-scoped routes
 
-MoonMind serves the native application at `GET /omnigent-ui/workflow-chat/{chatBindingId}[?embedded=1]`, reverse-proxying stock assets and injecting a bootstrap, so the browser never reaches the upstream server. The host boundary presents the application's expected `/c/{chatBindingId}` route and rebases HTTP, SSE, and WebSocket traffic onto the facade, then restores the reloadable scoped URL. Boot probes get bounded local projections, the session catalog contains only the bound session, and after provider cleanup reads use the captured final snapshot. Embedded and full-page views share binding, facade, credentials, and policy.
+MoonMind serves native Workflow Chat at `GET /omnigent-ui/workflow-chat/{chatBindingId}[?embedded=1]`; embedded and full-page views share the scoped facade, credentials, and policy. The host adapter presents `/c/{chatBindingId}` and rebases HTTP, SSE, and WebSocket traffic without exposing the upstream server. After provider cleanup, reads use the captured final snapshot. Stored item payloads are flattened into the native API representation while retaining item identities, ordering, and cursors; already-flat captures remain readable.
 
 `window.__MOONMIND_OMNIGENT_CHAT__` carries only the binding id, scoped API and WebSocket bases, presentation mode, read-only state, filtered capabilities with disabled reasons, labels, and a compatibility version, never a provider session id, upstream URL, host id, credential, profile, or workspace authority.
 
