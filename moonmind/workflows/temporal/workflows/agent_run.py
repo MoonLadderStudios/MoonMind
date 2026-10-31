@@ -1569,6 +1569,11 @@ class MoonMindAgentRun:
                 # A failed or canceled observation cannot earn progress or
                 # refresh the allowance used by cancellation and terminal saving.
                 self._execution_budget = context
+                if is_cancelled_exception(exc):
+                    # Temporal can wrap cancellation in ActivityError. Keep it
+                    # on the existing cancellation path, which owns runtime
+                    # cleanup, rather than the generic slot-release path.
+                    raise CancelledError("Final progress observation canceled") from exc
             if (
                 context is not None
                 and isinstance(exc, ActivityError)
