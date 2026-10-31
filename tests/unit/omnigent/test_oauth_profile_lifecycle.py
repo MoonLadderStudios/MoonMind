@@ -8280,6 +8280,34 @@ async def test_workspace_checkpoint_streams_beyond_generic_input_limit(
 
 
 @pytest.mark.asyncio
+async def test_workspace_checkpoint_accepts_large_saved_work_metadata(tmp_path) -> None:
+    archive_stream = io.BytesIO()
+    with tarfile.open(fileobj=archive_stream, mode="w:gz") as archive:
+        member = tarfile.TarInfo("candidate.txt")
+        member.size = len(b"saved candidate")
+        archive.addfile(member, io.BytesIO(b"saved candidate"))
+
+    class LargeCheckpoint(_StreamingArtifactService):
+        async def get_metadata(self, **kwargs):
+            artifact, *rest = await super().get_metadata(**kwargs)
+            artifact.size_bytes = 485_612_182
+            return artifact, *rest
+
+    service = LargeCheckpoint({"checkpoint/candidate": archive_stream.getvalue()})
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    await _runtime_for(tmp_path)._apply_workspace_checkpoint_restore(
+        workspace,
+        artifact_ref="artifact://checkpoint/candidate",
+        artifact_gateway=service,
+        access=access_for_test("workflow:fixture-restore"),
+    )
+
+    assert (workspace / "candidate.txt").read_bytes() == b"saved candidate"
+    assert service.chunk_calls == ["checkpoint/candidate"]
+
+
+@pytest.mark.asyncio
 async def test_prepare_workspace_rejects_oversized_restore_from_metadata(
     tmp_path, monkeypatch
 ) -> None:

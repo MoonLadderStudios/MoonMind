@@ -34,6 +34,7 @@ from moonmind.omnigent.workspace_sources import (
     decode_legacy_workspace_path,
     parse_existing_workspace_grant,
 )
+from moonmind.schemas.saved_work_models import SAVED_WORK_FORMAT_SIZE_LIMITS
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
@@ -468,6 +469,61 @@ async def test_strict_admission_rejects_restricted_and_incomplete(tmp_path):
 # ---------------------------------------------------------------------------
 # Impl 3: streamed verification under explicit budgets; hostile archives.
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "archive_bytes", [485_612_182, SAVED_WORK_FORMAT_SIZE_LIMITS["max_total_bytes"]]
+)
+async def test_checkpoint_restore_admits_supported_saved_work_size(
+    tmp_path, archive_bytes
+):
+    payload = _tar_bytes([("candidate.txt", b"saved candidate", "file")])
+
+    class LargeCheckpoint(FakeArtifactService):
+        async def get_metadata(self, **kwargs):
+            artifact, *rest = await super().get_metadata(**kwargs)
+            # Model the real checkpoint's metadata admission without storing a
+            # half-gigabyte unit fixture. The byte/digest path still runs.
+            artifact.size_bytes = archive_bytes
+            return artifact, *rest
+
+    artifacts = LargeCheckpoint({"checkpoint": payload})
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    await WorkspaceArtifactProjector(artifacts).project(
+        workspace,
+        checkpoint_ref="artifact://checkpoint",
+        workflow_id="workflow-1",
+        runtime_uid=os.getuid(),
+        runtime_gid=os.getgid(),
+    )
+
+    assert (workspace / "candidate.txt").read_bytes() == b"saved candidate"
+    assert any(call[0] == "read" for call in artifacts.calls)
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_restore_rejects_above_saved_work_limit_before_read(tmp_path):
+    class OversizedCheckpoint(FakeArtifactService):
+        async def get_metadata(self, **kwargs):
+            artifact, *rest = await super().get_metadata(**kwargs)
+            artifact.size_bytes = SAVED_WORK_FORMAT_SIZE_LIMITS["max_total_bytes"] + 1
+            return artifact, *rest
+
+    artifacts = OversizedCheckpoint({"checkpoint": b"unread"})
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    with pytest.raises(WorkspaceArtifactProjectionError, match="workspace bound"):
+        await WorkspaceArtifactProjector(artifacts).project(
+            workspace,
+            checkpoint_ref="artifact://checkpoint",
+            workflow_id="workflow-1",
+            runtime_uid=os.getuid(),
+            runtime_gid=os.getgid(),
+        )
+    assert all(call[0] == "metadata" for call in artifacts.calls)
+    assert list(workspace.iterdir()) == []
 
 
 def _hostile_cases():
