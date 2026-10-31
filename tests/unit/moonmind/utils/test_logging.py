@@ -198,10 +198,23 @@ def test_redact_sensitive_text_scrubs_relative_auth_basenames(basename):
     assert redact_sensitive_text(basename) == "[REDACTED_AUTH_PATH]"
 
 
-def test_redact_sensitive_text_redacts_quoted_secret_assignments():
-    result = redact_sensitive_text('api_key="raw-secret" password: \'other-secret\'')
-
-    assert result == "api_key=[REDACTED] password=[REDACTED]"
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            'api_key="raw-secret" password: \'other-secret\'',
+            "api_key=[REDACTED] password: [REDACTED]",
+        ),
+        ("Authorization: [REDACTED]", "Authorization: [REDACTED]"),
+        ("Cookie: session=private-value", "Cookie: [REDACTED]"),
+        (
+            "Set-Cookie: session=private-value; Secure; HttpOnly",
+            "Set-Cookie: [REDACTED]",
+        ),
+    ],
+)
+def test_redact_sensitive_text_preserves_secret_assignment_separators(text, expected):
+    assert redact_sensitive_text(text) == expected
 
 
 @pytest.mark.parametrize(
