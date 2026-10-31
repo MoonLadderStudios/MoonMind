@@ -140,7 +140,7 @@ jobs:
           docker tag repository-security:qualification "$REGISTRY_IMAGE:$CANDIDATE_TAG"
           docker push "$REGISTRY_IMAGE:$CANDIDATE_TAG"
           docker image inspect "$REGISTRY_IMAGE:$CANDIDATE_TAG" > evidence/published.json
-          python - <<'PY'
+          sudo python3 - <<'PY'
           import json
           from pathlib import Path
           path = Path('evidence/runtime/qualification.json')
