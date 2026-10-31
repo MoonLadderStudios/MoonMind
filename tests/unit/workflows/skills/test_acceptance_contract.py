@@ -15,6 +15,7 @@ import pytest
 from moonmind.workflows.skills.acceptance_contract import (
     acceptance_evidence,
     assessment_scope_violations,
+    validate_completion_target,
 )
 from moonmind.workflows.skills.approval_policy import parse_step_gate_result
 
@@ -473,3 +474,64 @@ def test_legacy_unverified_disclosure_rejects_explicit_null_status(candidate):
     report["validatedRefs"]["acceptance"]["evidence"][1]["status"] = None
     assert acceptance_evidence(report) is None
     assert not portable.reuse(report, current)["reusable"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("declared_repository", [
+    "https://github.com/example/repo.git",
+    "https://github.com/example/repo",
+    "git@github.com:example/repo.git",
+    "https://GitHub.com/Example/Repo.git",
+])
+async def test_github_repository_aliases_advance_without_rewriting_evidence(
+    candidate, declared_repository,
+):
+    repo, _, report = candidate
+    git(repo, "switch", "release")
+    git(repo, "merge", "--ff-only", "feature")
+    observed = portable.capture(repo, "example/repo", "release")["completionTarget"]
+    binding = report["validatedRefs"]["acceptance"]
+    binding["subject"]["repository"] = declared_repository
+    binding["completionTarget"] = observed
+    before = copy.deepcopy(report)
+    reads = []
+
+    async def read_target(repository, ref):
+        reads.append((repository, ref))
+        return portable.capture(repo, repository, ref or "release")["completionTarget"]
+
+    error = await validate_completion_target(
+        report, repository="example/repo", source_ref="example/repo#1",
+        expected_ref="release", read_target=read_target,
+    )
+
+    assert error is None
+    assert reads == [("example/repo", "release")]
+    assert report == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("declared_repository", [
+    "https://github.com/example/other.git",
+    "https://github.com.evil.example/example/repo.git",
+    "https://gitlab.com/example/repo.git",
+    "https://user@github.com/example/repo.git",
+    "https://github.com/example/repo.git?ref=other",
+    "https://github.com:8443/example/repo.git",
+    "../repo",
+])
+async def test_repository_aliases_keep_remote_authority_bound(candidate, declared_repository):
+    _, _, report = candidate
+    binding = report["validatedRefs"]["acceptance"]
+    binding["subject"]["repository"] = declared_repository
+    target = {**binding["subject"], "ref": "refs/heads/release"}
+    target.pop("repository")
+    binding["completionTarget"] = target
+
+    async def read_target(_repository, _ref):
+        return target
+
+    assert await validate_completion_target(
+        report, repository="example/repo", source_ref="example/repo#1",
+        read_target=read_target,
+    ) is not None
