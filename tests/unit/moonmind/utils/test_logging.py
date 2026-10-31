@@ -198,10 +198,44 @@ def test_redact_sensitive_text_scrubs_relative_auth_basenames(basename):
     assert redact_sensitive_text(basename) == "[REDACTED_AUTH_PATH]"
 
 
-def test_redact_sensitive_text_redacts_quoted_secret_assignments():
-    result = redact_sensitive_text('api_key="raw-secret" password: \'other-secret\'')
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            'api_key="raw-secret" password: \'other-secret\'',
+            "api_key=[REDACTED] password: [REDACTED]",
+        ),
+        ("Authorization: [REDACTED]", "Authorization: [REDACTED]"),
+        ("Cookie: session=private-value", "Cookie: [REDACTED]"),
+        (
+            "Set-Cookie: session=private-value; Secure; HttpOnly",
+            "Set-Cookie: [REDACTED]",
+        ),
+    ],
+)
+def test_redact_sensitive_text_preserves_secret_assignment_separators(text, expected):
+    assert redact_sensitive_text(text) == expected
 
-    assert result == "api_key=[REDACTED] password=[REDACTED]"
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "passwd=private-value",
+        "authorization=private-value",
+        "cookie=private-value",
+        "session=private-value",
+        "session_id='private-value'",
+        "Cookie: session=private-value; identity=private-value",
+        "Set-Cookie: identity=private-value; Secure; HttpOnly",
+        "xoxb-1234567890-1234567890-private-value",
+        "xoxp-1234567890-1234567890-private-value",
+    ],
+)
+def test_redact_sensitive_text_scrubs_review_credentials(text):
+    redacted = redact_sensitive_text(text)
+    assert "private-value" not in redacted
+    assert "[REDACTED]" in redacted
+
 
 def test_redact_sensitive_text_redacts_private_keys_without_regex_backtracking():
     private_key = (

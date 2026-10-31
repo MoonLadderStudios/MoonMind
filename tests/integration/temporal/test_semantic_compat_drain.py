@@ -79,6 +79,16 @@ async def test_real_queued_start_retains_every_adapter_without_starting_work():
     ) as env:
         await register_deployment_search_attributes(env)
         handle = await _start(env, f"unpolled-{uuid4()}", {}, admitted=True)
+        # Starting a workflow does not wait for its Visibility index entry.
+        # Observe the known consumer before testing the drain classification.
+        async with asyncio.timeout(10):
+            while not [
+                row
+                async for row in env.client.list_workflows(
+                    query=f'WorkflowId="{handle.id}" AND ExecutionStatus="Running"'
+                )
+            ]:
+                await asyncio.sleep(0.05)
         result = await _observe(env.client)
         assert all(row.queued_starts == 1 for row in result.values())
         assert all(not row.may_remove for row in result.values())

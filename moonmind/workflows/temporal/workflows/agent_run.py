@@ -24,6 +24,8 @@ from temporalio.workflow import (
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from moonmind.utils.logging import redact_sensitive_text
+    from moonmind.workflows.report_output import build_agent_report_bundle
     from moonmind.runtime_intent import (
         MODEL_SELECTION_KEYS,
         SELECTION_DERIVED_KEYS,
@@ -400,6 +402,7 @@ MANAGED_SESSION_FETCH_RESULT_ACTIVITY_PATCH_ID = (
 TERMINAL_CHECKPOINT_PUBLICATION_PATCH_ID = (
     "agent-run-terminal-checkpoint-publication-v1"
 )
+OPTIONAL_REPORT_RECOVERY_PATCH_ID = "agent-run-optional-report-recovery-v1"
 STORY_BREAKDOWN_ARTIFACT_HANDOFF_PATCH_ID = (
     "agent-run-story-breakdown-artifact-handoff-v1"
 )
@@ -1485,8 +1488,9 @@ class MoonMindAgentRun:
         kwargs.update(overrides)
         context = getattr(self, "_execution_budget", None)
         deferred_finishing = False
-        if context is not None and activity_name.startswith(
-            ("agent_runtime.", "integration.", "omnigent.")
+        if context is not None and (
+            activity_name.startswith(("agent_runtime.", "integration.", "omnigent."))
+            or activity_name == "artifact.publish_report_bundle"
         ):
             # Capacity admission has its own bounded queue contract. It cannot
             # authorize execution or refresh this context.
@@ -1503,6 +1507,7 @@ class MoonMindAgentRun:
                     "agent_runtime.cancel",
                     "agent_runtime.evaluate_terminal_evidence",
                     "agent_runtime.publish_artifacts",
+                    "artifact.publish_report_bundle",
                     "agent_runtime.publish_terminal_checkpoint",
                     "agent_runtime.load_session_snapshot",
                     "agent_runtime.fetch_session_summary",
@@ -3209,6 +3214,70 @@ class MoonMindAgentRun:
             self._terminal_result_payload_compacted_for_history = False
         return terminal_result
 
+    async def _recover_optional_report(
+        self, *, request: AgentExecutionRequest, result: AgentRunResult
+    ) -> AgentRunResult:
+        report = request.parameters.get("reportOutput")
+        if (
+            not isinstance(report, Mapping)
+            or report.get("enabled") is not True
+            or report.get("required") is not False
+            or report.get("reportType") != "optional_quality_review"
+            or result.metadata.get("primaryReportRef")
+            or not workflow.patched(OPTIONAL_REPORT_RECOVERY_PATCH_ID)
+        ):
+            return result
+        try:
+            info = workflow.info()
+            bundle = await self._execute_routed_activity(
+                "artifact.publish_report_bundle",
+                build_agent_report_bundle(
+                    result.model_dump(mode="json", by_alias=True),
+                    fallback_execution={
+                        "namespace": info.namespace,
+                        "workflow_id": info.workflow_id,
+                        "run_id": info.run_id,
+                    },
+                ),
+                retry_policy=RetryPolicy(maximum_attempts=2),
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            )
+            primary = (
+                bundle.get("primary_report_ref")
+                if isinstance(bundle, Mapping)
+                else None
+            )
+            if not isinstance(primary, Mapping) or not primary.get("artifact_id"):
+                raise ValueError("report recovery returned no primary report reference")
+        except (ExecutionBudgetExhausted, ActivityError, ValueError) as exc:
+            if is_cancelled_exception(exc):
+                raise
+            self._get_logger().warning(
+                "Optional report recovery was not confirmed; retaining the original result.",
+                exc_info=True,
+            )
+            return result.model_copy(
+                update={
+                    "metadata": {
+                        **result.metadata,
+                        "terminalSaveIncomplete": True,
+                        "reportRecoveryError": redact_sensitive_text(
+                            str(getattr(exc, "cause", None) or exc)
+                        )[:1000]
+                        or type(exc).__name__,
+                    }
+                }
+            )
+        return result.model_copy(
+            update={
+                "metadata": {
+                    **result.metadata,
+                    "reportBundle": bundle,
+                    "primaryReportRef": primary["artifact_id"],
+                }
+            }
+        )
+
     async def _publish_terminal_result(
         self,
         *,
@@ -3277,7 +3346,7 @@ class MoonMindAgentRun:
                     else {}
                 ),
             )
-        except (ExecutionBudgetExhausted, ActivityError):
+        except (ExecutionBudgetExhausted, ActivityError) as exc:
             context = getattr(self, "_execution_budget", None)
             if context is None:
                 raise
@@ -3296,6 +3365,10 @@ class MoonMindAgentRun:
                     }
                 }
             )
+            if not is_cancelled_exception(exc):
+                self.final_result = await self._recover_optional_report(
+                    request=request, result=self.final_result
+                )
             return self.final_result
         if isinstance(enriched_result, AgentRunResult):
             self.final_result = enriched_result
@@ -3317,6 +3390,9 @@ class MoonMindAgentRun:
                     raise
                 self._terminal_result_payload_compacted_for_history = True
                 self.final_result = AgentRunResult(**compacted_result)
+        self.final_result = await self._recover_optional_report(
+            request=request, result=self.final_result
+        )
         return self.final_result
 
     def _record_provider_native_pr_metadata(

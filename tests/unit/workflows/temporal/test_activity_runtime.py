@@ -2939,6 +2939,7 @@ async def test_agent_runtime_publish_artifacts_publishes_explicit_report_bundle(
                                 "required": True,
                                 "reportType": "integration_test_report",
                                 "primaryPath": "reports/final-report",
+                                "subject": {"candidateDigest": "sha256:" + "a" * 64},
                                 "executionRef": {
                                     "namespace": "default",
                                     "workflow_id": "parent-wf",
@@ -2967,6 +2968,9 @@ async def test_agent_runtime_publish_artifacts_publishes_explicit_report_bundle(
             assert reports[0].metadata_json["report_scope"] == "final"
             assert reports[0].metadata_json["is_final_report"] is True
             assert reports[0].metadata_json["name"] == "final-report.md"
+            assert reports[0].metadata_json["subject"] == {
+                "candidateDigest": "sha256:" + "a" * 64
+            }
             _artifact, path = await service.read_path(
                 artifact_id=reports[0].artifact_id,
                 access=access_for_test("system:agent_runtime"),
@@ -3927,9 +3931,22 @@ async def test_native_missing_tools_missing_action_defaults_to_blocked_not_human
     assert verify_payload["recommendedNextAction"] == "blocked"
 
 
+@pytest.mark.parametrize(
+    "report_type,truncated,has_answer,failure",
+    [
+        ("agent_run_report", False, True, None),
+        ("optional_quality_review", True, True, None),
+        ("optional_quality_review", False, False, None),
+        ("optional_quality_review", False, True, "execution_error"),
+    ],
+)
 async def test_agent_runtime_publish_artifacts_uses_last_assistant_text_for_report_body(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    report_type: str,
+    truncated: bool,
+    has_answer: bool,
+    failure: str | None,
 ) -> None:
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -3952,16 +3969,22 @@ async def test_agent_runtime_publish_artifacts_uses_last_assistant_text_for_repo
             await activities.agent_runtime_publish_artifacts(
                 AgentRunResult(
                     summary="Completed with status completed",
+                    failureClass=failure,
                     metadata={
+                        "lastAssistantTextTruncated": truncated,
                         "lastAssistantText": (
-                            "# Docker Compose Update System Report\n\n"
-                            "The implementation is missing report handoff coverage."
+                            (
+                                "# Docker Compose Update System Report\n\n"
+                                "The implementation is missing report handoff coverage."
+                            )
+                            if has_answer
+                            else ""
                         ),
                         "moonmind": {
                             "reportOutput": {
                                 "enabled": True,
                                 "required": True,
-                                "reportType": "agent_run_report",
+                                "reportType": report_type,
                                 "primaryPath": "exports/final-answer.txt",
                                 "executionRef": {
                                     "namespace": "default",
@@ -3990,9 +4013,18 @@ async def test_agent_runtime_publish_artifacts_uses_last_assistant_text_for_repo
                 access=access_for_test("system:agent_runtime"),
             )
             rendered = path.read_text(encoding="utf-8")
-            assert rendered.startswith("# Docker Compose Update System Report")
-            assert "missing report handoff coverage" in rendered
+            if has_answer:
+                assert rendered.startswith("# Docker Compose Update System Report")
+                assert "missing report handoff coverage" in rendered
+            else:
+                assert "unavailable" in rendered.lower()
             assert "Completed with status completed" not in rendered
+            if truncated:
+                assert "truncated" in rendered.lower()
+            if failure:
+                assert "partial review" in rendered.lower()
+                assert failure in rendered
+
 
 async def test_agent_runtime_publish_artifacts_fails_required_report_on_publish_error(
     tmp_path: Path,

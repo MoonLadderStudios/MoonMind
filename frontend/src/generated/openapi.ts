@@ -1789,6 +1789,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/{workflow_id}/quality-review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Optional Quality Review */
+        post: operations["create_optional_quality_review_api_executions__workflow_id__quality_review_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions": {
         parameters: {
             query?: never;
@@ -10330,6 +10347,30 @@ export interface components {
             /** Continue Variant */
             continue_variant?: string | null;
         };
+        /** OptionalReviewRequest */
+        OptionalReviewRequest: {
+            /** Sourcerunid */
+            sourceRunId: string;
+            /** Objective */
+            objective: string;
+            /** Scope */
+            scope: string;
+            /** Candidaterefs */
+            candidateRefs: string[];
+            /** Evidencerefs */
+            evidenceRefs?: string[];
+            /** Candidatedigest */
+            candidateDigest?: string | null;
+            /** Runtime */
+            runtime?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Timeoutseconds
+             * @default 120
+             */
+            timeoutSeconds: number;
+        };
         /** OutputDeclaration */
         OutputDeclaration: {
             /** Name */
@@ -17874,6 +17915,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RemediationApprovalDecisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_optional_quality_review_api_executions__workflow_id__quality_review_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OptionalReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionModel"];
                 };
             };
             /** @description Validation Error */
