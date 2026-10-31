@@ -188,11 +188,12 @@ async def test_schedule_write_wins_lock_before_expiry_sweep(
         async with sessions() as session:
             artifact_id = (await expired_input(_service(session, tmp_path))).artifact_id
             definition_id = None
+            old_root_id = None
             if replacing:
                 old_id = (await expired_input(_service(session, tmp_path))).artifact_id
-                definition_id = (
-                    await write_schedule(session, old_id, adapter(), tmp_path)
-                ).id
+                definition = await write_schedule(session, old_id, adapter(), tmp_path)
+                definition_id = definition.id
+                old_root_id = definition.input_artifact_root_id
         admitted, release = asyncio.Event(), asyncio.Event()
         temporal = adapter()
 
@@ -208,6 +209,7 @@ async def test_schedule_write_wins_lock_before_expiry_sweep(
             RecurringWorkflowsService, "_retain_target_artifacts", pause_before_commit
         )
         rpc_observations = []
+        rpc_sweeps = []
 
         async def inspect_committed_inputs(**kwargs):
             # The RPC no longer contains uncommitted admission. A separate
@@ -227,9 +229,7 @@ async def test_schedule_write_wins_lock_before_expiry_sweep(
                 result = await service.sweep_lifecycle(
                     principal="service:sweeper", now=FUTURE
                 )
-                # Replacing a definition releases its old input. Only that
-                # retired input may be collected, never the newly admitted one.
-                assert result.soft_deleted_count == int(replacing)
+                rpc_sweeps.append(result)
                 assert (
                     await service.read(
                         artifact_id=artifact_id, access=access_for_test("operator")
@@ -254,9 +254,9 @@ async def test_schedule_write_wins_lock_before_expiry_sweep(
             await asyncio.sleep(0.1)
             was_blocked = not sweep_task.done()
             release.set()
-            await writer_task
+            written = await writer_task
             assert was_blocked
-            assert (await sweep_task).soft_deleted_count == 0
+            concurrent_sweep = await sweep_task
             assert rpc_observations == [True]
         async with sessions() as reader:
             assert (
@@ -264,21 +264,28 @@ async def test_schedule_write_wins_lock_before_expiry_sweep(
                     artifact_id=artifact_id, access=access_for_test("operator")
                 )
             )[1]
+            remaining_sweep = await _service(reader, tmp_path).sweep_lifecycle(
+                principal="service:sweeper", now=FUTURE
+            )
+            # The concurrent sweeps may divide the retired input and producer
+            # root differently. Across all pages, only those two rows may go.
+            assert sum(
+                result.soft_deleted_count
+                for result in (concurrent_sweep, *rpc_sweeps, remaining_sweep)
+            ) == 2 * int(replacing)
+            assert (
+                await _service(reader, tmp_path).sweep_lifecycle(
+                    principal="service:sweeper", now=FUTURE
+                )
+            ).soft_deleted_count == 0
+            current_root = await reader.get(
+                models.TemporalArtifact, written.input_artifact_root_id
+            )
+            assert current_root.status is models.TemporalArtifactStatus.COMPLETE
             if replacing:
-                # Replacement retires both the old producer root and its input.
-                # The next bounded page collects the remaining retired row.
-                assert (
-                    await _service(reader, tmp_path).sweep_lifecycle(
-                        principal="service:sweeper", now=FUTURE
-                    )
-                ).soft_deleted_count == 1
-                assert (
-                    await _service(reader, tmp_path).sweep_lifecycle(
-                        principal="service:sweeper", now=FUTURE
-                    )
-                ).soft_deleted_count == 0
-                old = await reader.get(models.TemporalArtifact, old_id)
-                assert old.status is models.TemporalArtifactStatus.DELETED
+                for retired_id in (old_id, old_root_id):
+                    old = await reader.get(models.TemporalArtifact, retired_id)
+                    assert old.status is models.TemporalArtifactStatus.DELETED
 
 
 @pytest.mark.parametrize("replacing", [False, True])
