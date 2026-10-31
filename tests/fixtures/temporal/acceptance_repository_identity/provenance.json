@@ -1,0 +1,11 @@
+{
+  "sourceRevision": "9fe8bfa2c0edc253db233f5930bae3bf8d12fc35",
+  "sourceFile": "moonmind/workflows/temporal/workflows/run.py",
+  "sourceSha256": "cfcfd59d357023c316394ce1dcbf88a4b069e1233e47801aa224dde2e22af862",
+  "historySha256": "6b0a784a1d64375e68779fae55acc07652a9f617c8aa2b0f1492d6279eca1e17",
+  "identity": "acceptance-fixture",
+  "result": {
+    "disposition": "branch_required",
+    "publication": "skipped"
+  }
+}

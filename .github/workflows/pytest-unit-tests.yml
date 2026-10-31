@@ -1257,6 +1257,18 @@ jobs:
         run: |
           python -m pip install --upgrade pip uv
           uv pip install --system -e .
+      - name: Set up Node for the hosted-UI capture
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Build and test the pinned native chat application
+        run: |
+          npm install --global "$(node --print "require('./omnigent/package.json').packageManager")"
+          cd omnigent
+          pnpm install --frozen-lockfile --filter web
+          pnpm --filter web exec vitest run src/shell/AppShell.test.tsx
+          pnpm --filter web run build
       - name: Verify scoped CLI through the pinned native runner
         # Keep upstream's dependencies isolated from the application driver.
         # This replay uses real native Codex filters and local subprocesses;
@@ -1265,11 +1277,6 @@ jobs:
           uv sync --project omnigent --frozen --no-dev
           omnigent/.venv/bin/python \
             tests/integration/reliability/replays/issue-brief-verification-handoff/runner_boundary.py
-      - name: Set up Node for the hosted-UI capture
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '20'
-          cache: npm
       - name: Install the browser controller's Playwright runtime
         # The hosted-UI capture runs on the job host against the container's
         # hosted origin, so Playwright belongs here and not in the deployable
@@ -1279,20 +1286,6 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - name: Verify the compiled native chat application
-        env:
-          MOONMIND_NATIVE_CHAT_FIXTURE_DIR: ${{ runner.temp }}/native-chat-fixture
-        run: |
-          set -euo pipefail
-          # A fixed public regression fixture, never a deployment selection.
-          # No process in the fixture image is started and no provider is used.
-          fixture_image=ghcr.io/omnigent-ai/omnigent-server@sha256:b211b81fb739a7be9b326603d54511cc1f1e2f91f311b85ac2ea144c85129d56
-          docker pull --platform linux/arm64 "$fixture_image"
-          fixture_container=$(docker create --platform linux/arm64 "$fixture_image")
-          trap 'docker rm "$fixture_container" >/dev/null' EXIT
-          mkdir -p "$MOONMIND_NATIVE_CHAT_FIXTURE_DIR"
-          docker cp "$fixture_container:/build/omnigent/server/static/web-ui/." "$MOONMIND_NATIVE_CHAT_FIXTURE_DIR/"
-          node tools/test_native_chat_browser.mjs
       - name: Build the exact deployable image
         id: build
         if: inputs.candidate_image == ''
@@ -1379,6 +1372,17 @@ jobs:
             echo "digest=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
             echo "runnable=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
           fi
+      - name: Verify the native chat application shipped in the image
+        env:
+          CANDIDATE_IMAGE: ${{ steps.digest.outputs.runnable }}
+          MOONMIND_NATIVE_CHAT_FIXTURE_DIR: ${{ runner.temp }}/native-chat-fixture
+        run: |
+          set -euo pipefail
+          native_container=$(docker create "$CANDIDATE_IMAGE")
+          trap 'docker rm "$native_container" >/dev/null' EXIT
+          mkdir -p "$MOONMIND_NATIVE_CHAT_FIXTURE_DIR"
+          docker cp "$native_container:/app/omnigent/omnigent/server/static/web-ui/." "$MOONMIND_NATIVE_CHAT_FIXTURE_DIR/"
+          node tools/test_native_chat_browser.mjs
       - name: Start Temporal for the worker readiness probe
         shell: bash
         run: |
@@ -1564,7 +1568,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: omnigent-exact-artifact-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/omnigent-exact-artifact
+          path: |
+            artifacts/omnigent-exact-artifact
+            artifacts/native-chat-sidebar
           if-no-files-found: warn
           retention-days: 14
 

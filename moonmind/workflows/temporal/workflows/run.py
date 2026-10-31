@@ -21,6 +21,7 @@ with workflow.unsafe.imports_passed_through():
         merge_runtime_selection,
         model_selection_fields,
         provider_profile_ref_from_mapping,
+        step_profile_intent,
     )
     from moonmind.workflows.temporal.run_failure_diagnostics import RunFailureDiagnostics
     from pydantic import ValidationError
@@ -218,22 +219,29 @@ with workflow.unsafe.imports_passed_through():
         validate_remediation_loop_agent_instructions,
     )
 
+from moonmind.core.artifacts import durable_artifact_ref
 from moonmind.workflows.skills.approval_policy import (
     ReviewRequest,
     StepGateResult,
+    PreparedStepGate,
+    normalize_step_gate_verdict,
+    prepare_step_gate_record,
+    step_gate_payload,
+    step_gate_repair_issues,
+    step_gate_repair_feedback,
+    step_gate_result_ref,
+    step_gate_sources,
     gate_transition_allows_review_retry,
     inject_review_feedback_into_inputs,
     is_review_gate_active,
     merge_accepted_output_evidence,
     parse_step_gate_result,
-    recommended_next_actions,
     review_gate_budget_metadata,
     review_gate_retry_allowed,
     review_gate_verdict_made_progress,
     terminal_disposition_for_gate_stop,
 )
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
-from moonmind.workflows.skills.tool_plan_contracts import REVIEW_VERDICTS
 from moonmind.workflows.skills.tool_definitions import (
     validate_machine_tool_authority,
     validate_tool_dispatch_authority,
@@ -258,7 +266,6 @@ from moonmind.workflows.temporal.bounded_story_loop import (
     LoopBudget,
     LoopStopState,
     PublicationAction,
-    PublicationFeasibility,
     RemainingWorkArtifact,
 )
 from moonmind.workflows.temporal.bounded_story_loop import (
@@ -279,7 +286,13 @@ from moonmind.workflows.temporal.incident_reconstruction import (
     build_incident_reconstruction_manifest,
     build_incident_trace_ref,
 )
-from moonmind.workflows.temporal.publication_recovery import PublicationObservation
+from moonmind.workflows.temporal.publication_recovery import (
+    PublicationObservation,
+    extract_pull_request_url,
+    prepare_publication_feasibility,
+    resolve_native_pr_branches,
+    resolve_run_publication_feasibility,
+)
 from moonmind.workflows.temporal.publish_auto_evidence import (
     AutoPublishEvidenceError,
     parse_auto_publish_evidence,
@@ -433,26 +446,6 @@ _MOONSPEC_GATE_PASSING_VERDICTS = frozenset({"FULLY_IMPLEMENTED"})
 # RUN_MOONSPEC_GATE_CONTRACT_SINGLE_REPAIR_PATCH).
 _MOONSPEC_GATE_CONTRACT_REPAIR_MAX_ATTEMPTS = 2
 _MOONSPEC_GATE_CONTRACT_SINGLE_REPAIR_MAX_ATTEMPTS = 1
-_MOONSPEC_GATE_BLOCKING_VERDICTS = frozenset(
-    {
-        "ADDITIONAL_WORK_NEEDED",
-        "NO_DETERMINATION",
-        "BLOCKED",
-        "FAILED_UNRECOVERABLE",
-        "ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION",
-    }
-)
-_MOONSPEC_GATE_VERDICT_TEXT_PATTERN = re.compile(
-    r"\b("
-    r"FULLY_IMPLEMENTED|"
-    r"ADDITIONAL_WORK_NEEDED|"
-    r"NO_DETERMINATION|"
-    r"ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION|"
-    r"FAILED_UNRECOVERABLE|"
-    r"BLOCKED"
-    r")\b",
-    re.IGNORECASE,
-)
 _MOONSPEC_REMEDIATION_TITLE_ATTEMPT_PATTERN = re.compile(
     r"\b(?P<attempt>\d+)\s+of\s+(?P<max_attempts>\d+)\b",
     re.IGNORECASE,
@@ -638,6 +631,7 @@ RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH = "run-trusted-issue-brief-authority-v1"
 # New gates bind objective acceptance; old histories retain their recorded routing.
 RUN_ACCEPTANCE_EVIDENCE_PATCH = "run-acceptance-evidence-v1"
 RUN_ACCEPTANCE_SOURCE_HANDOFF_PATCH = "run-acceptance-source-handoff-v1"
+RUN_ACCEPTANCE_REPOSITORY_IDENTITY_PATCH = "run-acceptance-repository-identity-v1"
 RUN_ISSUE_EVIDENCE_CONTINUATION_PATCH = "run-issue-evidence-continuation-v1"
 RUN_ISSUE_EVIDENCE_ELIGIBILITY_PATCH = "run-issue-evidence-eligibility-v1"
 # Issue-driven PRs and preserved-draft summaries name the trusted source issue
@@ -5421,6 +5415,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             repository=str(self._repo or ""),
             ref=evidence.completion_target.ref,
             revision=evidence.completion_target.revision,
+            repository_aliases=(
+                self._publish_context.get("acceptanceRepositoryAliases") is True
+            ),
         ):
             return None
         return gate
@@ -5461,8 +5458,24 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if (
             self._issue_implement_handoff_role(node) != "code-review-handoff"
             or self._publish_mode(parameters) != "pr"
-            or not self._issue_implement_pr_required()
         ):
+            return None
+        # Activate at the external handoff, after retained verifier/publisher
+        # commands. A reset before publication can adopt the repair without
+        # changing earlier decisions; continuation retains this projection.
+        if self._patched_or_false_outside_workflow(
+            RUN_ACCEPTANCE_REPOSITORY_IDENTITY_PATCH
+        ):
+            self._publish_context["acceptanceRepositoryAliases"] = True
+        if not self._issue_implement_pr_required():
+            if (
+                self._publish_context.get("acceptanceRepositoryAliases") is True
+                and self._has_no_commit_publish_evidence()
+            ):
+                self._record_publish_result(
+                    parameters=parameters,
+                    execution_result={"outputs": {"push_status": "no_commits"}},
+                )
             return None
         existing = self._coerce_text(
             self._pull_request_url or self._publish_context.get("pullRequestUrl"),
@@ -8962,160 +8975,30 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             )
         return None
 
-    def _extract_moonspec_verify_verdict(
-        self,
-        outputs: Mapping[str, Any],
-    ) -> str | None:
-        for source in self._moonspec_verify_sources(outputs):
-            for key in (
-                "verdict",
-                "gateVerdict",
-                "gate_verdict",
-                "moonSpecVerdict",
-                "moonspecVerdict",
-                "verificationVerdict",
-                "verification_verdict",
-            ):
-                raw_verdict = source.get(key)
-                verdict = self._normalize_moonspec_verify_verdict(raw_verdict)
-                if verdict:
-                    return verdict
-                if isinstance(raw_verdict, str) and raw_verdict.strip():
-                    return "NO_DETERMINATION"
-        return None
-
-    def _moonspec_verify_sources(
-        self,
-        outputs: Mapping[str, Any],
-    ) -> Iterable[Mapping[str, Any]]:
-        for key in (
-            "moonSpecVerify",
-            "moonspecVerify",
-            "moonspec_verify",
-            "verification",
-            "verificationResult",
-            "verification_result",
-            "gate",
-            "review",
-        ):
-            candidate = outputs.get(key)
-            if isinstance(candidate, Mapping):
-                yield candidate
-        yield outputs
-
-    @staticmethod
-    def _normalize_moonspec_verify_verdict(value: Any) -> str | None:
-        if not isinstance(value, str):
-            return None
-        normalized = value.strip().upper().replace("-", "_").replace(" ", "_")
-        if normalized == "PASS":
-            normalized = "FULLY_IMPLEMENTED"
-        elif normalized == "FAIL":
-            normalized = "ADDITIONAL_WORK_NEEDED"
-        if (
-            normalized in _MOONSPEC_GATE_PASSING_VERDICTS
-            or normalized in _MOONSPEC_GATE_BLOCKING_VERDICTS
-        ):
-            return normalized
-        return None
-
-    def _extract_moonspec_verify_verdict_from_text(self, value: Any) -> str | None:
-        if not isinstance(value, str) or not value.strip():
-            return None
-        text = value[:4000]
-        match = _MOONSPEC_GATE_VERDICT_TEXT_PATTERN.search(text)
-        if not match:
-            return None
-        return self._normalize_moonspec_verify_verdict(match.group(1))
-
-    def _moonspec_verify_report_text(
-        self,
-        outputs: Mapping[str, Any],
-    ) -> str | None:
-        for source in self._moonspec_verify_sources(outputs):
-            for key in (
-                "moonSpecVerifyReport",
-                "moonspecVerifyReport",
-                "verificationReport",
-                "verification_report",
-                "lastAssistantText",
-                "assistantText",
-                "summary",
-                "message",
-            ):
-                value = source.get(key)
-                if not isinstance(value, str):
-                    continue
-                text = value.strip()
-                if "# MoonSpec Verification Report" in text and "**Verdict**" in text:
-                    return text
-            turn_metadata = source.get("turnMetadata")
-            if isinstance(turn_metadata, Mapping):
-                for key in ("assistantText", "lastAssistantText"):
-                    value = turn_metadata.get(key)
-                    if not isinstance(value, str):
-                        continue
-                    text = value.strip()
-                    if (
-                        "# MoonSpec Verification Report" in text
-                        and "**Verdict**" in text
-                    ):
-                        return text
-        return None
+    _normalize_moonspec_verify_verdict = staticmethod(normalize_step_gate_verdict)
+    _moonspec_verify_sources = staticmethod(step_gate_sources)
+    _moonspec_verify_gate_result_ref = staticmethod(step_gate_result_ref)
 
     def _moonspec_verify_gate_result(
         self,
         outputs: Mapping[str, Any],
     ) -> StepGateResult:
-        payload: dict[str, Any] = {}
-        for source in self._moonspec_verify_sources(outputs):
-            for key in (
-                "verdict",
-                "gateVerdict",
-                "gate_verdict",
-                "moonSpecVerdict",
-                "moonspecVerdict",
-                "verificationVerdict",
-                "verification_verdict",
-            ):
-                if source.get(key):
-                    payload = dict(source)
-                    payload["verdict"] = source.get(key)
-                    require_acceptance = bool(self._assessment_context) and self._patched_or_false_outside_workflow(
-                        RUN_ACCEPTANCE_EVIDENCE_PATCH
-                    )
-                    return parse_step_gate_result(
-                        payload,
-                        require_acceptance=require_acceptance,
-                        validation_time=workflow.now() if require_acceptance else None,
-                        validate_action_compatibility=(
-                            self._patched_or_false_outside_workflow(
-                                RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
-                            )
-                        ),
-                    )
-
-        return parse_step_gate_result({})
-
-    def _moonspec_verify_gate_result_ref(
-        self,
-        outputs: Mapping[str, Any],
-    ) -> str | None:
-        for source in self._moonspec_verify_sources(outputs):
-            for key in (
-                "gateResultRef",
-                "gate_result_ref",
-                "stepGateResultRef",
-                "step_gate_result_ref",
-                "artifactRef",
-                "artifact_ref",
-                "diagnosticsRef",
-                "diagnostics_ref",
-            ):
-                gate_result_ref = self._coerce_text(source.get(key), max_chars=400)
-                if gate_result_ref:
-                    return gate_result_ref
-        return None
+        # Patch evaluation stays here and in its historical order. The Skill
+        # owner alone selects and interprets the result envelope.
+        payload = step_gate_payload(outputs)
+        if not payload:
+            return parse_step_gate_result({})
+        require_acceptance = bool(self._assessment_context) and self._patched_or_false_outside_workflow(
+            RUN_ACCEPTANCE_EVIDENCE_PATCH
+        )
+        return parse_step_gate_result(
+            payload,
+            require_acceptance=require_acceptance,
+            validation_time=workflow.now() if require_acceptance else None,
+            validate_action_compatibility=self._patched_or_false_outside_workflow(
+                RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
+            ),
+        )
 
     def _moonspec_contract_repair_issues(
         self,
@@ -9143,23 +9026,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             gate_result = self._moonspec_verify_gate_result(outputs)
         except Exception:
             return ()
-        if not (gate_result.invalid or gate_result.degraded):
-            return ()
-        if gate_result.issues:
-            return tuple(gate_result.issues)
-        # A missing-verdict envelope locates no verdict-keyed source, so the
-        # canonical parse cannot bind its issues. Carry the bounded raw
-        # findings as untrusted repair data instead of dropping them,
-        # mirroring the parser's dict-only ceiling.
-        for source in self._moonspec_verify_sources(outputs):
-            issues_raw = source.get("issues")
-            if isinstance(issues_raw, list):
-                raw_issues = [
-                    issue for issue in issues_raw[:20] if isinstance(issue, dict)
-                ]
-                if raw_issues:
-                    return tuple(raw_issues)
-        return ()
+        return step_gate_repair_issues(outputs, gate_result)
 
     def _moonspec_verify_contract_repair_feedback(
         self,
@@ -9184,137 +9051,32 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if not isinstance(outputs, Mapping):
             return None
         gate_result = self._moonspec_verify_gate_result(outputs)
-        if not (gate_result.invalid or gate_result.degraded):
-            return None
-        detail = gate_result.downgrade_reason or (
-            "the structured verifier JSON was missing or failed contract " "validation"
-        )
-        verdicts = ", ".join(sorted(REVIEW_VERDICTS))
-        next_actions = ", ".join(recommended_next_actions())
-        return (
-            "MoonSpec verify gate contract repair required: "
-            f"{detail}. Rewrite the structured verifier JSON at the "
-            "instructed verify artifact path using only canonical field "
-            f"values (verdict one of: {verdicts}; recommendedNextAction one "
-            f"of: {next_actions}), re-verify against the current workspace "
-            "state, and finish with the Markdown MoonSpec Verification "
-            "Report. Do not modify implementation source in this attempt."
-        )
+        return step_gate_repair_feedback(gate_result)
 
     def _record_moonspec_verify_gate(
         self,
         *,
         node_id: str,
         outputs: Mapping[str, Any],
-    ) -> None:
+    ) -> PreparedStepGate:
         gate_result = self._moonspec_verify_gate_result(outputs)
-        verdict = gate_result.verdict
-        reason = (
-            "MoonSpec verification report was present but structured gate output "
-            "was missing."
-            if gate_result.degraded and self._moonspec_verify_report_text(outputs)
-            else None
-        )
-        if reason is None:
-            for source in self._moonspec_verify_sources(outputs):
-                reason = self._sanitize_operator_summary(
-                    self._coerce_text(
-                        source.get("operator_summary")
-                        or source.get("operatorSummary")
-                        or source.get("summary")
-                        or source.get("message"),
-                        max_chars=700,
-                    )
-                )
-                if reason:
-                    break
-        diagnostics_ref = None
-        for source in self._moonspec_verify_sources(outputs):
-            diagnostics_ref = self._coerce_text(
-                source.get("diagnostics_ref")
-                or source.get("diagnosticsRef")
-                or source.get("verificationReportRef")
-                or source.get("verification_report_ref")
-                or source.get("reportRef"),
-                max_chars=400,
-            )
-            if diagnostics_ref:
-                break
-        self._moonspec_gate_verdict = verdict
-        self._moonspec_gate_reason = reason
-        declared_verdict = None
-        for source in self._moonspec_verify_sources(outputs):
-            declared_verdict = self._normalize_moonspec_verify_verdict(
-                source.get("verdict")
-            )
-            if declared_verdict:
-                break
-        gate_result_ref = self._moonspec_verify_gate_result_ref(outputs)
-        remaining_work_ref = gate_result.remaining_work_ref
-        if self._patched_or_false_outside_workflow(
-            RUN_MOONSPEC_VERIFY_REMAINING_WORK_EVIDENCE_PATCH
-        ):
-            remaining_work_ref = self._bounded_story_loop_artifact_ref(
-                remaining_work_ref
-            ) or (
-                self._bounded_story_loop_artifact_ref(gate_result_ref)
-                if verdict == "ADDITIONAL_WORK_NEEDED"
-                else None
-            )
-        gate_context: dict[str, Any] = {
-            "logicalStepId": node_id,
-            "verdict": verdict,
-            "declaredVerdict": declared_verdict,
-            "confidence": gate_result.confidence,
-            "validatedRefs": dict(gate_result.validated_refs or {}),
-            "invalidatedRefs": list(gate_result.invalidated_refs),
-            "remainingWorkRef": remaining_work_ref,
-            "recommendedNextAction": gate_result.recommended_next_action,
-            "targetLogicalStepId": gate_result.target_logical_step_id,
-            "workspacePolicyRecommendation": (
-                gate_result.workspace_policy_recommendation
+        decision = prepare_step_gate_record(
+            outputs,
+            logical_step_id=node_id,
+            result=gate_result,
+            remaining_work_evidence_enabled=self._patched_or_false_outside_workflow(
+                RUN_MOONSPEC_VERIFY_REMAINING_WORK_EVIDENCE_PATCH
             ),
-            "recoverableInCurrentRuntime": (gate_result.recoverable_in_current_runtime),
-            "invalid": gate_result.invalid,
-            "degraded": gate_result.degraded,
-        }
-        if self._patched_or_false_outside_workflow(
-            RUN_ISSUE_EVIDENCE_CONTINUATION_PATCH
-        ):
-            projection = gate_context["validatedRefs"].get("acceptanceProjection")
-            for source in self._moonspec_verify_sources(outputs):
-                remaining = source.get("remainingWork")
-                if isinstance(remaining, list) and remaining:
-                    gate_context["evidenceContinuationEligible"] = bool(
-                        isinstance(projection, Mapping)
-                        and not gate_result.invalid
-                        and not gate_result.degraded
-                        and gate_result.recommended_next_action != "needs_human"
-                        and all(
-                            isinstance(item, Mapping)
-                            and item.get("gapType") in {"evidence", "verification", "environment"}
-                            for item in remaining
-                        )
-                    )
-                    break
-        if gate_result.downgrade_reason:
-            gate_context["downgradeReason"] = gate_result.downgrade_reason
-        if gate_result_ref:
-            gate_context["gateResultRef"] = gate_result_ref
-        if reason:
-            gate_context["summary"] = reason
-        if diagnostics_ref:
-            gate_context["diagnosticsRef"] = diagnostics_ref
-        self._publish_context["moonSpecGate"] = gate_context
+            evidence_continuation_enabled=self._patched_or_false_outside_workflow(
+                RUN_ISSUE_EVIDENCE_CONTINUATION_PATCH
+            ),
+        )
+        self._moonspec_gate_verdict = decision.result.verdict
+        self._moonspec_gate_reason = decision.context.get("summary")
+        self._publish_context["moonSpecGate"] = dict(decision.context)
+        return decision
 
-    @staticmethod
-    def _bounded_story_loop_artifact_ref(value: Any) -> str | None:
-        ref = str(value or "").strip()
-        if ref.startswith("artifact://"):
-            return ref
-        if ref.startswith("art_"):
-            return f"artifact://{ref}"
-        return None
+    _bounded_story_loop_artifact_ref = staticmethod(durable_artifact_ref)
 
     def _bounded_story_loop_gate_from_step_gate(
         self,
@@ -15668,16 +15430,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     tool_name=tool_name,
                     node_inputs=node_inputs,
                 ):
-                    step_gate_result = self._moonspec_verify_gate_result(
-                        outputs_for_gate
-                    )
-                    step_gate_result_ref = self._moonspec_verify_gate_result_ref(
-                        outputs_for_gate
-                    )
-                    self._record_moonspec_verify_gate(
+                    gate_decision = self._record_moonspec_verify_gate(
                         node_id=node_id,
                         outputs=outputs_for_gate,
                     )
+                    step_gate_result = gate_decision.result
+                    step_gate_result_ref = gate_decision.result_ref
                     gate_verdict = self._normalize_moonspec_verify_verdict(
                         self._moonspec_gate_verdict
                     )
@@ -18749,85 +18507,23 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         last_node_inputs: Mapping[str, Any],
         publish_payload: Mapping[str, Any],
     ) -> tuple[str, str]:
-        # The accepted published head is the only branch a managed push
-        # boundary remotely verified for this run, and it is recorded branch
-        # and SHA together. Every other head candidate is raw step metadata:
-        # ``_record_execution_context`` mirrors ``branch``/``push_branch`` from
-        # whichever step ran last, so a read-only verifier -- the step the
-        # MoonSpec terminal gate always trips on -- can name a branch that was
-        # never pushed. The gate resolves publication feasibility from the
-        # accepted head, so publication must target that same head rather than
-        # re-deriving one from mutable metadata.
-        accepted_head: str | None = None
+        accepted_head = None
         if self._patched_or_false_outside_workflow(
             RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH
         ):
             accepted = self._accepted_published_head()
             if accepted is not None:
                 accepted_head = accepted[0]
-        if workflow.patched(NATIVE_PR_BRANCH_DEFAULTS_PATCH):
-            head_candidates = (
-                accepted_head,
-                agent_outputs.get("push_branch"),
-                self._publish_context.get("branch"),
-                agent_outputs.get("branch"),
-                agent_outputs.get("targetBranch"),
-                workspace_spec.get("targetBranch"),
-                last_node_inputs.get("targetBranch"),
-            )
-            base_candidates = (
-                self._resolve_publish_base_branch(publish_payload),
-                agent_outputs.get("push_base_branch"),
-                agent_outputs.get("baseBranch"),
-                agent_outputs.get("base_branch"),
-                self._publish_context.get("baseRef"),
-                workspace_spec.get("startingBranch"),
-                last_node_inputs.get("startingBranch"),
-                "main",
-            )
-        else:
-            head_candidates = (
-                accepted_head,
-                agent_outputs.get("push_branch"),
-                self._publish_context.get("branch"),
-                agent_outputs.get("branch"),
-                agent_outputs.get("targetBranch"),
-                workspace_spec.get("targetBranch"),
-                parameters.get("targetBranch"),
-                last_node_inputs.get("targetBranch"),
-                workspace_spec.get("branch"),
-                last_node_inputs.get("branch"),
-            )
-            base_candidates = (
-                agent_outputs.get("baseBranch"),
-                agent_outputs.get("base_branch"),
-                self._publish_context.get("baseRef"),
-                workspace_spec.get("startingBranch"),
-                workspace_spec.get("branch"),
-                last_node_inputs.get("startingBranch"),
-                last_node_inputs.get("branch"),
-                "main",
-            )
-        head_branch = next(
-            (
-                candidate
-                for candidate in (self._coerce_text(value) for value in head_candidates)
-                if candidate
-            ),
-            "",
+        return resolve_native_pr_branches(
+            parameters=parameters,
+            agent_outputs=agent_outputs,
+            workspace_spec=workspace_spec,
+            last_node_inputs=last_node_inputs,
+            publish_payload=publish_payload,
+            publish_context=self._publish_context,
+            accepted_head=accepted_head,
+            branch_defaults_enabled=workflow.patched(NATIVE_PR_BRANCH_DEFAULTS_PATCH),
         )
-        base_branch = next(
-            (
-                candidate
-                for candidate in (
-                    self._normalize_native_pr_base_branch(value)
-                    for value in base_candidates
-                )
-                if candidate
-            ),
-            "main",
-        )
-        return head_branch, base_branch
 
     def _native_pr_push_status_blocks_creation(self, push_status: Any) -> bool:
         status = self._coerce_text(push_status)
@@ -18840,46 +18536,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         return False
 
     def _extract_pull_request_url(self, result: Any) -> str | None:
-        outputs = self._get_from_result(result, "outputs")
-        if not isinstance(outputs, Mapping):
-            return None
-
-        for provider_key in (
-            "providerNativePullRequest",
-            "provider_native_pull_request",
-        ):
-            provider_native = outputs.get(provider_key)
-            if not isinstance(provider_native, Mapping):
-                continue
-            for field in ("url", "pullRequestUrl", "prUrl"):
-                value = provider_native.get(field)
-                if not isinstance(value, str) or not value.strip():
-                    continue
-                match = _GITHUB_PR_URL_PATTERN.search(value)
-                if match is not None:
-                    return match.group(0)
-
-        candidate_fields = (
-            "pull_request_url",
-            "pullRequestUrl",
-            "pr_url",
-            "prUrl",
-            "url",
-            "external_url",
-            "externalUrl",
-            "stdout_tail",
-            "stderr_tail",
-            "summary",
-            "message",
-        )
-        for field in candidate_fields:
-            value = outputs.get(field)
-            if not isinstance(value, str) or not value.strip():
-                continue
-            match = _GITHUB_PR_URL_PATTERN.search(value)
-            if match is not None:
-                return match.group(0)
-        return None
+        return extract_pull_request_url(self._get_from_result(result, "outputs"))
 
     def _record_publish_result(
         self,
@@ -20303,112 +19960,18 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         return self._publication_feasibility(execution_result)["feasible"]
 
     def _publication_feasibility(self, execution_result: Any) -> dict[str, Any]:
-        """Resolve publication feasibility for the run, not just for one step.
-
-        ``_step_publication_feasibility`` classifies the evidence a single step
-        produced. The MoonSpec terminal gate always trips on a read-only
-        verification step, which pushes nothing and therefore always classifies
-        as ``publication_state_ambiguous``. That made the mandated draft
-        publication handoff unreachable and orphaned pushed remediation heads,
-        so an ambiguous step classification defers to the run's durable
-        published head. Definitive negatives (unauthorized, contaminated, no
-        candidate change) are preserved -- they are safety decisions, not
-        missing knowledge.
-        """
-
-        feasibility = self._step_publication_feasibility(execution_result)
-        if (
-            feasibility.get("reason") == "publication_state_ambiguous"
+        decision = prepare_publication_feasibility(
+            self._get_from_result(execution_result, "outputs")
+        )
+        accepted_head_available = (
+            decision.reason == "publication_state_ambiguous"
             and self._patched_or_false_outside_workflow(
                 RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH
             )
             and self._accepted_published_head() is not None
-        ):
-            return PublicationFeasibility(
-                feasible=True,
-                reason="verified_remote_head",
-                evidenceRefs=tuple(feasibility.get("evidenceRefs") or ()),
-            ).model_dump(by_alias=True)
-        return feasibility
-
-    def _step_publication_feasibility(self, execution_result: Any) -> dict[str, Any]:
-        """Classify accepted repository evidence produced by a single step."""
-
-        if self._extract_pull_request_url(execution_result):
-            return PublicationFeasibility(
-                feasible=True, reason="verified_remote_head"
-            ).model_dump(by_alias=True)
-        outputs = self._get_from_result(execution_result, "outputs")
-        if not isinstance(outputs, Mapping):
-            return PublicationFeasibility(
-                feasible=False, reason="publication_state_ambiguous"
-            ).model_dump(by_alias=True)
-        evidence = outputs.get("acceptedRepositoryEvidence")
-        if not isinstance(evidence, Mapping):
-            evidence = outputs.get("accepted_repository_evidence")
-        if not isinstance(evidence, Mapping):
-            return PublicationFeasibility(
-                feasible=False, reason="publication_state_ambiguous"
-            ).model_dump(by_alias=True)
-        candidate_diff_ref = self._bounded_story_loop_artifact_ref(
-            evidence.get("candidateDiffRef")
         )
-        evidence_refs = tuple(
-            ref
-            for ref in (
-                self._bounded_story_loop_artifact_ref(evidence.get("evidenceRef")),
-                candidate_diff_ref,
-            )
-            if ref
-        )
-        if evidence.get("publicationAuthorized") is False:
-            return PublicationFeasibility(
-                feasible=False,
-                reason="publication_unauthorized",
-                evidenceRefs=evidence_refs,
-            ).model_dump(by_alias=True)
-        if evidence.get("candidateContaminated") is True:
-            return PublicationFeasibility(
-                feasible=False,
-                reason="candidate_contaminated",
-                evidenceRefs=evidence_refs,
-            ).model_dump(by_alias=True)
-        push_status = str(evidence.get("pushStatus") or "").strip().lower()
-        if push_status in {"pushed", "published"}:
-            return PublicationFeasibility(
-                feasible=True,
-                reason="verified_remote_head",
-                evidenceRefs=evidence_refs,
-            ).model_dump(by_alias=True)
-        commit_count = evidence.get("commitsAheadOfBase")
-        if isinstance(commit_count, bool):
-            commit_count = None
-        if isinstance(commit_count, (int, float)):
-            return PublicationFeasibility(
-                feasible=int(commit_count) > 0,
-                reason=(
-                    "commits_ahead_of_base"
-                    if int(commit_count) > 0
-                    else "no_candidate_change"
-                ),
-                evidenceRefs=evidence_refs,
-            ).model_dump(by_alias=True)
-        if candidate_diff_ref:
-            return PublicationFeasibility(
-                feasible=True,
-                reason="safe_candidate_diff",
-                evidenceRefs=evidence_refs,
-            ).model_dump(by_alias=True)
-        if evidence.get("repositoryChanged") is False:
-            return PublicationFeasibility(
-                feasible=False,
-                reason="no_candidate_change",
-                evidenceRefs=evidence_refs,
-            ).model_dump(by_alias=True)
-        return PublicationFeasibility(
-            feasible=False,
-            reason="publication_state_ambiguous",
-            evidenceRefs=evidence_refs,
+        return resolve_run_publication_feasibility(
+            decision, accepted_head_available=accepted_head_available,
         ).model_dump(by_alias=True)
 
     @staticmethod
@@ -23075,38 +22638,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         normalized_account_intent = self._workflow_patch_enabled(
             RUN_ACCOUNT_INTENT_NORMALIZATION_PATCH
         )
-        if normalized_account_intent:
-            raw_execution_profile_ref = (
-                provider_profile_ref_from_mapping(runtime_block)
-                or provider_profile_ref_from_mapping(node_inputs)
-            )
-        elif profile_selection_inheritance:
-            # V1 histories retain the original five aliases and selector test.
-            raw_execution_profile_ref = next(
-                (
-                    str(value).strip()
-                    for source in (runtime_block, node_inputs)
-                    for key in (
-                        "providerProfileRef",
-                        "profileId",
-                        "providerProfile",
-                        "executionProfileRef",
-                        "execution_profile_ref",
-                    )
-                    if (value := source.get(key)) is not None and str(value).strip()
-                ),
-                None,
-            )
-        else:
-            # Keep retained command payloads on their recorded alias precedence.
-            raw_execution_profile_ref = (
-                runtime_block.get("executionProfileRef")
-                or runtime_block.get("profileId")
-                or runtime_block.get("providerProfile")
-                or node_inputs.get("executionProfileRef")
-                or node_inputs.get("profileId")
-                or node_inputs.get("providerProfile")
-            )
+        profile_intent = step_profile_intent(
+            runtime_block,
+            node_inputs,
+            normalized_account_intent=normalized_account_intent,
+            selection_inheritance=profile_selection_inheritance,
+        )
+        raw_execution_profile_ref = profile_intent.profile_ref
         execution_profile_ref = None
         if raw_execution_profile_ref is not None:
             candidate = str(raw_execution_profile_ref).strip() or None
@@ -23119,18 +22657,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if (
             execution_profile_ref is None
             and workflow_parameters is not None
-            and not (
-                (normalized_account_intent or profile_selection_inheritance)
-                and any(
-                    (
-                        has_profile_selector(source)
-                        if normalized_account_intent
-                        else isinstance(source.get("profileSelector"), Mapping)
-                        and bool(source["profileSelector"])
-                    )
-                    for source in (runtime_block, node_inputs)
-                )
-            )
+            and profile_intent.inherit_workflow_profile
         ):
             execution_profile_ref = self._inherited_execution_profile_ref(
                 workflow_parameters,

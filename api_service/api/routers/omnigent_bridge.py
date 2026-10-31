@@ -3895,6 +3895,18 @@ def _durable_provider_session_id(row: Any) -> str:
     return str(getattr(row, "omnigent_session_id", "") or "").strip()
 
 
+def _captured_native_item(item: Any) -> Any:
+    """Expose stored item payloads in the native API's flat representation."""
+
+    if not isinstance(item, dict) or not isinstance(item.get("data"), dict):
+        return item
+    payload = {key: value for key, value in item["data"].items() if value is not None}
+    envelope = {
+        key: value for key, value in item.items() if key != "data" and value is not None
+    }
+    return {**payload, **envelope}
+
+
 async def _captured_terminal_snapshot(row: Any) -> dict[str, Any] | None:
     """Read authorized history, or retain live reads for diagnostic-only captures."""
     from moonmind.workflows.temporal.artifacts import TemporalArtifactError
@@ -3938,7 +3950,10 @@ async def _captured_terminal_snapshot(row: Any) -> dict[str, Any] | None:
             raise ValueError("Captured evidence has no transcript")
         if not isinstance(captured["items"], list):
             raise ValueError("Invalid captured transcript")
-        return captured
+        return {
+            **captured,
+            "items": [_captured_native_item(item) for item in captured["items"]],
+        }
     except (OmnigentArtifactError, TemporalArtifactError, OSError, ValueError) as exc:
         raise WorkflowChatFacadeError(
             "The captured terminal transcript is unavailable.",

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
@@ -207,6 +208,33 @@ class ScheduleTriggerResult:
     disposition: str = "pending"
     message: str | None = None
 
+
+@dataclass(frozen=True, slots=True)
+class SemanticCompatDrainObservations:
+    """One semantic adapter's retained consumers from a complete history scan.
+
+    Closed histories remain reset consumers while Temporal retains them. Counts
+    are conservative: an unrecorded patch cannot prove an old branch unused.
+    Missing observations never permit removal, and this receipt deletes nothing.
+    """
+
+    open_histories: int | None = None
+    queued_starts: int | None = None
+    saved_inputs: int | None = None
+    supported_resets: int | None = None
+    errors: tuple[str, ...] = ()
+
+    @property
+    def may_remove(self) -> bool:
+        return not self.errors and all(
+            type(value) is int and value == 0
+            for value in (
+                self.open_histories, self.queued_starts,
+                self.saved_inputs, self.supported_resets,
+            )
+        )
+
+
 def _schedule_object_value(source: object, *keys: str) -> Any:
     if source is None:
         return None
@@ -389,6 +417,95 @@ def _old_queue_checkpoint_persistence(events: Sequence[Any]) -> tuple[int, int]:
                 closed.add(getattr(event, field_name).scheduled_event_id)
                 break
     return len(scheduled), len(scheduled - closed)
+
+
+async def _retained_compat_histories(
+    client: Any, query: str,
+) -> AsyncIterator[WorkflowHistory]:
+    """Shared drain observation route; every history read is pinned to its run."""
+    async for execution in client.list_workflows(query=query):
+        if not execution.run_id:
+            raise ValueError("retained consumer has no observable run identity")
+        yield await client.get_workflow_handle(
+            execution.id, run_id=execution.run_id,
+        ).fetch_history()
+
+
+async def _semantic_compat_consumers(
+    history: WorkflowHistory, converter: Any,
+) -> tuple[dict[str, tuple[bool, bool]], bool]:
+    """Read recorded decisions and saved payloads without executing a workflow."""
+    from moonmind.workflows.skills.approval_policy import has_retained_step_gate_shape
+    from moonmind.workflows.temporal.workflows.run import (
+        NATIVE_PR_BRANCH_DEFAULTS_PATCH,
+        RUN_ACCOUNT_INTENT_NORMALIZATION_PATCH,
+        RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH,
+    )
+
+    markers: dict[str, int] = {}
+    agent_commands: list[int] = []
+    publication_commands: list[int] = []
+    retained_gate = saved_gate = False
+    first_task_completed = False
+    payload_fields = (
+        ("workflow_execution_started_event_attributes", "input"),
+        ("activity_task_scheduled_event_attributes", "input"),
+        ("activity_task_completed_event_attributes", "result"),
+        ("start_child_workflow_execution_initiated_event_attributes", "input"),
+        ("child_workflow_execution_completed_event_attributes", "result"),
+        ("workflow_execution_signaled_event_attributes", "input"),
+        ("workflow_execution_continued_as_new_event_attributes", "input"),
+    )
+    for event in history.events:
+        if event.HasField("workflow_task_completed_event_attributes"):
+            first_task_completed = True
+        if event.HasField("marker_recorded_event_attributes"):
+            marker = event.marker_recorded_event_attributes
+            if marker.marker_name == "core_patch":
+                patch = json.loads(marker.details["patch-data"].payloads[0].data)
+                markers.setdefault(patch["id"], event.event_id)
+        if event.HasField("start_child_workflow_execution_initiated_event_attributes"):
+            attrs = event.start_child_workflow_execution_initiated_event_attributes
+            if attrs.workflow_type.name == "MoonMind.AgentRun":
+                agent_commands.append(event.event_id)
+        if event.HasField("activity_task_scheduled_event_attributes"):
+            if event.activity_task_scheduled_event_attributes.activity_type.name == "repo.create_pr":
+                publication_commands.append(event.event_id)
+        for field_name, payload_name in payload_fields:
+            if not event.HasField(field_name):
+                continue
+            payloads = getattr(getattr(event, field_name), payload_name).payloads
+            values = await converter.decode(payloads)
+            legacy = any(has_retained_step_gate_shape(value) for value in values)
+            retained_gate |= legacy
+            if field_name in {
+                "workflow_execution_started_event_attributes",
+                "workflow_execution_continued_as_new_event_attributes",
+            }:
+                saved_gate |= legacy
+        if event.HasField("workflow_execution_update_accepted_event_attributes"):
+            request = event.workflow_execution_update_accepted_event_attributes.accepted_request
+            values = await converter.decode(request.input.args.payloads)
+            retained_gate |= any(
+                has_retained_step_gate_shape(value) for value in values
+            )
+
+    def needs_patch(patch: str, commands: Sequence[int]) -> bool:
+        marker = markers.get(patch)
+        # A late marker cannot erase earlier commands that used the old branch.
+        return marker is None or any(command < marker for command in commands)
+
+    return {
+        "gate_aliases": (retained_gate, saved_gate),
+        "profile_selection": (
+            needs_patch(RUN_ACCOUNT_INTENT_NORMALIZATION_PATCH, agent_commands), False,
+        ),
+        "native_pr_branches": (
+            needs_patch(NATIVE_PR_BRANCH_DEFAULTS_PATCH, publication_commands)
+            or needs_patch(RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH, publication_commands),
+            False,
+        ),
+    }, not first_task_completed
 
 
 class TemporalClientAdapter:
@@ -748,6 +865,87 @@ class TemporalClientAdapter:
             supported_resets_pending=None if closed is None else closed[0],
         )
 
+    async def observe_semantic_compat_drain(
+        self,
+    ) -> dict[str, SemanticCompatDrainObservations]:
+        """Observe removal eligibility for the moved gate/profile/PR adapters.
+
+        Reuse checkpoint drainage's Visibility/history route. All open parents
+        can still receive a saved gate result; queued and failed-first-task work
+        retains every adapter. Closed aliases and pre-patch histories retain
+        reset support until history retention drains them. No fixture result,
+        missing marker, failed listing or unreadable payload proves drainage.
+        """
+        families = ("gate_aliases", "profile_selection", "native_pr_branches")
+        counts = {family: [0, 0, 0, 0] for family in families}
+        errors: list[str] = []
+        try:
+            client = await self.get_client()
+        except Exception as exc:
+            return {
+                family: SemanticCompatDrainObservations(errors=(f"connection: {exc}",))
+                for family in families
+            }
+        for running in (True, False):
+            query = (
+                f'WorkflowType="{RENAMED_USER_WORKFLOW_TYPE}" AND '
+                f'ExecutionStatus{"=" if running else "!="}"Running"'
+            )
+            try:
+                async for history in _retained_compat_histories(client, query):
+                    consumers, queued = await _semantic_compat_consumers(
+                        history, client.data_converter,
+                    )
+                    for family, (retained, saved) in consumers.items():
+                        counts[family][0] += int(running and (retained or family == "gate_aliases"))
+                        counts[family][1] += int(running and queued)
+                        counts[family][2] += int(saved)
+                        counts[family][3] += int(not running and (retained or queued))
+            except Exception as exc:
+                # Partial scans are not zero. Preserve the original diagnostic.
+                errors.append(f"{query}: {type(exc).__name__}: {exc}")
+                logger.warning(
+                    "Semantic compat drain observation failed for %s", query,
+                    exc_info=True,
+                )
+        if errors:
+            return {
+                family: SemanticCompatDrainObservations(errors=tuple(errors))
+                for family in families
+            }
+        # A paused durable schedule can still reintroduce a saved alias after
+        # history retention expires. Describe its stored action; listing
+        # metadata alone does not expose the admitted arguments.
+        try:
+            from temporalio.client import ScheduleActionStartWorkflow
+            from moonmind.workflows.skills.approval_policy import has_retained_step_gate_shape
+
+            async for entry in await client.list_schedules():
+                description = await client.get_schedule_handle(entry.id).describe()
+                action = description.schedule.action
+                if (
+                    isinstance(action, ScheduleActionStartWorkflow)
+                    and action.workflow == RENAMED_USER_WORKFLOW_TYPE
+                ):
+                    payloads = [arg for arg in action.args if isinstance(arg, Payload)]
+                    values = [arg for arg in action.args if not isinstance(arg, Payload)]
+                    values.extend(await client.data_converter.decode(payloads))
+                    counts["gate_aliases"][2] += int(any(
+                        has_retained_step_gate_shape(value) for value in values
+                    ))
+        except Exception as exc:
+            errors.append(f"saved schedule inputs: {type(exc).__name__}: {exc}")
+            logger.warning("Semantic compat saved-input observation failed", exc_info=True)
+        return {
+            family: SemanticCompatDrainObservations(
+                open_histories=values[0], queued_starts=values[1],
+                saved_inputs=None if errors and family == "gate_aliases" else values[2],
+                supported_resets=values[3],
+                errors=tuple(errors) if family == "gate_aliases" else (),
+            )
+            for family, values in counts.items()
+        }
+
     @staticmethod
     async def _scan_checkpoint_compat_consumers(
         client: Any, query: str
@@ -755,10 +953,7 @@ class TemporalClientAdapter:
         consumers = 0
         outstanding = 0
         try:
-            async for execution in client.list_workflows(query=query):
-                history = await client.get_workflow_handle(
-                    execution.id, run_id=execution.run_id
-                ).fetch_history()
+            async for history in _retained_compat_histories(client, query):
                 scheduled, pending = _old_queue_checkpoint_persistence(
                     history.events
                 )

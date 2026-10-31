@@ -154,8 +154,8 @@ describe('isMountableNativeChatStatus', () => {
 describe('resolveSameOriginChatUrl', () => {
   it('returns the same-origin relative path for a scoped url', () => {
     expect(
-      resolveSameOriginChatUrl('/omnigent-ui/workflow-chat/cb-1?embedded=1', ORIGIN),
-    ).toBe('/omnigent-ui/workflow-chat/cb-1?embedded=1');
+      resolveSameOriginChatUrl('/omnigent-ui/workflow-chat/cb-1?embedded=1&sidebar=closed', ORIGIN),
+    ).toBe('/omnigent-ui/workflow-chat/cb-1?embedded=1&sidebar=closed');
   });
 
   it('rejects blank and cross-origin urls (never mounts upstream)', () => {
@@ -168,10 +168,10 @@ describe('resolveSameOriginChatUrl', () => {
 });
 
 describe('fullPageChatHref', () => {
-  it('drops the embedded flag but stays on the MoonMind origin', () => {
+  it('drops embed presentation flags while retaining session controls and the MoonMind origin', () => {
     expect(
-      fullPageChatHref('/omnigent-ui/workflow-chat/cb-1?embedded=1', ORIGIN),
-    ).toBe('/omnigent-ui/workflow-chat/cb-1');
+      fullPageChatHref('/omnigent-ui/workflow-chat/cb-1?embedded=1&sidebar=closed&file=README.md#L2', ORIGIN),
+    ).toBe('/omnigent-ui/workflow-chat/cb-1?file=README.md#L2');
   });
 
   it('refuses to construct an upstream url', () => {

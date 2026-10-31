@@ -167,6 +167,9 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from moonmind.workflows.temporal.publication_recovery import (
+    prepare_publication_feasibility,
+)
 from moonmind.workflows.temporal.remediation_loop import (
     RemediationLoopSpec,
     materialize_attempt_nodes,
@@ -1850,10 +1853,8 @@ async def test_verification_gate_draft_publishes_run_owned_published_head(
 
         # The verification step's own evidence is inconclusive, before and
         # after the fix. That classification is correct for the step.
-        step_scoped = _replay_published_head(case)
-        assert step_scoped._step_publication_feasibility(execution_result)[
-            "reason"
-        ] == expected["verificationGateStepFeasibilityReason"]
+        step_scoped = prepare_publication_feasibility(execution_result["outputs"])
+        assert step_scoped.reason == expected["verificationGateStepFeasibilityReason"]
 
         # Raw push keys a non-publishing step left in the publish context are
         # not accepted evidence, so they never upgrade the gate on their own.
@@ -8991,9 +8992,9 @@ async def test_verified_no_commit_publication_reaches_the_workflow_publish_hando
     parent._owner_type = "user"
     parent._owner_id = "generic-no-commit-replay"
     outputs = dict(published.metadata)
-    feasibility = parent._step_publication_feasibility(SimpleNamespace(outputs=outputs))
-    assert feasibility["feasible"] is expected["publicationFeasible"]
-    assert feasibility["reason"] == expected["publicationFeasibilityReason"]
+    feasibility = prepare_publication_feasibility(outputs)
+    assert feasibility.feasible is expected["publicationFeasible"]
+    assert feasibility.reason == expected["publicationFeasibilityReason"]
     parent._record_publish_result(
         parameters={"publishMode": manifest["publishMode"]},
         execution_result=SimpleNamespace(outputs=outputs),

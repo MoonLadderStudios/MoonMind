@@ -232,6 +232,7 @@ from moonmind.schemas.managed_session_models import (
     TerminateCodexManagedSessionRequest,
 )
 from moonmind.workflows.skills.approval_policy import (
+    canonicalize_step_gate_payload,
     recommended_next_action_for_verdict,
     recommended_next_actions,
     step_gate_contract_violations,
@@ -9326,63 +9327,6 @@ class TemporalAgentRuntimeActivities:
                     return value.strip()
             return None
 
-        def _canonicalize_moonspec_verify_gate_payload(
-            gate_payload: Mapping[str, Any],
-        ) -> dict[str, Any]:
-            """Preserve the Skill's canonical action; repair missing/invalid values."""
-
-            canonical_payload = dict(gate_payload)
-            recoverable_raw = (
-                canonical_payload.get("recoverableInCurrentRuntime")
-                if "recoverableInCurrentRuntime" in canonical_payload
-                else canonical_payload.get("recoverable_in_current_runtime")
-            )
-            try:
-                recoverable = _coerce_bool(recoverable_raw, default=False)
-            except ValueError:
-                recoverable = False
-            canonical_action = recommended_next_action_for_verdict(
-                canonical_payload.get("verdict"),
-                recoverable_in_current_runtime=recoverable,
-            )
-            if not canonical_action:
-                return canonical_payload
-            # MoonLadderStudios/MoonMind#4472: a native NO_DETERMINATION result
-            # without current-runtime recovery must not implicitly acquire a
-            # human decision. The canonical helper defaults that case to
-            # ``needs_human``; derive ``blocked`` instead when the producer
-            # did not supply an explicit valid action. Genuine explicit
-            # ``needs_human``/``blocked`` decisions are preserved above.
-            declared_verdict = (
-                str(canonical_payload.get("verdict") or "").strip().upper()
-            )
-            if declared_verdict == "INCONCLUSIVE":
-                declared_verdict = "NO_DETERMINATION"
-            raw_action = canonical_payload.get("recommendedNextAction")
-            if raw_action is None:
-                raw_action = canonical_payload.get("recommended_next_action")
-            raw_action_text = (
-                raw_action.strip() if isinstance(raw_action, str) else None
-            )
-            if (
-                declared_verdict == "NO_DETERMINATION"
-                and not recoverable
-                and raw_action_text not in recommended_next_actions()
-            ):
-                canonical_action = "blocked"
-            if raw_action_text in recommended_next_actions():
-                canonical_payload["recommendedNextAction"] = raw_action_text
-                canonical_payload.pop("recommended_next_action", None)
-                return canonical_payload
-            if raw_action is not None and raw_action_text != canonical_action:
-                canonical_payload.setdefault(
-                    "rawRecommendedNextAction",
-                    raw_action if isinstance(raw_action, str) else str(raw_action),
-                )
-            canonical_payload["recommendedNextAction"] = canonical_action
-            canonical_payload.pop("recommended_next_action", None)
-            return canonical_payload
-
         def _remediation_cadence() -> Mapping[str, Any]:
             value = moonmind_metadata.get("remediationCadence")
             return value if isinstance(value, Mapping) else {}
@@ -9654,7 +9598,7 @@ class TemporalAgentRuntimeActivities:
             if prepared is None:
                 return {}
             verify_path, payload = prepared
-            gate_payload = _canonicalize_moonspec_verify_gate_payload(payload)
+            gate_payload = canonicalize_step_gate_payload(payload)
             # Only this publisher may mint a descriptor after full validation
             # and an immutable write; a verifier cannot submit its own shortcut.
             gate_refs = gate_payload.get("validatedRefs")

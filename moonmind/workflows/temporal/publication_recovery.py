@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
@@ -21,6 +22,9 @@ from moonmind.publish.saved_candidate import (
     SavedPublicationAdmission,
     SavedPublicationCommit,
 )
+
+from moonmind.core.artifacts import durable_artifact_ref
+from moonmind.workflows.temporal.bounded_story_loop import PublicationFeasibility
 
 if TYPE_CHECKING:
     from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
@@ -1025,5 +1029,255 @@ __all__ = [
     "publication_operation_key",
     "publication_recovery_workflow_id",
     "reconcile_publication_state",
+    "extract_pull_request_url",
+    "prepare_publication_feasibility",
+    "resolve_native_pr_branches",
+    "resolve_run_publication_feasibility",
     "validate_restored_candidate",
 ]
+
+
+_GITHUB_PR_URL_PATTERN = re.compile(
+    r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+",
+    re.IGNORECASE,
+)
+
+
+def _publication_text(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return " ".join(value.split()) or None
+
+
+def _publication_branch(value: Any) -> str | None:
+    branch = str(value or "").strip()
+    while True:
+        previous = branch
+        for prefix in ("refs/remotes/origin/", "refs/heads/", "origin/"):
+            if branch.startswith(prefix):
+                branch = branch.removeprefix(prefix)
+        if branch == previous:
+            return branch or None
+
+
+def _publish_base_branch(payload: Mapping[str, Any]) -> str | None:
+    base = payload.get("prBaseBranch")
+    if base is None:
+        base = payload.get("baseBranch")
+    return _publication_text(base)
+
+
+def extract_pull_request_url(outputs: Any) -> str | None:
+    """Decode current and retained provider PR metadata, preserving precedence."""
+    if not isinstance(outputs, Mapping):
+        return None
+
+    for provider_key in (
+        "providerNativePullRequest",
+        "provider_native_pull_request",
+    ):
+        provider_native = outputs.get(provider_key)
+        if not isinstance(provider_native, Mapping):
+            continue
+        for field in ("url", "pullRequestUrl", "prUrl"):
+            value = provider_native.get(field)
+            if not isinstance(value, str) or not value.strip():
+                continue
+            match = _GITHUB_PR_URL_PATTERN.search(value)
+            if match is not None:
+                return match.group(0)
+
+    candidate_fields = (
+        "pull_request_url",
+        "pullRequestUrl",
+        "pr_url",
+        "prUrl",
+        "url",
+        "external_url",
+        "externalUrl",
+        "stdout_tail",
+        "stderr_tail",
+        "summary",
+        "message",
+    )
+    for field in candidate_fields:
+        value = outputs.get(field)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        match = _GITHUB_PR_URL_PATTERN.search(value)
+        if match is not None:
+            return match.group(0)
+    return None
+
+
+def prepare_publication_feasibility(outputs: Any) -> PublicationFeasibility:
+    """Classify one step's accepted repository evidence at the publication owner."""
+    if extract_pull_request_url(outputs):
+        return PublicationFeasibility(
+            feasible=True, reason="verified_remote_head"
+        )
+    if not isinstance(outputs, Mapping):
+        return PublicationFeasibility(
+            feasible=False, reason="publication_state_ambiguous"
+        )
+    evidence = outputs.get("acceptedRepositoryEvidence")
+    if not isinstance(evidence, Mapping):
+        evidence = outputs.get("accepted_repository_evidence")
+    if not isinstance(evidence, Mapping):
+        return PublicationFeasibility(
+            feasible=False, reason="publication_state_ambiguous"
+        )
+    candidate_diff_ref = durable_artifact_ref(
+        evidence.get("candidateDiffRef")
+    )
+    evidence_refs = tuple(
+        ref
+        for ref in (
+            durable_artifact_ref(evidence.get("evidenceRef")),
+            candidate_diff_ref,
+        )
+        if ref
+    )
+    if evidence.get("publicationAuthorized") is False:
+        return PublicationFeasibility(
+            feasible=False,
+            reason="publication_unauthorized",
+            evidenceRefs=evidence_refs,
+        )
+    if evidence.get("candidateContaminated") is True:
+        return PublicationFeasibility(
+            feasible=False,
+            reason="candidate_contaminated",
+            evidenceRefs=evidence_refs,
+        )
+    push_status = str(evidence.get("pushStatus") or "").strip().lower()
+    if push_status in {"pushed", "published"}:
+        return PublicationFeasibility(
+            feasible=True,
+            reason="verified_remote_head",
+            evidenceRefs=evidence_refs,
+        )
+    commit_count = evidence.get("commitsAheadOfBase")
+    if isinstance(commit_count, bool):
+        commit_count = None
+    if isinstance(commit_count, (int, float)):
+        return PublicationFeasibility(
+            feasible=int(commit_count) > 0,
+            reason=(
+                "commits_ahead_of_base"
+                if int(commit_count) > 0
+                else "no_candidate_change"
+            ),
+            evidenceRefs=evidence_refs,
+        )
+    if candidate_diff_ref:
+        return PublicationFeasibility(
+            feasible=True,
+            reason="safe_candidate_diff",
+            evidenceRefs=evidence_refs,
+        )
+    if evidence.get("repositoryChanged") is False:
+        return PublicationFeasibility(
+            feasible=False,
+            reason="no_candidate_change",
+            evidenceRefs=evidence_refs,
+        )
+    return PublicationFeasibility(
+        feasible=False,
+        reason="publication_state_ambiguous",
+        evidenceRefs=evidence_refs,
+    )
+
+
+def resolve_run_publication_feasibility(
+    decision: PublicationFeasibility, *, accepted_head_available: bool,
+) -> PublicationFeasibility:
+    """Fill an ambiguous read-only result from the run's confirmed published head.
+
+    Definitive unauthorized, contaminated and no-change outcomes remain binding.
+    """
+    if decision.reason == "publication_state_ambiguous" and accepted_head_available:
+        return decision.model_copy(update={"feasible": True, "reason": "verified_remote_head"})
+    return decision
+
+
+def resolve_native_pr_branches(
+    *,
+    parameters: Mapping[str, Any],
+    agent_outputs: Mapping[str, Any],
+    workspace_spec: Mapping[str, Any],
+    last_node_inputs: Mapping[str, Any],
+    publish_payload: Mapping[str, Any],
+    publish_context: Mapping[str, Any],
+    accepted_head: str | None,
+    branch_defaults_enabled: bool,
+) -> tuple[str, str]:
+    """Use the confirmed head and the recorded metadata precedence.
+
+    A read-only verifier's branch is not evidence of a pushed candidate. The
+    accepted run head takes precedence; the older fallback only serves retained
+    histories that have not recorded the branch-defaults patch.
+    """
+    if branch_defaults_enabled:
+        head_candidates = (
+            accepted_head,
+            agent_outputs.get("push_branch"),
+            publish_context.get("branch"),
+            agent_outputs.get("branch"),
+            agent_outputs.get("targetBranch"),
+            workspace_spec.get("targetBranch"),
+            last_node_inputs.get("targetBranch"),
+        )
+        base_candidates = (
+            _publish_base_branch(publish_payload),
+            agent_outputs.get("push_base_branch"),
+            agent_outputs.get("baseBranch"),
+            agent_outputs.get("base_branch"),
+            publish_context.get("baseRef"),
+            workspace_spec.get("startingBranch"),
+            last_node_inputs.get("startingBranch"),
+            "main",
+        )
+    else:
+        head_candidates = (
+            accepted_head,
+            agent_outputs.get("push_branch"),
+            publish_context.get("branch"),
+            agent_outputs.get("branch"),
+            agent_outputs.get("targetBranch"),
+            workspace_spec.get("targetBranch"),
+            parameters.get("targetBranch"),
+            last_node_inputs.get("targetBranch"),
+            workspace_spec.get("branch"),
+            last_node_inputs.get("branch"),
+        )
+        base_candidates = (
+            agent_outputs.get("baseBranch"),
+            agent_outputs.get("base_branch"),
+            publish_context.get("baseRef"),
+            workspace_spec.get("startingBranch"),
+            workspace_spec.get("branch"),
+            last_node_inputs.get("startingBranch"),
+            last_node_inputs.get("branch"),
+            "main",
+        )
+    head_branch = next(
+        (
+            candidate
+            for candidate in (_publication_text(value) for value in head_candidates)
+            if candidate
+        ),
+        "",
+    )
+    base_branch = next(
+        (
+            candidate
+            for candidate in (
+                _publication_branch(value)
+                for value in base_candidates
+            )
+            if candidate
+        ),
+        "main",
+    )
+    return head_branch, base_branch

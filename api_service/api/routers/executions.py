@@ -18517,6 +18517,7 @@ async def resolve_workflow_chat_binding(
         # substitutes the upstream route (docs/UI/WorkflowChatPanel.md §4).
         chat_url = (
             f"/omnigent-ui/workflow-chat/{resolution.chat_binding_id}?embedded=1"
+            "&sidebar=closed"
         )
         api_base = (
             f"/api/workflow-chat-bindings/{resolution.chat_binding_id}/omnigent"
