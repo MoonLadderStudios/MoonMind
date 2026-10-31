@@ -1403,6 +1403,12 @@ class OmnigentBridgeSessionStore:
             if runtime_authority is not None:
                 metadata = dict(stored.metadata_ or {})
                 if metadata.get("runtimeAuthority") not in (None, runtime_authority):
+                    await self._check_interrupted_admission(
+                        request=request,
+                        stored=stored,
+                        plan_ref=plan_ref,
+                        runtime_authority=runtime_authority,
+                    )
                     raise OmnigentIdempotencyError(
                         "bridge runtime authority is already bound"
                     )
@@ -1433,6 +1439,68 @@ class OmnigentBridgeSessionStore:
             await session.commit()
             await session.refresh(stored)
             return _detached(session, stored)
+
+    async def _check_interrupted_admission(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        stored: OmnigentBridgeSession,
+        plan_ref: str,
+        runtime_authority: dict[str, Any],
+    ) -> None:
+        """Leave a delivered journal intact and let its step own a successor."""
+
+        previous = (stored.metadata_ or {}).get("runtimeAuthority")
+        if (
+            not isinstance(previous, dict)
+            or stored.first_message_posted_at is None
+            or stored.status in {"completed", "canceled"}
+            or not isinstance(previous.get("admissionEpoch"), int)
+            or isinstance(previous.get("admissionEpoch"), bool)
+            or runtime_authority["admissionEpoch"] <= previous["admissionEpoch"]
+            or (stored.metadata_ or {}).get("executionPlanRef") != plan_ref
+        ):
+            return
+        from moonmind.omnigent.runtime_bindings import (
+            DbRuntimeBindingStore,
+            RuntimeBindingState,
+            stable_binding_id,
+        )
+
+        previous_id = stable_binding_id(
+            execution_plan_ref=plan_ref,
+            idempotency_key=request.idempotency_key,
+            admission_epoch=previous["admissionEpoch"],
+        )
+        if previous.get("bindingId") != previous_id:
+            return
+        binding = await DbRuntimeBindingStore(self._session_factory).get(previous_id)
+        if (
+            binding is None
+            or binding.state is not RuntimeBindingState.cleaned
+            or binding.terminalResult is not None
+            or binding.executionPlanRef != plan_ref
+            or not binding.hostBindingRef
+            or not binding.hostLeaseRef
+            or not binding.omnigentHostId
+            or binding.hostBindingRef != stored.host_binding_ref
+            or binding.hostLeaseRef != stored.host_lease_ref
+            or binding.omnigentHostId != stored.omnigent_host_id
+        ):
+            return
+        from moonmind.omnigent.harness_platform.failures import (
+            HarnessPlatformError,
+            HarnessPlatformFailure,
+        )
+
+        # A new admission cannot reuse the posted message or its provider
+        # identity. The existing interrupted-step owner preserves the save,
+        # budget and completed steps while admitting a fresh execution.
+        raise HarnessPlatformError(
+            "The prior delivered Omnigent turn's runtime was cleaned; "
+            "resume through interrupted-step recovery instead of rebinding its journal",
+            code=HarnessPlatformFailure.OMNIGENT_SESSION_HOST_LOST,
+        )
 
     async def _locked_github_projection_owner(
         self,
