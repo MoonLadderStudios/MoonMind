@@ -537,10 +537,12 @@ async def test_final_status_reconciliation_before_the_budget_verdict(monkeypatch
         if activity_name == "agent_runtime.status":
             elapsed = (clock.now() - _START).total_seconds()
             status_polls.append(elapsed)
-            # The final reconciliation is the one poll dispatched without a
-            # remaining-budget clamp: the budget looks spent, so the poll is
-            # given the activity's own configured window instead of zero.
-            is_reconciliation = "schedule_to_close_timeout" not in kwargs
+            # Observe the polling decision against the admitted clock. Timeout
+            # keyword selection belongs to dispatch and is exercised by the
+            # registered managed-boundary tests.
+            is_reconciliation = (
+                run._execution_budget.remaining_seconds(clock.now()) <= 0
+            )
             if is_reconciliation:
                 reconciliation_polls.append(elapsed)
                 # The supervisor advance that landed during the last bounded

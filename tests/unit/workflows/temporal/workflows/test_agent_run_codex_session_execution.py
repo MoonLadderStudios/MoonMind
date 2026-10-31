@@ -15,7 +15,9 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunHandle,
     AgentRunResult,
     AgentRunStatus,
+    ExecutionBudgetContext,
     _MAX_SUMMARY_CHARS,
+    resolve_execution_budget,
 )
 from moonmind.schemas.managed_session_models import (
     SendCodexManagedSessionTurnRequest,
@@ -1492,7 +1494,21 @@ async def test_timeout_result_is_published_through_artifact_activity(
     run = MoonMindAgentRun()
     routed_calls: list[tuple[str, Any]] = []
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    now_values = iter([start, start + timedelta(seconds=2)])
+    request = _managed_session_request(parameters={"publishMode": "none"})
+    request = request.model_copy(
+        update={
+            "timeout_policy": {"timeout_seconds": 1},
+            "execution_budget": ExecutionBudgetContext(
+                budget=resolve_execution_budget(
+                    agent_kind=request.agent_kind,
+                    timeout_policy={"timeout_seconds": 1},
+                ),
+                logicalStepId="step",
+                attemptId="wf-agent-run-1",
+                admittedAt=start,
+            ),
+        }
+    )
 
     async def fake_execute_routed_activity(
         activity_name: str,
@@ -1507,15 +1523,11 @@ async def test_timeout_result_is_published_through_artifact_activity(
     monkeypatch.setattr(
         agent_run_module.workflow,
         "now",
-        lambda: next(now_values),
+        lambda: start + timedelta(seconds=2),
     )
     monkeypatch.setattr(run, "_execute_routed_activity", fake_execute_routed_activity)
 
-    result = await run.run(
-        _managed_session_request(
-            parameters={"publishMode": "none"},
-        ).model_copy(update={"timeout_policy": {"timeout_seconds": 1}})
-    )
+    result = await run.run(request)
 
     assert result.failure_class == "execution_error"
     assert result.metadata["childWorkflowId"] == "wf-agent-run-1"

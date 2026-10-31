@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -2575,6 +2576,9 @@ def _resolved_marked_turn_timeout_seconds(request: AgentExecutionRequest) -> flo
     still spend most of their available window on the initial attempt.
     """
 
+    if request.execution_budget is not None:
+        return request.execution_budget.remaining_seconds(datetime.now(UTC))
+    # Recorded profile-bound requests retain the historical retry reserve.
     base_seconds = float(
         resolve_execution_budget(
             agent_kind=request.agent_kind,
@@ -3242,6 +3246,12 @@ async def run_omnigent_execution(
                     runtime="omnigent",
                     attempt_ordinal=_activity_attempt(),
                 ):
+                    if request.execution_budget is not None:
+                        request.execution_budget.activity_timeouts(
+                            now=datetime.now(UTC),
+                            start_to_close_seconds=1,
+                            schedule_to_close_seconds=1,
+                        )
                     first_message_response = await client.post_event(
                         session_id, first_message
                     )

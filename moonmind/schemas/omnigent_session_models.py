@@ -19,6 +19,7 @@ from pydantic.alias_generators import to_camel
 
 from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
+    ExecutionBudgetContext,
     OmnigentExecutionPlanBinding,
 )
 from moonmind.schemas.temporal_payload_policy import (
@@ -84,6 +85,11 @@ class OmnigentSessionContinueAsNewState(_OmnigentSessionModel):
     )
     terminal_result_ref: str | None = Field(None, alias="terminalResultRef")
     session_started_at: datetime | None = Field(None, alias="sessionStartedAt")
+    execution_budget: ExecutionBudgetContext | None = Field(
+        None,
+        alias="executionBudget",
+        exclude_if=lambda value: value is None,
+    )
 
     @field_validator("terminal_result_ref")
     @classmethod
@@ -127,6 +133,11 @@ class OmnigentSessionWorkflowInput(_OmnigentSessionModel):
     )
     resume_state: OmnigentSessionContinueAsNewState | None = Field(
         None, alias="resumeState"
+    )
+    execution_budget: ExecutionBudgetContext | None = Field(
+        None,
+        alias="executionBudget",
+        exclude_if=lambda value: value is None,
     )
 
     @field_validator(
@@ -178,6 +189,11 @@ class OmnigentResolveIntentRequest(_OmnigentSessionModel):
 
     omnigent_execution_plan: OmnigentExecutionPlanBinding | None = Field(
         None, alias="omnigentExecutionPlan"
+    )
+    execution_budget: ExecutionBudgetContext | None = Field(
+        None,
+        alias="executionBudget",
+        exclude_if=lambda value: value is None,
     )
     # Replay-only field for histories scheduled before the compact plan-bound
     # handoff. New AgentRun histories never populate it.
@@ -383,6 +399,12 @@ class OmnigentSessionAdmissionDecision(_OmnigentSessionModel):
 class OmnigentFailureAuthorityRequest(_OmnigentSessionModel):
     """Immutable child authority used to recover the current session fence."""
 
+    execution_budget: ExecutionBudgetContext | None = Field(
+        None,
+        alias="executionBudget",
+        exclude_if=lambda value: value is None,
+    )
+
     session_id: str = Field(alias="sessionId", min_length=1, max_length=255)
     compiled_execution_intent_ref: str = Field(
         alias="compiledExecutionIntentRef", min_length=1, max_length=1024
@@ -414,6 +436,11 @@ class OmnigentSessionActivityRequest(_OmnigentSessionModel):
     """Reference-only request shared by bounded supervisor Activities."""
 
     session_id: str = Field(alias="sessionId", min_length=1, max_length=255)
+    execution_budget: ExecutionBudgetContext | None = Field(
+        None,
+        alias="executionBudget",
+        exclude_if=lambda value: value is None,
+    )
     compiled_execution_intent_ref: str = Field(
         alias="compiledExecutionIntentRef", min_length=1, max_length=1024
     )

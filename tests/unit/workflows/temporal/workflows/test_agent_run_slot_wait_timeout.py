@@ -1,8 +1,8 @@
 """Tests for provider-profile slot waiting behavior in MoonMind.AgentRun.
 
 The awaiting state (waiting for a provider-profile slot) must not consume the
-execution timeout budget.  ``overall_start`` is reset after slot acquisition
-so the full timeout is available for actual execution.
+execution timeout budget. Registered managed-budget boundary tests exercise
+the allowance carried into launch after capacity waiting.
 
 The slot wait uses a timeout+retry loop. Recovery may ensure and re-request the
 manager, but it must never terminate the singleton while credential consumers
@@ -72,33 +72,6 @@ class TestSlotWaitRetryBehavior:
         assert found_without_timeout, (
             "The legacy (unpatched) slot-wait path must remain for replay "
             "compatibility"
-        )
-
-    def test_overall_start_reset_after_slot_acquisition(self):
-        """After the slot-wait ``wait_condition``, the code must reset
-        ``overall_start`` so that execution timeout starts fresh."""
-        source = inspect.getsource(MoonMindAgentRun._run_under_claim)
-        lines = source.splitlines()
-
-        # Find the slot_assigned_event wait_condition region.
-        # Look for the last occurrence (closest to the actual wait exit).
-        wait_indices = []
-        for i, line in enumerate(lines):
-            if "slot_assigned_event" in line and "is_set" in line:
-                wait_indices.append(i)
-        assert wait_indices, "Could not find slot_assigned_event is_set"
-
-        # Look for overall_start reset within 20 lines of the last wait
-        reset_found = False
-        for wait_idx in wait_indices:
-            for line in lines[wait_idx + 1 : wait_idx + 21]:
-                if "overall_start" in line and "workflow.now()" in line:
-                    reset_found = True
-                    break
-        assert reset_found, (
-            "overall_start must be reset to workflow.now() shortly after "
-            "the slot_assigned_event wait_condition so that awaiting time "
-            "does not count against the execution timeout"
         )
 
     def test_pause_gate_blocks_launch_after_slot_acquisition(self):
