@@ -129,6 +129,10 @@ The normal control-plane flow is:
 
 ## 4. Observability behavior
 
+Execution `waitingReason` retains the full explanation, including recurring
+admission waits before the first Step. Sources and projections persist this
+text without truncation so pending runs remain readable.
+
 The observability routes are artifact-first:
 
 - `observability-summary` reports whether live follow is appropriate,
