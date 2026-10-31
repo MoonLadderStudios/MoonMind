@@ -10228,6 +10228,21 @@ class TemporalAgentRuntimeActivities:
                     break
             summary_text = str(summary_payload.get("summary") or "").strip()
             body = assistant_text or operator_summary or summary_text
+            if report_output.get("reportType") == "optional_quality_review":
+                if not (assistant_text or operator_summary) and (
+                    not body or is_generic_completion_summary(body)
+                ):
+                    body = "Review unavailable: no textual assessment was produced."
+                if metadata.get("lastAssistantTextTruncated") is True:
+                    body += (
+                        "\n\nPartial report: text was truncated. Consult the retained "
+                        "output artifacts for the full response."
+                    )
+                if summary_payload.get("failure_class"):
+                    body += (
+                        "\n\nPartial review: provider execution failed "
+                        f"({summary_payload['failure_class']}); observations may be incomplete."
+                    )
             if not body:
                 body = "Agent run completed without a textual report body."
             if body.lstrip().startswith("#"):
@@ -10527,6 +10542,11 @@ class TemporalAgentRuntimeActivities:
                             "producer": "activity:agent_runtime.publish_artifacts",
                             "render_hint": "text",
                             "name": primary_report_name,
+                            **(
+                                {"subject": report_output["subject"]}
+                                if "subject" in report_output
+                                else {}
+                            ),
                             **step_artifact_metadata,
                         },
                     },

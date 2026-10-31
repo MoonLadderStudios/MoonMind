@@ -30,7 +30,7 @@ from moonmind.omnigent.failure_classification import (
 )
 from moonmind.omnigent.settings import resolved_server_url
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
-from moonmind.utils.logging import redact_sensitive_payload
+from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from moonmind.workflows.temporal.artifacts import (
     ArtifactAccessContext,
@@ -1784,6 +1784,40 @@ def build_omnigent_result(
     )
     if initial_context_pack_ref:
         metadata["initialContextPackRef"] = initial_context_pack_ref
+    report_output = parameters.get("reportOutput")
+    if isinstance(report_output, Mapping) and report_output.get("enabled") is True:
+        # Native snapshots carry the answer in ordered conversation items, not
+        # `summary`. Project only this turn's bounded answer into the existing
+        # report input; the full snapshot remains a durable artifact.
+        items = final_snapshot.get("items")
+        for item in reversed(items if isinstance(items, list) else []):
+            if not isinstance(item, Mapping) or item.get("type") != "message":
+                continue
+            data = item.get("data")
+            if not isinstance(data, Mapping):
+                continue
+            if data.get("role") == "user":
+                break
+            if data.get("role") != "assistant":
+                continue
+            content = data.get("content")
+            if not isinstance(content, list):
+                continue
+            answer = redact_sensitive_text(
+                "".join(
+                    block["text"]
+                    for block in content
+                    if isinstance(block, Mapping) and isinstance(block.get("text"), str)
+                )
+            ).strip()
+            if answer:
+                encoded = answer.encode("utf-8")
+                metadata["lastAssistantText"] = encoded[:4096].decode(
+                    "utf-8", errors="ignore"
+                )
+                if len(encoded) > 4096:
+                    metadata["lastAssistantTextTruncated"] = True
+                break
     metadata.update(capture_bundle.metadata_refs)
     snapshot_metadata_keys = {
         "omnigentAgentName": "omnigent_agent_name",
