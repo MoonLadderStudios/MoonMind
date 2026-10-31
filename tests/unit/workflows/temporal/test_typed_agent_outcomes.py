@@ -590,6 +590,75 @@ def test_typed_failure_summary_does_not_parse_display_instructions(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stored_outcome", [None, "active", "succeeded"])
+async def test_rejected_workflow_objective_does_not_inherit_verifier_success(
+    tmp_path, stored_outcome
+):
+    async with _persisted_execution(tmp_path) as (session, record, service):
+        record.state = MoonMindWorkflowState.FAILED
+        record.memo = {"objectiveOutcome": stored_outcome}
+        facts = AgentRunResult(
+            executionState="completed",
+            objectiveOutcome="succeeded",
+            publicationState="unknown",
+        ).outcome_projection()
+        summary = {
+            "finishOutcome": {"code": "FAILED"},
+            "agentResult": facts,
+            "primaryOutcome": {
+                "kind": "workflow_gate",
+                "terminalDisposition": "failed_with_remaining_work",
+                "reasonCode": "verification_requested_blocked",
+            },
+            "publish": {"status": "skipped"},
+        }
+        record.finish_summary_json = summary
+
+        # Existing records must project the workflow's rejection immediately,
+        # retaining the successful verifier turn as a separate fact.
+        for serializer in (_serialize_execution, _serialize_execution_list_item):
+            payload = serializer(record).model_dump(by_alias=True, mode="json")
+            assert payload["objectiveOutcome"] == "failed"
+            assert payload["agentResult"]["objectiveOutcome"] == "succeeded"
+        assert record.memo["objectiveOutcome"] == stored_outcome
+
+        service._record_finish_summary(
+            record, finish_outcome_code="FAILED", finish_summary=summary
+        )
+        await session.commit()
+        session.expire_all()
+        reloaded = await session.get(type(record), "mm:typed")
+        assert reloaded.memo["objectiveOutcome"] == "failed"
+        for serializer in (_serialize_execution, _serialize_execution_list_item):
+            payload = serializer(reloaded).model_dump(by_alias=True, mode="json")
+            assert payload["objectiveOutcome"] == "failed"
+            assert payload["agentResult"]["objectiveOutcome"] == "succeeded"
+            assert payload["agentResult"]["publicationState"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_cleanup_failure_does_not_retract_confirmed_publication(tmp_path):
+    async with _persisted_execution(tmp_path) as (_, record, service):
+        record.state = MoonMindWorkflowState.FAILED
+        facts = AgentRunResult(
+            executionState="completed",
+            objectiveOutcome="succeeded",
+            publicationState="published",
+            secondaryErrors=[{"code": "cleanup_failed", "diagnosticsRef": "art_cleanup"}],
+        ).outcome_projection()
+        service._record_finish_summary(
+            record,
+            finish_outcome_code="FAILED",
+            finish_summary={"finishOutcome": {"code": "FAILED"}, "agentResult": facts},
+        )
+        for serializer in (_serialize_execution, _serialize_execution_list_item):
+            payload = serializer(record).model_dump(by_alias=True, mode="json")
+            assert payload["objectiveOutcome"] == "succeeded"
+            assert payload["agentResult"]["publicationState"] == "published"
+            assert payload["agentResult"]["secondaryErrors"] == facts["secondaryErrors"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("objective", ["verification_blocked", "failed", "idle"])
 async def test_workflow_objective_keeps_its_scope_separate_from_agent_work(
     tmp_path, objective
