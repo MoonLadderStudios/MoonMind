@@ -69,6 +69,21 @@ from moonmind.omnigent import codex_login
             ],
             "unavailable",
         ),
+        *[
+            (
+                [
+                    {"error": {"code": 401}},
+                    {"error": {"code": -32603, "message": message}},
+                ],
+                "unauthorized",
+            )
+            for message in (
+                "refresh_token_reused",
+                "Refresh token was revoked",
+                "Refresh token was already used",
+                "Access token could not be refreshed",
+            )
+        ],
     ],
 )
 def test_account_read_probe_checks_provider_without_turns_or_private_output(

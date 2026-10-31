@@ -3,6 +3,8 @@
 import logging
 from datetime import UTC, datetime
 
+from moonmind.workflows.provider_failures import provider_auth_failure_markers
+
 logger = logging.getLogger(__name__)
 
 # Run as ``python3 -c <probe> <codex home>``. Print only a verdict, never
@@ -29,7 +31,10 @@ except Exception:
 # account/read is the TUI bootstrap check: login status and model/list can both
 # succeed from local state while workspace routing rejects the same login.
 # Use the public CLI protocol, send no turn, and print no account/error bodies.
-CODEX_ACCOUNT_READ_PROBE = """\
+# Serialize the shared auth markers: refresh rejection may carry no HTTP status.
+CODEX_ACCOUNT_READ_PROBE = (
+    f"AUTH_FAILURE_MARKERS = {provider_auth_failure_markers()!r}\n"
+    + """\
 import asyncio, json, os, re, signal, sys
 
 async def main():
@@ -73,6 +78,8 @@ async def main():
                     error.get("code") == 401 or re.search(
                         r"(?<![0-9])401(?![0-9])", str(error.get("message", ""))
                     )
+                    or any(marker in str(error.get("message", "")).lower()
+                           for marker in AUTH_FAILURE_MARKERS)
                 )
 
             # The access token can be rejected while its refresh token is
@@ -116,6 +123,7 @@ async def main():
 
 asyncio.run(main())
 """
+)
 
 
 async def record_ended_codex_login(
