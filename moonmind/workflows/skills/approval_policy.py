@@ -70,6 +70,40 @@ def step_gate_payload(outputs: Mapping[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def has_retained_step_gate_shape(value: Any) -> bool:
+    """Identify saved inputs/results that still need the retained gate decoder.
+
+    The Temporal drain observer uses the decoder's own container and verdict
+    vocabulary. A canonical envelope is traversed as an envelope, so its nested
+    verdict is not mistaken for the old root-level result shape.
+    """
+    if isinstance(value, Mapping):
+        if any(isinstance(value.get(key), Mapping) for key in _RETAINED_GATE_CONTAINERS):
+            return True
+        canonical = value.get("moonSpecVerify")
+        if isinstance(canonical, Mapping) and not canonical.get("verdict") and any(
+            canonical.get(key) for key in _GATE_VERDICT_KEYS[1:]
+        ):
+            return True
+        if not isinstance(canonical, Mapping) and any(
+            value.get(key) for key in _GATE_VERDICT_KEYS
+        ):
+            return True
+        return any(
+            has_retained_step_gate_shape(child)
+            for key, child in value.items()
+            if key != "moonSpecVerify"
+        )
+    if isinstance(value, (list, tuple)):
+        return any(has_retained_step_gate_shape(child) for child in value)
+    if isinstance(value, bytes):
+        try:
+            return has_retained_step_gate_shape(json.loads(value))
+        except (ValueError, UnicodeDecodeError):
+            return False
+    return False
+
+
 def normalize_step_gate_verdict(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
