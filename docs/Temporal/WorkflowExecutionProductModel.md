@@ -162,4 +162,11 @@ Do not use an unqualified Task label for MoonMind-owned product work.
 
 `MoonMind.AgentRun` remains the durable lifecycle wrapper for one true managed or external agent execution. `MoonMind.AgentSession`, `MoonMind.ManagedSessionReconcile`, `MoonMind.ProviderProfileManager`, `MoonMind.OAuthSession`, and `MoonMind.MergeAutomation` retain specialized workflow semantics. (New `MoonMind.ManifestIngest` launches are rejected; old rows stay readable as replay/drain evidence.)
 
+The workflow objective and its last agent turn have separate outcomes. A
+successful verifier turn can reject publication with remaining implementation
+work. A failed workflow's authoritative `primaryOutcome` gate rejection settles
+its objective as failed, even when a memo or retained `agentResult` records that
+successful turn. The agent result remains available as evidence. A later
+reporting or cleanup failure does not by itself retract confirmed work.
+
 A future `MoonMind.ChatThread` workflow should be added only if chat threads become durable orchestration objects that own multi-execution lifecycle, not merely because the UI embeds a native session.
