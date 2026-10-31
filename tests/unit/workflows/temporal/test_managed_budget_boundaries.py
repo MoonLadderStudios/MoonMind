@@ -718,10 +718,16 @@ async def test_interrupted_final_progress_read_cannot_resume_execution(
                     state.blocked_info.scheduled_time
                     + state.blocked_info.schedule_to_close_timeout
                 )
-                await env.sleep(
-                    max(0, (deadline - await env.get_current_time()).total_seconds())
-                    + 1
-                )
+                # Active Activities can make the test server's sleep consume
+                # wall time. Keep each clock RPC below its own client timeout.
+                for _ in range(7):
+                    remaining = (
+                        deadline - await env.get_current_time()
+                    ).total_seconds() + 1
+                    if remaining <= 0:
+                        break
+                    await env.sleep(min(10, remaining))
+                assert await env.get_current_time() > deadline
                 # Keep the reply blocked until Temporal records the timeout;
                 # releasing it here races the server's timeout notification.
                 result = await asyncio.wait_for(result_task, timeout=20)
