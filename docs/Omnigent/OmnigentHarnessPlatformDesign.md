@@ -151,11 +151,11 @@ Effective concurrency is the minimum of all layers, and the admission decision r
 
 ## 10. Credential materializers
 
-A materializer turns a leased Provider Profile and acquired generation into runtime state a harness can consume. A plugin may describe its needs, but MoonMind decides which materializers are trusted and which secret roles, target paths, host modes, and cleanup they use. A materializer declares accepted implementations, auth models, host modes, secret roles, state mutability, target (for example a `0600` generated file), and cleanup, and returns a secret-free handle with its cleanup ref and attestation.
+A materializer binds a leased Provider Profile generation to harness-readable state. MoonMind admits plugin needs against trusted implementations, auth models, secret roles, paths, host modes, mutability and cleanup. The returned secret-free handle identifies cleanup and attestation; generated files can require `0600` permissions.
 
 Classes: `oauth-home` (exclusive mutable CLI OAuth home with generation tracking), `omnigent-provider-config` (lease-owned Omnigent config backed by secret refs), `generated-auth-file`, `secret-env-file`, `session-scoped-config`, `host-owned-auth` (pre-authenticated connected host; nothing copied), and `none`.
 
-Mutable credential stores need exclusive ownership unless a provider-specific design proves safe concurrent refresh, and refreshed state either persists to the authoritative store or is rejected before launch, because a disposable copy would silently lose it. The Codex OAuth volume, generation checks, startup scripts, readiness checks, lease, and release-last cleanup form `codex-oauth-home@1`, which the generic interface wraps without rewriting.
+Mutable credential stores require exclusive ownership unless concurrent refresh is proven safe. Refresh must persist authoritatively or fail before launch. `codex-oauth-home@1` retains its OAuth volume, generation fences, startup/readiness checks, lease and release-last cleanup through the generic interface.
 
 ## 11. Host Classes and launch policies
 
@@ -169,7 +169,7 @@ A launch policy (`moonmind.omnigent-launch-policy.v2`) governs host behavior, no
 
 **Exact host.** After the host exists, a verifier intersects that decision with the host attestation, network and mount attestation, live model-option attestation, and bridge readiness into a fenced `ExactHostCapabilityDecision`. Missing, unknown, stale, or mismatched required evidence blocks runner and session creation.
 
-**Model validation** uses the workflow host's installed harness and account, independently of the worker's CLI. It retries missing models and transient catalog errors on the same host and lease, at most three reads. Authentication and invalid requests stay terminal. Codex OAuth rejects a proven ended login before and after reads: login status and bundled models can mask a failed refresh; ordinary token expiry remains refreshable. Launch requires the exact selected model or Claude's upstream `served` verdict. Exhaustion retains bounded evidence before cleanup: a completed read without the model fails as `OMNIGENT_MODEL_UNAVAILABLE`; no completed read means absence is unproven and fails as `OMNIGENT_HARNESS_CATALOG_UNAVAILABLE`.
+**Model validation** runs on the workflow host. Missing models and transient catalog errors get three reads on that host and lease; authentication and invalid requests stay terminal. Codex OAuth checks public `account/read`: login status, token timestamps and bundled models can mask workspace-routing rejection. A 401 gets one Codex-managed refresh in the authoritative leased home. Persistent rejection or missing login requires reauthentication of that generation; an unavailable probe blocks launch without invalidating credentials. It retains only its verdict and sends no model turn. Ended logins are rejected after catalog reads; ordinary expiry remains refreshable. Launch requires the exact model or Claude's upstream `served` verdict. Exhaustion retains evidence before cleanup: observed absence yields `OMNIGENT_MODEL_UNAVAILABLE`; an unreadable catalog yields `OMNIGENT_HARNESS_CATALOG_UNAVAILABLE`.
 
 **Required versus preferred.** Missing or unknown required capabilities block plan creation (class level) or realization (exact host). A missing preferred capability can yield an explicit degraded decision. Degradation never broadens authority, and no mismatch silently picks another harness, profile, Host Class, model, policy, or realizer.
 
