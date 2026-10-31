@@ -13,8 +13,31 @@ import re
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
+
+from moonmind.workflows.executions.repository_contract import (
+    github_repository_name_from_value,
+)
+
+
+def _github_repository_identity(value: str) -> str | None:
+    """Compare supported public GitHub aliases without discarding authority."""
+    if value.startswith(("/", "./", "../", "file://")):
+        return None
+    try:
+        if "://" in value:
+            parsed = urlsplit(value)
+            default_port = 443 if parsed.scheme.lower() == "https" else 80
+            if parsed.port not in (None, default_port):
+                return None
+        name = github_repository_name_from_value(value)
+    except ValueError:
+        return None
+    if not name or any(part in {".", ".."} for part in name.split("/")):
+        return None
+    return name.casefold()
 
 
 class _Record(BaseModel):
@@ -184,10 +207,23 @@ class AcceptanceEvidence(_Record):
                 require_verified=True,
             )
 
-    def matches_target(self, *, repository: str, ref: str, revision: str) -> bool:
+    def matches_target(
+        self,
+        *,
+        repository: str,
+        ref: str,
+        revision: str,
+        repository_aliases: bool = False,
+    ) -> bool:
         """Validate an independently observed target against declared evidence."""
+        same_repository = self.subject.repository == repository
+        if repository_aliases and not same_repository:
+            declared = _github_repository_identity(self.subject.repository)
+            same_repository = bool(
+                declared and declared == _github_repository_identity(repository)
+            )
         return (
-            self.subject.repository == repository
+            same_repository
             and self.completion_target.ref == ref
             and self.completion_target.revision == revision
             and self.subject.content_digest == self.completion_target.content_digest
@@ -726,6 +762,7 @@ async def validate_completion_target(
             repository=repository,
             ref=target.get("ref", ""),
             revision=target.get("revision", ""),
+            repository_aliases=True,
         )
         or target.get("contentDigest") != evidence.subject.content_digest
     ):
