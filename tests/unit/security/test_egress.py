@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime
 
@@ -284,7 +285,16 @@ def test_profile_is_immutable_digest_stable_and_has_no_execution_fields():
 
 @pytest.mark.asyncio
 async def test_attestation_proves_internal_ipv4_network_and_exact_gateway():
+    from moonmind.security import egress
+
     calls = []
+    observed_digests = {
+        **EGRESS_FILE_DIGESTS,
+        "squid.conf": "sha256:"
+        + hashlib.sha256(
+            (egress.EGRESS_BUNDLED_POLICY_DIRECTORY / "squid.conf").read_bytes()
+        ).hexdigest(),
+    }
 
     async def runner(args):
         calls.append(tuple(args))
@@ -315,7 +325,7 @@ async def test_attestation_proves_internal_ipv4_network_and_exact_gateway():
         return (
             0,
             "".join(
-                f"{EGRESS_FILE_DIGESTS[path.rsplit('/', 1)[-1]].removeprefix('sha256:')}  {path}\n"
+                f"{observed_digests[path.rsplit('/', 1)[-1]].removeprefix('sha256:')}  {path}\n"
                 for path in args[3:]
             ).encode(),
             b"",
