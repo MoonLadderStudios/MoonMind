@@ -637,6 +637,71 @@ async def test_rejected_workflow_objective_does_not_inherit_verifier_success(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stored_outcome", [None, "active", "succeeded"])
+async def test_workflow_failure_before_publication_is_not_agent_success(
+    tmp_path, stored_outcome
+):
+    async with _persisted_execution(tmp_path) as (session, record, service):
+        record.state = MoonMindWorkflowState.FAILED
+        record.memo = {"objectiveOutcome": stored_outcome}
+        facts = AgentRunResult(
+            executionState="completed",
+            objectiveOutcome="succeeded",
+            publicationState="not_published",
+        ).outcome_projection()
+        summary = {
+            "finishOutcome": {"code": "FAILED"},
+            "failure": {"source": "workflow", "category": "user_error"},
+            "agentResult": facts,
+            "publish": {"mode": "pr", "status": "skipped"},
+        }
+        record.finish_summary_json = summary
+        for serializer in (_serialize_execution, _serialize_execution_list_item):
+            payload = serializer(record).model_dump(by_alias=True, mode="json")
+            assert payload["objectiveOutcome"] == "failed"
+            assert payload["agentResult"]["objectiveOutcome"] == "succeeded"
+            assert payload["agentResult"]["publicationState"] == "not_published"
+        assert record.memo["objectiveOutcome"] == stored_outcome
+
+        service._record_finish_summary(
+            record, finish_outcome_code="FAILED", finish_summary=summary
+        )
+        await session.commit()
+        session.expire_all()
+        reloaded = await session.get(type(record), "mm:typed")
+        assert reloaded.memo["objectiveOutcome"] == "failed"
+        for serializer in (_serialize_execution, _serialize_execution_list_item):
+            assert serializer(reloaded).objective_outcome == "failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source, publication", [("activity", "not_published"), ("workflow", "published")]
+)
+async def test_other_failure_observations_keep_confirmed_agent_facts(
+    tmp_path, source, publication
+):
+    async with _persisted_execution(tmp_path) as (_, record, _service):
+        record.state = MoonMindWorkflowState.FAILED
+        record.memo = {"objectiveOutcome": "succeeded"}
+        facts = AgentRunResult(
+            executionState="completed",
+            objectiveOutcome="succeeded",
+            publicationState=publication,
+        ).outcome_projection()
+        record.finish_summary_json = {
+            "finishOutcome": {"code": "FAILED"},
+            "failure": {"source": source, "category": "user_error"},
+            "agentResult": facts,
+            "publish": {"mode": "pr", "status": "skipped"},
+        }
+        for serializer in (_serialize_execution, _serialize_execution_list_item):
+            payload = serializer(record).model_dump(by_alias=True, mode="json")
+            assert payload["objectiveOutcome"] == "succeeded"
+            assert payload["agentResult"]["publicationState"] == publication
+
+
+@pytest.mark.asyncio
 async def test_cleanup_failure_does_not_retract_confirmed_publication(tmp_path):
     async with _persisted_execution(tmp_path) as (_, record, service):
         record.state = MoonMindWorkflowState.FAILED
