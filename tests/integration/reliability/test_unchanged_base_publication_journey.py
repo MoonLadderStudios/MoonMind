@@ -157,7 +157,7 @@ async def test_unchanged_candidate_retains_identity_without_publication_authorit
         assert remediation is None
     else:
         assert remediation["repositoryTarget"]["revision"]["commitSha"] == original
-    feasibility = MoonMindRunWorkflow()._step_publication_feasibility(
+    feasibility = MoonMindRunWorkflow()._publication_feasibility(
         {"outputs": result.metadata}
     )
     assert (

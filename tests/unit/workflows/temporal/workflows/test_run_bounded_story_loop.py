@@ -14,6 +14,9 @@ from moonmind.workflows.temporal.bounded_story_loop import (
     bounded_story_loop_scope_guard,
     bounded_story_loop_step_effects,
 )
+from moonmind.workflows.temporal.publication_recovery import (
+    prepare_publication_feasibility,
+)
 from moonmind.workflows.temporal.workflows.run import (
     RUN_BOUNDED_STORY_LOOP_FEEDBACK_PROGRESS_PATCH,
     RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH,
@@ -1595,9 +1598,9 @@ def test_terminal_gate_draft_publishes_run_owned_published_head(
     workflow = _gate_workflow(monkeypatch, published_head_feasibility=True)
 
     # The step's own evidence is still correctly inconclusive.
-    step_scoped = workflow._step_publication_feasibility(_VERIFICATION_STEP_RESULT)
-    assert step_scoped["feasible"] is False
-    assert step_scoped["reason"] == "publication_state_ambiguous"
+    step_scoped = prepare_publication_feasibility(_VERIFICATION_STEP_RESULT["outputs"])
+    assert step_scoped.feasible is False
+    assert step_scoped.reason == "publication_state_ambiguous"
 
     feasibility = workflow._publication_feasibility(_VERIFICATION_STEP_RESULT)
     assert feasibility["feasible"] is True
