@@ -21,6 +21,7 @@ from tests.unit.workflows.temporal.workflows.test_run_integration import (
 pytestmark = [pytest.mark.asyncio, pytest.mark.temporal_boundary]
 LAUNCHES = []
 QUOTA_SEEN = None
+COOLDOWN_SECONDS = 3
 REAL_PATCHED = workflow.patched
 
 
@@ -54,7 +55,7 @@ async def result(payload: dict) -> dict:
                 "providerErrorClass": "rate_limit",
                 "providerErrorCode": "429",
                 "retryRecommendation": "retry_after_cooldown",
-                "retryAfterSeconds": 3,
+                "retryAfterSeconds": COOLDOWN_SECONDS,
                 "sanitizedSummary": "Provider cooldown",
             },
         }
@@ -85,7 +86,7 @@ async def profiles(payload: dict) -> dict:
 @workflow.defn(name="BudgetCooldownParent")
 class BudgetCooldownParent:
     @workflow.run
-    async def run(self) -> int:
+    async def run(self, expect_exhaustion: bool = False) -> int:
         owner = parent_module.MoonMindRunWorkflow()
         owner._owner_id = "owner"
         owner._repo = "owner/repo"
@@ -99,23 +100,35 @@ class BudgetCooldownParent:
         owner._maybe_bind_workflow_scoped_session = bind
         owner._record_canonical_step_checkpoint = checkpoint
         owner._record_step_execution_manifest = checkpoint
-        await owner._run_execution_stage(
-            parameters={
-                "repository": "owner/repo",
-                "model": "selected-model",
-                "publishMode": "none",
-            },
-            plan_ref="art_plan",
-        )
+        try:
+            await owner._run_execution_stage(
+                parameters={
+                    "repository": "owner/repo",
+                    "model": "selected-model",
+                    "publishMode": "none",
+                },
+                plan_ref="art_plan",
+            )
+        except ValueError:
+            if not expect_exhaustion:
+                raise
         return owner._step_execution_for("step") or 0
 
 
 @pytest.mark.timeout(90)
+@pytest.mark.parametrize(
+    "cooldown_seconds,expected_attempts",
+    [(3, 2), (120, 1)],
+    ids=["successor", "cooldown-deadline"],
+)
 async def test_cooldown_parent_retry_and_worker_replacement_share_budget_and_intent(
     monkeypatch,
+    cooldown_seconds,
+    expected_attempts,
 ):
-    global QUOTA_SEEN
+    global QUOTA_SEEN, COOLDOWN_SECONDS
     QUOTA_SEEN = asyncio.Event()
+    COOLDOWN_SECONDS = cooldown_seconds
     LAUNCHES.clear()
     enabled = {
         parent_module.RUN_CONDITIONAL_REGISTRY_READ_PATCH,
@@ -218,6 +231,7 @@ async def test_cooldown_parent_retry_and_worker_replacement_share_budget_and_int
             )
             handle = await env.client.start_workflow(
                 BudgetCooldownParent.run,
+                expected_attempts == 1,
                 id="budget-cooldown-parent",
                 task_queue=root_queue,
             )
@@ -235,7 +249,10 @@ async def test_cooldown_parent_retry_and_worker_replacement_share_budget_and_int
             await stack.enter_async_context(root_worker())
             await stack.enter_async_context(child_worker())
             try:
-                assert await asyncio.wait_for(handle.result(), timeout=30) == 2
+                assert (
+                    await asyncio.wait_for(handle.result(), timeout=30)
+                    == expected_attempts
+                )
             except TimeoutError:
                 history = await handle.fetch_history()
                 children = [
@@ -266,6 +283,28 @@ async def test_cooldown_parent_retry_and_worker_replacement_share_budget_and_int
                     flush=True,
                 )
                 raise
+        if expected_attempts == 1:
+            from moonmind.schemas.agent_runtime_models import (
+                AgentRunResult,
+                ExecutionBudgetContext,
+            )
+
+            assert len(LAUNCHES) == 1
+            first_context = LAUNCHES[0]["request"]["executionBudget"]
+            raw = await env.client.get_workflow_handle(
+                first_context["attemptId"]
+            ).result()
+            terminal = (
+                raw
+                if isinstance(raw, AgentRunResult)
+                else AgentRunResult.model_validate(raw)
+            )
+            assert terminal.metadata["reason"] == "timed_out"
+            final_budget = ExecutionBudgetContext.model_validate(
+                terminal.metadata["executionBudget"]
+            )
+            assert final_budget.elapsed_seconds(await env.get_current_time()) <= 42
+            return
         assert len(LAUNCHES) == 3
         requests = [entry["request"] for entry in LAUNCHES]
         contexts = [entry["executionBudget"] for entry in requests]

@@ -7911,8 +7911,8 @@ class MoonMindAgentRun:
                     )
 
                     # Wait for a provider-profile slot.
-                    # Awaiting time does not count against the execution timeout;
-                    # overall_start is reset once the slot is acquired.
+                    # Initial capacity waiting is excluded; a cooldown after
+                    # execution starts consumes the shared allowance.
                     # If the manager appears unavailable, bounded recovery
                     # ensures/re-requests it without terminating lease authority.
                     #
@@ -7983,6 +7983,14 @@ class MoonMindAgentRun:
                             not self.slot_assigned_event.is_set()
                             or self.runtime_selection_updated_event.is_set()
                         ):
+                            context = getattr(self, "_execution_budget", None)
+                            if (
+                                context is not None
+                                and context.remaining_seconds(workflow.now()) <= 0
+                            ):
+                                raise ExecutionBudgetExhausted(
+                                    "execution allowance exhausted during provider cooldown"
+                                )
                             try:
                                 if (
                                     not self.slot_assigned_event.is_set()
@@ -8041,10 +8049,18 @@ class MoonMindAgentRun:
                                     self._slot_wait_timeout_override_seconds
                                     or _SLOT_WAIT_TIMEOUT_SECONDS
                                 )
+                                context = getattr(self, "_execution_budget", None)
+                                if context is not None:
+                                    slot_wait_timeout_seconds = min(
+                                        slot_wait_timeout_seconds,
+                                        context.remaining_seconds(workflow.now()),
+                                    )
                                 await workflow.wait_condition(
                                     lambda: self.slot_assigned_event.is_set()
                                     or self.runtime_selection_updated_event.is_set(),
-                                    timeout=timedelta(seconds=slot_wait_timeout_seconds),
+                                    timeout=timedelta(
+                                        seconds=slot_wait_timeout_seconds
+                                    ),
                                 )
                                 if self.runtime_selection_updated_event.is_set():
                                     (
@@ -8062,6 +8078,12 @@ class MoonMindAgentRun:
                                     refresh_waiting_reason = True
                                     continue
                             except TimeoutError:
+                                context = getattr(self, "_execution_budget", None)
+                                if (
+                                    context is not None
+                                    and context.remaining_seconds(workflow.now()) <= 0
+                                ):
+                                    raise
                                 if (
                                     slot_recovery_attempts
                                     >= _SLOT_WAIT_MAX_RECOVERY_ATTEMPTS
