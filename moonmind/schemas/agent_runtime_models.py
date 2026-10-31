@@ -286,14 +286,22 @@ class ExecutionBudgetContext(BaseModel):
             }
         )
 
-    def begin_finishing(self, now: datetime) -> "ExecutionBudgetContext":
+    def begin_finishing(
+        self, now: datetime, *, deadline: datetime | None = None
+    ) -> "ExecutionBudgetContext":
         if self.finishing_deadline is not None:
             return self
+        finishing_deadline = now + timedelta(
+            seconds=EXECUTION_FINISHING_ALLOWANCE_SECONDS
+        )
         return self.model_copy(
             update={
                 "finishing_started_at": now,
-                "finishing_deadline": now
-                + timedelta(seconds=EXECUTION_FINISHING_ALLOWANCE_SECONDS),
+                "finishing_deadline": (
+                    min(finishing_deadline, deadline)
+                    if deadline is not None
+                    else finishing_deadline
+                ),
             }
         )
 

@@ -10,6 +10,8 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from temporalio import activity
+from temporalio.client import WorkflowFailureError
+from temporalio.exceptions import CancelledError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
@@ -36,6 +38,12 @@ from moonmind.workflows.temporal.workflows import agent_run
 from tests.integration.services.temporal.workflows import test_agent_run as harness
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.temporal_boundary]
+
+_FINAL_PROGRESS_SCENARIOS = {
+    "early_progress_control",
+    "boundary_progress",
+    "boundary_no_progress",
+}
 
 
 class ManagedActivities:
@@ -89,33 +97,35 @@ class ManagedActivities:
             self.calls[name] += 1
             if name == "agent_runtime.status" and self.accounting:
                 poll = self.calls[name]
-                if self.accounting == "progress_extension" and poll == 2:
-                    self.store.update_status(
-                        payload["runId"], "running", last_log_offset=1
-                    )
-                if poll == (5 if self.accounting == "progress_extension" else 3):
-                    if self.accounting not in {
-                        "early_progress_control", "boundary_progress", "boundary_no_progress"
-                    }:
-                        self.store.update_status(
-                            payload["runId"],
-                            "completed",
-                            exit_code=0,
-                            error_message="Confirmed managed completion",
-                        )
-                if self.accounting in {
-                    "early_progress_control", "boundary_progress", "boundary_no_progress"
-                }:
+                if self.accounting in _FINAL_PROGRESS_SCENARIOS:
                     early = self.accounting == "early_progress_control"
                     if poll == (2 if early else 4):
                         if self.accounting != "boundary_no_progress":
                             self.store.update_status(
                                 payload["runId"], "running", last_log_offset=4096
                             )
-                        if self.mode in {"worker_restart", "late_reply", "cancel"}:
+                        if self.mode in {
+                            "worker_restart",
+                            "late_reply",
+                            "cancel",
+                            "observation_timeout",
+                        }:
+                            self.blocked_info = activity.info()
                             self.started.set()
                             await self.release.wait()
                     if poll == (4 if early else 5):
+                        self.store.update_status(
+                            payload["runId"],
+                            "completed",
+                            exit_code=0,
+                            error_message="Confirmed managed completion",
+                        )
+                else:
+                    if self.accounting == "progress_extension" and poll == 2:
+                        self.store.update_status(
+                            payload["runId"], "running", last_log_offset=1
+                        )
+                    if poll == (5 if self.accounting == "progress_extension" else 3):
                         self.store.update_status(
                             payload["runId"],
                             "completed",
@@ -155,9 +165,7 @@ async def managed_runtime(tmp_path, monkeypatch, **options):
             "runtime": request.agent_id,
             "noProgressTimeoutSeconds": (
                 300
-                if options.get("accounting") in {
-                    "early_progress_control", "boundary_progress", "boundary_no_progress"
-                }
+                if options.get("accounting") in _FINAL_PROGRESS_SCENARIOS
                 else 20 if options.get("accounting") == "progress_extension" else 1
             ),
             "noProgressGraceSeconds": 1,
@@ -626,16 +634,19 @@ async def test_final_status_progress_uses_production_dispatch(
                 deadline = context.finishing_deadline or context.effective_deadline(
                     workflow_clock
                 )
-                assert workflow_clock + attrs.schedule_to_close_timeout.ToTimedelta() <= (
-                    deadline + timedelta(milliseconds=1)
+                assert (
+                    workflow_clock + attrs.schedule_to_close_timeout.ToTimedelta()
+                    <= (deadline + timedelta(milliseconds=1))
                 )
         if accounting != "early_progress_control":
             observed_at, attrs = status_commands[3]
             assert (observed_at - context.admitted_at).total_seconds() >= 40
-            assert attrs.schedule_to_close_timeout.ToTimedelta() <= timedelta(seconds=60)
+            assert attrs.schedule_to_close_timeout.ToTimedelta() <= timedelta(
+                seconds=60
+            )
             if not completes:
                 # A failed reconciliation shares its allowance with terminal saving.
-                assert context.finishing_started_at == observed_at
+                assert context.finishing_started_at >= observed_at
                 assert context.finishing_deadline == observed_at + timedelta(seconds=60)
         persisted = await service.list_for_execution(
             namespace="default",
@@ -650,3 +661,62 @@ async def test_final_status_progress_uses_production_dispatch(
             access=ArtifactAccessContext.for_execution(queue),
         )
         assert json.loads(raw)["summary"] == result.summary
+
+
+@pytest.mark.timeout(90)
+@pytest.mark.parametrize("mode", ["cancel", "observation_timeout"])
+async def test_interrupted_final_progress_read_cannot_resume_execution(
+    tmp_path, monkeypatch, mode
+):
+    async with managed_runtime(
+        tmp_path, monkeypatch, accounting="boundary_progress", mode=mode
+    ) as runtime:
+        env, state, _service, queue, *_ = runtime
+        handle = await env.client.start_workflow(
+            agent_run.MoonMindAgentRun.run,
+            AgentExecutionRequest(
+                agentKind="managed",
+                agentId="claude_code",
+                executionProfileRef="default-managed",
+                correlationId=queue,
+                idempotencyKey=queue + ":execute",
+                timeoutPolicy={
+                    "timeout_seconds": 30,
+                    "max_timeout_seconds": 90,
+                    "progress_stall_seconds": 30,
+                },
+                parameters={"publishMode": "none"},
+            ),
+            id=queue,
+            task_queue=queue,
+        )
+        result_task = asyncio.create_task(handle.result())
+        await asyncio.wait_for(state.started.wait(), timeout=20)
+        if mode == "cancel":
+            await handle.cancel()
+            with pytest.raises(WorkflowFailureError) as error:
+                await asyncio.wait_for(result_task, timeout=20)
+            assert isinstance(error.value.cause, CancelledError)
+            assert state.cancellation_seen
+            assert state.store.load(state.launches[0]["run_id"]).status == "canceled"
+        else:
+            deadline = (
+                state.blocked_info.scheduled_time
+                + state.blocked_info.schedule_to_close_timeout
+            )
+            await env.sleep(
+                max(0, (deadline - await env.get_current_time()).total_seconds()) + 1
+            )
+            state.release.set()
+            result = await asyncio.wait_for(result_task, timeout=20)
+            context = ExecutionBudgetContext.model_validate(
+                result.metadata["executionBudget"]
+            )
+            assert result.metadata["reason"] == "timed_out"
+            assert result.metadata["terminalSaveIncomplete"] is True
+            assert context.last_progress_seconds < 20
+            assert context.finishing_deadline <= deadline
+        assert len(state.launches) == 1
+        assert state.calls["agent_runtime.status"] == 4
+        assert state.calls["agent_runtime.fetch_result"] == 0
+        assert state.calls["agent_runtime.publish_artifacts"] == 0
