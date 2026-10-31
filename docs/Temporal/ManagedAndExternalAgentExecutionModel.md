@@ -777,6 +777,9 @@ reaching the ceiling, so the operator can investigate or adjust the limit.
 Monotonic intervals resist host clock changes; persisted wall-clock timestamps
 correlate runtime evidence. Before ending for lack of progress, the supervisor
 samples CPU/workspace activity and the workflow checks fresh canonical status.
+The final status read uses a bounded observation window before committing to
+finishing. Fresh progress can extend execution only under the original ceiling;
+a stale, failed or canceled read shares its deadline with terminal cleanup.
 No-progress grace and cancellation reconciliation use the admitted productive-time
 clock, including excluded waits, earned progress and previous attempts. Expiry
 stops task work. Observation, cancellation,

@@ -283,6 +283,7 @@ OMNIGENT_PROFILE_BOUND_RECONCILIATION_PATCH_ID = (
     "agent-run-omnigent-profile-bound-reconciliation-v1"
 )
 LOGICAL_STEP_EXECUTION_BUDGET_PATCH_ID = "agent-run-logical-step-budget-v1"
+FINAL_PROGRESS_RECONCILIATION_PATCH_ID = "agent-run-final-progress-reconciliation-v1"
 # The canonical delivery boundary parks these provider observations as
 # delivery_unknown. Remaining time cannot authorize another delivery of that
 # command; preserve the original failure for its reconciliation owner. These
@@ -1462,9 +1463,12 @@ class MoonMindAgentRun:
         args: object,
         *,
         operation_deadline: datetime | None = None,
+        reconcile_progress: bool = False,
         **overrides: Any,
     ) -> object:
         """Execute an activity using the module-level catalog for routing."""
+        if reconcile_progress and activity_name != "agent_runtime.status":
+            raise ValueError("Only managed status can reconcile execution progress")
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(activity_name)
         kwargs = self._execute_kwargs_for_route(route)
         if (
@@ -1480,6 +1484,7 @@ class MoonMindAgentRun:
             kwargs["task_queue"] = settings.temporal.activity_agent_runtime_task_queue
         kwargs.update(overrides)
         context = getattr(self, "_execution_budget", None)
+        deferred_finishing = False
         if context is not None and activity_name.startswith(
             ("agent_runtime.", "integration.", "omnigent.")
         ):
@@ -1507,8 +1512,19 @@ class MoonMindAgentRun:
                     "agent_runtime.publish_bridge_events",
                 } or activity_name.endswith((".cancel", ".fetch_result", ".status"))
                 if finishing and context.remaining_seconds(now) <= 0:
+                    # The last status observation can reveal progress hidden by
+                    # the preceding wait. Bound that read with the finishing
+                    # allowance, but let the workflow judge its evidence before
+                    # making finishing irreversible. The original hard ceiling
+                    # and an already committed finishing state still bind.
+                    deferred_finishing = (
+                        reconcile_progress
+                        and context.finishing_deadline is None
+                        and context.elapsed_seconds(now) < context.budget.max_seconds
+                    )
                     context = context.begin_finishing(now)
-                    self._execution_budget = context
+                    if not deferred_finishing:
+                        self._execution_budget = context
                 kwargs.update(
                     context.activity_timeouts(
                         now=now,
@@ -1548,8 +1564,16 @@ class MoonMindAgentRun:
         )
         try:
             return await execute_typed_activity(activity_name, args, **kwargs)
-        except ActivityError as exc:
-            if context is not None and isinstance(exc.cause, TemporalTimeoutError):
+        except BaseException as exc:
+            if deferred_finishing:
+                # A failed or canceled observation cannot earn progress or
+                # refresh the allowance used by cancellation and terminal saving.
+                self._execution_budget = context
+            if (
+                context is not None
+                and isinstance(exc, ActivityError)
+                and isinstance(exc.cause, TemporalTimeoutError)
+            ):
                 finishing = context.finishing_deadline is not None
                 if context.remaining_seconds(workflow.now(), finishing=finishing) <= 0:
                     raise ExecutionBudgetExhausted(
@@ -4474,6 +4498,7 @@ class MoonMindAgentRun:
         uses_codex_session_adapter: bool,
         use_managed_status_activity: bool,
         remaining_budget_seconds: float | None = None,
+        reconcile_progress: bool = False,
     ) -> AgentRunStatusModel:
         if uses_codex_session_adapter:
             return await adapter.status(self.run_id)
@@ -4486,6 +4511,8 @@ class MoonMindAgentRun:
                         else None
                     )
                 }
+                if reconcile_progress:
+                    status_budget["reconcile_progress"] = True
             else:
                 # Named pre-admission history compatibility; live timeout
                 # arithmetic belongs to ExecutionBudgetContext at dispatch.
@@ -9043,6 +9070,7 @@ class MoonMindAgentRun:
                         remaining_timeout = _budget_remaining_seconds()
                         if remaining_timeout <= 0:
                             break
+                        progress_reconciliation = None
 
                         try:
                             # Add bounded wait
@@ -9084,26 +9112,36 @@ class MoonMindAgentRun:
                                 # Final bounded reconciliation: the budget looks
                                 # spent, but the last wait may have hidden a
                                 # supervisor progress advance that extends it.
-                                # ``None`` gives this one poll the activity's
-                                # configured window instead of the exhausted
-                                # budget, so it can actually return.
                                 budget_reconciled = True
                                 remaining_status_budget = None
+                                context = getattr(self, "_execution_budget", None)
+                                if context is not None and workflow.patched(
+                                    FINAL_PROGRESS_RECONCILIATION_PATCH_ID
+                                ):
+                                    # Keep the provisional read deadline so a
+                                    # failed verdict shares it with saving. The
+                                    # command and clock survive worker replay.
+                                    progress_reconciliation = context.begin_finishing(
+                                        workflow.now()
+                                    )
                             status_obj = await self._poll_managed_status(
                                 request=request,
                                 adapter=adapter,
                                 uses_codex_session_adapter=uses_codex_session_adapter,
                                 use_managed_status_activity=use_managed_status_activity,
                                 remaining_budget_seconds=remaining_status_budget,
+                                **(
+                                    {"reconcile_progress": True}
+                                    if progress_reconciliation is not None
+                                    else {}
+                                ),
                             )
 
                         self.run_status = status_obj.status
                         # One progress observation feeds both the no-progress
                         # watchdog and the execution budget, so the two can never
                         # disagree about whether this run is making progress.
-                        progress_signature = self._status_progress_signature(
-                            status_obj
-                        )
+                        progress_signature = self._status_progress_signature(status_obj)
                         progress_observed = (
                             progress_signature != last_progress_signature
                         )
@@ -9113,6 +9151,18 @@ class MoonMindAgentRun:
                             # Fresh progress rearms the final reconciliation for
                             # the next budget boundary this run reaches.
                             budget_reconciled = False
+                        if (
+                            progress_reconciliation is not None
+                            and _budget_remaining_seconds() <= 0
+                        ):
+                            # Stale progress or the original ceiling ends task
+                            # work. Never restart the observation/save allowance.
+                            self._execution_budget = (
+                                self._execution_budget.begin_finishing(
+                                    workflow.now(),
+                                    deadline=progress_reconciliation.finishing_deadline,
+                                )
+                            )
                         if workflow.patched(AGENT_RUN_RESILIENCY_POLICY_PATCH_ID):
                             if progress_observed:
                                 stagnant_poll_count = 0

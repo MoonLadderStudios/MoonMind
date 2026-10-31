@@ -84,6 +84,30 @@ def test_serialized_state_does_not_refresh_a_worker_or_activity_retry():
     )["schedule_to_close_timeout"] == timedelta(seconds=1)
 
 
+def test_failed_progress_observation_shares_its_deadline_with_finishing():
+    first = context()
+    observation = first.begin_finishing(START + timedelta(seconds=10))
+    finished = first.begin_finishing(
+        START + timedelta(seconds=15), deadline=observation.finishing_deadline
+    )
+    assert finished.finishing_deadline == observation.finishing_deadline
+    assert finished.elapsed_seconds(START + timedelta(seconds=20)) == 15
+    assert finished.observe_progress(START + timedelta(seconds=20)) == finished
+    assert (
+        finished.begin_finishing(
+            START + timedelta(seconds=20), deadline=START + timedelta(seconds=1000)
+        )
+        == finished
+    )
+    # A caller-supplied deadline can only shorten the fixed finishing allowance.
+    assert (
+        first.begin_finishing(
+            START + timedelta(seconds=10), deadline=START + timedelta(seconds=1000)
+        )
+        == observation
+    )
+
+
 def test_profile_bridge_uses_admitted_remaining_time_without_retry_reserve():
     from moonmind.omnigent import execute
 
