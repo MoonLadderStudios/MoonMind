@@ -6470,7 +6470,13 @@ class MoonMindAgentRun:
                 )
                 manager_handle = workflow.get_external_workflow_handle(manager_id)
             return len(profiles)
-        except Exception:
+        except Exception as exc:
+            if getattr(
+                self, "_execution_budget", None
+            ) is not None and is_cancelled_exception(exc):
+                # The workflow owner handles cancellation; it cannot become
+                # another admission attempt. Old histories retain their commands.
+                raise
             self._get_logger().warning(
                 "Failed to sync provider profiles for runtime_id=%s; continuing with manager state",
                 runtime_id,
