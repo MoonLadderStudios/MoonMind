@@ -14,18 +14,22 @@ no manually managed test service (mirrors
 from __future__ import annotations
 
 import asyncio
+import importlib
 import os
 import shutil
 import socket
 import subprocess
 import tempfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import func, select
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+from sqlalchemy import func, select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -37,6 +41,7 @@ from api_service.core.sync import (
 from api_service.db.models import (
     Base,
     MoonMindWorkflowState,
+    TemporalExecutionCanonicalRecord,
     TemporalExecutionOwnerType,
     TemporalExecutionProjectionSyncState,
     TemporalExecutionRecord,
@@ -131,6 +136,110 @@ def _payload(workflow_id: str, updated_at: datetime) -> dict:
         "parameters": {"targetRuntime": "codex_cli"},
         "updated_at": updated_at,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner", ["temporal", "canonical"])
+async def test_postgres_waiting_execution_retains_full_reason_in_api(
+    pg_maker, owner
+) -> None:
+    from api_service.api.routers.executions import _serialize_execution
+
+    reason = "Waiting for an independent issue implementation slot."
+    workflow_id = "mm:waiting-" + owner
+    payload = _payload(workflow_id, datetime(2026, 10, 31, tzinfo=UTC))
+    payload.update(
+        state=MoonMindWorkflowState.AWAITING_EXTERNAL,
+        awaiting_external=True,
+        waiting_reason=reason,
+        memo={"title": "Scheduled search", "summary": reason},
+    )
+    async with pg_maker() as session:
+        if owner == "canonical":
+            session.add(TemporalExecutionCanonicalRecord(**payload))
+        await mutate_execution_projection(
+            session, workflow_id=workflow_id, payload=payload, owner=owner
+        )
+        await session.commit()
+
+    async with pg_maker() as session:
+        record = await session.get(TemporalExecutionRecord, workflow_id)
+        assert record is not None
+        assert record.waiting_reason == reason
+        assert record.awaiting_external
+        response = _serialize_execution(record).model_dump(by_alias=True)
+        assert response["workflowId"] == workflow_id
+        assert response["state"] == "awaiting_external"
+        assert response["waitingReason"] == reason
+        assert response["summary"] == reason
+        if owner == "canonical":
+            source = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+            assert source is not None
+            assert source.waiting_reason == reason
+
+
+@pytest.mark.asyncio
+async def test_postgres_wait_reason_upgrade_preserves_data_and_refuses_truncation(
+    pg_maker,
+) -> None:
+    migration = importlib.import_module(
+        "api_service.migrations.versions.408_execution_wait_reason_text"
+    )
+
+    def migrate(connection, action):
+        with Operations.context(MigrationContext.configure(connection)):
+            action()
+
+    stamped = datetime(2026, 10, 31, tzinfo=UTC)
+    workflow_id = "mm:existing-wait"
+    payload = _payload(workflow_id, stamped)
+    payload.update(
+        state=MoonMindWorkflowState.AWAITING_EXTERNAL,
+        awaiting_external=True,
+        waiting_reason="provider_capacity",
+    )
+    async with pg_maker() as session:
+        # Begin with the installed schema, not just the updated ORM metadata.
+        for table in ("temporal_execution_sources", "temporal_executions"):
+            await session.execute(
+                text(
+                    f"ALTER TABLE {table} ALTER COLUMN waiting_reason TYPE varchar(32)"
+                )
+            )
+        session.add(TemporalExecutionCanonicalRecord(**payload))
+        await mutate_execution_projection(
+            session, workflow_id=workflow_id, payload=payload, owner="canonical"
+        )
+        await session.commit()
+        connection = await session.connection()
+        await connection.run_sync(migrate, migration.upgrade)
+        await session.commit()
+
+    reason = "Waiting for an independent issue implementation slot."
+    async with pg_maker() as session:
+        for model in (TemporalExecutionCanonicalRecord, TemporalExecutionRecord):
+            row = await session.get(model, workflow_id)
+            assert row.waiting_reason == "provider_capacity"
+            assert row.parameters == payload["parameters"]
+        payload.update(waiting_reason=reason, updated_at=stamped + timedelta(seconds=1))
+        await mutate_execution_projection(
+            session, workflow_id=workflow_id, payload=payload, owner="temporal"
+        )
+        await session.commit()
+
+    # A schema downgrade must fail rather than discard the saved explanation.
+    with pytest.raises(DBAPIError, match="value too long"):
+        async with pg_maker() as session:
+            connection = await session.connection()
+            await connection.run_sync(migrate, migration.downgrade)
+            await session.commit()
+
+    async with pg_maker() as session:
+        for model in (TemporalExecutionCanonicalRecord, TemporalExecutionRecord):
+            row = await session.get(model, workflow_id)
+            assert row.waiting_reason == reason
+            assert row.workflow_id == workflow_id
+            assert row.parameters == payload["parameters"]
 
 
 @pytest.mark.asyncio

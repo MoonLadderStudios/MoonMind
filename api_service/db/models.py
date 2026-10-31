@@ -2245,7 +2245,7 @@ class TemporalExecutionCanonicalRecord(Base):
     awaiting_external: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
-    waiting_reason: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    waiting_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     attention_required: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
@@ -2707,7 +2707,7 @@ class TemporalExecutionRecord(Base):
     awaiting_external: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
-    waiting_reason: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    waiting_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     attention_required: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
