@@ -537,6 +537,21 @@ async def test_registered_managed_reconciliation_preserves_time_accounting(
                 )
                 assert context.excluded_seconds > policy["timeout_seconds"]
                 assert context.elapsed_seconds(completed_at) < 30
+                launch_event = next(
+                    event
+                    for event in history.events
+                    if event.HasField("activity_task_scheduled_event_attributes")
+                    and event.activity_task_scheduled_event_attributes.activity_type.name
+                    == "agent_runtime.launch"
+                )
+                launch_budget = ExecutionBudgetContext.model_validate(
+                    state.launches[0]["request"]["executionBudget"]
+                )
+                assert launch_budget.suspended_at is None
+                assert launch_budget.excluded_seconds == context.excluded_seconds
+                assert launch_budget.remaining_seconds(
+                    launch_event.event_time.ToDatetime(tzinfo=UTC)
+                ) == pytest.approx(policy["timeout_seconds"], abs=1)
             else:
                 assert context.elapsed_seconds(completed_at) > policy["timeout_seconds"]
                 assert context.last_progress_seconds >= 20
