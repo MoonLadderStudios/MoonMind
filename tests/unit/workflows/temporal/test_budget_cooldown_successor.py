@@ -4,6 +4,7 @@ import asyncio
 import json
 from collections import defaultdict
 from contextlib import AsyncExitStack
+from datetime import datetime
 
 import pytest
 from temporalio import activity, workflow
@@ -86,20 +87,28 @@ async def profiles(payload: dict) -> dict:
 @workflow.defn(name="BudgetCooldownParent")
 class BudgetCooldownParent:
     @workflow.run
-    async def run(self, expect_exhaustion: bool = False) -> int:
+    async def run(self, options: dict) -> int:
         owner = parent_module.MoonMindRunWorkflow()
+        self.owner = owner
         owner._owner_id = "owner"
         owner._repo = "owner/repo"
 
         async def checkpoint(*_args, **_kwargs):
             return None
 
+        async def manifest(*_args, **kwargs):
+            if (
+                options.get("pauseBetweenAttempts")
+                and kwargs.get("terminal_disposition") == "retryable"
+            ):
+                owner._paused = True
+
         async def bind(request):
             return request
 
         owner._maybe_bind_workflow_scoped_session = bind
         owner._record_canonical_step_checkpoint = checkpoint
-        owner._record_step_execution_manifest = checkpoint
+        owner._record_step_execution_manifest = manifest
         try:
             await owner._run_execution_stage(
                 parameters={
@@ -110,21 +119,30 @@ class BudgetCooldownParent:
                 plan_ref="art_plan",
             )
         except ValueError:
-            if not expect_exhaustion:
+            if not options.get("expectExhaustion"):
                 raise
         return owner._step_execution_for("step") or 0
+
+    @workflow.query
+    def paused_between_attempts(self) -> bool:
+        return self.owner._paused
+
+    @workflow.signal
+    def resume(self) -> None:
+        self.owner._paused = False
 
 
 @pytest.mark.timeout(90)
 @pytest.mark.parametrize(
-    "cooldown_seconds,expected_attempts",
-    [(3, 2), (120, 1)],
-    ids=["successor", "cooldown-deadline"],
+    "cooldown_seconds,expected_attempts,pause_seconds",
+    [(3, 2, 0), (120, 1, 0), (3, 2, 100)],
+    ids=["successor", "cooldown-deadline", "paused-successor"],
 )
 async def test_cooldown_parent_retry_and_worker_replacement_share_budget_and_intent(
     monkeypatch,
     cooldown_seconds,
     expected_attempts,
+    pause_seconds,
 ):
     global QUOTA_SEEN, COOLDOWN_SECONDS
     QUOTA_SEEN = asyncio.Event()
@@ -231,7 +249,10 @@ async def test_cooldown_parent_retry_and_worker_replacement_share_budget_and_int
             )
             handle = await env.client.start_workflow(
                 BudgetCooldownParent.run,
-                expected_attempts == 1,
+                {
+                    "expectExhaustion": expected_attempts == 1,
+                    "pauseBetweenAttempts": bool(pause_seconds),
+                },
                 id="budget-cooldown-parent",
                 task_queue=root_queue,
             )
@@ -248,6 +269,17 @@ async def test_cooldown_parent_retry_and_worker_replacement_share_budget_and_int
             await child.shutdown()
             await stack.enter_async_context(root_worker())
             await stack.enter_async_context(child_worker())
+            if pause_seconds:
+                for _ in range(40):
+                    if await handle.query(BudgetCooldownParent.paused_between_attempts):
+                        break
+                    await env.sleep(1)
+                else:
+                    pytest.fail("The parent did not pause at the successor boundary")
+                assert len(LAUNCHES) == 2
+                await env.sleep(pause_seconds)
+                assert len(LAUNCHES) == 2
+                await handle.signal(BudgetCooldownParent.resume)
             try:
                 assert (
                     await asyncio.wait_for(handle.result(), timeout=30)
@@ -314,6 +346,12 @@ async def test_cooldown_parent_retry_and_worker_replacement_share_budget_and_int
         assert contexts[2]["budget"] == contexts[0]["budget"]
         assert contexts[2]["consumedSeconds"] >= 3
         assert contexts[2]["recoveryCount"] == 1
+        if pause_seconds:
+            wall_seconds = (
+                datetime.fromisoformat(contexts[2]["admittedAt"])
+                - datetime.fromisoformat(contexts[0]["admittedAt"])
+            ).total_seconds()
+            assert wall_seconds - contexts[2]["consumedSeconds"] >= pause_seconds
         assert all(
             entry["agentId"] == "claude_code"
             and entry["executionProfileRef"] == "default-managed"

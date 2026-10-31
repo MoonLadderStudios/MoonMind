@@ -50,6 +50,7 @@ class SessionActivities:
         self.saved = False
         self.harvested = False
         self.decisions = {}
+        self.decision_writes = Counter()
         self.budgets = []
 
     def apply(self, name):
@@ -100,7 +101,7 @@ class SessionActivities:
                 submission=SubmissionState.ACCEPTED,
                 terminalOutcome=TerminalOutcome.SUCCESS if self.terminal else None,
                 terminalEvidenceRef="art_result" if self.saved else None,
-                evidenceHarvested=self.saved,
+                evidenceHarvested=self.harvested,
             )
             observations = ObservationSet(
                 evidence=EvidenceObservation(
@@ -140,6 +141,7 @@ class SessionActivities:
                 ),
             }
         if name == "omnigent.persist_decision":
+            self.decision_writes[payload["decisionId"]] += 1
             self.decisions[payload["decisionId"]] = payload["decision"]
         if name in {"omnigent.read_event_batch", "omnigent.observe_snapshot"}:
             return {
@@ -253,7 +255,14 @@ async def test_registered_session_crosses_deadline_without_new_allowance(
         }
         assert state.effects["omnigent.harvest_evidence"] == 1
         assert state.effects["omnigent.publish_workspace"] == 1
+        # A lost acknowledgement follows a confirmed save, so observation must
+        # recover it without another call. The other injected failures occur
+        # before that effect and may safely retry the save.
+        if target == "omnigent.publish_workspace" and mode == "lost_ack":
+            assert state.calls["omnigent.publish_workspace"] == 1
         assert state.effects["omnigent.record_terminal"] <= 1
+        assert state.decision_writes
+        assert all(count == 1 for count in state.decision_writes.values())
         contexts = [
             ExecutionBudgetContext.model_validate(value) for value in state.budgets
         ]
