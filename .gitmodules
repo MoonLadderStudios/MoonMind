@@ -3,4 +3,4 @@
 	url = https://github.com/MoonLadderStudios/MoonSpec.git
 [submodule "omnigent"]
 	path = omnigent
-	url = https://github.com/omnigent-ai/omnigent
+	url = https://github.com/nsticco/omnigent

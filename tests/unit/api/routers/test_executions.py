@@ -20068,7 +20068,9 @@ def test_chat_binding_available_is_browser_safe(monkeypatch) -> None:
     assert body["state"] == "available"
     assert body["readOnly"] is False
     # Server-generated, binding-scoped navigation targets.
-    assert body["chatUrl"] == "/omnigent-ui/workflow-chat/chatb_opaque123?embedded=1"
+    assert body["chatUrl"] == (
+        "/omnigent-ui/workflow-chat/chatb_opaque123?embedded=1&sidebar=closed"
+    )
     assert body["apiBase"] == "/api/workflow-chat-bindings/chatb_opaque123/omnigent"
     assert body["capabilities"] == {"viewTranscript": True, "sendMessage": True}
 
