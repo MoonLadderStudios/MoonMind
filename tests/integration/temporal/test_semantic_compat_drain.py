@@ -13,6 +13,7 @@ from temporalio.client import Client
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
+from moonmind.workflows.skills.approval_policy import step_gate_payload
 from moonmind.workflows.temporal.activity_catalog import get_workflow_child_task_queue
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
@@ -143,7 +144,15 @@ async def test_canonical_completed_work_drains_gate_aliases_independently():
         _receipt("canonical", env.client, result, handle=handle)
 
 
-async def test_paused_saved_schedule_retains_alias_decoder_until_repaired():
+@pytest.mark.parametrize("saved_outputs", [
+    {"verification": {"verdict": "BLOCKED"}},
+    {"moonSpecVerify": {}, "verdict": "BLOCKED"},
+    {"moonSpecVerify": {"summary": "Saved diagnostics"}, "gateVerdict": "BLOCKED"},
+    {"moonSpecVerify": {"verdict": ""}, "verification_verdict": "BLOCKED"},
+], ids=["legacy-container", "empty-canonical", "diagnostics-only", "blank-verdict"])
+async def test_paused_saved_schedule_retains_alias_decoder_until_repaired(
+    saved_outputs, request,
+):
     async with await WorkflowEnvironment.start_local(
         data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
     ) as env:
@@ -153,17 +162,20 @@ async def test_paused_saved_schedule_retains_alias_decoder_until_repaired():
             definition_id=definition, cron_expression="0 0 1 1 *", enabled=False,
             workflow_type="MoonMind.UserWorkflow",
         )
-        await adapter.create_schedule(
+        schedule_id = await adapter.create_schedule(
             **arguments, workflow_input={
-                "previousOutputs": {"verification": {"verdict": "BLOCKED"}},
+                "previousOutputs": saved_outputs,
             },
         )
+        description = await env.client.get_schedule_handle(schedule_id).describe()
+        assert description.schedule.state.paused
+        assert step_gate_payload(saved_outputs)["verdict"] == "BLOCKED"
         result = await _observe(env.client)
         assert result["gate_aliases"].saved_inputs == 1
         assert not result["gate_aliases"].may_remove
         assert result["profile_selection"].may_remove
         assert result["native_pr_branches"].may_remove
-        _receipt("saved-schedule", env.client, result)
+        _receipt(f"saved-schedule-{request.node.callspec.id}", env.client, result)
         await adapter.update_schedule(
             **arguments, workflow_input={
                 "previousOutputs": {"moonSpecVerify": {"verdict": "BLOCKED"}},
@@ -171,7 +183,7 @@ async def test_paused_saved_schedule_retains_alias_decoder_until_repaired():
         )
         repaired = await _observe(env.client)
         assert all(row.may_remove for row in repaired.values())
-        _receipt("repaired-schedule", env.client, repaired)
+        _receipt(f"repaired-schedule-{request.node.callspec.id}", env.client, repaired)
 
 
 @workflow.defn(name="MoonMind.AgentRun")

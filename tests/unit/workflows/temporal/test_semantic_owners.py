@@ -130,3 +130,25 @@ def test_profile_owner_preserves_empty_selector_inheritance(normalized, inherita
 ])
 def test_gate_owner_identifies_retained_saved_shapes(value, retained):
     assert gates.has_retained_step_gate_shape(value) is retained
+
+
+@pytest.mark.parametrize("root_key", [
+    "verdict", "gateVerdict", "gate_verdict", "moonSpecVerdict",
+    "moonspecVerdict", "verificationVerdict", "verification_verdict",
+])
+@pytest.mark.parametrize("canonical", [
+    {}, {"summary": "Saved verifier diagnostics"}, {"verdict": ""},
+], ids=["empty", "diagnostics-only", "blank-verdict"])
+def test_gate_owner_detects_root_fallback_beneath_incomplete_envelope(root_key, canonical):
+    outputs = {"moonSpecVerify": canonical, root_key: "BLOCKED"}
+
+    assert gates.step_gate_payload(outputs) == {**outputs, "verdict": "BLOCKED"}
+    assert gates.has_retained_step_gate_shape(outputs)
+
+
+def test_gate_owner_keeps_canonical_verdict_precedence_over_root_fallback():
+    canonical = {"verdict": "FULLY_IMPLEMENTED"}
+    outputs = {"moonSpecVerify": canonical, "gateVerdict": "BLOCKED"}
+
+    assert gates.step_gate_payload(outputs) == canonical
+    assert not gates.has_retained_step_gate_shape(outputs)

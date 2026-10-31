@@ -75,7 +75,8 @@ def has_retained_step_gate_shape(value: Any) -> bool:
 
     The Temporal drain observer uses the decoder's own container and verdict
     vocabulary. A canonical envelope is traversed as an envelope, so its nested
-    verdict is not mistaken for the old root-level result shape.
+    verdict is not mistaken for the old root-level result shape. An incomplete
+    envelope still allows the decoder to fall back to a root-level verdict.
     """
     if isinstance(value, Mapping):
         if any(isinstance(value.get(key), Mapping) for key in _RETAINED_GATE_CONTAINERS):
@@ -85,7 +86,9 @@ def has_retained_step_gate_shape(value: Any) -> bool:
             canonical.get(key) for key in _GATE_VERDICT_KEYS[1:]
         ):
             return True
-        if not isinstance(canonical, Mapping) and any(
+        if (
+            not isinstance(canonical, Mapping) or not canonical.get("verdict")
+        ) and any(
             value.get(key) for key in _GATE_VERDICT_KEYS
         ):
             return True
