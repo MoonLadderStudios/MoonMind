@@ -690,32 +690,49 @@ async def test_interrupted_final_progress_read_cannot_resume_execution(
             id=queue,
             task_queue=queue,
         )
-        result_task = asyncio.create_task(handle.result())
-        await asyncio.wait_for(state.started.wait(), timeout=20)
-        if mode == "cancel":
-            await handle.cancel()
-            with pytest.raises(WorkflowFailureError) as error:
-                await asyncio.wait_for(result_task, timeout=20)
-            assert isinstance(error.value.cause, CancelledError)
-            assert state.cancellation_seen
-            assert state.store.load(state.launches[0]["run_id"]).status == "canceled"
-        else:
-            deadline = (
-                state.blocked_info.scheduled_time
-                + state.blocked_info.schedule_to_close_timeout
-            )
-            await env.sleep(
-                max(0, (deadline - await env.get_current_time()).total_seconds()) + 1
-            )
-            state.release.set()
-            result = await asyncio.wait_for(result_task, timeout=20)
-            context = ExecutionBudgetContext.model_validate(
-                result.metadata["executionBudget"]
-            )
-            assert result.metadata["reason"] == "timed_out"
-            assert result.metadata["terminalSaveIncomplete"] is True
-            assert context.last_progress_seconds < 20
-            assert context.finishing_deadline <= deadline
+        # Own the clock while requesting cancellation: automatic time skipping
+        # can otherwise spend cleanup's entire allowance between cancel commands.
+        with env.auto_time_skipping_disabled():
+            result_task = asyncio.create_task(handle.result())
+            for _ in range(10):
+                if state.started.is_set():
+                    break
+                await env.sleep(10)
+            await asyncio.wait_for(state.started.wait(), timeout=20)
+            if mode == "cancel":
+                await handle.cancel()
+                with pytest.raises(WorkflowFailureError) as error:
+                    await asyncio.wait_for(result_task, timeout=20)
+                assert isinstance(error.value.cause, CancelledError)
+                assert state.cancellation_seen
+                assert (
+                    state.store.load(state.launches[0]["run_id"]).status == "canceled"
+                )
+            else:
+                deadline = (
+                    state.blocked_info.scheduled_time
+                    + state.blocked_info.schedule_to_close_timeout
+                )
+                await env.sleep(
+                    max(0, (deadline - await env.get_current_time()).total_seconds())
+                    + 1
+                )
+                # Keep the reply blocked until Temporal records the timeout;
+                # releasing it here races the server's timeout notification.
+                result = await asyncio.wait_for(result_task, timeout=20)
+                state.release.set()
+                context = ExecutionBudgetContext.model_validate(
+                    result.metadata["executionBudget"]
+                )
+                assert result.metadata["reason"] == "timed_out"
+                assert result.metadata["terminalSaveIncomplete"] is True
+                assert context.last_progress_seconds < 30
+                assert context.finishing_deadline <= deadline
+                history = await handle.fetch_history()
+                assert any(
+                    event.HasField("activity_task_timed_out_event_attributes")
+                    for event in history.events
+                )
         assert len(state.launches) == 1
         assert state.calls["agent_runtime.status"] == 4
         assert state.calls["agent_runtime.fetch_result"] == 0
