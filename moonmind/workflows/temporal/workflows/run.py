@@ -916,6 +916,7 @@ RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
 )
 RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH = "run-moonspec-verify-publication-gate-v1"
 RUN_ADVISORY_ARTIFACT_REVIEW_PATCH = "run-advisory-artifact-review-v1"
+RUN_ADVISORY_REVIEW_COMPLETION_PATCH = "run-advisory-review-completion-v1"
 RUN_INCOMPLETE_DRAFT_OBJECTIVE_OUTCOME_PATCH = "run-incomplete-draft-objective-outcome-v1"
 RUN_MOONSPEC_GATE_PREVIOUS_OUTPUTS_HANDOFF_PATCH = (
     "run-moonspec-gate-previous-outputs-handoff-v1"
@@ -15539,7 +15540,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             blocked_message = (
                 None
                 if blocked_outcome_wait_skipped
-                else self._blocked_outcome_message(execution_result)
+                else self._blocked_outcome_message(
+                    execution_result, node_inputs=node_inputs
+                )
             )
             if blocked_message and workflow.patched(
                 RUN_BLOCKED_OUTCOME_SHORT_CIRCUIT_PATCH
@@ -17059,7 +17062,18 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 mappings.append(parsed)
         return tuple(mappings)
 
-    def _blocked_outcome_message(self, execution_result: Any) -> str | None:
+    def _blocked_outcome_message(
+        self,
+        execution_result: Any,
+        *,
+        node_inputs: Mapping[str, Any] | None = None,
+    ) -> str | None:
+        if (
+            node_inputs is not None
+            and self._is_advisory_artifact_review_step(node_inputs=node_inputs)
+            and workflow.patched(RUN_ADVISORY_REVIEW_COMPLETION_PATCH)
+        ):
+            return None
         outputs = self._get_from_result(execution_result, "outputs")
         if not isinstance(outputs, Mapping):
             return None

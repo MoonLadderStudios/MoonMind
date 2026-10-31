@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
-from temporalio.exceptions import ApplicationError
+from temporalio.exceptions import ActivityError, ApplicationError, CancelledError
 
 from moonmind.schemas.agent_runtime_models import (
     MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
@@ -882,6 +882,194 @@ async def test_terminal_contract_continuation_propagates_cancellation(
             request=_request_with_terminal_contract(),
             result=AgentRunResult(summary="initial"),
         )
+
+
+@pytest.mark.parametrize("initial_failure", [False, True])
+@pytest.mark.parametrize("recovery_failure", [False, True])
+async def test_optional_report_save_recovers_without_repeating_compute(
+    monkeypatch, initial_failure, recovery_failure
+):
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    now = agent_run_module.workflow.now()
+    run._execution_budget = ExecutionBudgetContext(
+        budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 120}),
+        logicalStepId="review",
+        attemptId="review-1",
+        admittedAt=now,
+    )
+    request = _managed_session_request()
+    request.parameters["reportOutput"] = {
+        "enabled": True,
+        "required": False,
+        "reportType": "optional_quality_review",
+        "executionRef": {
+            "namespace": "default",
+            "workflowId": "parent",
+            "runId": "parent-run",
+        },
+        "subject": {"candidateDigest": "sha256:" + "a" * 64},
+    }
+    original = AgentRunResult(
+        summary="Provider failed",
+        failureClass="execution_error",
+        diagnosticsRef="art_retained",
+        metadata={"lastAssistantText": "Verdict: BLOCKED. Evidence unavailable."},
+    )
+    calls = []
+
+    def interrupted(name):
+        return ActivityError(
+            "Report transport interrupted",
+            scheduled_event_id=10,
+            started_event_id=11,
+            identity="worker",
+            activity_type=name,
+            activity_id="save",
+            retry_state=None,
+        )
+
+    async def execute(name, payload, **kwargs):
+        calls.append(name)
+        if name == "agent_runtime.publish_artifacts":
+            if initial_failure:
+                raise interrupted(name)
+            return payload
+        assert (
+            name == "artifact.publish_report_bundle"
+        ), "Recovery repeated compute or unrelated effects"
+        assert payload["workflow_id"] == "parent"
+        assert payload["run_id"] == "parent-run"
+        assert "Verdict: BLOCKED" in payload["primary"]["payload"]
+        assert "Partial review" in payload["primary"]["payload"]
+        assert kwargs["retry_policy"].maximum_attempts == 2
+        if recovery_failure:
+            raise interrupted(name)
+        return {"primary_report_ref": {"artifact_id": "art_review"}}
+
+    run._execute_routed_activity = execute
+    saved = await run._publish_terminal_result(request=request, result=original)
+    assert calls == [
+        "agent_runtime.publish_artifacts",
+        "artifact.publish_report_bundle",
+    ]
+    assert saved.failure_class == original.failure_class
+    assert saved.metadata["lastAssistantText"] == original.metadata["lastAssistantText"]
+    if recovery_failure:
+        assert saved.metadata["terminalSaveIncomplete"] is True
+        assert "reportRecoveryError" in saved.metadata
+    else:
+        assert saved.metadata["primaryReportRef"] == "art_review"
+
+
+@pytest.mark.parametrize("remaining", [0, 3])
+async def test_report_recovery_uses_the_existing_finishing_deadline(
+    monkeypatch, remaining
+):
+    _configure_workflow_runtime(monkeypatch)
+    now = agent_run_module.workflow.now()
+    monkeypatch.setattr(agent_run_module.workflow, "now", lambda: now)
+    run = MoonMindAgentRun()
+    run._execution_budget = ExecutionBudgetContext(
+        budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 120}),
+        logicalStepId="review",
+        attemptId="review-1",
+        admittedAt=now,
+        finishingStartedAt=now,
+        finishingDeadline=now + timedelta(seconds=remaining),
+    )
+    calls = []
+
+    async def execute(name, payload, **kwargs):
+        calls.append(name)
+        assert kwargs["start_to_close_timeout"].total_seconds() <= remaining
+        assert kwargs["schedule_to_close_timeout"].total_seconds() <= remaining
+        return {"primary_report_ref": {"artifact_id": "art_review"}}
+
+    monkeypatch.setattr(agent_run_module, "execute_typed_activity", execute)
+    request = _managed_session_request()
+    request.parameters["reportOutput"] = {
+        "enabled": True,
+        "required": False,
+        "reportType": "optional_quality_review",
+    }
+    result = run._enrich_result_metadata(
+        request=request, result=AgentRunResult(summary="Retained review")
+    )
+    saved = await run._recover_optional_report(request=request, result=result)
+    if remaining:
+        assert calls == ["artifact.publish_report_bundle"]
+        assert saved.metadata["primaryReportRef"] == "art_review"
+    else:
+        assert calls == []
+        assert saved.metadata["terminalSaveIncomplete"] is True
+    assert run._execution_budget.finishing_deadline == now + timedelta(
+        seconds=remaining
+    )
+
+
+@pytest.mark.parametrize("reason", ["required", "old_history", "already_saved"])
+async def test_optional_report_recovery_preserves_other_save_owners(
+    monkeypatch, reason
+):
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    request = _managed_session_request()
+    request.parameters["reportOutput"] = {
+        "enabled": True,
+        "required": reason == "required",
+        "reportType": "optional_quality_review",
+    }
+    if reason == "old_history":
+        monkeypatch.setattr(agent_run_module.workflow, "patched", lambda _name: False)
+    result = AgentRunResult(
+        summary="Saved",
+        metadata={"primaryReportRef": "art_saved"} if reason == "already_saved" else {},
+    )
+
+    async def unexpected(*_args, **_kwargs):
+        raise AssertionError("Recovery must retain the existing save owner")
+
+    monkeypatch.setattr(run, "_execute_routed_activity", unexpected)
+    assert await run._recover_optional_report(request=request, result=result) is result
+
+
+async def test_cancelled_terminal_save_does_not_start_report_recovery(monkeypatch):
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    run._execution_budget = ExecutionBudgetContext(
+        budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 120}),
+        logicalStepId="review",
+        attemptId="review-1",
+        admittedAt=agent_run_module.workflow.now(),
+    )
+    request = _managed_session_request()
+    request.parameters["reportOutput"] = {
+        "enabled": True,
+        "required": False,
+        "reportType": "optional_quality_review",
+    }
+    calls = []
+
+    async def cancelled(name, payload, **kwargs):
+        calls.append(name)
+        error = ActivityError(
+            "Save cancelled",
+            scheduled_event_id=10,
+            started_event_id=11,
+            identity="worker",
+            activity_type=name,
+            activity_id="save",
+            retry_state=None,
+        )
+        raise error from CancelledError("Cancelled by operator")
+
+    run._execute_routed_activity = cancelled
+    saved = await run._publish_terminal_result(
+        request=request, result=AgentRunResult(summary="Retained review")
+    )
+    assert calls == ["agent_runtime.publish_artifacts"]
+    assert saved.metadata["terminalSaveIncomplete"] is True
 
 
 async def test_publish_terminal_result_compacts_replayed_moonspec_verify_metadata(
