@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,7 @@ class _Execution:
         self.agent_profile_reads = 0
         self.submission_profile_reads: list[int] = []
         self.admission_status = 201
+        self.admission_replies: list[tuple[int, dict[str, Any]]] = []
 
     def next(self) -> dict[str, Any]:
         status = self.statuses[min(self.reads, len(self.statuses) - 1)]
@@ -86,6 +88,10 @@ def api_server():
             elif self.path == "/api/executions":
                 execution.submissions.append(json.loads(body))
                 execution.submission_profile_reads.append(execution.agent_profile_reads)
+                if execution.admission_replies:
+                    status, reply = execution.admission_replies.pop(0)
+                    self._send(status, reply)
+                    return
                 if execution.admission_status == 201:
                     self._send(201, {"workflowId": "mm:journey", "runId": "run-1"})
                 else:
@@ -261,6 +267,85 @@ def test_populate_still_fails_on_admission_rejection(api_server, tmp_path, capsy
     assert code == 1
     assert len(execution.submissions) == 1
     assert "HTTP 409" in capsys.readouterr().err
+
+
+def test_populate_waits_for_provider_bootstrap_using_identical_submission(
+    api_server, tmp_path, monkeypatch, capsys
+):
+    base, execution = api_server
+    execution.admission_replies = [
+        (
+            409,
+            {
+                "detail": "no launch-ready Provider Profile matches the default Omnigent Agent Profile"
+            },
+        ),
+        (201, {"workflowId": "mm:journey", "runId": "run-1"}),
+    ]
+    execution.statuses = [{"status": "failed", "summary": "stop after admission"}]
+    monkeypatch.setattr(journey.time, "sleep", lambda _seconds: None)
+    earliest_start = datetime.now(timezone.utc) + timedelta(seconds=15)
+
+    code = journey.main(
+        [
+            "populate",
+            "--api-base",
+            base,
+            "--state-file",
+            str(tmp_path / "state.json"),
+            "--timeout",
+            "5",
+            "--defer-seconds",
+            "10",
+        ]
+    )
+
+    assert code == 1  # Admitted workflow failures must still fail the journey.
+    assert len(execution.submissions) == 3  # Refusal, creation, lost-ack redelivery.
+    assert all(body == execution.submissions[0] for body in execution.submissions)
+    assert (
+        datetime.fromisoformat(
+            execution.submissions[0]["payload"]["schedule"]["scheduledFor"]
+        )
+        >= earliest_start
+    )
+    assert "closed before cancellation" in capsys.readouterr().err
+
+
+def test_populate_provider_bootstrap_timeout_still_fails(
+    api_server, tmp_path, monkeypatch, capsys
+):
+    base, execution = api_server
+    pending = (
+        409,
+        {
+            "detail": "no launch-ready Provider Profile matches the default Omnigent Agent Profile"
+        },
+    )
+    execution.admission_replies = [pending] * 10
+    clock = [0.0]
+    monkeypatch.setattr(journey.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        journey.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+    )
+
+    code = journey.main(
+        [
+            "populate",
+            "--api-base",
+            base,
+            "--state-file",
+            str(tmp_path / "state.json"),
+            "--timeout",
+            "5",
+        ]
+    )
+
+    assert code == 1
+    assert clock[0] == 5
+    assert len(execution.submissions) == 2
+    assert execution.submissions[0] == execution.submissions[1]
+    assert "Provider Profile did not become ready" in capsys.readouterr().err
 
 
 def test_pre_upgrade_populate_saves_work_the_old_release_accepts(api_server, tmp_path):
