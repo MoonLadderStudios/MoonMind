@@ -703,12 +703,95 @@ async def test_default_resolution_publishes_only_on_request(monkeypatch):
     monkeypatch.setattr(store, "save_resolved_state", saved.append)
     target = {"server": NEW_SERVER, "shared": NEW_HOST}
 
-    observed = await omnigent_release._default_await_resolution(target, attempts=1)
+    drivers = omnigent_release._default_drivers()
+    observed = await drivers.await_resolution(target)
     assert observed == target
     assert saved == []
 
-    await omnigent_release._default_publish_resolution(target)
+    await drivers.publish_resolution(target)
     assert saved == [state]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("live_image", [NEW_SERVER, OLD_SERVER])
+async def test_publish_retains_qualified_resolution_after_live_verification(
+    monkeypatch, live_image
+):
+    from moonmind.omnigent.bootstrap import image_resolution, store
+    from moonmind.workflows.skills import omnigent_release
+
+    qualified = SimpleNamespace(
+        server_image_ref=NEW_SERVER,
+        opencode_host_image_ref=NEW_HOST,
+        shared_host_image_ref=NEW_HOST,
+        pi_host_image_ref="",
+        details={"opencodeHostCompatibility": {"status": "ready"}},
+    )
+    observations = []
+
+    async def resolve(_env):
+        observations.append(True)
+        if len(observations) == 1:
+            return qualified
+        return SimpleNamespace(
+            **{
+                **vars(qualified),
+                "details": {
+                    "opencodeHostCompatibility": {
+                        "status": "blocked",
+                        "failureCode": "omnigent_host_bootstrap_contract_missing",
+                    }
+                },
+            }
+        )
+
+    async def verify_live(_ref):
+        return live_image
+
+    saved = []
+    monkeypatch.setattr(image_resolution, "resolve_omnigent_images", resolve)
+    monkeypatch.setattr(store, "save_resolved_state", saved.append)
+    monkeypatch.setattr(omnigent_release, "_default_verify_live_container", verify_live)
+    target = {"server": NEW_SERVER, "opencode": NEW_HOST, "shared": NEW_HOST}
+    drivers = omnigent_release._default_drivers()
+
+    if live_image != NEW_SERVER:
+        with pytest.raises(OmnigentReleaseError) as error:
+            await omnigent_release._verify_installed_release(drivers, target)
+        assert error.value.step == "verify"
+        assert saved == []
+    else:
+        assert (
+            await omnigent_release._verify_installed_release(drivers, target) == target
+        )
+        assert saved == [qualified]
+
+
+@pytest.mark.asyncio
+async def test_qualified_resolution_cannot_publish_a_different_target(monkeypatch):
+    from moonmind.omnigent.bootstrap import image_resolution, store
+    from moonmind.workflows.skills import omnigent_release
+
+    state = SimpleNamespace(
+        server_image_ref=NEW_SERVER,
+        opencode_host_image_ref="",
+        shared_host_image_ref=NEW_HOST,
+        pi_host_image_ref="",
+        details={},
+    )
+
+    async def resolve(_env):
+        return state
+
+    saved = []
+    monkeypatch.setattr(image_resolution, "resolve_omnigent_images", resolve)
+    monkeypatch.setattr(store, "save_resolved_state", saved.append)
+    drivers = omnigent_release._default_drivers()
+    target = {"server": NEW_SERVER, "shared": NEW_HOST}
+    assert await drivers.await_resolution(target) == target
+    with pytest.raises(OmnigentReleaseError):
+        await drivers.publish_resolution({**target, "server": OLD_SERVER})
+    assert saved == []
 
 
 def test_store_merge_preserves_unrelated_entries(tmp_path):

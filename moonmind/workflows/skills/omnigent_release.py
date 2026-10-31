@@ -466,29 +466,18 @@ async def _resolve_record(
 
 async def _default_await_resolution(
     record_refs: Mapping[str, str], *, attempts: int = 20, delay_seconds: float = 15.0
-) -> dict[str, str]:
-    # Digest-pinned inputs resolve by local inspection only: no registry pull,
-    # so each attempt is cheap and the loop just waits for the restarted
-    # container to become observable. Nothing is persisted here: fresh
-    # admission binds the resolved state, so it is published only after the
-    # live check verifies the installation.
+) -> tuple[Any, dict[str, str]]:
+    # Resolution includes functional host bootstrap probes. Keep the successful
+    # evidence for publication after live verification instead of qualifying
+    # the same immutable images again at that boundary.
     last_error = "resolution never became ready"
     for _ in range(max(1, attempts)):
         state, observed, error = await _resolve_record(record_refs)
         if state is not None:
-            return observed
+            return state, observed
         last_error = error
         await asyncio.sleep(delay_seconds)
     raise OmnigentReleaseError("await-resolution", last_error)
-
-
-async def _default_publish_resolution(record_refs: Mapping[str, str]) -> None:
-    from moonmind.omnigent.bootstrap.store import save_resolved_state
-
-    state, _observed, error = await _resolve_record(record_refs)
-    if state is None:
-        raise OmnigentReleaseError("publish-resolution", error)
-    save_resolved_state(state)
 
 
 async def _default_verify_live_container(server_ref: str) -> str | None:
@@ -500,14 +489,32 @@ async def _default_verify_live_container(server_ref: str) -> str | None:
 
 
 def _default_drivers() -> OmnigentReleaseDrivers:
+    qualified: tuple[dict[str, str], Any] | None = None
+
+    async def await_resolution(record_refs: dict[str, str]) -> dict[str, str]:
+        nonlocal qualified
+        qualified = None
+        state, observed = await _default_await_resolution(record_refs)
+        qualified = (dict(record_refs), state)
+        return observed
+
+    async def publish_resolution(record_refs: dict[str, str]) -> None:
+        from moonmind.omnigent.bootstrap.store import save_resolved_state
+
+        if qualified is None or qualified[0] != record_refs:
+            raise OmnigentReleaseError(
+                "publish-resolution", "no qualified resolution for the recorded images"
+            )
+        save_resolved_state(qualified[1])
+
     return OmnigentReleaseDrivers(
         deployment_inputs=_default_deployment_inputs,
         resolve_candidates=_default_resolve_candidates,
         read_live_refs=_default_read_live_refs,
         restart_server=None,
-        await_resolution=_default_await_resolution,
+        await_resolution=await_resolution,
         verify_live_container=_default_verify_live_container,
-        publish_resolution=_default_publish_resolution,
+        publish_resolution=publish_resolution,
     )
 
 
