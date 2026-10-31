@@ -54,12 +54,16 @@ def build_workspace_archive(
                 if not (stat.S_ISREG(before.st_mode) or stat.S_ISLNK(before.st_mode)):
                     raise ValueError("workspace archive has unsupported file type")
                 total += before.st_size
-                if (
-                    before.st_size > limits["max_file_bytes"]
-                    or total > limits["max_total_bytes"]
-                    or len(entries) >= limits["max_file_count"]
+                for dimension, observed, limit in (
+                    ("file bytes", before.st_size, limits["max_file_bytes"]),
+                    ("total bytes", total, limits["max_total_bytes"]),
+                    ("file count", len(entries) + 1, limits["max_file_count"]),
                 ):
-                    raise ValueError("workspace archive exceeds saved-work limits")
+                    if observed > limit:
+                        raise ValueError(
+                            "workspace archive exceeds saved-work limits: "
+                            f"{dimension} {observed} > {limit}"
+                        )
                 fingerprints[path] = (
                     before.st_ino,
                     before.st_size,
@@ -119,6 +123,9 @@ def build_workspace_archive(
                 ):
                     output.write(chunk)
             if compressed.tell() > limits["max_total_bytes"]:
-                raise ValueError("workspace archive exceeds saved-work limits")
+                raise ValueError(
+                    "workspace archive exceeds saved-work limits: "
+                    f"compressed bytes {compressed.tell()} > {limits['max_total_bytes']}"
+                )
             compressed.seek(0)
             return compressed.read(), entries
