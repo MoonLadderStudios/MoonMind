@@ -473,6 +473,7 @@ DEFAULT_EGRESS_PROFILE = EgressProfile.model_validate(
                 "githubusercontent.com",
                 "google.com",
                 "googleapis.com",
+                "oaiusercontent.com",
                 "opencode.ai",
                 "openai.com",
             )

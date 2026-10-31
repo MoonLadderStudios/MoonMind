@@ -59,6 +59,10 @@ not accepted by name-only rules. CIDRs overlapping unspecified, private,
 loopback, carrier NAT, link-local, multicast, reserved, IPv4-mapped IPv6, or
 unique-local ranges are rejected.
 
+Connected tools deliver downloadable diagnostics through regional hosts under
+`oaiusercontent.com`. The default HTTPS allowlist includes that domain so an
+agent can read retrieved CI logs and artifacts inside its sandbox.
+
 The Omnigent-only extra provider destinations come from one deployment-owned
 data file, `docker/sandbox-egress-proxy/omnigent-provider-domains.txt`, shared
 by the backend and the proxy. It lists one exact lowercase public DNS name per

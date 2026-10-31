@@ -199,6 +199,11 @@ Resuming finalization validates a surviving directory against saved file digests
 
 Missing evidence rejects the policy before launch. Before a checkpoint starts an attempt or a restore, MoonMind validates source ids, input and plan identity, logical step and attempt provenance, artifact existence and authorization, workspace/branch/commit consistency, kind-to-policy compatibility, and side-effect eligibility. Omnigent restore additionally digest-checks each artifact, checks repository baseline/head compatibility, and requires the current Provider Profile and credential generation to match; provider URLs, local paths, container ids, and provider-native ids are never artifact authority. Session reattach, workspace cold restore, and branch creation are evaluated independently with bounded denial reasons.
 
+Workspace snapshot restore shares the saved-work export limits: 1 GiB compressed
+and expanded, with at most 100 MiB per file. Attachment bundles retain their
+separate, smaller limits so a supported saved workspace can resume without
+expanding the attachment budget.
+
 Checkpoint Branch launch runs this validation — plus branch/turn lineage, expected branch-head version, instruction digest, isolated git binding, and stored policy and snapshot checks — before acquiring a lease, mutating a host or repository, creating a session, or posting a message. The source workflow input and outcome stay immutable.
 
 Failures are typed (`StepCheckpointValidationFailureCode`: `source_mismatch`, `task_input_mismatch`, `plan_mismatch`, `step_mismatch`, `execution_mismatch`, `artifact_missing`, `artifact_unauthorized`, `artifact_corrupted`, `workspace_mismatch`, `checkpoint_kind_incompatible`, `policy_incompatible`, `invalid_checkpoint`), and MoonMind fails with the code in diagnostics before launching an agent or touching the workspace.
