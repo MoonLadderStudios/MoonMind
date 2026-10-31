@@ -3,7 +3,7 @@
 // All HTTP data and actions are synthetic and confined to this loopback server.
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { chromium } from 'playwright';
@@ -69,7 +69,7 @@ const server = createServer(async (req, res) => {
   if (req.method !== 'GET') return reply({ error: 'No live actions in this fixture' }, 405);
   if (url.pathname === '/outer') {
     res.writeHead(200, { 'Content-Type': 'text/html' });
-    return res.end(`<output id="state">loading</output><iframe src="${uiBase}?embedded=1"></iframe>
+    return res.end(`<output id="state">loading</output><iframe style="width:100%;height:90vh;border:0" src="${uiBase}?embedded=1&sidebar=closed"></iframe>
       <script>addEventListener('message',e=>{if(e.origin===location.origin&&e.source===document.querySelector('iframe').contentWindow&&e.data.chatBindingId==='${binding}')document.querySelector('#state').textContent=e.data.type+':'+(e.data.reason||'')})</script>`);
   }
   if (url.pathname.startsWith(apiBase + '/')) {
@@ -108,15 +108,18 @@ const origin = `http://127.0.0.1:${server.address().port}`;
 const browser = await chromium.launch({ headless: true });
 try {
   for (const test of [
-    { name: 'embedded', path: '/outer', embedded: true },
+    { name: 'embedded', path: '/outer', embedded: true, closed: true },
+    { name: 'embedded-mobile', path: '/outer', embedded: true, closed: true, width: 390 },
+    { name: 'closed-deep-link', path: `${uiBase}/c/${binding}?sidebar=closed`, closed: true },
+    { name: 'open-mobile', path: `${uiBase}?sidebar=open`, width: 390, open: true },
     { name: 'full-page', path: uiBase },
     { name: 'deep-link', path: `${uiBase}/c/${binding}` },
-    { name: 'slow-startup', path: '/outer', embedded: true, slow: 16000 },
+    { name: 'slow-startup', path: '/outer', embedded: true, slow: 16000, closed: true },
     { name: 'transient-read', path: uiBase, transient: true },
   ]) {
     scenario = { ...test };
     apiReads = [];
-    const context = await browser.newContext();
+    const context = await browser.newContext({ viewport: { width: test.width || 1280, height: 900 } });
     context.setDefaultTimeout(30000);
     const page = await context.newPage();
     const requests = [];
@@ -135,6 +138,43 @@ try {
     assert.ok(!requests.some((url) => url.pathname.startsWith('/v1/')), 'No unscoped API traffic');
     assert.deepEqual(errors, []);
     if (test.embedded) assert.match(await page.locator('#state').innerText(), /chat.ready/);
+    const shell = native.locator('.app-shell');
+    if (test.closed) {
+      // Browser layout diagnostics defer a ResizeObserver delivery; they do
+      // not mean the native app crashed during a responsive panel change.
+      await shell.evaluate(() => {
+        window.dispatchEvent(new ErrorEvent('error', { message: 'ResizeObserver loop completed with undelivered notifications.' }));
+        window.dispatchEvent(new ErrorEvent('error', { message: 'ResizeObserver loop limit exceeded' }));
+      });
+      if (test.embedded) assert.match(await page.locator('#state').innerText(), /chat.ready/);
+      assert.equal(await shell.getAttribute('data-sidebar-open'), null, 'Explicit closed presentation');
+      await native.getByRole('button', { name: 'Open sidebar', exact: true }).click();
+      assert.equal(await shell.getAttribute('data-sidebar-open'), 'true', 'Manual expansion remains available');
+      await page.reload();
+      await native.getByRole('log').getByText('Captured fixture response survives cleanup.', { exact: true }).waitFor();
+      if (test.embedded) {
+        await page.waitForFunction(() => document.querySelector('#state').textContent.includes('chat.ready'));
+      }
+      assert.equal(await shell.getAttribute('data-sidebar-open'), null, 'Closed survives reload');
+      await page.setViewportSize({ width: test.width === 390 ? 1280 : 390, height: 900 });
+      await page.setViewportSize({ width: test.width || 1280, height: 900 });
+      await native.locator('.conversations-sidebar').evaluate((sidebar) => Promise.all(sidebar.getAnimations().map((animation) => animation.finished)));
+      assert.equal(await shell.getAttribute('data-sidebar-open'), null, 'Closed survives responsive resizing');
+      if (test.embedded) assert.match(await page.locator('#state').innerText(), /chat.ready/);
+      if (test.name === 'embedded' || test.name === 'embedded-mobile') {
+        const screenshotDirectory = 'artifacts/native-chat-sidebar';
+        mkdirSync(screenshotDirectory, { recursive: true });
+        await page.screenshot({ path: `${screenshotDirectory}/${test.name}.png`, fullPage: true });
+      }
+    } else if (test.open || test.name === 'full-page') {
+      assert.equal(await shell.getAttribute('data-sidebar-open'), 'true', 'Native open presentation retained');
+    }
+    assert.deepEqual(errors, [], 'Native UI must remain error-free after interaction and reload');
+    if (test.name === 'embedded') {
+      await shell.evaluate(() => window.dispatchEvent(new ErrorEvent('error', { message: 'Synthetic application crash' })));
+      await page.waitForFunction(() => document.querySelector('#state').textContent.includes('chat.fatal'));
+      assert.match(await page.locator('#state').innerText(), /chat.fatal:native_crash/);
+    }
     if (test.name === 'full-page') {
       const send = () => page.evaluate(async (endpoint) => {
         try {

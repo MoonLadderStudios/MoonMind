@@ -22,20 +22,16 @@
 > presentation option is unrelated and stays supported.
 
 **Compatibility declaration:** `omnigent.server.v1` with embedded runner
-authentication profile `omnigent.runner_tunnel.983c93c6`, verified against
-upstream Omnigent source commit
-`f04b0354fb5344c1ea8b92795ceb6760a9ad7595`.
+authentication profile `omnigent.runner_tunnel.983c93c6`. The source revision is
+recorded by `PINNED_OMNIGENT_COMMIT` and the native UI network contract fixture.
 
 This is an Omnigent-compatible adapter boundary, not a MoonMind host protocol.
 Only an unchanged stock host speaking the declared profiles may connect.
 Unknown protocol or authentication profiles fail closed.
 
 MoonMind embedded compatibility mode delegates runner authentication to the
-Omnigent submodule pinned at commit
-`f04b0354fb5344c1ea8b92795ceb6760a9ad7595`. The supported protocol profile
-identifier remains `omnigent.runner_tunnel.983c93c6`; the source-pin boundary
-test proves that this profile's verifier entrypoints remain available at the
-new revision.
+checked-in Omnigent submodule. The source boundary tests verify that the
+declared profile's verifier entrypoints remain available.
 
 The authoritative transport is the upstream websocket runner tunnel at
 `/v1/runners/{runner_id}/tunnel`. A stock runner supplies exactly one

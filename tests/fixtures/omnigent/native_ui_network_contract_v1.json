@@ -4,43 +4,43 @@
   "source": "vendored pinned omnigent server and native workspace UI",
   "evidence": {
     "capture": "stock-ui-and-server-static-analysis",
-    "sourceCommit": "f04b0354fb5344c1ea8b92795ceb6760a9ad7595",
+    "sourceCommit": "ebf63ff916dec81b3e74938dc4e67627dd20642e",
     "sourceFiles": [
       {
         "path": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
-        "sha256": "76c9915e22ab4ab345220fb4bafcea67381c3071eaef3c6968cab790a184eb19"
+        "sha256": "47dc6dd77c771299c54bae70f83b764ed18be2b766c5295986d567b9e55654c4"
       },
       {
         "path": "omnigent/omnigent/server/routes/sessions/routes_core.py",
-        "sha256": "c647ca6aac092f0ea7d29154bc1f447fe1efa323a196bf81ba6e28e3a3af3eb0"
+        "sha256": "6ca20fc7eefdd21d4e08fde5bfe774bff21606d3f2a917c58ebad45de543bc40"
       },
       {
         "path": "omnigent/omnigent/server/routes/terminal_attach.py",
-        "sha256": "655e3dddfc62f53082996238ac685fc8e65a41878f3083e6f62a8d1a1bcf7b74"
+        "sha256": "b192a39d3c8a1382cdd3c9fa68d0ccc05e77b768a0c75026ad164deddbf11a42"
       },
       {
         "path": "omnigent/omnigent/server/routes/dictation.py",
-        "sha256": "a086ddae9009df9325e49a758cc2e58145115466e85b0eafad7eb53d0558b64f"
+        "sha256": "d191dc76d7b96f1afad7b0d3f6f0ad1e5b1084780018f9620d88e0cdc7896da8"
       },
       {
         "path": "omnigent/omnigent/server/routes/sessions/routes_browser.py",
-        "sha256": "c84871c429df5e76e0653d0322ad2a676f2e25df1cdc557418629dd0e168283a"
+        "sha256": "ec2ffc826698dcf093c01e911f6108d619ac72ebd50093a93094718af56f0900"
       },
       {
         "path": "omnigent/omnigent/server/routes/imports.py",
-        "sha256": "ee575c1682a53158929bb12860df081561f673d3dcf2445b6e0705b9254b843d"
+        "sha256": "8b8c330b5fa98cfaa7a2c46d8195ddb41e8896332d23719dd233bd6b0f838ee2"
       },
       {
         "path": "omnigent/web/src/hooks/useTerminals.ts",
-        "sha256": "ee5601dd9aab60424182409fe79df089f335266c9942b19ecd91bf16637d8a72"
+        "sha256": "dada1f382aa5ccfc2823e9ee043fc2f6e07960cbe7c20a8659752c65f0a7738c"
       },
       {
         "path": "omnigent/web/src/components/blocks/TerminalView.tsx",
-        "sha256": "80a367b8ab8873956cd8a63417ab95293beb16af63f1749a7de14c355c5acab4"
+        "sha256": "48df2845ed339191355539e5b0ed6bbdbc86b11347073767bff925a900bbc42d"
       },
       {
         "path": "omnigent/web/src/lib/sessionUpdatesSocket.ts",
-        "sha256": "79d0114e85870ea7df637128a48362acc4186059f0ced93cccd39f63f204d5eb"
+        "sha256": "ae0e9e59b06ebcad7bd1dc858e025bab71f6d1062381e4af8f67ac80d9ac6104"
       },
       {
         "path": "omnigent/web/src/lib/dictation.ts",
@@ -48,19 +48,27 @@
       },
       {
         "path": "omnigent/web/src/lib/sessionsApi.ts",
-        "sha256": "2df2ca3baa8dda7e20c6dcaac32a70b885d63a70b70860650c26d4d94ed4d2ae"
+        "sha256": "71181c80e7e7aa56e23d3d92e30a66ff0deb971f8fedc18b969e29c7b4f1c5d9"
       },
       {
         "path": "omnigent/web/src/shell/ImportSessionsPanel.tsx",
-        "sha256": "f78b0ac8bb1ad3d0c01a9230ef6414e66158bac2a15ef1f6e57b01eae28e62f5"
+        "sha256": "993236b8449eda1abf75c3eefcb0440c7b6a5ca2df9089d44b2adb90fe6b492f"
       },
       {
         "path": "omnigent/omnigent/server/routes/sessions/routes_items.py",
-        "sha256": "236d49711b041f7a602b19e419e8596f0896f987d8cff4733a41598cf8be855c"
+        "sha256": "455b5c3e940dad50d8f45fafc0f55e807d2ac491a9a336747391865109b2ede6"
       },
       {
         "path": "omnigent/omnigent/runner/app.py",
-        "sha256": "accaf80bdf2692b17992be389a64299cad6cceb75aef94a8977577a9a8c3a961"
+        "sha256": "4d1a0f972192ee4914509de8bc7a52bffbfe49372274d1fdad8e2181cf88444f"
+      },
+      {
+        "path": "omnigent/omnigent/runner/resource_routes.py",
+        "sha256": "5b75707b54beb2dd0b9a389122e01608adf2b927e0ce8f2836ddad41dfaddbaa"
+      },
+      {
+        "path": "omnigent/web/src/shell/AppShell.tsx",
+        "sha256": "0523eea5e6daf8a9a349d27d320965ec76c43f42b48a8c6d9a773d1b80f0fb21"
       }
     ],
     "routeCount": 38,

@@ -12,7 +12,7 @@ const AVAILABLE: WorkflowChatBinding = {
   workflowId: 'wf-1',
   runId: 'run-1',
   logicalStepId: 'step-a',
-  chatUrl: '/omnigent-ui/workflow-chat/cb-1?embedded=1',
+  chatUrl: '/omnigent-ui/workflow-chat/cb-1?embedded=1&sidebar=closed',
   apiBase: '/api/workflow-chat-bindings/cb-1/omnigent',
   state: 'available',
   readOnly: false,
@@ -94,7 +94,7 @@ describe('WorkflowNativeChatRoute', () => {
 
     const frame = await screen.findByTitle('Ship the thing — Omnigent chat');
     expect(frame.tagName).toBe('IFRAME');
-    expect(frame.getAttribute('src')).toBe('/omnigent-ui/workflow-chat/cb-1?embedded=1');
+    expect(frame.getAttribute('src')).toBe('/omnigent-ui/workflow-chat/cb-1?embedded=1&sidebar=closed');
     // No legacy custom composer/transcript is rendered on the native path.
     expect(document.querySelector('textarea')).toBeNull();
     expect(screen.queryByTestId('chat-session-blocks')).toBeNull();
@@ -134,6 +134,26 @@ describe('WorkflowNativeChatRoute', () => {
     renderRoute(vi.fn(), false, { steps: [], onUnknownStep });
     expect(await screen.findByText('Step remediation:1')).toBeTruthy();
     expect(onUnknownStep).toHaveBeenCalledWith('remediation:1');
+  });
+
+  it('loads each new binding with the collapsed-sidebar parameter', async () => {
+    vi.useFakeTimers();
+    let binding: WorkflowChatBinding = AVAILABLE;
+    mockBinding(() => ({ body: binding }));
+    renderRoute();
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    const firstFrame = screen.getByTitle('Ship the thing — Omnigent chat');
+
+    binding = {
+      ...AVAILABLE,
+      chatBindingId: 'cb-2',
+      chatUrl: '/omnigent-ui/workflow-chat/cb-2?embedded=1&sidebar=closed',
+      apiBase: '/api/workflow-chat-bindings/cb-2/omnigent',
+    };
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    const nextFrame = screen.getByTitle('Ship the thing — Omnigent chat');
+    expect(nextFrame).not.toBe(firstFrame);
+    expect(nextFrame.getAttribute('src')).toBe(binding.chatUrl);
   });
 
   it('reloads the native frame when the bound session ends instead of leaving a stale live view', async () => {
