@@ -16,6 +16,9 @@ from moonmind.omnigent.settings import (
     omnigent_requires_certification,
 )
 from tests.artifact_access import access_for_test
+from tests.unit.services.test_omnigent_execution_plan_service import (
+    _compiler_dependency_owner,  # noqa: F401 - pytest fixture import
+)
 
 
 def test_omitted_blank_and_shipped_default_are_ordinary() -> None:

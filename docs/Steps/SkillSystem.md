@@ -348,24 +348,26 @@ required source content cannot be read.
 
 ### 10.3 Provenance
 
-The resolved snapshot records which Skills and content evidence were selected,
-where each came from, which selectors and policies influenced the result,
-which Skills were inherited or excluded, and which materialization mode was
-selected.
+Snapshots record selected content, provenance, selectors, policies, inheritance,
+exclusions and materialization mode.
 
 ---
 
 ## 11. Content Evidence, Immutability, and Replay
 
-Agent Skill content refs and digests are immutable; changing content creates
-new evidence under the same canonical Skill name. A `ResolvedSkillSet` is also
-immutable: a run or step carries an exact snapshot ref, retries and
-continue-as-new reuse it, reruns reuse the original by default, and
-re-resolution is explicit and creates a new snapshot.
+Skill content and resolved snapshots are immutable. Edits create new evidence,
+not replacements for admitted revisions. Producers seal exact content IDs and
+digests in the artifact owner's flat closure, reused by admission, retention and
+recovery. Idempotent producer retries preserve that closure.
 
-Full Skill bodies, large bundles, resolved manifests, prompt indexes, source
-traces, and materialization bundles live in artifacts or equivalent blob
-storage. Workflow history carries compact refs and bounded metadata only.
+Required content stays protected for its consumer's lifetime. Missing optional
+evidence allows partial availability; unavailable or changed required content
+blocks use. Retention grants no read permission, and quarantine and restricted-raw
+policy still apply.
+
+Backfill uses original manifests and recorded digests, never current Skill lookup.
+Bodies, bundles and manifests remain in artifacts; workflow history carries refs.
+Adapters consume admitted snapshots without rediscovery.
 
 ---
 
@@ -721,10 +723,11 @@ materialization metadata, and adapter-specific compatibility links.
 
 ## 20. Schedule, Rerun, and Replay Semantics
 
-Scheduled work stores Skill intent at schedule creation and resolves the actual
-`ResolvedSkillSet` when each run starts, unless the schedule explicitly carries
-a resolved snapshot ref; snapshot reuse is an explicit mode, not the silent
-default. Reruns reuse the original `ResolvedSkillSet` and do not silently
-re-resolve "latest" Skills; re-resolution requires explicit operator intent.
-Retries and continue-as-new preserve the same snapshot unless a new resolution
-is explicitly requested.
+A saved execution plan retains its exact resolved Skill snapshot, even while its
+schedule is disabled. Editing a current Skill does not replace frozen content.
+Unresolved selector-only schedules still express resolution intent, not a historical
+snapshot that migration may invent.
+
+Retries, reruns and continue-as-new preserve admitted snapshots by default. Explicit
+re-resolution creates a new snapshot and dependency closure; retained definitions
+and recovery never silently substitute the current Skill revision.

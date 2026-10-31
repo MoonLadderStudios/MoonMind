@@ -18,6 +18,9 @@ from api_service.services import omnigent_policies as policies
 from moonmind.omnigent.policies import PolicyDocument, PolicyState
 from tests.artifact_access import access_for_test
 from tests.unit.api.test_omnigent_policy_service import policy_db
+from tests.unit.services.test_omnigent_execution_plan_service import (
+    _compiler_dependency_owner,  # noqa: F401 - pytest fixture import
+)
 
 OLD_SERVER = "ghcr.io/example/omnigent-server@sha256:" + "a" * 64
 OLD_HOST = "ghcr.io/example/omnigent-host@sha256:" + "a" * 64

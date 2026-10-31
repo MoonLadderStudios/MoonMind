@@ -20751,7 +20751,8 @@ async def _admit_saved_work_publication(
         else str(canonical.run_id or "")
     )
     if not source_run_id or not any(
-        str(getattr(link, "workflow_id", "") or "") == canonical.workflow_id
+        str(getattr(link, "namespace", "") or "") == canonical.namespace
+        and str(getattr(link, "workflow_id", "") or "") == canonical.workflow_id
         and str(getattr(link, "run_id", "") or "") == source_run_id
         for link in links
     ):
@@ -20771,6 +20772,16 @@ async def _admit_saved_work_publication(
     try:
         manifest, publication_objects = parse_saved_work_publication_manifest(
             manifest_bytes
+        )
+        from moonmind.workflows.temporal.saved_work_dependencies import (
+            verify_saved_work_dependencies,
+        )
+
+        closure = await verify_saved_work_dependencies(
+            artifact_service, artifact=artifact, payload=manifest_bytes, access=access
+        )
+        required_ids = tuple(
+            entry.artifact_id for entry in closure.dependencies if entry.required
         )
         for publication_object in publication_objects:
             part, _links, _pinned, part_policy = await artifact_service.get_metadata(
@@ -20859,6 +20870,7 @@ async def _admit_saved_work_publication(
         dict.fromkeys(
             [
                 artifact_id,
+                *required_ids,
                 *(saved_work_artifact_id(item.ref) for item in publication_objects),
             ]
         )

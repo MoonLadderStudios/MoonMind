@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sys
@@ -13,22 +14,26 @@ import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.db import base
-from api_service.db.models import Base
+from api_service.db.models import Base, TemporalArtifact
 from api_service.services import omnigent_execution_plan_service as service
+from moonmind.config.settings import settings
+from moonmind.omnigent.bridge_artifacts import link_verified_execution_plan_inputs
 from moonmind.omnigent.harness_platform import execution_plan, stores
 from moonmind.workflows.temporal.activities import (
     omnigent_session_activities as admission,
 )
-from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
-from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
-from tests.artifact_access import access_for_test
-from tests.unit.services.test_omnigent_execution_plan_service import (  # noqa: F401 -- isolated deployment observation
-    _ready_opencode_image_pair,
+from moonmind.workflows.temporal.activities.omnigent_activities import (
+    _OnDemandTemporalArtifactService,
 )
-from tests.unit.services.test_omnigent_execution_plan_service import (
-    _ArtifactService,
+from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    LocalTemporalArtifactStore,
+)
+from tests.unit.services.test_omnigent_execution_plan_service import (  # noqa: F401 -- isolated deployment observation
     _compile_opencode_plan,
     _protected_support_evidence,
+    _ready_opencode_image_pair,
 )
 
 pytestmark = [
@@ -36,6 +41,66 @@ pytestmark = [
     pytest.mark.integration,
     pytest.mark.reliability_journey,
 ]
+
+
+WORKFLOW = "mm:plan-reader-replay"
+
+
+@pytest.fixture(autouse=True)
+def local_artifact_storage(tmp_path, monkeypatch):
+    # Runtime catalog probing is outside this retained plan reader boundary.
+    monkeypatch.setattr(
+        service, "_try_load_real_harness_config", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
+    monkeypatch.setattr(
+        settings.workflow, "temporal_artifact_root", str(tmp_path / "blobs")
+    )
+
+
+async def _admit_inputs(maker, compiled):
+    await link_verified_execution_plan_inputs(
+        session_factory=maker,
+        plan=compiled.envelope,
+        binding=compiled.binding,
+        workflow_id=WORKFLOW,
+        run_id="reader-run",
+        access=ArtifactAccessContext.for_service("user-1"),
+    )
+
+
+async def _read_artifact(artifacts, ref):
+    _, payload = await artifacts.read(
+        artifact_id=ref.removeprefix("artifact:"),
+        access=ArtifactAccessContext.for_execution(WORKFLOW),
+    )
+    return json.loads(payload)
+
+
+async def _task_input(artifacts):
+    return await service.persist_json_artifact(
+        artifact_service=artifacts,
+        principal="user-1",
+        artifact_class="workflow.task_input_snapshot",
+        payload={
+            "draft": {"workflow": {"instructions": "Preserve the admitted request."}}
+        },
+    )
+
+
+async def _corrupt_artifact(maker, ref, document):
+    # Deliberately corrupt persisted bytes and their transport checksum. This
+    # exercises the reader's immutable plan/source identity check, not a fake
+    # reader or merely the blob checksum guard.
+    payload = json.dumps(document).encode()
+    async with maker() as session:
+        row = await session.get(TemporalArtifact, ref.removeprefix("artifact:"))
+        LocalTemporalArtifactStore(
+            Path(settings.workflow.temporal_artifact_root)
+        ).write_bytes(row.storage_key, payload, content_type=row.content_type)
+        row.sha256 = hashlib.sha256(payload).hexdigest()
+        row.size_bytes = len(payload)
+        await session.commit()
 
 
 @pytest.fixture
@@ -83,7 +148,8 @@ async def test_new_plan_reaches_registered_admission_without_writer_reader_sha_m
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         maker = async_sessionmaker(engine, expire_on_commit=False)
-        artifacts = _ArtifactService()
+        artifacts = _OnDemandTemporalArtifactService(maker)
+        input_ref, input_digest = await _task_input(artifacts)
         monkeypatch.setattr(
             service,
             "resolve_execution_evidence",
@@ -104,11 +170,16 @@ async def test_new_plan_reaches_registered_admission_without_writer_reader_sha_m
         compiled = await _compile_opencode_plan(
             monkeypatch,
             artifacts=artifacts,
+            session_factory=maker,
+            workflow_id=WORKFLOW,
+            task_input_snapshot_ref=input_ref,
+            task_input_snapshot_digest=input_digest,
             launch_policy_ref="omnigent-on-demand@1",
             plan_store=stores.DbExecutionPlanStore(maker),
         )
+        await _admit_inputs(maker, compiled)
         # Artifact bytes and DB payload must both omit the redundant v1 field.
-        serialized = json.loads(artifacts.payloads[compiled.binding.plan_artifact_ref])
+        serialized = await _read_artifact(artifacts, compiled.binding.plan_artifact_ref)
         monkeypatch.setattr(base, "async_session_maker", maker)
         if reader == "retained":
             # Execute the actual reader source from the failing fleet, not a
@@ -124,11 +195,6 @@ async def test_new_plan_reaches_registered_admission_without_writer_reader_sha_m
                 retained_reader.verify_execution_plan_envelope,
             )
 
-        async def read_artifact(ref, *, access: ArtifactAccessContext):
-            assert isinstance(access, ArtifactAccessContext)
-            return json.loads(artifacts.payloads[ref])
-
-        monkeypatch.setattr(admission, "_read_json_artifact", read_artifact)
         monkeypatch.setattr(
             admission, "_plan_capacity_authority", AsyncMock(return_value={})
         )
@@ -165,15 +231,19 @@ async def test_new_plan_reaches_registered_admission_without_writer_reader_sha_m
             # admitted authority must reject replacement before any launch.
             planned = loaded.payload.supportIdentity.omnigentServerBuildRef
             monkeypatch.setattr(
-                retained_preflight, "resolve_deployed_server_build_digest", lambda: planned
+                retained_preflight,
+                "resolve_deployed_server_build_digest",
+                lambda: planned,
             )
             monkeypatch.setattr(
-                retained_preflight, "_resolve_deployed_host_image_ref",
+                retained_preflight,
+                "_resolve_deployed_host_image_ref",
                 lambda _: loaded.payload.hostImageRef,
             )
             retained_preflight.assert_plan_matches_deployed_runtime(loaded.payload)
             monkeypatch.setattr(
-                retained_preflight, "resolve_deployed_server_build_digest",
+                retained_preflight,
+                "resolve_deployed_server_build_digest",
                 lambda: "sha256:" + "f" * 64,
             )
             with pytest.raises(retained_preflight.OmnigentDeploymentIdentityConflict):
@@ -203,12 +273,10 @@ async def test_new_plan_reaches_registered_admission_without_writer_reader_sha_m
             with pytest.raises(Exception):
                 retained_reader.verify_execution_plan_envelope(ordinary_wire)
         serialized["payload"]["model"]["effort"] = "changed"
-        artifacts.payloads[compiled.binding.plan_artifact_ref] = json.dumps(
-            serialized
-        ).encode()
+        await _corrupt_artifact(maker, compiled.binding.plan_artifact_ref, serialized)
         with pytest.raises(ValueError, match="digest mismatch|supportIdentity"):
             await admission._load_verified_execution_plan(
-                compiled.binding, access=access_for_test("service:omnigent-session")
+                compiled.binding, access=ArtifactAccessContext.for_execution(WORKFLOW)
             )
     finally:
         await engine.dispose()
@@ -230,7 +298,8 @@ async def test_stable_upstream_agent_source_survives_admission(tmp_path, monkeyp
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         maker = async_sessionmaker(engine, expire_on_commit=False)
-        artifacts = _ArtifactService()
+        artifacts = _OnDemandTemporalArtifactService(maker)
+        input_ref, input_digest = await _task_input(artifacts)
         monkeypatch.setattr(
             service,
             "resolve_execution_evidence",
@@ -239,6 +308,10 @@ async def test_stable_upstream_agent_source_survives_admission(tmp_path, monkeyp
         compiled = await _compile_opencode_plan(
             monkeypatch,
             artifacts=artifacts,
+            session_factory=maker,
+            workflow_id=WORKFLOW,
+            task_input_snapshot_ref=input_ref,
+            task_input_snapshot_digest=input_digest,
             launch_policy_ref="omnigent-on-demand@1",
             plan_store=stores.DbExecutionPlanStore(maker),
             document_source={
@@ -247,11 +320,12 @@ async def test_stable_upstream_agent_source_survives_admission(tmp_path, monkeyp
                 "upstreamSnapshotDigest": stable_projection,
             },
         )
+        await _admit_inputs(maker, compiled)
         planned_source = compiled.envelope.payload.agentSource
         profile_ref = compiled.envelope.payload.agentProfileSnapshotRef.removeprefix(
             "artifact:"
         )
-        profile_snapshot = json.loads(artifacts.payloads[profile_ref])
+        profile_snapshot = await _read_artifact(artifacts, profile_ref)
         # The incident's precondition: the stable source digest and the
         # profile version digest are different values.
         assert planned_source["upstreamSnapshotDigest"] == stable_projection
@@ -259,27 +333,22 @@ async def test_stable_upstream_agent_source_survives_admission(tmp_path, monkeyp
 
         monkeypatch.setattr(base, "async_session_maker", maker)
 
-        async def read_artifact(ref, *, access: ArtifactAccessContext):
-            assert isinstance(access, ArtifactAccessContext)
-            return json.loads(artifacts.payloads[ref])
-
-        monkeypatch.setattr(admission, "_read_json_artifact", read_artifact)
         loaded = await admission._load_verified_execution_plan(
-            compiled.binding, access=access_for_test("service:omnigent-session")
+            compiled.binding, access=ArtifactAccessContext.for_execution(WORKFLOW)
         )
         assert loaded.payload.agentSource["upstreamSnapshotDigest"] == (
             stable_projection
         )
 
         # A genuinely different upstream projection must still be rejected.
-        conflicting = json.loads(artifacts.payloads[profile_ref])
+        conflicting = await _read_artifact(artifacts, profile_ref)
         conflicting["document"]["source"]["upstreamSnapshotDigest"] = (
             "sha256:" + "b" * 64
         )
-        artifacts.payloads[profile_ref] = json.dumps(conflicting).encode()
+        await _corrupt_artifact(maker, profile_ref, conflicting)
         with pytest.raises(ValueError, match="conflicts with planned source identity"):
             await admission._load_verified_execution_plan(
-                compiled.binding, access=access_for_test("service:omnigent-session")
+                compiled.binding, access=ArtifactAccessContext.for_execution(WORKFLOW)
             )
     finally:
         await engine.dispose()
@@ -301,7 +370,8 @@ async def test_plan_compiled_by_the_previous_writer_still_admits(tmp_path, monke
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         maker = async_sessionmaker(engine, expire_on_commit=False)
-        artifacts = _ArtifactService()
+        artifacts = _OnDemandTemporalArtifactService(maker)
+        input_ref, input_digest = await _task_input(artifacts)
         monkeypatch.setattr(
             service,
             "resolve_execution_evidence",
@@ -317,6 +387,10 @@ async def test_plan_compiled_by_the_previous_writer_still_admits(tmp_path, monke
         compiled = await _compile_opencode_plan(
             monkeypatch,
             artifacts=artifacts,
+            session_factory=maker,
+            workflow_id=WORKFLOW,
+            task_input_snapshot_ref=input_ref,
+            task_input_snapshot_digest=input_digest,
             launch_policy_ref="omnigent-on-demand@1",
             plan_store=stores.DbExecutionPlanStore(maker),
             document_source={
@@ -325,10 +399,11 @@ async def test_plan_compiled_by_the_previous_writer_still_admits(tmp_path, monke
                 "upstreamSnapshotDigest": stable_projection,
             },
         )
+        await _admit_inputs(maker, compiled)
         profile_ref = compiled.envelope.payload.agentProfileSnapshotRef.removeprefix(
             "artifact:"
         )
-        profile_snapshot = json.loads(artifacts.payloads[profile_ref])
+        profile_snapshot = await _read_artifact(artifacts, profile_ref)
         # The historical shape: the plan pins the version digest while the
         # artifact's document carries a different stable projection digest.
         assert compiled.envelope.payload.agentSource["upstreamSnapshotDigest"] == (
@@ -341,27 +416,22 @@ async def test_plan_compiled_by_the_previous_writer_still_admits(tmp_path, monke
 
         monkeypatch.setattr(base, "async_session_maker", maker)
 
-        async def read_artifact(ref, *, access: ArtifactAccessContext):
-            assert isinstance(access, ArtifactAccessContext)
-            return json.loads(artifacts.payloads[ref])
-
-        monkeypatch.setattr(admission, "_read_json_artifact", read_artifact)
         loaded = await admission._load_verified_execution_plan(
-            compiled.binding, access=access_for_test("service:omnigent-session")
+            compiled.binding, access=ArtifactAccessContext.for_execution(WORKFLOW)
         )
         assert loaded.planRef == compiled.envelope.planRef
 
         # A different Agent Profile artifact must still be rejected, even
         # though the legacy version digest is accepted for historical plans.
-        conflicting = json.loads(artifacts.payloads[profile_ref])
+        conflicting = await _read_artifact(artifacts, profile_ref)
         conflicting["digest"] = "sha256:" + "c" * 64
         conflicting["document"]["source"]["upstreamSnapshotDigest"] = (
             "sha256:" + "b" * 64
         )
-        artifacts.payloads[profile_ref] = json.dumps(conflicting).encode()
+        await _corrupt_artifact(maker, profile_ref, conflicting)
         with pytest.raises(ValueError, match="conflicts with planned source identity"):
             await admission._load_verified_execution_plan(
-                compiled.binding, access=access_for_test("service:omnigent-session")
+                compiled.binding, access=ArtifactAccessContext.for_execution(WORKFLOW)
             )
     finally:
         await engine.dispose()

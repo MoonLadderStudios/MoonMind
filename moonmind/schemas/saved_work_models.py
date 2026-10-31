@@ -874,3 +874,137 @@ def saved_work_artifact_metadata(
             ),
         }
     }
+
+
+def saved_work_artifact_dependencies(
+    artifact_kind: str, payload: bytes
+) -> list[dict[str, Any]]:
+    """Describe the producer's immutable artifact inputs, not access grants.
+
+    Git baselines remain external restore prerequisites, not artifact IDs.
+    The artifact owner verifies these descriptors before publishing the root.
+    """
+    if artifact_kind not in {
+        "saved_work_manifest",
+        "checkpoint_manifest",
+        "step_execution_checkpoint",
+    }:
+        return []
+    document = json.loads(payload)
+    if not isinstance(document, dict):
+        raise TypeError("Saved-work index must be an object")
+    dependencies: list[dict[str, Any]] = []
+
+    def add(ref, digest, role, required=True):
+        if not ref:
+            return
+        artifact_id = _artifact_id_from_ref(ref)
+        if not artifact_id or not artifact_id.startswith("art_"):
+            raise ValueError("Saved-work dependency must name a durable artifact")
+        dependencies.append(
+            {
+                "artifact_id": artifact_id,
+                "sha256": str(digest).removeprefix("sha256:") if digest else None,
+                "required": required,
+                "role": role,
+            }
+        )
+
+    if artifact_kind == "saved_work_manifest":
+        required_formats = set(document.get("requiredFormats") or [])
+        for output in document.get("outputs") or []:
+            add(
+                output.get("ref"),
+                output.get("digest"),
+                "saved_work.output." + str(output.get("format") or "unknown"),
+                output.get("format") in required_formats,
+            )
+        # Publication reads a recorded delta even when the capture profile
+        # makes that output format optional or a historical summary omits it.
+        git = document.get("git") or {}
+        add(git.get("deltaRef"), git.get("deltaDigest"), "saved_work.git_delta")
+        # The task snapshot is provenance, not required to restore the bytes.
+        source = document.get("source") or {}
+        add(
+            source.get("taskInputSnapshotRef"),
+            source.get("taskInputSnapshotDigest"),
+            "saved_work.source_task",
+            False,
+        )
+        return dependencies
+
+    if artifact_kind == "step_execution_checkpoint":
+        # Canonical checkpoints may keep these compact inputs in their own
+        # Temporal history. They are not blobs governed by artifact retention.
+        source = document.get("source") or {}
+        workflow_id, run_id = source.get("workflowId"), source.get("runId")
+        for field, suffix, role in (
+            ("taskInputSnapshotRef", "task-input", "checkpoint.task"),
+            ("planRef", "plan", "checkpoint.plan"),
+        ):
+            ref = document.get(field)
+            if (
+                workflow_id
+                and run_id
+                and ref == f"temporal://{workflow_id}/{run_id}/{suffix}"
+            ):
+                continue
+            # planDigest identifies the envelope, not the artifact's bytes.
+            add(ref, None, role)
+        for ref in document.get("preparedInputRefs") or []:
+            add(ref, None, "checkpoint.prepared_input")
+        workspace = document.get("workspace") or {}
+        for field, digest_field in (
+            ("manifestRef", "manifestDigest"),
+            ("archiveRef", "archiveDigest"),
+            ("patchRef", "patchDigest"),
+            ("externalStateRef", None),
+        ):
+            add(
+                workspace.get(field),
+                workspace.get(digest_field) if digest_field else None,
+                "checkpoint.workspace." + field,
+            )
+        omnigent = document.get("omnigentCheckpoint") or {}
+        for field, digest_field in (
+            ("externalStateRef", "externalStateDigest"),
+            ("headRef", "headDigest"),
+            ("workspaceCheckpointRef", "workspaceCheckpointDigest"),
+            ("diffRef", "diffDigest"),
+            ("resourceManifestRef", "resourceManifestDigest"),
+            ("captureManifestRef", "captureManifestDigest"),
+        ):
+            add(
+                omnigent.get(field),
+                omnigent.get(digest_field),
+                "checkpoint.omnigent." + field,
+            )
+        for field in ("instructionRefs", "contextRefs"):
+            for ref in omnigent.get(field) or []:
+                add(ref, None, "checkpoint.omnigent." + field)
+        for field in ("terminalRef", "diagnosticsRef"):
+            add(omnigent.get(field), None, "checkpoint.omnigent." + field, False)
+        return dependencies
+
+    # Sandbox checkpoint schema and retained managed capture schema.
+    add(document.get("archiveRef"), document.get("archiveDigest"), "checkpoint.archive")
+    add(document.get("patchRef"), document.get("patchDigest"), "checkpoint.patch")
+    archive = document.get("archive") or {}
+    add(
+        archive.get("ref"),
+        archive.get("sha256") or archive.get("digest"),
+        "checkpoint.archive",
+    )
+    git = document.get("git") or {}
+    index = git.get("indexPatch") or document.get("indexPatch") or {}
+    add(index.get("ref"), index.get("digest"), "checkpoint.index")
+    history = document.get("gitHistory") or {}
+    add(history.get("ref"), history.get("digest"), "checkpoint.history")
+    # Nested worktrees carry their own Git objects and partially staged index.
+    # Restore requires each recorded object after the source host is gone.
+    for module in git.get("submodules") or []:
+        history = module.get("gitHistory") or {}
+        add(history.get("ref"), history.get("digest"), "checkpoint.submodule.history")
+        index = (module.get("git") or {}).get("indexPatch") or {}
+        add(index.get("ref"), index.get("digest"), "checkpoint.submodule.index")
+    return dependencies

@@ -26,6 +26,7 @@ from moonmind.workflows.temporal.artifacts import (
 from tests.artifact_access import access_for_test
 from tests.unit.services.test_omnigent_execution_plan_service import (
     _ArtifactService,
+    _compiler_dependency_owner,  # noqa: F401 - pytest fixture import
     _configure_ready_host_image_pair,
     _PlanStore,
     _policy_snapshot,
@@ -41,7 +42,8 @@ _TASK_DIGEST = "sha256:" + "1" * 64
 class _OccurrenceSession:
     """Admission lookup rows and staged compiler artifact metadata."""
 
-    def __init__(self, provider) -> None:
+    def __init__(self, provider, *, artifacts) -> None:
+        self.artifacts = artifacts
         self.provider = provider
         self.commits = 0
         self.rollbacks = 0
@@ -58,6 +60,18 @@ class _OccurrenceSession:
             return SimpleNamespace(
                 created_by_principal="original-task-principal",
                 sha256=_TASK_DIGEST.removeprefix("sha256:"),
+            )
+        if model is TemporalArtifact and key in self.artifacts.payloads:
+            from hashlib import sha256
+
+            # Exact serialized root bytes from the same fake compiler owner,
+            # not a permissive metadata row for arbitrary requested IDs.
+            return SimpleNamespace(
+                artifact_id=key,
+                sha256=sha256(self.artifacts.payloads[key]).hexdigest(),
+                dependency_closure_version=None,
+                dependency_closure_sha256=None,
+                dependency_request_sha256=None,
             )
         return None
 
@@ -216,7 +230,7 @@ async def test_occurrence_binds_the_newly_installed_host_without_schedule_rewrit
 
     # A routine release installs a rebuilt host and server of the same family.
     _install(monkeypatch, host=_REPO + "8" * 64, server=_SERVER + "9" * 64)
-    session = _OccurrenceSession(_provider())
+    session = _OccurrenceSession(_provider(), artifacts=artifacts)
     admitted = await RecurringWorkflowsService(
         session, artifact_service=artifacts
     ).admit_occurrence_execution_plan(
@@ -263,7 +277,7 @@ async def test_occurrence_keeps_its_recorded_plan_for_a_foreign_host_family(
         host="ghcr.io/example/other-host@sha256:" + "8" * 64,
         server=_SERVER + "9" * 64,
     )
-    session = _OccurrenceSession(_provider())
+    session = _OccurrenceSession(_provider(), artifacts=artifacts)
     admitted = await RecurringWorkflowsService(
         session, artifact_service=artifacts
     ).admit_occurrence_execution_plan(
@@ -294,7 +308,7 @@ async def test_worker_activity_admits_the_occurrence_through_the_schedule_owner(
     artifacts = _ArtifactService()
     parameters, _stored_plan = await _schedule_parameters(artifacts)
     _install(monkeypatch, host=_REPO + "8" * 64, server=_SERVER + "9" * 64)
-    session = _OccurrenceSession(_provider())
+    session = _OccurrenceSession(_provider(), artifacts=artifacts)
 
     @asynccontextmanager
     async def session_maker():
@@ -380,7 +394,7 @@ async def test_step_successor_binds_the_installed_runtime_with_the_same_intent(
 
     # An update replaced the host and server while the Step was running.
     _install(monkeypatch, host=_REPO + "8" * 64, server=_SERVER + "9" * 64)
-    session = _OccurrenceSession(_provider())
+    session = _OccurrenceSession(_provider(), artifacts=artifacts)
     admitted = await _successor_admission(monkeypatch, artifacts, parameters, session)
 
     assert admitted["disposition"] == "admitted"
@@ -417,7 +431,7 @@ async def test_step_successor_keeps_the_recorded_plan_when_intent_would_change(
     edited = SimpleNamespace(
         profile_id="codex", runtime_id="codex_cli", provider_id="azure-openai"
     )
-    session = _OccurrenceSession(edited)
+    session = _OccurrenceSession(edited, artifacts=artifacts)
     admitted = await _successor_admission(monkeypatch, artifacts, parameters, session)
 
     assert admitted["disposition"] == "recorded"
@@ -441,7 +455,7 @@ async def test_occurrence_without_a_snapshot_keeps_its_plan_when_its_task_is_unr
     # frozen task input is no longer readable.
     parameters.pop("agentProfileSnapshot")
 
-    session = _OccurrenceSession(_provider())
+    session = _OccurrenceSession(_provider(), artifacts=artifacts)
     admitted = await RecurringWorkflowsService(
         session, artifact_service=artifacts
     ).admit_occurrence_execution_plan(
@@ -463,7 +477,7 @@ async def test_step_successor_keeps_the_recorded_plan_it_cannot_compare(
     parameters, _recorded_plan = await _schedule_parameters(artifacts)
     _PlanStore.plans.pop(parameters["omnigentExecutionPlan"]["planRef"])
 
-    session = _OccurrenceSession(_provider())
+    session = _OccurrenceSession(_provider(), artifacts=artifacts)
     admitted = await _successor_admission(monkeypatch, artifacts, parameters, session)
 
     assert admitted == {
@@ -476,8 +490,11 @@ async def test_step_successor_keeps_the_recorded_plan_it_cannot_compare(
 class _ChildSuccessorSession:
     """The real repository-connection database plus the rows admission reads."""
 
-    def __init__(self, session, provider, *, task_ref: str, task_digest: str):
+    def __init__(
+        self, session, provider, *, task_ref: str, task_digest: str, artifacts
+    ):
         self._session = session
+        self.artifacts = artifacts
         self.provider = provider
         self.task_ref = task_ref
         self.task_digest = task_digest
@@ -495,7 +512,18 @@ class _ChildSuccessorSession:
                 created_by_principal="user-1",
                 sha256=self.task_digest.removeprefix("sha256:"),
             )
-        return await self._session.get(model, key, **kwargs)
+        row = await self._session.get(model, key, **kwargs)
+        if row is None and model is TemporalArtifact and key in self.artifacts.payloads:
+            from hashlib import sha256
+
+            return SimpleNamespace(
+                artifact_id=key,
+                sha256=sha256(self.artifacts.payloads[key]).hexdigest(),
+                dependency_closure_version=None,
+                dependency_closure_sha256=None,
+                dependency_request_sha256=None,
+            )
+        return row
 
     async def commit(self):
         self.commits += 1
@@ -576,6 +604,7 @@ async def test_resolver_child_successor_binds_the_installed_runtime_with_its_aut
                     provider,
                     task_ref=current.get("taskRef", ""),
                     task_digest=current.get("taskDigest", ""),
+                    artifacts=artifacts,
                 )
                 yield current["session"]
 
@@ -756,6 +785,7 @@ async def test_step_successor_keeps_the_recorded_plan_when_its_repository_route_
                 provider,
                 task_ref="art_request_1",
                 task_digest="sha256:" + "1" * 64,
+                artifacts=artifacts,
             )
             yield current["session"]
 
@@ -815,18 +845,34 @@ async def test_step_successor_keeps_the_recorded_plan_when_its_repository_route_
             **access["source"],
             "snapshotRef": "repository-access-snapshot:" + plan_service._sha256(body),
         }
-        _PlanStore.plans[recorded.envelope.planRef] = recorded.envelope.model_copy(
-            update={
-                "payload": payload.model_copy(
-                    update={
-                        "resolvedTools": {
-                            **payload.resolvedTools,
-                            "repositoryAccess": access,
-                        }
-                    }
-                )
-            }
+        from moonmind.omnigent.harness_platform.execution_plan import (
+            create_execution_plan_envelope,
         )
+
+        historical = create_execution_plan_envelope(
+            payload.model_copy(
+                update={
+                    "resolvedTools": {
+                        **payload.resolvedTools,
+                        "repositoryAccess": access,
+                    },
+                }
+            )
+        )
+        # A recorded prior selection must remain an internally consistent
+        # immutable envelope, not mutate payload underneath the old plan hash.
+        root_id = "art_historical_route_plan"
+        artifacts.payloads[root_id] = plan_service._json_bytes(
+            historical.model_dump(mode="json", by_alias=True)
+        )
+        _PlanStore.plans[historical.planRef] = historical
+        parameters["omnigentExecutionPlan"] = recorded.binding.model_copy(
+            update={
+                "plan_ref": historical.planRef,
+                "plan_digest": "sha256:" + historical.planRef.rsplit(":", 1)[-1],
+                "plan_artifact_ref": root_id,
+            }
+        ).model_dump(mode="json", by_alias=True, exclude_none=True)
         moved = await admit(parameters)
     finally:
         await engine.dispose()

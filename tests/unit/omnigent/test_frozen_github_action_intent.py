@@ -20,13 +20,12 @@ from moonmind.omnigent.workspace_intent import (
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from tests.artifact_access import access_for_test
 from tests.unit.services.test_omnigent_execution_plan_service import (  # noqa: F401
-    _ready_opencode_image_pair,
-)
-from tests.unit.services.test_omnigent_execution_plan_service import (
     _compile_opencode_plan,
+    _compiler_dependency_owner,
     _configure_github_repository_plan_test,
     _PlanStore,
     _ReadableRepositoryPlanArtifacts,
+    _ready_opencode_image_pair,
 )
 
 

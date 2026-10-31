@@ -359,6 +359,27 @@ def _checkpoint_payload_identity(payload: bytes) -> tuple[str, int]:
     return "sha256:" + hashlib.sha256(payload).hexdigest(), len(payload)
 
 
+async def _seal_saved_work_artifact(
+    service, artifact, *, artifact_kind, payload, principal="system", access=None
+):
+    from moonmind.schemas.saved_work_models import saved_work_artifact_dependencies
+    from moonmind.workflows.temporal.artifacts import ArtifactDependency
+
+    access = access or ArtifactAccessContext.for_service(principal)
+    entries = saved_work_artifact_dependencies(artifact_kind, payload)
+    for entry in entries:
+        if entry["required"] and entry["sha256"] is None:
+            metadata, *_ = await service.get_metadata(
+                artifact_id=entry["artifact_id"], access=access
+            )
+            entry["sha256"] = metadata.sha256
+    await service.record_verified_dependencies(
+        root_artifact_id=artifact.artifact_id,
+        dependencies=[ArtifactDependency(**item) for item in entries],
+        access=access,
+    )
+
+
 def _saved_work_execution_link(model: Any) -> ExecutionRef:
     """Build the owning-execution link for every saved-work artifact.
 
@@ -2756,16 +2777,30 @@ class TemporalSandboxActivities:
             artifact_kind = str(
                 (metadata or {}).get("artifact_kind") or "checkpoint"
             ).strip()
-            completed, _reused = (
-                await self._artifact_service.put_content_addressed_payload_complete(
-                    principal="system",
-                    payload=payload,
-                    content_type=content_type,
-                    metadata_json=dict(metadata or {}),
-                    scope=artifact_kind,
-                    link=_checkpoint_activity_execution_link(),
-                )
+            (
+                completed,
+                _reused,
+            ) = await self._artifact_service.put_content_addressed_payload_complete(
+                principal="system",
+                payload=payload,
+                content_type=content_type,
+                metadata_json=dict(metadata or {}),
+                scope=artifact_kind,
+                link=None,
             )
+            await _seal_saved_work_artifact(
+                self._artifact_service,
+                completed,
+                artifact_kind=artifact_kind,
+                payload=payload,
+            )
+            execution_link = _checkpoint_activity_execution_link()
+            if execution_link is not None:
+                await self._artifact_service.link_artifact(
+                    artifact_id=completed.artifact_id,
+                    principal="system",
+                    execution_ref=execution_link,
+                )
             return _compact_artifact_ref_text(build_artifact_ref(completed))
         artifact = self._artifact_store.put_bytes(
             payload,
@@ -6519,6 +6554,29 @@ class TemporalAgentRuntimeActivities:
                     "PUBLICATION_CONTENT_INVALID",
                     "saved-work object has an unexpected content type",
                 )
+            from moonmind.workflows.temporal.saved_work_dependencies import (
+                verify_saved_work_dependencies,
+            )
+
+            try:
+                await verify_saved_work_dependencies(
+                    self._artifact_service,
+                    artifact=artifact,
+                    payload=body,
+                    access=ArtifactAccessContext.for_activity(
+                        principal=_SAVED_WORK_PUBLICATION_PRINCIPAL
+                    ),
+                )
+            except TemporalArtifactAuthorizationError as exc:
+                raise SavedPublicationError(
+                    "PUBLICATION_SAVED_WORK_UNAUTHORIZED",
+                    "saved-work dependency is not readable by the admitted owner",
+                ) from exc
+            except (TemporalArtifactNotFoundError, TemporalArtifactStateError) as exc:
+                raise SavedPublicationError(
+                    "PUBLICATION_SAVED_WORK_UNAVAILABLE",
+                    "saved-work dependency closure is unavailable",
+                ) from exc
             return body
 
         publisher = PublishService()
@@ -7583,18 +7641,19 @@ class TemporalAgentRuntimeActivities:
         artifact_kind: str,
         link: ExecutionRef | dict[str, Any] | None = None,
     ) -> str:
-        completed, _reused = (
-            await self._artifact_service.put_content_addressed_payload_complete(
-                principal="system",
-                payload=payload,
-                content_type=content_type,
-                scope=artifact_kind,
-                link=link,
-                metadata_json={
-                    "artifact_kind": artifact_kind,
-                    **saved_work_artifact_metadata(artifact_kind, payload),
-                },
-            )
+        (
+            completed,
+            _reused,
+        ) = await self._artifact_service.put_content_addressed_payload_complete(
+            principal="system",
+            payload=payload,
+            content_type=content_type,
+            scope=artifact_kind,
+            link=None,
+            metadata_json={
+                "artifact_kind": artifact_kind,
+                **saved_work_artifact_metadata(artifact_kind, payload),
+            },
         )
         # Bind the retry to the expected capture candidate: a reused
         # COMPLETE artifact carrying different bytes must fail (or start an
@@ -7607,6 +7666,18 @@ class TemporalAgentRuntimeActivities:
             expected_size_bytes=size,
             artifact=completed,
         )
+        await _seal_saved_work_artifact(
+            self._artifact_service,
+            completed,
+            artifact_kind=artifact_kind,
+            payload=payload,
+        )
+        if link is not None:
+            await self._artifact_service.link_artifact(
+                artifact_id=completed.artifact_id,
+                principal="system",
+                execution_ref=link,
+            )
         return _compact_artifact_ref_text(build_artifact_ref(completed))
 
     async def agent_runtime_restore_workspace_checkpoint(
@@ -17145,18 +17216,61 @@ class TemporalCheckpointActivities:
         metadata: Mapping[str, Any] | None = None,
     ) -> str:
         if self._artifact_service is not None:
-            artifact, _upload = await self._artifact_service.create(
-                principal=self._principal,
-                content_type=content_type,
-                metadata_json=dict(metadata or {}),
-                link=_checkpoint_activity_execution_link(),
+            from copy import copy
+
+            from moonmind.workflows.temporal.artifacts import (
+                ArtifactTransactionOwnership,
             )
-            completed = await self._artifact_service.write_complete(
-                artifact_id=artifact.artifact_id,
-                principal=self._principal,
-                payload=payload,
-                content_type=content_type,
+
+            # Keep the injected store, limits and policy configuration while
+            # composing this bounded publication under one explicit owner.
+            original = self._artifact_service
+            service = copy(original)
+            owns_transaction = (
+                original._transaction_ownership
+                is ArtifactTransactionOwnership.STANDALONE
             )
+            service._transaction_ownership = ArtifactTransactionOwnership.CALLER
+            access = ArtifactAccessContext.for_activity(principal=self._principal)
+            execution_link = _checkpoint_activity_execution_link()
+            if execution_link is None:
+                raise TemporalActivityRuntimeError(
+                    "Checkpoint publication requires Activity identity"
+                )
+            try:
+                artifact, _upload = await service.create(
+                    principal=self._principal,
+                    content_type=content_type,
+                    metadata_json=dict(metadata or {}),
+                    link=execution_link,
+                )
+                completed = await service.write_complete(
+                    artifact_id=artifact.artifact_id,
+                    principal=self._principal,
+                    payload=payload,
+                    content_type=content_type,
+                )
+                await _seal_saved_work_artifact(
+                    service,
+                    completed,
+                    artifact_kind=str(
+                        (metadata or {}).get("artifact_kind") or "checkpoint"
+                    ),
+                    payload=payload,
+                    principal=self._principal,
+                    access=access,
+                )
+                if owns_transaction:
+                    await service._repository.commit()
+            except BaseException as primary:
+                if owns_transaction:
+                    try:
+                        await service._repository._session.rollback()
+                    except BaseException as cleanup:  # noqa: BLE001 - preserve the primary failure, including cancellation.
+                        primary.add_note(
+                            f"Checkpoint rollback failed: {type(cleanup).__name__}"
+                        )
+                raise
             return canonical_artifact_ref(
                 _compact_artifact_ref_text(build_artifact_ref(completed))
             )

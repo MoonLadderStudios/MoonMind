@@ -17,6 +17,12 @@ from moonmind.omnigent.host_image_drift import (
     reconcile_effective_launch_to_selected_host,
 )
 from tests.artifact_access import access_for_test
+from tests.unit.services.test_omnigent_execution_plan_service import (
+    _ArtifactService as _DependencyRecordingArtifacts,
+)
+from tests.unit.services.test_omnigent_execution_plan_service import (
+    _compiler_dependency_owner,  # noqa: F401 - pytest fixture import
+)
 
 
 def _launch(
@@ -127,10 +133,9 @@ def test_reconcile_placeholders_and_mutable_tags_fail_closed():
     )
 
 
-class _ArtifactService:
+class _ArtifactService(_DependencyRecordingArtifacts):
     def __init__(self) -> None:
-        self.payloads: dict[str, bytes] = {}
-        self._index = 0
+        super().__init__()
 
     async def create(self, **_kwargs):
         self._index += 1

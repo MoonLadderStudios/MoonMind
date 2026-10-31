@@ -39,6 +39,7 @@ from tests.helpers.repository_connections import (
 from tests.unit.services.test_omnigent_execution_plan_service import (  # noqa: F401
     _ArtifactService,
     _compile_opencode_plan,
+    _compiler_dependency_owner,
     _ready_opencode_image_pair,
 )
 
