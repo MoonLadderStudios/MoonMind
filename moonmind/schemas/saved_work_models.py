@@ -919,6 +919,10 @@ def saved_work_artifact_dependencies(
                 "saved_work.output." + str(output.get("format") or "unknown"),
                 output.get("format") in required_formats,
             )
+        # Publication reads a recorded delta even when the capture profile
+        # makes that output format optional or a historical summary omits it.
+        git = document.get("git") or {}
+        add(git.get("deltaRef"), git.get("deltaDigest"), "saved_work.git_delta")
         # The task snapshot is provenance, not required to restore the bytes.
         source = document.get("source") or {}
         add(
@@ -996,4 +1000,11 @@ def saved_work_artifact_dependencies(
     add(index.get("ref"), index.get("digest"), "checkpoint.index")
     history = document.get("gitHistory") or {}
     add(history.get("ref"), history.get("digest"), "checkpoint.history")
+    # Nested worktrees carry their own Git objects and partially staged index.
+    # Restore requires each recorded object after the source host is gone.
+    for module in git.get("submodules") or []:
+        history = module.get("gitHistory") or {}
+        add(history.get("ref"), history.get("digest"), "checkpoint.submodule.history")
+        index = (module.get("git") or {}).get("indexPatch") or {}
+        add(index.get("ref"), index.get("digest"), "checkpoint.submodule.index")
     return dependencies
