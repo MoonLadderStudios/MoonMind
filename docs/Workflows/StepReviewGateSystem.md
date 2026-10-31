@@ -317,14 +317,14 @@ replay coverage or the existing versioned migration mechanism.
 
 ## Current source and delayed evidence ownership
 
-The portable `acceptance/v1` verification map binds each obligation to the current
-original source, declared proof method and relevant target. A source-bound report
-carries the actual byte inventory and its digest for both passing and nonpassing
-judgments. Suggestions remain advisory. The original issue brief is the source
-of authority; an initial assessment and its `BLOCKED` verdict remain history.
-When old requirement IDs were invented or superseded, source-byte selectors and
-recorded scope reconciliation preserve the explanation while replacing the old
-map. This does not authorize omitting a current mandatory source obligation.
+Portable `acceptance/v1` evidence binds every mandatory obligation to original
+source bytes, its proof method and target. Passing and nonpassing judgments retain
+the byte inventory and digest. Target comparison recognizes supported public
+GitHub clone URLs and `owner/repo` aliases while binding the host, repository, ref,
+revision and content digest. The original issue brief remains authoritative;
+suggestions and initial assessments, including `BLOCKED`, grant no completion
+authority. Source-byte selectors and recorded scope reconciliation explain
+replaced requirement IDs without omitting a current mandatory obligation.
 
 After preserving an incomplete candidate PR, `MoonMind.UserWorkflow` owns delayed
 CI evidence through its existing issue claim and remediation budgets. The

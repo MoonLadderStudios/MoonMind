@@ -631,6 +631,7 @@ RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH = "run-trusted-issue-brief-authority-v1"
 # New gates bind objective acceptance; old histories retain their recorded routing.
 RUN_ACCEPTANCE_EVIDENCE_PATCH = "run-acceptance-evidence-v1"
 RUN_ACCEPTANCE_SOURCE_HANDOFF_PATCH = "run-acceptance-source-handoff-v1"
+RUN_ACCEPTANCE_REPOSITORY_IDENTITY_PATCH = "run-acceptance-repository-identity-v1"
 RUN_ISSUE_EVIDENCE_CONTINUATION_PATCH = "run-issue-evidence-continuation-v1"
 RUN_ISSUE_EVIDENCE_ELIGIBILITY_PATCH = "run-issue-evidence-eligibility-v1"
 # Issue-driven PRs and preserved-draft summaries name the trusted source issue
@@ -5412,6 +5413,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             repository=str(self._repo or ""),
             ref=evidence.completion_target.ref,
             revision=evidence.completion_target.revision,
+            repository_aliases=(
+                self._publish_context.get("acceptanceRepositoryAliases") is True
+            ),
         ):
             return None
         return gate
@@ -5452,8 +5456,24 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if (
             self._issue_implement_handoff_role(node) != "code-review-handoff"
             or self._publish_mode(parameters) != "pr"
-            or not self._issue_implement_pr_required()
         ):
+            return None
+        # Activate at the external handoff, after retained verifier/publisher
+        # commands. A reset before publication can adopt the repair without
+        # changing earlier decisions; continuation retains this projection.
+        if self._patched_or_false_outside_workflow(
+            RUN_ACCEPTANCE_REPOSITORY_IDENTITY_PATCH
+        ):
+            self._publish_context["acceptanceRepositoryAliases"] = True
+        if not self._issue_implement_pr_required():
+            if (
+                self._publish_context.get("acceptanceRepositoryAliases") is True
+                and self._has_no_commit_publish_evidence()
+            ):
+                self._record_publish_result(
+                    parameters=parameters,
+                    execution_result={"outputs": {"push_status": "no_commits"}},
+                )
             return None
         existing = self._coerce_text(
             self._pull_request_url or self._publish_context.get("pullRequestUrl"),
