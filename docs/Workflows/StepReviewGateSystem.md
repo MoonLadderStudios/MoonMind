@@ -21,6 +21,15 @@ Publication and runtime-intent owners prepare repository feasibility and account
 selection. Temporal patch evaluation stays in orchestration for replay. Existing
 PR-resolution and issue-finalization owners keep those responsibilities.
 
+`TemporalExecutionService.observe_semantic_compat_drain` reports retained gate
+aliases, profile-selection patches, and native PR branch defaults through the
+existing Temporal history observer. Queued starts, saved aliases (including paused
+schedules), open consumers, and retained reset histories prevent removal. Failed
+or incomplete observations remain unknown. Eligibility requires every dimension
+observed at zero; the report
+does not remove adapters or mutate workflows. Replay proves command compatibility
+separately from drainage.
+
 This is a desired-state contract. Its continuation requirements do not establish
 that every runtime, publication path, or deployed Skill already implements them.
 Execution evidence and implementation gaps belong in PRs and run artifacts.

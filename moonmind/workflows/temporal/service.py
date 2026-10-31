@@ -91,7 +91,10 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactStateError,
     TemporalArtifactValidationError,
 )
-from moonmind.workflows.temporal.client import TemporalClientAdapter
+from moonmind.workflows.temporal.client import (
+    SemanticCompatDrainObservations,
+    TemporalClientAdapter,
+)
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 from moonmind.workflows.temporal.hard_switch_cutover import (
     resolve_user_workflow_start_contract,
@@ -1006,6 +1009,12 @@ class TemporalExecutionService:
         ``evaluate_checkpoint_compat_drain_observations``.
         """
         return await self._client_adapter.observe_checkpoint_compat_drain()
+
+    async def observe_semantic_compat_drain(
+        self,
+    ) -> dict[str, SemanticCompatDrainObservations]:
+        """Read retained gate/profile/publication consumers without changing them."""
+        return await self._client_adapter.observe_semantic_compat_drain()
 
     async def _validate_dependencies(
         self,

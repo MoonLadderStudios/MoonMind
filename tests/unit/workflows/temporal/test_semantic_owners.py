@@ -117,3 +117,16 @@ def test_profile_owner_preserves_empty_selector_inheritance(normalized, inherita
     )
     assert decision.profile_ref is None
     assert decision.inherit_workflow_profile is expected
+
+
+@pytest.mark.parametrize("value,retained", [
+    ({"moonSpecVerify": {"verdict": "BLOCKED"}}, False),
+    ({"moonSpecVerify": {"gateVerdict": "BLOCKED"}}, True),
+    ({"verification": {"verdict": "BLOCKED"}}, True),
+    ({"verdict": "BLOCKED"}, True),
+    ({"previousOutputs": [{"gate": {"verdict": "BLOCKED"}}]}, True),
+    (b'{"outputs":{"verification_result":{"verdict":"BLOCKED"}}}', True),
+    ({"summary": "BLOCKED"}, False),
+])
+def test_gate_owner_identifies_retained_saved_shapes(value, retained):
+    assert gates.has_retained_step_gate_shape(value) is retained
