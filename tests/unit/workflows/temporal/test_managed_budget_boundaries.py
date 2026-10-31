@@ -295,6 +295,11 @@ async def test_managed_faults_preserve_the_admitted_boundary(
                 await stack.enter_async_context(worker)
         result = await asyncio.wait_for(result_task, timeout=20)
         history = await handle.fetch_history()
+        completed_at = next(
+            event.event_time.ToDatetime(tzinfo=UTC)
+            for event in history.events
+            if event.HasField("workflow_execution_completed_event_attributes")
+        )
         assert len(state.launches) == 1
         launched = state.launches[0]["request"]
         assert launched["executionBudget"]["attemptId"] == budget.attempt_id
@@ -326,7 +331,7 @@ async def test_managed_faults_preserve_the_admitted_boundary(
         assert saved_budget.consumed_seconds == 3
         if target != "publish_artifacts":
             assert saved_budget.finishing_deadline is not None
-        assert saved_budget.remaining_seconds(await env.get_current_time()) == 0
+        assert saved_budget.remaining_seconds(completed_at) == 0
 
         completions = [
             event
@@ -447,6 +452,14 @@ async def test_registered_managed_reconciliation_preserves_time_accounting(
             task_queue=queue,
         )
         result = await asyncio.wait_for(handle.result(), timeout=20)
+        history = await handle.fetch_history()
+        # The server may skip unrelated workflows' timers after this workflow
+        # completes. Account against this execution's retained completion event.
+        completed_at = next(
+            event.event_time.ToDatetime(tzinfo=UTC)
+            for event in history.events
+            if event.HasField("workflow_execution_completed_event_attributes")
+        )
         context = ExecutionBudgetContext.model_validate(
             result.metadata["executionBudget"]
         )
@@ -466,7 +479,6 @@ async def test_registered_managed_reconciliation_preserves_time_accounting(
             if accounting == "capacity_wait":
                 # Queueing starts after the manager's cooldown was recorded,
                 # so the excluded interval is slightly shorter than 100s.
-                history = await handle.fetch_history()
                 assigned = False
                 for event in history.events:
                     if event.HasField("workflow_execution_signaled_event_attributes"):
@@ -485,10 +497,7 @@ async def test_registered_managed_reconciliation_preserves_time_accounting(
                     abs=0.001,
                 )
                 assert context.excluded_seconds > policy["timeout_seconds"]
-                assert context.elapsed_seconds(await env.get_current_time()) < 30
+                assert context.elapsed_seconds(completed_at) < 30
             else:
-                assert (
-                    context.elapsed_seconds(await env.get_current_time())
-                    > policy["timeout_seconds"]
-                )
+                assert context.elapsed_seconds(completed_at) > policy["timeout_seconds"]
                 assert context.last_progress_seconds >= 20
