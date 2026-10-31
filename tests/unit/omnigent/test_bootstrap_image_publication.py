@@ -61,6 +61,22 @@ async def test_image_admission_checks_bootstrap_contents_not_only_version(monkey
     assert len(probes) == 1
 
 
+@pytest.mark.asyncio
+async def test_failed_bootstrap_probe_retains_bounded_original_diagnostic(
+    monkeypatch, caplog
+):
+    diagnostic = "cache copy failed: no space left on device"
+
+    async def run(_argv, timeout=30):
+        return 1, "", "x" * 10000 + diagnostic
+
+    monkeypatch.setattr(image_resolution, "_run", run)
+    caplog.set_level("WARNING")
+    assert not await image_resolution._image_opencode_bootstrap_ready(HOST_REF)
+    assert diagnostic in caplog.text
+    assert len(caplog.text) < 4096
+
+
 def _state(**overrides) -> ResolvedOmnigentDeploymentState:
     payload = {
         "serverImageRef": SERVER_REF,
