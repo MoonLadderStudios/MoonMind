@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 
 from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
+    ExecutionBudgetContext,
     resolve_execution_budget,
 )
 from moonmind.workflows.terminal_evidence import terminal_evidence_repair_instruction
@@ -60,12 +61,25 @@ async def complete_skill_turns(
     recorded_turns_only=False,
 ):
     phases = sink.binding.phaseResults or {}
+    context = request.execution_budget
     if "budget" not in phases:
-        await sink.record_phase("budget", {"startedAt": datetime.now(UTC).isoformat()})
-    started = datetime.fromisoformat(sink.binding.phaseResults["budget"]["startedAt"])
-    seconds = resolve_execution_budget(
-        agent_kind=request.agent_kind, timeout_policy=request.timeout_policy
-    ).base_seconds
+        await sink.record_phase(
+            "budget",
+            (
+                {"executionBudget": context.model_dump(mode="json", by_alias=True)}
+                if context is not None
+                else {"startedAt": datetime.now(UTC).isoformat()}
+            ),
+        )
+    if context is None:
+        # Replay adapter for requests recorded before workflow admission owned
+        # the cumulative clock. New requests never start a local allowance.
+        started = datetime.fromisoformat(
+            sink.binding.phaseResults["budget"]["startedAt"]
+        )
+        seconds = resolve_execution_budget(
+            agent_kind=request.agent_kind, timeout_policy=request.timeout_policy
+        ).base_seconds
     instruction = None
     previous_progress = None
     for ordinal in range(MAX_CONTINUATIONS + 1):
@@ -84,7 +98,11 @@ async def complete_skill_turns(
                 if result is None:
                     raise ValueError("Finalization has no recorded provider turn")
                 return result
-            remaining = seconds - (datetime.now(UTC) - started).total_seconds()
+            remaining = (
+                context.remaining_seconds(datetime.now(UTC))
+                if context is not None
+                else seconds - (datetime.now(UTC) - started).total_seconds()
+            )
             if remaining <= 0:
                 raise TimeoutError(
                     "The durable attempt's execution budget is exhausted"
@@ -124,22 +142,44 @@ async def complete_skill_turns(
         # A transient evidence read retries verification of the recorded turn,
         # never a billed implementation turn. Counters survive worker retries.
         evaluation = None
-        budget_key = f"verification_budget:{ordinal}"
-        if budget_key not in (sink.binding.phaseResults or {}):
-            await sink.record_phase(
-                budget_key, {"startedAt": datetime.now(UTC).isoformat()}
+        if context is None:
+            budget_key = f"verification_budget:{ordinal}"
+            if budget_key not in (sink.binding.phaseResults or {}):
+                await sink.record_phase(
+                    budget_key, {"startedAt": datetime.now(UTC).isoformat()}
+                )
+            verification_started = datetime.fromisoformat(
+                sink.binding.phaseResults[budget_key]["startedAt"]
             )
-        verification_started = datetime.fromisoformat(
-            sink.binding.phaseResults[budget_key]["startedAt"]
-        )
         for evidence_attempt in range(3):
             failure_key = f"verification_failure:{ordinal}:{evidence_attempt}"
             if failure_key in (sink.binding.phaseResults or {}):
                 continue
-            remaining = (
-                VERIFICATION_READ_BUDGET_SECONDS
-                - (datetime.now(UTC) - verification_started).total_seconds()
-            )
+            if context is not None:
+                now = datetime.now(UTC)
+                if context.remaining_seconds(now) <= 0:
+                    finishing = (sink.binding.phaseResults or {}).get(
+                        "finishing_budget"
+                    )
+                    context = (
+                        ExecutionBudgetContext.model_validate(finishing)
+                        if finishing
+                        else context.begin_finishing(now)
+                    )
+                    if finishing is None:
+                        await sink.record_phase(
+                            "finishing_budget",
+                            context.model_dump(mode="json", by_alias=True),
+                        )
+                    request.execution_budget = context
+                remaining = context.remaining_seconds(
+                    now, finishing=context.finishing_deadline is not None
+                )
+            else:
+                remaining = (
+                    VERIFICATION_READ_BUDGET_SECONDS
+                    - (datetime.now(UTC) - verification_started).total_seconds()
+                )
             if remaining <= 0:
                 break
             try:

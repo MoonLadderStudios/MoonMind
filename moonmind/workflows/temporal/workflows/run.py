@@ -31,6 +31,7 @@ with workflow.unsafe.imports_passed_through():
         AgentExecutionRequest,
         AgentRunResult,
         ExecutionBudget,
+        ExecutionBudgetContext,
         OmnigentExecutionPlanBinding,
         resolve_execution_budget,
     )
@@ -1190,6 +1191,7 @@ RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH = (
 # ceiling the interrupted attempts left, and an exhausted ceiling stops instead
 # of starting another attempt. Older histories keep a fresh budget per attempt.
 RUN_INTERRUPTED_STEP_DEADLINE_PATCH = "run-interrupted-step-deadline-v1"
+RUN_LOGICAL_STEP_EXECUTION_BUDGET_PATCH = "run-logical-step-execution-budget-v1"
 # MoonMind#4627: an interrupted Omnigent Step's successor is a fresh attempt.
 # It is admitted again on the installed runtime from the workflow's frozen
 # inputs, keeping the recorded request intent; a refused admission keeps the
@@ -13692,6 +13694,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 system_retries = 0
                 # Interrupted attempts share the Step's admitted hard ceiling.
                 interrupted_step_budget: ExecutionBudget | None = None
+                logical_step_budget: ExecutionBudgetContext | None = None
                 interrupted_step_consumed_seconds = 0.0
                 agent_attempt_started_at: datetime | None = None
                 while system_retries <= 3:
@@ -14196,6 +14199,31 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                     )
                                 else:
                                     if workflow.patched(
+                                        RUN_LOGICAL_STEP_EXECUTION_BUDGET_PATCH
+                                    ):
+                                        now = workflow.now()
+                                        logical_step_budget = (
+                                            ExecutionBudgetContext(
+                                                budget=resolve_execution_budget(
+                                                    agent_kind=request.agent_kind,
+                                                    timeout_policy=request.timeout_policy,
+                                                ),
+                                                logicalStepId=node_id,
+                                                attemptId=child_workflow_id,
+                                                admittedAt=now,
+                                            )
+                                            if logical_step_budget is None
+                                            else logical_step_budget.successor(
+                                                now=now,
+                                                attempt_id=child_workflow_id,
+                                            )
+                                        )
+                                        request = request.model_copy(
+                                            update={
+                                                "execution_budget": logical_step_budget
+                                            }
+                                        )
+                                    elif workflow.patched(
                                         RUN_INTERRUPTED_STEP_DEADLINE_PATCH
                                     ):
                                         if interrupted_step_budget is None:
@@ -14230,6 +14258,27 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             execution_result = await self._hydrate_acceptance_result(
                                 self._map_agent_run_result(child_result)
                             )
+                            if logical_step_budget is not None:
+                                result_outputs = execution_result.get("outputs") or {}
+                                carried_budget = result_outputs.get("executionBudget")
+                                if isinstance(carried_budget, Mapping):
+                                    observed_budget = (
+                                        ExecutionBudgetContext.model_validate(
+                                            carried_budget
+                                        )
+                                    )
+                                    if (
+                                        observed_budget.logical_step_id
+                                        != logical_step_budget.logical_step_id
+                                        or observed_budget.budget
+                                        != logical_step_budget.budget
+                                        or observed_budget.attempt_id
+                                        != logical_step_budget.attempt_id
+                                    ):
+                                        raise ValueError(
+                                            "child budget observation conflicts with admitted logical step"
+                                        )
+                                    logical_step_budget = observed_budget
                             try:
                                 progress_state = self._agent_run_progress_by_child.get(
                                     child_workflow_id
@@ -14590,6 +14639,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             )
                         if (
                             retryable
+                            and logical_step_budget is not None
+                            and logical_step_budget.remaining_seconds(workflow.now())
+                            <= 0
+                        ):
+                            retryable = False
+                            step_failure_summary = f"{step_failure_summary}; the Step's execution budget was exhausted across interrupted attempts"
+                        if (
+                            retryable
                             and system_retries < 3
                             and interrupted_step_budget is not None
                             and agent_attempt_started_at is not None
@@ -14638,7 +14695,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 f"Retrying plan node {node_id} after {failure_message} "
                                 f"(attempt {system_retries} of 3)"
                             )
+                            if logical_step_budget is not None and self._paused:
+                                logical_step_budget = logical_step_budget.suspend(
+                                    workflow.now()
+                                )
                             await self._wait_if_paused_at_safe_boundary()
+                            if logical_step_budget is not None:
+                                logical_step_budget = logical_step_budget.resume(
+                                    workflow.now()
+                                )
                             if self._cancel_requested:
                                 return
                             if omnigent_step and workflow.patched(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import posixpath
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Mapping, NoReturn, get_args
 
 from pydantic import (
@@ -92,6 +92,7 @@ ExecutionBudgetVerdict = Literal[
 ExecutionBudgetMode = Literal["progress_aware", "flat"]
 # Timeout-policy key carrying :data:`ExecutionBudgetMode` across the boundary.
 EXECUTION_BUDGET_MODE_KEY = "execution_budget_mode"
+EXECUTION_FINISHING_ALLOWANCE_SECONDS = 60
 
 
 class ExecutionBudget(BaseModel):
@@ -140,6 +141,169 @@ class ExecutionBudget(BaseModel):
             max_seconds=self.base_seconds,
             progress_stall_seconds=self.base_seconds,
             mode="flat",
+        )
+
+    def deadline_seconds(self, last_progress_seconds: float | None = None) -> float:
+        """Effective deadline on the logical step's productive-time clock."""
+
+        if self.mode == "flat" or last_progress_seconds is None:
+            return float(self.base_seconds)
+        return float(
+            min(
+                self.max_seconds,
+                max(
+                    self.base_seconds,
+                    last_progress_seconds + self.progress_stall_seconds,
+                ),
+            )
+        )
+
+
+class ExecutionBudgetExhausted(TimeoutError):
+    """The admitted execution or finishing allowance cannot start an operation."""
+
+
+class ExecutionBudgetContext(BaseModel):
+    """Durable accounting for the existing budget, owned by the workflow.
+
+    Capacity waiting and explicit pauses suspend this clock. Cooldown, transport
+    retries and automatic successors consume it. A finishing deadline permits
+    observation, saving and cleanup only; it never authorizes another turn.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, frozen=True, extra="forbid")
+
+    budget: ExecutionBudget
+    logical_step_id: str = Field(alias="logicalStepId", min_length=1, max_length=255)
+    attempt_id: str = Field(alias="attemptId", min_length=1, max_length=255)
+    admitted_at: datetime = Field(alias="admittedAt")
+    consumed_seconds: float = Field(
+        0, alias="consumedSeconds", ge=0, allow_inf_nan=False
+    )
+    excluded_seconds: float = Field(
+        0, alias="excludedSeconds", ge=0, allow_inf_nan=False
+    )
+    suspended_at: datetime | None = Field(None, alias="suspendedAt")
+    last_progress_seconds: float | None = Field(None, alias="lastProgressSeconds", ge=0)
+    recovery_count: int = Field(0, alias="recoveryCount", ge=0)
+    finishing_started_at: datetime | None = Field(None, alias="finishingStartedAt")
+    finishing_deadline: datetime | None = Field(None, alias="finishingDeadline")
+
+    @field_validator(
+        "admitted_at", "suspended_at", "finishing_started_at", "finishing_deadline"
+    )
+    @classmethod
+    def _utc_clock(cls, value: datetime | None) -> datetime | None:
+        return (
+            value.replace(tzinfo=UTC)
+            if value is not None and value.tzinfo is None
+            else value
+        )
+
+    def elapsed_seconds(self, now: datetime) -> float:
+        at = min(now, self.finishing_started_at or now, self.suspended_at or now)
+        return self.consumed_seconds + max(
+            0.0, (at - self.admitted_at).total_seconds() - self.excluded_seconds
+        )
+
+    def remaining_seconds(self, now: datetime, *, finishing: bool = False) -> float:
+        if finishing:
+            if self.finishing_deadline is None:
+                raise ValueError("finishing allowance has not been admitted")
+            return max(0.0, (self.finishing_deadline - now).total_seconds())
+        if self.finishing_deadline is not None:
+            return 0.0
+        return max(
+            0.0,
+            self.budget.deadline_seconds(self.last_progress_seconds)
+            - self.elapsed_seconds(now),
+        )
+
+    def effective_deadline(self, now: datetime) -> datetime:
+        return now + timedelta(seconds=self.remaining_seconds(now))
+
+    def activity_timeouts(
+        self,
+        *,
+        now: datetime,
+        start_to_close_seconds: float,
+        schedule_to_close_seconds: float,
+        finishing: bool = False,
+        operation_deadline: datetime | None = None,
+    ) -> dict[str, timedelta]:
+        remaining = self.remaining_seconds(now, finishing=finishing)
+        if operation_deadline is not None:
+            remaining = min(remaining, (operation_deadline - now).total_seconds())
+        if remaining <= 0:
+            raise ExecutionBudgetExhausted("logical step allowance exhausted")
+        return {
+            "start_to_close_timeout": timedelta(
+                seconds=min(start_to_close_seconds, remaining)
+            ),
+            "schedule_to_close_timeout": timedelta(
+                seconds=min(schedule_to_close_seconds, remaining)
+            ),
+        }
+
+    def observe_progress(self, now: datetime) -> "ExecutionBudgetContext":
+        if self.finishing_deadline is not None:
+            return self
+        return self.model_copy(
+            update={
+                "last_progress_seconds": max(
+                    self.last_progress_seconds or 0, self.elapsed_seconds(now)
+                )
+            }
+        )
+
+    def suspend(self, now: datetime) -> "ExecutionBudgetContext":
+        if self.suspended_at is not None or self.finishing_deadline is not None:
+            return self
+        return self.model_copy(update={"suspended_at": now})
+
+    def resume(self, now: datetime) -> "ExecutionBudgetContext":
+        if self.suspended_at is None:
+            return self
+        return self.model_copy(
+            update={
+                "excluded_seconds": self.excluded_seconds
+                + max(0.0, (now - self.suspended_at).total_seconds()),
+                "suspended_at": None,
+            }
+        )
+
+    def successor(self, *, now: datetime, attempt_id: str) -> "ExecutionBudgetContext":
+        if self.remaining_seconds(now) <= 0:
+            raise ExecutionBudgetExhausted("no allowance for an automatic successor")
+        return self.model_copy(
+            update={
+                "admitted_at": now,
+                "consumed_seconds": self.elapsed_seconds(now),
+                "excluded_seconds": 0,
+                "suspended_at": None,
+                "attempt_id": attempt_id,
+                "recovery_count": self.recovery_count + 1,
+            }
+        )
+
+    def begin_finishing(
+        self, now: datetime, *, deadline: datetime | None = None
+    ) -> "ExecutionBudgetContext":
+        """Commit finishing once, retaining any earlier observation deadline."""
+        if self.finishing_deadline is not None:
+            return self
+        finishing_deadline = now + timedelta(
+            seconds=EXECUTION_FINISHING_ALLOWANCE_SECONDS
+        )
+        return self.model_copy(
+            update={
+                "finishing_started_at": now,
+                "finishing_deadline": (
+                    min(finishing_deadline, deadline)
+                    if deadline is not None
+                    else finishing_deadline
+                ),
+            }
         )
 
 
@@ -1177,6 +1341,11 @@ class AgentExecutionRequest(BaseModel):
     skill: dict[str, Any] = Field(default_factory=dict, alias="skill")
     parameters: dict[str, Any] = Field(default_factory=dict, alias="parameters")
     timeout_policy: dict[str, Any] = Field(default_factory=dict, alias="timeoutPolicy")
+    execution_budget: ExecutionBudgetContext | None = Field(
+        None,
+        alias="executionBudget",
+        exclude_if=lambda value: value is None,
+    )
     retry_policy: dict[str, Any] = Field(default_factory=dict, alias="retryPolicy")
     approval_policy: dict[str, Any] = Field(
         default_factory=dict, alias="approvalPolicy"

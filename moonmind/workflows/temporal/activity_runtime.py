@@ -8537,6 +8537,12 @@ class TemporalAgentRuntimeActivities:
         profile = profile.model_copy(update={"env_overrides": env_overrides})
 
         # Idempotency check handled in launcher
+        if request.execution_budget is not None:
+            request.execution_budget.activity_timeouts(
+                now=datetime.now(UTC),
+                start_to_close_seconds=1,
+                schedule_to_close_seconds=1,
+            )
         record, process, cleanup_paths, deferred_cleanup_paths = await self._run_launcher.launch(
             run_id=run_id,
             workflow_id=workflow_id or None,
@@ -8588,6 +8594,11 @@ class TemporalAgentRuntimeActivities:
                     run_id=run_id,
                     process=process,
                     budget=budget,
+                    **(
+                        {"execution_budget": request.execution_budget}
+                        if request.execution_budget is not None
+                        else {}
+                    ),
                     cleanup_paths=cleanup_paths or None,
                     deferred_cleanup_paths=deferred_cleanup_paths or None,
                 )

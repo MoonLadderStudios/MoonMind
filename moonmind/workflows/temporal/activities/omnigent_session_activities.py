@@ -41,6 +41,7 @@ from moonmind.omnigent.harness_platform.harness_registry import (
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunResult,
+    ExecutionBudgetContext,
     OmnigentExecutionPlanBinding,
 )
 from moonmind.schemas.omnigent_session_models import (
@@ -815,6 +816,30 @@ async def _load_intent_request(
             ),
         )
     binding = parsed.omnigent_execution_plan or agent_request.omnigent_execution_plan
+    admitted_budget = agent_request.execution_budget
+    if admitted_budget is None and payload.get("executionBudget") is not None:
+        admitted_budget = ExecutionBudgetContext.model_validate(
+            payload["executionBudget"]
+        )
+    if parsed.execution_budget is not None:
+        current_budget = parsed.execution_budget
+        if admitted_budget is None or any(
+            getattr(current_budget, key) != getattr(admitted_budget, key)
+            for key in (
+                "budget",
+                "logical_step_id",
+                "attempt_id",
+                "admitted_at",
+                "consumed_seconds",
+                "recovery_count",
+            )
+        ):
+            raise ValueError("execution budget conflicts with immutable admission")
+        admitted_budget = current_budget
+    if admitted_budget is not None:
+        agent_request = agent_request.model_copy(
+            update={"execution_budget": admitted_budget}
+        )
     if binding is not None:
         if agent_request.omnigent_execution_plan != binding:
             raise ValueError("request snapshot execution-plan authority mismatch")
@@ -1965,6 +1990,15 @@ def _omnigent_intent_snapshot_payload(
             "omnigentExecutionPlan": plan_binding.model_dump(
                 mode="json", by_alias=True
             ),
+            **(
+                {
+                    "executionBudget": request.execution_budget.model_dump(
+                        mode="json", by_alias=True
+                    )
+                }
+                if request.execution_budget is not None
+                else {}
+            ),
         },
         "omnigent.agent-execution-request-snapshot.json",
         "omnigent.agent_execution_request_snapshot",
@@ -2017,6 +2051,15 @@ async def omnigent_resolve_intent_activity(
             workspace_checkpoint_restore_ref=(
                 resolved.workspace_checkpoint_restore_ref
             ),
+        )
+    if resolved.execution_budget is not None:
+        if (
+            request.execution_budget is not None
+            and request.execution_budget != resolved.execution_budget
+        ):
+            raise ValueError("resolved execution budget conflicts with request")
+        request = request.model_copy(
+            update={"execution_budget": resolved.execution_budget}
         )
     if (
         request.agent_kind != "external"
@@ -2153,6 +2196,7 @@ async def omnigent_resolve_intent_activity(
         stepExecutionId=resolved.step_execution_id,
         agentRunId=resolved.agent_run_id,
         initialTurnAttemptId=turn_attempt_id,
+        executionBudget=request.execution_budget,
         admittedFeatureGeneration=resolved.admitted_feature_generation,
         compatibilityVersion=resolved.compatibility_version,
     )
@@ -2246,6 +2290,7 @@ async def omnigent_load_reconciliation_inputs_activity(
     intent_digest = str(payload.get("compiledExecutionIntentDigest") or "").strip()
     request_stub = OmnigentSessionActivityRequest(
         sessionId=session_id,
+        executionBudget=payload.get("executionBudget"),
         compiledExecutionIntentRef=intent_ref,
         compiledExecutionIntentDigest=intent_digest,
         omnigentExecutionPlan=payload.get("omnigentExecutionPlan"),
@@ -2402,12 +2447,17 @@ async def omnigent_load_reconciliation_inputs_activity(
         "observationCount": len(observations),
         "decisionCount": len(decisions),
     }
-    timeout_seconds = int(
-        (request.timeout_policy or {}).get("timeout_seconds")
-        or (request.timeout_policy or {}).get("timeoutSeconds")
-        or 21_600
-    )
-    if session.created_at is not None:
+    if request.execution_budget is not None:
+        response["executionBudget"] = request.execution_budget.model_dump(
+            mode="json", by_alias=True
+        )
+    elif session.created_at is not None:
+        # Recorded pre-budget session histories retain their original clock.
+        timeout_seconds = int(
+            (request.timeout_policy or {}).get("timeout_seconds")
+            or (request.timeout_policy or {}).get("timeoutSeconds")
+            or 21_600
+        )
         response["timeoutAt"] = (
             session.created_at + timedelta(seconds=max(1, timeout_seconds))
         ).isoformat()
@@ -4603,6 +4653,19 @@ async def omnigent_observe_snapshot_activity(
         and not turn_state["unfinishedToolCall"]
     )
     signature = turn_state["signature"]
+    previous_progress = next(
+        (
+            (observation.bounded_index or {}).get("executionProgressSignature")
+            for observation in reversed(prior_observations)
+            if observation.observation_type == "provider_snapshot"
+        ),
+        None,
+    )
+    progress_observed = (
+        turn_state["progress"]
+        and isinstance(signature, tuple)
+        and list(signature) != previous_progress
+    )
     required_quiet_seconds = (
         _MARKED_TURN_QUIET_PERIOD_SECONDS
         if turn_state["terminalAssistantAfterWork"]
@@ -4668,6 +4731,9 @@ async def omnigent_observe_snapshot_activity(
     elif effective_status in _TERMINAL_PROVIDER_STATES:
         outcome = "failure"
     bounded: dict[str, Any] = {
+        "executionProgressSignature": (
+            list(signature) if isinstance(signature, tuple) else None
+        ),
         **resource_observations(observed_at),
         "providerSession": {
             "observedAt": observed_at.isoformat(),
@@ -4675,8 +4741,7 @@ async def omnigent_observe_snapshot_activity(
             "providerSessionId": session.provider_session_ref,
             "rawStatus": effective_status,
             "openToolCall": bool(
-                snapshot.get("active_tool_call")
-                or snapshot.get("activeToolCall")
+                snapshot.get("active_tool_call") or snapshot.get("activeToolCall")
             ),
             "cursor": session.provider_event_cursor,
             "snapshotDigest": digest,
@@ -4755,7 +4820,11 @@ async def omnigent_observe_snapshot_activity(
                 expected_fencing_generation=request.fencing_generation,
                 snapshot_frontier=digest,
             )
-    return {"observationCount": 1, "snapshotFrontier": digest}
+    return {
+        "observationCount": 1,
+        "snapshotFrontier": digest,
+        "progressObserved": progress_observed,
+    }
 
 
 async def omnigent_record_terminal_activity(
@@ -5272,7 +5341,27 @@ async def omnigent_publish_workspace_activity(
         workspace_locator = workspace_intent.workspace_locator_payload()
         publish_mode = workspace_intent.publish_mode
         base_branch = workspace_intent.starting_branch
-    if publish_mode == "none":
+    recorded_publication_ref = str(session.metadata.get("publicationEvidenceRef") or "")
+    if recorded_publication_ref:
+        recorded_publication = await _read_json_artifact(
+            recorded_publication_ref,
+            access=ArtifactAccessContext.for_service(_ARTIFACT_PRINCIPAL),
+        )
+        if not isinstance(recorded_publication.get("publication"), Mapping):
+            raise ValueError("recorded publication evidence is missing its outcome")
+        publication = dict(recorded_publication["publication"])
+    elif (
+        request.execution_budget is not None
+        and request.execution_budget.finishing_deadline is not None
+    ):
+        # Finishing may save/reconcile prior effects, but cannot start a new
+        # push or PR. Harvested work remains available to the successor.
+        publication = {
+            "status": "not_attempted",
+            "publishMode": publish_mode,
+            "reason": "execution_budget_exhausted",
+        }
+    elif publish_mode == "none":
         publication = {"status": "skipped", "publishMode": "none"}
     else:
         github_token = await (
@@ -5433,8 +5522,17 @@ async def omnigent_publish_workspace_activity(
         if session.terminal_state == "canceled"
         else "execution_failed"
     )
+    publication_expired = (
+        publication.get("reason") == "execution_budget_exhausted"
+        and publish_mode != "none"
+    )
     result = AgentRunResult(
         outputRefs=[harvested_ref, publication_ref],
+        publicationState=(
+            "not_published"
+            if publication_expired or publish_mode == "none"
+            else "unknown"
+        ),
         executionState=(
             session.terminal_state
             if session.terminal_state
@@ -5442,25 +5540,43 @@ async def omnigent_publish_workspace_activity(
             else "unknown"
         ),
         objectiveOutcome=(
-            "succeeded"
-            if session.terminal_state == "completed"
+            "failed"
+            if publication_expired
             else (
-                "failed"
-                if session.terminal_state in {"failed", "timed_out"}
-                else "cancelled" if session.terminal_state == "canceled" else "unknown"
+                "succeeded"
+                if session.terminal_state == "completed"
+                else (
+                    "failed"
+                    if session.terminal_state in {"failed", "timed_out"}
+                    else (
+                        "cancelled"
+                        if session.terminal_state == "canceled"
+                        else "unknown"
+                    )
+                )
             )
         ),
         summary=f"Omnigent session {session.terminal_state}",
         failureClass=(
-            None
-            if session.terminal_state == "completed"
-            else "integration_error"
-            if session.terminal_state == "delivery_unknown"
-            else "canceled"
-            if session.terminal_state == "canceled"
-            else "timed_out"
-            if session.terminal_state == "timed_out"
-            else "execution_error"
+            "timed_out"
+            if publication_expired
+            else (
+                None
+                if session.terminal_state == "completed"
+                else (
+                    "integration_error"
+                    if session.terminal_state == "delivery_unknown"
+                    else (
+                        "canceled"
+                        if session.terminal_state == "canceled"
+                        else (
+                            "timed_out"
+                            if session.terminal_state == "timed_out"
+                            else "execution_error"
+                        )
+                    )
+                )
+            )
         ),
         metadata={
             "canonicalSessionId": request.session_id,

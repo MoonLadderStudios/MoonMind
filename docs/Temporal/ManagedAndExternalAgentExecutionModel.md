@@ -749,10 +749,10 @@ expiry grants no workspace-deletion or completion authority.
 
 ## 15.1 Execution budget
 
-An agent run has one execution budget, resolved from `timeoutPolicy` by a single
-authority and enforced identically by the `MoonMind.AgentRun` poll loop and the
-managed process supervisor. The workflow publishes the resolved budget into the
-launch request, so the two deadlines cannot diverge.
+The workflow admits one `executionBudget` from `timeoutPolicy` per logical step.
+Its clock, consumption, progress and attempt identities travel through AgentRun,
+OmnigentSession, Activities and successors. Activity timeouts derive centrally;
+managed supervision inherits consumed time. Older histories retain named replay paths.
 
 | Field | Meaning |
 |---|---|
@@ -761,33 +761,33 @@ launch request, so the two deadlines cannot diverge.
 | `progress_stall_seconds` | How long observed progress may go stale before an over-base run is treated as stuck. |
 | `execution_budget_mode` | `progress_aware` or `flat`. |
 
-Omitted fields resolve to kind-specific defaults; the ceiling defaults to a
-multiple of the base window, so a tight requested budget keeps a tight ceiling.
-The stall window never exceeds the base window (a run's own start counts as an
-observation, so a wider stall window would erase the base window), and the base
-window is bound by the same absolute cap as the ceiling.
+Omitted fields use kind-specific defaults and a ceiling scaled to the base window.
+The stall window cannot exceed the base; both base and ceiling obey the absolute cap.
 
-**Mode travels with the numbers.** A history that predates progress-awareness
-publishes its flat decision, not just its base window. Otherwise a re-resolving
-callee (every launch and retry) could derive a ceiling the workflow never
-granted, and the supervisor would keep a process running after the workflow had
-timed out and released its provider slot.
+Pre-progress histories retain flat deadlines.
+Initial capacity queueing and explicit safe-boundary pauses exclude only their
+recorded intervals. Cooldown and automatic retries consume the original allowance.
+An explicit full retry admits a new, recorded allowance.
 
 **Elapsed wall-clock alone is not evidence that a run is stuck.** A run ends for
-budget only when the base window has elapsed with no progress observed within
-`progress_stall_seconds` (or ever), or when the hard ceiling is reached. The two
-outcomes are reported distinctly, because the operator responses differ (raise
-the ceiling versus investigate a wedged runtime), and the result records the
-budget and the condition that ended it.
+budget when the base window has elapsed without recent progress, or at the hard
+ceiling. The result records the budget and distinguishes stale progress from
+reaching the ceiling, so the operator can investigate or adjust the limit.
 
-Monotonic intervals resist host clock changes; persisted wall-clock timestamps
-correlate runtime evidence. Before ending for lack of progress, the supervisor
-samples CPU/workspace activity and the workflow checks fresh canonical status.
-Managed recovery preserves confirmed completion and bounds cancellation, polling
-and result fetching to the remaining budget. A fetch timeout at that deadline
-produces the normal budget result and retains its original diagnostics; other
-Activity errors keep their failure behavior. Provider quota classification still
-enters cooldown recovery. The hard ceiling ends execution without further reconciliation.
+Before ending for lack of progress, supervisors evaluate fresh status and session
+snapshots before committing to finishing. This bounded final read can extend
+execution only under the original ceiling; a stale, failed or canceled read shares
+its deadline with terminal cleanup.
+No-progress grace and cancellation reconciliation use the admitted productive-time
+clock, including excluded waits, earned progress and previous attempts. Once
+execution expires, observation, cancellation, saving and cleanup share one
+60-second finishing deadline across retries and Continue-As-New. Finishing cannot
+start another turn or publication. If saving or cleanup remains incomplete, retain
+confirmed results and report the gap to the recovery owner. Unconfirmed artifact
+writes may already be durable; a lost reply cannot authorize repeating them or
+replacing a confirmed result. Quota and non-retryable failures retain their
+structured meanings. A completed run retains success when finishing saves its work
+and repository publication was omitted or set to `none`.
 
 ### Progress evidence
 
