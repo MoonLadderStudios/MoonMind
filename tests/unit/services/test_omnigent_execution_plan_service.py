@@ -117,11 +117,54 @@ class _LegacyClassAdmissionDecision(BaseModel):
     unknown: tuple[str, ...] = ()
 
 
+@pytest.fixture(autouse=True)
+def _compiler_dependency_owner(monkeypatch):
+    from moonmind.omnigent import bridge_artifacts
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactService
+
+    real_seal = bridge_artifacts.ensure_verified_execution_plan_dependencies
+
+    async def seal(*, artifacts, plan, binding, access, **kwargs):
+        if isinstance(artifacts, TemporalArtifactService):
+            return await real_seal(
+                artifacts=artifacts, plan=plan, binding=binding, access=access, **kwargs
+            )
+        # Only synthetic compiler transports are isolated here. Real artifact
+        # services retain the full authority/integrity/lifecycle path.
+        assert binding.plan_ref == plan.planRef
+        assert binding.plan_digest == "sha256:" + plan.planRef.rsplit(":", 1)[-1]
+        assert binding.plan_artifact_ref in artifacts.payloads
+        assert json.loads(
+            artifacts.payloads[binding.plan_artifact_ref]
+        ) == plan.model_dump(mode="json", by_alias=True)
+        assert access is not None
+        artifacts.sealed_plan_binding = binding
+        return None
+
+    monkeypatch.setattr(
+        bridge_artifacts, "ensure_verified_execution_plan_dependencies", seal
+    )
+
+
 class _ArtifactService:
     def __init__(self, db_session=None) -> None:
         self._db_session = db_session
         self.payloads: dict[str, bytes] = {}
         self._index = 0
+
+    async def record_verified_dependencies(
+        self, *, root_artifact_id, dependencies, access
+    ):
+        from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
+
+        ArtifactAccessContext.require(access)
+        assert root_artifact_id in self.payloads
+        for entry in dependencies:
+            assert entry.required
+            assert entry.role == "input.skill_content"
+            assert len(entry.sha256) == 64
+        self.recorded_dependencies = getattr(self, "recorded_dependencies", {})
+        self.recorded_dependencies[root_artifact_id] = tuple(dependencies)
 
     async def create(self, **_kwargs):
         self._index += 1
@@ -266,6 +309,7 @@ async def test_admission_persists_nested_dynamic_execution_skills(
             session_factory=object(),
             artifact_service=artifacts,
             principal="user-1",
+            access=access_for_test("operator"),
             workflow_id="mm:remediation-skill-snapshot",
             task_input_snapshot_digest="sha256:" + "1" * 64,
             initial_parameters={

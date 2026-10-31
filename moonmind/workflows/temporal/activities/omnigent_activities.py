@@ -71,6 +71,17 @@ class _OnDemandTemporalArtifactService:
     async def soft_delete(self, *, artifact_id: str, **kwargs: Any) -> Any:
         return await self._invoke("soft_delete", artifact_id=artifact_id, **kwargs)
 
+    async def dependency_proof(self, **kwargs: Any) -> Any:
+        # Metadata/integrity proof only, never a child read grant. Preserve
+        # this adapter's existing standalone session per operation contract.
+        return await self._invoke("dependency_proof", **kwargs)
+
+    async def record_verified_dependencies(self, **kwargs: Any) -> Any:
+        return await self._invoke("record_verified_dependencies", **kwargs)
+
+    async def verified_dependencies(self, **kwargs: Any) -> Any:
+        return await self._invoke("verified_dependencies", **kwargs)
+
 
 def _parent_repository_binding_set(parent_plan: Any) -> Any:
     """Rebuild the parent binding set for child-inheritance checks.

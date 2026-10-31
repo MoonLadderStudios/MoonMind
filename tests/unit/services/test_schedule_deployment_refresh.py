@@ -36,6 +36,41 @@ def _persisted_schedule_plan(digest_char):
     )
 
 
+def _root_digest(plan):
+    from api_service.services.omnigent_execution_plan_service import (
+        json_artifact_digest,
+    )
+
+    return json_artifact_digest(
+        {
+            "schemaVersion": plan.schema_version,
+            "planRef": plan.plan_ref,
+            "payload": plan.payload_json,
+        }
+    ).removeprefix("sha256:")
+
+
+@pytest.fixture(autouse=True)
+def _synthetic_plan_publication(monkeypatch):
+    from api_service.services.recurring_workflows_service import (
+        RecurringWorkflowsService,
+    )
+
+    original = RecurringWorkflowsService._retain_target_artifacts
+
+    async def retain(self, target, **kwargs):
+        if isinstance(
+            self._session, (DeploymentSession, ManagedBootstrapScheduleSession)
+        ):
+            binding = target["initialParameters"]["omnigentExecutionPlan"]
+            assert binding["planArtifactRef"] == "artifact:art_plan"
+            return "art_plan"
+        return await original(self, target, **kwargs)
+
+    # The module stubs compilation, not the original persisted authority reader.
+    monkeypatch.setattr(RecurringWorkflowsService, "_retain_target_artifacts", retain)
+
+
 class DeploymentSession(_GenericV2Session):
     def __init__(self, runtime="opencode", harness="opencode-native", provider="opencode-go"):
         super().__init__(provider_runtime_id=runtime, harness_id=harness)
@@ -85,6 +120,7 @@ class DeploymentSession(_GenericV2Session):
                 sha256="a" * 64,
             )
             for artifact_id in (
+                "art_plan",
                 "art_original_task",
                 "art_task_input",
                 "task-input",
@@ -92,6 +128,10 @@ class DeploymentSession(_GenericV2Session):
                 "art_skills",
             )
         }
+
+        self.task_inputs["art_plan"].sha256 = _root_digest(
+            _persisted_schedule_plan("1")
+        )
 
     async def get(self, model, key):
         if model is ManagedAgentProviderProfile:
@@ -465,6 +505,8 @@ class ManagedBootstrapScheduleSession:
             for artifact_id in ("art_task_input", "art_plan", "art_skills", "plan", "skills")
         }
 
+        self.artifacts["art_plan"].sha256 = _root_digest(plan)
+
     @staticmethod
     def snapshot(version):
         policy = version.document["policyRef"]
@@ -681,6 +723,7 @@ async def test_plan_schedule_refresh_converges_until_authority_moves(
         binding = _schedule_plan_binding(str(len(compiled) + 1))
         plan = _persisted_schedule_plan(str(len(compiled) + 1))
         session.plans[plan.plan_ref] = plan
+        session.artifacts["art_plan"].sha256 = _root_digest(plan)
         return SimpleNamespace(
             envelope=SimpleNamespace(
                 payload=SimpleNamespace(

@@ -22,6 +22,7 @@ from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
+    TemporalArtifactUnavailableError,
 )
 from moonmind.workflows.temporal.service import TemporalExecutionService
 from tests.artifact_access import access_for_test
@@ -82,6 +83,7 @@ async def test_api_create_and_saved_schedule_edit_share_inputs_without_deadlock(
                 db_session=kwargs["db_session"],
                 artifact_service=kwargs["artifact_service"],
                 principal=kwargs["principal"],
+                access=kwargs["access"],
                 workflow_id=kwargs["workflow_id"],
                 task_input_snapshot_digest=kwargs["task_input_snapshot_digest"],
                 initial_parameters=kwargs["initial_parameters"],
@@ -190,14 +192,15 @@ async def test_api_create_and_saved_schedule_edit_share_inputs_without_deadlock(
     retained_skill, admitted_input = asyncio.Event(), asyncio.Event()
     api_shared_lock_attempt = asyncio.Event()
     sweep_completed = asyncio.Event()
+    schedule_committed = asyncio.Event()
     original_retain = recurring.RecurringWorkflowsService._retain_target_artifacts
     original_create = TemporalExecutionService.create_execution
     original_lock = TemporalArtifactRepository.get_artifact_for_update
 
-    async def retain(self, target):
+    async def retain(self, target, **kwargs):
         token = role.set("retention")
         try:
-            return await original_retain(self, target)
+            return await original_retain(self, target, **kwargs)
         finally:
             role.reset(token)
 
@@ -208,14 +211,14 @@ async def test_api_create_and_saved_schedule_edit_share_inputs_without_deadlock(
         finally:
             role.reset(token)
 
-    async def lock(self, artifact_id):
+    async def lock(self, artifact_id, **kwargs):
         canonical_api = role.get() == "api"
         if canonical_api and artifact_id == skill_id:
             # A globally ordered admission may wait on the Skill first. Let
             # retention finish in that case instead of creating a test-only
             # wait; the old input-first admission signals after acquiring it.
             api_shared_lock_attempt.set()
-        artifact = await original_lock(self, artifact_id)
+        artifact = await original_lock(self, artifact_id, **kwargs)
         if role.get() == "retention" and artifact_id == skill_id:
             retained_skill.set()
             await asyncio.wait_for(api_shared_lock_attempt.wait(), 15)
@@ -232,7 +235,7 @@ async def test_api_create_and_saved_schedule_edit_share_inputs_without_deadlock(
     monkeypatch.setattr(TemporalExecutionService, "create_execution", create)
     monkeypatch.setattr(TemporalArtifactRepository, "get_artifact_for_update", lock)
 
-    async def edit_schedule():
+    async def edit_schedule_transaction():
         async with sessions() as session:
             definition = await session.get(RecurringWorkflowDefinition, definition_id)
             return await recurring.RecurringWorkflowsService(
@@ -248,6 +251,12 @@ async def test_api_create_and_saved_schedule_edit_share_inputs_without_deadlock(
                 expected_version=version,
                 actor=OperatorAdmission(via="loopback"),
             )
+
+    async def edit_schedule():
+        try:
+            return await edit_schedule_transaction()
+        finally:
+            schedule_committed.set()
 
     async def sweep_retention():
         await asyncio.wait_for(retained_skill.wait(), 15)
@@ -268,10 +277,9 @@ async def test_api_create_and_saved_schedule_edit_share_inputs_without_deadlock(
         describe_workflow=AsyncMock(return_value=None),
         namespace_retention_seconds=AsyncMock(return_value=86400),
     )
-    outcomes = await asyncio.wait_for(
-        asyncio.gather(
-            edit_schedule(),
-            _submit(
+    async def submit_with_dependency_retry():
+        async def submit():
+            return await _submit(
                 sessions,
                 adapter,
                 {
@@ -282,7 +290,22 @@ async def test_api_create_and_saved_schedule_edit_share_inputs_without_deadlock(
                         "idempotencyKey": "shared-saved-input-admission",
                     },
                 },
-            ),
+            )
+
+        try:
+            return await submit()
+        except TemporalArtifactUnavailableError:
+            # A dependency lock held by the schedule is explicitly retryable,
+            # not a missing artifact or a partial admission. Finish that owner
+            # before retrying the same idempotent API request.
+            api_shared_lock_attempt.set()
+            await asyncio.wait_for(schedule_committed.wait(), 15)
+            return await submit()
+
+    outcomes = await asyncio.wait_for(
+        asyncio.gather(
+            edit_schedule(),
+            submit_with_dependency_retry(),
             sweep_retention(),
             return_exceptions=True,
         ),

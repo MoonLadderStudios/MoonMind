@@ -765,7 +765,7 @@ async def test_cold_workspace_gateway_restore_keeps_original_candidate(
         tmp_path,
         monkeypatch,
         backend="local_fs",
-        multipart=False,
+        large_archive=False,
     )
 
 

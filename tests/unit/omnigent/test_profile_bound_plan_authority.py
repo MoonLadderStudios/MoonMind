@@ -17,6 +17,7 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from tests.artifact_access import access_for_test
 from tests.unit.services.test_omnigent_execution_plan_service import (
     _ArtifactService,
+    _compiler_dependency_owner,  # noqa: F401 - pytest fixture import
     _configure_ready_host_image_pair,
     _PlanStore,
     _policy_snapshot,

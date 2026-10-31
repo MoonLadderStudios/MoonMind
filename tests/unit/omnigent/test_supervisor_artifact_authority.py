@@ -335,6 +335,47 @@ async def test_pre_upgrade_missing_certificate_keeps_ordinary_reissue(
     )
     assert migrated.payload.admissionAuthority.admissionMode == "ordinary"
     assert migrated.payload.admissionAuthority.supportTier == "uncertified"
+    # Missing or undecodable evidence must never acquire an execution grant.
+    assert ref.removeprefix("artifact:") not in {
+        artifact_id for _, artifact_id, _, _ in await _links(supervisor.sessions)
+    }
+    if ref in {"artifact:", "artifact:invalid"}:
+        async with supervisor.sessions() as session:
+            dependencies = (
+                (
+                    await session.execute(
+                        select(models.TemporalArtifactDependency).where(
+                            models.TemporalArtifactDependency.root_artifact_id
+                            == binding.plan_artifact_ref.removeprefix("artifact:")
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        assert dependencies
+        assert all(row.role != "evidence.support" for row in dependencies)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("supervisor", ["strict"], indirect=True)
+@pytest.mark.parametrize(
+    "ref", ["artifact:art_missing", "artifact:", "artifact:invalid"]
+)
+async def test_missing_historical_certificate_still_fails_under_strict_policy(
+    supervisor, ref
+):
+    binding = await _replace_support(supervisor, ref=ref, digest="sha256:" + "0" * 64)
+    with pytest.raises(activities._AdmissionCertificateError, match="unavailable"):
+        await activities._load_verified_execution_plan(
+            binding,
+            workflow_id="new-wf",
+            run_id="new-run",
+            access=access_for_test("workflow:" + "new-wf"),
+        )
+    assert ref.removeprefix("artifact:") not in {
+        artifact_id for _, artifact_id, _, _ in await _links(supervisor.sessions)
+    }
 
 
 @pytest.mark.asyncio
@@ -500,3 +541,44 @@ async def test_launch_consumers_read_inputs_before_enforcing_profile_prerequisit
     with pytest.raises(ValueError, match=error):
         await consumer(request.model_dump(by_alias=True))
     assert await _links(supervisor.sessions) == before
+
+
+@pytest.mark.asyncio
+async def test_optional_certificate_cannot_hide_malformed_required_profile(supervisor):
+    from moonmind.omnigent.bridge_artifacts import (
+        OmnigentArtifactError,
+        ensure_verified_execution_plan_dependencies,
+    )
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        create_execution_plan_envelope,
+    )
+
+    payload = supervisor.compiled.envelope.payload
+    plan = create_execution_plan_envelope(
+        payload.model_copy(
+            update={
+                "agentProfileSnapshotRef": "artifact:invalid",
+                "admissionAuthority": payload.admissionAuthority.model_copy(
+                    update={
+                        "admissionMode": "strict",
+                        "supportEvidenceRef": "artifact:invalid",
+                        "supportEvidenceDigest": "sha256:" + "0" * 64,
+                        "supportTier": "supported",
+                    }
+                ),
+            }
+        )
+    )
+    binding = supervisor.compiled.binding.model_copy(
+        update={
+            "plan_ref": plan.planRef,
+            "plan_digest": "sha256:" + plan.planRef.rsplit(":", 1)[-1],
+        }
+    )
+    with pytest.raises(OmnigentArtifactError, match="Unsupported durable artifact ref"):
+        await ensure_verified_execution_plan_dependencies(
+            artifacts=_OnDemandTemporalArtifactService(supervisor.sessions),
+            plan=plan,
+            binding=binding,
+            access=access_for_test("workflow:new-wf"),
+        )

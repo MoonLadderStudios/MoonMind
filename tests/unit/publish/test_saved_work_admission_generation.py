@@ -240,6 +240,7 @@ async def test_normal_api_fresh_generation_after_fenced_prepare_preserves_output
         connection,
     ):
         app, adapter, record, user = _saved_work_app(monkeypatch, state.service)
+        record.namespace = state.service._default_namespace
         record.workflow_id = state.saved.workflow_id
         record.run_id = state.saved.run_id
         record.search_attributes["mm_owner_id"] = str(user.id)

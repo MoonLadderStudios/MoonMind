@@ -225,6 +225,12 @@ class RecurringWorkflowDefinition(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    input_artifact_root_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("temporal_artifacts.artifact_id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -2965,6 +2971,15 @@ class TemporalArtifact(Base):
     operator_recovery_granted: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false"),
     )
+    dependency_request_sha256: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    dependency_closure_version: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    dependency_closure_sha256: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
     content_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     sha256: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
@@ -3093,6 +3108,30 @@ Index(
     postgresql_where=TemporalArtifact.operator_recovery_granted.is_not(True),
     sqlite_where=TemporalArtifact.operator_recovery_granted.is_not(True),
 )
+
+
+class TemporalArtifactDependency(Base):
+    """Immutable producer-verified closure, separate from read permission links."""
+
+    __tablename__ = "temporal_artifact_dependencies"
+    __table_args__ = (
+        Index(
+            "ix_artifact_dependencies_required_child",
+            "dependency_artifact_id",
+            "required",
+        ),
+    )
+    root_artifact_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("temporal_artifacts.artifact_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    # Logical identity survives optional metadata cleanup. Required live roots
+    # prevent deletion through the artifact lifecycle, not a child FK.
+    dependency_artifact_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    role: Mapped[str] = mapped_column(String(64), primary_key=True)
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    required: Mapped[bool] = mapped_column(Boolean, nullable=False)
 
 
 class TemporalArtifactLink(Base):

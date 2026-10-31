@@ -18755,6 +18755,7 @@ class _SavedWorkArtifacts:
         *,
         linked_workflow_id: str = "mm:wf-1",
         linked_run_id: str | None = "run-2",
+        linked_namespace: str = "moonmind",
         content_type: str = "application/vnd.moonmind.saved-work-manifest+json;version=1",
     ) -> None:
         self.artifact = SimpleNamespace(
@@ -18782,7 +18783,11 @@ class _SavedWorkArtifacts:
             redaction_level=TemporalArtifactRedactionLevel.NONE,
         )
         self.links = [
-            SimpleNamespace(workflow_id=linked_workflow_id, run_id=linked_run_id)
+            SimpleNamespace(
+                namespace=linked_namespace,
+                workflow_id=linked_workflow_id,
+                run_id=linked_run_id,
+            )
         ]
         self.accesses: list[ArtifactAccessContext] = []
         self.delegations: list[tuple[tuple[str, ...], str]] = []
@@ -18802,6 +18807,31 @@ class _SavedWorkArtifacts:
         assert artifact_id == "art_saved"
         self.accesses.append(ArtifactAccessContext.require(access))
         return self.artifact, _SAVED_WORK_MANIFEST
+
+    async def verified_dependencies(self, *, root_artifact_id, access):
+        # This API boundary double represents an already sealed producer root.
+        # Real closure integrity/retention is covered by artifact service tests.
+        from moonmind.workflows.temporal.artifacts import (
+            ArtifactDependency,
+            ArtifactDependencyClosure,
+            _dependency_digest,
+        )
+
+        assert root_artifact_id == self.artifact.artifact_id
+        self.accesses.append(ArtifactAccessContext.require(access))
+        dependencies = (
+            ArtifactDependency(
+                artifact_id=self.snapshot.artifact_id,
+                sha256=_SAVED_WORK_SNAPSHOT_DIGEST,
+                required=True,
+                role="saved_work.output.full_snapshot",
+            ),
+        )
+        return ArtifactDependencyClosure(
+            dependencies=dependencies,
+            unavailable_optional=(),
+            sha256=_dependency_digest(self.artifact.sha256, dependencies),
+        )
 
     async def delegate_read_access(self, *, artifact_ids, workflow_id, access):
         assert ArtifactAccessContext.require(access).is_operator
@@ -18923,29 +18953,47 @@ _SAVED_WORK_BODY = {
 
 
 @pytest.mark.parametrize("dependency", ["authority", "storage"])
-@pytest.mark.parametrize("boundary", ["construction", "manifest", "snapshot"])
-def test_saved_work_publication_outage_does_not_start_replacement(monkeypatch, dependency, boundary):
+@pytest.mark.parametrize(
+    "boundary", ["construction", "manifest", "closure", "snapshot"]
+)
+def test_saved_work_publication_outage_does_not_start_replacement(
+    monkeypatch, dependency, boundary
+):
     from moonmind.workflows.temporal.artifacts import TemporalArtifactUnavailableError
+
     artifacts = _SavedWorkArtifacts()
-    error = TemporalArtifactUnavailableError("art_saved", dependency=dependency, operation="read")
+    error = TemporalArtifactUnavailableError(
+        "art_saved", dependency=dependency, operation="read"
+    )
     if boundary == "manifest":
         artifacts.read = AsyncMock(side_effect=error)
+    elif boundary == "closure":
+        artifacts.verified_dependencies = AsyncMock(side_effect=error)
     elif boundary == "snapshot":
         metadata = artifacts.get_metadata
+
         async def part_metadata(**kwargs):
             if kwargs["artifact_id"] == "art_snapshot":
                 raise error
             return await metadata(**kwargs)
+
         artifacts.get_metadata = part_metadata
     app, adapter, _record, _user = _saved_work_app(monkeypatch, artifacts)
     if boundary == "construction":
+
         def unavailable():
             raise error
-        app.dependency_overrides[executions_module._get_saved_work_artifact_service] = lambda: unavailable
+
+        app.dependency_overrides[executions_module._get_saved_work_artifact_service] = (
+            lambda: unavailable
+        )
     with TestClient(app, raise_server_exceptions=False) as client:
-        response = client.post("/api/executions/mm:wf-1/retry-publication", json=_SAVED_WORK_BODY)
+        response = client.post(
+            "/api/executions/mm:wf-1/retry-publication", json=_SAVED_WORK_BODY
+        )
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == f"artifact_{dependency}_unavailable"
+    assert artifacts.delegations == []
     adapter.start_workflow.assert_not_awaited()
 
 
@@ -19011,7 +19059,7 @@ def test_saved_work_publication_requires_the_exact_source_run_link(
     artifacts = _SavedWorkArtifacts(linked_run_id=linked_run_id)
     # Separate links matching each identity never establish the requested pair.
     artifacts.links.append(
-        SimpleNamespace(workflow_id="mm:other", run_id="run-2")
+        SimpleNamespace(namespace="moonmind", workflow_id="mm:other", run_id="run-2")
     )
     app, adapter, _record, _user = _saved_work_app(monkeypatch, artifacts)
     adapter.start_workflow.side_effect = lambda **kwargs: WorkflowStartResult(
@@ -19064,6 +19112,12 @@ def test_saved_work_publication_preserves_selected_run_after_workflow_advances(
     [
         (
             _SavedWorkArtifacts(linked_workflow_id="mm:other"),
+            _SAVED_WORK_BODY,
+            409,
+            "saved_work_source_mismatch",
+        ),
+        (
+            _SavedWorkArtifacts(linked_namespace="foreign-namespace"),
             _SAVED_WORK_BODY,
             409,
             "saved_work_source_mismatch",

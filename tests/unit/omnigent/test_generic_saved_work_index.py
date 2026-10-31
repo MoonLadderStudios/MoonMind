@@ -20,6 +20,8 @@ from tests.artifact_access import access_for_test
 def _install_service(monkeypatch, artifact_module, service):
     class BoundService(artifact_module.TemporalArtifactService):
         def __new__(cls, *_args, **_kwargs):
+            if hasattr(service, "_transaction_ownership"):
+                service._transaction_ownership = _kwargs["transaction_ownership"]
             return service
 
     monkeypatch.setattr(artifact_module, "TemporalArtifactService", BoundService)
@@ -156,6 +158,7 @@ async def test_durable_saved_index_is_linked_only_after_verified_readback(monkey
         ),
         read=AsyncMock(return_value=(None, payload)),
         link_artifact=AsyncMock(),
+        record_verified_dependencies=AsyncMock(),
         list_for_execution=AsyncMock(return_value=[]),
     )
     if failure == "lookup":
@@ -170,7 +173,7 @@ async def test_durable_saved_index_is_linked_only_after_verified_readback(monkey
 
     @asynccontextmanager
     async def sessions():
-        yield SimpleNamespace()
+        yield SimpleNamespace(commit=AsyncMock())
 
     gateway = TemporalOmnigentArtifactGateway(sessions)
     monkeypatch.setattr(gateway, "_execution_link", lambda *args, **kwargs: SimpleNamespace(
@@ -210,7 +213,7 @@ async def test_checkpoint_retry_reuses_durable_objects_before_saved_index(tmp_pa
 
         @asynccontextmanager
         async def sessions():
-            yield SimpleNamespace()
+            yield service._repository._session
 
         gateway = TemporalOmnigentArtifactGateway(sessions)
         request = SimpleNamespace(correlation_id="workflow", step_execution=None)
@@ -243,7 +246,7 @@ async def test_lost_saved_link_ack_reuses_one_saved_result(tmp_path, monkeypatch
 
         @asynccontextmanager
         async def sessions():
-            yield SimpleNamespace()
+            yield service._repository._session
 
         gateway = TemporalOmnigentArtifactGateway(sessions)
         publisher = OmnigentWorkspacePublicationService(tmp_path, artifact_gateway=gateway)

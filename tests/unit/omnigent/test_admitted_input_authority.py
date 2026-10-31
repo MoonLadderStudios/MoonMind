@@ -58,6 +58,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
     TemporalArtifactRepository,
     TemporalArtifactService,
+    TemporalArtifactStateError,
 )
 from tests.artifact_access import access_for_test
 from tests.unit.omnigent.test_plan_and_realizer_dispatch import _codex_plan_inputs
@@ -548,7 +549,20 @@ async def test_admission_does_not_release_protected_raw_bytes(artifacts, protect
     )
     await _protect(artifacts, skills.body_id, protection)
     plan, binding = await _admitted_plan(artifacts, skills)
-    await _admit(artifacts, plan, binding, workflow_id="run-wf")
+    if protection == "quarantined":
+        async with artifacts() as session:
+            before = set((await session.scalars(select(TemporalArtifactLink.id))).all())
+        # This is executable Skill admission, not metadata diagnostics. An
+        # unavailable required Skill fails before any new execution grants.
+        with pytest.raises(TemporalArtifactStateError, match="quarantined"):
+            await _admit(artifacts, plan, binding, workflow_id="run-wf")
+        async with artifacts() as session:
+            assert (
+                set((await session.scalars(select(TemporalArtifactLink.id))).all())
+                == before
+            )
+    else:
+        await _admit(artifacts, plan, binding, workflow_id="run-wf")
     request = _request(plan, binding, workflow_id="run-wf", skills=skills)
     with pytest.raises(Exception) as failure:
         await TemporalOmnigentArtifactGateway(artifacts).read_admitted_input(

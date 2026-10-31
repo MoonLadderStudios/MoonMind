@@ -106,6 +106,16 @@ class ManagedCheckpointRestoreService:
                     access=access,
                 )
                 content_type = str(getattr(artifact, "content_type", ""))
+                from moonmind.workflows.temporal.saved_work_dependencies import (
+                    verify_saved_work_dependencies,
+                )
+
+                await verify_saved_work_dependencies(
+                    self.artifact_service,
+                    artifact=artifact,
+                    payload=payload,
+                    access=access,
+                )
             else:
                 payload = self.artifact_store.get_bytes(ref)
                 artifact = getattr(self.artifact_store, "_meta", {}).get(ref)

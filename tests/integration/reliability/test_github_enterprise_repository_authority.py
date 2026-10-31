@@ -10,7 +10,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+import pytest_asyncio
 
+from api_service.db import base
+from api_service.services import omnigent_execution_plan_service as writer
 from api_service.services.repository_connections import RepositoryConnectionService
 from moonmind.config.settings import settings
 from moonmind.omnigent.host_services.github_credentials import (
@@ -21,6 +24,14 @@ from moonmind.workflows.executions.repository_contract import (
     RepositoryIdentity,
     normalize_endpoint,
 )
+from moonmind.workflows.temporal.activities.omnigent_activities import (
+    _OnDemandTemporalArtifactService,
+)
+from moonmind.workflows.temporal.artifacts import (
+    LocalTemporalArtifactStore,
+    TemporalArtifactService,
+)
+from tests.artifact_access import access_for_test
 from tests.helpers.repository_connections import (
     github_pat_connection,
     github_repository_assignment,
@@ -30,12 +41,10 @@ from tests.integration.reliability.test_repository_authority_handoffs_4009 impor
     _compile,
     _request,
 )
-from tests.integration.reliability.test_repository_authority_handoffs_4009 import (
-    authority_context as _shared_authority_context,
-)
 from tests.unit.services.test_omnigent_execution_plan_service import (  # noqa: F401
     _ready_opencode_image_pair,
 )
+from tests.unit.workflows.temporal.test_artifacts import temporal_db
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -43,7 +52,38 @@ pytestmark = [
     pytest.mark.reliability_journey,
 ]
 
-authority_context = _shared_authority_context
+
+@pytest_asyncio.fixture
+async def authority_context(tmp_path, monkeypatch):
+    monkeypatch.setenv("SELECTED_REPOSITORY_PAT", "selected-secret-canary")
+    monkeypatch.setenv("GITHUB_TOKEN", "ambient-secret-canary")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "either")
+    monkeypatch.setattr(
+        writer, "_try_load_real_harness_config", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        writer, "resolve_execution_evidence", lambda *_a, **_kw: (None, "uncertified")
+    )
+    monkeypatch.setattr(
+        TemporalArtifactService,
+        "_build_store_from_settings",
+        staticmethod(lambda: LocalTemporalArtifactStore(tmp_path / "artifacts")),
+    )
+    async with temporal_db(tmp_path) as sessions:
+        monkeypatch.setattr(base, "async_session_maker", sessions)
+        artifacts = _OnDemandTemporalArtifactService(sessions)
+
+        async def read_repository_access_snapshot(ref, *, request):
+            _metadata, payload = await artifacts.read(
+                artifact_id=ref.removeprefix("artifact:"),
+                access=access_for_test("user-1"),
+            )
+            return payload
+
+        yield sessions, artifacts, SimpleNamespace(
+            read_repository_access_snapshot=read_repository_access_snapshot,
+        )
+
 
 _ENDPOINT = "https://github.enterprise.test"
 _REMOTE = f"{_ENDPOINT}/{_REPO}.git"
@@ -65,7 +105,7 @@ async def _enterprise_plan(
             )
         }
     )
-    sessions, _artifacts, gateway = context
+    sessions, artifacts, gateway = context
     async with sessions() as session:
         connections = RepositoryConnectionService(session)
         await connections.create_connection(
@@ -88,9 +128,39 @@ async def _enterprise_plan(
         "repository": {"name": _REPO},
         "branch": {"name": "main"},
     }
-    compiled = await _compile(
-        monkeypatch, context, repository=target, requiredCapabilities=["gh"]
+    from api_service.api.routers.executions import (
+        _build_original_workflow_input_snapshot_payload,
     )
+
+    snapshot = _build_original_workflow_input_snapshot_payload(
+        source_kind="create",
+        payload={
+            "repository": target,
+            "targetRuntime": "omnigent",
+            "requiredCapabilities": ["gh"],
+        },
+        task_payload={"instructions": "Use durable refs only."},
+    )
+    input_ref, input_digest = await writer.persist_json_artifact(
+        artifact_service=artifacts,
+        principal="user-1",
+        artifact_class="original_task_input_snapshot",
+        payload=snapshot,
+    )
+    compiled = await _compile(
+        monkeypatch,
+        context,
+        repository=target,
+        requiredCapabilities=["gh"],
+        task_input_snapshot_ref=input_ref,
+        task_input_snapshot_digest=input_digest,
+    )
+    closure = await artifacts.verified_dependencies(
+        root_artifact_id=compiled.binding.plan_artifact_ref,
+        access=access_for_test("user-1"),
+    )
+    assert closure is not None
+    assert input_ref in {entry.artifact_id for entry in closure.dependencies}
     request = _request().model_copy(
         update={"workspace_spec": {"repositoryTarget": target}}
     )

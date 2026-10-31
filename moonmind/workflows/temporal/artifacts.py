@@ -43,6 +43,7 @@ from botocore.exceptions import ConnectionError as S3ConnectionError
 from botocore.exceptions import ReadTimeoutError
 from sqlalchemy import (
     Select,
+    and_,
     case,
     cast,
     delete,
@@ -1479,6 +1480,97 @@ def schedule_input_artifact_ids(target: Mapping[str, Any]) -> set[str]:
     return ids
 
 
+# Original producer output labels for retained pre-closure saved-work roots.
+# Consumer/input links do not establish historical capture authority.
+_LEGACY_SAVED_WORK_OUTPUT_LINKS = (
+    "output.checkpoint",
+    "checkpoint.saved_work",
+    "evidence.recovery",
+)
+
+
+@dataclass(frozen=True)
+class ArtifactDependency:
+    artifact_id: str
+    sha256: str | None
+    required: bool = True
+    role: str = "input"
+
+
+@dataclass(frozen=True)
+class ArtifactDependencyClosure:
+    dependencies: tuple[ArtifactDependency, ...]
+    unavailable_optional: tuple[str, ...]
+    sha256: str
+
+
+def _dependency_digest(
+    root_sha256: str,
+    dependencies: Iterable[ArtifactDependency],
+    request_sha256: str | None = None,
+) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "rootSha256": root_sha256,
+                "requestSha256": request_sha256,
+                "dependencies": [asdict(item) for item in dependencies],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+
+def _normalized_dependencies(
+    dependencies: Iterable[ArtifactDependency],
+) -> tuple[ArtifactDependency, ...]:
+    indexed = {}
+    identities = {}
+    for item in dependencies:
+        if (
+            not isinstance(item, ArtifactDependency)
+            or not isinstance(item.artifact_id, str)
+            or not re.fullmatch(r"art_[A-Za-z0-9_-]+", item.artifact_id)
+            or not isinstance(item.role, str)
+            or not re.fullmatch(r"[a-zA-Z0-9_.:-]{1,64}", item.role)
+            or type(item.required) is not bool
+            or (item.sha256 is None and item.required)
+            or (
+                item.sha256 is not None
+                and (
+                    not isinstance(item.sha256, str)
+                    or not re.fullmatch(r"[a-f0-9]{64}", item.sha256)
+                )
+            )
+        ):
+            raise TemporalArtifactValidationError(
+                "Invalid verified artifact dependency"
+            )
+        if item.sha256 is not None:
+            if (
+                item.artifact_id in identities
+                and identities[item.artifact_id] != item.sha256
+            ):
+                raise TemporalArtifactStateError(
+                    "Conflicting dependency content identities"
+                )
+            identities[item.artifact_id] = item.sha256
+        key = (item.artifact_id, item.role)
+        previous = indexed.get(key)
+        if previous and previous.sha256 != item.sha256:
+            raise TemporalArtifactStateError(
+                "Conflicting dependency content identities"
+            )
+        indexed[key] = ArtifactDependency(
+            item.artifact_id,
+            item.sha256,
+            item.required or bool(previous and previous.required),
+            item.role,
+        )
+    return tuple(indexed[key] for key in sorted(indexed))
+
+
 class TemporalArtifactRepository:
     """Persistence helper for Temporal artifacts and execution links."""
 
@@ -2018,7 +2110,251 @@ class TemporalArtifactRepository:
             ),
         )
 
-    def _saved_definition_reference_exists(self, artifact_id: Any) -> Any:
+    @_artifact_authority_boundary
+    async def get_verified_dependencies(
+        self, root_artifact_id: str
+    ) -> tuple[ArtifactDependency, ...] | None:
+        """Read sealed producer proof, not a grant to read its children."""
+        root = await self.get_artifact(root_artifact_id)
+        if root.dependency_closure_version is None:
+            if (
+                root.dependency_closure_sha256 is not None
+                or root.dependency_request_sha256 is not None
+            ):
+                raise TemporalArtifactStateError("Incomplete artifact dependency seal")
+            return None
+        if (
+            root.dependency_closure_version != 1
+            or not root.dependency_closure_sha256
+            or not root.dependency_request_sha256
+        ):
+            raise TemporalArtifactStateError("Unsupported artifact dependency seal")
+        rows = (
+            (
+                await self._session.execute(
+                    select(db_models.TemporalArtifactDependency).where(
+                        db_models.TemporalArtifactDependency.root_artifact_id
+                        == root_artifact_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        entries = _normalized_dependencies(
+            ArtifactDependency(
+                row.dependency_artifact_id, row.sha256, row.required, row.role
+            )
+            for row in rows
+        )
+        if (
+            _dependency_digest(root.sha256, entries, root.dependency_request_sha256)
+            != root.dependency_closure_sha256
+        ):
+            raise TemporalArtifactStateError(
+                "Artifact dependency closure integrity mismatch"
+            )
+        return entries
+
+    @staticmethod
+    def _active_execution_reference_exists(artifact_id: Any) -> Any:
+        link = db_models.TemporalArtifactLink.__table__
+        execution = db_models.TemporalExecutionCanonicalRecord.__table__
+        return exists(
+            select(1)
+            .select_from(
+                link.join(execution, link.c.workflow_id == execution.c.workflow_id)
+            )
+            .where(
+                link.c.artifact_id == artifact_id,
+                link.c.namespace == execution.c.namespace,
+                or_(
+                    link.c.run_id == execution.c.run_id,
+                    and_(
+                        link.c.run_id == "",
+                        link.c.link_type.in_(
+                            (_DELEGATED_INPUT_LINK_TYPE, _DELEGATED_RAW_LINK_TYPE)
+                        ),
+                    ),
+                ),
+                execution.c.close_status.is_(None),
+                execution.c.state.not_in(
+                    ("completed", "failed", "canceled", "no_commit")
+                ),
+            )
+        )
+
+    def _intrinsic_root_liveness(self, root, *, now):
+        pin = db_models.TemporalArtifactPin.__table__
+        claim = db_models.TemporalArtifactUseClaim.__table__
+        schedule = db_models.RecurringWorkflowDefinition.__table__
+        skill = db_models.AgentSkillDefinition.__table__
+        current_definition = or_(
+            exists(
+                select(1).where(schedule.c.input_artifact_root_id == root.c.artifact_id)
+            ),
+            exists(
+                select(1).where(
+                    skill.c.artifact_ref.in_(
+                        (
+                            root.c.artifact_id,
+                            "artifact:" + root.c.artifact_id,
+                            "artifact://" + root.c.artifact_id,
+                        )
+                    )
+                )
+            ),
+        )
+        live = or_(
+            root.c.expires_at.is_(None),
+            root.c.expires_at > now,
+            root.c.retention_class == db_models.TemporalArtifactRetentionClass.PINNED,
+            exists(select(1).where(pin.c.artifact_id == root.c.artifact_id)),
+            exists(
+                select(1).where(
+                    claim.c.artifact_id == root.c.artifact_id, claim.c.expires_at > now
+                )
+            ),
+            current_definition,
+            self._active_execution_reference_exists(root.c.artifact_id),
+            self._active_journal_reference_exists(root.c.artifact_id),
+        )
+        return and_(
+            root.c.hard_deleted_at.is_(None),
+            root.c.deleted_at.is_(None),
+            root.c.status == db_models.TemporalArtifactStatus.COMPLETE,
+            live,
+        )
+
+    def _required_dependency_reference_exists(self, artifact_id, *, now=None):
+        root = db_models.TemporalArtifact.__table__.alias("dependency_root")
+        edge = db_models.TemporalArtifactDependency.__table__
+        return exists(
+            select(1)
+            .select_from(edge.join(root, root.c.artifact_id == edge.c.root_artifact_id))
+            .where(
+                edge.c.dependency_artifact_id == artifact_id,
+                edge.c.required.is_(True),
+                root.c.dependency_closure_version == 1,
+                self._intrinsic_root_liveness(root, now=now or datetime.now(UTC)),
+            )
+        ).correlate(db_models.TemporalArtifact)
+
+    def _legacy_saved_root_condition(self, root, *, now: datetime):
+        from moonmind.workflows.temporal.saved_work_dependencies import (
+            SAVED_WORK_DEPENDENCY_CONTENT_KINDS,
+            SAVED_WORK_DEPENDENCY_KINDS,
+        )
+
+        return and_(
+            root.c.dependency_closure_version.is_(None),
+            root.c.dependency_closure_sha256.is_(None),
+            root.c.dependency_request_sha256.is_(None),
+            or_(
+                root.c.content_type.in_(tuple(SAVED_WORK_DEPENDENCY_CONTENT_KINDS)),
+                root.c.metadata["artifact_kind"]
+                .as_string()
+                .in_(tuple(SAVED_WORK_DEPENDENCY_KINDS)),
+            ),
+            self._intrinsic_root_liveness(root, now=now),
+        )
+
+    def _legacy_saved_root_reference_exists(self, artifact_id, *, now=None):
+        """Temporary migration protection, limited to already-owned run inputs."""
+        root = db_models.TemporalArtifact.__table__.alias("legacy_dependency_root")
+        owner = db_models.TemporalArtifactLink.__table__.alias("legacy_root_link")
+        child = db_models.TemporalArtifactLink.__table__.alias("legacy_child_link")
+        execution = db_models.TemporalExecutionCanonicalRecord.__table__
+        return exists(
+            select(1)
+            .select_from(
+                root.join(owner, owner.c.artifact_id == root.c.artifact_id)
+                .join(
+                    execution,
+                    and_(
+                        execution.c.workflow_id == owner.c.workflow_id,
+                        execution.c.namespace == owner.c.namespace,
+                    ),
+                )
+                .join(
+                    child,
+                    and_(
+                        child.c.workflow_id == owner.c.workflow_id,
+                        child.c.namespace == owner.c.namespace,
+                        child.c.run_id == owner.c.run_id,
+                    ),
+                )
+            )
+            .where(
+                child.c.artifact_id == artifact_id,
+                owner.c.link_type.in_(_LEGACY_SAVED_WORK_OUTPUT_LINKS),
+                child.c.artifact_id != root.c.artifact_id,
+                self._legacy_saved_root_condition(root, now=now or datetime.now(UTC)),
+            )
+        ).correlate(db_models.TemporalArtifact)
+
+    @_artifact_authority_boundary
+    async def list_unsealed_saved_work_roots(self, *, now, limit, after=None):
+        root = db_models.TemporalArtifact.__table__.alias("legacy_dependency_root")
+        owner = db_models.TemporalArtifactLink.__table__.alias("legacy_root_link")
+        execution = db_models.TemporalExecutionCanonicalRecord.__table__
+        candidates = (
+            select(
+                root.c.artifact_id,
+                owner.c.namespace,
+                execution.c.workflow_id,
+                owner.c.run_id,
+                func.row_number()
+                .over(
+                    partition_by=root.c.artifact_id,
+                    order_by=(
+                        case((execution.c.workflow_id.is_not(None), 0), else_=1),
+                        owner.c.created_at,
+                        owner.c.workflow_id,
+                        owner.c.run_id,
+                    ),
+                )
+                .label("owner_order"),
+            )
+            .select_from(
+                root.outerjoin(
+                    owner,
+                    and_(
+                        owner.c.artifact_id == root.c.artifact_id,
+                        owner.c.link_type.in_(_LEGACY_SAVED_WORK_OUTPUT_LINKS),
+                    ),
+                ).outerjoin(
+                    execution,
+                    and_(
+                        execution.c.workflow_id == owner.c.workflow_id,
+                        execution.c.namespace == owner.c.namespace,
+                    ),
+                )
+            )
+            .where(
+                self._legacy_saved_root_condition(root, now=now),
+            )
+            .subquery()
+        )
+        query = select(
+            candidates.c.artifact_id,
+            candidates.c.namespace,
+            candidates.c.workflow_id,
+            candidates.c.run_id,
+        ).where(candidates.c.owner_order == 1)
+        if after is not None:
+            query = query.where(candidates.c.artifact_id > after)
+        return list(
+            (
+                await self._session.execute(
+                    query.order_by(candidates.c.artifact_id).limit(max(1, int(limit)))
+                )
+            ).all()
+        )
+
+    def _saved_definition_reference_exists(
+        self, artifact_id: Any, *, now: datetime | None = None
+    ) -> Any:
         """Exact saved schedule and Skill fields retain their current bytes."""
         schedule = db_models.RecurringWorkflowDefinition
 
@@ -2049,13 +2385,14 @@ class TemporalArtifactRepository:
         schedule_ref = (
             exists()
             .where(
+                schedule.input_artifact_root_id.is_(None),
                 or_(
                     *(
                         matches(schedule.target[path].as_string())
                         for path in _SCHEDULE_ARTIFACT_REF_PATHS
                     ),
                     array_ref,
-                )
+                ),
             )
             .correlate(db_models.TemporalArtifact)
         )
@@ -2064,7 +2401,19 @@ class TemporalArtifactRepository:
             .where(matches(db_models.AgentSkillDefinition.artifact_ref))
             .correlate(db_models.TemporalArtifact)
         )
-        return or_(schedule_ref, skill_ref)
+        current_root = (
+            exists()
+            .where(schedule.input_artifact_root_id == artifact_id)
+            .correlate(db_models.TemporalArtifact)
+        )
+        return or_(
+            schedule_ref,
+            skill_ref,
+            current_root,
+            self._active_execution_reference_exists(artifact_id),
+            self._required_dependency_reference_exists(artifact_id, now=now),
+            self._legacy_saved_root_reference_exists(artifact_id, now=now),
+        )
 
     @_artifact_authority_boundary
     async def has_saved_definition_reference(self, artifact_id: str) -> bool:
@@ -2126,7 +2475,7 @@ class TemporalArtifactRepository:
                     db_models.TemporalArtifact.artifact_id
                 ).correlate(db_models.TemporalArtifact),
                 ~self._saved_definition_reference_exists(
-                    db_models.TemporalArtifact.artifact_id
+                    db_models.TemporalArtifact.artifact_id, now=now
                 ),
             )
             .order_by(
@@ -2200,7 +2549,7 @@ class TemporalArtifactRepository:
             # NULL); keep the tombstone as that run's diagnostic context.
             referenced(db_models.TemporalExecutionRemediationLink.context_artifact_ref),
             self._active_journal_reference_exists(artifact_id).correlate(artifact),
-            self._saved_definition_reference_exists(artifact_id),
+            self._saved_definition_reference_exists(artifact_id, now=now),
         ]
 
     def _purge_eligibility(
@@ -2350,13 +2699,13 @@ class TemporalArtifactRepository:
 
     @_artifact_authority_boundary
     async def get_artifact_for_update(
-        self, artifact_id: str
+        self, artifact_id: str, *, wait: bool = True
     ) -> db_models.TemporalArtifact:
         """Return the artifact row locked for a destructive-action recheck."""
         stmt: Select[tuple[db_models.TemporalArtifact]] = (
             select(db_models.TemporalArtifact)
             .where(db_models.TemporalArtifact.artifact_id == artifact_id)
-            .with_for_update()
+            .with_for_update(skip_locked=not wait)
             # A waiter may have loaded this row before another transaction
             # deleted it. The lock must return the committed state, not that
             # earlier identity-map copy.
@@ -2365,6 +2714,16 @@ class TemporalArtifactRepository:
         result = await self._session.execute(stmt)
         artifact = result.scalars().first()
         if artifact is None:
+            if not wait and await self._session.scalar(
+                select(
+                    exists().where(
+                        db_models.TemporalArtifact.artifact_id == artifact_id
+                    )
+                )
+            ):
+                raise TemporalArtifactUnavailableError(
+                    artifact_id, dependency="authority", operation="lock_dependencies"
+                )
             raise _missing_artifact_error(artifact_id)
         return artifact
 
@@ -4438,6 +4797,287 @@ class TemporalArtifactService:
         except Exception as exc:
             _raise_storage_error(exc, artifact_id=artifact.artifact_id, operation=operation, read=True)
 
+    async def _verify_dependency_bytes(
+        self,
+        artifact: db_models.TemporalArtifact,
+        *,
+        access: ArtifactAccessContext,
+        expected_sha256: str | None,
+    ) -> None:
+        # Integrity verification returns no raw bytes and creates no raw grant.
+        # Preserve metadata-authorized restricted-input admission separately
+        # from the ordinary consumer raw-serving policy.
+        await self._assert_artifact_read_access(artifact, access=access)
+        self._assert_not_quarantined(artifact)
+        if (
+            artifact.status is not db_models.TemporalArtifactStatus.COMPLETE
+            or artifact.deleted_at is not None
+            or artifact.hard_deleted_at is not None
+        ):
+            raise TemporalArtifactStateError("Dependency artifact is not available")
+        now = datetime.now(UTC)
+        expiry = artifact.expires_at
+        if expiry is not None and expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=UTC)
+        if (
+            expiry is not None
+            and expiry <= now
+            and artifact.retention_class
+            is not db_models.TemporalArtifactRetentionClass.PINNED
+            and not await self._repository.get_pin(artifact.artifact_id)
+            and not await self._repository.has_saved_definition_reference(
+                artifact.artifact_id
+            )
+            and not await self._repository.has_active_journal_reference(
+                artifact.artifact_id
+            )
+            and not await self._repository.list_live_use_claims(
+                artifact.artifact_id, now=now
+            )
+        ):
+            raise TemporalArtifactStateError("Dependency artifact is expired")
+        if (
+            not artifact.sha256
+            or artifact.size_bytes is None
+            or (expected_sha256 is not None and artifact.sha256 != expected_sha256)
+        ):
+            raise TemporalArtifactStateError("Dependency artifact digest mismatch")
+        try:
+            matches = await _settled_storage_call(
+                lambda: self._store.object_matches(
+                    artifact.storage_key,
+                    sha256=artifact.sha256,
+                    size_bytes=artifact.size_bytes,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - preserve unknown storage errors
+            _raise_storage_error(
+                exc,
+                artifact_id=artifact.artifact_id,
+                operation="verify_dependencies",
+                read=True,
+            )
+        if not matches:
+            raise TemporalArtifactStateError(
+                "Dependency artifact bytes unavailable or digest mismatch"
+            )
+
+    async def record_verified_dependencies(
+        self,
+        *,
+        root_artifact_id: str,
+        dependencies: Iterable[ArtifactDependency],
+        access: ArtifactAccessContext,
+    ) -> ArtifactDependencyClosure:
+        """Atomically seal producer-verified immutable input identities."""
+        access = ArtifactAccessContext.require(access)
+        entries = _normalized_dependencies(dependencies)
+        # The direct request is distinct from its frozen transitive result.
+        # A lost-ack retry must not expand a child's later first seal.
+        root = await self._repository.get_artifact_for_update(
+            root_artifact_id, wait=False
+        )
+        request_digest = _dependency_digest(root.sha256, entries)
+        if (
+            await self._repository.get_verified_dependencies(root_artifact_id)
+            is not None
+        ):
+            if root.dependency_request_sha256 != request_digest:
+                raise TemporalArtifactStateError(
+                    "Immutable artifact dependency request already differs"
+                )
+            return await self.verified_dependencies(
+                root_artifact_id=root_artifact_id, access=access
+            )
+        expanded = list(entries)
+        observed_closures = {}
+        for entry in entries:
+            try:
+                nested = await self._repository.get_verified_dependencies(
+                    entry.artifact_id
+                )
+            except TemporalArtifactNotFoundError:
+                if entry.required:
+                    raise
+                continue
+            observed_closures[entry.artifact_id] = nested
+            for child in nested or ():
+                expanded.append(
+                    ArtifactDependency(
+                        child.artifact_id,
+                        child.sha256,
+                        entry.required and child.required,
+                        child.role,
+                    )
+                )
+        entries = _normalized_dependencies(expanded)
+        if any(entry.artifact_id == root_artifact_id for entry in entries):
+            raise TemporalArtifactValidationError(
+                "Artifact dependency closure cannot contain its root"
+            )
+        locked = {}
+        required_ids = {entry.artifact_id for entry in entries if entry.required} | {
+            root_artifact_id
+        }
+        for artifact_id in sorted(
+            {entry.artifact_id for entry in entries} | {root_artifact_id}
+        ):
+            try:
+                locked[artifact_id] = await self._repository.get_artifact_for_update(
+                    artifact_id, wait=False
+                )
+            except TemporalArtifactNotFoundError:
+                if artifact_id in required_ids:
+                    raise
+        for artifact_id, observed in observed_closures.items():
+            if artifact_id not in locked:
+                continue
+            if (
+                await self._repository.get_verified_dependencies(artifact_id)
+                != observed
+            ):
+                raise TemporalArtifactStateError(
+                    "Dependency closure changed during admission; retry"
+                )
+        root = locked[root_artifact_id]
+        await self._verify_dependency_bytes(
+            root, access=access, expected_sha256=root.sha256
+        )
+        available, missing = [], []
+        for entry in entries:
+            artifact = locked.get(entry.artifact_id)
+            if artifact is None:
+                missing.append(entry.artifact_id)
+                continue
+            # Authorization and policy failures never become optional absence.
+            await self._assert_artifact_read_access(artifact, access=access)
+            self._assert_not_quarantined(artifact)
+            try:
+                await self._verify_dependency_bytes(
+                    artifact, access=access, expected_sha256=entry.sha256
+                )
+            except (TemporalArtifactNotFoundError, TemporalArtifactStateError):
+                if entry.required:
+                    raise
+                missing.append(entry.artifact_id)
+                continue
+            available.append(
+                ArtifactDependency(
+                    entry.artifact_id, artifact.sha256, entry.required, entry.role
+                )
+            )
+        verified_by_key = {
+            (entry.artifact_id, entry.role): entry for entry in available
+        }
+        entries = tuple(
+            verified_by_key.get((entry.artifact_id, entry.role), entry)
+            for entry in entries
+        )
+        digest = _dependency_digest(root.sha256, entries, request_digest)
+        previous = await self._repository.get_verified_dependencies(root_artifact_id)
+        if previous is not None:
+            if previous != entries:
+                raise TemporalArtifactStateError(
+                    "Immutable artifact dependency closure already differs"
+                )
+        else:
+            for entry in entries:
+                self._repository._session.add(
+                    db_models.TemporalArtifactDependency(
+                        root_artifact_id=root_artifact_id,
+                        dependency_artifact_id=entry.artifact_id,
+                        sha256=entry.sha256,
+                        required=entry.required,
+                        role=entry.role,
+                    )
+                )
+            root.dependency_request_sha256 = request_digest
+            root.dependency_closure_version = 1
+            root.dependency_closure_sha256 = digest
+            await self._finish_mutation()
+        return ArtifactDependencyClosure(
+            tuple(available), tuple(sorted(set(missing))), digest
+        )
+
+    async def dependency_proof(
+        self, *, root_artifact_id: str, access: ArtifactAccessContext
+    ) -> tuple[ArtifactDependency, ...] | None:
+        """Return root-authorized producer proof, never bytes or child grants.
+
+        Admission consumers must independently bind this root to their original
+        trusted plan before using the proof in the existing delegation owner.
+        """
+        root = await self._repository.get_artifact(root_artifact_id)
+        await self._verify_dependency_bytes(
+            root,
+            access=ArtifactAccessContext.require(access),
+            expected_sha256=root.sha256,
+        )
+        return await self._repository.get_verified_dependencies(root_artifact_id)
+
+    async def verified_dependencies(
+        self, *, root_artifact_id: str, access: ArtifactAccessContext
+    ) -> ArtifactDependencyClosure | None:
+        """Verify retained closure availability without adding permission links."""
+        entries = await self.dependency_proof(
+            root_artifact_id=root_artifact_id, access=access
+        )
+        if entries is None:
+            return None
+        access = ArtifactAccessContext.require(access)
+        locked = {}
+        required_ids = {entry.artifact_id for entry in entries if entry.required} | {
+            root_artifact_id
+        }
+        for artifact_id in sorted(
+            {entry.artifact_id for entry in entries} | {root_artifact_id}
+        ):
+            try:
+                locked[artifact_id] = await self._repository.get_artifact_for_update(
+                    artifact_id, wait=False
+                )
+            except TemporalArtifactNotFoundError:
+                if artifact_id in required_ids:
+                    raise
+        root = locked[root_artifact_id]
+        await self._verify_dependency_bytes(
+            root, access=access, expected_sha256=root.sha256
+        )
+        # No expansion here: a child's newly sealed closure cannot redefine
+        # the exact immutable revision already admitted by this root.
+        available, missing = [], []
+        for entry in entries:
+            artifact = locked.get(entry.artifact_id)
+            if artifact is None:
+                missing.append(entry.artifact_id)
+                continue
+            try:
+                await self._assert_artifact_read_access(artifact, access=access)
+            except TemporalArtifactAuthorizationError:
+                if entry.required:
+                    raise
+                missing.append(entry.artifact_id)
+                continue
+            if entry.sha256 is None:
+                # Missing original optional bytes never acquire invented provenance.
+                missing.append(entry.artifact_id)
+                continue
+            try:
+                await self._verify_dependency_bytes(
+                    artifact, access=access, expected_sha256=entry.sha256
+                )
+            except (TemporalArtifactNotFoundError, TemporalArtifactStateError):
+                if entry.required:
+                    raise
+                missing.append(entry.artifact_id)
+                continue
+            available.append(entry)
+        return ArtifactDependencyClosure(
+            tuple(available),
+            tuple(sorted(set(missing))),
+            root.dependency_closure_sha256,
+        )
+
     async def read(
         self,
         *,
@@ -5515,6 +6155,71 @@ class TemporalArtifactService:
         await self._finish_mutation()
         return counts
 
+    async def _backfill_saved_work_dependencies(
+        self, *, now, limit, on_progress=None
+    ) -> bool:
+        """Migrate one bounded page before expiry, using original linked authority."""
+        from copy import copy
+
+        from moonmind.workflows.temporal.saved_work_dependencies import (
+            verify_saved_work_dependencies,
+        )
+
+        draining = getattr(self, "_pending_write_draining", False)
+        if not draining or not getattr(self, "_saved_dependency_scan_complete", False):
+            candidates = await self._repository.list_unsealed_saved_work_roots(
+                now=now,
+                limit=limit,
+                after=getattr(self, "_saved_dependency_cursor", None),
+            )
+            self._saved_dependency_page_advanced = bool(candidates)
+            if not candidates:
+                self._saved_dependency_scan_complete = True
+                self._saved_dependency_cursor = None
+            for root_id, _namespace, workflow_id, _original_run in candidates:
+                self._saved_dependency_cursor = root_id
+                if on_progress is not None:
+                    on_progress()
+                # Keep original read/link authority. Neither a retention pointer
+                # nor a current workflow run invents a grant to historical bytes.
+                if workflow_id is None:
+                    logger.warning(
+                        "Retained artifact dependency backfill has no recorded producer execution root=%s",
+                        root_id,
+                    )
+                    continue
+                access = ArtifactAccessContext.for_execution(workflow_id)
+                participant = copy(self)
+                participant._transaction_ownership = ArtifactTransactionOwnership.CALLER
+                try:
+                    artifact, payload = await participant.read(
+                        artifact_id=root_id, access=access
+                    )
+                    await verify_saved_work_dependencies(
+                        participant, artifact=artifact, payload=payload, access=access
+                    )
+                    await self._finish_mutation()
+                except BaseException as primary:
+                    try:
+                        await self._repository._session.rollback()
+                    except BaseException as cleanup:  # noqa: BLE001
+                        primary.add_note(
+                            f"Dependency backfill rollback failed: {type(cleanup).__name__}"
+                        )
+                        raise primary
+                    if not isinstance(primary, Exception):
+                        raise
+                    logger.warning(
+                        "Retained artifact dependency backfill unavailable root=%s",
+                        root_id,
+                        exc_info=True,
+                    )
+        else:
+            self._saved_dependency_page_advanced = False
+        return bool(
+            await self._repository.list_unsealed_saved_work_roots(now=now, limit=1)
+        )
+
     async def sweep_lifecycle(
         self,
         *,
@@ -5532,6 +6237,9 @@ class TemporalArtifactService:
         sweep_now = now or datetime.now(UTC)
         lifecycle_run_id = run_id or str(uuid4())
         page_size = max(1, int(limit))
+        pending_saved_dependencies = await self._backfill_saved_work_dependencies(
+            now=sweep_now, limit=page_size, on_progress=on_progress
+        )
         pruned = await self._repository.prune_expired_use_claims(now=sweep_now)
         expired = await self._repository.list_expired_artifacts(
             now=sweep_now, limit=page_size
@@ -5697,6 +6405,7 @@ class TemporalArtifactService:
             hard_delete_candidate_count=len(hard_candidates),
             drained=not pending_intents
             and not pending_uploads
+            and not pending_saved_dependencies
             and all(
                 count < page_size
                 for count in (
@@ -5738,6 +6447,8 @@ class TemporalArtifactService:
         pages: list[LifecycleSweepSummary] = []
         self._pending_write_draining = True
         self._pending_write_scan_complete = False
+        self._saved_dependency_scan_complete = False
+        self._saved_dependency_cursor = None
         try:
             while True:
                 page = await self.sweep_lifecycle(
@@ -5762,6 +6473,9 @@ class TemporalArtifactService:
                 )
                 progressed = progressed or getattr(
                     self, "_pending_write_page_advanced", False
+                )
+                progressed = progressed or getattr(
+                    self, "_saved_dependency_page_advanced", False
                 )
                 if page.drained or not progressed or time.monotonic() >= deadline:
                     break

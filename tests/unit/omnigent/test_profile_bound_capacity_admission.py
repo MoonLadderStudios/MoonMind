@@ -29,6 +29,9 @@ from tests.unit.omnigent.test_provider_leases_workflow_owned_capacity import (
     _inspection,
     _session_factory,
 )
+from tests.unit.services.test_omnigent_execution_plan_service import (
+    _compiler_dependency_owner,  # noqa: F401 - pytest fixture import
+)
 
 admitted_codex_plan = test_profile_bound_plan_authority.admitted_codex_plan
 
