@@ -1263,6 +1263,55 @@ async def test_publish_report_bundle_writes_links_final_marker_and_step_metadata
             )
             assert structured_payload == b'{"findings": [], "status": "complete"}'
 
+
+async def test_optional_report_bundle_reconciles_saved_parts_after_interruption(
+    tmp_path, monkeypatch
+):
+    async with temporal_db(tmp_path) as maker:
+        async with maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            request = dict(
+                principal="workflow-producer",
+                namespace="moonmind",
+                workflow_id="review",
+                run_id="review-run",
+                report_type="optional_quality_review",
+                report_scope="final",
+                primary={"payload": "Advisory report", "content_type": "text/markdown"},
+                summary={
+                    "payload": "Partial observations",
+                    "content_type": "text/plain",
+                },
+            )
+            publish = service._publish_report_bundle_component
+            primary_refs = []
+
+            async def interrupted(**kwargs):
+                if kwargs["link_type"] == "report.summary":
+                    raise RuntimeError("response lost after primary save")
+                ref = await publish(**kwargs)
+                primary_refs.append(ref)
+                return ref
+
+            monkeypatch.setattr(
+                service, "_publish_report_bundle_component", interrupted
+            )
+            with pytest.raises(RuntimeError, match="response lost"):
+                await service.publish_report_bundle(**request)
+            monkeypatch.setattr(service, "_publish_report_bundle_component", publish)
+            recovered = await service.publish_report_bundle(**request)
+            repeated = await service.publish_report_bundle(**request)
+            assert recovered["primary_report_ref"] == primary_refs[0]
+            assert repeated == recovered
+            changed = await service.publish_report_bundle(
+                **{**request, "primary": {"payload": "Different observations"}}
+            )
+            assert changed["primary_report_ref"] != recovered["primary_report_ref"]
+
+
 async def test_publish_report_bundle_rejects_missing_and_duplicate_final_marker(
     tmp_path: Path,
 ) -> None:

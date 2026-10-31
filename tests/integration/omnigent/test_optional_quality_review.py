@@ -19,6 +19,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from temporalio import activity
+from temporalio.exceptions import ActivityError
 from temporalio.api.workflowservice.v1 import DescribeWorkflowExecutionResponse
 from temporalio.workflow import ParentInfo
 
@@ -46,7 +47,10 @@ from api_service.services.omnigent_agent_profile_service import (
 from moonmind.config.settings import settings
 from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
 from moonmind.omnigent.settings import resolved_server_url
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    AgentRunResult,
+)
 from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
@@ -87,6 +91,8 @@ def verifier_skill(monkeypatch):
     "review_kind",
     [
         "findings",
+        "blocked",
+        "structured_blocked",
         "unavailable",
         "partial",
         "missing_report",
@@ -256,18 +262,9 @@ async def test_explicit_review_native_journey_and_report_only_recovery(
         tool_name=node["tool"]["name"], node_inputs=node["inputs"]
     ), "The explicitly optional review must not become a parent completion gate"
 
-    async def recover_and_present(restored, computed, report):
+    async def present_saved_report(saved, computed, report):
         async with journey.session_factory() as session:
             artifacts = TemporalArtifactService(TemporalArtifactRepository(session))
-            recovered_publisher = TemporalAgentRuntimeActivities(
-                artifact_service=artifacts
-            )
-            monkeypatch.setattr(
-                recovered_publisher,
-                "execution_notify_completion",
-                AsyncMock(return_value={"status": "skipped"}),
-            )
-            saved = await recovered_publisher.agent_runtime_publish_artifacts(restored)
             report_id = saved.metadata["primaryReportRef"]
             metadata, _, _, read_policy = await artifacts.get_metadata(
                 artifact_id=report_id, access=access
@@ -338,7 +335,6 @@ async def test_explicit_review_native_journey_and_report_only_recovery(
         return saved
 
     child_calls = []
-    pending_report = {}
 
     async def execute_review_child(workflow_name, request, **kwargs):
         assert workflow_name == "MoonMind.AgentRun"
@@ -398,6 +394,10 @@ async def test_explicit_review_native_journey_and_report_only_recovery(
                 f"candidate sha256:{digest}; scope: selected output only. "
                 "The supplied output was reviewed; required test evidence was unavailable."
             )
+        if review_kind == "blocked":
+            report += "\nVerdict: BLOCKED. Required test evidence is unavailable."
+        if review_kind == "structured_blocked":
+            report += '\n```json\n{"status":"blocked","summary":"Source evidence unavailable"}\n```'
         original_response = journey.server.append_assistant_response
 
         def respond(_text):
@@ -418,6 +418,8 @@ async def test_explicit_review_native_journey_and_report_only_recovery(
         # The existing publisher receives the committed AgentRun result. A lost
         # report transport is retried through this owner with no new native turn.
         child = MoonMindAgentRun()
+        assert request.execution_budget is not None
+        child._execution_budget = request.execution_budget
         child_id = kwargs["id"]
         monkeypatch.setattr(
             run_module.workflow,
@@ -432,9 +434,6 @@ async def test_explicit_review_native_journey_and_report_only_recovery(
                     run_id=record.run_id,
                 ),
             ),
-        )
-        completed = child._enrich_result_metadata(
-            request=request, result=computed, include_parent_execution=True
         )
         monkeypatch.setattr(
             activity,
@@ -473,16 +472,52 @@ async def test_explicit_review_native_journey_and_report_only_recovery(
                 AsyncMock(return_value={"status": "skipped"}),
             )
             publish = artifacts.publish_report_bundle
+            saved_bundle = []
+
+            async def interrupted_report(**payload):
+                if review_kind == "missing_report":
+                    saved_bundle.append(await publish(**payload))
+                raise RuntimeError("report transport interrupted")
+
             monkeypatch.setattr(
                 artifacts,
                 "publish_report_bundle",
-                AsyncMock(side_effect=RuntimeError("report transport interrupted")),
+                interrupted_report,
             )
-            # No forged parent handoff is needed: the report's executionRef is the
-            # original API-admitted review run and the producer remains service-owned.
-            with pytest.raises(RuntimeError, match="report transport interrupted"):
-                await publisher.agent_runtime_publish_artifacts(completed)
-            monkeypatch.setattr(artifacts, "publish_report_bundle", publish)
+            publication_calls = []
+
+            async def publish_activity(name, payload, **_kwargs):
+                publication_calls.append(name)
+                if name == "artifact.publish_report_bundle":
+                    return await publish(**payload)
+                assert name == "agent_runtime.publish_artifacts"
+                try:
+                    return await publisher.agent_runtime_publish_artifacts(payload)
+                except RuntimeError as exc:
+                    raise ActivityError(
+                        "report transport interrupted",
+                        scheduled_event_id=1,
+                        started_event_id=2,
+                        identity="publisher",
+                        activity_type=name,
+                        activity_id="save",
+                        retry_state=None,
+                    ) from exc
+
+            monkeypatch.setattr(child, "_execute_routed_activity", publish_activity)
+            saved = await child._publish_terminal_result(
+                request=request, result=computed
+            )
+            assert publication_calls == [
+                "agent_runtime.publish_artifacts",
+                "artifact.publish_report_bundle",
+            ]
+            assert saved.metadata["primaryReportRef"]
+            if saved_bundle:
+                assert (
+                    saved.metadata["primaryReportRef"]
+                    == saved_bundle[0]["primary_report_ref"]["artifact_id"]
+                )
             result_access = ArtifactAccessContext.for_service("system:agent_runtime")
             committed = await artifacts.list_for_execution(
                 namespace=record.namespace,
@@ -498,13 +533,11 @@ async def test_explicit_review_native_journey_and_report_only_recovery(
                 access=result_access,
             )
             restored = AgentRunResult.model_validate_json(committed_bytes)
+            assert restored.metadata.get("lastAssistantText") == computed.metadata.get(
+                "lastAssistantText"
+            )
             assert not journey.server.host_alive
-        if review_kind in {"missing_report", "provider_failed_report_pending"}:
-            pending_report.update(restored=restored, computed=computed, report=report)
-            saved = restored
-            assert "primaryReportRef" not in saved.metadata
-        else:
-            saved = await recover_and_present(restored, computed, report)
+        await present_saved_report(saved, computed, report)
         assert (
             len([e for e in journey.server.events if e.get("type") == "message"]) == 1
         )
@@ -523,6 +556,10 @@ async def test_explicit_review_native_journey_and_report_only_recovery(
         run_module.RUN_MOONSPEC_GATE_CONTRACT_SINGLE_REPAIR_PATCH,
         run_module.RUN_MOONSPEC_VERIFY_REPORT_RECOVERY_PATCH,
         run_module.RUN_ADVISORY_ARTIFACT_REVIEW_PATCH,
+        run_module.RUN_BLOCKED_OUTCOME_SHORT_CIRCUIT_PATCH,
+        "run-advisory-review-completion-v1",
+        "agent-run-optional-report-recovery-v1",
+        "agent-run-parent-execution-artifact-handoff-v1",
         run_module.RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH,
         run_module.RUN_EXECUTION_SCOPED_PRINCIPAL_PATCH,
         run_module.RUN_STEP_PROFILE_SELECTION_INHERITANCE_PATCH,
@@ -584,7 +621,7 @@ async def test_explicit_review_native_journey_and_report_only_recovery(
                     payload=payload.payload,
                     content_type=payload.content_type,
                 )
-            pytest.fail(f"Unexpected parent side effect: {name}")
+            raise AssertionError(f"Unexpected parent side effect: {name}")
 
         monkeypatch.setattr(run_module, "execute_typed_activity", artifact_activity)
         monkeypatch.setattr(run_module.workflow, "execute_activity", artifact_activity)
@@ -603,8 +640,6 @@ async def test_explicit_review_native_journey_and_report_only_recovery(
                 parent._determine_publish_completion(parameters=parameters)[0]
                 == "success"
             )
-    if pending_report:
-        await recover_and_present(**pending_report)
     assert len(child_calls) == 1
     assert set(activity_calls) <= {
         "artifact.read",

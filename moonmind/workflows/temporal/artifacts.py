@@ -6848,6 +6848,34 @@ class TemporalArtifactService:
             encoded = bytes(payload)
 
         content_type = component.get("content_type") or "application/octet-stream"
+        if metadata.get("report_type") == "optional_quality_review":
+            # An interrupted save may have committed any prefix of the bundle.
+            # Reconcile each complete part before repeating a write; retained
+            # observations and metadata, rather than a new attempt, identify it.
+            digest = hashlib.sha256(encoded).hexdigest()
+            for saved in await self.list_for_execution(
+                namespace=namespace,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                link_type=link_type,
+                access=ArtifactAccessContext.for_service(principal),
+            ):
+                if (
+                    saved.status == db_models.TemporalArtifactStatus.COMPLETE
+                    and saved.sha256 == digest
+                    and saved.content_type == str(content_type)
+                    and {
+                        key: value
+                        for key, value in (saved.metadata_json or {}).items()
+                        if key != "preview_artifact_id"
+                    }
+                    == dict(metadata)
+                ):
+                    ref = build_artifact_ref(saved)
+                    return {
+                        "artifact_ref_v": ref.artifact_ref_v,
+                        "artifact_id": ref.artifact_id,
+                    }
         artifact, _upload = await self.create(
             principal=principal,
             content_type=str(content_type),
