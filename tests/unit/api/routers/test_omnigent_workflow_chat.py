@@ -2608,6 +2608,114 @@ def test_terminal_items_page_uses_captured_snapshot_after_provider_cleanup(
         assert _PROVIDER_SESSION_ID not in metadata_response.text
 
 
+@pytest.mark.parametrize("storage_envelopes", [True, False], ids=["stored", "native"])
+def test_terminal_transcript_preserves_native_item_shape_after_cleanup(
+    monkeypatch, storage_envelopes: bool
+) -> None:
+    metadata = dict(_row().metadata_)
+    metadata["capabilityAuthority"] = {
+        **metadata["capabilityAuthority"],
+        "providerSessionId": _PROVIDER_SESSION_ID,
+    }
+    native_items = [
+        {
+            "id": "saved-message",
+            "type": "message",
+            "response_id": "saved-response",
+            "status": "completed",
+            "created_at": 100,
+            "session_id": _PROVIDER_SESSION_ID,
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Saved progress."}],
+        },
+        {
+            "id": "saved-call",
+            "type": "function_call",
+            "response_id": "saved-response",
+            "status": "completed",
+            "created_at": 101,
+            "name": "sys_os_shell",
+            "arguments": '{"command":"printf verified"}',
+            "call_id": "call-1",
+        },
+        {
+            "id": "saved-output",
+            "type": "function_call_output",
+            "response_id": "saved-response",
+            "status": "completed",
+            "created_at": 102,
+            "call_id": "call-1",
+            "output": "verified",
+        },
+    ]
+    captured_items = native_items
+    if storage_envelopes:
+        common = {"id", "type", "response_id", "status", "created_at", "session_id"}
+        captured_items = [
+            {
+                **{key: value for key, value in item.items() if key in common},
+                "created_by": None,
+                "data": {
+                    key: value for key, value in item.items() if key not in common
+                },
+            }
+            for item in native_items
+        ]
+    captured = {"id": _PROVIDER_SESSION_ID, "items": captured_items}
+
+    class _Gateway:
+        async def read_text(self, artifact_ref: str) -> str:
+            assert artifact_ref == "artifact://omnigent/captured-final"
+            return json.dumps(captured)
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.LocalOmnigentArtifactGateway",
+        _Gateway,
+    )
+    store = _FakeStore(
+        row=_row(
+            status="completed",
+            omnigent_session_id="",
+            final_snapshot_ref="artifact://omnigent/captured-final",
+            metadata_=metadata,
+        )
+    )
+    client, proxy, _store = _build(store=store)
+    expected = [dict(item) for item in native_items]
+    expected[0]["session_id"] = _CHAT_BINDING_ID
+
+    first = client.get(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/items"),
+        params={"limit": "2", "order": "asc"},
+    )
+    assert first.status_code == 200
+    page = first.json()
+    assert page["data"][0]["content"][0]["text"] == "Saved progress."
+    assert page["data"][1]["name"] == "sys_os_shell"
+    assert page["data"] == expected[:2]
+    assert page["last_id"] == "saved-call"
+    assert page["has_more"] is True
+
+    following = client.get(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/items"),
+        params={"limit": "2", "order": "asc", "after": page["last_id"]},
+    )
+    assert following.status_code == 200
+    assert following.json()["data"] == expected[2:]
+    assert following.json()["has_more"] is False
+
+    for path in (f"v1/sessions/{_CHAT_BINDING_ID}", "v1/sessions"):
+        response = client.get(_path(path))
+        assert response.status_code == 200
+        snapshot = response.json()
+        if path == "v1/sessions":
+            snapshot = snapshot["data"][0]
+        assert snapshot["items"] == expected
+        assert snapshot["readOnly"] is True
+        assert _PROVIDER_SESSION_ID not in response.text
+    assert proxy.sessions == []
+
+
 # --- Strict stream cursors ---------------------------------------------------
 
 

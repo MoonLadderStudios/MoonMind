@@ -1669,10 +1669,12 @@ class GenericOmnigentHostRealizer:
                     },
                 },
             )
-        cleanup_evidence: dict[str, Any] = {}
-        if binding.omnigentSessionId:
-            cleanup_evidence["session"] = await self._session_cleanup.drain(
-                binding.omnigentSessionId
+        host_lease, cleanup_evidence = await self._drain_bound_session(
+            binding, host_lease, host_context
+        )
+        if "host" in cleanup_evidence:
+            cleanup_evidence["host"] = await self._publish_host_logs(
+                request, cleanup_evidence["host"]
             )
         binding = await self._save_or_retain(request, binding)
         if host_lease is not None and host_lease.status != "cleaned":
@@ -1735,6 +1737,56 @@ class GenericOmnigentHostRealizer:
             },
         )
         return binding, host_lease
+
+    async def _drain_bound_session(
+        self,
+        binding: StableRuntimeBinding,
+        host_lease: Any | None,
+        host_context: dict[str, Any] | None,
+    ) -> tuple[Any | None, dict[str, Any]]:
+        if not binding.omnigentSessionId:
+            return host_lease, {}
+        try:
+            return host_lease, {
+                "session": await self._session_cleanup.drain(binding.omnigentSessionId)
+            }
+        except HarnessPlatformError as exc:
+            if (
+                exc.code != HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED
+                or host_lease is None
+                or (host_lease.status != "cleaned" and host_context is None)
+            ):
+                raise
+            # The server cannot confirm a runner stop on an offline host.
+            # This attempt's fenced Docker removal is stronger consumer-stop
+            # evidence; an offline projection or failed stop alone is not.
+            evidence: dict[str, Any] = {}
+            if host_lease.status != "cleaned":
+                host_lease = await self._host_leases.claim_cleanup(
+                    host_lease.leaseRef, expected_generation=host_lease.generation
+                )
+                evidence["host"] = await self._host_runtime.cleanup(
+                    host_context=host_context,
+                    host_lease_ref=host_lease.leaseRef,
+                    host_lease_generation=host_lease.launchGeneration,
+                )
+                host_lease = await self._host_leases.mark_cleaned(
+                    host_lease.leaseRef, expected_generation=host_lease.generation
+                )
+            logger.warning(
+                "Session drain failed; confirmed fenced removal of host lease %s",
+                host_lease.leaseRef,
+                exc_info=True,
+            )
+            evidence["session"] = {
+                "drained": False,
+                "sessionId": binding.omnigentSessionId,
+                "reason": "host_removed_after_drain_failed",
+                "errorCode": str(exc.code),
+                "hostLeaseRef": host_lease.leaseRef,
+                "hostLeaseGeneration": host_lease.launchGeneration,
+            }
+            return host_lease, evidence
 
     async def _publish_host_logs(
         self,
@@ -2302,27 +2354,30 @@ class GenericOmnigentHostRealizer:
                 code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
             )
         if host_lease is not None and host_lease.status != "cleaned":
-            if binding.omnigentSessionId:
-                await self._session_cleanup.drain(binding.omnigentSessionId)
-            saved_request = (binding.phaseResults or {}).get("workspace")
-            if saved_request:
-                # Historical workspace receipts omitted the top-level copy of
-                # the Step Execution's plan. Recover only that proven omission
-                # from the immutable step/binding authority; conflicts still fail.
-                saved_request = dict(saved_request)
-                step_plan = (saved_request.get("stepExecution") or {}).get(
-                    "omnigentExecutionPlan"
+            host_lease, _evidence = await self._drain_bound_session(
+                binding, host_lease, host_lease.cleanupHandle
+            )
+        saved_request = (binding.phaseResults or {}).get("workspace")
+        if saved_request:
+            # A failed drain may have already removed the owned host. Its
+            # caller-owned workspace still needs saving after an interruption.
+            # Historical receipts omitted the top-level copy of the Step
+            # Execution's plan; recover only that proven omission.
+            saved_request = dict(saved_request)
+            step_plan = (saved_request.get("stepExecution") or {}).get(
+                "omnigentExecutionPlan"
+            )
+            if step_plan and step_plan.get("planRef") != binding.executionPlanRef:
+                raise HarnessPlatformError(
+                    "saved workspace plan differs from its runtime binding",
+                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
                 )
-                if step_plan and step_plan.get("planRef") != binding.executionPlanRef:
-                    raise HarnessPlatformError(
-                        "saved workspace plan differs from its runtime binding",
-                        code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
-                    )
-                if step_plan and "omnigentExecutionPlan" not in saved_request:
-                    saved_request["omnigentExecutionPlan"] = step_plan
-                binding = await self._save_or_retain(
-                    AgentExecutionRequest.model_validate(saved_request), binding
-                )
+            if step_plan and "omnigentExecutionPlan" not in saved_request:
+                saved_request["omnigentExecutionPlan"] = step_plan
+            binding = await self._save_or_retain(
+                AgentExecutionRequest.model_validate(saved_request), binding
+            )
+        if host_lease is not None and host_lease.status != "cleaned":
             claimed = await self._host_leases.claim_cleanup(
                 host_lease.leaseRef, expected_generation=host_lease.generation
             )

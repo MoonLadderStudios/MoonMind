@@ -350,8 +350,7 @@ def _head_insert_position(document: str) -> int | None:
             return None
         candidate = window[idx + 1 : idx + 5]
         if len(candidate) == 4 and all(
-            _ascii_lower(char) == expected
-            for char, expected in zip(candidate, "head")
+            _ascii_lower(char) == expected for char, expected in zip(candidate, "head")
         ):
             end = window.find(">", idx + 5)
             if end == -1:
@@ -424,6 +423,7 @@ def rewrite_asset_urls(document: str, *, scoped_base: str) -> str:
 
     def _scope_srcset(match: re.Match[str]) -> str:
         tag = match.group(0)
+
         # Only rewrite the srcset attribute value, leaving src/href (handled
         # above) untouched within the same tag.
         def _rewrite_value(value: re.Match[str]) -> str:
@@ -814,7 +814,10 @@ def render_native_ui_document(
       if (!readyAnnounced && !fatalAnnounced) announceFatal(lastReadFailure);
     }, 60000);
   }
-  window.addEventListener("error", function () {
+  window.addEventListener("error", function (event) {
+    // Responsive panels can defer ResizeObserver delivery to the next frame.
+    if (event.message === "ResizeObserver loop completed with undelivered notifications." ||
+        event.message === "ResizeObserver loop limit exceeded") return;
     announceFatal("native_crash");
   });
   window.addEventListener("unhandledrejection", function () {

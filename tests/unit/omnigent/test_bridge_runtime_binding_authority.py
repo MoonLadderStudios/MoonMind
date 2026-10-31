@@ -1,4 +1,9 @@
-"""Workflow Chat uses the live execution's durable runtime authority."""
+"""The bridge and Workflow Chat retain the execution's runtime authority."""
+
+import hashlib
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -9,6 +14,20 @@ from api_service.db.models import Base, OmnigentBridgeSession
 from moonmind.omnigent.bridge_store import (
     CHAT_BINDING_STATE_AVAILABLE,
     OmnigentBridgeSessionStore,
+    OmnigentIdempotencyError,
+)
+from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
+from moonmind.omnigent.control_plane.identities import canonical_omnigent_session_id
+from moonmind.omnigent.control_plane.turn_commands import (
+    CanonicalSessionBootstrap,
+    CanonicalTurnCommandService,
+)
+from moonmind.omnigent.harness_platform.execution_plan import (
+    create_execution_plan_envelope,
+)
+from moonmind.omnigent.harness_platform.failures import (
+    HarnessPlatformError,
+    HarnessPlatformFailure,
 )
 from moonmind.omnigent.harness_platform.runtime_binding import (
     runtime_binding_execution_scope,
@@ -20,12 +39,21 @@ from moonmind.omnigent.harness_platform.stores import (
 from moonmind.omnigent.provider_leases import AcquiredProviderLease
 from moonmind.omnigent.runtime_bindings import (
     DbRuntimeBindingStore as StableRuntimeBindingStore,
+    RuntimeBindingState,
 )
+from moonmind.omnigent.realizers.turn_delivery import canonical_turn_idempotency_key
+from moonmind.omnigent.turn_authority import canonical_turn_authority
 from moonmind.provider_profiles.lease_client import (
     CredentialLease,
     CredentialLeasePurpose,
 )
-from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    OmnigentExecutionPlanBinding,
+)
+from moonmind.workflows.temporal.activities.omnigent_activities import (
+    _try_generic_realizer_dispatch,
+)
 from tests.unit.omnigent.test_bridge_store import _request
 from tests.unit.omnigent.test_generic_plane_n_way_concurrency import (
     ZEN_PROFILE,
@@ -317,3 +345,243 @@ async def test_generic_host_binding_resolves_chat_read_only(store, shape):
         )
         is None
     )
+
+
+async def _admitted_bridge_attempt(store, request, plan, epoch):
+    payload = request.model_dump(by_alias=True, mode="json")
+    payload["admittedProviderCapacity"] = {
+        "schemaVersion": "admitted-provider-capacity/v2",
+        "leaseOwnerId": "agent-run-generic-step",
+        "profiles": [
+            {
+                "providerProfileRef": ZEN_PROFILE,
+                "providerRuntimeId": "opencode",
+                "capacityScopeRef": "opencode-zen:contributor-free",
+                "credentialGeneration": 3,
+            }
+        ],
+        "executionPlanRef": plan.planRef,
+        "agentRunWorkflowId": "agent-run-generic-step",
+        "agentRunRunId": "run-7",
+        "stepExecutionId": request.step_execution.step_execution_id,
+        "idempotencyKey": request.idempotency_key,
+        "admissionEpoch": epoch,
+    }
+    request = AgentExecutionRequest.model_validate(payload)
+    commands = CanonicalTurnCommandService(store._control_plane_store)
+    command_key = canonical_turn_idempotency_key(request)
+    await commands.claim(
+        workflow_id=request.step_execution.workflow_id,
+        provider_session_ref="",
+        chat_binding_id=None,
+        command_type="execute_admitted_plan",
+        turn_source="initial",
+        idempotency_key=command_key,
+        payload_digest=plan.planRef,
+        step_execution_id=request.step_execution.step_execution_id,
+        bootstrap=CanonicalSessionBootstrap(
+            provider="omnigent",
+            step_execution_id=request.step_execution.step_execution_id,
+            agent_run_id=request.correlation_id,
+            source_idempotency_key=command_key,
+            execution_plan_ref=plan.planRef,
+            admission_epoch=epoch,
+        ),
+        requested_authority=canonical_turn_authority(request, plan),
+    )
+    stable = StableRuntimeBindingStore(store._session_factory)
+    leases = _generic_host_leases("current")
+    lease_ref = f"provider-lease:admission-{epoch}"
+    leases["primary-model"]["providerLeaseRef"] = lease_ref
+    binding = await stable.create_initial(
+        execution_plan_ref=plan.planRef,
+        idempotency_key=request.idempotency_key,
+        provider_leases=leases,
+        admission_epoch=epoch,
+    )
+    for state in (
+        RuntimeBindingState.credentials_materialized,
+        RuntimeBindingState.host_allocating,
+        RuntimeBindingState.host_ready,
+    ):
+        binding = await stable.update(
+            binding.bindingId,
+            expected_revision=binding.revision,
+            expected_fencing_generation=binding.fencingGeneration,
+            state=state,
+            updates={
+                "hostBindingRef": f"host-binding:admission-{epoch}",
+                "hostLeaseRef": f"host-lease:admission-{epoch}",
+                "hostLeaseGeneration": 1,
+                "omnigentHostId": f"host-admission-{epoch}",
+            },
+        )
+    authorization = {
+        "request": request,
+        "endpoint_ref": "default",
+        "provider_profile_id": ZEN_PROFILE,
+        "provider_lease_id": lease_ref,
+        "credential_generation": 3,
+        "host_binding_ref": binding.hostBindingRef,
+        "host_lease_ref": binding.hostLeaseRef,
+        "omnigent_host_id": binding.omnigentHostId,
+        "effective_launch_snapshot": {
+            "executionPlanRef": plan.planRef,
+            "runtimeBindingRef": binding.bindingId,
+            "executionRealizerRef": "generic-omnigent-host@1",
+            "launchPolicyRef": plan.payload.launchPolicyRef,
+        },
+    }
+    return stable, binding, authorization
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prior_state",
+    [
+        "cleaned",
+        "live",
+        "settled",
+        "foreign-host",
+        "completed-bridge",
+        "canceled-bridge",
+    ],
+)
+async def test_posted_admission_recovery_preserves_prior_authority(
+    store,
+    monkeypatch,
+    prior_state,
+):
+    base = _zen_plan("admission-recovery")
+    launch = {
+        "harness": base.payload.harnessId,
+        "launchPolicyRef": base.payload.launchPolicyRef,
+        "hostImageRef": "example.test/host@sha256:" + "1" * 64,
+    }
+    canonical = json.dumps(launch, sort_keys=True, separators=(",", ":"))
+    launch["snapshotRef"] = (
+        "omnigent-launch:sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+    )
+    raw = json.dumps(launch, sort_keys=True, separators=(",", ":")).encode()
+    payload = base.payload.model_dump(by_alias=True, mode="json")
+    payload.update(
+        hostImageRef=launch["hostImageRef"],
+        hostArchitecture="linux/amd64",
+        omnigentHostBuildDigest="sha256:" + "2" * 64,
+        policySnapshotDigest="sha256:" + "3" * 64,
+        effectiveLaunchSnapshotRef="artifact:admission-launch",
+        effectiveLaunchSnapshotDigest="sha256:" + hashlib.sha256(raw).hexdigest(),
+    )
+    plan = create_execution_plan_envelope(payload)
+    await DbExecutionPlanStore(store._session_factory).persist(plan)
+    monkeypatch.setattr(
+        TemporalOmnigentArtifactGateway,
+        "read_admitted_input",
+        AsyncMock(return_value=raw),
+    )
+    request = _request("posted-capacity-recovery", with_step=True)
+    request.omnigent_execution_plan = OmnigentExecutionPlanBinding(
+        planRef=plan.planRef,
+        planDigest="sha256:" + plan.planRef.rsplit(":", 1)[-1],
+        planArtifactRef="artifact:admission-plan",
+        taskInputSnapshotRef="artifact:admission-request",
+        taskInputSnapshotDigest="sha256:" + "4" * 64,
+    )
+    stable, binding, first = await _admitted_bridge_attempt(store, request, plan, 1)
+    initial = await store.bind_profile_authorization(**first)
+    replayed = await store.bind_profile_authorization(**first)
+    assert replayed.bridge_session_id == initial.bridge_session_id
+    assert (
+        replayed.metadata_["runtimeAuthority"] == initial.metadata_["runtimeAuthority"]
+    )
+    await store.attach_session(request.idempotency_key, "session-first-admission")
+    await store.record_session_created(
+        request.idempotency_key,
+        session_id="session-first-admission",
+        session_status="running",
+        capabilities={},
+    )
+    await store.mark_prepared(
+        request.idempotency_key, digest="original-digest", marker="original-marker"
+    )
+    await store.mark_posting(request.idempotency_key)
+    await store.mark_posted(request.idempotency_key, item_id="original-message")
+    if prior_state != "live":
+        for state in (RuntimeBindingState.failed, RuntimeBindingState.cleaned):
+            binding = await stable.update(
+                binding.bindingId,
+                expected_revision=binding.revision,
+                expected_fencing_generation=binding.fencingGeneration,
+                state=state,
+                updates={
+                    "terminalResult": {
+                        "executionState": "completed",
+                        "objectiveOutcome": "succeeded",
+                    }
+                }
+                if prior_state == "settled"
+                else {},
+            )
+    if prior_state == "foreign-host":
+        async with store._session_factory() as session:
+            row = await session.get(
+                OmnigentBridgeSession,
+                (await store.get_existing(request.idempotency_key)).bridge_session_id,
+            )
+            row.host_lease_ref = "another-owner-host-lease"
+            await session.commit()
+    if prior_state in {"completed-bridge", "canceled-bridge"}:
+        await store.mark_terminal(
+            request.idempotency_key,
+            status=prior_state.removesuffix("-bridge"),
+            terminal_refs={"captureManifestRef": "artifact:prior-terminal-capture"},
+        )
+    before = await store.get_existing(request.idempotency_key)
+    old_session_id = canonical_omnigent_session_id(
+        workflow_id=request.step_execution.workflow_id,
+        step_execution_id=request.step_execution.step_execution_id,
+        agent_run_id=request.correlation_id,
+        admission_epoch=1,
+    )
+    async with store._control_plane_store.transaction() as repos:
+        old_session = await repos.sessions.get(old_session_id)
+    _stable, _binding, second = await _admitted_bridge_attempt(store, request, plan, 2)
+
+    if prior_state == "cleaned":
+        with pytest.raises(HarnessPlatformError) as exc:
+            await store.bind_profile_authorization(**second)
+        assert exc.value.code == HarnessPlatformFailure.OMNIGENT_SESSION_HOST_LOST
+
+        async def dispatch(_request, _plan):
+            return await store.bind_profile_authorization(**second)
+
+        result = await _try_generic_realizer_dispatch(
+            second["request"],
+            plan_store=DbExecutionPlanStore(store._session_factory),
+            realizer_registry=SimpleNamespace(
+                require=lambda _ref: SimpleNamespace(execute=dispatch)
+            ),
+            artifact_gateway=SimpleNamespace(admit_execution_plan_inputs=AsyncMock()),
+        )
+        assert (
+            result.provider_error_code
+            == HarnessPlatformFailure.OMNIGENT_SESSION_HOST_LOST
+        )
+        assert result.retry_recommendation == "retry_step_execution"
+        assert result.retry_disposition == "retry"
+    else:
+        with pytest.raises(
+            OmnigentIdempotencyError, match="runtime authority is already bound"
+        ):
+            await store.bind_profile_authorization(**second)
+
+    after = await store.get_existing(request.idempotency_key)
+    assert after.metadata_ == before.metadata_
+    assert after.omnigent_session_id == before.omnigent_session_id
+    assert after.host_lease_ref == before.host_lease_ref
+    assert after.first_message_item_id == "original-message"
+    assert after.first_message_digest == "original-digest"
+    assert after.first_message_posted_at == before.first_message_posted_at
+    assert after.terminal_refs == before.terminal_refs
+    async with store._control_plane_store.transaction() as repos:
+        assert await repos.sessions.get(old_session_id) == old_session

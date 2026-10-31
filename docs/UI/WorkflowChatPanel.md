@@ -84,7 +84,7 @@ When the bound session changes state, for example when it ends while open, the n
 
 MoonMind must not add a second composer, transcript toolbar, approval tray, file rail, or session-control panel around the native UI.
 
-In embedded mode, Omnigent may hide application-global chrome that MoonMind already supplies, such as the global conversation sidebar. Session-specific controls and the native workspace rail remain visible only when the effective capability projection permits them.
+Embedded chat starts with Omnigent's global conversation sidebar collapsed using `sidebar=closed`. The native toggle can reopen it; session-specific controls and the workspace rail remain available when the effective capability projection permits them. Full-page **Open in Omnigent** drops the embed presentation flags and uses the native defaults.
 
 On mobile, the native chat application fills the Workflow Detail content region and uses its own responsive behavior.
 
@@ -93,7 +93,7 @@ On mobile, the native chat application fills the Workflow Detail content region 
 The preferred deployment exposes the native Omnigent web application through the MoonMind origin, for example:
 
 ```text
-/omnigent-ui/workflow-chat/{chatBindingId}?embedded=1
+/omnigent-ui/workflow-chat/{chatBindingId}?embedded=1&sidebar=closed
 ```
 
 `chatBindingId` is an opaque MoonMind binding identifier. The browser does not author an upstream endpoint, provider session id, host id, runner id, profile ref, workspace path, or provider credential.
@@ -101,6 +101,8 @@ The preferred deployment exposes the native Omnigent web application through the
 `embedded=1` is a presentational mode only. It must not create a second session protocol, transcript model, composer implementation, or fork of Omnigent behavior.
 
 A same-origin iframe opens the native conversation under the binding-scoped basename. Its deep link stays valid throughout startup, reload and retry. Full-page **Open in Omnigent** uses the same scope. The hosted adapter suppresses the native global conversation-catalog request; bound metadata and transcript reads still use the authorized facade.
+
+MoonMind images build and include the stock native UI from the Omnigent submodule, so normal application updates deliver the presentation behavior. A source-only checkout without a built bundle proxies assets from the configured Omnigent server. Session API and WebSocket traffic still passes through the bound facade to that server.
 
 The integration must provide:
 
