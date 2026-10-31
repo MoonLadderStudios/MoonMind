@@ -94,12 +94,34 @@ class ManagedActivities:
                         payload["runId"], "running", last_log_offset=1
                     )
                 if poll == (5 if self.accounting == "progress_extension" else 3):
-                    self.store.update_status(
-                        payload["runId"],
-                        "completed",
-                        exit_code=0,
-                        error_message="Confirmed managed completion",
-                    )
+                    if self.accounting not in {
+                        "early_progress_control", "boundary_progress", "boundary_no_progress"
+                    }:
+                        self.store.update_status(
+                            payload["runId"],
+                            "completed",
+                            exit_code=0,
+                            error_message="Confirmed managed completion",
+                        )
+                if self.accounting in {
+                    "early_progress_control", "boundary_progress", "boundary_no_progress"
+                }:
+                    early = self.accounting == "early_progress_control"
+                    if poll == (2 if early else 4):
+                        if self.accounting != "boundary_no_progress":
+                            self.store.update_status(
+                                payload["runId"], "running", last_log_offset=4096
+                            )
+                        if self.mode in {"worker_restart", "late_reply", "cancel"}:
+                            self.started.set()
+                            await self.release.wait()
+                    if poll == (4 if early else 5):
+                        self.store.update_status(
+                            payload["runId"],
+                            "completed",
+                            exit_code=0,
+                            error_message="Confirmed managed completion",
+                        )
             target = (
                 "cancel_status"
                 if name == "agent_runtime.status" and self.cancellation_seen
@@ -132,7 +154,11 @@ async def managed_runtime(tmp_path, monkeypatch, **options):
         return {
             "runtime": request.agent_id,
             "noProgressTimeoutSeconds": (
-                20 if options.get("accounting") == "progress_extension" else 1
+                300
+                if options.get("accounting") in {
+                    "early_progress_control", "boundary_progress", "boundary_no_progress"
+                }
+                else 20 if options.get("accounting") == "progress_extension" else 1
             ),
             "noProgressGraceSeconds": 1,
             "stuckAction": "request_intervention",
@@ -501,3 +527,126 @@ async def test_registered_managed_reconciliation_preserves_time_accounting(
             else:
                 assert context.elapsed_seconds(completed_at) > policy["timeout_seconds"]
                 assert context.last_progress_seconds >= 20
+
+
+@pytest.mark.timeout(90)
+@pytest.mark.parametrize(
+    "accounting,mode,ceiling,completes",
+    [
+        ("early_progress_control", None, 90, True),
+        ("boundary_progress", None, 90, True),
+        ("boundary_progress", "worker_restart", 90, True),
+        ("boundary_no_progress", None, 90, False),
+        ("boundary_progress", None, 40, False),
+        ("boundary_progress", "late_reply", 45, False),
+    ],
+)
+async def test_final_status_progress_uses_production_dispatch(
+    tmp_path, monkeypatch, accounting, mode, ceiling, completes
+):
+    """A last status read can earn progress, but never a new ceiling or save window."""
+    async with managed_runtime(
+        tmp_path, monkeypatch, accounting=accounting, mode=mode
+    ) as runtime:
+        env, state, service, queue, _manager, active, workers, stack = runtime
+        handle = await env.client.start_workflow(
+            agent_run.MoonMindAgentRun.run,
+            AgentExecutionRequest(
+                agentKind="managed",
+                agentId="claude_code",
+                executionProfileRef="default-managed",
+                correlationId=queue,
+                idempotencyKey=queue + ":execute",
+                timeoutPolicy={
+                    "timeout_seconds": 30,
+                    "max_timeout_seconds": ceiling,
+                    "progress_stall_seconds": 30,
+                },
+                parameters={
+                    "publishMode": "none",
+                    "model": "selected-model",
+                    "repository": "owner/repo",
+                },
+            ),
+            id=queue,
+            task_queue=queue,
+        )
+        result_task = asyncio.create_task(handle.result())
+        if mode:
+            await asyncio.wait_for(state.started.wait(), timeout=20)
+            if mode == "worker_restart":
+                await asyncio.wait_for(active[0].shutdown(), timeout=10)
+                await stack.enter_async_context(workers(activities=False)[0])
+            elif mode == "late_reply":
+                await env.sleep(6)
+            state.release.set()
+        result = await asyncio.wait_for(result_task, timeout=20)
+        history = await handle.fetch_history()
+        context = ExecutionBudgetContext.model_validate(
+            result.metadata["executionBudget"]
+        )
+        assert context.budget.base_seconds == 30
+        assert context.budget.max_seconds == ceiling
+        assert context.logical_step_id == queue + ":execute"
+        assert context.attempt_id == queue
+        assert context.recovery_count == 0
+        assert len(state.launches) == 1
+        launched = state.launches[0]["request"]
+        assert launched["parameters"]["model"] == "selected-model"
+        assert launched["parameters"]["repository"] == "owner/repo"
+        assert launched["parameters"]["publishMode"] == "none"
+        assert state.calls["agent_runtime.cancel"] == 0
+        assert state.calls["agent_runtime.publish_artifacts"] == 1
+        assert state.calls["agent_runtime.fetch_result"] == int(completes)
+        assert state.calls["agent_runtime.status"] == (
+            5 if completes and accounting == "boundary_progress" else 4
+        )
+        if completes:
+            assert result.failure_class is None
+            assert result.summary == "Confirmed managed completion"
+            assert context.finishing_deadline is None
+            assert context.last_progress_seconds >= 40
+        else:
+            assert result.metadata["reason"] == "timed_out"
+            assert context.finishing_deadline is not None
+            if accounting == "boundary_no_progress":
+                assert context.last_progress_seconds < 20
+
+        workflow_clock = context.admitted_at
+        status_commands = []
+        for event in history.events:
+            if event.HasField("workflow_task_started_event_attributes"):
+                workflow_clock = event.event_time.ToDatetime(tzinfo=UTC)
+            if not event.HasField("activity_task_scheduled_event_attributes"):
+                continue
+            attrs = event.activity_task_scheduled_event_attributes
+            if attrs.activity_type.name == "agent_runtime.status":
+                status_commands.append((workflow_clock, attrs))
+            if attrs.activity_type.name == "agent_runtime.publish_artifacts":
+                deadline = context.finishing_deadline or context.effective_deadline(
+                    workflow_clock
+                )
+                assert workflow_clock + attrs.schedule_to_close_timeout.ToTimedelta() <= (
+                    deadline + timedelta(milliseconds=1)
+                )
+        if accounting != "early_progress_control":
+            observed_at, attrs = status_commands[3]
+            assert (observed_at - context.admitted_at).total_seconds() >= 40
+            assert attrs.schedule_to_close_timeout.ToTimedelta() <= timedelta(seconds=60)
+            if not completes:
+                # A failed reconciliation shares its allowance with terminal saving.
+                assert context.finishing_started_at == observed_at
+                assert context.finishing_deadline == observed_at + timedelta(seconds=60)
+        persisted = await service.list_for_execution(
+            namespace="default",
+            workflow_id=queue,
+            run_id=(await handle.describe()).run_id,
+            access=ArtifactAccessContext.for_execution(queue),
+            link_type="output.agent_result",
+        )
+        assert len(persisted) == 1
+        _, raw = await service.read(
+            artifact_id=persisted[0].artifact_id,
+            access=ArtifactAccessContext.for_execution(queue),
+        )
+        assert json.loads(raw)["summary"] == result.summary
