@@ -59,6 +59,7 @@ class ManagedActivities:
         self.restart()
         self.target, self.mode, self.accounting = target, mode, accounting
         self.calls = Counter()
+        self.status_polls = {}
         self.started = asyncio.Event()
         self.release = asyncio.Event()
         self.launches = []
@@ -96,7 +97,11 @@ class ManagedActivities:
         async def handler(payload: dict) -> dict:
             self.calls[name] += 1
             if name == "agent_runtime.status" and self.accounting:
-                poll = self.calls[name]
+                # Transport retries reobserve the same poll; they do not advance
+                # the simulated provider to its next productive status.
+                poll = self.status_polls.setdefault(
+                    activity.info().activity_id, len(self.status_polls) + 1
+                )
                 if self.accounting in _FINAL_PROGRESS_SCENARIOS:
                     early = self.accounting == "early_progress_control"
                     if poll == (2 if early else 4):
@@ -734,6 +739,7 @@ async def test_interrupted_final_progress_read_cannot_resume_execution(
                     for event in history.events
                 )
         assert len(state.launches) == 1
-        assert state.calls["agent_runtime.status"] == 4
+        assert len(state.status_polls) == 4
+        assert state.calls["agent_runtime.status"] >= 4
         assert state.calls["agent_runtime.fetch_result"] == 0
         assert state.calls["agent_runtime.publish_artifacts"] == 0
