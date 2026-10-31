@@ -20,6 +20,16 @@ def canonical_artifact_ref(ref: str) -> str:
     return f"artifact://{artifact_id}" if artifact_id else str(ref or "").strip()
 
 
+def durable_artifact_ref(value: Any) -> str | None:
+    """Bound workflow evidence to artifact URIs or retained artifact IDs."""
+    ref = str(value or "").strip()
+    if ref.startswith("artifact://"):
+        return ref
+    if ref.startswith("art_"):
+        return f"artifact://{ref}"
+    return None
+
+
 class TemporalArtifactStorageBackend(str, enum.Enum):
     """Supported backing stores for Temporal artifact bytes."""
     S3 = "s3"

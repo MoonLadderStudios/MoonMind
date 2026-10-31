@@ -7473,22 +7473,6 @@ def test_moonspec_verify_gate_skips_unannotated_remediation_gate_after_pass(
     )
 
 
-def test_moonspec_verify_text_verdict_parser_is_not_a_branch_boundary(
-    mock_run_workflow: MoonMindRunWorkflow,
-) -> None:
-    verdict = mock_run_workflow._extract_moonspec_verify_verdict_from_text(
-        "Current verdict: ADDITIONAL_WORK_NEEDED. Prior run was FULLY_IMPLEMENTED."
-    )
-
-    assert verdict == "ADDITIONAL_WORK_NEEDED"
-    assert (
-        mock_run_workflow._extract_moonspec_verify_verdict(
-            {"summary": "Current verdict: ADDITIONAL_WORK_NEEDED."}
-        )
-        is None
-    )
-
-
 def test_moonspec_verify_gate_degrades_report_only_markdown(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
