@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 from collections.abc import Mapping
@@ -17,6 +18,7 @@ from moonmind.omnigent.compatibility import versions_compatible
 _DIGEST_RE = re.compile(r"^.+@sha256:[0-9a-f]{64}$")
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _OMNIGENT_VERSION_RE = re.compile(r"\bomnigent\s+([0-9]+\.[0-9]+\.[0-9]+)\b")
+logger = logging.getLogger(__name__)
 
 
 async def _run(cmd: list[str], timeout: int = 30) -> tuple[int, str, str]:
@@ -758,10 +760,18 @@ async def _image_opencode_bootstrap_ready(image_ref: str) -> bool:
         Path(__file__).resolve().parents[3]
         / "services/omnigent/moonmind-host/verify-warm-plugin-cache.sh"
     )
-    code, _, _ = await _run(
+    code, stdout, stderr = await _run(
         ["sh", str(probe), image_ref, "60"],
         timeout=90,
     )
+    if code != 0:
+        detail = "\n".join(part.strip() for part in (stderr, stdout) if part.strip())
+        logger.warning(
+            "Omnigent bootstrap probe failed for %s (exit %d): %s",
+            image_ref,
+            code,
+            detail[-2048:] or "no diagnostic output",
+        )
     return code == 0
 
 
