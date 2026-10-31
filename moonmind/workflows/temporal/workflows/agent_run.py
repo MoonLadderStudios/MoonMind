@@ -1460,6 +1460,8 @@ class MoonMindAgentRun:
         self,
         activity_name: str,
         args: object,
+        *,
+        operation_deadline: datetime | None = None,
         **overrides: Any,
     ) -> object:
         """Execute an activity using the module-level catalog for routing."""
@@ -1517,6 +1519,7 @@ class MoonMindAgentRun:
                             "schedule_to_close_timeout"
                         ].total_seconds(),
                         finishing=finishing and context.finishing_deadline is not None,
+                        operation_deadline=operation_deadline,
                     )
                 )
                 if "heartbeat_timeout" in kwargs:
@@ -3235,11 +3238,24 @@ class MoonMindAgentRun:
                 "agent_runtime.publish_artifacts",
                 self.final_result,
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                **(
+                    # This Activity can commit several durable artifacts before
+                    # losing its reply. Its writes do not have an idempotent
+                    # replay contract, so an uncertain save must remain visible
+                    # rather than repeating those effects in a transport retry.
+                    {"retry_policy": RetryPolicy(maximum_attempts=1)}
+                    if context is not None
+                    else {}
+                ),
             )
-        except ExecutionBudgetExhausted:
+        except (ExecutionBudgetExhausted, ActivityError):
             context = getattr(self, "_execution_budget", None)
-            if context is None or context.finishing_deadline is None:
+            if context is None:
                 raise
+            self._get_logger().warning(
+                "Terminal artifact saving was not confirmed; preserving the terminal result.",
+                exc_info=True,
+            )
             self.final_result = self.final_result.model_copy(
                 update={
                     "metadata": {
@@ -3739,27 +3755,16 @@ class MoonMindAgentRun:
             context = getattr(self, "_execution_budget", None)
             if context is not None:
                 now = workflow.now()
-                finishing = context.finishing_deadline is not None
                 fetch_deadline = (
                     now + timedelta(seconds=remaining_budget_seconds)
                     if remaining_budget_seconds is not None
-                    else (
-                        context.finishing_deadline
-                        if finishing
-                        else context.effective_deadline(now)
-                    )
+                    else None
                 )
-                route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-                    "agent_runtime.fetch_result"
-                )
-                fetch_budget = context.activity_timeouts(
-                    now=now,
-                    start_to_close_seconds=route.timeouts.start_to_close_seconds,
-                    schedule_to_close_seconds=route.timeouts.schedule_to_close_seconds,
-                    finishing=finishing,
-                    operation_deadline=fetch_deadline,
-                )
+                # The dispatcher admits finishing when necessary and derives
+                # both Activity timeouts from the current durable context.
+                fetch_budget["operation_deadline"] = fetch_deadline
             elif remaining_budget_seconds is not None:
+                # Recorded histories before logical-step budget admission.
                 fetch_deadline = workflow.now() + timedelta(
                     seconds=remaining_budget_seconds
                 )
@@ -4473,11 +4478,27 @@ class MoonMindAgentRun:
         if uses_codex_session_adapter:
             return await adapter.status(self.run_id)
         if use_managed_status_activity:
-            schedule_to_close_override = (
-                self._managed_status_schedule_to_close_override(
-                    remaining_budget_seconds=remaining_budget_seconds,
+            if getattr(self, "_execution_budget", None) is not None:
+                status_budget = {
+                    "operation_deadline": (
+                        workflow.now() + timedelta(seconds=remaining_budget_seconds)
+                        if remaining_budget_seconds is not None
+                        else None
+                    )
+                }
+            else:
+                # Named pre-admission history compatibility; live timeout
+                # arithmetic belongs to ExecutionBudgetContext at dispatch.
+                schedule_to_close_override = (
+                    self._managed_status_schedule_to_close_override(
+                        remaining_budget_seconds=remaining_budget_seconds,
+                    )
                 )
-            )
+                status_budget = (
+                    {"schedule_to_close_timeout": schedule_to_close_override}
+                    if schedule_to_close_override is not None
+                    else {}
+                )
             status_payload = await self._execute_routed_activity(
                 "agent_runtime.status",
                 AgentRuntimeStatusInput(
@@ -4485,11 +4506,7 @@ class MoonMindAgentRun:
                     agentId=request.agent_id,
                 ),
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                **(
-                    {"schedule_to_close_timeout": schedule_to_close_override}
-                    if schedule_to_close_override is not None
-                    else {}
-                ),
+                **status_budget,
             )
             return self._coerce_managed_status_payload(
                 status_payload=status_payload,
@@ -4511,7 +4528,7 @@ class MoonMindAgentRun:
         *,
         remaining_budget_seconds: float | None = None,
     ) -> timedelta | None:
-        """Bound status queueing without changing legacy activity commands."""
+        """Preserve status commands recorded before logical-step admission."""
 
         if not workflow.patched(MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID):
             return timedelta(seconds=180)
@@ -4526,6 +4543,17 @@ class MoonMindAgentRun:
                 max(0.001, float(remaining_budget_seconds)),
             )
         )
+
+    def _managed_reconciliation_remaining_seconds(
+        self, *, legacy_deadline: datetime
+    ) -> float:
+        context = getattr(self, "_execution_budget", None)
+        if context is not None:
+            return context.remaining_seconds(
+                workflow.now(), finishing=context.finishing_deadline is not None
+            )
+        # Compatibility for histories without LOGICAL_STEP_EXECUTION_BUDGET_PATCH_ID.
+        return (legacy_deadline - workflow.now()).total_seconds()
 
     async def _reconcile_managed_no_progress(
         self,
@@ -4545,6 +4573,7 @@ class MoonMindAgentRun:
             return None
 
         deadline = workflow.now() + timedelta(seconds=grace_seconds)
+        legacy_deadline = overall_start + timedelta(seconds=timeout_seconds)
         status_obj = initial_status
         while True:
             self.run_status = status_obj.status
@@ -4558,8 +4587,9 @@ class MoonMindAgentRun:
                     )
                 ):
                     remaining_fetch_budget = (
-                        timeout_seconds
-                        - (workflow.now() - overall_start).total_seconds()
+                        self._managed_reconciliation_remaining_seconds(
+                            legacy_deadline=legacy_deadline
+                        )
                     )
                     if remaining_fetch_budget <= 0:
                         return None
@@ -4573,8 +4603,8 @@ class MoonMindAgentRun:
                 )
 
             remaining_grace = (deadline - workflow.now()).total_seconds()
-            remaining_overall = (
-                timeout_seconds - (workflow.now() - overall_start).total_seconds()
+            remaining_overall = self._managed_reconciliation_remaining_seconds(
+                legacy_deadline=legacy_deadline
             )
             remaining = min(remaining_grace, remaining_overall)
             if remaining <= 0:
@@ -4602,8 +4632,9 @@ class MoonMindAgentRun:
                             AGENT_RUN_MANAGED_RESULT_FETCH_BUDGET_PATCH_ID
                         ):
                             remaining_fetch_budget = (
-                                timeout_seconds
-                                - (workflow.now() - overall_start).total_seconds()
+                                self._managed_reconciliation_remaining_seconds(
+                                    legacy_deadline=legacy_deadline
+                                )
                             )
                             if remaining_fetch_budget <= 0:
                                 return None
@@ -4617,9 +4648,8 @@ class MoonMindAgentRun:
                             use_managed_status_activity=use_managed_status_activity,
                             **fetch_budget,
                         )
-                    remaining_overall = (
-                        timeout_seconds
-                        - (workflow.now() - overall_start).total_seconds()
+                    remaining_overall = self._managed_reconciliation_remaining_seconds(
+                        legacy_deadline=legacy_deadline
                     )
                 if workflow.patched(
                     AGENT_RUN_MANAGED_NO_PROGRESS_CANCEL_FETCH_PATCH_ID
@@ -4647,8 +4677,9 @@ class MoonMindAgentRun:
 
             remaining_status_budget = min(
                 (deadline - workflow.now()).total_seconds(),
-                timeout_seconds
-                - (workflow.now() - overall_start).total_seconds(),
+                self._managed_reconciliation_remaining_seconds(
+                    legacy_deadline=legacy_deadline
+                ),
             )
             if (
                 use_managed_status_activity
@@ -4688,17 +4719,28 @@ class MoonMindAgentRun:
         cooldown handling can take over when the supervisor classifies a 429.
         """
 
+        context = getattr(self, "_execution_budget", None)
+        recovery_deadline = workflow.now() + timedelta(seconds=remaining_overall)
+        if context is not None:
+            recovery_deadline = (
+                context.finishing_deadline or context.effective_deadline(workflow.now())
+            )
+            remaining_overall = self._managed_reconciliation_remaining_seconds(
+                legacy_deadline=recovery_deadline
+            )
         if not self.run_id or remaining_overall <= 0:
             return None
 
-        recovery_deadline = workflow.now() + timedelta(seconds=remaining_overall)
         bounded_expiry_recovery = (
             use_managed_status_activity
             and not uses_codex_session_adapter
             and workflow.patched(AGENT_RUN_MANAGED_NO_PROGRESS_EXPIRY_RECOVERY_PATCH_ID)
         )
         cancel_budget = {}
-        if bounded_expiry_recovery:
+        if context is not None:
+            cancel_budget["operation_deadline"] = recovery_deadline
+        elif bounded_expiry_recovery:
+            # Exact timeout commands for pre-admission recorded histories.
             route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("agent_runtime.cancel")
             cancel_budget = {
                 "start_to_close_timeout": timedelta(
@@ -4733,12 +4775,18 @@ class MoonMindAgentRun:
             return None
 
         if bounded_expiry_recovery:
-            remaining_overall = (recovery_deadline - workflow.now()).total_seconds()
+            remaining_overall = self._managed_reconciliation_remaining_seconds(
+                legacy_deadline=recovery_deadline
+            )
             if remaining_overall <= 0:
                 return None
         reconcile_seconds = min(
             max(float(poll_interval) * 2.0, 10.0),
-            max(1.0, float(remaining_overall)),
+            (
+                remaining_overall
+                if context is not None
+                else max(1.0, float(remaining_overall))
+            ),
         )
         deadline = workflow.now() + timedelta(seconds=reconcile_seconds)
 
@@ -4775,8 +4823,10 @@ class MoonMindAgentRun:
                 if not bounded_expiry_recovery:
                     return None
                 remaining_status_budget = (
-                    recovery_deadline - workflow.now()
-                ).total_seconds()
+                    self._managed_reconciliation_remaining_seconds(
+                        legacy_deadline=recovery_deadline
+                    )
+                )
                 if remaining_status_budget <= 0:
                     return None
             status_obj = await self._poll_managed_status(
@@ -4793,8 +4843,10 @@ class MoonMindAgentRun:
                     AGENT_RUN_MANAGED_RESULT_FETCH_BUDGET_PATCH_ID
                 ):
                     remaining_fetch_budget = (
-                        recovery_deadline - workflow.now()
-                    ).total_seconds()
+                        self._managed_reconciliation_remaining_seconds(
+                            legacy_deadline=recovery_deadline
+                        )
+                    )
                     if remaining_fetch_budget <= 0:
                         return None
                     fetch_budget["remaining_budget_seconds"] = remaining_fetch_budget
