@@ -10,8 +10,8 @@ embedded and full-page presentations.
 * Adapter: extracted from the document rendered by the real
   :func:`moonmind.omnigent.native_ui.render_native_ui_document`, never a copy.
 * Consumer: the real ``SessionUpdatesSocket`` class plus its
-  ``buildUpdatesUrl``/``nextReconnectDelay`` helpers, compiled from the
-  pinned TypeScript sources by the real compiler. The exact
+  ``buildUpdatesUrl``/``nextReconnectDelay`` helpers, loaded from the
+  pinned TypeScript sources with Node's built-in type stripping. The exact
   ``sendWatch`` guard quoted in the issue brief is asserted present before
   execution.
 * No network: recording native transports, host-seam stubs, and a real
@@ -109,32 +109,26 @@ assert.ok(tsSrc.includes('if (this.ws?.readyState === WebSocket.OPEN) {'),
 assert.ok(tsSrc.includes('this.ws.send(JSON.stringify({ type: "watch", session_ids: this.watched }));'),
   'pinned file must carry the exact watch send');
 
-// Compile the actual consumer and shared backoff module instead of stripping
-// private fields/types by regex. Only the host routing seam is synthetic.
+// Node's built-in TypeScript stripper keeps this backend regression independent
+// of npm installs while running the actual consumer and shared backoff source.
 const path = require('node:path');
-const vm = require('node:vm');
-const ts = require(require.resolve('typescript', { paths: [process.cwd()] }));
-function loadModule(source, dependencies = {}) {
-  const output = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
-  const module = { exports: {} };
-  const run = vm.runInThisContext('(function(require, module, exports) {\n' + output + '\n})');
-  run((name) => {
-    assert.ok(Object.hasOwn(dependencies, name), `unexpected consumer dependency: ${name}`);
-    return dependencies[name];
-  }, module, module.exports);
-  return module.exports;
+const { stripTypeScriptTypes } = require('node:module');
+const moduleUrl = (source) => 'data:text/javascript;base64,' + Buffer.from(stripTypeScriptTypes(source)).toString('base64');
+const backoffUrl = moduleUrl(fs.readFileSync(path.join(path.dirname(process.argv[3]), 'reconnectBackoff.ts'), 'utf8'));
+const dependencies = {
+  '@/lib/host': moduleUrl('export const isHostRoutingEnabled = () => false; export const resolveWebSocketUrl = (path) => String(path);'),
+  '@/lib/reconnectBackoff': backoffUrl,
+  '@/lib/sessionHost': moduleUrl('export const modalHostId = () => null;'),
+};
+let consumerSource = stripTypeScriptTypes(tsSrc);
+for (const [specifier, url] of Object.entries(dependencies)) {
+  assert.ok(consumerSource.includes(JSON.stringify(specifier)), `missing consumer dependency: ${specifier}`);
+  consumerSource = consumerSource.replaceAll(JSON.stringify(specifier), JSON.stringify(url));
 }
-const backoff = loadModule(fs.readFileSync(path.join(path.dirname(process.argv[3]), 'reconnectBackoff.ts'), 'utf8'));
-const consumer = loadModule(tsSrc, {
-  '@/lib/host': { isHostRoutingEnabled: () => false, resolveWebSocketUrl: (path) => String(path) },
-  '@/lib/reconnectBackoff': backoff,
-  '@/lib/sessionHost': { modalHostId: () => null },
-});
-const Pinned = consumer.sessionUpdatesSocket.constructor;
+const consumer = import(moduleUrl(consumerSource));
 
 (async () => {
+  const Pinned = (await consumer).sessionUpdatesSocket.constructor;
   const sock = new Pinned();
 
   // #4013 crash path: never-connected setWatched is a silent no-op.
