@@ -77,6 +77,21 @@ def workflow_objective_outcome(
         # A verifier can finish its turn successfully while rejecting the
         # enclosing objective. Its settled memo must not erase that rejection.
         return "failed"
+    failure = finish_summary.get("failure") if finish_summary else None
+    publish = finish_summary.get("publish") if finish_summary else None
+    canonical = finish_summary.get("agentResult") if finish_summary else None
+    if (
+        state == "failed"
+        and isinstance(failure, Mapping)
+        and failure.get("source") == "workflow"
+        and isinstance(publish, Mapping)
+        and publish.get("status") == "skipped"
+        and isinstance(canonical, Mapping)
+        and canonical.get("publicationState") == "not_published"
+    ):
+        # A completed agent turn does not settle a failed enclosing handoff.
+        # Retain that turn's facts without claiming the workflow was delivered.
+        return "failed"
     value = memo.get("objectiveOutcome")
     outcome = (
         cast(ObjectiveOutcomeValue, value)
@@ -85,7 +100,6 @@ def workflow_objective_outcome(
     )
     if outcome not in {None, "active"}:
         return outcome
-    canonical = finish_summary.get("agentResult") if finish_summary else None
     terminal_agent = state in {
         "completed",
         "failed",
