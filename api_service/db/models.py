@@ -75,6 +75,7 @@ class GitHubIssueClaim(Base):
     comment_body: Mapped[str] = mapped_column(Text, nullable=False)
     pending_comment_body: Mapped[Optional[str]] = mapped_column(Text)
     finalization_json: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON)
+    project_binding_json: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON)
     comment_id: Mapped[Optional[str]] = mapped_column(Text)
     announcement_started: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
