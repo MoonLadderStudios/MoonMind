@@ -17722,6 +17722,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if (
             reference is None
             and isinstance(metadata, Mapping)
+            and "runtimeSessionContext" not in metadata
             and metadata.get("runtimeBindingRef")
         ):
             # A queued pre-upgrade result may have no context receipt. Carry

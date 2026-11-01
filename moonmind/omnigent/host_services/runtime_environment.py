@@ -101,9 +101,9 @@ class OmnigentRuntimeEnvironmentService:
         needs_jira_tools = requires_jira_tools(required_capabilities)
         context_environment = {}
         if (
-            plan.payload.harnessId == "codex-native"
-            and request.step_execution is not None
+            request.step_execution is not None
             and request.step_execution.runtime_session_context is not None
+            and plan.payload.harnessId == "codex-native"
         ):
             context_environment["MOONMIND_CODEX_REQUIRE_CONTEXT"] = "1"
         if not needs_fanout and not needs_containers and not needs_jira_tools:
