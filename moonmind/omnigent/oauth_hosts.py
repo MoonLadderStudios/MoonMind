@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from api_service.db.models import (
@@ -37,6 +37,10 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentHostLease,
 )
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
+from moonmind.omnigent.harness_platform.static_hosts import (
+    GENERIC_STATIC_LEASE_PURPOSE,
+    static_host_scope_ref,
+)
 from moonmind.utils.logging import redact_sensitive_text
 
 
@@ -73,8 +77,15 @@ _TRANSITIONS: dict[str, frozenset[str]] = {
 }
 
 
-def deterministic_host_lease_id(provider_lease_id: str) -> str:
-    digest = hashlib.sha256(provider_lease_id.encode("utf-8")).hexdigest()[:32]
+def deterministic_host_lease_id(
+    provider_lease_id: str, allocation_key: str | None = None
+) -> str:
+    identity = (
+        provider_lease_id
+        if allocation_key is None
+        else f"{provider_lease_id}\0{allocation_key}"
+    )
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
     return f"ohl_{digest}"
 
 
@@ -245,6 +256,7 @@ class OmnigentOAuthHostRepository:
         effective_launch_snapshot: dict[str, Any] | None = None,
         require_idle: bool = False,
         expected_binding: OmnigentOAuthHostBinding | None = None,
+        commit: bool = True,
     ) -> OmnigentOAuthHostBinding:
         """Create or update a profile's binding.
 
@@ -284,7 +296,15 @@ class OmnigentOAuthHostRepository:
                         .where(
                             OmnigentOAuthHostLeaseRecord.provider_profile_id
                             == profile_id,
-                            OmnigentOAuthHostLeaseRecord.status.in_(ACTIVE_HOST_STATES),
+                            or_(
+                                OmnigentOAuthHostLeaseRecord.status.in_(
+                                    ACTIVE_HOST_STATES
+                                ),
+                                (OmnigentOAuthHostLeaseRecord.status == "failed")
+                                & OmnigentOAuthHostLeaseRecord.cleanup_completed_at.is_(
+                                    None
+                                ),
+                            ),
                         )
                         .limit(1)
                     )
@@ -322,7 +342,10 @@ class OmnigentOAuthHostRepository:
                     record.execution_profile_ref = execution_profile_ref
                     record.launch_policy_ref = launch_policy_ref
                     record.effective_launch_snapshot_json = effective_launch_snapshot
-            await session.commit()
+            if commit:
+                await session.commit()
+            else:
+                await session.flush()
             await session.refresh(record)
             return self._binding_model(record, profile)
 
@@ -375,10 +398,19 @@ class OmnigentOAuthHostRepository:
         idempotency_key: str,
         lease_purpose: str = "execution_omnigent",
         ttl_seconds: int = 5400,
+        capacity_admission: Any | None = None,
+        effective_launch_snapshot: Mapping[str, Any] | None = None,
     ) -> OmnigentHostLease:
         now = datetime.now(UTC)
-        lease_id = deterministic_host_lease_id(provider_lease_id)
+        lease_id = deterministic_host_lease_id(
+            provider_lease_id,
+            idempotency_key if lease_purpose == GENERIC_STATIC_LEASE_PURPOSE else None,
+        )
         async with self._session_factory() as session:
+            if not binding.host_launch_profile_ref:
+                from moonmind.omnigent.host_capacity import GenericHostCapacityAdmission
+
+                await GenericHostCapacityAdmission.lock_for_admission(session)
             locked_row = (
                 await session.execute(
                     select(
@@ -410,6 +442,38 @@ class OmnigentOAuthHostRepository:
                     code="OMNIGENT_LAUNCH_SNAPSHOT_CONFLICT",
                 )
             mount = locked_binding.credential_mount_ref
+            selected_snapshot = (
+                dict(effective_launch_snapshot)
+                if effective_launch_snapshot is not None
+                else locked_binding.effective_launch_snapshot
+            )
+            if effective_launch_snapshot is not None:
+                from moonmind.omnigent.execution_profiles import (
+                    validate_effective_launch_snapshot,
+                )
+
+                validate_effective_launch_snapshot(selected_snapshot)
+                if any(
+                    selected_snapshot.get(key) != expected
+                    for key, expected in {
+                        "providerProfileId": locked_binding.provider_profile_id,
+                        "harness": locked_binding.harness,
+                        "endpointRef": locked_binding.endpoint_ref,
+                    }.items()
+                ):
+                    raise OmnigentOAuthHostError(
+                        "static allocation launch authority changed"
+                    )
+            static_scope = (
+                static_host_scope_ref(
+                    harness=locked_binding.harness,
+                    endpoint_ref=locked_binding.endpoint_ref,
+                    host_id=locked_binding.static_host_id,
+                )
+                if not locked_binding.host_launch_profile_ref
+                and lease_purpose != "credential_validation"
+                else None
+            )
             existing = await session.get(OmnigentOAuthHostLeaseRecord, lease_id)
             if existing is None:
                 existing = (
@@ -422,36 +486,94 @@ class OmnigentOAuthHostRepository:
                 ).scalar_one_or_none()
             if existing is not None:
                 if (
-                    existing.provider_profile_id
-                    != locked_binding.provider_profile_id
+                    existing.provider_profile_id != locked_binding.provider_profile_id
                     or existing.provider_lease_id != provider_lease_id
                     or existing.binding_ref != locked_binding.binding_ref
+                    or existing.lease_purpose != lease_purpose
                 ):
                     raise OmnigentOAuthHostError(
                         "idempotency key is already bound to another host lease"
                     )
-                if (
-                    existing.effective_launch_snapshot_json
-                    != locked_binding.effective_launch_snapshot
-                ):
+                if existing.effective_launch_snapshot_json != selected_snapshot:
                     raise OmnigentOAuthHostError(
                         "retry launch snapshot does not match the durable host lease",
                         code="OMNIGENT_LAUNCH_SNAPSHOT_CONFLICT",
                     )
                 return self._lease_model(existing)
+            if static_scope is not None:
+                # Old rows intentionally retain NULL scope metadata. Read their
+                # configured binding rather than interpreting a missing column
+                # value as a free physical host during the transition.
+                retained = (
+                    await session.execute(
+                        select(
+                            OmnigentOAuthHostLeaseRecord, OmnigentOAuthHostBindingRecord
+                        )
+                        .join(
+                            OmnigentOAuthHostBindingRecord,
+                            OmnigentOAuthHostBindingRecord.binding_ref
+                            == OmnigentOAuthHostLeaseRecord.binding_ref,
+                        )
+                        .where(
+                            or_(
+                                OmnigentOAuthHostLeaseRecord.status.in_(
+                                    ACTIVE_HOST_STATES
+                                ),
+                                (OmnigentOAuthHostLeaseRecord.status == "failed")
+                                & OmnigentOAuthHostLeaseRecord.cleanup_completed_at.is_(
+                                    None
+                                ),
+                            ),
+                            or_(
+                                OmnigentOAuthHostLeaseRecord.static_scope_ref
+                                == static_scope,
+                                OmnigentOAuthHostLeaseRecord.static_scope_ref.is_(None),
+                            ),
+                        )
+                    )
+                ).all()
+                for active, configured in retained:
+                    if (
+                        active.lease_purpose == "credential_validation"
+                        or configured.host_launch_profile_ref
+                    ):
+                        continue
+                    observed_scope = active.static_scope_ref or static_host_scope_ref(
+                        harness=configured.harness,
+                        endpoint_ref=configured.endpoint_ref,
+                        host_id=configured.static_host_id,
+                    )
+                    if observed_scope == static_scope:
+                        raise OmnigentOAuthHostError(
+                            "another lease for the selected static host is still active",
+                            code=HOST_PROFILE_BUSY_ERROR_CODE,
+                        )
+            if capacity_admission is not None:
+                decision = await capacity_admission.evaluate_within(
+                    session, already_allocated=False
+                )
+                if not decision.admitted:
+                    from moonmind.omnigent.harness_platform.failures import (
+                        HarnessPlatformError,
+                        HarnessPlatformFailure,
+                    )
+
+                    raise HarnessPlatformError(
+                        decision.waiting_reason,
+                        code=HarnessPlatformFailure.OMNIGENT_HOST_CAPACITY_UNAVAILABLE,
+                    )
             record = OmnigentOAuthHostLeaseRecord(
                 lease_id=lease_id,
                 provider_profile_id=locked_binding.provider_profile_id,
                 provider_lease_id=provider_lease_id,
+                static_scope_ref=static_scope,
                 binding_ref=locked_binding.binding_ref,
                 credential_generation=mount.auth_volume_ref.credential_generation,
                 holder_workflow_id=holder_workflow_id,
                 agent_run_id=agent_run_id,
                 idempotency_key=idempotency_key,
                 lease_purpose=lease_purpose,
-                effective_launch_snapshot_json=(
-                    locked_binding.effective_launch_snapshot
-                ),
+                effective_launch_snapshot_json=(selected_snapshot),
                 container_name=(
                     deterministic_host_container_name(lease_id)
                     if locked_binding.host_launch_profile_ref
@@ -480,8 +602,17 @@ class OmnigentOAuthHostRepository:
                     active_profile_lease = (
                         await session.execute(
                             select(OmnigentOAuthHostLeaseRecord).where(
-                                OmnigentOAuthHostLeaseRecord.provider_profile_id
-                                == locked_binding.provider_profile_id,
+                                (
+                                    OmnigentOAuthHostLeaseRecord.provider_profile_id
+                                    == locked_binding.provider_profile_id
+                                    if static_scope is None
+                                    else or_(
+                                        OmnigentOAuthHostLeaseRecord.provider_profile_id
+                                        == locked_binding.provider_profile_id,
+                                        OmnigentOAuthHostLeaseRecord.static_scope_ref
+                                        == static_scope,
+                                    )
+                                ),
                                 OmnigentOAuthHostLeaseRecord.status.in_(
                                     ACTIVE_HOST_STATES
                                 ),
@@ -524,6 +655,11 @@ class OmnigentOAuthHostRepository:
             omnigentSessionId=record.omnigent_session_id,
             bridgeSessionId=record.bridge_session_id,
             effectiveLaunchSnapshot=record.effective_launch_snapshot_json,
+            runtimeBindingId=(
+                record.idempotency_key
+                if record.lease_purpose == GENERIC_STATIC_LEASE_PURPOSE
+                else None
+            ),
             status=record.status,
             acquiredAt=utc(record.acquired_at),
             lastHeartbeatAt=utc(record.last_heartbeat_at),
@@ -680,6 +816,11 @@ class OmnigentOAuthHostRepository:
             record = await session.get(OmnigentOAuthHostLeaseRecord, lease_id)
             if record is None or record.status not in TERMINAL_HOST_STATES:
                 raise OmnigentOAuthHostError("terminal host lease does not exist")
+            if record.lease_purpose == GENERIC_STATIC_LEASE_PURPOSE:
+                raise OmnigentOAuthHostError(
+                    "a completed generic static allocation requires a new admission",
+                    code="OMNIGENT_HOST_CLEANUP_CLAIMED",
+                )
             record.status = "starting"
             record.last_heartbeat_at = now
             record.expires_at = now + timedelta(seconds=max(60, ttl_seconds))

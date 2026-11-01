@@ -442,53 +442,16 @@ class OmnigentOAuthHostRuntime:
 
     @staticmethod
     def _deployment_compose_command() -> tuple[str, ...]:
-        """Resolve Compose through the deployment-owned checkout and project."""
+        from moonmind.omnigent.host_services.compose_static import (
+            deployment_compose_command,
+        )
 
-        local_root = Path(
-            os.getenv("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR", "") or Path.cwd()
-        ).expanduser()
-        host_root_text = os.getenv("MOONMIND_DEPLOYMENT_PROJECT_DIR", "").strip()
-        compose_text = os.getenv("MOONMIND_DEPLOYMENT_COMPOSE_FILE", "").strip()
-        if compose_text:
-            configured = Path(compose_text).expanduser()
-            if configured.is_absolute() and not configured.exists():
-                relative: Path | None = None
-                if host_root_text:
-                    try:
-                        relative = configured.relative_to(
-                            Path(host_root_text).expanduser()
-                        )
-                    except ValueError:
-                        relative = None
-                compose_path = local_root / (relative or configured.name)
-            elif configured.is_absolute():
-                compose_path = configured
-            else:
-                compose_path = local_root / configured
-        else:
-            compose_path = local_root / "docker-compose.yaml"
-        project_name = (
-            os.getenv("MOONMIND_DEPLOYMENT_PROJECT_NAME", "moonmind").strip()
-            or "moonmind"
-        )
-        if not _SAFE_NETWORK.fullmatch(project_name):
+        try:
+            return deployment_compose_command()
+        except HarnessPlatformError as error:
             raise OmnigentOAuthHostError(
-                "deployment Compose project identity is unsafe",
-                code="OMNIGENT_DEPLOYMENT_COMPOSE_UNAVAILABLE",
-            )
-        if not compose_path.is_file():
-            raise OmnigentOAuthHostError(
-                "deployment Compose file is unavailable",
-                code="OMNIGENT_DEPLOYMENT_COMPOSE_UNAVAILABLE",
-            )
-        return (
-            "docker",
-            "compose",
-            "--project-name",
-            project_name,
-            "-f",
-            str(compose_path.resolve()),
-        )
+                str(error), code="OMNIGENT_DEPLOYMENT_COMPOSE_UNAVAILABLE"
+            ) from error
 
     async def validate_credential_mount(
         self,

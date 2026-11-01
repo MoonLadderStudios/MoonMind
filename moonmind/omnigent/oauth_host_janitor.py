@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from moonmind.omnigent.host_ports import OmnigentHostReclamationPorts
+from moonmind.omnigent.harness_platform.static_hosts import GENERIC_STATIC_LEASE_PURPOSE
 from moonmind.omnigent.oauth_host_runtime import (
     OmnigentEgressEvidenceRequestIdentity,
 )
@@ -811,7 +812,12 @@ class OmnigentOAuthHostJanitor:
         leases = list(
             {
                 lease.lease_id: lease
-                for lease in [*leases, *terminal_provider_leases, *binding_cleanup_leases]
+                for lease in [
+                    *leases,
+                    *terminal_provider_leases,
+                    *binding_cleanup_leases,
+                ]
+                if lease.lease_purpose != GENERIC_STATIC_LEASE_PURPOSE
             }.values()
         )
         cleanup_required = (

@@ -148,6 +148,7 @@ def _lease(*, heartbeat_age: int = 0):
     now = datetime.now(UTC)
     return SimpleNamespace(
         lease_id="lease-1",
+        lease_purpose="execution_omnigent",
         provider_profile_id="profile-1",
         provider_lease_id="provider-lease-1",
         binding_ref="binding-1",
@@ -1305,6 +1306,7 @@ def _drain_lease(*, provider_lease_id="provider-lease-1"):
     now = datetime.now(UTC)
     return SimpleNamespace(
         lease_id=deterministic_host_lease_id(provider_lease_id),
+        lease_purpose="execution_omnigent",
         provider_profile_id="profile-1",
         provider_lease_id=provider_lease_id,
         binding_ref="binding-1",

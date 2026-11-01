@@ -513,6 +513,15 @@ class OmnigentExecutionPlanningService:
                     code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
                 )
             effective_launch = reconciled
+            from moonmind.omnigent.harness_platform.static_hosts import (
+                bind_static_host_selection,
+            )
+            from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
+
+            effective_launch = await bind_static_host_selection(
+                repository=OmnigentOAuthHostRepository(self._session_factory),
+                effective_launch=effective_launch,
+            )
             (
                 policy_artifact_ref,
                 policy_artifact_digest,
@@ -1115,6 +1124,27 @@ class OmnigentPlannedHostResolver:
                 "effective launch architecture conflicts with the execution plan",
                 code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
             )
+        static_runtime = {}
+        if launch.get("hostMode") in {"static-connected", "static_compose"}:
+            from moonmind.omnigent.harness_platform.static_hosts import (
+                validate_static_host_selection,
+            )
+
+            selection = validate_static_host_selection(
+                launch.get("staticHostSelection"), effective_launch=launch
+            )
+            if (
+                selection["harness"] != plan.payload.harnessId
+                or selection["endpointRef"] != plan.payload.endpointRef
+            ):
+                raise HarnessPlatformError(
+                    "static host selection conflicts with the execution plan",
+                    code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+                )
+            static_runtime = {
+                "staticHostSelection": selection,
+                "effectiveLaunchSnapshot": dict(launch),
+            }
         exact_host = HostClass.model_validate(
             {
                 **host_class.model_dump(mode="json", by_alias=True),
@@ -1125,6 +1155,7 @@ class OmnigentPlannedHostResolver:
                     **host_class.runtime,
                     "uid": int(launch.get("runtimeUid") or 1000),
                     "gid": int(launch.get("runtimeGid") or 1000),
+                    **static_runtime,
                 },
                 "features": {
                     **host_class.features,
