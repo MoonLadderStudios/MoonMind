@@ -3,11 +3,11 @@
 **Document class:** Canonical declarative system / feature design.
 **Status:** Normative for the journey described here.
 **Owners:** MoonMind Platform and dashboard.
-**Updated:** 2026-10-17
+**Updated:** 2026-11-01
 
 ## 1. Purpose
 
-Workflow Remediation starts an ordinary MoonMind workflow about one failed **target** run. The remediation finds out why the target failed from the evidence the target left, fixes the cause where it is safe to, and says how to keep the failure from recurring, either in the target's repository or in MoonMind itself. The target's failure stays recorded as it happened: a repair shows up as the remediation's own result and, once the operator retries the target, as the target's new run.
+Workflow Remediation starts an ordinary MoonMind workflow about one failed **target** run. It uses saved evidence to diagnose and fix causes in the target repository or MoonMind. The original failure stays recorded. Repair is the remediation's result; recovering the target requires an operator retry.
 
 [Run History and New Run Semantics](../Temporal/WorkflowRunHistoryAndNewRunSemantics.md#7a-retry-from-a-step) owns retry from a step, [Verification Cadence](RemediationVerificationCadence.md) owns repair attempts inside one workflow, and [Checkpoint Branches](CheckpointBranchSystem.md) own corrective branches.
 
@@ -15,11 +15,11 @@ Workflow Remediation starts an ordinary MoonMind workflow about one failed **tar
 
 | Situation | Use |
 | --- | --- |
-| Transient failure: provider outage, rate limit, timeout, lost host | **Retry from failed step** on the target; nothing needs to change |
+| Transient failure, or a prerequisite that has since been fixed | **Retry from failed step** using the target's retained inputs and progress |
 | The failure needs diagnosis, a code or instruction fix, or a MoonMind change | **Remediate** |
 | The task itself should change | **Edit** and rerun |
 
-A remediation often ends by recommending a retry: once its fix lands, retrying the target from the failed step re-executes only the work that failed.
+A remediation can recommend retrying the failed step after its fix lands. **Continue remediation** is different: it resumes an admitted verifier repair loop with saved remaining work. It is unavailable when the target has no such admitted stopping point.
 
 ## 3. Architecture
 
@@ -31,7 +31,7 @@ A remediation often ends by recommending a retry: once its fix lands, retrying t
 
 ## 4. Creating a remediation
 
-**Remediate** on a failed, stuck, or intervention-required workflow opens Create with the pinned target workflow and run, repository, branch, Runtime, Profile, publication (`pr` with a repository, otherwise save-only), the `remediate-workflow` skill and default instructions. Everything remains editable before submit. The tab-scoped draft saves the authored submission so reload can reconcile a lost acknowledgment without duplicating the repair. It lasts until confirmed creation, discard or its original two-hour expiry; missing, altered, cross-tab or expired drafts are refused rather than partially submitted.
+On Overview, Steps and Artifacts, eligible workflows offer **Remediate** in **Workflow actions**. It opens editable Create with the pinned target workflow and run, repository, branch, Runtime, Profile, publication (`pr` with a repository, otherwise save-only), the `remediate-workflow` skill and instructions. Opening it starts no run; submission retains ordinary admission and authority checks. The tab-scoped draft preserves the authored submission for reload and lost-acknowledgment reconciliation until creation, discard or its original two-hour expiry. Missing, altered, cross-tab or expired drafts are refused rather than partially submitted.
 
 Choose the repository for the fix you want: the target's repository to repair the target's work, or `MoonLadderStudios/MoonMind` to change MoonMind so the failure does not recur. One remediation works in one repository.
 
