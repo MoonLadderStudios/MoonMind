@@ -925,6 +925,23 @@ async def test_translation_checks_the_selected_step_accounts_tier_options(monkey
 
 
 @pytest.mark.asyncio
+async def test_root_translation_retains_a_native_only_step_accounts_supported_route(monkeypatch):
+    from unittest.mock import AsyncMock
+    from api_service.api.routers.executions import _profile_route_runtime
+
+    root = provider(runtime_id="codex_cli")
+    child = provider(profile_id="native-only-child", runtime_id="codex_cli")
+    session = Row(get=AsyncMock(return_value=child))
+    async def own_route(_session, _user, profile):
+        return "omnigent" if profile.profile_id == root.profile_id else "codex_cli"
+    monkeypatch.setattr("api_service.services.profile_execution_selection.profile_route_runtime", own_route)
+    assert await _profile_route_runtime(
+        session=session, user=None, provider_profile=root, authored_runtime="codex_cli",
+        task_payload={"steps": [{"runtime": {"providerProfileRef": child.profile_id, "mode": "codex_cli"}}]},
+    ) is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("authored", [True, False])
 @pytest.mark.parametrize(
     "step_selection,tier_parameters,shared",
