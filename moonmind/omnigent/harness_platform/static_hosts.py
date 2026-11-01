@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import os
 import re
+import hashlib
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -40,6 +42,7 @@ STATIC_CODEX_SERVICE = "omnigent-host-codex"
 STATIC_CLAUDE_SERVICE = "omnigent-host-claude"
 STATIC_CODEX_PROFILE = "omnigent-host-codex"
 STATIC_CLAUDE_PROFILE = "omnigent-host-claude"
+GENERIC_STATIC_LEASE_PURPOSE = "execution_generic_static"
 
 STATIC_CODEX_PACK_REF = "codex-native-pack@1"
 STATIC_CLAUDE_PACK_REF = "claude-native-pack@1"
@@ -158,6 +161,130 @@ def static_host_row(service: str) -> StaticHostRow:
     raise HarnessPlatformError(
         f"unknown static Omnigent host service {service!r}",
         code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
+    )
+
+
+def static_host_row_for_harness(harness: str) -> StaticHostRow:
+    from moonmind.omnigent.harness_platform.runtime_packs import get_runtime_pack
+
+    matches = [
+        row
+        for row in STATIC_HOST_ROWS
+        if get_runtime_pack(row.runtime_pack_ref).supports_harness(harness)
+    ]
+    if len(matches) != 1:
+        raise HarnessPlatformError(
+            f"no unique static host service for {harness!r}",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
+        )
+    return matches[0]
+
+
+def validate_static_host_selection(
+    value: Mapping[str, object], *, effective_launch: Mapping[str, object]
+) -> dict[str, object]:
+    """Validate the configured static scope inside immutable launch authority."""
+    expected_fields = {
+        "bindingRef",
+        "providerProfileId",
+        "endpointRef",
+        "harness",
+        "staticHostId",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected_fields:
+        raise HarnessPlatformError(
+            "static host selection has an invalid shape",
+            code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+        )
+    for key, item in value.items():
+        if key == "staticHostId" and item is None:
+            continue
+        if (
+            not isinstance(item, str)
+            or not item
+            or len(item) > 255
+            or any(character in item for character in "\0\r\n")
+        ):
+            raise HarnessPlatformError(
+                f"invalid static host selection {key}",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            )
+    for key in ("providerProfileId", "endpointRef", "harness"):
+        if value[key] != effective_launch.get(key):
+            raise HarnessPlatformError(
+                f"static host selection conflicts with admitted {key}",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            )
+    static_host_row_for_harness(str(value["harness"]))
+    return dict(value)
+
+
+def static_host_scope_ref(
+    *, harness: str, endpoint_ref: str, host_id: str | None
+) -> str:
+    """Name one physical static host independently of its Provider Profile."""
+    # Both explicit and discovered IDs address this one configured Compose
+    # role. An ID spelling must not create another reservation for its mount.
+    identity = ["static-compose", static_host_row_for_harness(harness).service]
+    digest = hashlib.sha256(
+        json.dumps(identity, separators=(",", ":")).encode()
+    ).hexdigest()
+    return f"omnigent-static-scope:sha256:{digest}"
+
+
+async def bind_static_host_selection(
+    *, repository, effective_launch: Mapping[str, object], commit_binding: bool = True
+) -> dict[str, object]:
+    """Freeze a static choice through the existing host-binding owner.
+
+    Credential generations and mounts are acquired later. The compact
+    configured scope stays in the signed launch artifact, so queued work
+    cannot silently follow an operator's later host selection.
+    """
+    if effective_launch.get("hostMode") not in {"static-connected", "static_compose"}:
+        return dict(effective_launch)
+    from moonmind.omnigent.execution_profiles import (
+        seal_effective_launch_snapshot,
+        validate_effective_launch_snapshot,
+    )
+
+    validate_effective_launch_snapshot(effective_launch)
+    static_host_row_for_harness(str(effective_launch["harness"]))
+    profile_id = str(effective_launch["providerProfileId"])
+    binding = await repository.get_binding_for_profile(profile_id)
+    if binding is None:
+        binding = await repository.create_or_update_static_binding(
+            profile_id=profile_id,
+            endpoint_ref=str(effective_launch["endpointRef"]),
+            execution_profile_ref=str(effective_launch["executionProfileRef"]),
+            launch_policy_ref=str(effective_launch["launchPolicyRef"]),
+            effective_launch_snapshot=dict(effective_launch),
+            require_idle=True,
+            commit=commit_binding,
+        )
+    if binding.host_launch_profile_ref or (
+        binding.launch_policy_ref
+        and binding.launch_policy_ref != effective_launch["launchPolicyRef"]
+    ):
+        raise HarnessPlatformError(
+            "static launch conflicts with the selected host binding",
+            code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+        )
+    selection = validate_static_host_selection(
+        {
+            "bindingRef": binding.binding_ref,
+            "providerProfileId": binding.provider_profile_id,
+            "endpointRef": binding.endpoint_ref,
+            "harness": binding.harness,
+            "staticHostId": binding.static_host_id,
+        },
+        effective_launch=effective_launch,
+    )
+    return seal_effective_launch_snapshot(
+        {
+            **effective_launch,
+            "staticHostSelection": selection,
+        }
     )
 
 

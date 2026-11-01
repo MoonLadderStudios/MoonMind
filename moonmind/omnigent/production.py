@@ -224,12 +224,16 @@ def build_generic_omnigent_execution_services(
         session_factory=session_factory,
         artifact_gateway=artifacts,
     )
+    from moonmind.omnigent.host_services.compose_static import ComposeStaticHostService
+
+    static_hosts = ComposeStaticHostService(backend=docker, client=client)
     host_runtime = GenericOmnigentHostRuntime(
         launcher=DockerOmnigentHostLauncher(
             backend=docker,
             runtime_scripts=OmnigentRuntimeScriptService(),
             server_url=host_server_url,
             host_api_token=resolved_host_runner_token(),
+            static_hosts=static_hosts,
         ),
         workspace_service=OmnigentWorkspaceMaterializer(
             command_runner=daemon_command,
@@ -256,7 +260,9 @@ def build_generic_omnigent_execution_services(
         host_attestor=DockerOmnigentHostAttestor(
             backend=docker, client=client, artifacts=artifacts
         ),
-        cleanup_service=DockerOmnigentHostCleanupService(docker),
+        cleanup_service=DockerOmnigentHostCleanupService(
+            docker, static_hosts=static_hosts
+        ),
     )
 
     async def session_driver(request, *, session_authority_sink, **continuation):

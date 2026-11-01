@@ -257,11 +257,13 @@ class InMemoryOmnigentHostLeaseRepository:
         return updated
 
 class DbOmnigentHostLeaseRepository:
+
     def __init__(
         self,
         session_factory: Any,
         *,
         capacity_admission: Any | None = None,
+        static_repository: Any | None = None,
     ) -> None:
         self._session_factory = session_factory
         # MoonLadderStudios/MoonMind#3878: aggregate host and cold-launch
@@ -269,6 +271,19 @@ class DbOmnigentHostLeaseRepository:
         # serialized operation. Read-only pre-checks elsewhere are for waiting;
         # this is where admission is enforced.
         self._capacity_admission = capacity_admission
+        if static_repository is None:
+            from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
+            from moonmind.omnigent.runtime_bindings import DbRuntimeBindingStore
+            from moonmind.omnigent.static_host_leases import (
+                StaticOmnigentHostLeaseRepository,
+            )
+
+            static_repository = StaticOmnigentHostLeaseRepository(
+                host_repository=OmnigentOAuthHostRepository(session_factory),
+                runtime_binding_store=DbRuntimeBindingStore(session_factory),
+                capacity_admission=capacity_admission,
+            )
+        self._static = static_repository
 
     @staticmethod
     def _from_row(row: Any) -> HostLeaseAuthority:
@@ -291,6 +306,8 @@ class DbOmnigentHostLeaseRepository:
     async def get(self, lease_ref: str) -> HostLeaseAuthority | None:
         from api_service.db.models import OmnigentHostLeaseRecordV2
 
+        if lease_ref.startswith("ohl_"):
+            return await self._static.get(lease_ref)
         async with self._session_factory() as session:
             row = await session.get(OmnigentHostLeaseRecordV2, lease_ref)
             return self._from_row(row) if row is not None else None
@@ -301,6 +318,8 @@ class DbOmnigentHostLeaseRepository:
             OmnigentHostLeaseRecordV2,
         )
 
+        if kwargs.get("static_selection") is not None:
+            return await self._static.acquire(**kwargs)
         execution_plan_ref = str(kwargs["execution_plan_ref"])
         runtime_binding_id = str(kwargs["runtime_binding_id"])
         host_class_ref = str(kwargs["host_class_ref"])
@@ -391,6 +410,8 @@ class DbOmnigentHostLeaseRepository:
         return created
 
     async def mark_ready(self, lease_ref: str, **kwargs: Any) -> HostLeaseAuthority:
+        if lease_ref.startswith("ohl_"):
+            return await self._static.mark_ready(lease_ref, **kwargs)
         return await self._db_transition(
             lease_ref,
             expected_generation=int(kwargs["expected_generation"]),
@@ -403,6 +424,8 @@ class DbOmnigentHostLeaseRepository:
         )
 
     async def record_launch(self, lease_ref: str, **kwargs: Any) -> HostLeaseAuthority:
+        if lease_ref.startswith("ohl_"):
+            return await self._static.record_launch(lease_ref, **kwargs)
         return await self._db_transition(
             lease_ref,
             expected_generation=int(kwargs["expected_generation"]),
@@ -411,6 +434,8 @@ class DbOmnigentHostLeaseRepository:
         )
 
     async def claim_cleanup(self, lease_ref: str, **kwargs: Any) -> HostLeaseAuthority:
+        if lease_ref.startswith("ohl_"):
+            return await self._static.claim_cleanup(lease_ref, **kwargs)
         expected = int(kwargs["expected_generation"])
         return await self._db_transition(
             lease_ref,
@@ -420,6 +445,8 @@ class DbOmnigentHostLeaseRepository:
         )
 
     async def mark_cleaned(self, lease_ref: str, **kwargs: Any) -> HostLeaseAuthority:
+        if lease_ref.startswith("ohl_"):
+            return await self._static.mark_cleaned(lease_ref, **kwargs)
         return await self._db_transition(
             lease_ref,
             expected_generation=int(kwargs["expected_generation"]),
@@ -428,6 +455,8 @@ class DbOmnigentHostLeaseRepository:
         )
 
     async def heartbeat(self, lease_ref: str, **kwargs: Any) -> HostLeaseAuthority:
+        if lease_ref.startswith("ohl_"):
+            return await self._static.heartbeat(lease_ref, **kwargs)
         now = datetime.now(UTC)
         return await self._db_transition(
             lease_ref,
@@ -514,7 +543,10 @@ class DbOmnigentHostLeaseRepository:
                 .scalars()
                 .all()
             )
-            return tuple(self._from_row(row) for row in rows)
+            on_demand = tuple(self._from_row(row) for row in rows)
+        return on_demand + await self._static.list_recoverable(
+            stale_before=stale_before
+        )
 
 
 __all__ = [
