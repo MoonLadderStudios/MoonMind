@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from moonmind.config.settings import settings
@@ -13,15 +13,23 @@ from moonmind.workflows.executions.model_resolver import resolve_model_effort
 
 if TYPE_CHECKING:
     from api_service.services.omnigent_execution_plan_service import PersistedOmnigentExecutionPlan
+    from moonmind.omnigent.harness_platform.execution_plan import OmnigentExecutionPlanEnvelope
+
+
+@dataclass(frozen=True)
+class CompiledStepPlans:
+    plans: tuple[PersistedOmnigentExecutionPlan, ...] = ()
+    parameters: Mapping[str, Mapping[str, Any]] | None = None
 
 
 async def compile_step_execution_plans(
     *,
-    admitted: PersistedOmnigentExecutionPlan,
+    root_plan: OmnigentExecutionPlanEnvelope,
+    recorded_step_parameters: Mapping[str, Mapping[str, Any]] | None = None,
     provider_profile: Any,
     initial_parameters: Mapping[str, Any],
     **compilation_arguments: Any,
-) -> PersistedOmnigentExecutionPlan:
+) -> CompiledStepPlans:
     """Freeze a distinct model/effort selection before any step can launch.
 
     Account and capacity inheritance still belong to their existing owners.
@@ -35,10 +43,10 @@ async def compile_step_execution_plans(
 
     task = initial_parameters.get("workflow") or initial_parameters.get("task")
     if not isinstance(task, Mapping):
-        return admitted
+        return CompiledStepPlans()
     parent_runtime = task.get("runtime")
     parent_runtime = parent_runtime if isinstance(parent_runtime, Mapping) else {}
-    root_model = admitted.envelope.payload.modelConfig
+    root_model = root_plan.payload.modelConfig
     step_plans = []
     step_parameters = {}
     for step in task.get("steps") or []:
@@ -91,13 +99,5 @@ async def compile_step_execution_plans(
             "modelTierResolution": selection.as_metadata(),
         }
     if not step_parameters:
-        return admitted
-    return replace(
-        admitted,
-        step_plans=tuple(step_plans),
-        step_parameters=step_parameters,
-        artifact_refs=tuple(dict.fromkeys([
-            *admitted.artifact_refs,
-            *(ref for plan in step_plans for ref in plan.artifact_refs),
-        ])),
-    )
+        return CompiledStepPlans()
+    return CompiledStepPlans(plans=tuple(step_plans), parameters=step_parameters)

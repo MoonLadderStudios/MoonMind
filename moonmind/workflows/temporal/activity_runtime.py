@@ -2301,7 +2301,8 @@ class TemporalPlanActivities:
         return PlanGenerateActivityResult(plan_ref=plan_ref)
 
     async def _admit_execution_parameters(
-        self, binding_payload: Mapping[str, Any]
+        self, binding_payload: Mapping[str, Any],
+        *, execution_parameters: Mapping[str, Any] | None = None,
     ) -> Mapping[str, Any] | None:
         """Admit workflow inputs, then return a native graph's frozen intent.
 
@@ -2330,6 +2331,22 @@ class TemporalPlanActivities:
                 principal="service:native-planning"
             ),
         )
+        from moonmind.omnigent.harness_platform.execution_plan import logical_step_plan_digests
+
+        step_plans = (execution_parameters or {}).get("omnigentStepExecutionPlans")
+        try:
+            observed_steps = logical_step_plan_digests(step_plans)
+        except (ValueError, TypeError) as exc:
+            raise TemporalActivityRuntimeError("logical step plan authority is invalid") from exc
+        if observed_steps != (persisted.payload.logicalStepPlans or {}):
+            raise TemporalActivityRuntimeError("logical step plan authority conflicts with admission")
+        for step_plan in (step_plans or {}).values():
+            await _load_verified_execution_plan(
+                OmnigentExecutionPlanBinding.model_validate(step_plan["omnigentExecutionPlan"]),
+                workflow_id=execution.workflow_id, run_id=execution.workflow_run_id,
+                namespace=execution.namespace,
+                access=ArtifactAccessContext.for_activity(principal="service:step-planning"),
+            )
         if not any(
             getattr(value, "consumer", "agent") == "native"
             for value in persisted.payload.credentialBindings.values()
@@ -2377,7 +2394,7 @@ class TemporalPlanActivities:
         native_parameters: Mapping[str, Any] | None = None
         if omnigent_execution_plan is not None:
             native_parameters = await self._admit_execution_parameters(
-                omnigent_execution_plan
+                omnigent_execution_plan, execution_parameters=execution_parameters
             )
             if native_parameters is None:
                 # Input admission is shared; native graph restrictions do
