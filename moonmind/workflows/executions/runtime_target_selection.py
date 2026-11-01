@@ -318,7 +318,8 @@ def resolve_runtime_target_selection(
     native aliases use its shared route with authored provenance; an omitted
     runtime records Profile-derived provenance. ``profile_harness_id`` narrows
     new target choices to that Profile's harness without changing recorded
-    authority.
+    authority. An account inferred from a runtime default retains that
+    configured-default provenance.
     """
 
     active_surface = AuthoringSurface(str(surface))
@@ -469,7 +470,11 @@ def resolve_runtime_target_selection(
         authored_runtime = "omnigent"
     if not authored_runtime and str(profile_runtime or "").strip():
         authored_runtime = str(profile_runtime).strip()
-        intended_source = SelectionSource.profile
+        intended_source = (
+            SelectionSource.configured_default
+            if getattr(workflow_settings, "provider_profile_inferred", False)
+            else SelectionSource.profile
+        )
     if authored_runtime:
         runtime_id = normalize_runtime_id(authored_runtime)
         candidates = _views_for_runtime(views, runtime_id)
