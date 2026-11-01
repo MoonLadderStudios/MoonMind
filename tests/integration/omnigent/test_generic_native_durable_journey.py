@@ -1544,6 +1544,7 @@ async def assert_native_turn_saved_and_cleaned(
     journey, terminal_status="idle", *, expected_messages=1
 ):
     """Reuse the full durable lifecycle proof for separately admitted plans."""
+    from moonmind.omnigent.realizers.turn_delivery import admission_epoch
     request, plan, services = journey.request, journey.plan, journey.services
     realizer, server, docker = journey.realizer, journey.server, journey.docker
     manager, gateway, worker_root = (
@@ -1634,7 +1635,8 @@ async def assert_native_turn_saved_and_cleaned(
         assert provider_lease.released_at is None
     binding = await services.runtime_binding_store.get(
         stable_binding_id(
-            execution_plan_ref=plan.planRef, idempotency_key=request.idempotency_key
+            execution_plan_ref=plan.planRef, idempotency_key=request.idempotency_key,
+            admission_epoch=admission_epoch(request),
         )
     )
     assert binding.state is RuntimeBindingState.cleaned
