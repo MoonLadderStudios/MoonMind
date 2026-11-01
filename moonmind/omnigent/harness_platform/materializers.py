@@ -309,6 +309,11 @@ class ProviderConfigEndpoint(BaseModel):
     baseUrl: str = Field(alias="baseUrl")
     defaultModel: str | None = Field(None, alias="defaultModel")
     modelPins: dict[str, str] = Field(default_factory=dict, alias="modelPins")
+    codexConfiguration: dict[str, Any] | None = Field(
+        None,
+        alias="codexConfiguration",
+        exclude_if=lambda value: value is None,
+    )
     launchEnvironment: dict[str, str] = Field(
         default_factory=dict,
         alias="launchEnvironment",
@@ -340,7 +345,15 @@ def _omnigent_egress_admits(url: str) -> bool:
         port = parts.port
     except ValueError:
         return False
-    if parts.scheme != "https" or not host or port not in (None, 443):
+    if (
+        parts.scheme != "https"
+        or not host
+        or port not in (None, 443)
+        or parts.username
+        or parts.password
+        or parts.query
+        or parts.fragment
+    ):
         return False
     return any(
         destination.dns_name is not None
@@ -460,10 +473,39 @@ def codex_provider_config_endpoint(
     The direct Codex launch reads ``OPENAI_API_KEY`` and, for a custom
     endpoint, ``OPENAI_BASE_URL`` on Codex's built-in Responses provider; an
     ``openai`` provider-config family carries both. A Profile that brings its
-    own ``config.toml`` (a custom ``model_provider``, wire or retry tuning)
-    keeps its direct launch with the reason.
+    own ``config.toml`` can carry one Responses provider, selected model and
+    retry/stream tuning through the same credential owner. Other settings
+    keep their direct launch with a concrete translation gap.
     """
 
+    if (
+        str(getattr(profile, "runtime_id", "")) != "codex_cli"
+        or _enum_value(getattr(profile, "credential_source", None)) != "secret_ref"
+    ):
+        return None, "not a SecretRef Codex Provider Profile"
+    if getattr(profile, "file_templates", None) or getattr(
+        profile, "home_path_overrides", None
+    ):
+        from moonmind.provider_profiles.codex_configuration import (
+            configuration_for_profile,
+        )
+
+        configuration, reason = configuration_for_profile(profile)
+        if configuration is None:
+            return None, reason
+        base_url = str(configuration["provider"].get("base_url") or "").rstrip("/")
+        if not _omnigent_egress_admits(base_url):
+            return None, "the Omnigent egress profile does not admit the endpoint"
+        return (
+            ProviderConfigEndpoint(
+                family="openai",
+                secretRole=configuration["secretRole"],
+                baseUrl=base_url,
+                defaultModel=configuration["document"].get("model"),
+                codexConfiguration=configuration,
+            ),
+            "",
+        )
     key_role, literals, reason = _declared_key_launch(
         profile,
         runtime_id="codex_cli",

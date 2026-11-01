@@ -598,8 +598,12 @@ URLs at MoonMind proxy endpoints.
 
 ## 12. Example: Codex CLI + MiniMax
 
-A `composite` profile combines a provider config entry and named profile with an
-environment variable holding the key. A Claude Code + MiniMax profile instead
+A `composite` Codex profile declares one Responses provider in a private HOME,
+with its key supplied through a SecretRef. The shared host preserves its selected
+model, reasoning and explicit retry/stream limits. Only the unchanged obsolete
+managed recipe receives a rendering repair; edited Chat Completions recipes need
+an authored update because installed Codex no longer supports that wire.
+A Claude Code + MiniMax profile instead
 uses an `env_bundle` that sets `ANTHROPIC_BASE_URL` to MiniMax's
 Anthropic-compatible endpoint, `ANTHROPIC_AUTH_TOKEN` from the secret, the model
 variables, and `suppress_cli_model_flag_when_env_model_present`.
@@ -619,24 +623,29 @@ default_model_tier: 1
 max_parallel_runs: 4
 cooldown_after_429_seconds: 600
 secret_refs:
-  provider_api_key: { secret_id: sec_minimax_m27, backend_type: db_encrypted }
-clear_env_keys: [OPENAI_API_KEY]
+  provider_api_key: "db://sec_minimax_m27"
+# The API derives clear_env_keys from the selected authentication method.
 env_template:
   MINIMAX_API_KEY: { from_secret_ref: provider_api_key }
 file_templates:
-  - path: "~/.codex/config.toml"
+  - path: "{{runtime_support_dir}}/codex-home/config.toml"
     format: toml
     merge_strategy: deep_merge
     permissions: "0600"
     content_template:
+      model: "codex-MiniMax-M2.7"
+      model_provider: minimax
       model_providers:
         minimax:
           base_url: "https://api.minimax.io/v1"
           env_key: "MINIMAX_API_KEY"
-          wire_api: "chat"
+          wire_api: "responses"
           requires_openai_auth: false
-      profiles:
-        m27: { model: "{{resolved_model}}", model_provider: "minimax" }
+          request_max_retries: 4
+          stream_max_retries: 10
+          stream_idle_timeout_ms: 300000
+home_path_overrides:
+  CODEX_HOME: "{{runtime_support_dir}}/codex-home"
 command_behavior:
-  default_codex_profile_name: "m27"
+  suppress_default_model_flag: true
 ```

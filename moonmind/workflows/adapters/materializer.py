@@ -58,6 +58,21 @@ class ProviderProfileMaterializer:
         Returns a tuple of ``(env, command)``.
         """
         env = self._base_env.copy()
+        if profile.runtime_id == "codex_cli" and profile.file_templates:
+            from moonmind.provider_profiles.codex_configuration import (
+                repaired_managed_templates,
+            )
+
+            templates, repaired = repaired_managed_templates(profile)
+            if repaired:
+                profile = profile.model_copy(
+                    update={
+                        "file_templates": [
+                            RuntimeFileTemplate.model_validate(item)
+                            for item in templates
+                        ]
+                    }
+                )
 
         # Step 2: Clear keys — #3821 launch-boundary defense. Revalidate or
         # rederive the effective clearing policy through the single isolation
@@ -393,52 +408,9 @@ class ProviderProfileMaterializer:
         return str(value)
 
     def _to_toml(self, value: Any) -> str:
-        if not isinstance(value, dict):
-            raise ValueError("TOML file_templates require object content_template")
+        from moonmind.provider_profiles.codex_configuration import render_toml
 
-        lines: list[str] = []
-        scalar_items = {
-            key: val for key, val in value.items() if not isinstance(val, dict)
-        }
-        table_items = {
-            key: val for key, val in value.items() if isinstance(val, dict)
-        }
-
-        for key, val in scalar_items.items():
-            lines.append(f"{key} = {self._toml_scalar(val)}")
-
-        for key, val in table_items.items():
-            if lines:
-                lines.append("")
-            lines.extend(self._render_toml_table([str(key)], val))
-
-        return "\n".join(lines) + "\n"
-
-    def _render_toml_table(self, path: list[str], value: dict[str, Any]) -> list[str]:
-        lines = [f"[{'.'.join(path)}]"]
-        scalar_items = {
-            key: val for key, val in value.items() if not isinstance(val, dict)
-        }
-        table_items = {
-            key: val for key, val in value.items() if isinstance(val, dict)
-        }
-
-        for key, val in scalar_items.items():
-            lines.append(f"{key} = {self._toml_scalar(val)}")
-
-        for key, nested in table_items.items():
-            lines.append("")
-            lines.extend(self._render_toml_table(path + [str(key)], nested))
-        return lines
-
-    def _toml_scalar(self, value: Any) -> str:
-        if isinstance(value, bool):
-            return "true" if value else "false"
-        if isinstance(value, (int, float)):
-            return str(value)
-        if isinstance(value, list):
-            return "[" + ", ".join(self._toml_scalar(item) for item in value) + "]"
-        return json.dumps(str(value))
+        return render_toml(value)
 
     def cleanup(self) -> None:
         """Called upon worker shutdown to remove any secrets stored in files."""
