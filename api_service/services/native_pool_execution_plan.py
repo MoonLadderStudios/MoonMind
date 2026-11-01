@@ -22,7 +22,10 @@ from api_service.services.omnigent_agent_profile_selection import (
 from api_service.services.omnigent_execution_plan_service import (
     compile_and_persist_execution_plan,
 )
-from api_service.services.profile_execution_selection import profile_route_runtime
+from api_service.services.profile_execution_selection import (
+    profile_harness_id,
+    profile_route_runtime,
+)
 from moonmind.omnigent.bridge_artifacts import (
     link_verified_execution_plan_inputs_in_session,
 )
@@ -39,6 +42,10 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentExecutionPlanBinding,
 )
 from moonmind.runtime_identity import normalize_runtime_id
+from moonmind.workflows.executions.runtime_target_selection import (
+    AuthoringSurface,
+    resolve_runtime_target_selection,
+)
 from moonmind.workflows.temporal.artifacts import (
     ArtifactAccessContext,
     ArtifactTransactionOwnership,
@@ -217,6 +224,15 @@ async def prepare_selected_pool_plan(
             raise ValueError("the selected pool account is no longer launch-ready")
         if str(getattr(profile.runtime_id, "value", profile.runtime_id)) != runtime_id:
             raise ValueError("the selected pool account belongs to a different runtime")
+        target = resolve_runtime_target_selection(
+            surface=AuthoringSurface.workflow_create,
+            requested_runtime=runtime_id,
+            profile_runtime="omnigent",
+            profile_harness_id=profile_harness_id(profile),
+            record_metrics=False,
+        )
+        if not target.available or target.path_class != "generic_omnigent":
+            return {"disposition": "native", "reason": "shared_harness_not_available"}
         if await profile_route_runtime(session, None, profile) != "omnigent":
             return {
                 "disposition": "native",
@@ -298,7 +314,14 @@ async def prepare_selected_pool_plan(
         parameters = compile_agent_profile_snapshot_parameters(
             canonical.parameters or {}, snapshot=snapshot
         )
-        for key in ("requiredCapabilities", "githubOperations"):
+        for key in (
+            "requiredCapabilities",
+            "githubOperations",
+            "publishMode",
+            "commitMessage",
+            "publishBaseBranch",
+            "repository",
+        ):
             if key in selected.parameters:
                 parameters[key] = deepcopy(selected.parameters[key])
         parameters.update(

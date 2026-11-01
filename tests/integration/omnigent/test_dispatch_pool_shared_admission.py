@@ -61,8 +61,9 @@ session_factory = native_fixture.session_factory
 @pytest.mark.parametrize(
     "native_journey", ["codex-native", "claude-native"], indirect=True
 )
+@pytest.mark.parametrize("scenario", ["ordinary", "disabled", "publish"])
 async def test_pool_selected_account_compiles_once_and_preserves_its_original_inputs(
-    native_journey, monkeypatch
+    native_journey, monkeypatch, scenario
 ):
     journey = native_journey
     runtime = "codex_cli" if journey.harness == "codex-native" else "claude_code"
@@ -70,6 +71,38 @@ async def test_pool_selected_account_compiles_once_and_preserves_its_original_in
     monkeypatch.setattr(settings.workflow, "github_repository", "")
     inventory = await OmnigentHttpClient(base_url=resolved_server_url()).list_agents()
     async with journey.session_factory() as session:
+        repository = None
+        if scenario == "publish":
+            from api_service.services.repository_connections import (
+                RepositoryConnectionService,
+            )
+            from tests.helpers.repository_connections import (
+                github_pat_connection,
+                github_repository_assignment,
+            )
+
+            await RepositoryConnectionService(session).create_connection(
+                github_pat_connection("pool-repository", "POOL_TEST_REPOSITORY_TOKEN"),
+                actor_ref="system:deployment",
+                request_id="pool-publishing-connection",
+                principal_ref="system:deployment",
+                principal_scope=("system", None),
+            )
+            await RepositoryConnectionService(session).set_assignment(
+                github_repository_assignment(
+                    "pool-repository", "MoonLadderStudios/MoonMind"
+                ),
+                actor_ref="system:deployment",
+                request_id="pool-publishing-assignment",
+                principal_ref="system:deployment",
+                principal_scope=("system", None),
+            )
+            repository = {
+                "provider": "git",
+                "connectionRef": "pool-repository",
+                "repository": {"name": "MoonLadderStudios/MoonMind"},
+                "branch": {"name": "main"},
+            }
         provider = await session.get(
             ManagedAgentProviderProfile, native_fixture.PROFILE
         )
@@ -106,10 +139,20 @@ async def test_pool_selected_account_compiles_once_and_preserves_its_original_in
                                     "instructions": "Generate a report.",
                                     "type": "skill",
                                     "skill": {"id": native_fixture._DURABLE_SKILL_NAME},
+                                    **(
+                                        {
+                                            "publishMode": "pr",
+                                            "publishBaseBranch": "selected-target",
+                                            "commitMessage": "Publish selected pool work",
+                                        }
+                                        if scenario == "publish"
+                                        else {}
+                                    ),
                                 }
                             ],
                         },
                         "publishMode": "none",
+                        **({"repository": repository} if repository else {}),
                     },
                 },
             )
@@ -127,6 +170,9 @@ async def test_pool_selected_account_compiles_once_and_preserves_its_original_in
         selected = request.model_copy(
             update={"execution_profile_ref": native_fixture.PROFILE}
         )
+        if scenario == "publish":
+            assert record.parameters["publishMode"] == "none"
+            assert request.parameters["publishMode"] == "pr"
         original_parameters, original_memo = dict(record.parameters), dict(record.memo)
         parent_id = record.workflow_id
         parent_run = record.run_id
@@ -220,10 +266,37 @@ async def test_pool_selected_account_compiles_once_and_preserves_its_original_in
         "originalProfileRef": None,
         "request": selected.model_dump(mode="json", by_alias=True),
     }
+    if scenario == "disabled":
+        flag = (
+            "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED"
+            if runtime == "codex_cli"
+            else "MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED"
+        )
+        monkeypatch.setenv(flag, "false")
     async with journey.session_factory() as session:
+        previous_plan_count = await session.scalar(
+            select(func.count(OmnigentExecutionPlanRecord.plan_ref))
+        )
         result = await prepare_selected_pool_plan(
             session, runtime_id=runtime, payload=payload, client=transport
         )
+        if scenario == "disabled":
+            assert result["disposition"] == "native", result
+            assert (
+                await session.scalar(
+                    select(func.count(OmnigentExecutionPlanRecord.plan_ref))
+                )
+                == previous_plan_count
+            )
+            row = (
+                await session.scalars(
+                    select(ProviderProfileSlotLease).where(
+                        ProviderProfileSlotLease.lease_id == owner
+                    )
+                )
+            ).one()
+            assert row.lease_state == "held" and row.execution_plan_ref is None
+            return
         assert result["disposition"] == "shared", result
         shared = AgentExecutionRequest.model_validate(result["request"])
         assert shared.agent_kind == "external" and shared.agent_id == "omnigent"
@@ -246,6 +319,20 @@ async def test_pool_selected_account_compiles_once_and_preserves_its_original_in
         plan = await DbExecutionPlanStore(journey.session_factory).load(
             shared.omnigent_execution_plan.plan_ref
         )
+        if scenario == "publish":
+            from moonmind.omnigent.harness_platform.credential_bindings import (
+                repository_bindings_of,
+            )
+
+            bindings = repository_bindings_of(plan.payload.credentialBindings)
+            assert any(
+                binding.repositoryRole == "destination_write"
+                for binding in bindings.values()
+            )
+            assert shared.parameters["publishMode"] == "pr"
+            assert shared.parameters["publishBaseBranch"] == "selected-target"
+            assert shared.parameters["commitMessage"] == "Publish selected pool work"
+            return
         assert plan.payload.harnessId == journey.harness
         assert (
             plan.payload.credentialBindings["primary-model"].providerProfileRef
