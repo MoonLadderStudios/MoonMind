@@ -886,6 +886,7 @@ async def _resolve_initial_context_message(
     durable_row: Any,
     workspace: str | None,
     include_idempotency_marker: bool = True,
+    runtime_command_harness_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Resolve or restore the exact context-bearing first message."""
 
@@ -1016,6 +1017,62 @@ async def _resolve_initial_context_message(
             "required initial context retrieval is unavailable: "
             f"{evidence.get('reason') or 'retrieval_disabled'}"
         )
+    command = request.runtime_command
+    if (
+        command is not None
+        and command.recognition_mode == "selected_harness"
+        and not runtime_command_harness_id
+    ):
+        raise OmnigentContractError(
+            "runtime command requires the admitted Omnigent harness"
+        )
+    if runtime_command_harness_id and command is not None:
+        from moonmind.omnigent.harness_platform.harness_registry import (
+            harness_registration,
+        )
+        from moonmind.workflows.runtime_commands import (
+            RuntimeCommandRenderer,
+            SELECTED_HARNESS_RECOGNITION,
+        )
+
+        if (
+            command.recognition_mode == SELECTED_HARNESS_RECOGNITION
+            or command.requires_runtime_recognition
+        ):
+            supports_commands = harness_registration(
+                runtime_command_harness_id
+            ).slashCommandPassthrough
+            if not supports_commands:
+                # A slash-leading input for a non-command harness remains
+                # literal text; it must not execute or lose its authored line.
+                literal = "\n".join(
+                    part
+                    for part in (command.raw_command, command.instruction_body)
+                    if part
+                )
+                command = command.model_copy(
+                    update={
+                        "recognition_mode": "escaped_literal",
+                        "requires_runtime_recognition": False,
+                        "instruction_body": literal,
+                    }
+                )
+            rendered = RuntimeCommandRenderer(
+                slash_passthrough=supports_commands
+            ).render_runtime_command(
+                request.model_copy(
+                    update={
+                        "instruction_ref": _first_message_text(first_message),
+                        "runtime_command": command,
+                    }
+                )
+            )
+            if rendered.status != "ok":
+                raise OmnigentContractError(
+                    rendered.failure_reason or "runtime_command_render_failed"
+                )
+            first_message["data"]["content"][0]["text"] = rendered.rendered_instruction
+
     first_message.setdefault("metadata", {})[
         "moonmindIdempotencyKey"
     ] = request.idempotency_key
@@ -3033,6 +3090,10 @@ async def run_omnigent_execution(
                         include_idempotency_marker=selection.prompt.get(
                             "includeIdempotencyMarker", True
                         ),
+                        # Realizers bind this from the admitted plan. Never
+                        # infer command transport from the ambient runtime or
+                        # the generic "omnigent" execution id.
+                        runtime_command_harness_id=selection.agent.harness_override,
                     )
                 )
             digest = str(retrieval_evidence["preparedMessageDigest"])
