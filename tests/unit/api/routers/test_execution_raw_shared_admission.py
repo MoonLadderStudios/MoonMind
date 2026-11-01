@@ -148,3 +148,16 @@ async def test_a_new_serialized_request_cannot_inject_step_plan_authority(saved_
     assert response.status_code == 422, response.text
     assert "Step execution plans must be compiled" in response.text
     context.service._client_adapter.start_workflow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_recurring_definition_cannot_store_authored_step_plan_authority():
+    from fastapi import HTTPException
+    from api_service.api.routers.executions import _resolve_recurring_runtime_selection
+
+    with pytest.raises(HTTPException) as raised:
+        await _resolve_recurring_runtime_selection({
+            "initialParameters": {"omnigentStepExecutionPlans": {"selected": {}}},
+        }, session=None)
+    assert raised.value.status_code == 422
+    assert "Step execution plans must be compiled" in str(raised.value.detail)

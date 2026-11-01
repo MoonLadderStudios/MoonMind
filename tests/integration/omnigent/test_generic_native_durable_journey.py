@@ -129,6 +129,7 @@ class NativeTurnServer(FakeOmnigentServer):
         self.skills: Path | None = None
         self.delivered_skill: bytes | None = None
         self.model = "example/model"
+        self.additional_models = []
         self.host_alive = False
         self.stopped_sessions = set()
         self.foreign_consumers = []
@@ -226,7 +227,7 @@ class NativeTurnServer(FakeOmnigentServer):
         assert request.match_info["host_id"] == self.host_id
         assert request.match_info["harness"] == self.harness
         assert self.harness != "opencode-native"
-        return web.json_response({"models": [{"id": self.model}]})
+        return web.json_response({"models": [{"id": model} for model in [self.model, *self.additional_models]]})
 
     async def list_agents(self, request):
         return web.json_response(
@@ -823,7 +824,7 @@ class NativeDocker(StaticCodexDocker):
                 )
                 return 0, dependency["version"], ""
             if "list_opencode_cli_model_options" in " ".join(argv):
-                return 0, json.dumps({"models": [{"id": self.server.model}]}), ""
+                return 0, json.dumps({"models": [{"id": model} for model in [self.server.model, *self.server.additional_models]]}), ""
             if argv[3:6] in (
                 ["codex", "login", "status"],
                 ["claude", "auth", "status"],
@@ -1562,7 +1563,7 @@ async def assert_native_turn_saved_and_cleaned(
         created["host_type"] == "external" and created["workspace"] == "/workspaces/run"
     )
     assert created["agent_id"] == journey.harness + "-agent"
-    assert created["model_override"] == server.model
+    assert created["model_override"] == plan.payload.modelConfig.qualifiedId
     assert created["terminal_launch_args"] == (
         [
             "--permission-mode",

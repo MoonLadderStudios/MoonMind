@@ -120,3 +120,28 @@ async def test_independent_profile_and_harness_get_their_own_shared_plan(native_
         assert continued_plan.payload.harnessId == selected.payload.harnessId
         assert continued_plan.payload.modelConfig == selected.payload.modelConfig
         assert continued_plan.payload.credentialBindings == selected.payload.credentialBindings
+        if journey.harness == step_harness == "codex-native":
+            from copy import deepcopy
+            from api_service.db.models import MoonMindWorkflowState
+            from moonmind.workflows.temporal.service import TemporalExecutionRerunPlanError
+            from moonmind.workflows.temporal.artifacts import ArtifactAccessContext, TemporalArtifactRepository, TemporalArtifactService
+
+            source_id = record.workflow_id
+            altered = deepcopy(record.parameters)
+            altered["omnigentStepExecutionPlans"]["selected"]["profileId"] = PROFILE
+            with pytest.raises(TemporalExecutionRerunPlanError):
+                await service.validate_exact_rerun_execution_plan(parameters=altered)
+            record.state = MoonMindWorkflowState.COMPLETED
+            await session.commit()
+            async def start_with_grants(**kwargs):
+                async with journey.session_factory() as reader:
+                    artifacts = TemporalArtifactService(TemporalArtifactRepository(reader))
+                    for ref in (requests["root"].omnigent_execution_plan.plan_artifact_ref, requests["selected"].omnigent_execution_plan.plan_artifact_ref, requests["selected"].resolved_skillset_ref):
+                        await artifacts.read(artifact_id=ref, access=ArtifactAccessContext.for_execution(kwargs["workflow_id"]))
+                return SimpleNamespace(run_id="step-plans-rerun")
+            service._client_adapter.start_workflow = AsyncMock(side_effect=start_with_grants)
+            rerun = await service.create_fresh_rerun_execution(workflow_id=source_id, idempotency_key="exact-step-plan-rerun")
+            destination = await session.get(TemporalExecutionCanonicalRecord, rerun["workflow_id"])
+            assert destination.parameters["omnigentStepExecutionPlans"] == record.parameters["omnigentStepExecutionPlans"]
+            assert destination.parameters["omnigentExecutionPlan"] == record.parameters["omnigentExecutionPlan"]
+            assert destination.workflow_id != source_id

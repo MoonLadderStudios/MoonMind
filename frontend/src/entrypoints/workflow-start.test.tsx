@@ -21352,6 +21352,31 @@ describe("Task Create runtime switch layout stability", () => {
     expect((screen.getByLabelText("Step 1 Provider Profile") as HTMLSelectElement).value).toBe("codex-native-only");
   });
 
+  it("keeps an independently configured step Profile on its own shared route", async () => {
+    const fallback = configuredCodexInventory(fetchSpy.getMockImplementation()!);
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await fallback(input, init);
+      if (String(input).split("?")[0] !== "/api/v1/provider-profiles") return response;
+      const profiles = await response.json();
+      return { ok: true, json: async () => [profiles[0], {
+        ...profiles[0], profile_id: "independent-codex", account_label: "Independent Codex", is_default: false,
+        execution_selection: { ...profiles[0].execution_selection, providerProfileRef: "independent-codex" },
+      }] } as Response;
+    });
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    await waitFor(() => expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe("codex-configured"));
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    fireEvent.change(screen.getByLabelText("Step 1 Provider Profile"), { target: { value: "independent-codex" } });
+    await waitFor(() => expect(screen.queryByLabelText("Backend")).toBeNull());
+    expect(screen.queryByLabelText("Step 1 Backend")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Use the selected step account." } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const request = JSON.parse(String(fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions")?.[1]?.body));
+    expect(request.payload.task.runtime).toMatchObject({ mode: "omnigent", profileId: "codex-configured" });
+    expect(request.payload.task.steps[0].runtime.profileId).toBe("independent-codex");
+  });
+
   function configuredModelInventory(fallback: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
     const configured = configuredCodexInventory(fallback);
     return async (input: RequestInfo | URL, init?: RequestInit) => {
