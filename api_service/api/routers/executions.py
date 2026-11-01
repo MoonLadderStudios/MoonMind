@@ -128,6 +128,7 @@ from api_service.services.omnigent_agent_profile_selection import (
     resolve_agent_profile_snapshot,
     resolve_default_agent_profile_snapshot,
 )
+from api_service.services.profile_execution_selection import profile_harness_id
 from api_service.services.provider_profile_runtime import (
     ProviderProfileNotFoundError,
     ProviderProfileRuntimeMismatchError,
@@ -8257,6 +8258,15 @@ async def _load_provider_profile_for_runtime(
         ) from exc
 
 
+def _requested_runtime_target_id(*sources: Mapping[str, Any]) -> str | None:
+    for source in sources:
+        for key in ("requestedTargetId", "requested_target_id"):
+            value = str(source.get(key) or "").strip()
+            if value:
+                return value
+    return None
+
+
 async def _workflow_creation_defaults(
     *,
     session: Any,
@@ -8264,13 +8274,16 @@ async def _workflow_creation_defaults(
     task_payload: Mapping[str, Any],
     parameter_payload: Mapping[str, Any],
     agent_profile: object = None,
+    infer_native_profile: bool = True,
+    defaults: WorkflowCreationDefaults | None = None,
 ) -> WorkflowCreationDefaults:
     """Resolve submission fallbacks once, preserving explicit account intent."""
     from api_service.services.settings_catalog import SettingsCatalogService
 
-    defaults = await SettingsCatalogService(
-        session=session
-    ).workflow_creation_defaults()
+    if defaults is None:
+        defaults = await SettingsCatalogService(
+            session=session
+        ).workflow_creation_defaults()
     # Account-free work still needs the saved runtime for its admission route.
     if (
         not workflow_requires_agent(task_payload, parameter_payload)
@@ -8286,7 +8299,82 @@ async def _workflow_creation_defaults(
             return replace(defaults, provider_profile_ref=None)
         if provider_profile_ref_from_mapping(payload):
             return replace(defaults, provider_profile_ref=None)
+    if infer_native_profile and defaults.provider_profile_ref is None:
+        authored = resolve_launch_target_profile_selection(
+            {
+                **(payloads[-1] if payloads else {}),
+                "initialParameters": {
+                    **parameter_payload,
+                    "workflow": task_payload,
+                },
+            }
+        )
+        runtime_payload = payloads[0] if payloads else {}
+        intended_runtime = (
+            authored.runtime_ids[0]
+            if (
+                authored.runtime_ids
+                and authored.runtime_ids[0] != "omnigent"
+                and runtime_payload.get("authored") is not False
+            )
+            else defaults.default_runtime
+        )
+        if intended_runtime and normalize_runtime_id(intended_runtime) in {
+            "codex_cli",
+            "claude_code",
+        }:
+            # Native defaults used to select their account after admission.
+            # Freeze that same runtime's default before changing its backend;
+            # otherwise a shared default could choose a different harness or biller.
+            provider = await _load_default_provider_profile_for_runtime(
+                session=session, runtime_id=normalize_runtime_id(intended_runtime)
+            )
+            if provider is not None:
+                if not _steps_keep_profile_authority(provider, task_payload):
+                    return defaults
+                return replace(defaults, provider_profile_ref=provider.profile_id)
+            native_was_authored = (
+                authored.runtime_ids
+                and authored.runtime_ids[0] != "omnigent"
+                and runtime_payload.get("authored") is not False
+            )
+            if not native_was_authored:
+                raise _invalid_workflow_request(
+                    f"A Provider Profile for {intended_runtime!r} is required "
+                    "to preserve the configured harness and account. Select "
+                    "or configure that Profile before starting new work."
+                )
     return defaults
+
+
+def _steps_keep_profile_authority(
+    provider: Any, task_payload: Mapping[str, Any]
+) -> bool:
+    """Whether one exact shared plan can preserve the authored step choices."""
+    if has_unexpanded_task_template({"workflow": task_payload}):
+        return False
+    if goal_from_payloads(
+        task_payload=task_payload
+    ) and not workflow_is_already_authored(task_payload):
+        return False
+    for step in task_payload.get("steps") or []:
+        if not isinstance(step, Mapping):
+            continue
+        runtime = _coerce_mapping(step.get("runtime"))
+        if has_profile_selector(runtime):
+            return False
+        profile_ref = provider_profile_ref_from_mapping(
+            runtime
+        ) or provider_profile_ref_from_mapping(step)
+        if profile_ref and profile_ref != provider.profile_id:
+            return False
+        mode = runtime.get("mode")
+        if mode and normalize_runtime_id(mode) not in {
+            "omnigent",
+            normalize_runtime_id(provider.runtime_id),
+        }:
+            return False
+    return True
 
 
 async def _profile_route_runtime(
@@ -8297,8 +8385,9 @@ async def _profile_route_runtime(
     authored_runtime: object,
     agent_profile: object = None,
     routes: dict[str, str] | None = None,
+    task_payload: Mapping[str, Any] | None = None,
 ) -> str | None:
-    """Return the selected Profile's route when no runtime was authored.
+    """Resolve exact Profile equivalence for new product submissions.
 
     An explicit Agent Profile is Omnigent intent: it may name a version outside
     the active configurations the Provider Profile's own route reads.
@@ -8308,18 +8397,51 @@ async def _profile_route_runtime(
     """
 
     if authored_runtime:
+        # An explicit native runtime still names its harness/account authority.
+        # Translate only after validating that authority against the Profile;
+        # external backends and explicit Agent Profiles retain their own owner.
+        if (
+            normalize_runtime_id(authored_runtime) not in {"codex_cli", "claude_code"}
+            or agent_profile is not None
+        ):
+            return None
+        if provider_profile is not None:
+            _require_provider_profile_runtime(
+                profile=provider_profile,
+                profile_id=provider_profile.profile_id,
+                selected_runtime=authored_runtime,
+            )
+    if (
+        authored_runtime
+        and provider_profile is not None
+        and not _steps_keep_profile_authority(provider_profile, task_payload or {})
+    ):
         return None
     if agent_profile is not None:
         return "omnigent"
     if provider_profile is None:
         return None
-    if routes is not None and provider_profile.profile_id in routes:
-        return routes[provider_profile.profile_id]
     from api_service.services.profile_execution_selection import profile_route_runtime
 
-    route = await profile_route_runtime(session, user, provider_profile)
-    if routes is not None:
-        routes[provider_profile.profile_id] = route
+    if routes is not None and provider_profile.profile_id in routes:
+        route = routes[provider_profile.profile_id]
+    else:
+        route = await profile_route_runtime(session, user, provider_profile)
+        if routes is not None:
+            routes[provider_profile.profile_id] = route
+    if authored_runtime and route == "omnigent":
+        shared = resolve_runtime_target_selection(
+            surface=AuthoringSurface.workflow_create,
+            requested_runtime=authored_runtime,
+            profile_runtime=route,
+            profile_harness_id=profile_harness_id(provider_profile),
+            record_metrics=False,
+        )
+        if not shared.available or shared.path_class != "generic_omnigent":
+            # An explicit native choice is still supported while its own
+            # shared harness is stopped or unqualified. Never substitute a
+            # different enabled harness, or make this an implicit fallback.
+            return None
     return route
 
 
@@ -9251,25 +9373,6 @@ async def _resolve_step_runtime_selections(
                     "claude_code, omnigent."
                 )
             canonical_step_runtime = normalized_rt
-            # A step override is new admission in its own right. The top-level
-            # new-work selection only covers the workflow's runtime, so
-            # without this check an allowed top-level runtime plus a legacy
-            # ``steps[i].runtime.mode`` would keep creating new legacy work
-            # after the direct strategy's retirement class stopped admitting it.
-            # The deployment-owned direct-retirement cutoff
-            # (MoonLadderStudios/MoonMind#3931) applies here too so a per-step
-            # direct runtime cannot bypass the cutoff after it passes.
-            try:
-                from moonmind.omnigent.codex_cutover_drain import (
-                    assert_new_admission_allowed,
-                )
-
-                assert_new_admission_allowed(canonical_step_runtime)
-                assert_runtime_new_admission(canonical_step_runtime)
-            except ValueError as exc:
-                raise _invalid_workflow_request(
-                    f"payload.workflow.steps[{index}].runtime.mode: {exc}"
-                ) from exc
 
         raw_step_profile_id = provider_profile_ref_from_mapping(runtime_payload)
         raw_requested_model: str | None = runtime_payload.get("model") or None
@@ -9316,6 +9419,41 @@ async def _resolve_step_runtime_selections(
                 str(getattr(provider_profile, "profile_id", "") or "").strip()
                 or None
             )
+
+        if (
+            task_target_runtime == "omnigent"
+            and provider_profile is not None
+            and provider_profile.profile_id == task_profile_id
+            and canonical_step_runtime in {"codex_cli", "claude_code"}
+        ):
+            route = await _profile_route_runtime(
+                session=session,
+                user=None,
+                provider_profile=provider_profile,
+                authored_runtime=canonical_step_runtime,
+            )
+            if route == "omnigent":
+                canonical_step_runtime = route
+        if canonical_step_runtime:
+            # A step override is new admission in its own right. The top-level
+            # new-work selection only covers the workflow's runtime, so
+            # without this check an allowed top-level runtime plus a legacy
+            # ``steps[i].runtime.mode`` would keep creating new legacy work
+            # after the direct strategy's retirement class stopped admitting it.
+            # The deployment-owned direct-retirement cutoff
+            # (MoonLadderStudios/MoonMind#3931) applies here too so a per-step
+            # direct runtime cannot bypass the cutoff after it passes.
+            try:
+                from moonmind.omnigent.codex_cutover_drain import (
+                    assert_new_admission_allowed,
+                )
+
+                assert_new_admission_allowed(canonical_step_runtime)
+                assert_runtime_new_admission(canonical_step_runtime)
+            except ValueError as exc:
+                raise _invalid_workflow_request(
+                    f"payload.workflow.steps[{index}].runtime.mode: {exc}"
+                ) from exc
 
         (
             resolved_model,
@@ -9451,7 +9589,7 @@ async def _preset_expansion_target_runtime(
         or provider_profile_ref_from_mapping(task_payload)
         or provider_profile_ref_from_mapping(request_payload)
     )
-    if raw_profile_id and not authored_runtime and session is not None:
+    if raw_profile_id and session is not None:
         try:
             provider_profile = await load_provider_profile_for_runtime(
                 session=session,
@@ -9465,6 +9603,10 @@ async def _preset_expansion_target_runtime(
     return resolve_runtime_target_selection(
         surface=AuthoringSurface.preset_expansion,
         requested_runtime=authored_runtime,
+        requested_target_id=_requested_runtime_target_id(
+            request_payload, runtime_payload
+        ),
+        profile_harness_id=profile_harness_id(provider_profile),
         profile_runtime=await _profile_route_runtime(
             session=session,
             user=user,
@@ -9475,6 +9617,7 @@ async def _preset_expansion_target_runtime(
                 or runtime_payload.get("agentProfile")
             ),
             routes=profile_routes,
+            task_payload=task_payload,
         ),
         workflow_settings=workflow_settings or settings.workflow,
         # The admission that follows records the selection; this is its preview.
@@ -11750,6 +11893,7 @@ async def _create_execution_from_workflow_request(
         parameter_payload=payload,
         session=session,
         payloads=(_coerce_mapping(task_payload.get("runtime")), task_payload, payload),
+        infer_native_profile=False,
     )
     default_profile_ref = creation_defaults.provider_profile_ref
     if default_profile_ref:
@@ -11770,6 +11914,25 @@ async def _create_execution_from_workflow_request(
             workflow_settings=creation_defaults,
         )
         _reject_submit_version_identity(task_payload)
+
+    if default_profile_ref is None:
+        creation_defaults = await _workflow_creation_defaults(
+            task_payload=task_payload,
+            parameter_payload=payload,
+            session=session,
+            payloads=(
+                _coerce_mapping(task_payload.get("runtime")),
+                task_payload,
+                payload,
+            ),
+            defaults=creation_defaults,
+        )
+        default_profile_ref = creation_defaults.provider_profile_ref
+        if default_profile_ref:
+            task_payload["runtime"] = {
+                **_coerce_mapping(task_payload.get("runtime")),
+                "providerProfileRef": default_profile_ref,
+            }
 
     if default_profile_ref and not workflow_requires_agent(task_payload, payload):
         expanded_runtime = _coerce_mapping(task_payload.get("runtime"))
@@ -12051,6 +12214,7 @@ async def _create_execution_from_workflow_request(
         authored_runtime=authored_runtime,
         agent_profile=agent_profile_selection,
         routes=profile_routes,
+        task_payload=task_payload,
     )
     try:
         new_work_selection = resolve_new_work_selection(
@@ -12060,7 +12224,9 @@ async def _create_execution_from_workflow_request(
                 else AuthoringSurface.workflow_create
             ),
             authored_runtime=authored_runtime,
+            requested_target_id=_requested_runtime_target_id(payload, runtime_payload),
             profile_runtime=profile_runtime,
+            profile_harness_id=profile_harness_id(_provider_profile),
             workflow_settings=creation_defaults,
         )
         raw_target_runtime = new_work_selection.runtime_id
@@ -12111,16 +12277,7 @@ async def _create_execution_from_workflow_request(
         # Freeze the exact requested rollout target identity (when supplied)
         # so the recorded authority names the target, not just the runtime
         # string (MoonLadderStudios/MoonMind#3988).
-        requested_target_id = (
-            str(
-                payload.get("requestedTargetId")
-                or payload.get("requested_target_id")
-                or runtime_payload.get("requestedTargetId")
-                or runtime_payload.get("requested_target_id")
-                or ""
-            ).strip()
-            or None
-        )
+        requested_target_id = _requested_runtime_target_id(payload, runtime_payload)
         if requested_target_id is not None:
             requested_selection = resolve_runtime_target_selection(
                 surface=(
@@ -12130,6 +12287,7 @@ async def _create_execution_from_workflow_request(
                 ),
                 requested_runtime=canonical_target_runtime,
                 requested_target_id=requested_target_id,
+                profile_harness_id=profile_harness_id(_provider_profile),
                 workflow_settings=settings.workflow,
                 record_metrics=False,
             )
@@ -12927,6 +13085,7 @@ async def _resolve_recurring_runtime_selection(
         provider_profile=provider_profile,
         authored_runtime=authored_runtime,
         agent_profile=request_payload.get("agentProfile"),
+        task_payload=task_payload,
     )
     # MoonLadderStudios/MoonMind#3931: the recurring-schedule surface resolves
     # its unauthored default through the one shared boundary as Workflow
@@ -12935,7 +13094,11 @@ async def _resolve_recurring_runtime_selection(
         new_work_selection = resolve_new_work_selection(
             surface=AuthoringSurface.schedule,
             authored_runtime=authored_runtime,
+            requested_target_id=_requested_runtime_target_id(
+                request_payload, runtime_payload
+            ),
             profile_runtime=profile_runtime,
+            profile_harness_id=profile_harness_id(provider_profile),
             workflow_settings=creation_defaults,
         )
         raw_target_runtime = new_work_selection.runtime_id
@@ -15214,6 +15377,7 @@ async def create_execution(
                 session=session,
                 payloads=(runtime_payload, task_payload, initial_parameters, payload),
                 agent_profile=agent_profile_selection,
+                infer_native_profile=False,
             )
             authored_selection = resolve_launch_target_profile_selection(
                 {"initialParameters": initial_parameters}
@@ -15239,18 +15403,26 @@ async def create_execution(
             )
             authored_runtime = authored_runtimes[0] if authored_runtimes else None
             selects_omnigent = "omnigent" in authored_runtimes
-            profile_runtime = await _profile_route_runtime(
-                session=session,
-                user=user,
-                provider_profile=provider_profile,
-                authored_runtime=authored_runtime,
-                agent_profile=agent_profile_selection,
+            # Explicit serialized native starts do not carry the product
+            # envelope's compiled shared plan. Preserve that existing adapter;
+            # ordinary workflow/CLI and schedule producers translate above.
+            profile_runtime = (
+                None
+                if authored_runtime
+                else await _profile_route_runtime(
+                    session=session,
+                    user=user,
+                    provider_profile=provider_profile,
+                    authored_runtime=authored_runtime,
+                    agent_profile=agent_profile_selection,
+                )
             )
             try:
                 selection = resolve_new_work_selection(
                     surface=AuthoringSurface.workflow_create,
                     authored_runtime=authored_runtime,
                     profile_runtime=profile_runtime,
+                    profile_harness_id=profile_harness_id(provider_profile),
                     workflow_settings=creation_defaults,
                 )
             except ValueError as exc:

@@ -7905,8 +7905,14 @@ function WorkflowStartPageContent({
   const harnessProviderOptions = harness
     ? providerOptions.filter((option) => !option.runtimeId || option.runtimeId === harness)
     : providerOptions;
+  const independentStepAuthority = steps.some((step) =>
+    (Boolean(step.runtimeProviderProfile.trim()) && step.runtimeProviderProfile !== providerProfile) ||
+    (Boolean(step.runtimeMode) && step.runtimeMode !== "omnigent" && step.runtimeMode !== harness),
+  );
   const backendOptions = harness
     ? backendOptionsForHarness(harness, runtimeTargetCatalog, {
+        directRoute: !selectedConfiguredProfile?.execution_selection_error &&
+          (independentStepAuthority || !profileHasOmnigentRoute(selectedConfiguredProfile, [], harness, runtimeTargetCatalog)),
         omnigentRoute: (runtime === "omnigent" && !selectedRuntimeUnavailableReason) ||
           profileHasOmnigentRoute(
             selectedConfiguredProfile?.runtime_id && selectedConfiguredProfile.runtime_id !== harness
@@ -12601,6 +12607,8 @@ function WorkflowStartPageContent({
               const stepHarness = stepPreviewProfile?.runtime_id || harness;
               const stepBackendOptions = stepHarness
                 ? backendOptionsForHarness(stepHarness, runtimeTargetCatalog, {
+                    directRoute: !stepPreviewProfile?.execution_selection_error &&
+                      (stepPreviewProfileId !== providerProfile || !profileHasOmnigentRoute(stepPreviewProfile, [], stepHarness, runtimeTargetCatalog)),
                     omnigentRoute: profileHasOmnigentRoute(stepPreviewProfile, activeProviderProfiles, stepHarness, runtimeTargetCatalog),
                   })
                 : [];

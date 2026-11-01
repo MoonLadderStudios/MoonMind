@@ -251,3 +251,10 @@ describe('removed and unknown authoring targets (#4644)', () => {
     expect(runtimeUnavailableReason('codex_cloud', catalog)).toMatch(/^Unsupported Harness codex_cloud\. Explicitly choose a supported replacement/);
   });
 });
+
+
+it('does not offer Direct after the selected Profile has an equivalent shared route', () => {
+  expect(backendOptionsForHarness('codex_cli', promotedCatalog, {
+    omnigentRoute: true, directRoute: false,
+  })).toEqual([{ runtimeId: 'omnigent', label: 'Omnigent' }]);
+});
