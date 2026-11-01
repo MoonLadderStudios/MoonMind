@@ -1,5 +1,6 @@
 """Prepare workflow session creation from durable launch authority."""
 
+import hashlib
 from collections.abc import Mapping
 from typing import Any
 
@@ -124,6 +125,7 @@ async def prepare_workflow_session_create(
     bridge: Any,
     run_store: OmnigentBridgeSessionStore | None,
     provider_idempotency_key: str,
+    session_authority_sink: Any | None = None,
 ) -> tuple[dict[str, Any], str | None]:
     """Return the exact payload or a recovered provider session to attach."""
     metadata = dict(getattr(bridge, "metadata_", None) or {})
@@ -144,6 +146,21 @@ async def prepare_workflow_session_create(
     )
     payload["idempotency_key"] = provider_idempotency_key
     attached_id = str(getattr(bridge, "omnigent_session_id", None) or "").strip()
+    phases = (
+        getattr(getattr(session_authority_sink, "binding", None), "phaseResults", None)
+        or {}
+    )
+    continuation = phases.get("runtimeContextContinuation")
+    if continuation is not None:
+        return payload, await _prepare_context_fork(
+            payload=payload,
+            continuation=continuation,
+            client=client,
+            sink=session_authority_sink,
+            bridge_session_id=attached_id,
+            run_store=run_store,
+            idempotency_key=request.idempotency_key,
+        )
     if attached_id:
         return payload, attached_id
     needs_legacy_reconciliation = (
@@ -186,3 +203,171 @@ async def prepare_workflow_session_create(
         )
         payload["idempotency_key"] = provider_idempotency_key
     return payload, None
+
+
+async def _find_context_fork(client, *, agent_id, title, source_id):
+    after, cursors, matches = None, set(), set()
+    for _ in range(_MAX_LEGACY_SESSION_PAGES):
+        page = await client.list_sessions(agent_id=agent_id, after=after)
+        if (
+            not isinstance(page, Mapping)
+            or not isinstance(page.get("data"), list)
+            or not isinstance(page.get("has_more"), bool)
+        ):
+            raise OmnigentLaunchReconciliationError("Context fork lookup is incomplete")
+        for item in page["data"]:
+            if not isinstance(item, Mapping):
+                raise OmnigentLaunchReconciliationError(
+                    "Context fork lookup contains an invalid session"
+                )
+            if "title" not in item:
+                raise OmnigentLaunchReconciliationError("Context fork lookup omitted session titles")
+            if item.get("title") != title:
+                continue
+            labels = item.get("labels") or {}
+            if not isinstance(labels, Mapping):
+                raise OmnigentLaunchReconciliationError("Context fork lookup has invalid lineage")
+            if (
+                item.get("agent_id") != agent_id
+                or labels.get("omnigent.fork.source_id") != source_id
+                or not item.get("id")
+            ):
+                raise OmnigentLaunchReconciliationError(
+                    "Context fork lookup conflicts with its source authority"
+                )
+            matches.add(item["id"])
+        if not page["has_more"]:
+            break
+        cursor = page.get("last_id")
+        if not isinstance(cursor, str) or not cursor or cursor in cursors:
+            raise OmnigentLaunchReconciliationError(
+                "Context fork pagination did not advance"
+            )
+        cursors.add(cursor)
+        after = cursor
+    else:
+        raise OmnigentLaunchReconciliationError(
+            "Context fork lookup exceeded its page budget"
+        )
+    if len(matches) > 1:
+        raise OmnigentLaunchReconciliationError(
+            "Context fork lookup found multiple effects"
+        )
+    return next(iter(matches), None)
+
+
+async def _prepare_context_fork(
+    *,
+    payload,
+    continuation,
+    client,
+    sink,
+    bridge_session_id,
+    run_store,
+    idempotency_key,
+):
+    """Reconcile one native fork under the existing immutable phase journal."""
+    source_id = continuation["sourceSessionId"]
+    title = (
+        "MoonMind context "
+        + hashlib.sha256(sink.binding.bindingId.encode()).hexdigest()[:40]
+    )
+    phases = sink.binding.phaseResults or {}
+    session_id = bridge_session_id or getattr(sink.binding, "omnigentSessionId", None)
+    if not session_id:
+        session_id = await _find_context_fork(
+            client, agent_id=payload["agent_id"], title=title, source_id=source_id
+        )
+    if not session_id:
+        if "runtimeContextForkIntent" in phases:
+            raise OmnigentLaunchReconciliationError(
+                "Context fork delivery is unconfirmed; refusing to repeat it"
+            )
+        await sink.record_phase(
+            "runtimeContextForkIntent", {"sourceSessionId": source_id, "title": title}
+        )
+        fork_payload = {
+            key: payload[key]
+            for key in (
+                "agent_id",
+                "model_override",
+                "reasoning_effort",
+                "terminal_launch_args",
+            )
+            if key in payload
+        }
+        fork_payload.update(title=title, host_type="external")
+        for setting in ("model_override", "reasoning_effort"):
+            fork_payload.setdefault(setting, "default")
+        created = await client.fork_session(source_id, fork_payload)
+        session_id = created.get("id")
+        if not isinstance(session_id, str) or not session_id or session_id == source_id:
+            raise OmnigentLaunchReconciliationError(
+                "Context fork returned no new session identity"
+            )
+    # Persist ownership before runner launch, so cleanup and retries know the
+    # exact effect even if metadata binding or the launch acknowledgement fails.
+    await sink.session_created(session_id)
+    if run_store is not None and not bridge_session_id:
+        await run_store.attach_session(idempotency_key, session_id)
+    snapshot = await client.get_session(session_id)
+    labels = snapshot.get("labels") or {}
+    if not isinstance(labels, Mapping):
+        raise OmnigentLaunchReconciliationError("Context fork has invalid native lineage")
+    if (
+        snapshot.get("agent_id") != payload["agent_id"]
+        or labels.get("omnigent.fork.source_id") != source_id
+        or labels.get("omnigent.fork.carry_history") != "1"
+    ):
+        raise OmnigentLaunchReconciliationError(
+            "Context fork has no native history authority"
+        )
+    changes = {"labels": payload["labels"], "silent": True}
+    if "collaboration_mode" in payload:
+        changes["collaboration_mode"] = payload["collaboration_mode"]
+    await client.update_session(session_id, changes)
+    host_id, workspace = payload["host_id"], payload["workspace"]
+    bound = (sink.binding.phaseResults or {}).get("runtimeContextForkBound")
+    if bound is not None:
+        if (bound["sessionId"], bound["hostId"], bound["workspace"]) != (
+            session_id,
+            host_id,
+            workspace,
+        ):
+            raise OmnigentLaunchReconciliationError(
+                "Context fork runner conflicts with its admitted host"
+            )
+        return session_id
+    runner_id = snapshot.get("runner_id")
+    if runner_id:
+        if snapshot.get("host_id") != host_id:
+            raise OmnigentLaunchReconciliationError(
+                "Context fork runner ownership is unconfirmed"
+            )
+    else:
+        if "runtimeContextRunnerIntent" in (sink.binding.phaseResults or {}):
+            raise OmnigentLaunchReconciliationError(
+                "Context runner delivery is unconfirmed; refusing to repeat it"
+            )
+        await sink.record_phase(
+            "runtimeContextRunnerIntent",
+            {"sessionId": session_id, "hostId": host_id, "workspace": workspace},
+        )
+        launched = await client.launch_runner(
+            host_id, session_id=session_id, workspace=workspace
+        )
+        runner_id = launched.get("runner_id")
+        if not isinstance(runner_id, str) or not runner_id:
+            raise OmnigentLaunchReconciliationError(
+                "Context fork runner acknowledgement is incomplete"
+            )
+    await sink.record_phase(
+        "runtimeContextForkBound",
+        {
+            "sessionId": session_id,
+            "hostId": host_id,
+            "workspace": workspace,
+            "runnerId": runner_id,
+        },
+    )
+    return session_id

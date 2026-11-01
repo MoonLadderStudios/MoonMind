@@ -99,8 +99,15 @@ class OmnigentRuntimeEnvironmentService:
         needs_fanout = EXECUTION_FANOUT_REQUIRED_CAPABILITY in required_capabilities
         needs_containers = "docker" in required_capabilities
         needs_jira_tools = requires_jira_tools(required_capabilities)
+        context_environment = {}
+        if (
+            plan.payload.harnessId == "codex-native"
+            and request.step_execution is not None
+            and request.step_execution.runtime_session_context is not None
+        ):
+            context_environment["MOONMIND_CODEX_REQUIRE_CONTEXT"] = "1"
         if not needs_fanout and not needs_containers and not needs_jira_tools:
-            return deployment_project_environment()
+            return {**deployment_project_environment(), **context_environment}
         try:
             require_execution_fanout_authorization(
                 required_capabilities,
@@ -230,7 +237,7 @@ class OmnigentRuntimeEnvironmentService:
             environment["MOONMIND_REPOSITORY_CONNECTION_REF"] = (
                 repository_connection_ref
             )
-        return environment
+        return {**environment, **context_environment}
 
 
 __all__ = ["OmnigentRuntimeEnvironmentService"]

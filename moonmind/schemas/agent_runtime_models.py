@@ -573,6 +573,21 @@ class CanonicalTurnLineage(BaseModel):
         )
 
 
+class RuntimeSessionContextReference(BaseModel):
+    """Controller-carried reference to one completed shared native context."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    workflow_id: str = Field(alias="workflowId", min_length=1)
+    run_id: str = Field(alias="runId", min_length=1)
+    step_execution_id: str = Field(alias="stepExecutionId", min_length=1)
+    runtime_binding_ref: str = Field(
+        alias="runtimeBindingRef",
+        pattern=r"^omnigent-runtime-binding:sha256:[0-9a-f]{64}$",
+    )
+    epoch: str = Field(min_length=1, max_length=512)
+
+
 class AgentRuntimeStepExecutionLaunch(BaseModel):
     """Compact adapter-visible launch envelope for one Step Execution."""
 
@@ -587,6 +602,9 @@ class AgentRuntimeStepExecutionLaunch(BaseModel):
     reason: str = Field("initial_execution", min_length=1)
     runtime_context_policy: RuntimeContextPolicy = Field(
         ..., alias="runtimeContextPolicy"
+    )
+    runtime_session_context: RuntimeSessionContextReference | None = Field(
+        None, alias="runtimeSessionContext", exclude_if=lambda value: value is None
     )
     context_bundle_ref: str | None = Field(None, alias="contextBundleRef")
     context_bundle_digest: str | None = Field(None, alias="contextBundleDigest")
@@ -686,6 +704,7 @@ class AgentRuntimeStepExecutionLaunch(BaseModel):
                 field_name="stepExecution.resolvedSkillsetRef",
             )
         return self
+
 
 class RuntimeCommandInvocation(BaseModel):
     """Compact backend-normalized runtime command metadata for launch rendering."""

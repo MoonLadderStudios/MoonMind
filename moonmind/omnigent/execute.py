@@ -2931,6 +2931,7 @@ async def run_omnigent_execution(
                     bridge=durable_row,
                     run_store=run_store,
                     provider_idempotency_key=request.idempotency_key,
+                    session_authority_sink=session_authority_sink,
                 )
                 session_payload["labels"].setdefault("moonmind.issue", "MM-1059")
                 if recovered_id:
