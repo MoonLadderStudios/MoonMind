@@ -1576,7 +1576,17 @@ async def assert_native_turn_saved_and_cleaned(
     )
     messages = [event for event in server.events if event.get("type") == "message"]
     assert len(messages) == expected_messages
-    assert request.parameters["omnigent"]["prompt"]["text"] in messages[0]["data"]["content"][0]["text"]
+    # The harness renderer owns blank lines around a native command. Preserve
+    # the admitted content and line order without requiring its input spacing.
+    expected_prompt = "\n".join(
+        line for line in request.parameters["omnigent"]["prompt"]["text"].splitlines()
+        if line.strip()
+    )
+    rendered_prompt = "\n".join(
+        line for line in messages[0]["data"]["content"][0]["text"].splitlines()
+        if line.strip()
+    )
+    assert expected_prompt in rendered_prompt
     if getattr(journey, "env_bundle", False):
         for name, value in {
             "API_TIMEOUT_MS": "3000000",
