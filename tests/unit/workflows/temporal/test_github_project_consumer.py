@@ -419,6 +419,93 @@ async def test_phase_sync_recovers_a_lost_ack_without_repeating_effect(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["code_review", "closed"])
+async def test_verified_transition_survives_an_issue_read_failure(
+    provider, project_store, monkeypatch, phase
+):
+    from moonmind.workflows.temporal import github_project
+
+    receipt = await bound_claim(provider, project_store)
+    read_issue = github_project._read_issue
+
+    async def fail_after_durable_evidence(*_args):
+        saved = (await project_store.get(receipt.owner)).project_binding_json
+        if phase == "code_review":
+            assert saved["reviewCandidate"]["headSha"] == "a" * 40
+        else:
+            assert saved["completionVerified"] is True
+        raise github_project.ProjectError(
+            "project_read_incomplete", "Fixture read failure"
+        )
+
+    monkeypatch.setattr(
+        github_project,
+        "_read_issue",
+        fail_after_durable_evidence,
+    )
+    handoff = (
+        {
+            "prUrl": f"https://github.com/{REPOSITORY}/pull/7",
+            "prHead": "a" * 40,
+            "prBase": "main",
+        }
+        if phase == "code_review"
+        else {}
+    )
+    first = await github_project.sync_claim_project(
+        project_store,
+        receipt,
+        GitHubService(),
+        lifecycle_result={
+            "lifecycleSettled": phase,
+            "mutationOutcome": "applied",
+            "attemptHandoff": handoff,
+        },
+    )
+    assert first["status"] == "pending"
+    assert first["reasonCode"] == "project_read_incomplete"
+    restarted = await project_store.get(receipt.owner)
+    if phase == "code_review":
+        assert restarted.project_binding_json["reviewCandidate"]["headSha"] == "a" * 40
+    else:
+        assert restarted.project_binding_json["completionVerified"] is True
+        assert "reviewCandidate" not in restarted.project_binding_json
+    monkeypatch.setattr(github_project, "_read_issue", read_issue)
+    provider.issues[1] = issue(1, state="closed", state_reason="completed")
+    service = GitHubService()
+    monkeypatch.setattr(
+        service,
+        "read_pull_request",
+        AsyncMock(
+            return_value={
+                "number": 7,
+                "state": "closed",
+                "merged": True,
+                "merge_commit_sha": "c" * 40,
+                "title": "Fix o/r#1",
+                "body": "Closes o/r#1",
+                "base": {"ref": "main", "repo": {"full_name": REPOSITORY}},
+                "head": {
+                    "ref": "feature",
+                    "sha": "a" * 40,
+                    "repo": {"full_name": REPOSITORY},
+                },
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "read_repository_target",
+        AsyncMock(return_value={"ref": "refs/heads/main", "revision": "c" * 40}),
+    )
+    result = await github_project.sync_claim_project(project_store, restarted, service)
+    assert result["status"] == "confirmed", result
+    assert provider.items[0]["column"]["optionId"] == "done"
+    if phase == "closed":
+        service.read_pull_request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "label,option",
     [
@@ -457,6 +544,29 @@ async def test_manual_move_suspends_sync_instead_of_overwriting_it(
     assert result["reasonCode"] == "project_operator_move"
     assert not provider.mutations
     assert (await project_store.get(receipt.owner)).project_binding_json["suspended"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("after_success", [False, True])
+async def test_cleared_column_is_preserved_as_an_operator_move(
+    provider, project_store, after_success
+):
+    from moonmind.workflows.temporal.github_project import sync_claim_project
+
+    receipt = await bound_claim(provider, project_store)
+    provider.issues[1] = issue(1, labels=[{"name": "status: in-progress"}])
+    if after_success:
+        assert (await sync_claim_project(project_store, receipt, GitHubService()))[
+            "status"
+        ] == "confirmed"
+        receipt = await project_store.get(receipt.owner)
+        provider.issues[1] = issue(1, labels=[{"name": "status: code-review"}])
+    provider.items[0]["column"]["optionId"] = None
+    mutations = len(provider.mutations)
+    result = await sync_claim_project(project_store, receipt, GitHubService())
+    assert result["reasonCode"] == "project_operator_move"
+    assert len(provider.mutations) == mutations
+    assert provider.items[0]["column"]["optionId"] is None
 
 
 @pytest.mark.asyncio
@@ -540,6 +650,7 @@ async def test_late_merge_uses_exact_candidate_and_completion_target(
         receipt,
         GitHubService(),
         lifecycle_result={
+            "lifecycleSettled": "code_review",
             "mutationOutcome": "applied",
             "attemptHandoff": candidate,
         },

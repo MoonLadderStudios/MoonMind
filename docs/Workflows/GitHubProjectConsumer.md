@@ -73,16 +73,17 @@ the existing trusted completion decision, or a later completed issue closure who
 recorded verified PR/head is confirmed merged into the intended destination. A
 not-planned closure never becomes Done. Project updates cannot grant merge authority.
 
-Claim receipts retain the selected item, field/option IDs, completion target, and
-pending synchronization across restarts. Retries keep that issue and reuse its
-work. Lost update acknowledgements are reread before another mutation. The existing
-periodic issue maintenance retries pending updates and observes later completion;
-board failures remain separate from implementation outcomes. A newer local issue
-owner retires the predecessor's projection. Unexpected external column moves
-suspend further writes, with diagnostics. Returning the item to its last managed
-column or current lifecycle destination allows synchronization to resume.
-GitHub field updates provide no atomic
-ownership check, so a move concurrent with an already submitted request can race.
+Claim receipts retain the selected item, field/option IDs, completion target,
+verified review/completion evidence, and pending synchronization across restarts.
+Trusted transition evidence is saved before provider reads. Retries keep that issue
+and reuse its work. Lost update acknowledgements are reread before another mutation.
+The existing periodic issue maintenance retries pending updates and observes later
+completion; board failures remain separate from implementation outcomes. A newer
+local issue owner retires the predecessor's projection. External moves, including
+clearing the column, suspend further writes, with diagnostics. Returning the item
+to its last managed column or current lifecycle destination allows synchronization
+to resume. GitHub field updates provide no atomic ownership check, so a move
+concurrent with an already submitted request can race.
 
 ## Access and scheduling
 
