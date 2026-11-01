@@ -9,6 +9,7 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformFailure,
 )
 from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
+from moonmind.omnigent.host_services.launcher import clear_runtime_capability_files
 
 # The ephemeral host container is the only place the runner and harness log
 # why a turn was dropped, rejected, or crashed. Capture a bounded tail before
@@ -24,8 +25,10 @@ _HOST_LOG_TRUNCATION_MARKER = "[moonmind: earlier host log output truncated]\n"
 
 
 class DockerOmnigentHostCleanupService:
-    def __init__(self, backend: DockerCommandBackend) -> None:
+
+    def __init__(self, backend: DockerCommandBackend, *, static_hosts=None) -> None:
         self._backend = backend
+        self._static_hosts = static_hosts
 
     async def _capture_host_logs(self, container_name: str) -> dict[str, Any]:
         """Return the bounded, redacted stdout/stderr tail of one host.
@@ -77,6 +80,8 @@ class DockerOmnigentHostCleanupService:
         host_lease_generation: int,
         state_volume_ref: str,
         control_volume_ref: str | None = None,
+        static_host_id: str | None = None,
+        static_host_image_ref: str | None = None,
     ) -> dict[str, Any]:
         host_logs: dict[str, Any] = {}
         code, out, inspect_err = await self._backend.run(
@@ -96,6 +101,32 @@ class DockerOmnigentHostCleanupService:
                     "stale owner cannot clean a newer Omnigent host",
                     code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
                 )
+            if static_host_id:
+                if self._static_hosts is None:
+                    raise HarnessPlatformError(
+                        "static host drain is unavailable",
+                        code=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED,
+                    )
+                await self._static_hosts.assert_quiescent(static_host_id)
+                if control_volume_ref:
+                    _code, image, _error = await self._backend.run(
+                        ["docker", "inspect", "--format", "{{.Image}}", container_name]
+                    )
+                    await clear_runtime_capability_files(
+                        self._backend,
+                        control_volume=control_volume_ref,
+                        image_ref=image.strip(),
+                    )
+                return {
+                    "daemonObserved": True,
+                    "containerRemoved": False,
+                    "stateVolumeRemoved": False,
+                    "controlVolumeRemoved": False,
+                    "staticHostDrained": True,
+                    "hostLeaseRef": host_lease_ref,
+                    "hostLeaseGeneration": host_lease_generation,
+                    **await self._capture_host_logs(container_name),
+                }
             host_logs = await self._capture_host_logs(container_name)
             code, _out, _err = await self._backend.run(
                 ["docker", "rm", "-f", container_name], check=False
@@ -110,6 +141,22 @@ class DockerOmnigentHostCleanupService:
                 "host container cleanup inspection is deferred",
                 code=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED,
             )
+        if static_host_id:
+            await clear_runtime_capability_files(
+                self._backend,
+                control_volume=control_volume_ref,
+                image_ref=static_host_image_ref,
+            )
+            # No container means no credential consumer. Persistent state and
+            # its control mount belong to this physical service, not the run.
+            return {
+                "daemonObserved": True,
+                "containerRemoved": False,
+                "stateVolumeRemoved": False,
+                "staticHostDrained": True,
+                "alreadyAbsent": True,
+                "hostLeaseRef": host_lease_ref,
+            }
         code, out, inspect_err = await self._backend.run(
             [
                 "docker",

@@ -48,7 +48,7 @@ def test_binding_enforces_one_durable_host_configuration_per_profile() -> None:
     assert table.c.credential_mount_template_json.nullable is False
 
 
-def test_host_lease_enforces_one_active_record_per_profile_and_provider_lease() -> None:
+def test_host_lease_separates_allocation_history_from_active_exclusion() -> None:
     table = OmnigentOAuthHostLeaseRecord.__table__
     unique_columns = {
         tuple(column.name for column in constraint.columns)
@@ -56,9 +56,13 @@ def test_host_lease_enforces_one_active_record_per_profile_and_provider_lease() 
         if constraint.__class__.__name__ == "UniqueConstraint"
     }
     assert ("provider_profile_id",) not in unique_columns
-    assert ("provider_lease_id",) in unique_columns
+    assert ("provider_lease_id",) not in unique_columns
     assert ("idempotency_key",) in unique_columns
     assert table.c.credential_generation.nullable is False
+    assert any(
+        index.name == "ux_omnigent_oauth_host_lease_static_scope" and index.unique
+        for index in table.indexes
+    )
     assert any(
         index.name == "ix_omnigent_oauth_host_lease_expiry"
         and tuple(column.name for column in index.columns) == ("expires_at",)

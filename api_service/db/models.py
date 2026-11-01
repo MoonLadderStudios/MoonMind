@@ -4332,9 +4332,6 @@ class OmnigentOAuthHostLeaseRecord(Base):
 
     __tablename__ = "omnigent_oauth_host_leases"
     __table_args__ = (
-        UniqueConstraint(
-            "provider_lease_id", name="uq_omnigent_oauth_host_provider_lease"
-        ),
         UniqueConstraint("idempotency_key", name="uq_omnigent_oauth_host_idempotency"),
         CheckConstraint(
             "status IN ('allocating','starting','ready','assigned','draining','stopped','failed')",
@@ -4373,6 +4370,17 @@ class OmnigentOAuthHostLeaseRecord(Base):
             ),
         ),
         Index("ix_omnigent_oauth_host_lease_profile", "provider_profile_id"),
+        Index(
+            "ux_omnigent_oauth_host_lease_static_scope",
+            "static_scope_ref",
+            unique=True,
+            sqlite_where=text(
+                "status IN ('allocating','starting','ready','assigned','draining') OR (status = 'failed' AND cleanup_completed_at IS NULL)"
+            ),
+            postgresql_where=text(
+                "status IN ('allocating','starting','ready','assigned','draining') OR (status = 'failed' AND cleanup_completed_at IS NULL)"
+            ),
+        ),
         Index("ix_omnigent_oauth_host_lease_workflow", "holder_workflow_id"),
         Index("ix_omnigent_oauth_host_lease_expiry", "expires_at"),
     )
@@ -4384,6 +4392,7 @@ class OmnigentOAuthHostLeaseRecord(Base):
         nullable=False,
     )
     provider_lease_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    static_scope_ref: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     binding_ref: Mapped[str] = mapped_column(String(255), nullable=False)
     credential_generation: Mapped[int] = mapped_column(Integer, nullable=False)
     # Embedded host/server authentication is intentionally distinct from the

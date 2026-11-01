@@ -350,6 +350,17 @@ def resolve_policy_image_refs(policy: OmnigentLaunchPolicy) -> tuple[str, str]:
     return server_ref, host_ref
 
 
+def seal_effective_launch_snapshot(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Address a trusted launch payload without changing historical encoding."""
+    result = dict(payload)
+    result.pop("snapshotRef", None)
+    canonical = json.dumps(result, sort_keys=True, separators=(",", ":"))
+    result["snapshotRef"] = (
+        "omnigent-launch:sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+    )
+    return result
+
+
 def compile_effective_launch(
     *, profile_ref: str, policy_ref: str | None, provider_profile_id: str
 ) -> dict[str, Any]:
@@ -411,11 +422,7 @@ def compile_effective_launch(
         "egressCleanupAuthorityRequired": True,
         "capture": {**profile.capture_defaults, **policy.capture},
     }
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    payload["snapshotRef"] = (
-        "omnigent-launch:sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
-    )
-    return payload
+    return seal_effective_launch_snapshot(payload)
 
 
 def validate_effective_launch_snapshot(snapshot: Mapping[str, Any]) -> None:
@@ -423,10 +430,7 @@ def validate_effective_launch_snapshot(snapshot: Mapping[str, Any]) -> None:
 
     payload = dict(snapshot)
     supplied_ref = str(payload.pop("snapshotRef", ""))
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    expected_ref = (
-        "omnigent-launch:sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
-    )
+    expected_ref = seal_effective_launch_snapshot(payload)["snapshotRef"]
     if supplied_ref != expected_ref:
         raise OmnigentOAuthHostError(
             "effective launch snapshot digest does not match its content",

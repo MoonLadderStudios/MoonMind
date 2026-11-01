@@ -312,6 +312,7 @@ class HostClassTemplate:
     # The OpenCode harness needs its plugin closure and a server/host pair
     # the bootstrap judged compatible, whichever image variable serves it.
     requires_opencode_qualification: bool = False
+    host_modes: tuple[str, ...] = ("on-demand", "on_demand_docker")
 
     @property
     def ref(self) -> str:
@@ -364,6 +365,12 @@ DEFAULT_HOST_CLASS_TEMPLATES: tuple[HostClassTemplate, ...] = (
             "none@1",
         ),
         runtime_pack_ref="codex-native-pack@1",
+        host_modes=(
+            "on-demand",
+            "on_demand_docker",
+            "static-connected",
+            "static_compose",
+        ),
     ),
     HostClassTemplate(
         host_class_id="omnigent-claude",
@@ -379,6 +386,12 @@ DEFAULT_HOST_CLASS_TEMPLATES: tuple[HostClassTemplate, ...] = (
             "none@1",
         ),
         runtime_pack_ref="claude-native-pack@1",
+        host_modes=(
+            "on-demand",
+            "on_demand_docker",
+            "static-connected",
+            "static_compose",
+        ),
     ),
     HostClassTemplate(
         host_class_id="omnigent-opencode",
@@ -482,7 +495,7 @@ class OmnigentHostClassSelector:
                     f"{template.ref}: materializers unsupported: {unsupported}"
                 )
                 continue
-            if requested_host_mode not in {"on-demand", "on_demand_docker"}:
+            if requested_host_mode not in template.host_modes:
                 reasons.append(
                     f"{template.ref}: host mode {requested_host_mode} unsupported"
                 )

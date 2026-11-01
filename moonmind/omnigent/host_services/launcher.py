@@ -80,7 +80,51 @@ _CAPABILITY_BEARER_FILES = {
 }
 
 
+async def clear_runtime_capability_files(backend, *, control_volume, image_ref):
+    """Clear run capabilities without touching host authentication or state."""
+    if not control_volume:
+        return
+    code, _out, error = await backend.run(
+        ["docker", "volume", "inspect", "--format", "{{.Name}}", control_volume],
+        check=False,
+    )
+    if code != 0:
+        if "no such" in error.lower():
+            return
+        raise HarnessPlatformError(
+            "static control inspection is deferred",
+            code=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED,
+        )
+    if not image_ref:
+        raise HarnessPlatformError(
+            "static control cleanup image is unavailable",
+            code=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED,
+        )
+    files = " ".join(
+        "/control/" + filename for filename in _CAPABILITY_BEARER_FILES.values()
+    )
+    await backend.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--user",
+            "0:0",
+            "--mount",
+            f"type=volume,src={control_volume},dst=/control",
+            "--entrypoint",
+            "/bin/sh",
+            image_ref,
+            "-ceu",
+            f"rm -f {files} /control/.*.next",
+        ]
+    )
+
+
 class DockerOmnigentHostLauncher:
+
     def __init__(
         self,
         *,
@@ -88,8 +132,10 @@ class DockerOmnigentHostLauncher:
         runtime_scripts: OmnigentRuntimeScriptService,
         server_url: str | None = None,
         host_api_token: str | None = None,
+        static_hosts: Any | None = None,
     ) -> None:
         self._backend = backend
+        self._static_hosts = static_hosts
         self._scripts = runtime_scripts
         self._host_api_token = str(host_api_token or "")
         self._server_url = str(
@@ -133,6 +179,16 @@ class DockerOmnigentHostLauncher:
             "targetPath": "/run/moonmind-host-auth",
             "accessMode": "read-only",
         }
+
+    async def resolve_launch_spec(self, spec: HostLaunchSpec) -> HostLaunchSpec:
+        if spec.runtime.get("staticHostSelection") is None:
+            return spec
+        if self._static_hosts is None:
+            raise HarnessPlatformError(
+                "static host attachment is unavailable",
+                code=HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY,
+            )
+        return await self._static_hosts.resolve_spec(spec)
 
     async def _write_capability_file(
         self,
@@ -341,6 +397,7 @@ class DockerOmnigentHostLauncher:
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
         container_name = spec.correlationName
+        static = spec.runtime.get("staticHostSelection") is not None
         cpu_millis = int(launch_policy.limits["cpuMillis"])
         if cpu_millis < 1:
             raise HarnessPlatformError(
@@ -406,12 +463,18 @@ class DockerOmnigentHostLauncher:
                 "docker",
                 "volume",
                 "create",
-                "--label",
-                "moonmind.owner=generic-omnigent-host",
-                "--label",
-                f"moonmind.host_lease_ref={spec.hostLeaseRef}",
-                "--label",
-                f"moonmind.host_lease_generation={spec.hostLeaseGeneration}",
+                *(
+                    []
+                    if static
+                    else [
+                        "--label",
+                        "moonmind.owner=generic-omnigent-host",
+                        "--label",
+                        f"moonmind.host_lease_ref={spec.hostLeaseRef}",
+                        "--label",
+                        f"moonmind.host_lease_generation={spec.hostLeaseGeneration}",
+                    ]
+                ),
                 state_volume,
             ]
         )
@@ -431,6 +494,15 @@ class DockerOmnigentHostLauncher:
                         control_volume,
                     ]
                 )
+                if static:
+                    # A resident service reuses its physical control mount.
+                    # Clear every prior run capability before publishing this
+                    # admission's files; an absent new capability stays absent.
+                    await clear_runtime_capability_files(
+                        self._backend,
+                        control_volume=control_volume,
+                        image_ref=launch_image,
+                    )
                 if self._host_api_token:
                     await self._backend.run(
                         [
@@ -480,13 +552,14 @@ class DockerOmnigentHostLauncher:
                 ]
             )
         except BaseException:
-            if control_volume:
+            if not static:
+                if control_volume:
+                    await self._backend.run(
+                        ["docker", "volume", "rm", control_volume], check=False
+                    )
                 await self._backend.run(
-                    ["docker", "volume", "rm", control_volume], check=False
+                    ["docker", "volume", "rm", state_volume], check=False
                 )
-            await self._backend.run(
-                ["docker", "volume", "rm", state_volume], check=False
-            )
             raise
         for key, (filename, bearer) in capability_bearers.items():
             if bearer:
@@ -539,12 +612,16 @@ class DockerOmnigentHostLauncher:
             "--user",
             f"{host_class.runtime.get('uid', 1000)}:{host_class.runtime.get('gid', 1000)}",
         ]
+        if host_class.features.get("readOnlyRoot"):
+            command.append("--read-only")
         command.extend(cpu_args)
         for key, value in sorted(spec.labels.items()):
             command.extend(["--label", f"{key}={value}"])
         environment = {
             **runtime_environment,
-            "OMNIGENT_HOST_NAME": container_name,
+            "OMNIGENT_HOST_NAME": str(
+                spec.runtime.get("staticHostName") or container_name
+            ),
         }
         # The upstream Omnigent CLI treats managed-host launches as
         # (host_id, host_name) pairs: setting only one crashes identity
@@ -611,17 +688,25 @@ class DockerOmnigentHostLauncher:
             ]
         )
         try:
-            _code, container_id, _err = await self._backend.run(command)
-            await self._backend.run(["docker", "start", container_name])
-        except BaseException:
-            await self._backend.run(["docker", "rm", "-f", container_name], check=False)
-            await self._backend.run(
-                ["docker", "volume", "rm", state_volume], check=False
-            )
-            if control_volume:
-                await self._backend.run(
-                    ["docker", "volume", "rm", control_volume], check=False
+            if static:
+                container_id = await self._static_hosts.launch(
+                    spec=spec, command=command
                 )
+            else:
+                _code, container_id, _err = await self._backend.run(command)
+                await self._backend.run(["docker", "start", container_name])
+        except BaseException:
+            if not static:
+                await self._backend.run(
+                    ["docker", "rm", "-f", container_name], check=False
+                )
+                await self._backend.run(
+                    ["docker", "volume", "rm", state_volume], check=False
+                )
+                if control_volume:
+                    await self._backend.run(
+                        ["docker", "volume", "rm", control_volume], check=False
+                    )
             raise
         return {
             "containerId": container_id.strip(),

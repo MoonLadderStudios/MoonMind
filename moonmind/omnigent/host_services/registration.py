@@ -214,6 +214,7 @@ class OmnigentHostRegistrationService:
         harness_id: str,
         credentialless: bool = False,
         expected_host_id: str | None = None,
+        expected_host_name: str | None = None,
     ) -> dict[str, Any]:
         """Wait for the exact launched host to register ready.
 
@@ -238,6 +239,7 @@ class OmnigentHostRegistrationService:
                     harness_id=harness_id,
                     credentialless=credentialless,
                     expected_host_id=expected_host_id,
+                    expected_host_name=expected_host_name,
                 )
             finally:
                 record_safely(
@@ -304,6 +306,7 @@ class OmnigentHostRegistrationService:
         harness_id: str,
         credentialless: bool,
         expected_host_id: str,
+        expected_host_name: str | None = None,
     ) -> dict[str, Any]:
         from moonmind.workflows.adapters.omnigent_client import OmnigentClientError
 
@@ -324,7 +327,7 @@ class OmnigentHostRegistrationService:
                 verified = self._verify_targeted_host(
                     host,
                     expected_host_id=expected_host_id,
-                    correlation_name=correlation_name,
+                    correlation_name=expected_host_name or correlation_name,
                     harness_id=harness_id,
                     credentialless=credentialless,
                 )
