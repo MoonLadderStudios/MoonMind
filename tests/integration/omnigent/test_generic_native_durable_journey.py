@@ -56,6 +56,7 @@ from moonmind.omnigent.harness_platform.catalog_service import (
 )
 from moonmind.omnigent.host_services import docker_backend
 from moonmind.omnigent.runtime_bindings import RuntimeBindingState, stable_binding_id
+from moonmind.provider_profiles.isolation_policy import derive_isolation_policy
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
@@ -869,7 +870,14 @@ class AdmittedManager(HermeticProviderLeases):
         return Handle()
 
 
-async def _compile_plan(session_factory, harness, workflow_id, *, api_key=False):
+async def _compile_plan(
+    session_factory,
+    harness,
+    workflow_id,
+    *,
+    api_key=False,
+    env_bundle=False,
+):
     # Reuse the durable Skill producer, then expose its immutable body through
     # the real deployment catalog. Admission must resolve and persist its own
     # exact manifest; no Skill resolver or runtime materializer is substituted.
@@ -883,7 +891,11 @@ async def _compile_plan(session_factory, harness, workflow_id, *, api_key=False)
         "claude": "claude_code",
         "opencode": "opencode",
     }[profile_name]
-    provider_id = "anthropic" if profile_name == "claude" else "openai"
+    provider_id = (
+        "minimax"
+        if env_bundle
+        else "anthropic" if profile_name == "claude" else "openai"
+    )
     capabilities = provider_profile_creation_capabilities(
         runtime_id=runtime_id, provider_id=provider_id
     )
@@ -899,6 +911,29 @@ async def _compile_plan(session_factory, harness, workflow_id, *, api_key=False)
     fields["runtime_materialization_mode"] = RuntimeMaterializationMode(
         fields["runtime_materialization_mode"]
     )
+    if api_key and not env_bundle:
+        # Guided API-key setup stores the strategy's key mapping, exactly as the
+        # Provider Profile API-key action writes it.
+        strategy = provider_api_key_strategy(runtime_id, provider_id)
+        fields["env_template"] = {
+            strategy.env_key: {"from_secret_ref": strategy.secret_role}
+        }
+    if env_bundle:
+        isolation = derive_isolation_policy(
+            runtime_id=runtime_id,
+            provider_id=provider_id,
+            authentication_method="api_key",
+            credential_source=fields["credential_source"],
+            runtime_materialization_mode=fields["runtime_materialization_mode"],
+        )
+        fields["clear_env_keys"] = list(isolation.keys)
+        fields["env_template"] = {
+            "ANTHROPIC_AUTH_TOKEN": {"from_secret_ref": "provider_api_key"},
+            "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
+            "API_TIMEOUT_MS": "3000000",
+            "ANTHROPIC_SMALL_FAST_MODEL": "model",
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        }
     profile = ManagedAgentProviderProfile(
         profile_id=PROFILE,
         runtime_id=runtime_id,
@@ -909,18 +944,6 @@ async def _compile_plan(session_factory, harness, workflow_id, *, api_key=False)
         secret_refs={
             role["role"]: "env://NATIVE_JOURNEY_KEY" for role in method["secret_roles"]
         },
-        # Guided API-key setup stores the strategy's key mapping, exactly as the
-        # Provider Profile API-key action writes it.
-        **(
-            {
-                "env_template": {
-                    strategy.env_key: {"from_secret_ref": strategy.secret_role}
-                    for strategy in [provider_api_key_strategy(runtime_id, provider_id)]
-                }
-            }
-            if api_key
-            else {}
-        ),
         credential_generation=3,
         max_parallel_runs=1,
         enabled=True,
@@ -1012,8 +1035,9 @@ async def native_journey(
     )
     # ``<harness>-api-key`` is that harness's journey with an API-key Provider
     # Profile created by the guided Profile surface.
-    api_key = request.param.endswith("-api-key")
-    harness = request.param.removesuffix("-api-key")
+    env_bundle = request.param.endswith("-env-bundle")
+    api_key = request.param.endswith("-api-key") or env_bundle
+    harness = request.param.removesuffix("-api-key").removesuffix("-env-bundle")
     # These are default-path journeys, independent of the test runner's rollout
     # configuration. Credential readiness and real plan authority stay intact.
     for key in (
@@ -1057,7 +1081,11 @@ async def native_journey(
             synchronized["catalogRef"]
         )
         compiled = await _compile_plan(
-            session_factory, harness, workflow_id, api_key=api_key
+            session_factory,
+            harness,
+            workflow_id,
+            api_key=api_key,
+            env_bundle=env_bundle,
         )
         # Verify the public HTTP enums survive discovery, alongside the real
         # deployment overlay's native OAuth/API-key admission contracts.
@@ -1213,6 +1241,7 @@ async def native_journey(
             worker_root=worker_root,
             harness=harness,
             api_key=api_key,
+            env_bundle=env_bundle,
         )
     finally:
         await running.runner.cleanup()
@@ -1225,6 +1254,8 @@ async def native_journey(
         ("claude-native", "idle"),
         ("claude-native-api-key", "idle"),
         ("claude-native-api-key", "failed"),
+        ("claude-native-env-bundle", "idle"),
+        ("claude-native-env-bundle", "failed"),
         ("codex-native-api-key", "idle"),
         ("codex-native-api-key", "failed"),
         ("opencode-native", "idle"),
@@ -1295,6 +1326,16 @@ async def assert_native_turn_saved_and_cleaned(
     messages = [event for event in server.events if event.get("type") == "message"]
     assert len(messages) == expected_messages
     assert "Generate a report." in messages[0]["data"]["content"][0]["text"]
+    if getattr(journey, "env_bundle", False):
+        for name, value in {
+            "API_TIMEOUT_MS": "3000000",
+            "ANTHROPIC_SMALL_FAST_MODEL": "model",
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        }.items():
+            assert docker.launch_env[name] == value
+            assert name in docker.launch_env["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(
+                ","
+            )
     assert "sessions.stream" in server.route_calls
     assert not server.host_alive
     assert docker.volumes == {"journey_oauth": {}}
@@ -1340,6 +1381,8 @@ async def assert_native_turn_saved_and_cleaned(
             "claude-native": ("anthropic", "https://api.anthropic.com"),
             "codex-native": ("openai", "https://api.openai.com/v1"),
         }[journey.harness]
+        if getattr(journey, "env_bundle", False):
+            base_url = "https://api.minimax.io/anthropic"
         assert docker.auth_json == {
             "providers": {
                 "moonmind": {
@@ -1435,7 +1478,9 @@ async def assert_native_turn_saved_and_cleaned(
 
 
 @pytest.mark.parametrize(
-    "native_journey", ["claude-native-api-key", "codex-native-api-key"], indirect=True
+    "native_journey",
+    ["claude-native-api-key", "claude-native-env-bundle", "codex-native-api-key"],
+    indirect=True,
 )
 async def test_api_key_route_cancellation_cleans_owned_host_and_provider_config(
     native_journey, monkeypatch
@@ -1493,7 +1538,9 @@ async def test_api_key_route_cancellation_cleans_owned_host_and_provider_config(
 
 
 @pytest.mark.parametrize(
-    "native_journey", ["claude-native-api-key", "codex-native-api-key"], indirect=True
+    "native_journey",
+    ["claude-native-api-key", "claude-native-env-bundle", "codex-native-api-key"],
+    indirect=True,
 )
 async def test_api_key_successor_restores_saved_work_with_fresh_provider_config(
     native_journey, monkeypatch
