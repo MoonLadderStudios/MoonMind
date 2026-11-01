@@ -33,10 +33,11 @@ interchangeable responsibilities.
 Static Codex and Claude admission freezes the configured binding in the signed
 launch artifact. Reconfiguration cannot retarget queued work. Static allocation
 uses the existing physical lease ledger, excluding retained leases and other
-Profiles from the same Compose role. Complete native session inventory must
-show no live consumers before reattachment or drain; unknown observations defer
-cleanup. A successor has a separate allocation record even when its workflow
-retains the same provider capacity grant.
+Profiles from the same Compose role. A failed replacement can release its
+allocation only after observing the unchanged pre-launch container. Complete
+native session inventory must show no live consumers before reattachment or
+drain; unknown observations defer cleanup. A successor has a separate allocation
+record even when its workflow retains the same provider capacity grant.
 
 ## Limitations
 

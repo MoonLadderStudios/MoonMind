@@ -50,7 +50,9 @@ class DockerOmnigentHostCleanupService:
                 timeout_seconds=_HOST_LOG_TIMEOUT_SECONDS,
                 output_limit_bytes=None,
             )
-        except Exception as exc:  # noqa: BLE001 - evidence capture must not block cleanup
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - evidence capture must not block cleanup
             return {"hostLogsCaptureError": f"{type(exc).__name__}: {exc}"[:512]}
         if code != 0:
             return {
@@ -60,7 +62,11 @@ class DockerOmnigentHostCleanupService:
             }
         # ``docker logs`` interleaves the container's stdout and stderr on the
         # matching CLI streams; keep both so harness stderr is not lost.
-        text = out if not err else f"{out}{'' if out.endswith(chr(10)) or not out else chr(10)}{err}"
+        text = (
+            out
+            if not err
+            else f"{out}{'' if out.endswith(chr(10)) or not out else chr(10)}{err}"
+        )
         encoded = text.encode("utf-8", errors="replace")
         truncated = len(encoded) > _HOST_LOG_RETAINED_BYTES
         if truncated:
@@ -82,21 +88,34 @@ class DockerOmnigentHostCleanupService:
         control_volume_ref: str | None = None,
         static_host_id: str | None = None,
         static_host_image_ref: str | None = None,
+        static_previous_container_id: str | None = None,
     ) -> dict[str, Any]:
         host_logs: dict[str, Any] = {}
+        ownership_format = '{{ index .Config.Labels "moonmind.host_lease_ref" }}|{{ index .Config.Labels "moonmind.host_lease_generation" }}'
+        if static_host_id and static_previous_container_id:
+            ownership_format = "{{.Id}}|" + ownership_format
         code, out, inspect_err = await self._backend.run(
             [
                 "docker",
                 "container",
                 "inspect",
                 "--format",
-                '{{ index .Config.Labels "moonmind.host_lease_ref" }}|{{ index .Config.Labels "moonmind.host_lease_generation" }}',
+                ownership_format,
                 container_name,
             ],
             check=False,
         )
         if code == 0:
-            if out.strip() != f"{host_lease_ref}|{host_lease_generation}":
+            owner = out.strip()
+            previous_unchanged = False
+            if static_host_id and static_previous_container_id:
+                container_id, _, owner = owner.partition("|")
+                previous_unchanged = container_id == static_previous_container_id
+            launch_not_observed = owner != f"{host_lease_ref}|{host_lease_generation}"
+            # A failed launch may leave the prior resident in place. Only its
+            # exact pre-launch identity can settle this unlaunched allocation;
+            # mismatching successor labels and IDs still reject stale cleanup.
+            if launch_not_observed and not previous_unchanged:
                 raise HarnessPlatformError(
                     "stale owner cannot clean a newer Omnigent host",
                     code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
@@ -123,6 +142,7 @@ class DockerOmnigentHostCleanupService:
                     "stateVolumeRemoved": False,
                     "controlVolumeRemoved": False,
                     "staticHostDrained": True,
+                    "staticHostLaunchNotObserved": launch_not_observed,
                     "hostLeaseRef": host_lease_ref,
                     "hostLeaseGeneration": host_lease_generation,
                     **await self._capture_host_logs(container_name),

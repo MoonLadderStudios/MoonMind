@@ -678,6 +678,7 @@ class NativeDocker(StaticCodexDocker):
             return 0, "", ""
         if argv[:2] == ["docker", "create"]:
             self.create_count += 1
+            self.host_container_id = f"native-host-{self.create_count}"
             self.container_name = _options(argv, "--name")[0]
             self.host_labels = _mapping(argv, "--label")
             self.launch_env = _mapping(argv, "--env")
@@ -787,7 +788,12 @@ class NativeDocker(StaticCodexDocker):
             if "moonmind.host_lease_ref" in template:
                 return (
                     0,
-                    self.host_labels["moonmind.host_lease_ref"]
+                    (
+                        self.host_container_id + "|"
+                        if template.startswith("{{.Id}}|")
+                        else ""
+                    )
+                    + self.host_labels["moonmind.host_lease_ref"]
                     + "|"
                     + self.host_labels["moonmind.host_lease_generation"],
                     "",
@@ -926,7 +932,8 @@ class StaticNativeDocker(NativeDocker):
             if "ps" in argv:
                 return 0, self.host_container_id if self.server.host_alive else "", ""
             assert "up" in argv and "--no-deps" in argv
-            model = json.loads(input_bytes)
+            # Compose consumes the dollar escapes before creating the host.
+            model = json.loads(input_bytes.replace(b"$$", b"$"))
             definition = model["services"][service]
             assert definition["read_only"] is True
             assert (
@@ -969,6 +976,7 @@ class StaticNativeDocker(NativeDocker):
                 json.dumps(
                     [
                         {
+                            "Id": self.host_container_id,
                             "Name": "/" + self.container_name,
                             "Config": {
                                 "Env": [
