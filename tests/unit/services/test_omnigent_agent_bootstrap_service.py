@@ -35,6 +35,7 @@ from api_service.db.models import (
 from api_service.services.omnigent_agent_bootstrap_service import (
     BOOTSTRAP_PROFILE_ID,
     CLAUDE_API_KEY_BUILTIN_PROFILE_ID,
+    CLAUDE_ENV_BUNDLE_BUILTIN_PROFILE_ID,
     CLAUDE_BUILTIN_PROFILE_ID,
     CODEX_API_KEY_BUILTIN_PROFILE_ID,
     OPENCODE_BUILTIN_PROFILE_ID,
@@ -432,8 +433,27 @@ def _api_key_claude_provider(profile_id: str, **env):
     )
 
 
+@pytest.mark.parametrize(
+    "mode,provider_id,configuration_id,marker,provider_ids",
+    [
+        (
+            "api_key_env",
+            "anthropic",
+            CLAUDE_API_KEY_BUILTIN_PROFILE_ID,
+            "claude-api-key",
+            ["anthropic"],
+        ),
+        (
+            "env_bundle",
+            "minimax",
+            CLAUDE_ENV_BUNDLE_BUILTIN_PROFILE_ID,
+            "claude-env-bundle",
+            ["minimax"],
+        ),
+    ],
+)
 async def test_api_key_claude_profiles_route_through_managed_api_key_configuration(
-    session, monkeypatch
+    session, monkeypatch, mode, provider_id, configuration_id, marker, provider_ids
 ):
     monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
     monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "true")
@@ -451,6 +471,17 @@ async def test_api_key_claude_profiles_route_through_managed_api_key_configurati
         image_resolver=resolver,
     )
     api_key = _api_key_claude_provider("claude_anthropic_api")
+    api_key.provider_id = provider_id
+    api_key.runtime_materialization_mode = mode
+    if mode == "env_bundle":
+        api_key.env_template.update(
+            {
+                "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
+                "API_TIMEOUT_MS": "3000000",
+                "ANTHROPIC_SMALL_FAST_MODEL": "MiniMax-M2.7",
+                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            }
+        )
     # A deployment that has not reconciled the configuration yet keeps
     # routing the Profile to its direct launch.
     assert await profile_route_runtime(session, None, api_key) == "claude_code"
@@ -468,33 +499,33 @@ async def test_api_key_claude_profiles_route_through_managed_api_key_configurati
         session, endpoint_ref="default", bridge_mode="proxy", inventory=inventory
     )
     assert await reconcile_builtin_claude_agent_profile(session, inventory=inventory)
-    managed = await session.get(OmnigentAgentProfile, CLAUDE_API_KEY_BUILTIN_PROFILE_ID)
+    managed = await session.get(OmnigentAgentProfile, configuration_id)
     assert managed is not None
     assert managed.default_for_runtime is False
     version = await session.scalar(
         select(OmnigentAgentProfileVersion).where(
-            OmnigentAgentProfileVersion.profile_id == CLAUDE_API_KEY_BUILTIN_PROFILE_ID,
+            OmnigentAgentProfileVersion.profile_id == configuration_id,
             OmnigentAgentProfileVersion.version == managed.active_version,
         )
     )
-    assert version.rollout_metadata["managedBuiltin"] == "claude-api-key"
+    assert version.rollout_metadata["managedBuiltin"] == marker
     assert version.document["harness"] == "claude-native"
     assert version.document["policyRef"] == "claude-on-demand@1"
     assert version.document["providerRequirements"] == {
         "credentialSource": "secret_ref",
-        "materializationMode": "api_key_env",
-        "providerIds": ["anthropic"],
+        "materializationMode": mode,
+        "providerIds": provider_ids,
         "runtimeId": "claude_code",
     }
 
     assert await profile_route_runtime(session, None, api_key) == "omnigent"
     selection = await profile_execution_selection(session, api_key, None)
-    assert selection["profileId"] == CLAUDE_API_KEY_BUILTIN_PROFILE_ID
+    assert selection["profileId"] == configuration_id
     assert selection["harnessId"] == "claude-native"
     # A launch environment the provider config cannot carry stays direct.
     untranslatable = _api_key_claude_provider(
         "claude_custom_endpoint",
-        ANTHROPIC_BASE_URL="https://api.minimax.io/anthropic",
+        ANTHROPIC_BASE_URL="https://api.unadmitted.example/anthropic",
     )
     assert await profile_route_runtime(session, None, untranslatable) == "claude_code"
 
@@ -504,10 +535,7 @@ async def test_api_key_claude_profiles_route_through_managed_api_key_configurati
         await session.scalar(
             select(func.count())
             .select_from(OmnigentAgentProfileVersion)
-            .where(
-                OmnigentAgentProfileVersion.profile_id
-                == CLAUDE_API_KEY_BUILTIN_PROFILE_ID
-            )
+            .where(OmnigentAgentProfileVersion.profile_id == configuration_id)
         )
         == 1
     )
@@ -565,7 +593,7 @@ async def test_api_key_codex_profiles_route_through_managed_api_key_configuratio
     # A Profile whose own config.toml or endpoint the provider config cannot
     # carry stays direct.
     untranslatable = _api_key_codex_provider(
-        "codex_custom_endpoint", OPENAI_BASE_URL="https://api.minimax.io/v1"
+        "codex_custom_endpoint", OPENAI_BASE_URL="https://api.unadmitted.example/v1"
     )
     assert await profile_route_runtime(session, None, untranslatable) == "codex_cli"
 
