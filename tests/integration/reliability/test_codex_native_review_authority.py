@@ -49,7 +49,7 @@ async def _compile_native_review_plan(context, monkeypatch, tmp_path):
     )
     from tests.unit.api.test_pr_review_resolve_preset import _expand
 
-    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "false")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "true")
     monkeypatch.delenv("MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK", raising=False)
     monkeypatch.setenv(
         "OMNIGENT_SHARED_HOST_IMAGE_REF",
@@ -113,7 +113,7 @@ async def test_default_codex_persisted_native_plan_acquires_only_review_authorit
         context, monkeypatch, tmp_path
     )
     plan = compiled.envelope.payload
-    assert plan.executionRealizerRef == "codex-profile-bound@1"
+    assert plan.executionRealizerRef == "generic-omnigent-host@1"
     assert plan.credentialBindings["collaboration"].consumer == "native"
     assert set(plan.resolvedTools["repositoryAccess"]) == {"collaboration"}
     assert await context.plans.load(compiled.envelope.planRef) == compiled.envelope

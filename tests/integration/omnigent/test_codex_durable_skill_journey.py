@@ -575,8 +575,10 @@ async def _seed_codex_profile(session_factory) -> None:
         await seed_bootstrap_policies(session, image_resolver=resolve_image)
 
 
-async def _codex_plan(session_factory, skillset_ref: str, launch_policy: str):
-    """Compile the Codex plan from persisted launch authority, as the compiler does."""
+async def _codex_plan(
+    session_factory, skillset_ref: str, launch_policy: str, monkeypatch
+):
+    """Build a pre-upgrade plan, then execute it with current admission closed."""
 
     from api_service.services.omnigent_execution_plan_service import (
         _resolve_runtime_policy_snapshot,
@@ -634,16 +636,20 @@ async def _codex_plan(session_factory, skillset_ref: str, launch_policy: str):
             }
         },
     )
-    plan = compile_execution_plan(
-        **inputs,
-        policy_snapshot_ref=f"artifact:{policy_ref}",
-        policy_snapshot_digest=policy_digest,
-        effective_launch_snapshot_ref=f"artifact:{launch_ref}",
-        effective_launch_snapshot_digest=launch_digest,
-        host_image_ref=str(effective_launch["hostImageRef"]),
-        omnigent_host_build_digest=inputs["host_class"].omnigentBuildDigest,
-        host_architecture=architecture,
-    )
+    from tests.helpers.retained_codex import pre_upgrade_profile_bound_admission
+
+    with pre_upgrade_profile_bound_admission(monkeypatch) as old_policy:
+        plan = compile_execution_plan(
+            **inputs,
+            rollout_policy=old_policy,
+            policy_snapshot_ref=f"artifact:{policy_ref}",
+            policy_snapshot_digest=policy_digest,
+            effective_launch_snapshot_ref=f"artifact:{launch_ref}",
+            effective_launch_snapshot_digest=launch_digest,
+            host_image_ref=str(effective_launch["hostImageRef"]),
+            omnigent_host_build_digest=inputs["host_class"].omnigentBuildDigest,
+            host_architecture=architecture,
+        )
     return await DbExecutionPlanStore(session_factory).persist(plan)
 
 
@@ -850,7 +856,9 @@ async def test_registered_codex_realizer_delivers_durable_skill_through_turn_and
             run_store=OmnigentBridgeSessionStore(session_factory),
         )
         realizer = services.realizer_registry.require("codex-profile-bound@1")
-        plan = await _codex_plan(session_factory, skillset_ref, launch_policy)
+        plan = await _codex_plan(
+            session_factory, skillset_ref, launch_policy, monkeypatch
+        )
         if retained_binding:
             from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
 

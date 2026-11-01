@@ -17,6 +17,7 @@ from moonmind.omnigent.harness_platform.catalog import (
     create_catalog_snapshot,
 )
 from moonmind.omnigent.harness_platform.credential_bindings import create_binding_set
+from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.harness_platform.host_classes import (
     HostClass,
     OmnigentHostClassSelector,
@@ -369,6 +370,14 @@ async def test_workflow_cannot_author_realizer(field, legacy_default, monkeypatc
         "generic-omnigent-host@1" if legacy_default else "codex-profile-bound@1"
     )
     store = InMemoryExecutionPlanStore()
+    if legacy_default:
+        with pytest.raises(HarnessPlatformError, match="no execution realizer"):
+            await store.load_or_compile(
+                compile_fn=compile_execution_plan,
+                compile_kwargs=plan_inputs,
+            )
+        assert store._plans == {}
+        return
     envelope = await store.load_or_compile(
         compile_fn=compile_execution_plan,
         compile_kwargs=plan_inputs,
@@ -379,8 +388,24 @@ async def test_workflow_cannot_author_realizer(field, legacy_default, monkeypatc
 
 @pytest.fixture
 def retained_codex_realizer(monkeypatch):
-    """Compile legacy authority for tests that invoke the retained coordinator."""
-    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "false")
+    """Restore current admission immediately after historical fixture production."""
+    import sys
+    from tests.helpers.retained_codex import pre_upgrade_profile_bound_admission
+
+    current_compiler, current_helper = compile_execution_plan, _compile_codex_plan
+
+    def historical_compile(*args, **kwargs):
+        with pre_upgrade_profile_bound_admission(monkeypatch):
+            return current_compiler(*args, **kwargs)
+
+    def historical_helper(*args, **kwargs):
+        with pre_upgrade_profile_bound_admission(monkeypatch):
+            return current_helper(*args, **kwargs)
+
+    monkeypatch.setattr(
+        sys.modules[__name__], "compile_execution_plan", historical_compile
+    )
+    monkeypatch.setattr(sys.modules[__name__], "_compile_codex_plan", historical_helper)
 
 
 def _codex_dispatch_request(plan, *, target: str, policy: str):
@@ -721,21 +746,10 @@ def test_select_execution_realizer_codex_gate(monkeypatch):
     )
 
 
-def test_codex_plan_keeps_profile_bound_when_explicitly_disabled(monkeypatch):
-    from moonmind.omnigent.harness_platform.planner import (
-        select_execution_realizer,
-    )
-    from moonmind.omnigent.settings import generic_codex_qualified
-
+def test_codex_plan_fails_closed_when_explicitly_disabled(monkeypatch):
     monkeypatch.setenv(_GATE_ENV, "false")
-    assert generic_codex_qualified() is False
-    # Explicit compatibility selection stays on the retained profile-bound realizer.
-    assert (
-        select_execution_realizer(harness_id="codex-native", is_codex=True)
-        == "codex-profile-bound@1"
-    )
-    envelope = _compile_codex_plan()
-    assert envelope.payload.executionRealizerRef == "codex-profile-bound@1"
+    with pytest.raises(HarnessPlatformError, match="no execution realizer"):
+        _compile_codex_plan()
 
 
 def test_codex_generic_plan_when_qualified(monkeypatch):
@@ -752,12 +766,12 @@ def test_codex_generic_plan_when_qualified(monkeypatch):
     )
     envelope = _compile_codex_plan()
     assert envelope.payload.executionRealizerRef == "generic-omnigent-host@1"
-    # Deployment policy can restore the retained profile-bound default.
+    # Restoring a compatibility preference cannot reopen profile-bound work.
     monkeypatch.setenv(
         RUNTIME_PROVIDER_ROLLBACK_ENV, "restore_legacy_or_direct_default"
     )
     envelope2 = _compile_codex_plan()
-    assert envelope2.payload.executionRealizerRef == "codex-profile-bound@1"
+    assert envelope2.payload.executionRealizerRef == "generic-omnigent-host@1"
 
 
 def _codex_repository_plan_inputs():
@@ -803,7 +817,7 @@ def test_repository_codex_default_rejects_before_persisting_unrunnable_plan():
         inputs["rollout_policy"] = default_runtime_provider_rollout_policy(
             env={_GATE_ENV: "false"}
         )
-        with pytest.raises(HarnessPlatformError, match="realizer.*repository"):
+        with pytest.raises(HarnessPlatformError, match="no execution realizer"):
             await store.load_or_compile(
                 compile_fn=compile_execution_plan,
                 compile_kwargs=inputs,
@@ -898,8 +912,16 @@ def test_repository_codex_default_preserves_deployment_rollback(control):
     inputs["rollout_policy"] = default_runtime_provider_rollout_policy(
         env={_GATE_ENV: "true", RUNTIME_PROVIDER_ROLLBACK_ENV: control}
     )
-    with pytest.raises(HarnessPlatformError, match="realizer"):
-        compile_execution_plan(**inputs)
+    if control == "restore_legacy_or_direct_default":
+        plan = compile_execution_plan(**inputs)
+        assert plan.payload.executionRealizerRef == "generic-omnigent-host@1"
+        assert (
+            plan.payload.credentialBindings["source"].connectionRef
+            == "selected-repository"
+        )
+    else:
+        with pytest.raises(HarnessPlatformError, match="realizer"):
+            compile_execution_plan(**inputs)
 
 
 def test_generic_codex_default_honors_explicit_values(monkeypatch):
@@ -1050,11 +1072,24 @@ def test_plan_freezes_the_runtime_provider_rollout_decision(
     assert payload.executionRealizerRef == "generic-omnigent-host@1"
 
 
-def test_plan_records_the_explicit_legacy_compatibility_row(monkeypatch):
-    monkeypatch.setenv(_GATE_ENV, "false")
-    payload = _compile_codex_plan().payload
+def test_retained_plan_keeps_its_recorded_legacy_compatibility_row():
+    import json
+    from pathlib import Path
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        OmnigentExecutionPlanEnvelope,
+    )
+
+    fixture = json.loads(
+        (
+            Path(__file__).parents[2]
+            / "fixtures/omnigent/retained_profile_bound_plans/codex-on-demand-16.json"
+        ).read_text()
+    )
+    ref = fixture["request"]["omnigentExecutionPlan"]["planArtifactRef"]
+    payload = OmnigentExecutionPlanEnvelope.model_validate_json(
+        fixture["artifacts"][ref]
+    ).payload
     record = payload.runtimeProviderRollout
-    assert record is not None
     assert record.targetId == "codex.legacy-profile-bound-omnigent"
     assert record.pathClass == "legacy_profile_bound_omnigent"
     assert payload.executionRealizerRef == "codex-profile-bound@1"
@@ -1167,18 +1202,13 @@ def test_rollback_control_blocks_new_generic_codex_admission(monkeypatch):
         _compile_codex_plan()
     assert "realizer" in str(exc.value).lower()
 
-    # Restoring the explicitly supported legacy default re-admits it, and the
-    # plan records that truthful path.
+    # Restoring a compatibility preference cannot bypass the shared stop.
     monkeypatch.setenv(
         RUNTIME_PROVIDER_ROLLBACK_ENV,
         "stop_new_generic_codex_admission,restore_legacy_or_direct_default",
     )
-    payload = _compile_codex_plan().payload
-    assert payload.executionRealizerRef == "codex-profile-bound@1"
-    assert (
-        payload.runtimeProviderRollout.targetId
-        == "codex.legacy-profile-bound-omnigent"
-    )
+    with pytest.raises(HarnessPlatformError, match="no execution realizer"):
+        _compile_codex_plan()
 
 
 def test_stop_all_new_omnigent_work_never_substitutes_another_runtime(monkeypatch):
@@ -1658,7 +1688,10 @@ async def test_codex_realizer_materializes_a_durable_resolved_skill_snapshot(
     )
     assert skillset_ref.startswith("art_")
     skills = SimpleNamespace(manifest_id=skillset_ref)
-    plan, binding = await _admitted_plan(durable_artifact_storage, skills)
+    from tests.helpers.retained_codex import pre_upgrade_profile_bound_admission
+
+    with pre_upgrade_profile_bound_admission(monkeypatch):
+        plan, binding = await _admitted_plan(durable_artifact_storage, skills)
     request = _request(
         plan, binding, workflow_id="workflow-codex-skill", skills=skills
     )

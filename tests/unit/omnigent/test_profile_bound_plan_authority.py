@@ -7,22 +7,15 @@ from unittest.mock import AsyncMock
 import pytest
 import pytest_asyncio
 
-from api_service.services import omnigent_execution_plan_service as service
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
 )
 from moonmind.omnigent.settings import generic_codex_qualified
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
-from tests.artifact_access import access_for_test
 from tests.unit.services.test_omnigent_execution_plan_service import (
     _ArtifactService,
-    _compiler_dependency_owner,  # noqa: F401 - pytest fixture import
     _configure_ready_host_image_pair,
-    _PlanStore,
-    _policy_snapshot,
-    _protected_support_evidence,
-    _snapshot,
 )
 
 
@@ -33,55 +26,44 @@ async def _admit_codex_plan(
     shared_host="ghcr.io/example/omnigent-host@sha256:" + "f" * 64,
     server=None,
 ):
-    qualification_env = "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED"
-    monkeypatch.delenv(qualification_env, raising=False)
-    _configure_ready_host_image_pair(monkeypatch)
-    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", shared_host)
-    if server is not None:
-        monkeypatch.setenv("OMNIGENT_IMAGE_REF", server)
-    snapshot = _policy_snapshot(harness="codex-native", policy=policy)
-    monkeypatch.setattr(service, "DbExecutionPlanStore", _PlanStore)
-    monkeypatch.setattr(
-        service, "_resolve_runtime_policy_snapshot", AsyncMock(return_value=snapshot)
+    """Read bytes admitted by the pre-retirement compiler, without new admission."""
+    from pathlib import Path
+
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        OmnigentExecutionPlanEnvelope,
     )
-    monkeypatch.setattr(
-        service,
-        "resolve_execution_evidence",
-        lambda payload, **_kwargs: (_protected_support_evidence(payload), "supported"),
+
+    label = "codex-installed-images" if server is not None else policy.replace("@", "-")
+    fixture = json.loads(
+        (
+            Path(__file__).parents[2]
+            / "fixtures/omnigent/retained_profile_bound_plans"
+            / f"{label}.json"
+        ).read_text()
     )
     artifacts = _ArtifactService()
-    parameters = {
-        "targetRuntime": "omnigent",
-        "publishMode": "auto",
-        "omnigent": {
-            "executionTargetRef": "omnigent-codex@1",
-            "launchPolicyRef": policy,
-        },
+    artifacts.payloads = {
+        key: value.encode() for key, value in fixture["artifacts"].items()
     }
-    # Admit the retained coordinator explicitly, then restore ordinary defaults
-    # before dispatch so the frozen plan remains authoritative across promotion.
-    with monkeypatch.context() as admission:
-        admission.setenv(qualification_env, "false")
-        admitted = await service.compile_and_persist_execution_plan(
-            session_factory=object(),
-            artifact_service=artifacts,
-            principal="user-1",
-            workflow_id="mm:pr-resolver-policy-regression",
-            agent_profile_snapshot=_snapshot(
-                harness="codex-native", policy=policy, provider_id="codex"
-            ),
-            provider_profile=SimpleNamespace(
-                profile_id="codex", runtime_id="codex_cli", provider_id="openai"
-            ),
-            initial_parameters=parameters,
-            authored_request_ref="art_request_1",
-            authored_request_digest="sha256:" + "1" * 64,
-            task_input_snapshot_ref="art_request_1",
-            task_input_snapshot_digest="sha256:" + "1" * 64,
-            access=access_for_test("user-1"),
-        )
+    execution_request = AgentExecutionRequest.model_validate(fixture["request"])
+    binding = execution_request.omnigent_execution_plan
+    plan = OmnigentExecutionPlanEnvelope.model_validate_json(
+        artifacts.payloads[binding.plan_artifact_ref]
+    )
+    snapshot = json.loads(
+        artifacts.payloads[plan.payload.policySnapshotRef.removeprefix("artifact:")]
+    )
+    launch = json.loads(
+        artifacts.payloads[
+            plan.payload.effectiveLaunchSnapshotRef.removeprefix("artifact:")
+        ]
+    )
+    _configure_ready_host_image_pair(monkeypatch)
+    monkeypatch.delenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", raising=False)
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", shared_host)
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", server or launch["serverImageRef"])
     assert generic_codex_qualified() is True
-    assert admitted.envelope.payload.executionRealizerRef == "codex-profile-bound@1"
+    assert plan.payload.executionRealizerRef == "codex-profile-bound@1"
     coordinator = OmnigentProfileBoundExecutionCoordinator(
         session_factory=lambda: None,
         lease_client=object(),
@@ -90,25 +72,9 @@ async def _admit_codex_plan(
         run_store=object(),
         execution_runner=AsyncMock(),
         artifact_gateway=artifacts,
-        execution_plan=admitted.envelope,
+        execution_plan=plan,
     )
-    execution_request = AgentExecutionRequest(
-        agentKind="external",
-        agentId="omnigent",
-        executionProfileRef="codex",
-        correlationId="workflow-1",
-        idempotencyKey="attempt-1",
-        parameters=parameters,
-        omnigentExecutionPlan=admitted.binding,
-    )
-    launch = json.loads(
-        artifacts.payloads[
-            admitted.envelope.payload.effectiveLaunchSnapshotRef.removeprefix(
-                "artifact:"
-            )
-        ]
-    )
-    return coordinator, execution_request, admitted.envelope, snapshot, launch
+    return coordinator, execution_request, plan, snapshot, launch
 
 
 @pytest_asyncio.fixture

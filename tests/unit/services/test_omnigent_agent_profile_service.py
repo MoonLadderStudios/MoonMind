@@ -416,8 +416,8 @@ def test_codex_catalog_projects_observed_native_agent(monkeypatch):
         HarnessCatalogSyncResult,
     )
 
-    # The generic-host switch only selects Codex's realizer; the profile-bound
-    # default still needs the harness in the catalog.
+    # Retained plans and diagnostics still need the harness in the catalog
+    # when new shared admission is disabled.
     monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "false")
 
     def observed(agents, harnesses=()):

@@ -1123,13 +1123,9 @@ def test_quarantined_harness_no_credentials():
 
 
 # AC 23: Existing Codex workflows continue through current realizer without reduced behavior
-@pytest.mark.parametrize("legacy_default", [False, True])
-def test_codex_continuity_preserved(monkeypatch, legacy_default):
-    # The old Profile format remains usable under either supported selection.
-    if legacy_default:
-        monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "false")
-    else:
-        monkeypatch.delenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", raising=False)
+def test_codex_continuity_preserved(monkeypatch):
+    # The old Profile format remains usable for new shared work.
+    monkeypatch.delenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", raising=False)
     catalog = make_catalog()
     profile_v1 = {
         "endpointRef": "default",
@@ -1189,9 +1185,7 @@ def test_codex_continuity_preserved(monkeypatch, legacy_default):
         model_route_ref="openai",
         model_normalized_options={},
     )
-    assert envelope.payload.executionRealizerRef == (
-        "codex-profile-bound@1" if legacy_default else "generic-omnigent-host@1"
-    )
+    assert envelope.payload.executionRealizerRef == "generic-omnigent-host@1"
     assert envelope.payload.harnessId == "codex-native"
 
 
@@ -2136,7 +2130,6 @@ def test_compiled_plan_demotes_a_recorded_non_pass_support_row(
     promoted = _compile_opencode_plan().payload.runtimeProviderRollout
     assert promoted is not None
     assert promoted.state == "new_work_default"
-
 
 
 def test_plan_version_round_trip_preserves_historical_canonical_bytes():
