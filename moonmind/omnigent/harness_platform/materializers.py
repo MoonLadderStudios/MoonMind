@@ -11,7 +11,7 @@ import re
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
@@ -309,6 +309,20 @@ class ProviderConfigEndpoint(BaseModel):
     baseUrl: str = Field(alias="baseUrl")
     defaultModel: str | None = Field(None, alias="defaultModel")
     modelPins: dict[str, str] = Field(default_factory=dict, alias="modelPins")
+    launchEnvironment: dict[str, str] = Field(
+        default_factory=dict,
+        alias="launchEnvironment",
+        exclude_if=lambda value: not value,
+    )
+
+    @field_validator("launchEnvironment")
+    @classmethod
+    def _validate_launch_environment(cls, value):
+        from moonmind.omnigent.host_services.runtime_scripts import (
+            validate_provider_literal_launch_environment,
+        )
+
+        return validate_provider_literal_launch_environment(value)
 
 
 def _enum_value(raw: Any) -> str:
@@ -393,12 +407,17 @@ def claude_provider_config_endpoint(
     there with that reason.
     """
 
+    from moonmind.omnigent.host_services.runtime_scripts import (
+        PROVIDER_LITERAL_LAUNCH_ENV,
+        validate_provider_literal_launch_environment,
+    )
+
     key_role, literals, reason = _declared_key_launch(
         profile,
         runtime_id="claude_code",
         harness_label="Claude Code",
         key_env=_CLAUDE_KEY_ENV,
-        carried_literal_env=_CLAUDE_CARRIED_LITERAL_ENV,
+        carried_literal_env=_CLAUDE_CARRIED_LITERAL_ENV | PROVIDER_LITERAL_LAUNCH_ENV,
     )
     if not key_role:
         return None, reason
@@ -406,6 +425,16 @@ def claude_provider_config_endpoint(
     base_url = base_url.rstrip("/")
     if not _omnigent_egress_admits(base_url):
         return None, "the Omnigent egress profile does not admit the endpoint"
+    try:
+        launch_environment = validate_provider_literal_launch_environment(
+            {
+                key: value
+                for key, value in literals.items()
+                if key in PROVIDER_LITERAL_LAUNCH_ENV
+            }
+        )
+    except ValueError as error:
+        return None, str(error)
     return (
         ProviderConfigEndpoint(
             family="anthropic",
@@ -417,6 +446,7 @@ def claude_provider_config_endpoint(
                 for name, tier in _CLAUDE_TIER_MODEL_ENV.items()
                 if name in literals
             },
+            launchEnvironment=launch_environment,
         ),
         "",
     )

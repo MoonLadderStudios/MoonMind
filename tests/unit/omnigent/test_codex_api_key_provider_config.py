@@ -110,7 +110,7 @@ _MINIMAX_CODEX = {
             {
                 "env_template": {
                     "OPENAI_API_KEY": {"from_secret_ref": "openai_api_key"},
-                    "OPENAI_BASE_URL": "https://api.minimax.io/v1",
+                    "OPENAI_BASE_URL": "https://api.unadmitted.example/v1",
                 }
             },
             "egress",
