@@ -249,6 +249,8 @@ class OmnigentHostLauncherPort(Protocol):
 
     server_url: str
 
+    async def resolve_launch_spec(self, spec: HostLaunchSpec) -> HostLaunchSpec: ...
+
     async def launch(
         self,
         *,
@@ -307,6 +309,7 @@ class OmnigentHostRegistrationPort(Protocol):
         harness_id: str,
         credentialless: bool = False,
         expected_host_id: str | None = None,
+        expected_host_name: str | None = None,
     ) -> dict[str, Any]: ...
 
 
@@ -340,6 +343,8 @@ class OmnigentHostCleanupPort(Protocol):
         host_lease_generation: int,
         state_volume_ref: str,
         control_volume_ref: str | None,
+        static_host_id: str | None = None,
+        static_host_image_ref: str | None = None,
     ) -> dict[str, Any]: ...
 
 

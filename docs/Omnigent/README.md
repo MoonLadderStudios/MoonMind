@@ -23,12 +23,20 @@ interchangeable responsibilities.
 3. The trusted planner binds the plan to a fenced runtime binding: acquired
    credential generation, host lease, exact shared-image digest, and
    exact-host attestation.
-4. The generic host lifecycle launches the Host Class image, attaches only the
-   selected runtime's credential material, and runs the canonical session and
-   turn-command path.
-5. Terminal, event, resource, checkpoint, and publication evidence is harvested;
-   run-owned state is destroyed and profile-owned state is detached but
-   preserved.
+4. The generic host lifecycle launches the Host Class image or attaches the
+   selected static Compose role, delivers only the selected credentials, and
+   runs the canonical session and turn-command path.
+5. Terminal, event, resource, checkpoint, and publication evidence is harvested.
+   On-demand hosts are removed. Static hosts drain without removing their
+   identity, credential home or persistent state; run capabilities are cleared.
+
+Static Codex and Claude admission freezes the configured binding in the signed
+launch artifact. Reconfiguration cannot retarget queued work. Static allocation
+uses the existing physical lease ledger, excluding retained leases and other
+Profiles from the same Compose role. Complete native session inventory must
+show no live consumers before reattachment or drain; unknown observations defer
+cleanup. A successor has a separate allocation record even when its workflow
+retains the same provider capacity grant.
 
 ## Limitations
 
