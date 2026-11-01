@@ -282,6 +282,7 @@ async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_jan
             return [
                 SimpleNamespace(
                     lease_id="host-lease-1",
+                    lease_purpose="execution_omnigent",
                     provider_profile_id="profile-1",
                     binding_ref="binding-1",
                     container_name="host-1",
@@ -305,6 +306,7 @@ async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_jan
             assert ttl_seconds == 90
             return SimpleNamespace(
                 lease_id=lease_id,
+                lease_purpose="execution_omnigent",
                 provider_profile_id="profile-1",
                 binding_ref="binding-1",
                 container_name="host-1",

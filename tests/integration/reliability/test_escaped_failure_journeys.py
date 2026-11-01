@@ -4541,6 +4541,7 @@ async def test_fresh_omnigent_launch_is_not_reaped_before_materialization() -> N
     now = datetime.now(timezone.utc)
     lease = SimpleNamespace(
         lease_id="host-lease-fresh-launch",
+        lease_purpose="execution_omnigent",
         provider_profile_id="profile-replay",
         provider_lease_id="provider-lease-fresh-launch",
         binding_ref="binding-replay",
@@ -4632,6 +4633,7 @@ async def test_abandoned_omnigent_host_cleanup_releases_provider_capacity() -> N
     order: list[str] = []
     lease = SimpleNamespace(
         lease_id=manifest["hostLeaseRef"],
+        lease_purpose="execution_omnigent",
         provider_profile_id=manifest["providerProfileId"],
         provider_lease_id=manifest["providerLeaseRef"],
         binding_ref="binding-1",
