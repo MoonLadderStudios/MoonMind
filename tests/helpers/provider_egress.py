@@ -1,4 +1,4 @@
-"""Explicit provider policy for credential materializer unit tests."""
+"""Explicit optional-provider policy for unit tests."""
 
 import pytest
 
