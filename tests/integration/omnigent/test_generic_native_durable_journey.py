@@ -1150,6 +1150,7 @@ async def native_journey(
                 },
                 "parameters": {
                     "publishMode": "none",
+                    "metadata": {"moonmind": {"selectedSkill": _DURABLE_SKILL_NAME}},
                     "omnigent": {
                         "prompt": {"text": instructions},
                         "session": {},
@@ -1290,6 +1291,7 @@ async def test_shared_commands_follow_admitted_harness_and_preserve_completed_ef
     text = messages[0]["data"]["content"][0]["text"]
     assert text.count("/review --local") == 1
     assert text.count("Generate a report.") == 1
+    assert text.count(f"Selected skill: {_DURABLE_SKILL_NAME}") == 1
     if native_journey.harness == "claude-native":
         assert text.startswith("/review --local\n")
     else:
