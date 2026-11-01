@@ -375,18 +375,75 @@ def preserve_provider_settings(configuration, home, arguments):
     _write(path, document)
 
 
+def require_reusable_context(home, arguments):
+    """Refuse a fresh native start when a continuation was explicitly admitted.
+
+    Omnigent clones a local rollout or rebuilds one from its durable items
+    before starting app-server. Its best-effort fallback must not silently
+    erase MoonMind's requested same-epoch context.
+    """
+    if "app-server" not in arguments:
+        return
+    root = Path(home).resolve() / "sessions"
+    for path in root.rglob("*.jsonl"):
+        if (
+            path.is_symlink()
+            or not path.is_file()
+            or root not in path.resolve().parents
+        ):
+            continue
+        metadata = False
+        with path.open(encoding="utf-8") as stream:
+            for line in stream:
+                try:
+                    item = json.loads(line)
+                except (ValueError, TypeError):
+                    break
+                if not isinstance(item, dict):
+                    break
+                payload = item.get("payload") or {}
+                if not isinstance(payload, dict):
+                    break
+                if item.get("type") == "session_meta":
+                    metadata = payload.get("cwd") == str(Path.cwd())
+                if (
+                    metadata
+                    and item.get("type") == "compacted"
+                    and (payload.get("replacement_history") or payload.get("message"))
+                ):
+                    return
+                if (
+                    metadata
+                    and item.get("type") == "response_item"
+                    and payload.get("type") == "message"
+                    and payload.get("content")
+                ):
+                    return
+    raise ValueError(
+        "requested native context was not restored; refusing a fresh Codex conversation"
+    )
+
+
 if __name__ == "__main__":
     action, config_path, *arguments = sys.argv[1:]
-    configuration = json.loads(Path(config_path).read_text())
+    configuration = (
+        json.loads(Path(config_path).read_text()) if config_path != "-" else None
+    )
     if action == "prepare":
-        configure_home(configuration, os.environ["CODEX_HOME"])
+        if configuration is not None:
+            configure_home(configuration, os.environ["CODEX_HOME"])
         binary, wrapper, context = arguments
         launch = [context, sys.executable, __file__, "launch", config_path, binary]
         Path(wrapper).write_text("#!/bin/sh\nexec " + shlex.join(launch) + ' "$@"\n')
         Path(wrapper).chmod(0o700)
     elif action == "launch":
         binary, *arguments = arguments
-        preserve_provider_settings(configuration, os.environ["CODEX_HOME"], arguments)
+        if os.environ.get("MOONMIND_CODEX_REQUIRE_CONTEXT") == "1":
+            require_reusable_context(os.environ["CODEX_HOME"], arguments)
+        if configuration is not None:
+            preserve_provider_settings(
+                configuration, os.environ["CODEX_HOME"], arguments
+            )
         os.execv(binary, [binary, *arguments])
     else:
         raise SystemExit("unsupported Codex configuration operation")
