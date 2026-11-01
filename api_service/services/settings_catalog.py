@@ -101,6 +101,7 @@ class WorkflowCreationDefaults:
 
     default_runtime: str | None
     provider_profile_ref: str | None
+    provider_profile_inferred: bool = False
 
 
 class SettingOption(BaseModel):

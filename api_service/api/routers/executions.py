@@ -8332,7 +8332,11 @@ async def _workflow_creation_defaults(
             if provider is not None:
                 if not _steps_keep_profile_authority(provider, task_payload):
                     return defaults
-                return replace(defaults, provider_profile_ref=provider.profile_id)
+                return replace(
+                    defaults,
+                    provider_profile_ref=provider.profile_id,
+                    provider_profile_inferred=True,
+                )
             native_was_authored = (
                 authored.runtime_ids
                 and authored.runtime_ids[0] != "omnigent"

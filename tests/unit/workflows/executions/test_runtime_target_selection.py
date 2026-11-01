@@ -258,6 +258,28 @@ def test_profile_route_is_selected_as_non_authored_provenance():
         control_plane_metrics.reset()
 
 
+@pytest.mark.parametrize("route", ["codex_cli", "omnigent"])
+@pytest.mark.parametrize("authored", [False, True])
+def test_inferred_account_preserves_runtime_selection_source(route, authored):
+    selection = resolve_runtime_target_selection(
+        surface=AuthoringSurface.workflow_create,
+        requested_runtime="codex_cli" if authored else None,
+        profile_runtime=route,
+        profile_harness_id="codex-native",
+        workflow_settings=SimpleNamespace(
+            default_runtime="codex_cli",
+            provider_profile_ref="same-account",
+            provider_profile_inferred=True,
+        ),
+        policy=_policy(),
+    )
+    assert selection.runtime_id == route
+    assert selection.source is (
+        SelectionSource.authored if authored else SelectionSource.configured_default
+    )
+    assert selection.available
+
+
 def test_authored_runtime_wins_over_the_profile_route():
     selection = resolve_runtime_target_selection(
         surface=AuthoringSurface.workflow_create,
