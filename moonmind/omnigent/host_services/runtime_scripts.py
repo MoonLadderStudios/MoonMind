@@ -112,6 +112,7 @@ _GITHUB_TOKEN_ENV_UNSET = (
     "unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN"
 )
 _MOONMIND_RUNTIME_ENV_FILES = {
+    "MOONMIND_CODEX_REQUIRE_CONTEXT": "codex-require-context",
     "MOONMIND_URL": "moonmind-url",
     "MOONMIND_AGENT_RUN_ID": "agent-run-id",
     "MOONMIND_TASK_WORKFLOW_ID": "task-workflow-id",
@@ -160,6 +161,14 @@ class OmnigentRuntimeScriptService:
             "MOONMIND_STEP_EXECUTION_ID": step_execution_id,
         }
         supplied_runtime_environment = dict(runtime_environment or {})
+        require_codex_context = (
+            supplied_runtime_environment.get("MOONMIND_CODEX_REQUIRE_CONTEXT") == "1"
+        )
+        if (
+            "MOONMIND_CODEX_REQUIRE_CONTEXT" in supplied_runtime_environment
+            and not require_codex_context
+        ):
+            raise ValueError("invalid native context requirement")
         project_environment = {}
         if set(supplied_runtime_environment) - set(_MOONMIND_RUNTIME_ENV_FILES):
             # Keep the existing standalone verifier's stdlib-only builder path.
@@ -251,7 +260,7 @@ class OmnigentRuntimeScriptService:
                         )
                     codex_configuration = True
                 environment[key] = str(value)
-        if codex_configuration:
+        if codex_configuration or require_codex_context:
             provider_environment.update(
                 {
                     "CODEX_HOME": "/home/app/.codex",
@@ -368,7 +377,7 @@ class OmnigentRuntimeScriptService:
                 f"> {_RUNTIME_BIN_DIR}/moonmind; chmod 0700 {_RUNTIME_BIN_DIR}/moonmind; "
             )
         codex_setup = f"rm -f {_RUNTIME_BIN_DIR}/codex {runtime_context_dir}/codex-configuration.py; "
-        if codex_configuration:
+        if codex_configuration or require_codex_context:
             source_path = (
                 Path(__file__).resolve().parents[2]
                 / "provider_profiles"
@@ -379,7 +388,7 @@ class OmnigentRuntimeScriptService:
             codex_setup += (
                 f'codex_binary=$(command -v codex); test -n "$codex_binary"; '
                 f"printf '%s\\n' {shlex.quote(source)} > {helper}; chmod 0700 {helper}; "
-                f'python3 {helper} prepare "$MOONMIND_CODEX_PROFILE_CONFIG_FILE" "$codex_binary" {_RUNTIME_BIN_DIR}/codex {context_wrapper}; '
+                f'python3 {helper} prepare "${{MOONMIND_CODEX_PROFILE_CONFIG_FILE:--}}" "$codex_binary" {_RUNTIME_BIN_DIR}/codex {context_wrapper}; '
             )
         script = (
             "set -eu; "

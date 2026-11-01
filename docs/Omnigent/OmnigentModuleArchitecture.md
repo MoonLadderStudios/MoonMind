@@ -275,12 +275,14 @@ deletion removes its row in the same change rather than leaving a stale entry.
 
 The direct Codex/Claude launch, AgentSession, profile-bound and OAuth host
 rows retain Codex and Claude key Profiles with files or authentication outside
-the exact shared translation, sessions reused across a run's steps, and
+the exact shared translation, recorded direct AgentSession work, and
 profile-bound launches with their OAuth credential maintenance. Supported
 static-connected Codex/Claude hosts use the shared lifecycle.
 API-key Codex and Claude Profiles that translate exactly, including MiniMax's
 declared Claude environment bundle and Codex Responses file configuration, run
 on the shared lifecycle with their endpoint, model pins and non-secret tuning.
+Explicit same-epoch Codex context reuse forks durable native history through
+the shared lifecycle while keeping each attempt's resources and cleanup fenced.
 Credential maintenance drains
 a Profile's generic hosts through the generic host janitor before mutating its
 OAuth home. The durable consumer inventory is checked first, so Profiles without
