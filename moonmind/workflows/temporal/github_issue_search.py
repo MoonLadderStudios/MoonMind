@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -117,9 +118,16 @@ def is_parent_epic(issue: Mapping[str, Any]) -> bool:
     )
 
 
-def declared_dependencies(
+@dataclass(frozen=True)
+class _DependencyDeclarations:
+    scopes: dict[tuple[str, int], str]
+    children: set[tuple[str, int]]
+    prose_children: set[tuple[str, int]]
+
+
+def _declared_dependencies(
     body: str, repository: str, *, parent_epic: bool = False
-) -> dict[tuple[str, int], str]:
+) -> _DependencyDeclarations:
     """Read declared dependencies and child lists, never contextual issue links.
 
     Each reference carries its declared scope. Only a declaration whose own
@@ -134,7 +142,7 @@ def declared_dependencies(
     the same shape to divide scope with siblings, so it stays contextual there.
     """
     declarations = [
-        (match.group("refs"), _declaration_scope(match.group("keyword")), False)
+        (match.group("refs"), _declaration_scope(match.group("keyword")), "dependency")
         for match in _PREREQUISITE_DECLARATION_RE.finditer(body)
     ]
     # Child lists declare dependencies even when a stale checkbox claims
@@ -169,7 +177,7 @@ def declared_dependencies(
             # Only each sentence's leading reference list is consumed below,
             # so later contextual mentions in the same sentence stay prose.
             declarations.extend(
-                (sentence, PREREQUISITE_SCOPE_START, True)
+                (sentence, PREREQUISITE_SCOPE_START, "prose")
                 for sentence in _SENTENCE_BOUNDARY_RE.split(token.content)
                 if _declares_tracked_child(sentence)
             )
@@ -193,11 +201,14 @@ def declared_dependencies(
                 and context_section_level is None
                 and _declares_tracked_child(entry)
             ):
-                declarations.append((entry, PREREQUISITE_SCOPE_START, True))
+                declarations.append((entry, PREREQUISITE_SCOPE_START, "child"))
     scopes: dict[tuple[str, int], str] = {}
-    for declaration, scope, is_child in declarations:
+    children: set[tuple[str, int]] = set()
+    prose_children: set[tuple[str, int]] = set()
+    dependencies: set[tuple[str, int]] = set()
+    for declaration, scope, kind in declarations:
         text = _normalize_issue_references(declaration)
-        if is_child:
+        if kind != "dependency":
             # A spaced dash introduces a title, including numeric titles such
             # as "2FA support". A spaced range must name its endpoint with #.
             text = re.split(r"\s+[-\u2013\u2014]\s+(?![\s#])", text, maxsplit=1)[0]
@@ -221,11 +232,42 @@ def declared_dependencies(
                 # nothing useful can start until it is resolved.
                 if scopes.get(key) != PREREQUISITE_SCOPE_START:
                     scopes[key] = scope
+                if kind == "child":
+                    children.add(key)
+                elif kind == "prose":
+                    prose_children.add(key)
+                else:
+                    dependencies.add(key)
             text = text[match.end():].lstrip(" \t,;/")
             text = re.sub(r"^(?:and\b|&)\s*", "", text, flags=re.IGNORECASE)
     if len(scopes) > 100:
         raise ValueError("GitHub prerequisite declaration exceeds 100 issues.")
-    return scopes
+    return _DependencyDeclarations(
+        scopes, children, prose_children - children - dependencies
+    )
+
+
+def declared_dependencies(
+    body: str, repository: str, *, parent_epic: bool = False
+) -> dict[tuple[str, int], str]:
+    """Declared dependency scopes, retaining start-blocking precedence."""
+
+    return _declared_dependencies(body, repository, parent_epic=parent_epic).scopes
+
+
+def _observed_prerequisite_state(payload: Mapping[str, Any]) -> str:
+    github_state = str(payload["state"])
+    if "pull_request" not in payload or github_state != "closed":
+        return github_state
+    merged_at = payload["pull_request"].get("merged_at")
+    if isinstance(merged_at, str):
+        try:
+            if datetime.fromisoformat(merged_at).tzinfo is not None:
+                return "merged"
+        except ValueError:
+            pass
+    # Closing a PR without merging, or missing merge evidence, cannot satisfy it.
+    return github_state
 
 
 def declared_prerequisites(
@@ -262,23 +304,21 @@ async def check_prerequisites(
 ) -> list[dict[str, Any]]:
     """Resolve prerequisite state through authenticated GitHub reads only.
 
-    Only an open start-blocking prerequisite denies selection. Open completion
+    An unresolved start-blocking prerequisite denies selection. Unresolved completion
     dependencies are recorded on ``lookup.completion_dependencies`` (when
     ``include_completion`` authorizes the extra reads) so the completion gate
     can hold closure without stopping independently useful implementation.
     """
     body = str(issue.get("body") or "")
     parent_epic = is_parent_epic(issue)
-    scopes = declared_dependencies(body, repository, parent_epic=parent_epic)
+    declarations = _declared_dependencies(body, repository, parent_epic=parent_epic)
+    scopes = declarations.scopes
     # An epic's prose naming another epic describes a peer program, not a
     # child; open peers that name each other would otherwise block both
     # forever. PR references in prose likewise describe implementation context,
-    # not child issues. Explicit declarations and tracking lists stay strict.
-    prose_children = (
-        set(scopes) - set(declared_dependencies(body, repository))
-        if parent_epic
-        else set()
-    )
+    # not child issues. Tracked children stay issue-only; an explicit dependency
+    # on a PR is satisfied by authenticated merge evidence, never closure alone.
+    prose_children = declarations.prose_children
     refs = [
         (repo, number, scope)
         for (repo, number), scope in scopes.items()
@@ -324,21 +364,24 @@ async def check_prerequisites(
                     raise ValueError(
                         "GitHub prerequisite identity or state is invalid."
                     )
-                lookup.states[key] = payload["state"]
+                lookup.states[key] = _observed_prerequisite_state(payload)
                 if "pull_request" in payload:
                     lookup.pull_requests.add(key)
                 if is_parent_epic(payload):
                     lookup.epics.add(key)
-                prerequisite_state = payload["state"]
+                prerequisite_state = lookup.states[key]
             if key in lookup.pull_requests:
-                if (dependency_repo, number) not in prose_children:
+                if (dependency_repo, number) in prose_children:
+                    continue
+                if (dependency_repo, number) in declarations.children:
                     raise ValueError(
                         "GitHub prerequisite identity or state is invalid: "
                         f"{dependency_repo}#{number} is a pull request, not a child issue "
                         f"of {repository}#{issue.get('number')}."
                     )
-                continue
-            if prerequisite_state != "open":
+                if prerequisite_state == "merged":
+                    continue
+            elif prerequisite_state != "open":
                 continue
             if (dependency_repo, number) in prose_children and key in lookup.epics:
                 continue
