@@ -1,7 +1,7 @@
 """Boundary tests for MoonLadderStudios/MoonMind#4099.
 
-Pins the opt-in title-enrichment declaration on the
-``github-issue-search-and-implement`` seed preset, its preservation through
+Pins the opt-in title-enrichment declaration on the dynamic GitHub issue
+selection presets, its preservation through
 catalog expansion into the admitted plan snapshot, and the repaired
 production ``SetTitle`` workflow registration.
 """
@@ -34,6 +34,7 @@ pytestmark = [pytest.mark.asyncio]
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _PRESET_DIR = _REPO_ROOT / "api_service" / "data" / "presets"
 _SEARCH_PRESET = "github-issue-search-and-implement"
+_PROJECT_PRESET = "github-project-implement"
 
 
 @asynccontextmanager
@@ -72,9 +73,18 @@ async def _seeded_annotations(session, tmp_path) -> dict[str, dict]:
     }
 
 
-def test_search_preset_yaml_declares_opt_in_title_enrichment() -> None:
+@pytest.mark.parametrize(
+    "slug,title",
+    [
+        (_SEARCH_PRESET, "GitHub Issue Search and Implement"),
+        (_PROJECT_PRESET, "GitHub Project Implement"),
+    ],
+)
+def test_dynamic_issue_preset_yaml_declares_opt_in_title_enrichment(
+    slug, title
+) -> None:
     document = yaml.safe_load(
-        (_PRESET_DIR / f"{_SEARCH_PRESET}.yaml").read_text(encoding="utf-8")
+        (_PRESET_DIR / f"{slug}.yaml").read_text(encoding="utf-8")
     )
     enrichment = (document.get("annotations") or {}).get("titleEnrichment")
     assert enrichment == {
@@ -84,10 +94,10 @@ def test_search_preset_yaml_declares_opt_in_title_enrichment() -> None:
         "targetStyle": "base-colon-hash",
     }
     # The preset label is the frozen base for "<base>: #<number>".
-    assert document["title"] == "GitHub Issue Search and Implement"
+    assert document["title"] == title
 
 
-async def test_only_search_preset_opts_into_title_enrichment(tmp_path) -> None:
+async def test_only_dynamic_issue_presets_opt_into_title_enrichment(tmp_path) -> None:
     async with _catalog_db(tmp_path) as sessions:
         async with sessions() as session:
             annotations_by_slug = await _seeded_annotations(session, tmp_path)
@@ -98,7 +108,7 @@ async def test_only_search_preset_opts_into_title_enrichment(tmp_path) -> None:
         if isinstance(annotations.get("titleEnrichment"), dict)
         and annotations["titleEnrichment"].get("enabled") is True
     )
-    assert enabled == [_SEARCH_PRESET]
+    assert enabled == sorted([_SEARCH_PRESET, _PROJECT_PRESET])
 
 
 async def test_expansion_preserves_title_enrichment_in_plan_snapshot(

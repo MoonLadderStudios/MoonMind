@@ -683,13 +683,7 @@ async def _read_issue(
     return issue
 
 
-async def _completion_confirmed(
-    service, receipt, binding, lifecycle_result, finalization
-):
-    if lifecycle_result.get("lifecycleSettled") == "closed" and lifecycle_result.get(
-        "mutationOutcome"
-    ) in {"applied", "already_applied"}:
-        return True
+async def _completion_confirmed(service, receipt, binding, finalization):
     if binding.get("completionVerified"):
         return True
     plan = (finalization or {}).get("plan") or {}
@@ -752,11 +746,39 @@ async def _sync_claim_project(
     if not getattr(receipt, "project_binding_json", None):
         return {"status": "skipped"}
     lifecycle_result = lifecycle_result or {}
+    from sqlalchemy.ext.asyncio import async_object_session
+
     from moonmind.workflows.temporal.github_issue_lifecycle import interpret_issue
 
     async with store.locked(receipt.owner) as row:
         binding = dict(row.project_binding_json or {})
         try:
+            if lifecycle_result.get("mutationOutcome") in {
+                "applied",
+                "already_applied",
+            }:
+                if lifecycle_result.get("lifecycleSettled") == "closed":
+                    binding["completionVerified"] = True
+                elif lifecycle_result.get("lifecycleSettled") == "code_review":
+                    handoff = lifecycle_result.get("attemptHandoff") or {}
+                    url, head = handoff.get("prUrl"), handoff.get("prHead")
+                    match = re.fullmatch(
+                        r"https://github\.com/[^/]+/[^/]+/pull/([1-9]\d*)",
+                        str(url or ""),
+                    )
+                    if match and head:
+                        binding["reviewCandidate"] = {
+                            "repo": receipt.repository,
+                            "url": url,
+                            "number": int(match[1]),
+                            "headSha": head,
+                            "baseBranch": handoff.get("prBase", ""),
+                        }
+                if binding != row.project_binding_json:
+                    # Maintenance retries have no lifecycle event. Preserve its
+                    # trusted evidence durably before any fallible provider read.
+                    row.project_binding_json = dict(binding)
+                    await async_object_session(row).commit()
             issue = await _read_issue(service, receipt.repository, receipt.issue_number)
             phase = interpret_issue(issue).settled
             # A successor owns projection from its own claim. Retained receipts
@@ -781,30 +803,13 @@ async def _sync_claim_project(
                         "reasonCode": "project_closed_without_completion",
                     }
                 if not await _completion_confirmed(
-                    service, receipt, binding, lifecycle_result, row.finalization_json
+                    service, receipt, binding, row.finalization_json
                 ):
                     raise ProjectError(
                         "project_completion_unverified",
                         "Done awaits verified completion on the intended destination.",
                     )
                 binding["completionVerified"] = True
-            elif phase == "code_review" and lifecycle_result.get("mutationOutcome") in {
-                "applied",
-                "already_applied",
-            }:
-                handoff = lifecycle_result.get("attemptHandoff") or {}
-                url, head = handoff.get("prUrl"), handoff.get("prHead")
-                match = re.fullmatch(
-                    r"https://github\.com/[^/]+/[^/]+/pull/([1-9]\d*)", str(url or "")
-                )
-                if match and head:
-                    binding["reviewCandidate"] = {
-                        "repo": receipt.repository,
-                        "url": url,
-                        "number": int(match[1]),
-                        "headSha": head,
-                        "baseBranch": handoff.get("prBase", ""),
-                    }
             target = binding["phases"].get(phase)
             if not target:
                 binding["lastSync"] = {
@@ -821,8 +826,12 @@ async def _sync_claim_project(
                 binding.update(lastOptionId=target, pendingOptionId=None, phase=phase)
                 result = {"status": "confirmed", "phase": phase, "optionId": target}
             elif observed not in {
-                binding.get("lastOptionId"),
-                binding.get("pendingOptionId"),
+                option
+                for option in (
+                    binding.get("lastOptionId"),
+                    binding.get("pendingOptionId"),
+                )
+                if option
             }:
                 binding["suspended"] = True
                 result = {
@@ -836,8 +845,6 @@ async def _sync_claim_project(
                 row.project_binding_json = dict(binding)
                 # Commit the effect intent while retaining the claim lock's
                 # existing serialization, just as issue comment publication does.
-                from sqlalchemy.ext.asyncio import async_object_session
-
                 await async_object_session(row).commit()
                 data = await client.graphql(
                     """mutation UpdateProjectPhase($project: ID!, $item: ID!, $field: ID!, $option: String!) {

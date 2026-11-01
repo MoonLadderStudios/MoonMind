@@ -5,6 +5,9 @@ from pathlib import Path
 import pytest
 
 from api_service.services.presets.catalog import PresetCatalogService
+from moonmind.workflows.executions.preset_readiness import (
+    github_issue_search_scope_refresh_needed,
+)
 from tests.unit.api.test_batch_github_workflows_preset import _catalog_db
 
 
@@ -54,3 +57,24 @@ async def test_project_preset_defaults_to_discovery_for_the_selected_repository(
     loader_inputs = expanded["steps"][0]["tool"]["inputs"]
     assert loader_inputs["repository"] == "another-org/another-repo"
     assert loader_inputs["projectSource"]["url"] == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("all_authors", [False, True])
+async def test_project_schedule_accepts_its_expanded_author_choice(
+    tmp_path, all_authors
+):
+    async with _catalog_db(tmp_path) as sessions:
+        async with sessions() as session:
+            catalog = PresetCatalogService(session)
+            await catalog.sync_seed_templates(seed_dir=Path("api_service/data/presets"))
+            expanded = await catalog.expand_template(
+                slug="github-project-implement",
+                inputs={"include_all_authors": all_authors},
+                context={"repository": "another-org/another-repo"},
+            )
+    parameters = {
+        "system": {"recurrence": {"definitionId": "project-schedule"}},
+        "workflow": {"appliedStepTemplates": [expanded["appliedTemplate"]]},
+    }
+    assert github_issue_search_scope_refresh_needed(parameters) is None
