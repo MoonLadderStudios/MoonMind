@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shlex
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -695,6 +696,11 @@ class DockerOmnigentProviderConfigMaterializer(DockerOpencodeAuthJsonMaterialize
             models = {"default": qualified_model.split("/", 1)[1]}
         payload = json.dumps(
             {
+                **(
+                    {"_moonmind_codex_configuration": endpoint.codexConfiguration}
+                    if endpoint is not None and endpoint.codexConfiguration is not None
+                    else {}
+                ),
                 "providers": {
                     "moonmind": {
                         "kind": "key",
@@ -705,7 +711,7 @@ class DockerOmnigentProviderConfigMaterializer(DockerOpencodeAuthJsonMaterialize
                             "models": models,
                         },
                     }
-                }
+                },
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -725,15 +731,28 @@ class DockerOmnigentProviderConfigMaterializer(DockerOpencodeAuthJsonMaterialize
             ],
             failure="credential volume creation failed",
         )
-        writer_script = (
-            "set -eu; install -d -m 0700 -o 1000 -g 1000 /credential; "
-            'tmp=/credential/.config.yaml.tmp; cat > "$tmp"; '
-            'chown 1000:1000 "$tmp"; chmod 0600 "$tmp"; '
-            'mv "$tmp" /credential/config.yaml; '
-            "printf '%s\\n' \"$1\" > /credential/.moonmind-generation; "
-            "chown 1000:1000 /credential/.moonmind-generation; "
-            "chmod 0600 /credential/.moonmind-generation"
-        )
+        writer_script = r"""import json, os, pathlib, sys, tempfile
+root = pathlib.Path('/credential')
+root.mkdir(mode=0o700, exist_ok=True)
+os.chown(root, 1000, 1000); root.chmod(0o700)
+payload = json.load(sys.stdin)
+configuration = payload.pop('_moonmind_codex_configuration', None)
+files = {'config.yaml': json.dumps(payload)}
+if configuration is not None:
+    files['codex-profile.json'] = json.dumps(configuration)
+files['.moonmind-generation'] = sys.argv[-1] + '\n'
+for name, content in files.items():
+    descriptor, staged = tempfile.mkstemp(prefix='.' + name + '.', dir=root)
+    with os.fdopen(descriptor, 'w') as stream:
+        stream.write(content); stream.flush(); os.fsync(stream.fileno())
+        os.fchown(stream.fileno(), 1000, 1000); os.fchmod(stream.fileno(), 0o600)
+    os.replace(staged, root / name)
+descriptor = os.open(root, os.O_RDONLY)
+try:
+    os.fsync(descriptor)
+finally:
+    os.close(descriptor)
+"""
         try:
             verify_config_script = "".join(
                 (
@@ -746,6 +765,19 @@ class DockerOmnigentProviderConfigMaterializer(DockerOpencodeAuthJsonMaterialize
                     'assert d["providers"]["moonmind"]["kind"]=="key"\'',
                 )
             )
+            if endpoint is not None and endpoint.codexConfiguration is not None:
+                expected_config = json.dumps(
+                    endpoint.codexConfiguration, sort_keys=True
+                )
+                verify_config_script += (
+                    '; test "$(stat -c %u:%g /credential/codex-profile.json)" = 1000:1000; '
+                    'test "$(stat -c %a /credential/codex-profile.json)" = 600; '
+                    "python3 -c "
+                    + shlex.quote(
+                        "import json; assert json.load(open('/credential/codex-profile.json')) == "
+                        + repr(json.loads(expected_config))
+                    )
+                )
             writer_ref = await self._resolve_writer_ref(
                 context.writer_image_ref,
                 expected_omnigent_version=context.expected_omnigent_version,
@@ -767,9 +799,9 @@ class DockerOmnigentProviderConfigMaterializer(DockerOpencodeAuthJsonMaterialize
                     "--mount",
                     f"type=volume,src={volume_name},dst=/credential",
                     "--entrypoint",
-                    "/bin/sh",
+                    "python3",
                     writer_ref,
-                    "-ceu",
+                    "-c",
                     writer_script,
                     "--",
                     str(acquired.credential_generation),
@@ -846,6 +878,15 @@ class DockerOmnigentProviderConfigMaterializer(DockerOpencodeAuthJsonMaterialize
                 "attachments": [attachment],
                 "runtimeEnvironment": {
                     "OMNIGENT_CONFIG_HOME": self._TARGET,
+                    **(
+                        {
+                            "MOONMIND_CODEX_PROFILE_CONFIG_FILE": self._TARGET
+                            + "/codex-profile.json"
+                        }
+                        if endpoint is not None
+                        and endpoint.codexConfiguration is not None
+                        else {}
+                    ),
                     **(endpoint.launchEnvironment if endpoint is not None else {}),
                 },
                 "cleanupRef": f"credential-cleanup:sha256:{digest}",

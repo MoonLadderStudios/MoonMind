@@ -38,6 +38,7 @@ from api_service.services.omnigent_agent_bootstrap_service import (
     CLAUDE_ENV_BUNDLE_BUILTIN_PROFILE_ID,
     CLAUDE_BUILTIN_PROFILE_ID,
     CODEX_API_KEY_BUILTIN_PROFILE_ID,
+    CODEX_FILE_CONFIG_BUILTIN_PROFILE_ID,
     OPENCODE_BUILTIN_PROFILE_ID,
     BootstrapDefaultConflictError,
     build_bootstrap_document,
@@ -252,11 +253,11 @@ async def test_seed_uses_builtin_codex_when_env_absent(session):
         )
         is True
     )
-    # The stock Codex agent backs the OAuth default and the managed API-key
-    # configuration.
+    # The observed stock Codex agent backs each admitted credential shape.
     assert set(await session.scalars(select(OmnigentAgentProfile.profile_id))) == {
         BOOTSTRAP_PROFILE_ID,
         CODEX_API_KEY_BUILTIN_PROFILE_ID,
+        CODEX_FILE_CONFIG_BUILTIN_PROFILE_ID,
     }
     profile = await session.get(OmnigentAgentProfile, BOOTSTRAP_PROFILE_ID)
     assert profile is not None
@@ -610,6 +611,37 @@ async def test_api_key_codex_profiles_route_through_managed_api_key_configuratio
         )
         == 1
     )
+
+
+async def test_declared_codex_file_profile_routes_through_managed_configuration(
+    session,
+):
+    from moonmind.provider_profiles.codex_configuration import minimax_file_templates
+
+    selected = SimpleNamespace(
+        profile_id="operator-minimax",
+        runtime_id="codex_cli",
+        provider_id="minimax",
+        credential_source="secret_ref",
+        runtime_materialization_mode="composite",
+        execution_configuration=None,
+        secret_refs={"provider_api_key": "env://MINIMAX_API_KEY"},
+        env_template={"MINIMAX_API_KEY": {"from_secret_ref": "provider_api_key"}},
+        file_templates=minimax_file_templates(),
+        home_path_overrides={"CODEX_HOME": "{{runtime_support_dir}}/codex-home"},
+    )
+    assert await profile_route_runtime(session, None, selected) == "codex_cli"
+    assert await reconcile_bootstrap_agent_profile(
+        session, env={}, inventory=_inventory("codex-native-ui")
+    )
+    assert await profile_route_runtime(session, None, selected) == "omnigent"
+    configuration = await profile_execution_selection(session, selected, None)
+    assert configuration["profileId"] == "omnigent-codex-file-config"
+    assert configuration["harnessId"] == "codex-native"
+    # Authored settings outside the exact model-config translation stay
+    # readable on their narrow direct route, with no silent account fallback.
+    selected.file_templates[0]["content_template"]["approval_policy"] = "never"
+    assert await profile_route_runtime(session, None, selected) == "codex_cli"
 
 
 async def test_seed_does_not_claim_ready_before_upstream_identity_is_observed(session):

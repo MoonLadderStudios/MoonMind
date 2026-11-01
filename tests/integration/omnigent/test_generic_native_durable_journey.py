@@ -669,6 +669,9 @@ class NativeDocker(StaticCodexDocker):
                 assert volume in self.volumes
                 if input_bytes:
                     self.auth_json = json.loads(input_bytes)
+                    self.codex_configuration = self.auth_json.pop(
+                        "_moonmind_codex_configuration", None
+                    )
                 if ".moonmind-generation" in " ".join(argv):
                     generation = argv[argv.index("--") + 1]
                     if "readonly" in mounts["/credential"]:
@@ -1027,6 +1030,7 @@ async def _compile_plan(
     api_key=False,
     static_mode=False,
     env_bundle=False,
+    codex_config=False,
     instructions="Generate a report.",
 ):
     # Reuse the durable Skill producer, then expose its immutable body through
@@ -1044,7 +1048,7 @@ async def _compile_plan(
     }[profile_name]
     provider_id = (
         "minimax"
-        if env_bundle
+        if env_bundle or codex_config
         else "anthropic" if profile_name == "claude" else "openai"
     )
     capabilities = provider_profile_creation_capabilities(
@@ -1062,14 +1066,14 @@ async def _compile_plan(
     fields["runtime_materialization_mode"] = RuntimeMaterializationMode(
         fields["runtime_materialization_mode"]
     )
-    if api_key and not env_bundle:
+    if api_key and not env_bundle and not codex_config:
         # Guided API-key setup stores the strategy's key mapping, exactly as the
         # Provider Profile API-key action writes it.
         strategy = provider_api_key_strategy(runtime_id, provider_id)
         fields["env_template"] = {
             strategy.env_key: {"from_secret_ref": strategy.secret_role}
         }
-    if env_bundle:
+    if env_bundle or codex_config:
         isolation = derive_isolation_policy(
             runtime_id=runtime_id,
             provider_id=provider_id,
@@ -1085,6 +1089,21 @@ async def _compile_plan(
             "ANTHROPIC_SMALL_FAST_MODEL": "model",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         }
+    if codex_config:
+        from moonmind.provider_profiles.codex_configuration import (
+            minimax_file_templates,
+        )
+
+        templates = minimax_file_templates()
+        templates[0]["content_template"]["model"] = "model"
+        templates[0]["content_template"]["profiles"]["m27"]["model"] = "model"
+        fields.update(
+            env_template={"MINIMAX_API_KEY": {"from_secret_ref": "provider_api_key"}},
+            file_templates=templates,
+            home_path_overrides={"CODEX_HOME": "{{runtime_support_dir}}/codex-home"},
+            default_model="model",
+            command_behavior={"suppress_default_model_flag": True},
+        )
     profile = ManagedAgentProviderProfile(
         profile_id=PROFILE,
         runtime_id=runtime_id,
@@ -1194,8 +1213,13 @@ async def native_journey(
     selected_harness = selection["harness"]
     static_mode = bool(selection.get("static"))
     env_bundle = selected_harness.endswith("-env-bundle")
-    api_key = selected_harness.endswith("-api-key") or env_bundle
-    harness = selected_harness.removesuffix("-api-key").removesuffix("-env-bundle")
+    codex_config = selected_harness.endswith("-file-config")
+    api_key = selected_harness.endswith("-api-key") or env_bundle or codex_config
+    harness = (
+        selected_harness.removesuffix("-api-key")
+        .removesuffix("-env-bundle")
+        .removesuffix("-file-config")
+    )
     instructions = (
         "/review --local\nGenerate a report."
         if selection.get("command")
@@ -1257,6 +1281,7 @@ async def native_journey(
             api_key=api_key,
             static_mode=static_mode,
             env_bundle=env_bundle,
+            codex_config=codex_config,
             instructions=instructions,
         )
         # Verify the public HTTP enums survive discovery, alongside the real
@@ -1427,6 +1452,7 @@ async def native_journey(
             api_key=api_key,
             static_mode=static_mode,
             env_bundle=env_bundle,
+            codex_config=codex_config,
         )
     finally:
         await running.runner.cleanup()
@@ -1443,6 +1469,8 @@ async def native_journey(
         ("claude-native-env-bundle", "failed"),
         ("codex-native-api-key", "idle"),
         ("codex-native-api-key", "failed"),
+        ("codex-native-file-config", "idle"),
+        ("codex-native-file-config", "failed"),
         ("opencode-native", "idle"),
         ("opencode-native", "failed"),
     ],
@@ -1603,6 +1631,16 @@ async def assert_native_turn_saved_and_cleaned(
         }[journey.harness]
         if getattr(journey, "env_bundle", False):
             base_url = "https://api.minimax.io/anthropic"
+        if getattr(journey, "codex_config", False):
+            base_url = "https://api.minimax.io/v1"
+            configuration = docker.codex_configuration
+            assert configuration["document"]["model"] == "model"
+            assert configuration["provider"]["request_max_retries"] == 4
+            assert configuration["provider"]["stream_max_retries"] == 10
+            assert configuration["provider"]["stream_idle_timeout_ms"] == 300000
+            assert docker.launch_env["CODEX_HOME"] == "/home/app/.codex"
+            assert docker.launch_env["OMNIGENT_CODEX_PATH"].endswith("/bin/codex")
+            assert "codex-configuration.py prepare" in docker.script
         assert docker.auth_json == {
             "providers": {
                 "moonmind": {
@@ -1699,7 +1737,12 @@ async def assert_native_turn_saved_and_cleaned(
 
 @pytest.mark.parametrize(
     "native_journey",
-    ["claude-native-api-key", "claude-native-env-bundle", "codex-native-api-key"],
+    [
+        "claude-native-api-key",
+        "claude-native-env-bundle",
+        "codex-native-api-key",
+        "codex-native-file-config",
+    ],
     indirect=True,
 )
 async def test_api_key_route_cancellation_cleans_owned_host_and_provider_config(
@@ -1759,7 +1802,12 @@ async def test_api_key_route_cancellation_cleans_owned_host_and_provider_config(
 
 @pytest.mark.parametrize(
     "native_journey",
-    ["claude-native-api-key", "claude-native-env-bundle", "codex-native-api-key"],
+    [
+        "claude-native-api-key",
+        "claude-native-env-bundle",
+        "codex-native-api-key",
+        "codex-native-file-config",
+    ],
     indirect=True,
 )
 async def test_api_key_successor_restores_saved_work_with_fresh_provider_config(

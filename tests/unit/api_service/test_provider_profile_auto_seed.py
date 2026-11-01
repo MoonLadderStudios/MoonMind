@@ -1151,7 +1151,10 @@ async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
     ]
     assert codex_mm_profile.file_templates[0]["merge_strategy"] == "deep_merge"
     assert codex_mm_profile.file_templates[0]["permissions"] == "0600"
-    assert codex_mm_profile.file_templates[0]["content_template"]["profile"] == "m27"
+    codex_config = codex_mm_profile.file_templates[0]["content_template"]
+    assert "profile" not in codex_config
+    assert codex_config["model_provider"] == "minimax"
+    assert codex_config["model_providers"]["minimax"]["wire_api"] == "responses"
     assert codex_mm_profile.model_overrides == {"codex_profile_name": "m27"}
 
 
