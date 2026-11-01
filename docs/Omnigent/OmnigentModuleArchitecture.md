@@ -281,6 +281,8 @@ static-connected Codex/Claude hosts use the shared lifecycle.
 API-key Codex and Claude Profiles that translate exactly, including MiniMax's
 declared Claude environment bundle and Codex Responses file configuration, run
 on the shared lifecycle with their endpoint, model pins and non-secret tuning.
+Explicit same-epoch Codex context reuse forks durable native history through
+the shared lifecycle while keeping each attempt's resources and cleanup fenced.
 Credential maintenance drains
 a Profile's generic hosts through the generic host janitor before mutating its
 OAuth home. The durable consumer inventory is checked first, so Profiles without

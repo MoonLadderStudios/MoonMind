@@ -2922,7 +2922,19 @@ async def run_omnigent_execution(
                         ),
                     }
                 )
-            if not session_id:
+            context_phases = (
+                getattr(
+                    getattr(session_authority_sink, "binding", None),
+                    "phaseResults",
+                    None,
+                )
+                or {}
+            )
+            unfinished_context_setup = (
+                context_phases.get("runtimeContextContinuation") is not None
+                and "runtimeContextForkBound" not in context_phases
+            )
+            if not session_id or unfinished_context_setup:
                 session_payload, recovered_id = await prepare_workflow_session_create(
                     request=request,
                     selection=selection,
@@ -2931,11 +2943,19 @@ async def run_omnigent_execution(
                     bridge=durable_row,
                     run_store=run_store,
                     provider_idempotency_key=request.idempotency_key,
+                    session_authority_sink=session_authority_sink,
                 )
                 session_payload["labels"].setdefault("moonmind.issue", "MM-1059")
                 if recovered_id:
+                    if session_id and recovered_id != session_id:
+                        raise OmnigentContractError(
+                            "Recovered context session conflicts with durable retry state"
+                        )
                     session_id = recovered_id
-                    await run_store.attach_session(request.idempotency_key, session_id)
+                    if run_store is not None:
+                        await run_store.attach_session(
+                            request.idempotency_key, session_id
+                        )
                     external_state["retry"].update(
                         {
                             "sessionResolution": "attached",

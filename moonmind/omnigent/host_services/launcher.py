@@ -420,6 +420,7 @@ class DockerOmnigentHostLauncher:
             for key, filename in _CAPABILITY_BEARER_FILES.items()
         }
         allowed_runtime_environment = {
+            "MOONMIND_CODEX_REQUIRE_CONTEXT",
             "MOONMIND_URL",
             "MOONMIND_AGENT_RUN_ID",
             "MOONMIND_TASK_WORKFLOW_ID",
