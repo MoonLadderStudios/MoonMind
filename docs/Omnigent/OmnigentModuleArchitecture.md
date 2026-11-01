@@ -275,8 +275,11 @@ deletion removes its row in the same change rather than leaving a stale entry.
 
 Direct Codex/Claude and AgentSession adapters retain recorded work, opaque
 serialized plans, native extension inputs/direct targets, Profiles without exact shared
-translation, and independent per-step account, harness, pool or model/effort
-choices that cannot share one frozen plan. Equivalent product submissions,
+translation, and independent per-step account, harness, pool or native-option
+choices without an equivalent plan handoff. Distinct same-account model/effort
+pairs have immutable step plans compiled by the same admission owner, linked
+through the existing artifact owner and carried across successor attempts.
+Equivalent product submissions,
 native defaults and same-account step aliases use the shared route, including
 persisted schedule steps; selected harness policy is checked before translation.
 Fresh serialized canonical agent workflows use the same product admission compiler;

@@ -2802,6 +2802,10 @@ class TemporalExecutionService:
                     params.get("omnigentExecutionPlan")
                 )
                 != _admitted_execution_plan.binding
+                or params.get("omnigentStepExecutionPlans")
+                != _admitted_execution_plan.execution_parameters.get(
+                    "omnigentStepExecutionPlans"
+                )
             ):
                 raise TemporalExecutionValidationError(
                     "Execution input delegation conflicts with admitted plan authority"
@@ -2846,17 +2850,21 @@ class TemporalExecutionService:
                 # The application owns the canonical record and its entire
                 # verified grant closure. Lower-level operations only flush.
                 try:
-                    admitted_refs = (
-                        await link_verified_execution_plan_inputs_in_session(
+                    admitted_refs = []
+                    for admitted_plan in (
+                        _admitted_execution_plan,
+                        *_admitted_execution_plan.step_plans,
+                    ):
+                        linked_refs = await link_verified_execution_plan_inputs_in_session(
                             session=self._session,
-                            plan=_admitted_execution_plan.envelope,
-                            binding=_admitted_execution_plan.binding,
+                            plan=admitted_plan.envelope,
+                            binding=admitted_plan.binding,
                             workflow_id=workflow_id,
                             run_id=run_id,
                             namespace=self._namespace,
-                            access=_admitted_execution_plan.artifact_access,
+                            access=admitted_plan.artifact_access,
                         )
-                    )
+                        admitted_refs.extend(linked_refs)
                     record.artifact_refs = list(
                         dict.fromkeys([*record.artifact_refs, *admitted_refs])
                     )

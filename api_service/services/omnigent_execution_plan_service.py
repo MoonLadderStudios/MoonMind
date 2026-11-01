@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from copy import deepcopy
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -406,6 +407,20 @@ class PersistedOmnigentExecutionPlan:
     # (MoonLadderStudios/MoonMind#3833). ``None`` only for a plan compiled
     # before the contract existed.
     runtime_provider_rollout: dict[str, Any] | None = None
+    step_plans: tuple[PersistedOmnigentExecutionPlan, ...] = ()
+    step_parameters: Mapping[str, Mapping[str, Any]] | None = None
+
+    @property
+    def execution_parameters(self) -> dict[str, Any]:
+        parameters = {
+            "omnigentExecutionPlan": self.binding.model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            ),
+            "resolvedSkillsetRef": self.resolved_skillset_ref,
+        }
+        if self.step_parameters:
+            parameters["omnigentStepExecutionPlans"] = deepcopy(dict(self.step_parameters))
+        return parameters
 
 
 def _workflow_payload(initial_parameters: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -1394,6 +1409,7 @@ async def compile_and_persist_execution_plan(
     parent_repository_plan: OmnigentExecutionPlanEnvelope | None = None,
     parent_artifact_access: ArtifactAccessContext | None = None,
     access: ArtifactAccessContext,
+    _compile_step_plans: bool = True,
 ) -> PersistedOmnigentExecutionPlan:
     """Compile and persist one plan before Temporal or provider side effects."""
 
@@ -1929,13 +1945,13 @@ async def compile_and_persist_execution_plan(
         launch_policy=planner_launch_policy,
         model_qualified_id=(
             str(
-                initial_parameters.get("model") or model_mapping.get("model") or ""
+                (initial_parameters["model"] if "model" in initial_parameters else model_mapping.get("model")) or ""
             ).strip()
             or None
         ),
         model_effort=(
             str(
-                initial_parameters.get("effort") or model_mapping.get("effort") or ""
+                (initial_parameters["effort"] if "effort" in initial_parameters else model_mapping.get("effort")) or ""
             ).strip()
             or None
         ),
@@ -2143,7 +2159,7 @@ async def compile_and_persist_execution_plan(
     _evidence_refs: tuple[str, ...] = ()
     if support_evidence is not None:
         _evidence_refs = (support_evidence_ref,)
-    return PersistedOmnigentExecutionPlan(
+    admitted = PersistedOmnigentExecutionPlan(
         artifact_access=access,
         envelope=persisted,
         binding=binding,
@@ -2165,6 +2181,29 @@ async def compile_and_persist_execution_plan(
         resolved_skillset_ref=skill_ref,
         resolved_skillset_digest=skill_digest,
     )
+    if _compile_step_plans:
+        from api_service.services.omnigent_step_plan_service import compile_step_execution_plans
+
+        admitted = await compile_step_execution_plans(
+            admitted=admitted,
+            session_factory=session_factory,
+            artifact_service=artifact_service,
+            principal=principal,
+            workflow_id=workflow_id,
+            agent_profile_snapshot=agent_profile_snapshot,
+            provider_profile=provider_profile,
+            initial_parameters=initial_parameters,
+            authored_request_ref=authored_request_ref,
+            authored_request_digest=authored_request_digest,
+            task_input_snapshot_ref=task_input_snapshot_ref,
+            task_input_snapshot_digest=task_input_snapshot_digest,
+            execution_plan_store=execution_plan_store,
+            db_session=db_session,
+            parent_repository_plan=parent_repository_plan,
+            parent_artifact_access=parent_artifact_access,
+            access=access,
+        )
+    return admitted
 
 
 async def frozen_task_input_provenance(
@@ -2291,6 +2330,7 @@ async def compile_frozen_execution_plan(
         db_session=db_session,
         parent_repository_plan=parent_repository_plan,
         access=access,
+        _compile_step_plans=bool(initial_parameters.get("omnigentStepExecutionPlans")),
     )
 
 
@@ -2603,6 +2643,33 @@ async def readmit_frozen_execution_plan(
                     for ref in persisted_plan.artifact_refs
                 ),
             )
+        if preserve_recorded_intent and initial_parameters.get("omnigentStepExecutionPlans"):
+            recorded_steps = initial_parameters["omnigentStepExecutionPlans"]
+            admitted_steps = persisted_plan.step_parameters or {}
+            if set(recorded_steps) != set(admitted_steps):
+                changed.append("logical step plan selection")
+            plans_by_ref = {plan.binding.plan_ref: plan for plan in persisted_plan.step_plans}
+            for step_id in set(recorded_steps).intersection(admitted_steps):
+                recorded_step = await SessionExecutionPlanStore(db_session).load(
+                    recorded_steps[step_id]["omnigentExecutionPlan"]["planRef"]
+                )
+                admitted_step = plans_by_ref[
+                    admitted_steps[step_id]["omnigentExecutionPlan"]["planRef"]
+                ].envelope
+                if recorded_step is None:
+                    raise ValueError(f"the recorded execution plan for step {step_id} is unavailable")
+                step_changed = changed_admitted_intent(recorded_step.payload, admitted_step.payload)
+                step_changed += await changed_repository_selection(
+                    artifact_service=artifact_service,
+                    principal=principal,
+                    recorded=recorded_step.payload,
+                    admitted=admitted_step.payload,
+                    access=access._with_verified_inputs(
+                        ref.removeprefix("artifact://").removeprefix("artifact:")
+                        for ref in persisted_plan.artifact_refs
+                    ),
+                )
+                changed.extend(f"step {step_id}: {field}" for field in step_changed)
         if changed:
             raise ValueError(
                 "re-admission would change the recorded request intent: "
@@ -2624,13 +2691,7 @@ async def readmit_frozen_execution_plan(
             )
         return recorded(f"{type(exc).__name__}: {exc}")
     await db_session.commit()
-    return {
-        "disposition": "admitted",
-        "omnigentExecutionPlan": persisted_plan.binding.model_dump(
-            mode="json", by_alias=True, exclude_none=True
-        ),
-        "resolvedSkillsetRef": persisted_plan.resolved_skillset_ref,
-    }
+    return {"disposition": "admitted", **persisted_plan.execution_parameters}
 
 
 __all__ = [
