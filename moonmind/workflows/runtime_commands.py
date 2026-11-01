@@ -245,4 +245,13 @@ class RuntimeCommandRenderer:
                 prefix = f"{candidate}{separator}"
                 if prepared.startswith(prefix):
                     return prepared[len(prefix) :].strip()
+            # Skill activation can precede the authored command. Remove its
+            # complete block once, preserving context on both sides; a body
+            # fragment alone must not be removed from unrelated context.
+            if command.raw_command.strip() and candidate.startswith(
+                command.raw_command.strip()
+            ):
+                before, matched, after = prepared.partition(f"\n\n{candidate}")
+                if matched and (not after or after.startswith("\n")):
+                    return self._join_instruction_parts(before, after)
         return prepared.strip()
