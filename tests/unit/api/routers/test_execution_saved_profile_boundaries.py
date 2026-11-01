@@ -284,7 +284,7 @@ async def test_raw_retry_keeps_recorded_profile(saved_profile_submission, change
     context.service._client_adapter.start_workflow.assert_awaited_once()
 
 
-def agent_requests(parameters, *, selector_patch=True):
+def agent_requests(parameters, *, selector_patch=True, workflow_id="mm:profile-boundary", run_id="run-1"):
     from datetime import UTC, datetime
     from unittest.mock import patch
 
@@ -301,8 +301,8 @@ def agent_requests(parameters, *, selector_patch=True):
     workflow = MoonMindRunWorkflow()
     info = SimpleNamespace(
         namespace="default",
-        workflow_id="mm:profile-boundary",
-        run_id="run-1",
+        workflow_id=workflow_id,
+        run_id=run_id,
         parent=None,
         task_queue="test",
         start_time=datetime.now(UTC),

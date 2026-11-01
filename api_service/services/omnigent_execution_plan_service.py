@@ -532,8 +532,49 @@ async def _resolve_and_persist_skills(
     initial_parameters: Mapping[str, Any],
     db_session: Any | None = None,
     access: ArtifactAccessContext,
+    recorded_skillset_ref: str | None = None,
 ) -> tuple[AgentResolvedSkillSet, str, str, tuple[str, ...]]:
     """Resolve once at admission and persist exact content plus its manifest."""
+
+    if recorded_skillset_ref:
+        # Dispatch-time account selection happens after UserWorkflow resolved
+        # its Skill. Read that execution-granted immutable snapshot rather
+        # than consulting a catalog that may have changed during the wait.
+        from moonmind.workflows.temporal.artifacts import ArtifactDependency
+
+        manifest_id = recorded_skillset_ref.removeprefix("artifact://").removeprefix("artifact:")
+        artifact, body = await artifact_service.read(artifact_id=manifest_id, access=access)
+        frozen = json.loads(body)
+        resolved = AgentResolvedSkillSet.model_validate(frozen)
+        dependencies = [ArtifactDependency(artifact_id=manifest_id, sha256=artifact.sha256,
+                                           required=True, role="input.original_skill_snapshot")]
+        for skill in resolved.skills:
+            if not skill.content_ref or not str(skill.content_digest or "").startswith("sha256:"):
+                raise ValueError("recorded Skill snapshot lacks immutable content evidence")
+            content_id = str(skill.content_ref).removeprefix("artifact://").removeprefix("artifact:")
+            # A readable manifest is not authority over arbitrary referenced
+            # content. Keep the original execution's grants before sealing a
+            # new dependency closure.
+            _, content = await artifact_service.read(artifact_id=content_id, access=access)
+            if "sha256:" + hashlib.sha256(content).hexdigest() != skill.content_digest:
+                raise ValueError("recorded Skill content does not match its admitted digest")
+            dependencies.append(ArtifactDependency(
+                artifact_id=content_id,
+                sha256=skill.content_digest.removeprefix("sha256:"), required=True, role="input.skill_content",
+            ))
+        # Native manifests predate canonical JSON storage. Preserve their
+        # exact document in the shared serialization and retain the original
+        # artifact in the verified dependency closure.
+        shared_ref, shared_digest = await persist_json_artifact(
+            artifact_service=artifact_service, principal=principal,
+            artifact_class="omnigent.resolved_skill_set", payload=frozen,
+        )
+        await artifact_service.record_verified_dependencies(
+            root_artifact_id=shared_ref, dependencies=tuple(dependencies),
+            access=access._with_verified_inputs((shared_ref, *(entry.artifact_id for entry in dependencies))),
+        )
+        return (resolved.model_copy(update={"manifest_ref": shared_ref}), shared_ref,
+                shared_digest, tuple(str(skill.content_ref) for skill in resolved.skills))
 
     snapshot_seed = hashlib.sha256(
         f"{workflow_id}:{task_input_snapshot_digest}".encode()
@@ -563,6 +604,7 @@ async def _resolve_and_persist_skills(
 
     content_refs: list[str] = []
     created_refs: list[str] = []
+    catalog_refs: list[str] = []
     persisted_entries = []
     for skill in resolved.skills:
         if skill.content_ref:
@@ -571,6 +613,12 @@ async def _resolve_and_persist_skills(
                     f"selected Skill '{skill.skill_name}' lacks content digest evidence"
                 )
             content_refs.append(skill.content_ref)
+            # These references came from the deployment's Skill catalog, not
+            # request-supplied artifact pointers. This admission owner may
+            # delegate precisely the selected catalog content to a workflow;
+            # the dependency writer still verifies its digest and policy.
+            if skill.provenance.source_kind.value == "deployment":
+                catalog_refs.append(str(skill.content_ref).removeprefix("artifact://").removeprefix("artifact:"))
             persisted_entries.append(skill)
             continue
         source_path = str(skill.provenance.source_path or "").strip()
@@ -629,7 +677,7 @@ async def _resolve_and_persist_skills(
             )
             for skill in persisted_entries
         ),
-        access=access._with_verified_inputs((manifest_ref, *created_refs)),
+        access=access._with_verified_inputs((manifest_ref, *created_refs, *catalog_refs)),
     )
     resolved = resolved.model_copy(update={"manifest_ref": manifest_ref})
     return resolved, manifest_ref, manifest_digest, tuple(content_refs)
@@ -1412,6 +1460,7 @@ async def compile_and_persist_execution_plan(
     access: ArtifactAccessContext,
     _compile_step_plans: bool = True,
     _recorded_step_parameters: Mapping[str, Mapping[str, Any]] | None = None,
+    recorded_skillset_ref: str | None = None,
 ) -> PersistedOmnigentExecutionPlan:
     """Compile and persist one plan before Temporal or provider side effects."""
 
@@ -1711,6 +1760,7 @@ async def compile_and_persist_execution_plan(
         task_input_snapshot_digest=task_input_snapshot_digest,
         initial_parameters=initial_parameters,
         access=access,
+        recorded_skillset_ref=recorded_skillset_ref,
     )
     skill_delivery_ref = _digest_ref(
         "skill-delivery",
