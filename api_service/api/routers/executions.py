@@ -8330,7 +8330,7 @@ async def _workflow_creation_defaults(
                 session=session, runtime_id=normalize_runtime_id(intended_runtime)
             )
             if provider is not None:
-                if not _steps_keep_profile_authority(provider, task_payload):
+                if not await _steps_keep_profile_authority(provider, task_payload, session=session):
                     return defaults
                 return replace(
                     defaults,
@@ -8351,10 +8351,10 @@ async def _workflow_creation_defaults(
     return defaults
 
 
-def _steps_keep_profile_authority(
-    provider: Any, task_payload: Mapping[str, Any]
+async def _steps_keep_profile_authority(
+    provider: Any, task_payload: Mapping[str, Any], *, session: Any
 ) -> bool:
-    """Whether one exact shared plan can preserve the authored step choices."""
+    """Whether shared plans can preserve the authored account choices."""
     if has_unexpanded_task_template({"workflow": task_payload}):
         return False
     if goal_from_payloads(
@@ -8364,7 +8364,6 @@ def _steps_keep_profile_authority(
     from moonmind.runtime_intent import merge_runtime_selection, model_selection_fields
 
     task_runtime = _coerce_mapping(task_payload.get("runtime"))
-    root_selection = None
     for index, step in enumerate(task_payload.get("steps") or []):
         if not isinstance(step, Mapping):
             continue
@@ -8377,42 +8376,44 @@ def _steps_keep_profile_authority(
         profile_ref = provider_profile_ref_from_mapping(
             runtime
         ) or provider_profile_ref_from_mapping(step)
-        if profile_ref and profile_ref != provider.profile_id:
-            return False
         mode = runtime.get("mode")
         if mode and normalize_runtime_id(mode) not in {
             "omnigent",
             normalize_runtime_id(provider.runtime_id),
-        }:
+        } and not profile_ref:
             return False
-        if model_selection_fields(runtime):
-            # The shared plan freezes one model/effort pair. Resolve with the
-            # native owner's inheritance rules before treating aliases as
-            # equivalent; a distinct step selection still needs its adapter.
-            if root_selection is None:
-                root_selection = resolve_model_effort(
-                    runtime_id=provider.runtime_id,
-                    profile=provider,
-                    authored_runtime=task_runtime,
-                    require_launch_ready=False,
-                    workflow_settings=settings.workflow,
-                )
-            step_selection = resolve_model_effort(
-                runtime_id=provider.runtime_id,
-                profile=provider,
-                authored_runtime=merge_runtime_selection(task_runtime, runtime),
-                require_launch_ready=False,
+        selected_provider = provider
+        if profile_ref and profile_ref != provider.profile_id:
+            # Inspect the exact step account's options, never another account's
+            # tier table. Missing lookup evidence keeps the narrow native route.
+            if not callable(getattr(session, "get", None)):
+                return False
+            selected_provider = await session.get(ManagedAgentProviderProfile, profile_ref)
+            if selected_provider is None:
+                return False
+            if mode and normalize_runtime_id(mode) not in {"omnigent", normalize_runtime_id(selected_provider.runtime_id)}:
+                return False
+            step_route = await _profile_route_runtime(
+                session=session, user=None, provider_profile=selected_provider,
+                authored_runtime=(mode if mode and normalize_runtime_id(mode) in {"codex_cli", "claude_code"} else None),
+            )
+            if step_route != "omnigent":
+                return False
+        if model_selection_fields(runtime) or selected_provider is not provider:
+            # Model and effort have per-step plans. Arbitrary tier options
+            # still need their native adapter until the shared harness carries
+            # those options through launch, rather than merely recording them.
+            root = resolve_model_effort(
+                runtime_id=provider.runtime_id, profile=provider,
+                authored_runtime=task_runtime, require_launch_ready=False,
                 workflow_settings=settings.workflow,
             )
-            if (
-                step_selection.model,
-                step_selection.effort,
-                step_selection.tier_parameters,
-            ) != (
-                root_selection.model,
-                root_selection.effort,
-                root_selection.tier_parameters,
-            ):
+            selected = resolve_model_effort(
+                runtime_id=selected_provider.runtime_id, profile=selected_provider,
+                authored_runtime=merge_runtime_selection(task_runtime, runtime),
+                require_launch_ready=False, workflow_settings=settings.workflow,
+            )
+            if selected.tier_parameters or selected.tier_parameters != root.tier_parameters:
                 return False
     return True
 
@@ -8457,7 +8458,7 @@ async def _profile_route_runtime(
         and (authored_runtime or (task_payload or {}).get("steps"))
         and normalize_runtime_id(provider_profile.runtime_id)
         in {"codex_cli", "claude_code"}
-        and not _steps_keep_profile_authority(provider_profile, task_payload or {})
+        and not await _steps_keep_profile_authority(provider_profile, task_payload or {}, session=session)
     ):
         return (
             None
@@ -9390,6 +9391,7 @@ async def _resolve_step_runtime_selections(
     task_profile_id: str | None,
     session: Any,
     defer_account_validation: bool = False,
+    task_authored_runtime: object = None,
 ) -> None:
     """Normalize step intent; recurring starts validate independent accounts at dispatch."""
     if not steps:
@@ -9464,6 +9466,16 @@ async def _resolve_step_runtime_selections(
                     profile_id=effective_profile_id,
                     selected_runtime=canonical_step_runtime,
                 )
+            if (
+                not defer_account_validation
+                and raw_step_profile_id and not runtime_payload.get("mode") and task_authored_runtime
+                and normalize_runtime_id(task_authored_runtime) in {"codex_cli", "claude_code"}
+            ):
+                # Translating the root does not erase its authored harness.
+                _require_provider_profile_runtime(
+                    profile=provider_profile, profile_id=effective_profile_id,
+                    selected_runtime=normalize_runtime_id(task_authored_runtime),
+                )
         elif _runtime_model_tier(runtime_payload) is not None and not step_selects_pool:
             # Resolve profile-less tier intent only after the step runtime is
             # known, then persist that selection for the eventual launch.
@@ -9479,10 +9491,9 @@ async def _resolve_step_runtime_selections(
         if (
             task_target_runtime == "omnigent"
             and provider_profile is not None
-            and provider_profile.profile_id == task_profile_id
             and canonical_step_runtime in {"codex_cli", "claude_code"}
-            and _steps_keep_profile_authority(
-                provider_profile, {"runtime": task_runtime, "steps": [step]}
+            and await _steps_keep_profile_authority(
+                provider_profile, {"runtime": task_runtime, "steps": [step]}, session=session
             )
         ):
             route = await _profile_route_runtime(
@@ -12411,6 +12422,7 @@ async def _create_execution_from_workflow_request(
         task_target_runtime=canonical_target_runtime,
         task_profile_id=raw_profile_id if _provider_profile is not None else None,
         session=session,
+        task_authored_runtime=authored_runtime,
     )
     if normalized_steps:
         normalized_task_for_planner["steps"] = normalized_steps
@@ -12764,14 +12776,7 @@ async def _create_execution_from_workflow_request(
                     "message": str(exc),
                 },
             ) from exc
-        initial_parameters["omnigentExecutionPlan"] = (
-            persisted_omnigent_plan.binding.model_dump(
-                mode="json", by_alias=True, exclude_none=True
-            )
-        )
-        initial_parameters["resolvedSkillsetRef"] = (
-            persisted_omnigent_plan.resolved_skillset_ref
-        )
+        initial_parameters.update(persisted_omnigent_plan.execution_parameters)
         # MoonLadderStudios/MoonMind#3833: record the frozen runtime-provider
         # rollout decision beside the plan binding so Workflow Detail and audit
         # evidence show the truthful selected path. It is a sibling key, not a
@@ -13072,6 +13077,10 @@ async def _resolve_recurring_runtime_selection(
         raw_initial_parameters = request_payload.get("initial_parameters")
     if isinstance(raw_initial_parameters, Mapping):
         parameter_payload = raw_initial_parameters
+    if "omnigentStepExecutionPlans" in parameter_payload:
+        raise _invalid_workflow_request(
+            "Step execution plans must be compiled by workflow admission."
+        )
 
     try:
         validate_workflow_runtime_targets(request_payload)
@@ -13202,6 +13211,7 @@ async def _resolve_recurring_runtime_selection(
             task_profile_id=raw_profile_id,
             session=session,
             defer_account_validation=True,
+            task_authored_runtime=authored_runtime,
         )
         task_payload = {**task_payload, "steps": normalized_steps}
 
@@ -15479,6 +15489,10 @@ async def create_execution(
             _fresh_serialized_workflow_request(request) if existing is None else None
         )
         initial_parameters = dict(request.initial_parameters)
+        if existing is None and "omnigentStepExecutionPlans" in initial_parameters:
+            raise _invalid_workflow_request(
+                "Step execution plans must be compiled by workflow admission."
+            )
         if assessment_scope is not None:
             initial_parameters["assessmentScope"] = assessment_scope
         # Preserve every authored runtime before canonicalization. The resolved
@@ -19674,6 +19688,14 @@ async def continue_in_new_workflow(
             initial_params["workflow"] = {**retained_workflow, **authored_workflow}
         source_plan_payload = (canonical.parameters or {}).get("omnigentExecutionPlan")
         candidate_plan_payload = initial_params.get("omnigentExecutionPlan")
+        if initial_params.get("omnigentStepExecutionPlans") != (canonical.parameters or {}).get("omnigentStepExecutionPlans"):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "continuation_execution_plan_conflict",
+                    "message": "A linked continuation must preserve its source's immutable step plan authority.",
+                },
+            )
         if isinstance(source_plan_payload, Mapping):
             try:
                 source_plan = OmnigentExecutionPlanBinding.model_validate(
@@ -20777,6 +20799,7 @@ async def rerun_execution(
             repository=None,
             integration=None,
             _workflow_id=reserved_workflow_id,
+            _recovery_artifact_source=canonical,
         )
     except ProviderProfileRuntimeMismatchError as exc:
         # Provider Profiles are runtime-owned: the shared invariant is

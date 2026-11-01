@@ -301,10 +301,7 @@ async def omnigent_prepare_child_execution_plan_activity(
         # The child producer returns only a durable complete plan/snapshot.
         # Failed compilation rolls back its entire prepared artifact set.
         await db_session.commit()
-    initial_parameters["omnigentExecutionPlan"] = child_plan.binding.model_dump(
-        mode="json", by_alias=True, exclude_none=True
-    )
-    initial_parameters["resolvedSkillsetRef"] = child_plan.resolved_skillset_ref
+    initial_parameters.update(child_plan.execution_parameters)
     child_request["initial_parameters"] = initial_parameters
     return child_request
 
@@ -314,6 +311,7 @@ async def _link_execution_plan_inputs(
     *,
     execution: activity.Info,
     planning_parameters: Mapping[str, Any] | None = None,
+    admitted_step_plans: Mapping[str, Any] | None = None,
 ) -> None:
     """Delegate a persisted plan's verified inputs before a workflow consumes it."""
 
@@ -322,20 +320,25 @@ async def _link_execution_plan_inputs(
     from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
     from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 
-    binding = OmnigentExecutionPlanBinding.model_validate(binding_value)
-    plan = await DbExecutionPlanStore(async_session_maker).load(binding.plan_ref)
-    if plan is None:
-        raise ValueError("execution plan authority is unavailable")
-    await link_verified_execution_plan_inputs(
-        session_factory=async_session_maker,
-        plan=plan,
-        binding=binding,
-        workflow_id=execution.workflow_id,
-        run_id=execution.workflow_run_id,
-        namespace=execution.namespace,
-        planning_parameters=planning_parameters,
-        access=ArtifactAccessContext.for_execution(execution.workflow_id),
-    )
+    bindings = [binding_value]
+    step_plans = admitted_step_plans or (planning_parameters or {}).get("omnigentStepExecutionPlans")
+    if isinstance(step_plans, Mapping):
+        bindings.extend(step["omnigentExecutionPlan"] for step in step_plans.values())
+    for value in bindings:
+        binding = OmnigentExecutionPlanBinding.model_validate(value)
+        plan = await DbExecutionPlanStore(async_session_maker).load(binding.plan_ref)
+        if plan is None:
+            raise ValueError("execution plan authority is unavailable")
+        await link_verified_execution_plan_inputs(
+            session_factory=async_session_maker,
+            plan=plan,
+            binding=binding,
+            workflow_id=execution.workflow_id,
+            run_id=execution.workflow_run_id,
+            namespace=execution.namespace,
+            planning_parameters=planning_parameters,
+            access=ArtifactAccessContext.for_execution(execution.workflow_id),
+        )
 
 
 @activity.defn(name="omnigent.admit_scheduled_occurrence_plan")
@@ -381,7 +384,7 @@ async def omnigent_admit_scheduled_occurrence_plan_activity(
         admitted.get("omnigentExecutionPlan")
         or initial_parameters.get("omnigentExecutionPlan"),
         execution=execution,
-        planning_parameters=initial_parameters,
+        planning_parameters={**initial_parameters, **admitted},
     )
     return admitted
 
@@ -433,7 +436,8 @@ async def omnigent_admit_step_successor_plan_activity(
         # Recompilation creates new Skill/snapshot artifacts. The workflow
         # reads them before AgentRun starts, so launch-time grants are too late.
         await _link_execution_plan_inputs(
-            admitted["omnigentExecutionPlan"], execution=execution
+            admitted["omnigentExecutionPlan"], execution=execution,
+            admitted_step_plans=admitted.get("omnigentStepExecutionPlans"),
         )
     return admitted
 

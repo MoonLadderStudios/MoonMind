@@ -874,7 +874,7 @@ async def test_native_translation_preserves_independent_step_authority(
 
 
 @pytest.mark.asyncio
-async def test_step_translation_cannot_reuse_another_accounts_workflow_plan(
+async def test_step_translation_keeps_its_own_account_for_plan_compilation(
     monkeypatch,
 ):
     from unittest.mock import AsyncMock
@@ -899,26 +899,65 @@ async def test_step_translation_cannot_reuse_another_accounts_workflow_plan(
         task_profile_id="parent-account",
         session=session,
     )
-    assert steps[0]["runtime"]["mode"] == "codex_cli"
+    assert steps[0]["runtime"]["mode"] == "omnigent"
     assert steps[0]["runtime"]["providerProfileRef"] == child.profile_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("child_options", [{}, {"native_option": "required"}])
+async def test_translation_checks_the_selected_step_accounts_tier_options(monkeypatch, child_options):
+    from unittest.mock import AsyncMock
+    from api_service.api.routers.executions import _profile_route_runtime
+
+    root = provider(runtime_id="codex_cli", model_tiers=[{"model": "root"}, {"model": "root-second"}])
+    child = provider(profile_id="child", runtime_id="codex_cli", model_tiers=[
+        {"model": "child"}, {"model": "child-second", "parameters": child_options},
+    ])
+    session = Row(get=AsyncMock(return_value=child))
+    monkeypatch.setattr("api_service.services.profile_execution_selection.profile_route_runtime", AsyncMock(return_value="omnigent"))
+    route = await _profile_route_runtime(
+        session=session, user=None, provider_profile=root, authored_runtime="codex_cli",
+        task_payload={"runtime": {"model": "root", "effort": None}, "steps": [{
+            "runtime": {"providerProfileRef": "child", "modelTier": 2},
+        }]},
+    )
+    assert route == (None if child_options else "omnigent")
+
+
+@pytest.mark.asyncio
+async def test_root_translation_retains_a_native_only_step_accounts_supported_route(monkeypatch):
+    from unittest.mock import AsyncMock
+    from api_service.api.routers.executions import _profile_route_runtime
+
+    root = provider(runtime_id="codex_cli")
+    child = provider(profile_id="native-only-child", runtime_id="codex_cli")
+    session = Row(get=AsyncMock(return_value=child))
+    async def own_route(_session, _user, profile):
+        return "omnigent" if profile.profile_id == root.profile_id else "codex_cli"
+    monkeypatch.setattr("api_service.services.profile_execution_selection.profile_route_runtime", own_route)
+    assert await _profile_route_runtime(
+        session=session, user=None, provider_profile=root, authored_runtime="codex_cli",
+        task_payload={"steps": [{"runtime": {"providerProfileRef": child.profile_id, "mode": "codex_cli"}}]},
+    ) is None
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("authored", [True, False])
 @pytest.mark.parametrize(
-    "step_selection,equivalent",
+    "step_selection,tier_parameters,shared",
     [
-        ({}, True),
-        ({"model": "root-model", "effort": "high"}, True),
-        ({"model": "other-model"}, False),
-        ({"effort": "low"}, False),
-        ({"model": None, "effort": None}, False),
-        ({"modelTier": 1}, True),
-        ({"modelTier": 2}, False),
+        ({}, {}, True),
+        ({"model": "root-model", "effort": "high"}, {}, True),
+        ({"model": "other-model"}, {}, True),
+        ({"effort": "low"}, {}, True),
+        ({"model": None, "effort": None}, {}, True),
+        ({"modelTier": 1}, {}, True),
+        ({"modelTier": 2}, {}, True),
+        ({"modelTier": 2}, {"native_option": "required"}, False),
     ],
 )
 async def test_native_translation_preserves_step_model_selection(
-    monkeypatch, authored, step_selection, equivalent
+    monkeypatch, authored, step_selection, tier_parameters, shared
 ):
     from unittest.mock import AsyncMock
 
@@ -931,7 +970,7 @@ async def test_native_translation_preserves_step_model_selection(
         default_model_tier=1,
         model_tiers=[
             {"model": "root-model", "effort": "high"},
-            {"model": "other-model", "effort": "low"},
+            {"model": "other-model", "effort": "low", "parameters": tier_parameters},
         ],
     )
     candidate = configuration()
@@ -951,7 +990,7 @@ async def test_native_translation_preserves_step_model_selection(
         authored_runtime="codex_cli" if authored else None,
         task_payload=task,
     )
-    assert route == ("omnigent" if equivalent else (None if authored else "codex_cli"))
+    assert route == ("omnigent" if shared else (None if authored else "codex_cli"))
     assert task["steps"][0]["runtime"] == step_selection
 
 

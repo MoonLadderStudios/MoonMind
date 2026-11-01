@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from copy import deepcopy
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -45,6 +46,8 @@ from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
     OmnigentExecutionPlanPayload,
     create_execution_plan_envelope,
+    logical_step_plan_digests,
+    verify_execution_plan_envelope,
 )
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
@@ -406,6 +409,19 @@ class PersistedOmnigentExecutionPlan:
     # (MoonLadderStudios/MoonMind#3833). ``None`` only for a plan compiled
     # before the contract existed.
     runtime_provider_rollout: dict[str, Any] | None = None
+    step_plans: tuple[PersistedOmnigentExecutionPlan, ...] = ()
+    step_parameters: Mapping[str, Mapping[str, Any]] | None = None
+
+    @property
+    def execution_parameters(self) -> dict[str, Any]:
+        parameters = {
+            "omnigentExecutionPlan": self.binding.model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            ),
+            "resolvedSkillsetRef": self.resolved_skillset_ref,
+            "omnigentStepExecutionPlans": deepcopy(dict(self.step_parameters or {})),
+        }
+        return parameters
 
 
 def _workflow_payload(initial_parameters: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -1394,6 +1410,8 @@ async def compile_and_persist_execution_plan(
     parent_repository_plan: OmnigentExecutionPlanEnvelope | None = None,
     parent_artifact_access: ArtifactAccessContext | None = None,
     access: ArtifactAccessContext,
+    _compile_step_plans: bool = True,
+    _recorded_step_parameters: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> PersistedOmnigentExecutionPlan:
     """Compile and persist one plan before Temporal or provider side effects."""
 
@@ -1929,13 +1947,13 @@ async def compile_and_persist_execution_plan(
         launch_policy=planner_launch_policy,
         model_qualified_id=(
             str(
-                initial_parameters.get("model") or model_mapping.get("model") or ""
+                (initial_parameters["model"] if "model" in initial_parameters else model_mapping.get("model")) or ""
             ).strip()
             or None
         ),
         model_effort=(
             str(
-                initial_parameters.get("effort") or model_mapping.get("effort") or ""
+                (initial_parameters["effort"] if "effort" in initial_parameters else model_mapping.get("effort")) or ""
             ).strip()
             or None
         ),
@@ -2108,6 +2126,40 @@ async def compile_and_persist_execution_plan(
                     }
                 )
             )
+    step_plans = ()
+    step_parameters = None
+    if _compile_step_plans:
+        from api_service.services.omnigent_step_plan_service import compile_step_execution_plans
+        compiled_steps = await compile_step_execution_plans(
+            root_plan=plan,
+            recorded_step_parameters=_recorded_step_parameters,
+            session_factory=session_factory,
+            artifact_service=artifact_service,
+            principal=principal,
+            workflow_id=workflow_id,
+            agent_profile_snapshot=agent_profile_snapshot,
+            provider_profile=provider_profile,
+            initial_parameters=initial_parameters,
+            authored_request_ref=authored_request_ref,
+            authored_request_digest=authored_request_digest,
+            task_input_snapshot_ref=task_input_snapshot_ref,
+            task_input_snapshot_digest=task_input_snapshot_digest,
+            execution_plan_store=execution_plan_store,
+            db_session=db_session,
+            trusted_repository_declarations=trusted_repository_declarations,
+            workspace_source_kind=workspace_source_kind,
+            workspace_access_snapshot_ref=workspace_access_snapshot_ref,
+            worker_authority_kinds=worker_authority_kinds,
+            repository_bindings=repository_bindings,
+            parent_repository_plan=parent_repository_plan,
+            parent_artifact_access=parent_artifact_access,
+            access=access,
+        )
+        step_plans, step_parameters = compiled_steps.plans, compiled_steps.parameters
+        if step_parameters:
+            plan = create_execution_plan_envelope(plan.payload.model_copy(update={
+                "logicalStepPlans": logical_step_plan_digests(step_parameters),
+            }))
     plan_store = execution_plan_store or (
         SessionExecutionPlanStore(db_session)
         if db_session is not None
@@ -2143,7 +2195,7 @@ async def compile_and_persist_execution_plan(
     _evidence_refs: tuple[str, ...] = ()
     if support_evidence is not None:
         _evidence_refs = (support_evidence_ref,)
-    return PersistedOmnigentExecutionPlan(
+    admitted = PersistedOmnigentExecutionPlan(
         artifact_access=access,
         envelope=persisted,
         binding=binding,
@@ -2161,10 +2213,14 @@ async def compile_and_persist_execution_plan(
             *(access["artifactRef"] for access in repository_access.values()),
             skill_ref,
             plan_artifact_ref,
+            *(ref for step_plan in step_plans for ref in step_plan.artifact_refs),
         ),
         resolved_skillset_ref=skill_ref,
         resolved_skillset_digest=skill_digest,
+        step_plans=step_plans,
+        step_parameters=step_parameters,
     )
+    return admitted
 
 
 async def frozen_task_input_provenance(
@@ -2259,6 +2315,7 @@ async def compile_frozen_execution_plan(
     binding: OmnigentExecutionPlanBinding,
     parent_repository_plan: OmnigentExecutionPlanEnvelope | None = None,
     access: ArtifactAccessContext,
+    refresh_step_selections: bool = False,
 ) -> PersistedOmnigentExecutionPlan:
     """Compile an admitted workflow's frozen inputs again through this owner."""
 
@@ -2275,6 +2332,13 @@ async def compile_frozen_execution_plan(
     compilation_parameters = dict(initial_parameters)
     compilation_parameters.pop("omnigentExecutionPlan", None)
     compilation_parameters.pop("resolvedSkillsetRef", None)
+    recorded_plan = await SessionExecutionPlanStore(db_session).load(binding.plan_ref)
+    if recorded_plan is None:
+        raise ValueError("the recorded execution plan is unavailable")
+    recorded_plan = verify_execution_plan_envelope(recorded_plan)
+    recorded_steps = initial_parameters.get("omnigentStepExecutionPlans")
+    if logical_step_plan_digests(recorded_steps) != (recorded_plan.payload.logicalStepPlans or {}):
+        raise ValueError("logical step plan authority conflicts with its recorded root plan")
     return await compile_and_persist_execution_plan(
         session_factory=None,
         execution_plan_store=SessionExecutionPlanStore(db_session),
@@ -2291,6 +2355,8 @@ async def compile_frozen_execution_plan(
         db_session=db_session,
         parent_repository_plan=parent_repository_plan,
         access=access,
+        _compile_step_plans=refresh_step_selections or bool(recorded_steps),
+        _recorded_step_parameters=None if refresh_step_selections else recorded_steps,
     )
 
 
@@ -2603,6 +2669,33 @@ async def readmit_frozen_execution_plan(
                     for ref in persisted_plan.artifact_refs
                 ),
             )
+        if preserve_recorded_intent and initial_parameters.get("omnigentStepExecutionPlans"):
+            recorded_steps = initial_parameters["omnigentStepExecutionPlans"]
+            admitted_steps = persisted_plan.step_parameters or {}
+            if set(recorded_steps) != set(admitted_steps):
+                changed.append("logical step plan selection")
+            plans_by_ref = {plan.binding.plan_ref: plan for plan in persisted_plan.step_plans}
+            for step_id in set(recorded_steps).intersection(admitted_steps):
+                recorded_step = await SessionExecutionPlanStore(db_session).load(
+                    recorded_steps[step_id]["omnigentExecutionPlan"]["planRef"]
+                )
+                admitted_step = plans_by_ref[
+                    admitted_steps[step_id]["omnigentExecutionPlan"]["planRef"]
+                ].envelope
+                if recorded_step is None:
+                    raise ValueError(f"the recorded execution plan for step {step_id} is unavailable")
+                step_changed = changed_admitted_intent(recorded_step.payload, admitted_step.payload)
+                step_changed += await changed_repository_selection(
+                    artifact_service=artifact_service,
+                    principal=principal,
+                    recorded=recorded_step.payload,
+                    admitted=admitted_step.payload,
+                    access=access._with_verified_inputs(
+                        ref.removeprefix("artifact://").removeprefix("artifact:")
+                        for ref in persisted_plan.artifact_refs
+                    ),
+                )
+                changed.extend(f"step {step_id}: {field}" for field in step_changed)
         if changed:
             raise ValueError(
                 "re-admission would change the recorded request intent: "
@@ -2624,13 +2717,7 @@ async def readmit_frozen_execution_plan(
             )
         return recorded(f"{type(exc).__name__}: {exc}")
     await db_session.commit()
-    return {
-        "disposition": "admitted",
-        "omnigentExecutionPlan": persisted_plan.binding.model_dump(
-            mode="json", by_alias=True, exclude_none=True
-        ),
-        "resolvedSkillsetRef": persisted_plan.resolved_skillset_ref,
-    }
+    return {"disposition": "admitted", **persisted_plan.execution_parameters}
 
 
 __all__ = [

@@ -21,8 +21,6 @@ from pydantic import (
     model_validator,
 )
 
-from moonmind.omnigent.harness_platform.support import SupportKeyPayload
-
 from moonmind.omnigent.harness_platform.credential_bindings import (
     CredentialBinding,
     ModelAuthorityBinding,
@@ -329,6 +327,7 @@ class OmnigentExecutionPlanPayload(BaseModel):
     modelConfig: ModelConfig = Field(alias="model")
     resolvedSkills: dict[str, Any] = Field(alias="resolvedSkills")
     resolvedTools: dict[str, Any] = Field(default_factory=dict, alias="resolvedTools")
+    logicalStepPlans: dict[str, str] | None = Field(default=None, alias="logicalStepPlans")
     classAdmissionDecision: dict[str, Any] = Field(alias="classAdmissionDecision")
     runtimeValidationRequirements: tuple[str, ...] = Field(
         alias="runtimeValidationRequirements"
@@ -368,6 +367,8 @@ class OmnigentExecutionPlanPayload(BaseModel):
             payload.pop("omnigentVersion", None)
         if self.repositoryAuthorityRefs is None:
             payload.pop("repositoryAuthorityRefs", None)
+        if self.logicalStepPlans is None:
+            payload.pop("logicalStepPlans", None)
         return payload
 
     @model_validator(mode="after")
@@ -471,6 +472,7 @@ def canonical_payload_bytes(
         "supportIdentity",
         "runtimeProviderRollout",
         "repositoryAuthorityRefs",
+        "logicalStepPlans",
     ):
         if data.get(optional_v1_field) is None:
             data.pop(optional_v1_field, None)
@@ -483,6 +485,21 @@ def canonical_payload_bytes(
 def compute_plan_ref(payload: OmnigentExecutionPlanPayload | dict[str, Any]) -> str:
     digest = hashlib.sha256(canonical_payload_bytes(payload)).hexdigest()
     return f"omnigent-execution-plan:sha256:{digest}"
+
+
+def logical_step_plan_digests(parameters: Mapping[str, Any] | None) -> dict[str, str]:
+    """Bind each complete step handoff to its immutable root admission."""
+    if parameters is None:
+        return {}
+    if not isinstance(parameters, Mapping):
+        raise ValueError("logical step plan authority must be an object")
+    result = {}
+    for step_id, value in parameters.items():
+        if not isinstance(step_id, str) or not step_id.strip() or not isinstance(value, Mapping):
+            raise ValueError("logical step plan authority is invalid")
+        body = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        result[step_id] = "sha256:" + hashlib.sha256(body).hexdigest()
+    return result
 
 
 def compute_model_config_digest(

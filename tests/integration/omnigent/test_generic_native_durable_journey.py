@@ -122,12 +122,14 @@ class NativeTurnServer(FakeOmnigentServer):
     def __init__(self, harness):
         super().__init__(supports_diff=False, terminal_status="idle")
         self.harness = harness
+        self.registered_harnesses = [harness]
         self.host_id = ""
         self.host_name = ""
         self.workspace: Path | None = None
         self.skills: Path | None = None
         self.delivered_skill: bytes | None = None
         self.model = "example/model"
+        self.additional_models = []
         self.host_alive = False
         self.stopped_sessions = set()
         self.foreign_consumers = []
@@ -225,7 +227,7 @@ class NativeTurnServer(FakeOmnigentServer):
         assert request.match_info["host_id"] == self.host_id
         assert request.match_info["harness"] == self.harness
         assert self.harness != "opencode-native"
-        return web.json_response({"models": [{"id": self.model}]})
+        return web.json_response({"models": [{"id": model} for model in [self.model, *self.additional_models]]})
 
     async def list_agents(self, request):
         return web.json_response(
@@ -233,15 +235,16 @@ class NativeTurnServer(FakeOmnigentServer):
                 "object": "list",
                 "data": [
                     {
-                        "id": self.harness + "-agent",
-                        "harness": self.harness,
+                        "id": registered + "-agent",
+                        "harness": registered,
                         "version": "1.0.0",
                         "name": {
                             "codex-native": "codex-native-ui",
                             "claude-native": "claude-native-ui",
                             "opencode-native": "opencode-native-ui",
-                        }[self.harness],
+                        }[registered],
                     }
+                    for registered in self.registered_harnesses
                 ],
                 "has_more": False,
             }
@@ -821,7 +824,7 @@ class NativeDocker(StaticCodexDocker):
                 )
                 return 0, dependency["version"], ""
             if "list_opencode_cli_model_options" in " ".join(argv):
-                return 0, json.dumps({"models": [{"id": self.server.model}]}), ""
+                return 0, json.dumps({"models": [{"id": model} for model in [self.server.model, *self.server.additional_models]]}), ""
             if argv[3:6] in (
                 ["codex", "login", "status"],
                 ["claude", "auth", "status"],
@@ -1560,7 +1563,7 @@ async def assert_native_turn_saved_and_cleaned(
         created["host_type"] == "external" and created["workspace"] == "/workspaces/run"
     )
     assert created["agent_id"] == journey.harness + "-agent"
-    assert created["model_override"] == server.model
+    assert created["model_override"] == plan.payload.modelConfig.qualifiedId
     assert created["terminal_launch_args"] == (
         [
             "--permission-mode",
@@ -1573,7 +1576,17 @@ async def assert_native_turn_saved_and_cleaned(
     )
     messages = [event for event in server.events if event.get("type") == "message"]
     assert len(messages) == expected_messages
-    assert "Generate a report." in messages[0]["data"]["content"][0]["text"]
+    # The harness renderer owns blank lines around a native command. Preserve
+    # the admitted content and line order without requiring its input spacing.
+    expected_prompt = "\n".join(
+        line for line in request.parameters["omnigent"]["prompt"]["text"].splitlines()
+        if line.strip()
+    )
+    rendered_prompt = "\n".join(
+        line for line in messages[0]["data"]["content"][0]["text"].splitlines()
+        if line.strip()
+    )
+    assert expected_prompt in rendered_prompt
     if getattr(journey, "env_bundle", False):
         for name, value in {
             "API_TIMEOUT_MS": "3000000",

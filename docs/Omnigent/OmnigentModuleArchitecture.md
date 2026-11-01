@@ -275,8 +275,19 @@ deletion removes its row in the same change rather than leaving a stale entry.
 
 Direct Codex/Claude and AgentSession adapters retain recorded work, opaque
 serialized plans, native extension inputs/direct targets, Profiles without exact shared
-translation, and independent per-step account, harness, pool or model/effort
-choices that cannot share one frozen plan. Equivalent product submissions,
+translation, and per-step pools or native options without an equivalent plan
+handoff. Fixed step accounts, harnesses and distinct model/effort pairs have
+their own immutable plans compiled by the same admission owner, linked
+through the existing artifact owner and carried across successor attempts.
+The immutable root plan binds each complete step handoff by digest; admission,
+planning and continuation reject a replaced or missing handoff. Retained plans
+without this field preserve their original bytes and plan identities.
+Frozen successors retain each step's saved Profile snapshot. Exact reruns
+inherit their admitted artifact grants before Temporal can start.
+Fresh scheduled occurrences resolve current step configuration; their cache
+tracks selected Profile tiers/configuration, excluding generated plan refs.
+Replacing a root without specialized steps explicitly clears prior handoffs.
+Equivalent product submissions,
 native defaults and same-account step aliases use the shared route, including
 persisted schedule steps; selected harness policy is checked before translation.
 Fresh serialized canonical agent workflows use the same product admission compiler;

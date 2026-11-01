@@ -868,6 +868,7 @@ RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH = (
 RUN_OMNIGENT_EXECUTION_PLAN_BINDING_AUTHORITY_PATCH = (
     "run-omnigent-execution-plan-binding-authority-v1"
 )
+RUN_OMNIGENT_STEP_EXECUTION_PLANS_PATCH = "run-omnigent-step-execution-plans-v1"
 RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH = (
     "run-agent-required-capabilities-propagation-v1"
 )
@@ -12383,6 +12384,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "omnigentExecutionPlan": dict(binding),
             "resolvedSkillsetRef": skillset_ref,
         }
+        if self._workflow_patch_enabled(RUN_OMNIGENT_STEP_EXECUTION_PLANS_PATCH):
+            step_plans = admitted.get("omnigentStepExecutionPlans") or {}
+            if not isinstance(step_plans, Mapping):
+                raise ValueError(f"{subject} admission returned invalid step plan authority")
+            admitted_fields["omnigentStepExecutionPlans"] = dict(step_plans)
         parameters.update(admitted_fields)
         for key in ("initialParameters", "initial_parameters"):
             original = self._original_input_payload.get(key)
@@ -22706,6 +22712,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         trusted_remediation_checkpoint_restore_ref: str | None = None,
     ) -> "AgentExecutionRequest":
         """Build an ``AgentExecutionRequest`` from plan-node inputs and workflow context."""
+        if self._workflow_patch_enabled(RUN_OMNIGENT_STEP_EXECUTION_PLANS_PATCH):
+            step_plans = (workflow_parameters or {}).get("omnigentStepExecutionPlans")
+            admitted_step = step_plans.get(node_id) if isinstance(step_plans, Mapping) else None
+            if isinstance(admitted_step, Mapping):
+                if not isinstance((workflow_parameters or {}).get("omnigentExecutionPlan"), Mapping):
+                    raise ValueError("logical step plans require admitted workflow plan authority")
+                # This map is produced and persisted by admission, rather than
+                # by plan nodes. All existing binding and profile checks below
+                # now compare against this logical step's exact authority.
+                workflow_parameters = {**(workflow_parameters or {}), **admitted_step}
+                resolved_skillset_ref = str(admitted_step["resolvedSkillsetRef"])
         runtime_block_raw = node_inputs.get("runtime")
         runtime_block = (
             runtime_block_raw if isinstance(runtime_block_raw, Mapping) else {}
