@@ -534,6 +534,20 @@ class GenericOmnigentHostRealizer:
 
             host_started_at = time.monotonic()
             host_class, launch_policy = await self._resolve_host(plan, request=request)
+            static_selection = host_class.runtime.get("staticHostSelection")
+            if static_selection is not None:
+                binding = await self._update_binding(
+                    binding,
+                    updates={
+                        "phaseResults": {
+                            **(binding.phaseResults or {}),
+                            "staticHostSelection": {
+                                "hostClassRef": host_class.ref,
+                                "selection": static_selection,
+                            },
+                        }
+                    },
+                )
             credential_handles = await self._credentials.materialize_all(
                 request=request,
                 plan=plan,
@@ -630,6 +644,18 @@ class GenericOmnigentHostRealizer:
                 # selections.
                 resource_limits=launch_policy.limits,
                 ttl_seconds=int(launch_policy.limits["timeoutSeconds"]) + 900,
+                **(
+                    {
+                        "static_selection": static_selection,
+                        "effective_launch_snapshot": host_class.runtime[
+                            "effectiveLaunchSnapshot"
+                        ],
+                        "provider_leases": acquired,
+                        "request": request,
+                    }
+                    if static_selection is not None
+                    else {}
+                ),
             )
             binding = await self._update_binding(
                 binding,
@@ -643,16 +669,16 @@ class GenericOmnigentHostRealizer:
             async def record_host_launch(authority: dict[str, Any]) -> None:
                 nonlocal binding, host_lease
                 assert binding is not None and host_lease is not None
-                host_lease = await self._host_leases.record_launch(
-                    host_lease.leaseRef,
-                    expected_generation=host_lease.generation,
-                    cleanup_handle=authority,
-                )
                 cleanup = list(binding.cleanupAuthorityRefs)
                 if authority not in cleanup:
                     cleanup.append(authority)
                 binding = await self._update_binding(
                     binding, updates={"cleanupAuthorityRefs": cleanup}
+                )
+                host_lease = await self._host_leases.record_launch(
+                    host_lease.leaseRef,
+                    expected_generation=host_lease.generation,
+                    cleanup_handle=authority,
                 )
 
             host_context = await self._host_runtime.realize(
@@ -682,30 +708,56 @@ class GenericOmnigentHostRealizer:
                 if prepared.github_credential_attachment is not None
                 else None
             )
+            ready_authority = {
+                **next(
+                    (
+                        item
+                        for item in binding.cleanupAuthorityRefs
+                        if isinstance(item, dict)
+                        and item.get("kind") == "host"
+                        and item.get("hostLeaseRef") == host_lease.leaseRef
+                    ),
+                    {},
+                ),
+                "kind": "host",
+                "containerName": host_context["containerName"],
+                "stateVolumeRef": host_context["stateVolumeRef"],
+                "controlVolumeRef": host_context.get("controlVolumeRef"),
+                "launchGeneration": host_lease.launchGeneration,
+                "materializedInputPaths": dict(
+                    host_context.get("materializedInputPaths") or {}
+                ),
+                **(
+                    {"capabilityRenewal": host_context["capabilityRenewal"]}
+                    if host_context.get("capabilityRenewal")
+                    else {}
+                ),
+                **(
+                    {"githubProjectionRenewal": github_projection_renewal}
+                    if github_projection_renewal is not None
+                    else {}
+                ),
+            }
+            binding = await self._update_binding(
+                binding,
+                updates={
+                    "cleanupAuthorityRefs": [
+                        item
+                        for item in binding.cleanupAuthorityRefs
+                        if not (
+                            isinstance(item, dict)
+                            and item.get("kind") == "host"
+                            and item.get("hostLeaseRef") == host_lease.leaseRef
+                        )
+                    ]
+                    + [ready_authority]
+                },
+            )
             host_lease = await self._host_leases.mark_ready(
                 host_lease.leaseRef,
                 expected_generation=host_lease.generation,
                 omnigent_host_id=str(host_context["omnigentHostId"]),
-                cleanup_handle={
-                    "kind": "host",
-                    "containerName": host_context["containerName"],
-                    "stateVolumeRef": host_context["stateVolumeRef"],
-                    "controlVolumeRef": host_context.get("controlVolumeRef"),
-                    "launchGeneration": host_lease.launchGeneration,
-                    "materializedInputPaths": dict(
-                        host_context.get("materializedInputPaths") or {}
-                    ),
-                    **(
-                        {"capabilityRenewal": host_context["capabilityRenewal"]}
-                        if host_context.get("capabilityRenewal")
-                        else {}
-                    ),
-                    **(
-                        {"githubProjectionRenewal": github_projection_renewal}
-                        if github_projection_renewal is not None
-                        else {}
-                    ),
-                },
+                cleanup_handle=ready_authority,
             )
             attestations = {
                 key: str(value)

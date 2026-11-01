@@ -82,6 +82,16 @@ class _BootstrapPolicyDefinition:
 
 _BOOTSTRAP_POLICY_DEFINITIONS = (
     _BootstrapPolicyDefinition(
+        policy_id="claude-static",
+        name="Claude static host",
+        host_mode="static_compose",
+        profile_ref="omnigent-claude@1",
+        harness="claude-native",
+        agent_identities=(CLAUDE_STOCK_AGENT_NAME,),
+        compatible_providers=("anthropic",),
+        requires_claude=True,
+    ),
+    _BootstrapPolicyDefinition(
         policy_id="omnigent-codex",
         name="Omnigent Codex execution",
         host_mode="static_compose",

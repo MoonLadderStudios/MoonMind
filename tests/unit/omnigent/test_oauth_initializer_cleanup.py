@@ -113,6 +113,7 @@ def _authority():
     )
     lease = SimpleNamespace(
         lease_id="lease-1",
+        lease_purpose="execution_omnigent",
         container_name="host-1",
         provider_profile_id="profile-1",
         provider_lease_id="provider-lease-1",

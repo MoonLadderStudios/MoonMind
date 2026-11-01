@@ -274,11 +274,10 @@ deletion removes its row in the same change rather than leaving a stale entry.
 | Embedded host/runner transport admission | `omnigent.legacy.embedded_host_transport` | `new_admission_disabled` |
 
 The direct Codex/Claude launch, AgentSession, profile-bound and OAuth host
-rows stay live because the shared lifecycle still lacks the Codex and Claude
-key Profiles with files or authentication outside the exact shared translation,
-one session reused across a run's steps,
-static-connected Codex/Claude hosts, and OAuth credential maintenance of
-profile-bound and static hosts with its host-lease janitor.
+rows retain Codex and Claude key Profiles with files or authentication outside
+the exact shared translation, sessions reused across a run's steps, and
+profile-bound launches with their OAuth credential maintenance. Supported
+static-connected Codex/Claude hosts use the shared lifecycle.
 API-key Codex and Claude Profiles that translate exactly, including MiniMax's
 declared Claude environment bundle and Codex Responses file configuration, run
 on the shared lifecycle with their endpoint, model pins and non-secret tuning.

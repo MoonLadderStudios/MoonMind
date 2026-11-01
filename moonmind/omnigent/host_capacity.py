@@ -206,10 +206,6 @@ class GenericHostCapacityAdmission:
     ) -> tuple[int, int]:
         """Return (active hosts, cold launches inside the current window)."""
 
-        from sqlalchemy import func, select
-
-        from api_service.db.models import OmnigentHostLeaseRecordV2
-
         async with self._session_factory() as session:
             return await self.observe_within(session, now=now)
 
@@ -220,33 +216,25 @@ class GenericHostCapacityAdmission:
 
         from sqlalchemy import func, or_, select
 
-        from api_service.db.models import OmnigentHostLeaseRecordV2
+        from api_service.db.models import (
+            OmnigentHostLeaseRecordV2,
+            OmnigentOAuthHostLeaseRecord,
+        )
+        from moonmind.omnigent.harness_platform.static_hosts import (
+            GENERIC_STATIC_LEASE_PURPOSE,
+        )
 
         observed_at = now or datetime.now(UTC)
         window_start = observed_at - timedelta(
             seconds=self._cold_launch_window_seconds
         )
-        active = await session.execute(
+        active_on_demand = (
             select(func.count())
             .select_from(OmnigentHostLeaseRecordV2)
             .where(
-                OmnigentHostLeaseRecordV2.status.in_(
-                    ACTIVE_HOST_LEASE_STATUSES
-                ),
-                # An expired lease is already reclaimable, so it must not also
-                # spend capacity. `list_recoverable` treats expiry as the end
-                # of a lease's authority; counting it here too let one
-                # abandoned host hold every queued run in `awaiting_slot`
-                # forever, because its owner never returned to release it.
-                # Heartbeat refuses to renew an expired lease, so expiry is a
-                # one-way door: the previous owner cannot resume against a
-                # host whose slot this count has already released.
-                #
-                # A row with no recorded expiry stays counted -- an unknown
-                # deadline is not evidence of a free slot -- and so does
-                # `cleanup_pending`, where teardown is owed but unconfirmed.
-                # Only `cleaned` proves the container is gone, and until then
-                # the machine is still running it.
+                OmnigentHostLeaseRecordV2.status.in_(ACTIVE_HOST_LEASE_STATUSES),
+                # Cleanup remains owed after expiry; a completed cleanup is the
+                # evidence that releases its physical reservation.
                 or_(
                     OmnigentHostLeaseRecordV2.expires_at.is_(None),
                     OmnigentHostLeaseRecordV2.expires_at > observed_at,
@@ -254,18 +242,52 @@ class GenericHostCapacityAdmission:
                 ),
             )
         )
-        recent = await session.execute(
+        active_static = (
+            select(func.count())
+            .select_from(OmnigentOAuthHostLeaseRecord)
+            .where(
+                OmnigentOAuthHostLeaseRecord.lease_purpose
+                == GENERIC_STATIC_LEASE_PURPOSE,
+                OmnigentOAuthHostLeaseRecord.status.in_(
+                    (
+                        "allocating",
+                        "starting",
+                        "ready",
+                        "assigned",
+                        "draining",
+                        "failed",
+                    )
+                ),
+            )
+        )
+        recent_on_demand = (
             select(func.count())
             .select_from(OmnigentHostLeaseRecordV2)
             .where(
-                # Status-independent: a row inside the window is launch
-                # evidence even after it failed or finished cleanup.
                 OmnigentHostLeaseRecordV2.created_at >= window_start,
             )
         )
+        recent_static = (
+            select(func.count())
+            .select_from(OmnigentOAuthHostLeaseRecord)
+            .where(
+                OmnigentOAuthHostLeaseRecord.lease_purpose
+                == GENERIC_STATIC_LEASE_PURPOSE,
+                OmnigentOAuthHostLeaseRecord.acquired_at >= window_start,
+            )
+        )
+        # Each allocation has exactly one storage owner. Both physical forms
+        # contribute to the same two counts and serialized admission decision.
+        active = await session.execute(
+            select(active_on_demand.scalar_subquery() + active_static.scalar_subquery())
+        )
+        recent = await session.execute(
+            select(recent_on_demand.scalar_subquery() + recent_static.scalar_subquery())
+        )
         return int(active.scalar() or 0), int(recent.scalar() or 0)
 
-    async def lock_for_admission(self, session: Any) -> None:
+    @staticmethod
+    async def lock_for_admission(session: Any) -> None:
         """Serialize concurrent admissions for the caller's transaction.
 
         PostgreSQL takes a transaction-scoped advisory lock, so a second

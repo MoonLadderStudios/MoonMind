@@ -129,6 +129,8 @@ class NativeTurnServer(FakeOmnigentServer):
         self.delivered_skill: bytes | None = None
         self.model = "example/model"
         self.host_alive = False
+        self.stopped_sessions = set()
+        self.foreign_consumers = []
         self.on_first_message = None
         self.status = "idle"
         self.items = []
@@ -141,6 +143,7 @@ class NativeTurnServer(FakeOmnigentServer):
         app = super().app()
         app.router.add_get("/", self.native_document)
         app.router.add_get("/api/version", self.version)
+        app.router.add_get("/v1/sessions", self.list_sessions)
         app.router.add_get("/v1/harnesses", self.harnesses)
         app.router.add_get("/v1/hosts/{host_id}", self.get_host)
         app.router.add_get(
@@ -180,6 +183,25 @@ class NativeTurnServer(FakeOmnigentServer):
                     )
                 ],
                 "setup_steps": {},
+            }
+        )
+
+    async def list_sessions(self, request):
+        return web.json_response(
+            {
+                "data": [
+                    {
+                        "id": session,
+                        "host_id": self.host_id,
+                        "status": (
+                            "idle" if session in self.stopped_sessions else self.status
+                        ),
+                        "runner_online": session not in self.stopped_sessions,
+                    }
+                    for session in self.session_ids
+                ]
+                + self.foreign_consumers,
+                "has_more": False,
             }
         )
 
@@ -297,6 +319,8 @@ class NativeTurnServer(FakeOmnigentServer):
             return fault
         payload = await request.json()
         self.events.append(payload)
+        if payload["type"] == "stop_session":
+            self.stopped_sessions.add(request.match_info["session_id"])
         if payload["type"] != "message":
             return web.json_response({"queued": False})
         assert self.host_alive and self.workspace is not None
@@ -657,6 +681,7 @@ class NativeDocker(StaticCodexDocker):
             return 0, "", ""
         if argv[:2] == ["docker", "create"]:
             self.create_count += 1
+            self.host_container_id = f"native-host-{self.create_count}"
             self.container_name = _options(argv, "--name")[0]
             self.host_labels = _mapping(argv, "--label")
             self.launch_env = _mapping(argv, "--env")
@@ -665,7 +690,7 @@ class NativeDocker(StaticCodexDocker):
             self.launch_image = argv[argv.index("-ceu") - 1]
             self.network_ref = _options(argv, "--network")[0]
             self.server.host_id = self.launch_env["OMNIGENT_HOST_ID"]
-            self.server.host_name = self.container_name
+            self.server.host_name = self.launch_env["OMNIGENT_HOST_NAME"]
             self.server.workspace = Path(self.mounts["/workspaces/run"]["src"])
             assert self.server.workspace.is_dir()
             selected_uid = self.host_class.runtime["uid"]
@@ -766,7 +791,12 @@ class NativeDocker(StaticCodexDocker):
             if "moonmind.host_lease_ref" in template:
                 return (
                     0,
-                    self.host_labels["moonmind.host_lease_ref"]
+                    (
+                        self.host_container_id + "|"
+                        if template.startswith("{{.Id}}|")
+                        else ""
+                    )
+                    + self.host_labels["moonmind.host_lease_ref"]
                     + "|"
                     + self.host_labels["moonmind.host_lease_generation"],
                     "",
@@ -873,12 +903,132 @@ class AdmittedManager(HermeticProviderLeases):
         return Handle()
 
 
+class StaticNativeDocker(NativeDocker):
+    state_volume = "moonmind-test-static-persistent-state"
+    retained_identity = "12" * 16
+
+    async def _command(self, argv, *, input_bytes=None):
+        if argv[:2] == ["docker", "compose"]:
+            self.commands.append(tuple(argv))
+            service = "omnigent-host-" + self.server.harness.removesuffix("-native")
+            if "config" in argv:
+                return (
+                    0,
+                    json.dumps(
+                        {
+                            "services": {
+                                service: {
+                                    "volumes": [
+                                        {
+                                            "type": "volume",
+                                            "source": "state",
+                                            "target": "/home/app/.omnigent",
+                                        }
+                                    ]
+                                }
+                            },
+                            "volumes": {"state": {"name": self.state_volume}},
+                        }
+                    ),
+                    "",
+                )
+            if "ps" in argv:
+                return 0, self.host_container_id if self.server.host_alive else "", ""
+            assert "up" in argv and "--no-deps" in argv
+            # Compose consumes the dollar escapes before creating the host.
+            model = json.loads(input_bytes.replace(b"$$", b"$"))
+            definition = model["services"][service]
+            assert definition["read_only"] is True
+            assert (
+                definition["environment"]["OMNIGENT_HOST_ID"] == self.retained_identity
+            )
+            command = ["docker", "create"]
+            for key, flag in (
+                ("container_name", "--name"),
+                ("hostname", "--hostname"),
+                ("user", "--user"),
+            ):
+                command.extend([flag, definition[key]])
+            for key, value in definition["labels"].items():
+                command.extend(["--label", f"{key}={value}"])
+            for key, value in definition["environment"].items():
+                command.extend(["--env", f"{key}={value}"])
+            for mount in definition["volumes"]:
+                rendered = (
+                    f"type={mount['type']},src={mount['source']},dst={mount['target']}"
+                )
+                if mount["read_only"]:
+                    rendered += ",readonly"
+                command.extend(["--mount", rendered])
+            command.extend(
+                [
+                    "--network",
+                    definition["networks"][0],
+                    "--entrypoint",
+                    definition["entrypoint"],
+                    definition["image"],
+                    *definition["command"],
+                ]
+            )
+            result = await super()._command(command)
+            await super()._command(["docker", "start", definition["container_name"]])
+            return result
+        if argv[:2] == ["docker", "inspect"] and len(argv) == 3:
+            return (
+                0,
+                json.dumps(
+                    [
+                        {
+                            "Id": self.host_container_id,
+                            "Name": "/" + self.container_name,
+                            "Config": {
+                                "Env": [
+                                    f"{key}={value}"
+                                    for key, value in self.launch_env.items()
+                                ]
+                            },
+                            "Mounts": [
+                                {"Name": item["src"], "Destination": target}
+                                for target, item in self.mounts.items()
+                                if item["type"] == "volume"
+                            ],
+                        }
+                    ]
+                ),
+                "",
+            )
+        if (
+            argv[:3] == ["docker", "volume", "inspect"]
+            and argv[-1] == self.state_volume
+        ):
+            self.commands.append(tuple(argv))
+            self.volumes.setdefault(self.state_volume, {})
+            return 0, self.state_volume, ""
+        if argv[:2] == [
+            "docker",
+            "run",
+        ] and "load_host_identity_if_present" in " ".join(argv):
+            self.commands.append(tuple(argv))
+            return (
+                0,
+                json.dumps(
+                    {"id": self.retained_identity, "name": "operator-static-host"}
+                ),
+                "",
+            )
+        if argv[:2] == ["docker", "inspect"] and "{{.Image}}" in argv:
+            self.commands.append(tuple(argv))
+            return 0, HOST_IMAGE, ""
+        return await super()._command(argv, input_bytes=input_bytes)
+
+
 async def _compile_plan(
     session_factory,
     harness,
     workflow_id,
     *,
     api_key=False,
+    static_mode=False,
     env_bundle=False,
     codex_config=False,
     instructions="Generate a report.",
@@ -996,7 +1146,9 @@ async def _compile_plan(
         await seed_bootstrap_policies(session, image_resolver=resolve_image)
         artifacts = TemporalArtifactService(TemporalArtifactRepository(session))
         snapshot = _snapshot(
-            harness=harness, policy=f"{profile_name}-on-demand@1", provider_id=PROFILE
+            harness=harness,
+            policy=f"{profile_name}-{'static' if static_mode else 'on-demand'}@1",
+            provider_id=PROFILE,
         )
         snapshot["document"]["skills"] = [_DURABLE_SKILL_NAME]
         if api_key:
@@ -1059,6 +1211,7 @@ async def native_journey(
         request.param if isinstance(request.param, dict) else {"harness": request.param}
     )
     selected_harness = selection["harness"]
+    static_mode = bool(selection.get("static"))
     env_bundle = selected_harness.endswith("-env-bundle")
     codex_config = selected_harness.endswith("-file-config")
     api_key = selected_harness.endswith("-api-key") or env_bundle or codex_config
@@ -1126,6 +1279,7 @@ async def native_journey(
             harness,
             workflow_id,
             api_key=api_key,
+            static_mode=static_mode,
             env_bundle=env_bundle,
             codex_config=codex_config,
             instructions=instructions,
@@ -1230,7 +1384,17 @@ async def native_journey(
             session.add(provider_lease)
             await session.commit()
         monkeypatch.setattr(production, "TemporalClientAdapter", lambda: manager)
-        docker = NativeDocker(server=server, events=events, workflow_id=workflow_id)
+        docker = (StaticNativeDocker if static_mode else NativeDocker)(
+            server=server, events=events, workflow_id=workflow_id
+        )
+        if static_mode:
+            monkeypatch.setenv(
+                "MOONMIND_DEPLOYMENT_PROJECT_NAME", "moonmind-test-static"
+            )
+            monkeypatch.setenv(
+                "MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR",
+                str(Path(__file__).resolve().parents[3]),
+            )
         monkeypatch.setattr(docker_backend, "run_runtime_command", docker.command)
         monkeypatch.setattr(
             credential_materializers, "run_runtime_command", docker.command
@@ -1286,6 +1450,7 @@ async def native_journey(
             worker_root=worker_root,
             harness=harness,
             api_key=api_key,
+            static_mode=static_mode,
             env_bundle=env_bundle,
             codex_config=codex_config,
         )

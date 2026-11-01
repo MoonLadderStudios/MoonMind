@@ -24,8 +24,6 @@ re-verify the selected image and required behavior before any session starts.
 from __future__ import annotations
 
 import copy
-import hashlib
-import json
 import os
 import re
 from collections.abc import Mapping
@@ -300,12 +298,9 @@ def reconcile_effective_launch_to_selected_host(
             boundaries = dict(boundaries)
             boundaries["host"] = host
             reconciled["boundaries"] = boundaries
-    reconciled.pop("snapshotRef", None)
-    canonical = json.dumps(reconciled, sort_keys=True, separators=(",", ":"))
-    reconciled["snapshotRef"] = (
-        "omnigent-launch:sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
-    )
-    return reconciled
+    from moonmind.omnigent.execution_profiles import seal_effective_launch_snapshot
+
+    return seal_effective_launch_snapshot(reconciled)
 
 
 def bind_installed_shared_host_launch(

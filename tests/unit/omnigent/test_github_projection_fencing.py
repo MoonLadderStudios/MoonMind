@@ -575,3 +575,26 @@ async def test_independent_generation_one_acquirers_cannot_reverse_publication(
     finally:
         release_old.set()
         await asyncio.gather(older, return_exceptions=True)
+
+
+def test_retirement_erases_credentials_even_when_a_static_host_keeps_the_mount(
+    tmp_path,
+):
+    stamp = reservation(1)
+    run(tmp_path, stamp, "reserve")
+    run(tmp_path, stamp)
+    assert (tmp_path / "hosts.yml").exists()
+    run(tmp_path, stamp, "retire")
+    assert not (tmp_path / "hosts.yml").exists()
+    assert (
+        json.loads((tmp_path / ".projection-reservation.json").read_text())["retired"]
+        is True
+    )
+
+
+def test_static_retirement_erases_an_interrupted_publish_staging_file(tmp_path):
+    stamp = reservation(1)
+    run(tmp_path, stamp, "reserve")
+    (tmp_path / ".hosts.yml.interrupted").write_bytes(b"synthetic-interrupted-key")
+    run(tmp_path, stamp, "retire")
+    assert not list(tmp_path.glob(".hosts.yml.*"))
