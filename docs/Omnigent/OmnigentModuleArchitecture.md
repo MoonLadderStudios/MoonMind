@@ -279,8 +279,9 @@ translation, and independent per-step account, harness, pool or model/effort
 choices that cannot share one frozen plan. Equivalent product submissions,
 native defaults and same-account step aliases use the shared route, including
 persisted schedule steps; selected harness policy is checked before translation.
-Fresh serialized canonical workflows use the same product admission compiler;
+Fresh serialized canonical agent workflows use the same product admission compiler;
 their title, failure policy and accepted retry identity survive translation.
+Raw deferred step-account matching and tool-only boundary validation remain intact.
 Replaced defaults never select ambient credentials.
 Profile-bound execution and its OAuth host launcher admit no new plans;
 they retain queued starts, retries and cleanup under their recorded authority. Supported

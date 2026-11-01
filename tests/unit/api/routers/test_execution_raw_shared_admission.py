@@ -95,3 +95,23 @@ def test_native_runtime_authority_is_not_reinterpreted_as_product_configuration(
     body["initialParameters"]["workflow"]["runtime"].update(runtime_patch)
     request = CreateExecutionRequest.model_validate(body)
     assert _fresh_serialized_workflow_request(request) is None
+
+
+@pytest.mark.parametrize("alias", ["providerProfileRef", "profileId", "providerProfile", "executionProfileRef", "execution_profile_ref", "profile_id", "provider_profile"])
+def test_deferred_raw_step_account_intent_keeps_its_dispatch_boundary(alias):
+    body = raw_request()
+    body["initialParameters"]["workflow"]["steps"] = [
+        {"id": "selected", "instructions": "Keep deferred matching.", "runtime": {alias: "another-account"}},
+    ]
+    request = CreateExecutionRequest.model_validate(body)
+    assert _fresh_serialized_workflow_request(request) is None
+
+
+def test_raw_tool_only_requests_keep_the_existing_product_boundary():
+    body = raw_request()
+    body["initialParameters"]["workflow"]["steps"] = [
+        {"id": "lookup", "type": "tool", "tool": {"id": "github.resolve_pull_request_target", "inputs": {"pullRequest": "831"}}},
+    ]
+    body["initialParameters"]["workflow"].pop("runtime")
+    request = CreateExecutionRequest.model_validate(body)
+    assert _fresh_serialized_workflow_request(request) is None
