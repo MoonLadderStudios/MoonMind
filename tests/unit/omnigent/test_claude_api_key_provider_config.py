@@ -40,6 +40,9 @@ from moonmind.provider_profiles.lease_client import (
     CredentialLeasePurpose,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from tests.helpers.provider_egress import minimax_egress  # noqa: F401
+
+pytestmark = pytest.mark.usefixtures("minimax_egress")
 
 _KEY = "sk-ant-api-test-value"
 
