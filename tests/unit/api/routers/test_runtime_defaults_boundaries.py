@@ -714,8 +714,8 @@ async def test_raw_saved_omnigent_default_keeps_plan_boundary(dedicated_context)
     response = await context.client.post(
         "/api/executions", json=dedicated_body()["target"]
     )
-    assert response.status_code == 422, response.text
-    assert response.json()["detail"]["code"] == "omnigent_product_boundary_required"
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "default Omnigent Agent Profile is unavailable"
     assert len(context.settings_reads) == 1
     context.service._client_adapter.start_workflow.assert_not_awaited()
 
@@ -1005,8 +1005,18 @@ async def test_raw_configured_profile_keeps_omnigent_product_boundary(
         body["initialParameters"]["task"]["providerProfileRef"] = profile.profile_id
     context.settings_reads.clear()
     response = await context.client.post("/api/executions", json=body)
-    assert response.status_code == 422, response.text
-    assert response.json()["detail"]["code"] == "omnigent_product_boundary_required"
+    if explicit:
+        # This legacy task-level account alias retains its serialized boundary.
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"]["code"] == "omnigent_product_boundary_required"
+    elif configuration == "ready":
+        # A readiness marker alone is not a valid compiler-owned profile.
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"] == "agentProfile overrides do not form a valid profile document"
+    else:
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"]["code"] == "profile_execution_configuration_required"
+        assert response.json()["detail"]["profileId"] == profile.profile_id
     assert len(context.settings_reads) == 1
     context.service._client_adapter.start_workflow.assert_not_awaited()
 
