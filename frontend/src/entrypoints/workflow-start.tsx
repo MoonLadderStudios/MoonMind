@@ -12,7 +12,7 @@ import {
   summarizeSchedule,
 } from "../components/workflows/createDisclosureSummaries";
 import { PageHeader } from "../components/dashboard/PageHeader";
-import { readModelSelection, inheritModelSelection, hasModelSelection } from "../lib/modelSelection";
+import { readModelSelection, inheritModelSelection, hasModelSelection, displayModelSelection } from "../lib/modelSelection";
 import type { ModelSelection } from "../lib/modelSelection";
 import { useQuery } from "@tanstack/react-query";
 import { useInRouterContext, useLocation } from "react-router-dom";
@@ -7905,9 +7905,32 @@ function WorkflowStartPageContent({
   const harnessProviderOptions = harness
     ? providerOptions.filter((option) => !option.runtimeId || option.runtimeId === harness)
     : providerOptions;
+  const modelAuthority = (selection: ModelSelection, preview?: ProviderProfileTierPreviewItem) => {
+    const display = displayModelSelection(selection, selectedConfiguredProfile, preview);
+    const usesTier = display.selected !== "custom" && !selection.model?.trim();
+    const tier = usesTier && display.effective != null
+      ? selectedConfiguredProfile?.model_tiers?.[display.effective - 1]
+      : undefined;
+    return [
+      preview?.model !== undefined ? preview.model : display.model?.trim() || null,
+      preview?.effort !== undefined ? preview.effort : display.effort?.trim() || null,
+      JSON.stringify(tier?.parameters || {}),
+    ];
+  };
+  const workflowModelAuthority = modelAuthority(modelSelection, modelTierPreviewsQuery.data?.previews.workflow);
+  const stepHasIndependentModelAuthority = (step: StepState) => {
+    if (!hasModelSelection(step.runtimeSelection)) return false;
+    const authority = modelAuthority(
+      inheritModelSelection(modelSelection, step.runtimeSelection),
+      modelTierPreviewsQuery.data?.previews[`step:${step.localId}`],
+    );
+    return authority.some((value, index) => value !== workflowModelAuthority[index]);
+  };
+  // One root plan cannot carry a different step model/effort or tier policy.
   const independentStepAuthority = steps.some((step) =>
     (Boolean(step.runtimeProviderProfile.trim()) && step.runtimeProviderProfile !== providerProfile) ||
-    (Boolean(step.runtimeMode) && step.runtimeMode !== "omnigent" && step.runtimeMode !== harness),
+    (Boolean(step.runtimeMode) && step.runtimeMode !== "omnigent" && step.runtimeMode !== harness) ||
+    stepHasIndependentModelAuthority(step),
   );
   const backendOptions = harness
     ? backendOptionsForHarness(harness, runtimeTargetCatalog, {
@@ -12608,7 +12631,7 @@ function WorkflowStartPageContent({
               const stepBackendOptions = stepHarness
                 ? backendOptionsForHarness(stepHarness, runtimeTargetCatalog, {
                     directRoute: !stepPreviewProfile?.execution_selection_error &&
-                      (stepPreviewProfileId !== providerProfile || !profileHasOmnigentRoute(stepPreviewProfile, [], stepHarness, runtimeTargetCatalog)),
+                      (stepPreviewProfileId !== providerProfile || stepHasIndependentModelAuthority(step) || !profileHasOmnigentRoute(stepPreviewProfile, [], stepHarness, runtimeTargetCatalog)),
                     omnigentRoute: profileHasOmnigentRoute(stepPreviewProfile, activeProviderProfiles, stepHarness, runtimeTargetCatalog),
                   })
                 : [];

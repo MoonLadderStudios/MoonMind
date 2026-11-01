@@ -174,7 +174,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         ),
         consumer=(
             "Explicit serialized ``codex_cli`` starts/direct target identities, "
-            "native choices with independent step accounts/harnesses or pools, "
+            "native choices with independent step accounts/harnesses, pools or model/effort, "
             "and Codex key Profiles the provider config cannot "
             "carry, which ``profile_route_runtime`` routes here; their "
             "queued starts, retries and recovery, "
@@ -199,7 +199,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "egress policy does not admit. Declared single-provider Responses "
             "configuration, including the rendered managed MiniMax recipe, "
             "uses ``omnigent-provider-config@1`` and its private Codex config. "
-            "Serialized starts and independently selected step/pool accounts "
+            "Serialized starts and independent step account or model/effort choices "
             "still need their own immutable shared-plan handoff; a root plan "
             "cannot authorize a different step account. "
         ),
@@ -222,7 +222,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         ),
         consumer=(
             "Explicit serialized ``claude_code`` starts/direct target identities "
-            "and independent step account/harness or pool choices; Claude "
+            "and independent step account/harness, pool or model/effort choices; Claude "
             "Provider Profiles no Omnigent configuration accepts (key "
             "Profiles whose launch environment the provider config cannot "
             "carry, and every Claude Profile while generic Claude is "
@@ -248,7 +248,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "with their endpoint, model pins and non-secret launch tuning. "
             "Native Claude command rendering "
             "already uses the shared renderer through the admitted harness. "
-            "Serialized starts and independently selected step/pool accounts "
+            "Serialized starts and independent step account or model/effort choices "
             "still need an equivalent immutable shared-plan handoff."
         ),
     ),

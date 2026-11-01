@@ -21352,6 +21352,106 @@ describe("Task Create runtime switch layout stability", () => {
     expect((screen.getByLabelText("Step 1 Provider Profile") as HTMLSelectElement).value).toBe("codex-native-only");
   });
 
+  function configuredModelInventory(fallback: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
+    const configured = configuredCodexInventory(fallback);
+    return async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/v1/provider-profiles/codex-configured/model-tiers:preview") {
+        const request = JSON.parse(String(init?.body || "{}")) as {
+          steps: Array<{ id: string; modelTier?: number; model?: string | null; effort?: string | null }>;
+        };
+        return { ok: true, json: async () => ({ items: request.steps.map((step) => ({
+          stepId: step.id,
+          model: "model" in step ? step.model || "runtime-model" : step.modelTier === 1 ? "root-model" : "default-model",
+          effort: "effort" in step ? step.effort || "runtime-effort" : step.modelTier === 1 ? "medium" : "high",
+          modelSource: "task_override",
+          effortSource: "task_override",
+        })) }) } as Response;
+      }
+      if (String(input).split("?")[0] === "/api/v1/provider-profiles") {
+        const response = await configured(input, init);
+        const profiles = await response.json();
+        return { ok: true, json: async () => profiles.map((profile: object) => ({
+          ...profile,
+          model_tiers: [
+            { model: "root-model", effort: "medium" },
+            { model: "default-model", effort: "high" },
+          ],
+          default_model_tier: 2,
+        })) } as Response;
+      }
+      return configured(input, init);
+    };
+  }
+
+  it.each([
+    ["Model", "step-model", { model: "step-model", effort: "medium" }],
+    ["Effort", "high", { model: "root-model", effort: "high" }],
+    ["Effort", "", { model: "root-model", effort: null }],
+    ["Tier", "2", { modelTier: 2 }],
+  ])("retains Direct for an independent step %s value %s", async (field, value, authored) => {
+    fetchSpy.mockImplementation(configuredModelInventory(fetchSpy.getMockImplementation()!));
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    await waitFor(() => expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe("codex-configured"));
+    await waitFor(() => expect((screen.getByLabelText("Workflow Tier") as HTMLSelectElement).value).toBe("2"));
+    fireEvent.change(screen.getByLabelText("Workflow Tier"), { target: { value: "1" } });
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    fireEvent.change(await screen.findByLabelText(`Step 1 ${field}`), { target: { value } });
+    const backend = await screen.findByLabelText("Backend") as HTMLSelectElement;
+    expect(Array.from(backend.options).map((option) => option.value)).toEqual(["omnigent", "codex_cli"]);
+    expect(Array.from((screen.getByLabelText("Step 1 Backend") as HTMLSelectElement).options).map((option) => option.value)).toContain("codex_cli");
+    expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe("codex-configured");
+    fireEvent.change(backend, { target: { value: "codex_cli" } });
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Keep distinct step model authority." } });
+    await waitFor(() => expect((screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const call = fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions");
+    const task = JSON.parse(String(call?.[1]?.body)).payload.task;
+    expect(task.runtime).toMatchObject({ mode: "codex_cli", profileId: "codex-configured", modelTier: 1 });
+    expect(task.steps[0].runtime).toMatchObject(authored);
+    expect(task.runtime).not.toHaveProperty("executionConfiguration");
+    expect(task.runtime).not.toHaveProperty("agentProfile");
+  });
+
+  it.each(["Tier", "Model", "Effort"])("keeps a Profile-default equivalent step %s on the shared route", async (field) => {
+    fetchSpy.mockImplementation(configuredModelInventory(fetchSpy.getMockImplementation()!));
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    await waitFor(() => expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe("codex-configured"));
+    await waitFor(() => expect((screen.getByLabelText("Workflow Tier") as HTMLSelectElement).value).toBe("2"));
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    const value = { Tier: "2", Model: "default-model", Effort: "high" }[field];
+    const other = { Tier: "1", Model: "another-model", Effort: "low" }[field];
+    fireEvent.change(screen.getByLabelText(`Step 1 ${field}`), { target: { value: other } });
+    fireEvent.change(screen.getByLabelText(`Step 1 ${field}`), { target: { value } });
+    expect(screen.queryByLabelText("Backend")).toBeNull();
+    expect(screen.queryByLabelText("Step 1 Backend")).toBeNull();
+    expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe("codex-configured");
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Keep equivalent Profile defaults shared." } });
+    await waitFor(() => expect((screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const call = fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions");
+    const task = JSON.parse(String(call?.[1]?.body)).payload.task;
+    expect(task.runtime).toMatchObject({ mode: "omnigent", profileId: "codex-configured" });
+    expect(task.steps[0].runtime).toMatchObject(field === "Tier" ? { modelTier: 2 } : { model: "default-model", effort: "high" });
+  });
+
+  it("keeps an explicitly equal step model pair on the shared route", async () => {
+    fetchSpy.mockImplementation(configuredModelInventory(fetchSpy.getMockImplementation()!));
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    await waitFor(() => expect((screen.getByLabelText("Workflow Tier") as HTMLSelectElement).value).toBe("2"));
+    fireEvent.change(screen.getByLabelText("Workflow Model"), { target: { value: "root-model" } });
+    fireEvent.change(screen.getByLabelText("Workflow Effort"), { target: { value: "medium" } });
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    fireEvent.change(screen.getByLabelText("Step 1 Effort"), { target: { value: "high" } });
+    fireEvent.change(screen.getByLabelText("Step 1 Effort"), { target: { value: "medium" } });
+    await waitFor(() => expect(screen.queryByLabelText("Backend")).toBeNull());
+    expect(screen.queryByLabelText("Step 1 Backend")).toBeNull();
+    expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe("codex-configured");
+    expect((screen.getByLabelText("Workflow Model") as HTMLInputElement).value).toBe("root-model");
+    expect((screen.getByLabelText("Step 1 Effort") as HTMLInputElement).value).toBe("medium");
+  });
+
   it("offers step Backends from the selected step Profile, not other accounts of its Harness", async () => {
     fetchSpy.mockImplementation(mixedRouteInventory(fetchSpy.getMockImplementation()!));
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);

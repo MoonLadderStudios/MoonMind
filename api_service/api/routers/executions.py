@@ -8357,10 +8357,17 @@ def _steps_keep_profile_authority(
         task_payload=task_payload
     ) and not workflow_is_already_authored(task_payload):
         return False
-    for step in task_payload.get("steps") or []:
+    from moonmind.runtime_intent import merge_runtime_selection, model_selection_fields
+
+    task_runtime = _coerce_mapping(task_payload.get("runtime"))
+    root_selection = None
+    for index, step in enumerate(task_payload.get("steps") or []):
         if not isinstance(step, Mapping):
             continue
-        runtime = _coerce_mapping(step.get("runtime"))
+        runtime = _validate_runtime_tier_intent_for_submit(
+            _coerce_mapping(step.get("runtime")),
+            field_name=f"payload.workflow.steps[{index}].runtime",
+        )
         if has_profile_selector(runtime):
             return False
         profile_ref = provider_profile_ref_from_mapping(
@@ -8374,6 +8381,35 @@ def _steps_keep_profile_authority(
             normalize_runtime_id(provider.runtime_id),
         }:
             return False
+        if model_selection_fields(runtime):
+            # The shared plan freezes one model/effort pair. Resolve with the
+            # native owner's inheritance rules before treating aliases as
+            # equivalent; a distinct step selection still needs its adapter.
+            if root_selection is None:
+                root_selection = resolve_model_effort(
+                    runtime_id=provider.runtime_id,
+                    profile=provider,
+                    authored_runtime=task_runtime,
+                    require_launch_ready=False,
+                    workflow_settings=settings.workflow,
+                )
+            step_selection = resolve_model_effort(
+                runtime_id=provider.runtime_id,
+                profile=provider,
+                authored_runtime=merge_runtime_selection(task_runtime, runtime),
+                require_launch_ready=False,
+                workflow_settings=settings.workflow,
+            )
+            if (
+                step_selection.model,
+                step_selection.effort,
+                step_selection.tier_parameters,
+            ) != (
+                root_selection.model,
+                root_selection.effort,
+                root_selection.tier_parameters,
+            ):
+                return False
     return True
 
 
@@ -8412,11 +8448,18 @@ async def _profile_route_runtime(
                 selected_runtime=authored_runtime,
             )
     if (
-        authored_runtime
-        and provider_profile is not None
+        provider_profile is not None
+        and agent_profile is None
+        and (authored_runtime or (task_payload or {}).get("steps"))
+        and normalize_runtime_id(provider_profile.runtime_id)
+        in {"codex_cli", "claude_code"}
         and not _steps_keep_profile_authority(provider_profile, task_payload or {})
     ):
-        return None
+        return (
+            None
+            if authored_runtime
+            else normalize_runtime_id(provider_profile.runtime_id)
+        )
     if agent_profile is not None:
         return "omnigent"
     if provider_profile is None:
@@ -9348,11 +9391,17 @@ async def _resolve_step_runtime_selections(
     task_runtime = task_runtime or {}
 
     for index, step in enumerate(steps):
+        if not isinstance(step, Mapping):
+            continue
         runtime_payload = (
             step.get("runtime") if isinstance(step.get("runtime"), Mapping) else {}
         )
         if not runtime_payload:
             continue
+        runtime_payload = _validate_runtime_tier_intent_for_submit(
+            runtime_payload,
+            field_name=f"payload.workflow.steps[{index}].runtime",
+        )
 
         from moonmind.runtime_intent import (
             has_profile_selector,
@@ -9425,6 +9474,9 @@ async def _resolve_step_runtime_selections(
             and provider_profile is not None
             and provider_profile.profile_id == task_profile_id
             and canonical_step_runtime in {"codex_cli", "claude_code"}
+            and _steps_keep_profile_authority(
+                provider_profile, {"runtime": task_runtime, "steps": [step]}
+            )
         ):
             route = await _profile_route_runtime(
                 session=session,
@@ -9589,7 +9641,12 @@ async def _preset_expansion_target_runtime(
         or provider_profile_ref_from_mapping(task_payload)
         or provider_profile_ref_from_mapping(request_payload)
     )
-    if raw_profile_id and session is not None:
+    provisional_profile = getattr(workflow_settings, "provider_profile_ref", None)
+    if raw_profile_id and session is not None and not (
+        authored_runtime and raw_profile_id == provisional_profile
+    ):
+        # A saved default is provisional until expansion can identify tool-only
+        # work. Explicit account intent cleared this default and is validated.
         try:
             provider_profile = await load_provider_profile_for_runtime(
                 session=session,
@@ -9634,6 +9691,17 @@ async def _expand_goal_preset_for_workflow_submission(
     profile_routes: dict[str, str] | None = None,
     workflow_settings: Any = None,
 ) -> None:
+    explicit_template = has_unexpanded_task_template({"workflow": task_payload})
+    schedule = None
+    if not explicit_template:
+        if workflow_is_already_authored(task_payload):
+            return
+        schedule = schedule_preset_from_goal(
+            goal_from_payloads(task_payload=task_payload, parameter_payload=request_payload)
+        )
+        if schedule is None:
+            return
+
     target_runtime = await _preset_expansion_target_runtime(
         task_payload=task_payload,
         request_payload=request_payload,
@@ -9642,7 +9710,7 @@ async def _expand_goal_preset_for_workflow_submission(
         profile_routes=profile_routes,
         workflow_settings=workflow_settings,
     )
-    if has_unexpanded_task_template({"workflow": task_payload}):
+    if explicit_template:
         from api_service.services.presets.catalog import (
             PresetNotFoundError,
             PresetValidationError,
@@ -9675,15 +9743,6 @@ async def _expand_goal_preset_for_workflow_submission(
             )
         task_payload.clear()
         task_payload.update(expanded_task)
-        return
-
-    if workflow_is_already_authored(task_payload):
-        return
-
-    schedule = schedule_preset_from_goal(
-        goal_from_payloads(task_payload=task_payload, parameter_payload=request_payload)
-    )
-    if schedule is None:
         return
 
     from api_service.services.presets.catalog import (
@@ -13117,41 +13176,23 @@ async def _resolve_recurring_runtime_selection(
             )
         canonical_target_runtime = normalized_rt
 
-    # MoonLadderStudios/MoonMind#3931: a step override is new admission in its
-    # own right. Apply the same bounded step-runtime admission as Workflow
-    # Create so an allowed top-level runtime plus a retired
-    # ``steps[i].runtime.mode`` cannot persist new direct work after the
-    # direct-retirement cutoff.
+    # Normalize aliases through the same owner as ordinary submission before
+    # checking the direct cutoff, and retain those exact steps in the target.
+    normalized_steps = None
     if isinstance(steps_payload, Sequence) and not isinstance(
         steps_payload, (str, bytes)
     ):
-        for index, step_payload in enumerate(steps_payload):
-            if not isinstance(step_payload, Mapping):
-                continue
-            step_runtime_payload = step_payload.get("runtime")
-            if not isinstance(step_runtime_payload, Mapping):
-                continue
-            raw_step_mode = step_runtime_payload.get("mode")
-            if raw_step_mode is None or str(raw_step_mode).strip() == "":
-                continue
-            normalized_step_rt = normalize_runtime_id(raw_step_mode)
-            if normalized_step_rt not in _SUPPORTED_TASK_RUNTIMES:
-                raise _invalid_workflow_request(
-                    f"Unsupported payload.workflow.steps[{index}].runtime.mode: "
-                    f"{raw_step_mode!r}. Must be one of: codex_cli, "
-                    "claude_code, omnigent."
-                )
-            try:
-                from moonmind.omnigent.codex_cutover_drain import (
-                    assert_new_admission_allowed,
-                )
-
-                assert_new_admission_allowed(normalized_step_rt)
-                assert_runtime_new_admission(normalized_step_rt)
-            except ValueError as exc:
-                raise _invalid_workflow_request(
-                    f"payload.workflow.steps[{index}].runtime.mode: {exc}"
-                ) from exc
+        normalized_steps = [
+            dict(step) if isinstance(step, Mapping) else step for step in steps_payload
+        ]
+        await _resolve_step_runtime_selections(
+            steps=normalized_steps,
+            task_runtime=runtime_payload,
+            task_target_runtime=canonical_target_runtime,
+            task_profile_id=raw_profile_id,
+            session=session,
+        )
+        task_payload = {**task_payload, "steps": normalized_steps}
 
     if provider_profile is not None:
         authored_runtimes = (
@@ -13169,6 +13210,8 @@ async def _resolve_recurring_runtime_selection(
     }
     if raw_profile_id:
         metadata["profileId"] = raw_profile_id
+    if normalized_steps is not None:
+        metadata["_normalizedSteps"] = normalized_steps
     if isinstance(runtime_payload.get("profileSelector"), Mapping):
         metadata["profileSelector"] = dict(runtime_payload["profileSelector"])
     return (
@@ -13309,6 +13352,8 @@ def _stamp_recurring_runtime_metadata(
     task_key, task_payload = _recurring_workflow_payload(initial_parameters)
     if task_key is None:
         return
+    if isinstance(runtime_metadata.get("_normalizedSteps"), list):
+        task_payload["steps"] = runtime_metadata["_normalizedSteps"]
 
     runtime_payload = (
         dict(task_payload.get("runtime"))
