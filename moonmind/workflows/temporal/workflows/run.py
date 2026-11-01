@@ -21812,10 +21812,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             )
                 return await child
 
-            finally:
+            except (Exception, asyncio.CancelledError):
                 # The lease owner can cancel us while we await an auxiliary
                 # Activity or timer. That cancellation never reaches this
                 # detached handle implicitly: stop and drain it explicitly.
+                # Cache eviction closes the coroutine with GeneratorExit;
+                # Temporal still owns its live child and replays the wait.
                 if not child.done():
                     child.cancel()
                     drained = asyncio.gather(child, return_exceptions=True)
@@ -21826,6 +21828,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             # Repeated parent cancellation cannot cut short
                             # ordered resolver/agent cleanup.
                             continue
+                raise
 
         try:
             if guard_claim:

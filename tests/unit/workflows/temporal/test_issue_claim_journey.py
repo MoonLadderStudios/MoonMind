@@ -202,6 +202,11 @@ async def journey(tmp_path, monkeypatch, request):
     original_client = httpx.AsyncClient
 
     class Client(original_client):
+        def __init__(self, *args, **kwargs):
+            # Requests go to the local fixture, independent of deployment proxies.
+            kwargs["trust_env"] = False
+            super().__init__(*args, **kwargs)
+
         def build_request(self, method, url, *args, **kwargs):
             url = str(url).replace(
                 "https://api.github.com", f"http://127.0.0.1:{server.server_port}"

@@ -226,6 +226,7 @@ async def execute_with_issue_lease(*, lease, execute, renew, should_renew=None):
 
     execution = asyncio.create_task(execute())
     renewal = asyncio.create_task(maintain())
+    evicted = False
     try:
         done, _ = await asyncio.wait(
             {execution, renewal}, return_when=asyncio.FIRST_COMPLETED
@@ -235,10 +236,16 @@ async def execute_with_issue_lease(*, lease, execute, renew, should_renew=None):
         # Explicit return: the maintainer completes only by raising expiry,
         # so this preserves behavior while keeping return shapes consistent.
         return await renewal
+    except GeneratorExit:
+        # Worker cache eviction is not durable cancellation. Its replacement
+        # replays these tasks; no commands can run on this discarded loop.
+        evicted = True
+        raise
     finally:
-        for task in (execution, renewal):
-            if not task.done():
-                task.cancel()
-        # The runtime owns ordered cancellation/harvest/cleanup. Expiry removes
-        # claim authority; it never authorizes deletion of its workspace.
-        await asyncio.gather(execution, renewal, return_exceptions=True)
+        if not evicted:
+            for task in (execution, renewal):
+                if not task.done():
+                    task.cancel()
+            # The runtime owns ordered cancellation/harvest/cleanup. Expiry removes
+            # claim authority; it never authorizes deletion of its workspace.
+            await asyncio.gather(execution, renewal, return_exceptions=True)
