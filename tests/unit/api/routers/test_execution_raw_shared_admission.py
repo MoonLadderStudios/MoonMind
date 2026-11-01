@@ -97,6 +97,23 @@ def test_native_runtime_authority_is_not_reinterpreted_as_product_configuration(
     assert _fresh_serialized_workflow_request(request) is None
 
 
+@pytest.mark.parametrize("runtime_extension", [
+    {"requiredCapabilities": ["gh"]},
+    {"githubOperations": ["read", "note"]},
+    {"retainedNativeOption": {"mustSurvive": True}},
+])
+def test_step_runtime_extensions_keep_the_serialized_execution_boundary(runtime_extension):
+    body = raw_request()
+    body["initialParameters"]["workflow"]["steps"] = [{
+        "id": "selected", "instructions": "Keep step execution intent.",
+        "runtime": {"mode": "codex_cli", **runtime_extension},
+    }]
+    request = CreateExecutionRequest.model_validate(body)
+    original = request.model_dump()
+    assert _fresh_serialized_workflow_request(request) is None
+    assert request.model_dump() == original
+
+
 @pytest.mark.parametrize("alias", ["providerProfileRef", "profileId", "providerProfile", "executionProfileRef", "execution_profile_ref", "profile_id", "provider_profile"])
 def test_deferred_raw_step_account_intent_keeps_its_dispatch_boundary(alias):
     body = raw_request()

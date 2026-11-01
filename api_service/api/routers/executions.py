@@ -11753,6 +11753,7 @@ async def _create_execution_from_workflow_request(
     principal_context: dict[str, Any] | None = None,
     access: ArtifactAccessContext,
     serialized_request: CreateExecutionRequest | None = None,
+    creation_defaults_snapshot: WorkflowCreationDefaults | None = None,
 ) -> ExecutionModel | ScheduleCreatedResponse:
     request_type = str(request.type).strip().lower()
     if request_type not in {"task", "workflow"}:
@@ -11961,6 +11962,7 @@ async def _create_execution_from_workflow_request(
         session=session,
         payloads=(_coerce_mapping(task_payload.get("runtime")), task_payload, payload),
         infer_native_profile=False,
+        defaults=creation_defaults_snapshot,
     )
     default_profile_ref = creation_defaults.provider_profile_ref
     if default_profile_ref:
@@ -15298,6 +15300,8 @@ def _fresh_serialized_workflow_request(
     ):
         return None
     parameters = copy.deepcopy(request.initial_parameters)
+    if len(set(resolve_launch_target_profile_selection({"initialParameters": parameters}).runtime_ids)) > 1:
+        return None
     if set(parameters) - {
         "workflow", "task", "targetRuntime", "profileId", "providerProfileRef",
         "repository", "integration", "requiredCapabilities",
@@ -15314,6 +15318,11 @@ def _fresh_serialized_workflow_request(
         if not isinstance(step, Mapping):
             continue
         step_runtime = _coerce_mapping(step.get("runtime"))
+        if set(step_runtime) - {
+            "mode", "model", "effort", "modelTier", "tierFallback",
+            "tierPreview", "hardOverrideAudit",
+        }:
+            return None
         if (
             provider_profile_ref_from_mapping(step_runtime)
             or provider_profile_ref_from_mapping(step)
@@ -15466,18 +15475,9 @@ async def create_execution(
             if request.idempotency_key
             else None
         )
-        if existing is None:
-            workflow_request = _fresh_serialized_workflow_request(request)
-            if workflow_request is not None:
-                return await _create_execution_from_workflow_request(
-                    request=workflow_request,
-                    service=service,
-                    user=user,
-                    session=session,
-                    principal_context=principal_context,
-                    access=access,
-                    serialized_request=request,
-                )
+        workflow_request = (
+            _fresh_serialized_workflow_request(request) if existing is None else None
+        )
         initial_parameters = dict(request.initial_parameters)
         if assessment_scope is not None:
             initial_parameters["assessmentScope"] = assessment_scope
@@ -15607,6 +15607,32 @@ async def create_execution(
             # Omnigent requests retain the product-boundary rejection below.
             initial_parameters["targetRuntime"] = selection.runtime_id
             initial_parameters["runtimeCutover"] = new_work_evidence(selection)
+            if workflow_request is not None:
+                shared_route = selection.runtime_id == "omnigent"
+                candidate = provider_profile
+                if not shared_route and selection.runtime_id in {"codex_cli", "claude_code"}:
+                    from api_service.services.provider_profile_readiness import provider_profile_launch_ready
+
+                    candidate = candidate or await _load_default_provider_profile_for_runtime(
+                        session=session, runtime_id=selection.runtime_id,
+                    )
+                    if candidate is not None and provider_profile_launch_ready(candidate):
+                        shared_route = await _profile_route_runtime(
+                            session=session, user=user, provider_profile=candidate,
+                            authored_runtime=selection.runtime_id, task_payload=task_payload,
+                        ) == "omnigent"
+                if shared_route:
+                    if candidate is not None and not profile_ref:
+                        creation_defaults = replace(
+                            creation_defaults, provider_profile_ref=candidate.profile_id,
+                            provider_profile_inferred=True,
+                        )
+                    return await _create_execution_from_workflow_request(
+                        request=workflow_request, service=service, user=user,
+                        session=session, principal_context=principal_context,
+                        access=access, serialized_request=request,
+                        creation_defaults_snapshot=creation_defaults,
+                    )
 
         skill_validation = await validate_skill_step_inputs(
             initial_parameters=initial_parameters,
