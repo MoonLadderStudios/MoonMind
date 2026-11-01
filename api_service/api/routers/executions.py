@@ -19657,6 +19657,14 @@ async def continue_in_new_workflow(
             initial_params["workflow"] = {**retained_workflow, **authored_workflow}
         source_plan_payload = (canonical.parameters or {}).get("omnigentExecutionPlan")
         candidate_plan_payload = initial_params.get("omnigentExecutionPlan")
+        if initial_params.get("omnigentStepExecutionPlans") != (canonical.parameters or {}).get("omnigentStepExecutionPlans"):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "continuation_execution_plan_conflict",
+                    "message": "A linked continuation must preserve its source's immutable step plan authority.",
+                },
+            )
         if isinstance(source_plan_payload, Mapping):
             try:
                 source_plan = OmnigentExecutionPlanBinding.model_validate(

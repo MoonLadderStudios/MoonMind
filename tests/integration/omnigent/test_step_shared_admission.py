@@ -1,6 +1,7 @@
 """Independent step model choices receive their own immutable shared plan."""
 
 from types import SimpleNamespace
+from copy import deepcopy
 from unittest.mock import AsyncMock
 
 import httpx
@@ -135,6 +136,35 @@ async def test_independent_step_model_uses_its_own_shared_plan(native_journey, m
             await artifacts.read(artifact_id=successor_skillset, access=ArtifactAccessContext.for_execution("unrelated-workflow"))
         assert record.parameters["omnigentExecutionPlan"] == original_binding
         assert record.parameters["omnigentStepExecutionPlans"] == original_step_plans
+        if specialization == "model" and journey.harness == "codex-native":
+            from temporalio import activity
+            from moonmind.workflows.temporal.activity_runtime import TemporalActivityRuntimeError, TemporalPlanActivities
+
+            workflow_id = record.workflow_id
+            run_id = record.run_id
+            monkeypatch.setattr(activity, "in_activity", lambda: True)
+            monkeypatch.setattr(activity, "info", lambda: SimpleNamespace(workflow_id=workflow_id, workflow_run_id=run_id, namespace="default"))
+            planner = TemporalPlanActivities(artifact_service=artifacts)
+            admitted_parameters = deepcopy(record.parameters)
+            for tamper in ("replace", "remove"):
+                parameters = deepcopy(admitted_parameters)
+                if tamper == "replace":
+                    parameters["omnigentStepExecutionPlans"]["verify"]["omnigentExecutionPlan"] = parameters["omnigentExecutionPlan"]
+                else:
+                    parameters.pop("omnigentStepExecutionPlans")
+                refused = await readmit_frozen_execution_plan(
+                    db_session=session, artifact_service=None, workflow_id=workflow_id,
+                    initial_parameters=parameters, subject="Step handoff tamper test",
+                    preserve_recorded_intent=True,
+                )
+                assert refused["disposition"] == "recorded", refused
+                assert "step" in refused["reason"] and "authority" in refused["reason"]
+                with pytest.raises(TemporalActivityRuntimeError, match="step.*authority"):
+                    await planner.plan_validate(
+                        plan_ref="unused-agent-plan", principal=f"workflow:{workflow_id}",
+                        omnigent_execution_plan=admitted_parameters["omnigentExecutionPlan"],
+                        execution_parameters=parameters,
+                    )
         if specialization == "clear_effort" and journey.harness == "codex-native":
             monkeypatch.setattr(settings.workflow, "codex_effort", "low")
             refused = await readmit_frozen_execution_plan(

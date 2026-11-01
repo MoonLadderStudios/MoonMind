@@ -295,8 +295,10 @@ async def test_continue_creates_linked_workflow_and_pins_source(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("replacement_field", ["omnigentExecutionPlan", "omnigentStepExecutionPlans"])
 async def test_continue_rejects_authored_execution_plan_replacement(
     monkeypatch,
+    replacement_field,
 ) -> None:
     engine, sessions = await _database()
     user = SimpleNamespace(id=uuid4())
@@ -324,7 +326,7 @@ async def test_continue_rejects_authored_execution_plan_replacement(
             await ex.continue_in_new_workflow(
                 workflow_id="mm:source",
                 payload=_payload(
-                    initialParameters={"omnigentExecutionPlan": replacement}
+                    initialParameters={replacement_field: replacement}
                 ),
                 service=service,  # type: ignore[arg-type]
                 session=session,

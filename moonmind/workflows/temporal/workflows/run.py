@@ -22715,6 +22715,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             step_plans = (workflow_parameters or {}).get("omnigentStepExecutionPlans")
             admitted_step = step_plans.get(node_id) if isinstance(step_plans, Mapping) else None
             if isinstance(admitted_step, Mapping):
+                if not isinstance((workflow_parameters or {}).get("omnigentExecutionPlan"), Mapping):
+                    raise ValueError("logical step plans require admitted workflow plan authority")
                 # This map is produced and persisted by admission, rather than
                 # by plan nodes. All existing binding and profile checks below
                 # now compare against this logical step's exact authority.

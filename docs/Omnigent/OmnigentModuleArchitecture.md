@@ -279,6 +279,9 @@ translation, and independent per-step account, harness, pool or native-option
 choices without an equivalent plan handoff. Distinct same-account model/effort
 pairs have immutable step plans compiled by the same admission owner, linked
 through the existing artifact owner and carried across successor attempts.
+The immutable root plan binds each complete step handoff by digest; admission,
+planning and continuation reject a replaced or missing handoff. Retained plans
+without this field preserve their original bytes and plan identities.
 Equivalent product submissions,
 native defaults and same-account step aliases use the shared route, including
 persisted schedule steps; selected harness policy is checked before translation.
