@@ -786,8 +786,8 @@ def test_recorded_launch_inputs_decode_across_retained_schema_shapes():
     assert_new_admission_allowed("omnigent", env=env, now=now)
 
 
-def test_legacy_default_preserved_until_exact_promotion_succeeds(tmp_path):
-    """Review body P1: legacy row retires only on promoted, not raw boolean."""
+def test_linked_promotion_cannot_reopen_profile_bound_admission(tmp_path):
+    """Qualification governs shared promotion; historical admission stays closed."""
 
     import hashlib
     import json
@@ -818,8 +818,8 @@ def test_legacy_default_preserved_until_exact_promotion_succeeds(tmp_path):
             ),
         }
 
-    # Linked evidence mismatched: generic stays explicit-only and legacy stays
-    # the default so the proven path is preserved.
+    # Mismatched linked evidence keeps shared Codex explicit-only without
+    # restoring another lifecycle or changing credential selection.
     bad_env = dict(base_env)
     bad_env.update(
         _artifact_env({**selection, "materializer": "different-materializer@9"})
@@ -830,9 +830,9 @@ def test_legacy_default_preserved_until_exact_promotion_succeeds(tmp_path):
     }
     assert rules["codex.generic-omnigent"].state.name == "explicit_only"
     assert rules["codex.legacy-profile-bound-omnigent"].state.name == (
-        "new_work_default"
+        "retired_for_new_work"
     )
-    # Exact linked evidence promotes generic and retires legacy together.
+    # Exact linked evidence promotes shared Codex; the historical row stays retired.
     good_env = dict(base_env)
     good_env.update(_artifact_env(selection))
     rules = {
@@ -922,8 +922,9 @@ def test_generic_codex_default_and_promotion_share_admission_setting(value, enab
     assert rows["codex.generic-omnigent"].state == (
         "new_work_default" if enabled else "disabled"
     )
-    assert rows["codex.legacy-profile-bound-omnigent"].state == (
-        "retired_for_new_work" if enabled else "new_work_default"
+    assert rows["codex.legacy-profile-bound-omnigent"].state == "retired_for_new_work"
+    assert (
+        rows["codex.legacy-profile-bound-omnigent"].legacy_default_restorable is False
     )
 
 

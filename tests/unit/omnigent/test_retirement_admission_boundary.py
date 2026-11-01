@@ -8,22 +8,20 @@ strip caller-authored realizer fields before compilation. These
 tests drive :func:`compile_execution_plan` itself — not a nearby helper — so the
 code-owned retirement class is proven to gate real Codex plan admission.
 
-They also prove the two ordering rules the issue insists on:
-
-* new admission stops *only* when the class says so — the profile-bound
-  realizer is still ``active_product_path``, so Codex plan compilation still
-  succeeds; and
-* disabling new admission never touches execution, cancellation, cleanup, or
-  reads for an already-recorded plan.
+New Codex plans use the enabled shared owner. The retired profile-bound owner
+cannot be restored by a stale selector or caller field, while its recorded
+plans retain their realizer and digest.
 """
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
-from moonmind.omnigent import legacy_retirement
+from moonmind.omnigent.harness_platform import planner
 from moonmind.omnigent.harness_platform.agent_profile import OmnigentAgentProfileV2
 from moonmind.omnigent.harness_platform.catalog import (
     HarnessImplementationIdentity,
@@ -32,6 +30,10 @@ from moonmind.omnigent.harness_platform.catalog import (
     create_catalog_snapshot,
 )
 from moonmind.omnigent.harness_platform.credential_bindings import create_binding_set
+from moonmind.omnigent.harness_platform.execution_plan import (
+    OmnigentExecutionPlanEnvelope,
+    compute_plan_ref,
+)
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
@@ -112,8 +114,8 @@ def _host_class(implementation_ref: str) -> HostClass:
 
 @pytest.fixture()
 def codex_plan_inputs(monkeypatch) -> dict[str, object]:
-    # Exercise the explicitly retained compatibility lane, not the shared default.
-    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "false")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "true")
+    monkeypatch.delenv("MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK", raising=False)
     catalog = _catalog()
     impl = HarnessImplementationIdentity.model_validate(
         {
@@ -200,39 +202,23 @@ def codex_plan_inputs(monkeypatch) -> dict[str, object]:
     )
 
 
-def _reclassify(monkeypatch: pytest.MonkeyPatch, **updates: object) -> None:
-    record = get_retirement_record(PROFILE_BOUND_PATH_ID)
-    changed = record.model_validate({**record.model_dump(), **updates})
-    monkeypatch.setitem(
-        legacy_retirement._INVENTORY_BY_ID, PROFILE_BOUND_PATH_ID, changed
-    )
-    monkeypatch.setitem(
-        legacy_retirement._INVENTORY_BY_SURFACE,
-        f"realizer:{PROFILE_BOUND_REALIZER}",
-        changed,
-    )
-
-
-def test_active_product_path_still_compiles_codex_plans(codex_plan_inputs) -> None:
-    # Explicit false/restore policy still supports this compatibility choice;
-    # the code-owned guard must not disable it globally.
+def test_retired_profile_bound_admission_preserves_new_shared_plans(
+    codex_plan_inputs,
+) -> None:
     assert (
         get_retirement_record(PROFILE_BOUND_PATH_ID).retirement_class
-        is RetirementClass.ACTIVE_PRODUCT_PATH
+        is RetirementClass.NEW_ADMISSION_DISABLED
     )
     envelope = compile_execution_plan(**codex_plan_inputs)
-    assert envelope.payload.executionRealizerRef == PROFILE_BOUND_REALIZER
+    assert envelope.payload.executionRealizerRef == "generic-omnigent-host@1"
 
 
-def test_new_admission_disabled_rejects_the_trusted_planner_default(
+def test_retirement_guard_rejects_a_stale_trusted_planner_default(
     codex_plan_inputs, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _reclassify(
-        monkeypatch,
-        retirement_class=RetirementClass.NEW_ADMISSION_DISABLED,
-        new_admission_source="",
-        shared_operation="",
-        missing_outcome="",
+    # Isolate the retirement guard from the earlier shared-only selection guard.
+    monkeypatch.setattr(
+        planner, "select_execution_realizer", lambda **_kwargs: PROFILE_BOUND_REALIZER
     )
     with pytest.raises(HarnessPlatformError) as excinfo:
         compile_execution_plan(**codex_plan_inputs)
@@ -245,26 +231,27 @@ def test_new_admission_disabled_rejects_the_trusted_planner_default(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("field", ["execution_realizer_ref", "executionRealizerRef"])
+@pytest.mark.parametrize(
+    "realizer", ["generic-omnigent-host@1", PROFILE_BOUND_REALIZER]
+)
 async def test_caller_realizer_cannot_bypass_the_retirement_state(
-    codex_plan_inputs, monkeypatch: pytest.MonkeyPatch, field: str
+    codex_plan_inputs, monkeypatch: pytest.MonkeyPatch, field: str, realizer: str
 ) -> None:
-    """A caller field cannot replace a retired deployment-selected realizer."""
+    """A caller field cannot bypass a disabled shared owner through retirement."""
 
-    _reclassify(
-        monkeypatch,
-        retirement_class=RetirementClass.NEW_ADMISSION_DISABLED,
-        new_admission_source="",
-        shared_operation="",
-        missing_outcome="",
-    )
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "false")
     store = InMemoryExecutionPlanStore()
-    codex_plan_inputs[field] = "generic-omnigent-host@1"
+    codex_plan_inputs[field] = realizer
     with pytest.raises(HarnessPlatformError) as excinfo:
         await store.load_or_compile(
             compile_fn=compile_execution_plan,
             compile_kwargs=codex_plan_inputs,
         )
-    assert "no longer admits new work" in str(excinfo.value)
+    assert (
+        excinfo.value.code
+        == HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE.value
+    )
+    assert "shared Omnigent path is disabled" in str(excinfo.value)
     assert store._plans == {}
 
 
@@ -275,19 +262,30 @@ def test_plan_compilation_takes_no_rollback_generation(codex_plan_inputs) -> Non
         compile_execution_plan(**codex_plan_inputs, rollback_generation="gen-1")
 
 
-def test_disabled_admission_does_not_change_recorded_plans(
-    codex_plan_inputs, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.asyncio
+async def test_disabled_admission_does_not_change_recorded_plans(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An already-compiled plan keeps its recorded realizer and digest."""
 
-    recorded = compile_execution_plan(**codex_plan_inputs)
-    _reclassify(
-        monkeypatch,
-        retirement_class=RetirementClass.NEW_ADMISSION_DISABLED,
-        new_admission_source="",
-        shared_operation="",
-        missing_outcome="",
+    fixture = json.loads(
+        (
+            Path(__file__).parents[2]
+            / "fixtures/omnigent/retained_profile_bound_plans/codex-on-demand-1.json"
+        ).read_text()
     )
+    binding = fixture["request"]["omnigentExecutionPlan"]
+    recorded = OmnigentExecutionPlanEnvelope.model_validate_json(
+        fixture["artifacts"][binding["planArtifactRef"]]
+    )
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "false")
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK", "stop_all_new_omnigent_work"
+    )
+    store = InMemoryExecutionPlanStore()
+    await store.persist(recorded)
+    assert await store.load(binding["planRef"]) == recorded
+    assert compute_plan_ref(recorded.payload) == binding["planRef"]
     assert recorded.payload.executionRealizerRef == PROFILE_BOUND_REALIZER
     # The realizer stays registered and resolvable for the recorded plan even
     # though no new plan may select it.
