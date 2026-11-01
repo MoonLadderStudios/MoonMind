@@ -97,6 +97,38 @@ def test_nested_composition_without_scope_requires_refresh() -> None:
     assert payload["presets"][0]["slug"] == SEARCH
 
 
+def test_nested_composition_keeps_mapped_false_and_true_author_choices() -> None:
+    for value in (False, True):
+        parameters = _parameters(
+            [
+                {
+                    "slug": "github-project-implement",
+                    "composition": {
+                        "includes": [
+                            {
+                                "slug": SEARCH,
+                                "inputMapping": {"include_all_authors": value},
+                            }
+                        ]
+                    },
+                }
+            ]
+        )
+        assert github_issue_search_scope_refresh_needed(parameters) is None
+
+
+def test_nested_composition_missing_mapped_scope_still_requires_refresh() -> None:
+    parameters = _parameters(
+        [
+            {
+                "slug": "github-project-implement",
+                "composition": {"includes": [{"slug": SEARCH, "inputMapping": {}}]},
+            }
+        ]
+    )
+    assert github_issue_search_scope_refresh_needed(parameters) is not None
+
+
 def test_missing_task_or_malformed_provenance_needs_no_scope_decision() -> None:
     assert github_issue_search_scope_refresh_needed({}) is None
     assert github_issue_search_scope_refresh_needed({"task": {}}) is None

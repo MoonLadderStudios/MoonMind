@@ -822,6 +822,7 @@ async def resolve_issue(
     writers_settled: bool | None = None,
     reserve_candidate: Callable[[int], Awaitable[bool]] | None = None,
     include_all_authors: bool = False,
+    project_source: Mapping[str, Any] | None = None,
 ) -> tuple[int | None, dict[str, Any]]:
     """Select the best search match, or first unblocked open issue, within 500 rows.
 
@@ -888,6 +889,17 @@ async def resolve_issue(
         }
     }
     counts = evidence["searchEvidence"]
+    project_queue = None
+    if project_source:
+        from moonmind.workflows.temporal.github_project import ProjectError, discover_project_queue
+
+        if not is_blank_search:
+            return None, {**evidence, "reasonCode": "conflicting_project_search", "error": "Use project columns and view filters instead of combining a project with issue search."}
+        try:
+            project_queue = await discover_project_queue(github_service, repository, project_source)
+        except ProjectError as exc:
+            return None, {**evidence, "reasonCode": exc.code, "error": str(exc)}
+        counts["project"] = project_queue.evidence
     token, error = await github_service.resolve_github_token(
         repo=repository, operations=ISSUE_OPERATIONS
     )
@@ -932,7 +944,9 @@ async def resolve_issue(
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         for page in range(1, 6):
-            if not is_blank_search:
+            if project_queue is not None:
+                payload = project_queue.items[(page - 1) * 100:page * 100]
+            elif not is_blank_search:
                 url = "https://api.github.com/search/issues"
                 if include_all_authors:
                     scoped_q = f"{normalized_query} repo:{repository} is:issue is:open"
@@ -957,11 +971,14 @@ async def resolve_issue(
                 if not include_all_authors and authenticated_user is not None:
                     params["creator"] = str(authenticated_user["login"])
             try:
-                response = await client.get(
-                    url, params=params, headers=github_service._github_headers(token)
-                )
-                response.raise_for_status()
-                payload = response.json()
+                if project_queue is not None:
+                    response = None
+                else:
+                    response = await client.get(
+                        url, params=params, headers=github_service._github_headers(token)
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code
                 if status in {401, 403}:
@@ -1017,6 +1034,25 @@ async def resolve_issue(
                 }
             for candidate in candidates:
                 counts["candidatesExamined"] += 1
+                if project_queue is not None:
+                    number = candidate["content"]["number"]
+                    try:
+                        response = await client.get(
+                            f"https://api.github.com/repos/{repository}/issues/{number}",
+                            headers=github_service._github_headers(token),
+                        )
+                        response.raise_for_status()
+                        candidate = response.json()
+                    except (httpx.HTTPError, ValueError):
+                        return None, {**evidence, "reasonCode": "project_read_incomplete", "error": "Project issue detail could not be read."}
+                    if not isinstance(candidate, dict) or candidate.get("number") != number:
+                        return None, {**evidence, "reasonCode": "project_read_incomplete", "error": "Project issue detail does not match its selected identity."}
+                    if candidate.get("state") == "closed":
+                        _record_rejection(counts, number, "candidate_closed")
+                        continue
+                    if not project_queue.matches(candidate, project_queue.bindings[number]):
+                        _record_rejection(counts, number, "project_view_filter")
+                        continue
                 if not isinstance(candidate, Mapping):
                     return None, {
                         **evidence,
@@ -1230,6 +1266,20 @@ async def resolve_issue(
                         )
                         continue
                 try:
+                    if project_queue is not None:
+                        from moonmind.workflows.temporal.github_project import ProjectClient, ProjectError
+
+                        binding = project_queue.bindings[int(candidate["number"])]
+                        if not project_queue.matches(current, binding):
+                            _record_rejection(counts, candidate["number"], "project_view_filter")
+                            continue
+                        try:
+                            observed = await ProjectClient(github_service, repository).read_item(binding)
+                        except ProjectError as exc:
+                            return None, {**evidence, "reasonCode": exc.code, "error": str(exc)}
+                        if observed["optionId"] != binding["sourceOptionId"]:
+                            _record_rejection(counts, candidate["number"], "project_column_changed")
+                            continue
                     if reserve_candidate is not None and not await reserve_candidate(
                         int(candidate["number"])
                     ):
@@ -1258,11 +1308,19 @@ async def resolve_issue(
                 if selected_author is not None:
                     counts["selectedIssueAuthor"] = dict(selected_author)
                 evidence["selectedIssue"] = dict(current)
+                if project_queue is not None:
+                    evidence["selectedProjectItem"] = dict(project_queue.bindings[candidate["number"]])
+                    counts["project"]["selectedColumn"] = project_queue.bindings[candidate["number"]]["sourceColumn"]
                 return candidate["number"], evidence
-            if len(candidates) < 100:
+            if (project_queue is not None and page * 100 >= len(project_queue.items)) or (project_queue is None and len(candidates) < 100):
                 # An idle search is a completed search that selected nothing;
                 # lead with that and the operational causes, not author scope.
                 idle = "Search completed without selecting an issue."
+                if project_queue is not None:
+                    skipped = project_queue.evidence["skipped"]
+                    idle = "Project scan completed without selecting an issue."
+                    if skipped:
+                        idle += " Excluded project items: " + ", ".join(f"{reason}={count}" for reason, count in sorted(skipped.items())) + "."
                 if any(
                     counts.get("rejectionCounts", {}).get(reason)
                     for reason in RESERVATION_EXCLUSIONS
