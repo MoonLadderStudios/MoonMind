@@ -4547,8 +4547,7 @@ async def test_fresh_omnigent_launch_is_not_reaped_before_materialization() -> N
         binding_ref="binding-replay",
         container_name="host-container-fresh-launch",
         omnigent_session_id=None,
-        last_heartbeat_at=now
-        - timedelta(seconds=manifest["heartbeatAgeSeconds"]),
+        last_heartbeat_at=now - timedelta(seconds=manifest["heartbeatAgeSeconds"]),
         expires_at=now + timedelta(hours=1),
         status=manifest["leaseStatusAtJanitorScan"],
     )
