@@ -22,10 +22,13 @@ from temporalio.common import RawValue
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from api_service.db.models import (
+    ManagedAgentProviderProfile,
     OmnigentExecutionPlanRecord,
-    OmnigentRuntimeBindingRecord,
     OmnigentHostBindingRecordV2,
     OmnigentHostLeaseRecordV2,
+    OmnigentOAuthHostBindingRecord,
+    OmnigentOAuthHostLeaseRecord,
+    OmnigentRuntimeBindingRecord,
 )
 from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
 from moonmind.omnigent.host_capacity import GenericHostCapacityAdmission
@@ -90,6 +93,9 @@ async def test_scheduled_cleanup_isolates_oauth_failure_and_unblocks_same_agent_
         "test-unserved-owner", id=key + "-live", task_queue=key + "-unserved"
     )
     tables = [
+        ManagedAgentProviderProfile.__table__,
+        OmnigentOAuthHostBindingRecord.__table__,
+        OmnigentOAuthHostLeaseRecord.__table__,
         OmnigentExecutionPlanRecord.__table__,
         OmnigentRuntimeBindingRecord.__table__,
         OmnigentHostBindingRecordV2.__table__,

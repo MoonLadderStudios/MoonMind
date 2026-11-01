@@ -7,7 +7,7 @@ import json
 import os
 import re
 from pathlib import Path
-from uuid import UUID, NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
@@ -31,7 +31,8 @@ def deployment_compose_command() -> tuple[str, ...]:
     ).expanduser()
     host_root = os.getenv("MOONMIND_DEPLOYMENT_PROJECT_DIR", "").strip()
     configured = Path(
-        os.getenv("MOONMIND_DEPLOYMENT_COMPOSE_FILE", "docker-compose.yaml")
+        os.getenv("MOONMIND_DEPLOYMENT_COMPOSE_FILE", "").strip()
+        or "docker-compose.yaml"
     ).expanduser()
     if configured.is_absolute() and not configured.exists():
         try:
@@ -134,6 +135,18 @@ def _host_id(value):
     return UUID(str(value).removeprefix("host_")).hex
 
 
+def _literal_compose_values(value):
+    # The shared Docker projection already contains final values. Compose
+    # must not expand shell expressions or substitute the worker's environment.
+    if isinstance(value, str):
+        return value.replace("$", "$$")
+    if isinstance(value, list):
+        return [_literal_compose_values(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _literal_compose_values(item) for key, item in value.items()}
+    return value
+
+
 class ComposeStaticHostService:
     def __init__(self, *, backend, client):
         self._backend = backend
@@ -224,6 +237,8 @@ class ComposeStaticHostService:
         if ids:
             _code, raw, _err = await self._backend.run(["docker", "inspect", ids[0]])
             current = json.loads(raw)[0]
+            if not current.get("Id"):
+                _unavailable("static Compose container identity is unavailable")
             mounts = [
                 mount.get("Name")
                 for mount in current.get("Mounts", [])
@@ -307,6 +322,7 @@ class ComposeStaticHostService:
                     **spec.runtime,
                     "staticComposeService": row.service,
                     "staticComposeProject": command[3],
+                    "staticPreviousContainerId": current["Id"] if current else None,
                     "staticHostName": host_name,
                     "previousGithubVolumes": [
                         mount["Name"]
@@ -343,7 +359,7 @@ class ComposeStaticHostService:
                 "--no-deps",
                 spec.runtime["staticComposeService"],
             ],
-            input_bytes=json.dumps(model).encode(),
+            input_bytes=json.dumps(_literal_compose_values(model)).encode(),
         )
         for volume in spec.runtime.get("previousGithubVolumes", []):
             if volume in volumes:

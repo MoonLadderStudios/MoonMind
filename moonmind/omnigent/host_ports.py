@@ -22,7 +22,6 @@ from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from moonmind.auth.bound_acquisition import AcquiredCredential
-
 from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
 )
@@ -345,6 +344,7 @@ class OmnigentHostCleanupPort(Protocol):
         control_volume_ref: str | None,
         static_host_id: str | None = None,
         static_host_image_ref: str | None = None,
+        static_previous_container_id: str | None = None,
     ) -> dict[str, Any]: ...
 
 

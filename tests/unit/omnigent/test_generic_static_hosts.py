@@ -6,13 +6,16 @@ from unittest.mock import AsyncMock
 import pytest
 import pytest_asyncio
 
-from moonmind.omnigent.harness_platform.host_classes import OmnigentHostClassSelector
-from moonmind.omnigent.harness_platform import static_hosts
 from moonmind.omnigent.execution_profiles import (
     seal_effective_launch_snapshot,
     validate_effective_launch_snapshot,
 )
-from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+from moonmind.omnigent.harness_platform import static_hosts
+from moonmind.omnigent.harness_platform.failures import (
+    HarnessPlatformError,
+    HarnessPlatformFailure,
+)
+from moonmind.omnigent.harness_platform.host_classes import OmnigentHostClassSelector
 from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 
 
@@ -140,6 +143,7 @@ async def test_ordinary_launch_bytes_do_not_gain_static_authority():
 @pytest_asyncio.fixture
 async def physical_hosts(tmp_path):
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
     from api_service.db.models import Base, ManagedAgentProviderProfile
     from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
 
@@ -198,6 +202,7 @@ async def _reserve(
 @pytest.mark.asyncio
 async def test_static_readmission_preserves_the_prior_allocation_record(physical_hosts):
     from sqlalchemy import select
+
     from api_service.db.models import OmnigentOAuthHostLeaseRecord
 
     repository, factory, (binding, _other) = physical_hosts
@@ -308,6 +313,7 @@ async def static_port(physical_hosts):
 @pytest.mark.asyncio
 async def test_static_port_uses_the_existing_physical_lease_owner(static_port):
     from sqlalchemy import select
+
     from api_service.db.models import OmnigentHostLeaseRecordV2
 
     scene = static_port
@@ -476,6 +482,88 @@ def test_verified_static_launch_rehydrates_the_frozen_selection():
     assert resolved.runtime["effectiveLaunchSnapshot"] == launch
 
 
+async def _static_compose_launch_projection():
+    from moonmind.omnigent.host_services.compose_static import ComposeStaticHostService
+
+    backend = SimpleNamespace(run=AsyncMock(return_value=(0, "", "")))
+    client = SimpleNamespace(
+        list_sessions=AsyncMock(return_value={"data": [], "has_more": False})
+    )
+    spec = SimpleNamespace(
+        expectedOmnigentHostId="1" * 32,
+        correlationName="static-codex",
+        runtime={
+            "staticComposeService": "omnigent-host-codex",
+            "staticComposeProject": "moonmind-test-static",
+        },
+    )
+    await ComposeStaticHostService(backend=backend, client=client).launch(
+        spec=spec,
+        command=[
+            "docker",
+            "create",
+            "--name",
+            "static-codex",
+            "--env",
+            "LITERAL=$HOME/${value}/$(id)/$$",
+            "--label",
+            "literal=$VALUE",
+            "--mount",
+            "type=bind,src=/tmp/$workspace,dst=/workspaces/run",
+            "--entrypoint",
+            "/bin/sh",
+            "example/host:latest",
+            "-ceu",
+            'printf "%s" "$MOONMIND_ACTIVE_SKILLS_DIR" "${check%:*}" "${check##*:}"',
+        ],
+    )
+    return backend.run.await_args.kwargs["input_bytes"]
+
+
+@pytest.mark.asyncio
+async def test_static_compose_launch_preserves_literal_shell_and_configuration_values():
+    import json
+
+    model = json.loads(await _static_compose_launch_projection())
+    service = model["services"]["omnigent-host-codex"]
+    assert service["command"] == [
+        "-ceu",
+        'printf "%s" "$$MOONMIND_ACTIVE_SKILLS_DIR" "$${check%:*}" "$${check##*:}"',
+    ]
+    assert service["environment"]["LITERAL"] == "$$HOME/$${value}/$$(id)/$$$$"
+    assert service["labels"]["literal"] == "$$VALUE"
+    assert service["volumes"][0]["source"] == "/tmp/$$workspace"
+
+
+@pytest.mark.parametrize("configured", [None, "", "   ", "docker-compose.yaml"])
+def test_static_compose_bootstrap_default_file_is_consistent(
+    tmp_path, monkeypatch, configured
+):
+    from moonmind.omnigent.host_services.compose_static import (
+        deployment_compose_command,
+    )
+    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+
+    path = tmp_path / "docker-compose.yaml"
+    path.write_text("services: {}\n")
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR", str(tmp_path))
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_PROJECT_NAME", "moonmind-test-static")
+    if configured is None:
+        monkeypatch.delenv("MOONMIND_DEPLOYMENT_COMPOSE_FILE", raising=False)
+    else:
+        monkeypatch.setenv("MOONMIND_DEPLOYMENT_COMPOSE_FILE", configured)
+    command = deployment_compose_command()
+    assert command == (
+        "docker",
+        "compose",
+        "--project-name",
+        "moonmind-test-static",
+        "-f",
+        str(path),
+    )
+    assert OmnigentOAuthHostRuntime._deployment_compose_command() == command
+
+
 @pytest.mark.asyncio
 async def test_static_cleanup_drains_without_removing_container_or_state():
     from moonmind.omnigent.host_services.cleanup import DockerOmnigentHostCleanupService
@@ -514,6 +602,56 @@ async def test_static_cleanup_drains_without_removing_container_or_state():
     assert len(writes) == 1
     assert "existing-state" not in " ".join(writes[0])
     assert "execution-fanout" in " ".join(writes[0])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("current_id", ["resident-id", "successor-id"])
+@pytest.mark.parametrize("live_consumer", [False, True])
+@pytest.mark.parametrize("owner", ["previous-allocation|1", "<no value>|<no value>"])
+async def test_static_failed_launch_reconciles_only_the_unchanged_resident(
+    current_id, live_consumer, owner
+):
+    from moonmind.omnigent.host_services.cleanup import DockerOmnigentHostCleanupService
+
+    calls = []
+
+    class Backend:
+        async def run(self, argv, **kwargs):
+            calls.append(argv)
+            if argv[:3] == ["docker", "container", "inspect"]:
+                return 0, f"{current_id}|{owner}", ""
+            if argv[:2] == ["docker", "inspect"]:
+                return 0, "example/host:latest", ""
+            return 0, "", ""
+
+    static = SimpleNamespace(assert_quiescent=AsyncMock())
+    if live_consumer:
+        static.assert_quiescent.side_effect = HarnessPlatformError(
+            "native consumer", code=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED
+        )
+
+    cleanup = DockerOmnigentHostCleanupService(Backend(), static_hosts=static).cleanup(
+        container_name="static-codex",
+        host_lease_ref="failed-allocation",
+        host_lease_generation=1,
+        state_volume_ref="existing-state",
+        control_volume_ref="static-control",
+        static_host_id="1" * 32,
+        static_previous_container_id="resident-id",
+    )
+    if current_id == "successor-id" or live_consumer:
+        with pytest.raises(HarnessPlatformError):
+            await cleanup
+        assert not any(argv[:2] == ["docker", "run"] for argv in calls)
+    else:
+        result = await cleanup
+        assert result["staticHostDrained"] is True
+        assert result["staticHostLaunchNotObserved"] is True
+        assert any(argv[:2] == ["docker", "run"] for argv in calls)
+    assert not any(
+        argv[:2] == ["docker", "rm"] or argv[:3] == ["docker", "volume", "rm"]
+        for argv in calls
+    )
 
 
 @pytest.mark.asyncio
@@ -624,6 +762,7 @@ async def test_failed_legacy_allocation_keeps_its_physical_slot_until_cleanup(
     physical_hosts,
 ):
     from sqlalchemy import update
+
     from api_service.db.models import OmnigentOAuthHostLeaseRecord
 
     repository, factory, (first, second) = physical_hosts

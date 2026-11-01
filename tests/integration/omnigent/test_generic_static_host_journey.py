@@ -14,16 +14,141 @@ from api_service.db.models import (
 )
 from moonmind.omnigent.runtime_bindings import RuntimeBindingState
 from tests.integration.omnigent.test_generic_native_durable_journey import (
-    native_journey as _native_journey,
-    session_factory as _session_factory,
     GENERATED,
     RESULT_PATH,
+)
+from tests.integration.omnigent.test_generic_native_durable_journey import (
+    native_journey as _native_journey,
+)
+from tests.integration.omnigent.test_generic_native_durable_journey import (
+    session_factory as _session_factory,
 )
 
 native_journey = _native_journey
 session_factory = _session_factory
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+
+
+async def test_static_launch_round_trips_real_compose_interpolation():
+    import os
+    import shutil
+    import subprocess
+
+    from tests.unit.omnigent.test_generic_static_hosts import (
+        _static_compose_launch_projection,
+    )
+
+    docker = shutil.which("docker")
+    if (
+        not docker
+        or subprocess.run(
+            [docker, "compose", "version"], capture_output=True, timeout=30
+        ).returncode
+    ):
+        pytest.skip("Docker Compose CLI is unavailable")
+    projection = await _static_compose_launch_projection()
+    rendered = subprocess.run(
+        [
+            docker,
+            "compose",
+            "--project-name",
+            "moonmind-test-static",
+            "-f",
+            "-",
+            "config",
+            "--format",
+            "json",
+        ],
+        input=projection,
+        env={
+            **os.environ,
+            "HOME": "/worker-home",
+            "VALUE": "worker-value",
+            "MOONMIND_ACTIVE_SKILLS_DIR": "/worker-skills",
+        },
+        capture_output=True,
+        check=True,
+        timeout=30,
+    )
+    # `compose config` escapes its rendered dollars again for reuse as a
+    # Compose file. Its shell expressions and literal configuration must agree.
+    expected = json.loads(projection)["services"]["omnigent-host-codex"]
+    actual = json.loads(rendered.stdout)["services"]["omnigent-host-codex"]
+    for key in ("command", "environment", "labels"):
+        assert actual[key] == expected[key]
+    assert actual["volumes"][0]["source"] == expected["volumes"][0]["source"]
+
+
+@pytest.mark.parametrize(
+    "native_journey", [{"harness": "codex-native", "static": True}], indirect=True
+)
+async def test_static_prelaunch_failure_releases_allocation_and_preserves_resident(
+    native_journey, monkeypatch
+):
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+    from moonmind.omnigent.host_services import docker_backend
+    from moonmind.omnigent.runtime_bindings import stable_binding_id
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    scene = native_journey
+    first = await scene.realizer.execute(scene.request, scene.plan)
+    assert first.failure_class is None, first
+    original = await scene.services.runtime_binding_store.get(
+        first.metadata["runtimeBindingRef"]
+    )
+    previous_container = scene.docker.host_container_id
+    previous_labels = dict(scene.docker.host_labels)
+    payload = scene.request.model_dump(by_alias=True, mode="json", exclude_none=True)
+    step_id = scene.request.step_execution.workflow_id + ":run:implement:execution:2"
+    payload["idempotencyKey"] = "failed-static-admission"
+    payload["stepExecution"].update(executionOrdinal=2, stepExecutionId=step_id)
+    payload["workspaceSpec"]["workspaceLocator"]["workspaceId"] = hashlib.sha256(
+        f"{scene.request.step_execution.workflow_id}:{step_id}".encode()
+    ).hexdigest()[:24]
+    payload["admittedProviderCapacity"].update(
+        stepExecutionId=step_id,
+        idempotencyKey=payload["idempotencyKey"],
+        agentRunRunId="agent-run-2",
+    )
+    scene.manager.request = request = AgentExecutionRequest.model_validate(payload)
+    await scene.gateway.admit_execution_plan_inputs(request=request, plan=scene.plan)
+    command = scene.docker.command
+
+    async def fail_control_preparation(argv, **kwargs):
+        if (
+            list(argv[:3]) == ["docker", "volume", "create"]
+            and "mm-static-control-" in argv[-1]
+        ):
+            return 1, b"", b"transient control preparation failure"
+        return await command(argv, **kwargs)
+
+    monkeypatch.setattr(docker_backend, "run_runtime_command", fail_control_preparation)
+    with pytest.raises(
+        HarnessPlatformError, match="transient control preparation failure"
+    ):
+        await scene.realizer.execute(request, scene.plan)
+    binding = await scene.services.runtime_binding_store.get(
+        stable_binding_id(
+            execution_plan_ref=scene.plan.planRef,
+            idempotency_key=request.idempotency_key,
+        )
+    )
+    assert binding.state is RuntimeBindingState.cleaned
+    assert (
+        await scene.services.host_lease_repository.get(binding.hostLeaseRef)
+    ).status == "cleaned"
+    authority = next(
+        item for item in binding.cleanupAuthorityRefs if item.get("kind") == "host"
+    )
+    assert authority["staticPreviousContainerId"] == previous_container
+    assert scene.docker.host_labels == previous_labels
+    assert scene.docker.create_count == 1
+    assert scene.server.host_alive
+    assert scene.docker.state_volume in scene.docker.volumes
+    assert (
+        await scene.services.runtime_binding_store.get(original.bindingId)
+    ) == original
 
 
 @pytest.mark.parametrize(
@@ -91,6 +216,7 @@ async def test_static_cancel_preserves_the_service_and_starts_no_successor(
     native_journey, monkeypatch
 ):
     import asyncio
+
     from moonmind.omnigent.runtime_bindings import stable_binding_id
 
     scene = native_journey
@@ -131,6 +257,7 @@ async def test_static_successor_restores_saved_work_and_retains_old_allocation(
 ):
     import shutil
     from pathlib import Path
+
     from moonmind.omnigent.host_services import docker_backend
     from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 

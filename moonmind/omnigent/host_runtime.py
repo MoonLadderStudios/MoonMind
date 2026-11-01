@@ -335,9 +335,7 @@ class GenericOmnigentHostRuntime:
                 "workspaceAttachment": prepared.workspace_attachment,
                 "skillAttachment": prepared.skill_attachment,
                 "toolAttachments": list(prepared.tool_attachments),
-                "githubCredentialAttachment": (
-                    prepared.github_credential_attachment
-                ),
+                "githubCredentialAttachment": (prepared.github_credential_attachment),
                 "credentialAttachments": list(credential_attachments),
                 "controlAttachment": (
                     self._launcher.control_attachment(
@@ -366,6 +364,9 @@ class GenericOmnigentHostRuntime:
                 {
                     "staticHostId": spec.expectedOmnigentHostId,
                     "staticHostImageRef": spec.imageRef,
+                    "staticPreviousContainerId": spec.runtime.get(
+                        "staticPreviousContainerId"
+                    ),
                 }
                 if static_selection is not None
                 else {}
@@ -439,6 +440,9 @@ class GenericOmnigentHostRuntime:
                         {
                             "static_host_id": spec.expectedOmnigentHostId,
                             "static_host_image_ref": spec.imageRef,
+                            "static_previous_container_id": spec.runtime.get(
+                                "staticPreviousContainerId"
+                            ),
                         }
                         if static_selection is not None
                         else {}
@@ -455,6 +459,9 @@ class GenericOmnigentHostRuntime:
                 {
                     "staticHostId": spec.expectedOmnigentHostId,
                     "staticHostImageRef": spec.imageRef,
+                    "staticPreviousContainerId": spec.runtime.get(
+                        "staticPreviousContainerId"
+                    ),
                 }
                 if static_selection is not None
                 else {}
@@ -577,6 +584,9 @@ class GenericOmnigentHostRuntime:
                 {
                     "static_host_id": str(host_context["staticHostId"]),
                     "static_host_image_ref": host_context.get("staticHostImageRef"),
+                    "static_previous_container_id": host_context.get(
+                        "staticPreviousContainerId"
+                    ),
                 }
                 if host_context.get("staticHostId")
                 else {}
