@@ -28,6 +28,7 @@ from moonmind.services.skill_resolution import (
     extract_publish_metadata_from_skill_markdown,
     extract_required_capabilities_from_skill_markdown,
 )
+from moonmind.workflows.runtime_commands import SELECTED_HARNESS_RECOGNITION
 from moonmind.workflows.skills.tool_definitions import STORY_OUTPUT_TASK_TOOLS
 from moonmind.workflows.skills.resolver import (
     SkillResolutionError,
@@ -923,6 +924,11 @@ def build_runtime_command_preview_config() -> dict[str, Any]:
                 else {}
             ),
         }
+    runtimes["omnigent"] = {
+        "slashCommandPassthrough": False,
+        "recognitionMode": SELECTED_HARNESS_RECOGNITION,
+        "renderMode": "selected_harness",
+    }
     return {
         "hintCatalogVersion": _RUNTIME_COMMAND_HINT_CATALOG_VERSION,
         "runtimes": runtimes,
@@ -1040,7 +1046,13 @@ def _build_runtime_command_metadata(
         return payload
     hint_status = _runtime_command_hint_status(command)
     passthrough = _runtime_supports_slash_passthrough(target_runtime)
-    if passthrough:
+    if (target_runtime or DEFAULT_WORKFLOW_RUNTIME) == "omnigent":
+        # Omnigent is a lifecycle, not a provider command transport. The admitted
+        # plan's harness decides this after context preparation. The distinct
+        # marker leaves previously recorded command metadata unchanged.
+        recognition_mode = SELECTED_HARNESS_RECOGNITION
+        passthrough = True
+    elif passthrough:
         recognition_mode = (
             "hinted_runtime_passthrough"
             if hint_status == "hinted"
@@ -1101,6 +1113,15 @@ def _validate_supplied_runtime_command(
         "recognitionMode",
     ):
         if key not in supplied:
+            continue
+        if (
+            key == "recognitionMode"
+            and expected.get(key) == SELECTED_HARNESS_RECOGNITION
+            and supplied.get(key) == "runtime_does_not_support_slash_commands"
+        ):
+            # A saved draft predating harness-based recognition may carry the
+            # old derived classification. Authored command/source checks above
+            # still apply; new admission derives transport from its own plan.
             continue
         if supplied.get(key) != expected.get(key):
             raise WorkflowContractError(
