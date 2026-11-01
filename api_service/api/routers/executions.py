@@ -8391,6 +8391,14 @@ async def _steps_keep_profile_authority(
             selected_provider = await session.get(ManagedAgentProviderProfile, profile_ref)
             if selected_provider is None:
                 return False
+            if mode and normalize_runtime_id(mode) not in {"omnigent", normalize_runtime_id(selected_provider.runtime_id)}:
+                return False
+            step_route = await _profile_route_runtime(
+                session=session, user=None, provider_profile=selected_provider,
+                authored_runtime=(mode if mode and normalize_runtime_id(mode) in {"codex_cli", "claude_code"} else None),
+            )
+            if step_route != "omnigent":
+                return False
         if model_selection_fields(runtime) or selected_provider is not provider:
             # Model and effort have per-step plans. Arbitrary tier options
             # still need their native adapter until the shared harness carries
