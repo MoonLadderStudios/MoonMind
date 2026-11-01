@@ -15,6 +15,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+from api_service.services.omnigent_execution_plan_service import PersistedOmnigentExecutionPlan
+
 from api_service.db.models import (
     Base,
     ManagedAgentProviderProfile,
@@ -342,7 +344,7 @@ async def test_create_definition_compiles_agent_profile_snapshot_separately(
         "taskInputSnapshotDigest": "sha256:" + "c" * 64,
     }
     compile_plan = AsyncMock(
-        return_value=SimpleNamespace(
+        return_value=_CompiledPlan(
             binding=SimpleNamespace(
                 model_dump=lambda **_kwargs: dict(plan_binding)
             ),
@@ -499,7 +501,7 @@ async def test_create_definition_compiles_a_plan_for_a_default_omnigent_runtime(
         "taskInputSnapshotDigest": "sha256:" + "c" * 64,
     }
     compile_plan = AsyncMock(
-        return_value=SimpleNamespace(
+        return_value=_CompiledPlan(
             binding=SimpleNamespace(model_dump=lambda **_kwargs: dict(plan_binding)),
             artifact_refs=("art_profile", "art_skills", "art_plan"),
             resolved_skillset_ref="art_skills",
@@ -610,7 +612,7 @@ async def test_create_definition_failure_after_admission_leaves_no_definition(
         "compile_and_persist_execution_plan",
         AsyncMock(
             side_effect=RuntimeError("plan compilation unavailable"),
-            return_value=SimpleNamespace(
+            return_value=_CompiledPlan(
                 binding=SimpleNamespace(
                     model_dump=lambda **_kwargs: dict(plan_binding)
                 ),
@@ -718,6 +720,12 @@ async def test_create_definition_leaves_a_default_managed_runtime_plan_free(
     assert "omnigentExecutionPlan" not in initial_parameters
 
 
+class _CompiledPlan(SimpleNamespace):
+    """Compiler transport double exposing the production handoff property."""
+    step_parameters = None
+    execution_parameters = PersistedOmnigentExecutionPlan.execution_parameters
+
+
 def _mm3935_plan_admission(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     """Substitute default Agent Profile resolution and plan compilation only."""
 
@@ -751,7 +759,7 @@ def _mm3935_plan_admission(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         default_resolver,
     )
     compile_plan = AsyncMock(
-        return_value=SimpleNamespace(
+        return_value=_CompiledPlan(
             binding=SimpleNamespace(model_dump=lambda **_kwargs: dict(plan_binding)),
             artifact_refs=("art_profile", "art_skills", "art_plan"),
             resolved_skillset_ref="art_skills",
@@ -3116,7 +3124,7 @@ def _stub_compiled_plan(
     from api_service.services import omnigent_execution_plan_service
     from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 
-    compiled = SimpleNamespace(
+    compiled = _CompiledPlan(
         envelope=SimpleNamespace(payload=SimpleNamespace()),
         binding=OmnigentExecutionPlanBinding.model_validate(binding),
         artifact_refs=("artifact:art_plan",),

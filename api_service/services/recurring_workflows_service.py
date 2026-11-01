@@ -1226,6 +1226,7 @@ class RecurringWorkflowsService:
         """
 
         from api_service.services.omnigent_execution_plan_service import (
+            _workflow_payload,
             json_artifact_digest,
         )
         from api_service.services.omnigent_policies import (
@@ -1242,20 +1243,35 @@ class RecurringWorkflowsService:
         except (PolicyConflict, PolicyNotFound):
             # Compilation reports why this authority is not ready.
             return None
+        from api_service.db.models import ManagedAgentProviderProfile
+        from moonmind.runtime_intent import provider_profile_ref_from_mapping
+
+        def profile_inputs(profile):
+            return {name: getattr(profile, name, None) for name in (
+                "profile_id", "runtime_id", "provider_id", "default_model",
+                "default_effort", "default_model_tier", "model_tiers", "execution_configuration",
+            )}
+
+        profiles = {provider_profile.profile_id: profile_inputs(provider_profile)}
+        for step in _workflow_payload(initial_parameters).get("steps") or []:
+            if not isinstance(step, Mapping):
+                continue
+            profile_ref = provider_profile_ref_from_mapping(step.get("runtime") or {}) or provider_profile_ref_from_mapping(step)
+            if profile_ref and profile_ref not in profiles:
+                selected = await self._session.get(ManagedAgentProviderProfile, profile_ref)
+                if selected is None:
+                    return None
+                profiles[profile_ref] = profile_inputs(selected)
         return json_artifact_digest(
             {
                 "initialParameters": {
                     key: value
                     for key, value in initial_parameters.items()
-                    if key not in {"omnigentExecutionPlan", "resolvedSkillsetRef"}
+                    if key not in {"omnigentExecutionPlan", "resolvedSkillsetRef", "omnigentStepExecutionPlans"}
                 },
                 "runtimeProviderTarget": target.get("runtimeProviderTarget"),
                 "taskInputSnapshotDigest": binding.task_input_snapshot_digest,
-                "providerProfile": {
-                    "profileId": getattr(provider_profile, "profile_id", None),
-                    "runtimeId": getattr(provider_profile, "runtime_id", None),
-                    "providerId": getattr(provider_profile, "provider_id", None),
-                },
+                "providerProfiles": profiles,
                 "policySnapshotDigest": json_artifact_digest(policy_snapshot),
             }
         )
@@ -1300,6 +1316,7 @@ class RecurringWorkflowsService:
             access=await frozen_execution_artifact_access(
                 self._session, binding, workflow_id=workflow_id
             ),
+            refresh_step_selections=True,
         )
 
     async def admit_occurrence_execution_plan(

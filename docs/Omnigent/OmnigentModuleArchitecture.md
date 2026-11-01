@@ -284,6 +284,9 @@ planning and continuation reject a replaced or missing handoff. Retained plans
 without this field preserve their original bytes and plan identities.
 Frozen successors retain each step's saved Profile snapshot. Exact reruns
 inherit their admitted artifact grants before Temporal can start.
+Fresh scheduled occurrences resolve current step configuration; their cache
+tracks selected Profile tiers/configuration, excluding generated plan refs.
+Replacing a root without specialized steps explicitly clears prior handoffs.
 Equivalent product submissions,
 native defaults and same-account step aliases use the shared route, including
 persisted schedule steps; selected harness policy is checked before translation.

@@ -7927,7 +7927,7 @@ function WorkflowStartPageContent({
       modelTierPreviewsQuery.data?.previews[`step:${step.localId}`],
       profile,
     );
-    return options !== workflowModelOptions;
+    return options !== "{}" || options !== workflowModelOptions;
   };
   // Each configured step Profile has its own immutable account/harness plan.
   // Keep the native route when that exact Profile or its options need it.
