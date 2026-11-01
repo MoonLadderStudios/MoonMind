@@ -253,12 +253,8 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "has no environment field (native Claude sets only the base URL, "
             "key helper and tier pins). Exact API-key Profiles already run "
             "through ``omnigent-provider-config@1`` "
-            "(``omnigent-claude-api-key``). Also slash-command passthrough: "
-            "native Claude delivers a leading ``/command`` to its terminal, "
-            "but ``execution_contract`` classifies by runtime id, and "
-            "``omnigent`` also serves Codex, whose app-server input has no "
-            "slash commands, and the generic path has no counterpart to the "
-            "direct strategies' runtime-command rendering."
+            "(``omnigent-claude-api-key``). Native Claude command rendering "
+            "already uses the shared renderer through the admitted harness."
         ),
     ),
     LegacyPathRecord(
