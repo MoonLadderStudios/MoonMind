@@ -48,6 +48,16 @@ the minimized Compose inventory replay excludes retained and stopped one-offs
 from current-service convergence. A protected live scheduled canary remains a
 separate release gate.
 
+The search-publication journey expands the seed preset and loads its trusted
+issue, then resumes completed implementation at the production publisher. It
+follows the parent merge handoff through MergeAutomation, resolver-result
+consumption, trusted issue completion and API serialization. Lost publication,
+merge and issue acknowledgements, workflow-worker replacement with a pending
+resolver, and finalization failures retain the confirmed PR and saved head.
+Cancellation, foreign targets, operator holds and competing ownership stop new
+effects. GitHub and provider transport are controlled fixtures; accepted effect
+counts and Temporal histories establish which work recovery actually repeats.
+
 Run only the source-destroying archive replay with:
 
 ```bash

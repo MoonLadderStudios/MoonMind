@@ -9397,7 +9397,9 @@ async def _update_github_issue_status(
             applied.append(f"remove_label:{label}")
     issue_url = issue.get("url")
     updated_issue = dict(issue)
-    if mutation_plan.close_issue:
+    # A retried finalizer has already read the remote issue. An accepted close
+    # whose acknowledgement was lost must not be submitted again.
+    if mutation_plan.close_issue and issue.get("state") != "closed":
         async with httpx.AsyncClient(
             timeout=_GITHUB_ISSUE_MUTATION_TIMEOUT_SECONDS
         ) as client:
