@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shlex
+from pathlib import Path
 from typing import Any
 
 PROVIDER_LITERAL_LAUNCH_ENV = frozenset(
@@ -199,7 +200,11 @@ class OmnigentRuntimeScriptService:
         environment["PATH"] = ":".join(
             [*tool_bins, "/opt/venv/bin", "/usr/local/bin", "/usr/bin", "/bin"]
         )
-        allowed_runtime_environment = {"OMNIGENT_CONFIG_HOME"}
+        allowed_runtime_environment = {
+            "OMNIGENT_CONFIG_HOME",
+            "MOONMIND_CODEX_PROFILE_CONFIG_FILE",
+        }
+        codex_configuration = False
         provider_environment: dict[str, str] = {}
         for handle in credential_handles:
             selected_environment = dict(handle.get("runtimeEnvironment") or {})
@@ -235,7 +240,25 @@ class OmnigentRuntimeScriptService:
                     raise ValueError(
                         f"conflicting credential runtime environment {key}"
                     )
+                if key == "MOONMIND_CODEX_PROFILE_CONFIG_FILE":
+                    if (
+                        handle.get("materializerRef") != "omnigent-provider-config@1"
+                        or value
+                        != "/home/app/.moonmind-provider-config/codex-profile.json"
+                    ):
+                        raise ValueError(
+                            "Codex configuration requires its selected materializer projection"
+                        )
+                    codex_configuration = True
                 environment[key] = str(value)
+        if codex_configuration:
+            provider_environment.update(
+                {
+                    "CODEX_HOME": "/home/app/.codex",
+                    "OMNIGENT_CODEX_PATH": f"{_RUNTIME_BIN_DIR}/codex",
+                }
+            )
+            environment.update(provider_environment)
         control_path = (
             f"{control_attachment['targetPath']}/api-token"
             if control_attachment is not None and control_credential_available
@@ -344,6 +367,20 @@ class OmnigentRuntimeScriptService:
                 "'exec /opt/moonmind-tools/bin/moonmind \"$@\"' "
                 f"> {_RUNTIME_BIN_DIR}/moonmind; chmod 0700 {_RUNTIME_BIN_DIR}/moonmind; "
             )
+        codex_setup = f"rm -f {_RUNTIME_BIN_DIR}/codex {runtime_context_dir}/codex-configuration.py; "
+        if codex_configuration:
+            source_path = (
+                Path(__file__).resolve().parents[2]
+                / "provider_profiles"
+                / "codex_configuration.py"
+            )
+            source = source_path.read_text()
+            helper = f"{runtime_context_dir}/codex-configuration.py"
+            codex_setup += (
+                f'codex_binary=$(command -v codex); test -n "$codex_binary"; '
+                f"printf '%s\\n' {shlex.quote(source)} > {helper}; chmod 0700 {helper}; "
+                f'python3 {helper} prepare "$MOONMIND_CODEX_PROFILE_CONFIG_FILE" "$codex_binary" {_RUNTIME_BIN_DIR}/codex {context_wrapper}; '
+            )
         script = (
             "set -eu; "
             "unset OPENAI_API_KEY ANTHROPIC_API_KEY OPENCODE_AUTH_CONTENT "
@@ -356,6 +393,7 @@ class OmnigentRuntimeScriptService:
             'test -r "$path"; test "$(cat "$path")" = "$generation"; done; '
             'IFS=$oldifs; test -d "$MOONMIND_ACTIVE_SKILLS_DIR"; '
             + context_setup
+            + codex_setup
             + 'if [ "${MOONMIND_OPENCODE_RUNTIME:-0}" = 1 ]; then '
             "mkdir -p "
             + opencode_data

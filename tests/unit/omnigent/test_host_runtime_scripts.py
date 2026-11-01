@@ -37,6 +37,88 @@ def test_profile_owned_literal_environment_reaches_the_native_runner():
     assert "ANTHROPIC_AUTH_TOKEN" not in environment
 
 
+def test_custom_codex_projection_runs_through_the_native_executable_boundary(tmp_path):
+    import os
+
+    from moonmind.omnigent.harness_platform.materializers import (
+        codex_provider_config_endpoint,
+    )
+    from tests.unit.omnigent.test_codex_profile_configuration import profile
+
+    home, skills, binaries = (tmp_path / name for name in ("home", "skills", "bin"))
+    for directory in (home, skills, binaries):
+        directory.mkdir()
+    projection = home / ".moonmind-provider-config"
+    projection.mkdir()
+    endpoint, reason = codex_provider_config_endpoint(profile())
+    assert endpoint is not None, reason
+    (projection / "codex-profile.json").write_text(
+        json.dumps(endpoint.codexConfiguration)
+    )
+    (projection / ".moonmind-generation").write_text("3\n")
+    binaries.joinpath("python3").symlink_to(sys.executable)
+    native = binaries / "codex"
+    native.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, pathlib, tomllib\n"
+        "config=tomllib.loads((pathlib.Path(os.environ['CODEX_HOME'])/'config.toml').read_text())\n"
+        "print(json.dumps({'home':os.environ['CODEX_HOME'],'step':os.environ['MOONMIND_STEP_EXECUTION_ID'],"
+        "'skills':os.environ['MOONMIND_ACTIVE_SKILLS_DIR'],'model':config['model'],"
+        "'retries':config['model_providers']['custom']['request_max_retries']}))\n"
+    )
+    native.chmod(0o700)
+    omnigent = binaries / "omnigent"
+    omnigent.write_text(
+        f"#!{sys.executable}\n"
+        "import os, pathlib, shutil, subprocess\n"
+        "source=pathlib.Path(os.environ['CODEX_HOME']); private=source.parent/'private-native-home'\n"
+        "shutil.copytree(source,private)\n"
+        "subprocess.run([os.environ['OMNIGENT_CODEX_PATH'],'app-server'],check=True,"
+        "env={'PATH':os.environ['PATH'],'CODEX_HOME':str(private)})\n"
+    )
+    omnigent.chmod(0o700)
+    script, environment = OmnigentRuntimeScriptService().build_entrypoint(
+        credential_handles=[
+            {
+                "credentialGeneration": 3,
+                "materializerRef": "omnigent-provider-config@1",
+                "attachments": [{"targetPath": "/home/app/.moonmind-provider-config"}],
+                "runtimeEnvironment": {
+                    "OMNIGENT_CONFIG_HOME": "/home/app/.moonmind-provider-config",
+                    "MOONMIND_CODEX_PROFILE_CONFIG_FILE": "/home/app/.moonmind-provider-config/codex-profile.json",
+                },
+            }
+        ],
+        skill_attachment={"targetPath": str(skills)},
+        step_execution_id="workflow:run:node:execution:1",
+    )
+    environment = {
+        key: value.replace("/home/app", str(home)) for key, value in environment.items()
+    }
+    result = subprocess.run(
+        [
+            "/bin/sh",
+            "-ceu",
+            script.replace("/home/app", str(home)),
+            "--",
+            "http://test-omnigent",
+        ],
+        env={**os.environ, **environment, "PATH": f"{binaries}:{os.environ['PATH']}"},
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "home": str(home / "private-native-home"),
+        "step": "workflow:run:node:execution:1",
+        "skills": str(skills),
+        "model": "example-model",
+        "retries": 4,
+    }
+    passthrough = set(environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(","))
+    assert {"CODEX_HOME", "OMNIGENT_CODEX_PATH"} <= passthrough
+
+
 @pytest.mark.parametrize(
     "values",
     [
