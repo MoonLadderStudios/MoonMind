@@ -9385,7 +9385,9 @@ async def _resolve_step_runtime_selections(
     task_target_runtime: str | None,
     task_profile_id: str | None,
     session: Any,
+    defer_account_validation: bool = False,
 ) -> None:
+    """Normalize step intent; recurring starts validate independent accounts at dispatch."""
     if not steps:
         return
     task_runtime = task_runtime or {}
@@ -9440,23 +9442,24 @@ async def _resolve_step_runtime_selections(
             provider_profile = await session.get(
                 ManagedAgentProviderProfile, effective_profile_id
             )
-            if provider_profile is None and raw_step_profile_id:
-                raise _invalid_workflow_request(
-                    f"Provider profile not found for payload.workflow.steps[{index}]: "
-                    f"{raw_step_profile_id!r}."
+            if not defer_account_validation:
+                if provider_profile is None and raw_step_profile_id:
+                    raise _invalid_workflow_request(
+                        f"Provider profile not found for payload.workflow.steps[{index}]: "
+                        f"{raw_step_profile_id!r}."
+                    )
+                if provider_profile is None and task_profile_id and not raw_step_profile_id:
+                    raise _invalid_workflow_request(
+                        f"Provider profile not found for inherited task profile on "
+                        f"payload.workflow.steps[{index}]: {task_profile_id!r}."
+                    )
+                # A step may override the runtime while inheriting the task profile,
+                # so ownership is checked against the step's effective runtime.
+                _require_provider_profile_runtime(
+                    profile=provider_profile,
+                    profile_id=effective_profile_id,
+                    selected_runtime=canonical_step_runtime,
                 )
-            if provider_profile is None and task_profile_id and not raw_step_profile_id:
-                raise _invalid_workflow_request(
-                    f"Provider profile not found for inherited task profile on "
-                    f"payload.workflow.steps[{index}]: {task_profile_id!r}."
-                )
-            # A step may override the runtime while inheriting the task profile,
-            # so the ownership check runs against the step's effective runtime.
-            _require_provider_profile_runtime(
-                profile=provider_profile,
-                profile_id=effective_profile_id,
-                selected_runtime=canonical_step_runtime,
-            )
         elif _runtime_model_tier(runtime_payload) is not None and not step_selects_pool:
             # Resolve profile-less tier intent only after the step runtime is
             # known, then persist that selection for the eventual launch.
@@ -13191,6 +13194,7 @@ async def _resolve_recurring_runtime_selection(
             task_target_runtime=canonical_target_runtime,
             task_profile_id=raw_profile_id,
             session=session,
+            defer_account_validation=True,
         )
         task_payload = {**task_payload, "steps": normalized_steps}
 
