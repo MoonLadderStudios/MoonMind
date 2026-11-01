@@ -221,12 +221,16 @@ async def _find_context_fork(client, *, agent_id, title, source_id):
                     "Context fork lookup contains an invalid session"
                 )
             if "title" not in item:
-                raise OmnigentLaunchReconciliationError("Context fork lookup omitted session titles")
+                raise OmnigentLaunchReconciliationError(
+                    "Context fork lookup omitted session titles"
+                )
             if item.get("title") != title:
                 continue
             labels = item.get("labels") or {}
             if not isinstance(labels, Mapping):
-                raise OmnigentLaunchReconciliationError("Context fork lookup has invalid lineage")
+                raise OmnigentLaunchReconciliationError(
+                    "Context fork lookup has invalid lineage"
+                )
             if (
                 item.get("agent_id") != agent_id
                 or labels.get("omnigent.fork.source_id") != source_id
@@ -313,7 +317,9 @@ async def _prepare_context_fork(
     snapshot = await client.get_session(session_id)
     labels = snapshot.get("labels") or {}
     if not isinstance(labels, Mapping):
-        raise OmnigentLaunchReconciliationError("Context fork has invalid native lineage")
+        raise OmnigentLaunchReconciliationError(
+            "Context fork has invalid native lineage"
+        )
     if (
         snapshot.get("agent_id") != payload["agent_id"]
         or labels.get("omnigent.fork.source_id") != source_id

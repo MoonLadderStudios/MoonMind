@@ -18,6 +18,7 @@ from aiohttp import web
 from moonmind.omnigent.runtime_bindings import RuntimeBindingState, stable_binding_id
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from tests.integration.omnigent import test_generic_native_durable_journey as native
+
 native_journey = native.native_journey
 session_factory = native.session_factory
 
@@ -32,10 +33,10 @@ class ContextNativeServer(native.NativeTurnServer):
         self.current_session = None
         self.forks = []
         self.runner_launches = []
+        self.restored_report = None
 
     def app(self):
         app = super().app()
-        app.router.add_get("/v1/sessions", self.context_sessions)
         app.router.add_post("/v1/sessions/{source_id}/fork", self.context_fork)
         app.router.add_patch("/v1/sessions/{session_id}", self.context_patch)
         app.router.add_post("/v1/hosts/{host_id}/runners", self.context_runner)
@@ -50,6 +51,9 @@ class ContextNativeServer(native.NativeTurnServer):
 
     async def create_session(self, request):
         payload = await request.json()
+        if self.current_session is not None:
+            self.items, self.emitted_events = [], []
+            self.status, self.turn_active = "idle", False
         response = await super().create_session(request)
         session_id = json.loads(response.body)["id"]
         self.current_session = session_id
@@ -70,7 +74,7 @@ class ContextNativeServer(native.NativeTurnServer):
             self.frozen[session_id]["runner_online"] = False
         return response
 
-    async def context_sessions(self, request):
+    async def list_sessions(self, request):
         return web.json_response(
             {
                 "data": [self.snapshot(item) for item in self.session_ids],
@@ -110,6 +114,7 @@ class ContextNativeServer(native.NativeTurnServer):
         host_id, payload = request.match_info["host_id"], await request.json()
         assert payload["session_id"] == self.current_session
         assert host_id == self.host_id
+        self.restored_report = (self.workspace / native.RESULT_PATH).read_bytes()
         self.runner_launches.append((host_id, payload))
         runner_id = "runner-" + self.current_session
         self.session_records[self.current_session].update(
@@ -155,43 +160,79 @@ def _next_request(journey, result):
 
 
 @pytest.mark.parametrize(
-    "native_journey", ["codex-native", "codex-native-api-key"], indirect=True
+    "native_journey",
+    [
+        "codex-native",
+        "codex-native-api-key",
+        {"harness": "codex-native", "static": True},
+    ],
+    indirect=True,
 )
-async def test_same_epoch_context_survives_host_and_worker_cleanup(native_journey):
+@pytest.mark.parametrize("source_status", ["idle", "failed"])
+async def test_same_epoch_context_survives_host_and_worker_cleanup(
+    native_journey, source_status
+):
     journey = native_journey
-    first = await native.assert_native_turn_saved_and_cleaned(journey)
+    if journey.static_mode:
+        journey.server.terminal_status = source_status
+        first = await journey.realizer.execute(journey.request, journey.plan)
+        assert (first.failure_class is None) is (source_status == "idle")
+        assert journey.server.host_alive
+        saved = first.metadata["savedWorkspaceCheckpoint"]
+        assert (
+            "sha256:"
+            + hashlib.sha256(
+                await journey.gateway.read_bytes(saved["archiveRef"])
+            ).hexdigest()
+            == saved["archiveDigest"]
+        )
+    else:
+        first = await native.assert_native_turn_saved_and_cleaned(
+            journey, source_status
+        )
     source_id = journey.server.session_ids[0]
     original_items = copy.deepcopy(journey.server.frozen[source_id]["items"])
     source_ref = first.metadata["runtimeSessionContext"]["runtimeBindingRef"]
     source = await journey.services.runtime_binding_store.get(source_ref)
+    assert source.state is RuntimeBindingState.cleaned
     successor = _next_request(journey, first)
     await journey.gateway.admit_execution_plan_inputs(
         request=successor, plan=journey.plan
     )
-    assert not journey.server.workspace.exists()
+    if not journey.static_mode:
+        assert not journey.server.workspace.exists()
     if journey.worker_root.exists():
         shutil.rmtree(journey.worker_root)
     assert not journey.worker_root.exists()
     journey.manager.request = successor
+    journey.server.terminal_status = "idle"
     result = await journey.realizer.execute(successor, journey.plan)
-    assert result.failure_class is None, result
+    assert result.failure_class is None, (
+        result.summary,
+        result.provider_error_code,
+        (
+            await journey.gateway.read_text(result.diagnostics_ref)
+            if result.diagnostics_ref
+            else result.metadata
+        ),
+    )
     assert len(journey.server.forks) == 1 and len(journey.server.create_payloads) == 1
     assert journey.server.forks[0][0] == source_id
     assert journey.server.items[: len(original_items)] == original_items
     assert len(journey.server.items) > len(original_items)
+    assert journey.server.restored_report == native.GENERATED
     assert (
         result.metadata["runtimeSessionContext"]["epoch"]
         == first.metadata["runtimeSessionContext"]["epoch"]
     )
     assert journey.docker.launch_env["MOONMIND_CODEX_REQUIRE_CONTEXT"] == "1"
-    assert journey.docker.create_count == 2 and not journey.server.host_alive
+    assert journey.docker.create_count == 2
+    assert journey.server.host_alive is journey.static_mode
     assert await journey.services.runtime_binding_store.get(source_ref) == source
     target_ref = result.metadata["runtimeSessionContext"]["runtimeBindingRef"]
     target = await journey.services.runtime_binding_store.get(target_ref)
-    assert (
-        target.state is RuntimeBindingState.cleaned
-        and target.hostLeaseRef != source.hostLeaseRef
-    )
+    assert target.state is RuntimeBindingState.cleaned
+    assert target.hostLeaseRef != source.hostLeaseRef
     assert target.omnigentSessionId != source.omnigentSessionId
     before = journey.docker.create_count, len(journey.server.forks)
     journey.manager.request = journey.request
@@ -201,6 +242,39 @@ async def test_same_epoch_context_survives_host_and_worker_cleanup(native_journe
         == first.metadata["runtimeSessionContext"]
     )
     assert (journey.docker.create_count, len(journey.server.forks)) == before
+
+
+@pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
+async def test_fresh_policy_clears_the_shared_context_epoch(native_journey):
+    journey = native_journey
+    first = await native.assert_native_turn_saved_and_cleaned(journey)
+    successor = _next_request(journey, first)
+    successor = successor.model_copy(
+        update={
+            "step_execution": successor.step_execution.model_copy(
+                update={
+                    "runtime_context_policy": "fresh_agent_run",
+                    "runtime_session_context": None,
+                }
+            )
+        }
+    )
+    journey.manager.request = successor
+    await journey.gateway.admit_execution_plan_inputs(
+        request=successor, plan=journey.plan
+    )
+    result = await journey.realizer.execute(successor, journey.plan)
+    assert result.failure_class is None, result.summary
+    assert journey.server.forks == [] and len(journey.server.create_payloads) == 2
+    assert (
+        result.metadata["runtimeSessionContext"]["epoch"]
+        == successor.step_execution.step_execution_id
+    )
+    assert (
+        result.metadata["runtimeSessionContext"]["epoch"]
+        != first.metadata["runtimeSessionContext"]["epoch"]
+    )
+    assert "MOONMIND_CODEX_REQUIRE_CONTEXT" not in journey.docker.launch_env
 
 
 @pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
