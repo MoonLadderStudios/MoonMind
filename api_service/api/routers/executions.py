@@ -15304,6 +15304,22 @@ def _fresh_serialized_workflow_request(
     task_key, task = _recurring_workflow_payload(parameters)
     if not task or {"workflow", "task"} <= parameters.keys():
         return None
+    if not workflow_requires_agent(task, parameters):
+        return None
+    for step in task.get("steps") or []:
+        if not isinstance(step, Mapping):
+            continue
+        step_runtime = _coerce_mapping(step.get("runtime"))
+        if (
+            provider_profile_ref_from_mapping(step_runtime)
+            or provider_profile_ref_from_mapping(step)
+            or has_profile_selector(step_runtime)
+            or step_runtime.get("agentProfile") is not None
+        ):
+            # These raw shapes deliberately defer account matching to dispatch;
+            # the envelope also validates ownership at submission. Preserve
+            # their existing persistence semantics until that handoff is shared.
+            return None
     if set(task) - {
         "instructions", "title", "runtime", "steps", "skill", "tool", "skills",
         "inputs", "inputAttachments", "publish", "git", "repoRef",
