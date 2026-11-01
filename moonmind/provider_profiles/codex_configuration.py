@@ -20,6 +20,35 @@ from pathlib import Path
 _CONFIG_PATH = "{{runtime_support_dir}}/codex-home/config.toml"
 _CODEX_HOME = "{{runtime_support_dir}}/codex-home"
 MINIMAX_MODEL = "codex-MiniMax-M2.7"
+_SESSION_SETTINGS = {
+    "developer_instructions", "hide_agent_reasoning", "show_raw_agent_reasoning",
+    "project_doc_max_bytes", "project_doc_fallback_filenames", "history",
+}
+
+
+def _validate_session_settings(document):
+    """Carry session preferences without admitting another tool/auth owner."""
+    if "developer_instructions" in document and not isinstance(document["developer_instructions"], str):
+        raise ValueError("developer_instructions must be a string")
+    for key in ("hide_agent_reasoning", "show_raw_agent_reasoning"):
+        if key in document and type(document[key]) is not bool:
+            raise ValueError(f"{key} must be boolean")
+    if "project_doc_max_bytes" in document and (
+        type(document["project_doc_max_bytes"]) is not int or document["project_doc_max_bytes"] < 0
+    ):
+        raise ValueError("project_doc_max_bytes must be a nonnegative integer")
+    if "project_doc_fallback_filenames" in document:
+        names = document["project_doc_fallback_filenames"]
+        if not isinstance(names, list) or any(not isinstance(name, str) or not name for name in names):
+            raise ValueError("project_doc_fallback_filenames must be a string array")
+    if "history" in document:
+        history = document["history"]
+        if not isinstance(history, dict) or set(history) - {"persistence", "max_bytes"}:
+            raise ValueError("history contains unsupported settings")
+        if "persistence" in history and history["persistence"] not in {"save-all", "none"}:
+            raise ValueError("history persistence is unsupported")
+        if "max_bytes" in history and (type(history["max_bytes"]) is not int or history["max_bytes"] < 0):
+            raise ValueError("history max_bytes must be a nonnegative integer")
 
 
 def minimax_file_templates(*, legacy=False):
@@ -194,7 +223,7 @@ def configuration_for_profile(profile):
             document = _merge(document, layer)
         document.pop("profile", None)
         document.pop("profiles", None)
-        supported_settings = {
+        supported_settings = _SESSION_SETTINGS | {
             "model",
             "model_provider",
             "model_providers",
@@ -208,8 +237,9 @@ def configuration_for_profile(profile):
         if set(document) - supported_settings:
             return (
                 None,
-                "Codex configuration includes settings outside the shared model configuration",
+                "Codex configuration includes settings outside the shared model/session configuration",
             )
+        _validate_session_settings(document)
         provider_name = document.get("model_provider")
         providers = document.get("model_providers")
         if not isinstance(providers, dict) or set(providers) != {provider_name}:

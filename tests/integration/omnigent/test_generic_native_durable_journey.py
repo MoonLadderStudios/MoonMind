@@ -1034,6 +1034,7 @@ async def _compile_plan(
     static_mode=False,
     env_bundle=False,
     codex_config=False,
+    session_settings=None,
     instructions="Generate a report.",
 ):
     # Reuse the durable Skill producer, then expose its immutable body through
@@ -1098,6 +1099,7 @@ async def _compile_plan(
         )
 
         templates = minimax_file_templates()
+        templates[0]["content_template"].update(session_settings or {})
         templates[0]["content_template"]["model"] = "model"
         templates[0]["content_template"]["profiles"]["m27"]["model"] = "model"
         fields.update(
@@ -1285,6 +1287,7 @@ async def native_journey(
             static_mode=static_mode,
             env_bundle=env_bundle,
             codex_config=codex_config,
+            session_settings=selection.get("sessionSettings"),
             instructions=instructions,
         )
         # Verify the public HTTP enums survive discovery, alongside the real
@@ -1484,6 +1487,22 @@ async def test_registered_generic_native_turn_saves_result_and_cleans_owned_reso
     terminal_status,
 ):
     await assert_native_turn_saved_and_cleaned(native_journey, terminal_status)
+
+
+@pytest.mark.parametrize("native_journey", [{
+    "harness": "codex-native-file-config",
+    "sessionSettings": {
+        "developer_instructions": "Preserve completed work and the requested account.",
+        "history": {"persistence": "none", "max_bytes": 1048576},
+        "project_doc_fallback_filenames": ["PROJECT.md"],
+    },
+}], indirect=True)
+async def test_declared_codex_session_preferences_survive_shared_lifecycle(native_journey):
+    await assert_native_turn_saved_and_cleaned(native_journey)
+    document = native_journey.docker.codex_configuration["document"]
+    assert document["developer_instructions"] == "Preserve completed work and the requested account."
+    assert document["history"] == {"persistence": "none", "max_bytes": 1048576}
+    assert document["project_doc_fallback_filenames"] == ["PROJECT.md"]
 
 
 @pytest.mark.parametrize(

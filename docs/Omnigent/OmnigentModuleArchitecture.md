@@ -300,6 +300,9 @@ static-connected Codex/Claude hosts use the shared lifecycle.
 API-key Codex and Claude Profiles that translate exactly, including MiniMax's
 declared Claude environment bundle and Codex Responses file configuration, run
 on the shared lifecycle with their endpoint, model pins and non-secret tuning.
+Codex developer instructions, project-instruction discovery and history preferences
+also reach its private session config. Tool/authentication and launch settings
+without an equivalent projection retain their native route.
 Explicit same-epoch Codex context reuse forks durable native history through
 the shared lifecycle while keeping each attempt's resources and cleanup fenced.
 Credential maintenance drains
