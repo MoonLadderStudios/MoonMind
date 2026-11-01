@@ -1328,35 +1328,9 @@ def _is_untouched_legacy_codex_openrouter_profile(
 
 
 def _codex_minimax_m27_file_templates() -> list[dict[str, object]]:
-    return [
-        {
-            "path": "{{runtime_support_dir}}/codex-home/config.toml",
-            "format": "toml",
-            "merge_strategy": "deep_merge",
-            "content_template": {
-                "profile": "m27",
-                "model_providers": {
-                    "minimax": {
-                        "name": "MiniMax Chat Completions API",
-                        "base_url": "https://api.minimax.io/v1",
-                        "env_key": "MINIMAX_API_KEY",
-                        "wire_api": "chat",
-                        "requires_openai_auth": False,
-                        "request_max_retries": 4,
-                        "stream_max_retries": 10,
-                        "stream_idle_timeout_ms": 300000,
-                    },
-                },
-                "profiles": {
-                    "m27": {
-                        "model": "codex-MiniMax-M2.7",
-                        "model_provider": "minimax",
-                    }
-                },
-            },
-            "permissions": "0600",
-        }
-    ]
+    from moonmind.provider_profiles.codex_configuration import minimax_file_templates
+
+    return minimax_file_templates()
 
 
 _LEGACY_SETUP_PROFILE_SPECS = {

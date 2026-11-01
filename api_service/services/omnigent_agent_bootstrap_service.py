@@ -65,6 +65,7 @@ CLAUDE_BUILTIN_PROFILE_ID = "omnigent-claude-default"
 CLAUDE_API_KEY_BUILTIN_PROFILE_ID = "omnigent-claude-api-key"
 CLAUDE_ENV_BUNDLE_BUILTIN_PROFILE_ID = "omnigent-claude-env-bundle"
 CODEX_API_KEY_BUILTIN_PROFILE_ID = "omnigent-codex-api-key"
+CODEX_FILE_CONFIG_BUILTIN_PROFILE_ID = "omnigent-codex-file-config"
 OPENCODE_BUILTIN_PROFILE_ID = "omnigent-opencode-default"
 _ENV_DEFAULT_AGENT_NAME = "OMNIGENT_DEFAULT_AGENT_NAME"
 _BUILTIN_DEFAULT_AGENT_NAME = "codex-native-ui"
@@ -737,9 +738,29 @@ _MANAGED_CODEX_API_KEY_CONFIGURATION = _ManagedConfiguration(
     provider_ids=("openai",),
     origin="builtin_codex",
 )
+_MANAGED_CODEX_FILE_CONFIGURATION = _ManagedConfiguration(
+    profile_id=CODEX_FILE_CONFIG_BUILTIN_PROFILE_ID,
+    marker="codex-file-config",
+    display_name="Codex via Omnigent (model configuration)",
+    description=(
+        "MoonMind-managed Codex configuration for declared Responses provider "
+        "settings carried by the shared host."
+    ),
+    credential_source="secret_ref",
+    materialization_mode="composite",
+    harness=_BOOTSTRAP_HARNESS,
+    execution_profile_ref=_BOOTSTRAP_EXECUTION_PROFILE_REF,
+    provider_runtime_id=_BOOTSTRAP_PROVIDER_RUNTIME_ID,
+    provider_ids=(),
+    origin="builtin_codex",
+)
+_MANAGED_CODEX_KEY_CONFIGURATIONS = (
+    _MANAGED_CODEX_API_KEY_CONFIGURATION,
+    _MANAGED_CODEX_FILE_CONFIGURATION,
+)
 MANAGED_BUILTIN_MARKERS = {
     item.profile_id: item.marker
-    for item in (*_MANAGED_CLAUDE_CONFIGURATIONS, _MANAGED_CODEX_API_KEY_CONFIGURATION)
+    for item in (*_MANAGED_CLAUDE_CONFIGURATIONS, *_MANAGED_CODEX_KEY_CONFIGURATIONS)
 }
 
 
@@ -942,15 +963,19 @@ async def _reconcile_managed_codex_api_key_configuration(
         required_capabilities=_BOOTSTRAP_REQUIRED_CAPABILITIES,
     )["ready"]:
         return False
-    return await _reconcile_managed_configuration(
-        session,
-        _MANAGED_CODEX_API_KEY_CONFIGURATION,
-        upstream_id=upstream_id,
-        upstream_version=upstream_version,
-        launch_policy_ref=launch_policy_ref,
-        projection=projection,
-        observed_at=observed_at,
-    )
+    results = [
+        await _reconcile_managed_configuration(
+            session,
+            managed,
+            upstream_id=upstream_id,
+            upstream_version=upstream_version,
+            launch_policy_ref=launch_policy_ref,
+            projection=projection,
+            observed_at=observed_at,
+        )
+        for managed in _MANAGED_CODEX_KEY_CONFIGURATIONS
+    ]
+    return all(results)
 
 
 async def _reconcile_bootstrap_profile_launch_policy(
