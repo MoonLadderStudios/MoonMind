@@ -91,6 +91,25 @@ def test_anthropic_api_key_profile_translates_to_default_endpoint():
     )
 
 
+def test_minimax_profile_preserves_its_declared_launch_environment_on_shared_hosts():
+    profile = _api_key_profile(
+        provider_id="minimax",
+        runtime_materialization_mode="env_bundle",
+        env_template=_MINIMAX_ENV,
+        secret_refs={"provider_api_key": "env://MINIMAX_API_KEY"},
+    )
+    endpoint, reason = claude_provider_config_endpoint(profile)
+    assert reason == ""
+    assert endpoint is not None
+    assert endpoint.baseUrl == "https://api.minimax.io/anthropic"
+    assert endpoint.launchEnvironment == {
+        "ANTHROPIC_SMALL_FAST_MODEL": "MiniMax-M2.7",
+        "API_TIMEOUT_MS": "3000000",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    }
+    assert materializer_ref_for_profile(profile) == "omnigent-provider-config@1"
+
+
 def test_declared_endpoint_model_and_tier_pins_are_carried_exactly():
     profile = _api_key_profile(
         env_template={
@@ -116,20 +135,19 @@ def test_declared_endpoint_model_and_tier_pins_are_carried_exactly():
 @pytest.mark.parametrize(
     ("changes", "reason"),
     [
-        # The seeded MiniMax profile: Claude tuning keys with no provider-config
-        # field, behind an endpoint the shipped Omnigent egress does not admit.
+        # Unknown settings and unadmitted endpoints must still stay direct.
         (
             {
-                "env_template": _MINIMAX_ENV,
+                "env_template": {**_MINIMAX_ENV, "CLAUDE_UNCARRIED_SETTING": "1"},
                 "secret_refs": {"provider_api_key": "env://MINIMAX_API_KEY"},
             },
-            "API_TIMEOUT_MS",
+            "CLAUDE_UNCARRIED_SETTING",
         ),
         (
             {
                 "env_template": {
                     "ANTHROPIC_AUTH_TOKEN": {"from_secret_ref": "anthropic_api_key"},
-                    "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
+                    "ANTHROPIC_BASE_URL": "https://api.unadmitted.example/anthropic",
                 }
             },
             "egress",
@@ -380,6 +398,7 @@ async def test_untranslatable_profile_fails_closed_at_provisioning(tmp_path):
                 "env_template": {
                     **_MINIMAX_ENV,
                     "ANTHROPIC_AUTH_TOKEN": {"from_secret_ref": "provider_api_key"},
+                    "CLAUDE_UNCARRIED_SETTING": "1",
                 },
             },
             materializer_ref="omnigent-provider-config@1",
@@ -389,4 +408,46 @@ async def test_untranslatable_profile_fails_closed_at_provisioning(tmp_path):
         error.value.code
         == HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE
     )
-    assert "API_TIMEOUT_MS" in str(error.value)
+    assert "CLAUDE_UNCARRIED_SETTING" in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_env_bundle_materializes_only_the_key_and_carries_non_secret_tuning(
+    tmp_path,
+):
+    handles, records, backend, artifacts, resolver = await _provision(
+        tmp_path,
+        profile_values={
+            "credential_source": "secret_ref",
+            "runtime_materialization_mode": "env_bundle",
+            "secret_refs": {"provider_api_key": "env://ANTHROPIC_API_KEY"},
+            "env_template": _MINIMAX_ENV,
+        },
+        materializer_ref="omnigent-provider-config@1",
+    )
+    (handle,) = handles
+    assert handle.runtimeEnvironment == {
+        "OMNIGENT_CONFIG_HOME": "/home/app/.moonmind-provider-config",
+        "ANTHROPIC_SMALL_FAST_MODEL": "MiniMax-M2.7",
+        "API_TIMEOUT_MS": "3000000",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    }
+    assert resolver.resolved == ["ANTHROPIC_API_KEY"]
+    (body,) = [data for _argv, data in backend.calls if data]
+    family = json.loads(body)["providers"]["moonmind"]["anthropic"]
+    assert family["base_url"] == "https://api.minimax.io/anthropic"
+    assert family["api_key"] == _KEY
+    assert family["models"] == {
+        "default": "MiniMax-M2.7",
+        "opus": "MiniMax-M2.7",
+        "sonnet": "MiniMax-M2.7",
+        "haiku": "MiniMax-M2.7",
+    }
+    assert _KEY not in json.dumps(
+        {
+            "commands": [argv for argv, _data in backend.calls],
+            "handle": handle.model_dump(mode="json"),
+            "attestations": artifacts.payloads,
+        }
+    )
+    assert [record.cleanup_state for record in records] == ["active"]

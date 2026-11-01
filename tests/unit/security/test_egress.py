@@ -43,16 +43,14 @@ def test_openrouter_destination_is_scoped_to_omnigent(configured_egress):
 
 
 @pytest.mark.asyncio
-async def test_default_candidate_qualifies_against_v1_gateway():
+async def test_shipped_provider_destinations_require_a_compatible_gateway():
     from moonmind.security import egress
 
     for profile in (egress.DEFAULT_EGRESS_PROFILE, egress.OMNIGENT_EGRESS_PROFILE):
-        evidence = await egress.attest_docker_egress(
-            runner=_legacy_gateway_runner(), profile=profile, backend_ref="candidate"
-        )
-        assert evidence.validation_result == "passed"
-        assert evidence.enforcer_implementation == "docker-internal-proxy/v1"
-        assert evidence.config_digest == _LEGACY_CONFIG_DIGEST
+        with pytest.raises(RuntimeError, match="compatible gateway"):
+            await egress.attest_docker_egress(
+                runner=_legacy_gateway_runner(), profile=profile, backend_ref="candidate"
+            )
 
 
 @pytest.mark.parametrize(

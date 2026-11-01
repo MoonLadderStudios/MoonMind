@@ -63,6 +63,7 @@ logger = logging.getLogger(__name__)
 BOOTSTRAP_PROFILE_ID = "omnigent-bootstrap-default"
 CLAUDE_BUILTIN_PROFILE_ID = "omnigent-claude-default"
 CLAUDE_API_KEY_BUILTIN_PROFILE_ID = "omnigent-claude-api-key"
+CLAUDE_ENV_BUNDLE_BUILTIN_PROFILE_ID = "omnigent-claude-env-bundle"
 CODEX_API_KEY_BUILTIN_PROFILE_ID = "omnigent-codex-api-key"
 OPENCODE_BUILTIN_PROFILE_ID = "omnigent-opencode-default"
 _ENV_DEFAULT_AGENT_NAME = "OMNIGENT_DEFAULT_AGENT_NAME"
@@ -704,6 +705,18 @@ _MANAGED_CLAUDE_CONFIGURATIONS = (
         ),
         credential_source="secret_ref",
         materialization_mode="api_key_env",
+    ),
+    _ManagedConfiguration(
+        profile_id=CLAUDE_ENV_BUNDLE_BUILTIN_PROFILE_ID,
+        marker="claude-env-bundle",
+        display_name="Claude Code via Omnigent (environment bundle)",
+        description=(
+            "MoonMind-managed Claude Code configuration for declared API-key "
+            "environment bundles carried exactly by the shared host."
+        ),
+        credential_source="secret_ref",
+        materialization_mode="env_bundle",
+        provider_ids=("minimax",),
     ),
 )
 # The bootstrap Codex configuration serves OAuth Profiles; API-key Codex

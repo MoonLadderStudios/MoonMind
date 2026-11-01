@@ -844,7 +844,10 @@ class DockerOmnigentProviderConfigMaterializer(DockerOpencodeAuthJsonMaterialize
                 "credentialGeneration": acquired.credential_generation,
                 "materializerRef": self.ref,
                 "attachments": [attachment],
-                "runtimeEnvironment": {"OMNIGENT_CONFIG_HOME": self._TARGET},
+                "runtimeEnvironment": {
+                    "OMNIGENT_CONFIG_HOME": self._TARGET,
+                    **(endpoint.launchEnvironment if endpoint is not None else {}),
+                },
                 "cleanupRef": f"credential-cleanup:sha256:{digest}",
                 "attestationRef": attestation_ref,
             }

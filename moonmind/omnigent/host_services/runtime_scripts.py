@@ -5,6 +5,30 @@ from __future__ import annotations
 import shlex
 from typing import Any
 
+PROVIDER_LITERAL_LAUNCH_ENV = frozenset(
+    {
+        "ANTHROPIC_SMALL_FAST_MODEL",
+        "API_TIMEOUT_MS",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+    }
+)
+
+
+def validate_provider_literal_launch_environment(
+    values: dict[str, str],
+) -> dict[str, str]:
+    """Validate the non-secret tuning values carried by the shared host."""
+    unknown = set(values) - PROVIDER_LITERAL_LAUNCH_ENV
+    if unknown:
+        raise ValueError(
+            f"unsupported provider launch environment keys: {sorted(unknown)}"
+        )
+    for key, value in values.items():
+        if not isinstance(value, str) or not value or any(c in value for c in "\0\r\n"):
+            raise ValueError(f"invalid provider launch environment {key}")
+    return dict(values)
+
+
 _RUNTIME_BIN_DIR = "/home/app/.omnigent/moonmind/bin"
 _RUNTIME_CONTEXT_DIR = "/home/app/.omnigent/moonmind/runtime-context"
 
@@ -176,8 +200,30 @@ class OmnigentRuntimeScriptService:
             [*tool_bins, "/opt/venv/bin", "/usr/local/bin", "/usr/bin", "/bin"]
         )
         allowed_runtime_environment = {"OMNIGENT_CONFIG_HOME"}
+        provider_environment: dict[str, str] = {}
         for handle in credential_handles:
-            for key, value in dict(handle.get("runtimeEnvironment") or {}).items():
+            selected_environment = dict(handle.get("runtimeEnvironment") or {})
+            literals = {
+                key: value
+                for key, value in selected_environment.items()
+                if key not in allowed_runtime_environment
+            }
+            if literals:
+                if handle.get("materializerRef") != "omnigent-provider-config@1":
+                    raise ValueError(
+                        "provider launch environment requires its credential materializer"
+                    )
+                literals = validate_provider_literal_launch_environment(literals)
+            for key, value in selected_environment.items():
+                if key in literals:
+                    existing = environment.get(key)
+                    if existing is not None and existing != value:
+                        raise ValueError(
+                            f"conflicting credential runtime environment {key}"
+                        )
+                    provider_environment[key] = value
+                    environment[key] = value
+                    continue
                 if key not in allowed_runtime_environment or not str(value).startswith(
                     "/"
                 ):
@@ -236,6 +282,7 @@ class OmnigentRuntimeScriptService:
             *_EGRESS_PROXY_ENV_NAMES,
             *(_GITHUB_RUNTIME_ENV if github_credential_attachment is not None else {}),
             *supplied_runtime_environment,
+            *provider_environment,
         }
         if passthrough_names:
             environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"] = ",".join(
