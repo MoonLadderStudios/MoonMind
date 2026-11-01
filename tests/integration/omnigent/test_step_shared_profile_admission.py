@@ -122,11 +122,23 @@ async def test_independent_profile_and_harness_get_their_own_shared_plan(native_
         assert continued_plan.payload.credentialBindings == selected.payload.credentialBindings
         if journey.harness == step_harness == "codex-native":
             from copy import deepcopy
+            from fastapi import HTTPException
+            from api_service.services.recurring_workflows_service import RecurringWorkflowsService
             from api_service.db.models import MoonMindWorkflowState
             from moonmind.workflows.temporal.service import TemporalExecutionRerunPlanError
             from moonmind.workflows.temporal.artifacts import ArtifactAccessContext, TemporalArtifactRepository, TemporalArtifactService
 
             source_id = record.workflow_id
+            # A new scheduled occurrence resolves current step configuration;
+            # the interrupted successor above preserves its recorded snapshot.
+            with pytest.raises(HTTPException) as unavailable:
+                await RecurringWorkflowsService(session)._compile_scheduled_plan(
+                    workflow_id="mm-schedule:step-profile", principal="service:execution-plan",
+                    snapshot=record.parameters["agentProfileSnapshot"], provider_profile=root_provider,
+                    initial_parameters=record.parameters, binding=requests["root"].omnigent_execution_plan,
+                )
+            assert unavailable.value.status_code == 409
+            assert unavailable.value.detail["code"] == "profile_execution_configuration_required"
             altered = deepcopy(record.parameters)
             altered["omnigentStepExecutionPlans"]["selected"]["profileId"] = PROFILE
             with pytest.raises(TemporalExecutionRerunPlanError):

@@ -182,3 +182,36 @@ async def test_independent_step_model_uses_its_own_shared_plan(native_journey, m
             )
             assert refused["disposition"] == "recorded"
             assert "step verify" in refused["reason"] and "model" in refused["reason"]
+
+
+@pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
+async def test_explicit_shared_step_rejects_uncarried_native_tier_options(native_journey, monkeypatch):
+    journey = native_journey
+    monkeypatch.setattr(settings.workflow, "github_repository", "")
+    inventory = await OmnigentHttpClient(base_url=resolved_server_url()).list_agents()
+    async with journey.session_factory() as session:
+        provider = await session.get(ManagedAgentProviderProfile, PROFILE)
+        provider.model_tiers = [
+            {"model": journey.server.model},
+            {"model": "example/selected", "parameters": {"native_option": "required"}},
+        ]
+        await session.commit()
+        await reconcile_bootstrap_agent_profile(session, inventory=inventory)
+        await synchronize_omnigent_harness_catalog(session)
+        app = FastAPI()
+        app.include_router(router)
+        service = TemporalExecutionService(session)
+        service._client_adapter.start_workflow = AsyncMock(return_value=SimpleNamespace(run_id="must-not-start"))
+        app.dependency_overrides[_get_service] = lambda: service
+        app.dependency_overrides[get_async_session] = lambda: session
+        _override_user_dependencies(app, is_superuser=True)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/executions", json={"type": "workflow", "payload": {
+                "workflow": {"instructions": "Preserve every requested native option.",
+                    "runtime": {"mode": "omnigent", "providerProfileRef": PROFILE, "model": journey.server.model},
+                    "steps": [{"id": "selected", "instructions": "Use the selected tier.", "type": "skill", "skill": {"id": _DURABLE_SKILL_NAME}, "runtime": {"modelTier": 2}}]},
+                "publishMode": "none", "workspace": {"workspaceSource": {"kind": "scratch"}},
+            }})
+        assert response.status_code == 422, response.text
+        assert "native tier options" in response.text
+        service._client_adapter.start_workflow.assert_not_awaited()

@@ -8413,7 +8413,7 @@ async def _steps_keep_profile_authority(
                 authored_runtime=merge_runtime_selection(task_runtime, runtime),
                 require_launch_ready=False, workflow_settings=settings.workflow,
             )
-            if selected.tier_parameters != root.tier_parameters:
+            if selected.tier_parameters or selected.tier_parameters != root.tier_parameters:
                 return False
     return True
 

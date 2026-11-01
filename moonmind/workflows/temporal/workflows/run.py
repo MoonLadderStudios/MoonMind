@@ -12385,9 +12385,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "resolvedSkillsetRef": skillset_ref,
         }
         if self._workflow_patch_enabled(RUN_OMNIGENT_STEP_EXECUTION_PLANS_PATCH):
-            step_plans = admitted.get("omnigentStepExecutionPlans")
-            if isinstance(step_plans, Mapping):
-                admitted_fields["omnigentStepExecutionPlans"] = dict(step_plans)
+            step_plans = admitted.get("omnigentStepExecutionPlans") or {}
+            if not isinstance(step_plans, Mapping):
+                raise ValueError(f"{subject} admission returned invalid step plan authority")
+            admitted_fields["omnigentStepExecutionPlans"] = dict(step_plans)
         parameters.update(admitted_fields)
         for key in ("initialParameters", "initial_parameters"):
             original = self._original_input_payload.get(key)

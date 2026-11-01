@@ -419,9 +419,8 @@ class PersistedOmnigentExecutionPlan:
                 mode="json", by_alias=True, exclude_none=True
             ),
             "resolvedSkillsetRef": self.resolved_skillset_ref,
+            "omnigentStepExecutionPlans": deepcopy(dict(self.step_parameters or {})),
         }
-        if self.step_parameters:
-            parameters["omnigentStepExecutionPlans"] = deepcopy(dict(self.step_parameters))
         return parameters
 
 
@@ -2316,6 +2315,7 @@ async def compile_frozen_execution_plan(
     binding: OmnigentExecutionPlanBinding,
     parent_repository_plan: OmnigentExecutionPlanEnvelope | None = None,
     access: ArtifactAccessContext,
+    refresh_step_selections: bool = False,
 ) -> PersistedOmnigentExecutionPlan:
     """Compile an admitted workflow's frozen inputs again through this owner."""
 
@@ -2355,8 +2355,8 @@ async def compile_frozen_execution_plan(
         db_session=db_session,
         parent_repository_plan=parent_repository_plan,
         access=access,
-        _compile_step_plans=bool(initial_parameters.get("omnigentStepExecutionPlans")),
-        _recorded_step_parameters=recorded_steps,
+        _compile_step_plans=refresh_step_selections or bool(recorded_steps),
+        _recorded_step_parameters=None if refresh_step_selections else recorded_steps,
     )
 
 

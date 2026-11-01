@@ -92,6 +92,8 @@ async def compile_step_execution_plans(
             require_launch_ready=False,
             workflow_settings=settings.workflow,
         )
+        if selection.tier_parameters:
+            raise ValueError("Selected step native tier options require their native route")
         if not foreign_profile and (selection.model, selection.effort) == (
             root_model.qualifiedId, root_model.effort,
         ):
