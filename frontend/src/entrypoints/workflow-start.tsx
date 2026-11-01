@@ -7905,30 +7905,38 @@ function WorkflowStartPageContent({
   const harnessProviderOptions = harness
     ? providerOptions.filter((option) => !option.runtimeId || option.runtimeId === harness)
     : providerOptions;
-  const tierOptionsIdentity = (selection: ModelSelection, preview?: ProviderProfileTierPreviewItem) => {
-    const display = displayModelSelection(selection, selectedConfiguredProfile, preview);
+  const tierOptionsIdentity = (selection: ModelSelection, preview?: ProviderProfileTierPreviewItem, profile = selectedConfiguredProfile) => {
+    const display = displayModelSelection(selection, profile, preview);
     const usesTier = display.selected !== "custom" && !selection.model?.trim();
     const tier = usesTier && display.effective != null
-      ? selectedConfiguredProfile?.model_tiers?.[display.effective - 1]
+      ? profile?.model_tiers?.[display.effective - 1]
       : undefined;
     return JSON.stringify(tier?.parameters || {});
   };
   const workflowModelOptions = tierOptionsIdentity(modelSelection, modelTierPreviewsQuery.data?.previews.workflow);
+  const configuredStepProfile = (step: StepState) => {
+    const profileId = step.runtimeProviderProfile.trim() || providerProfile;
+    return providerProfilesQuery.isPlaceholderData ? undefined :
+      (providerProfilesQuery.data || []).find((profile) => profile.profile_id === profileId);
+  };
   const stepHasIndependentModelOptions = (step: StepState) => {
-    if (!hasModelSelection(step.runtimeSelection)) return false;
+    const profile = configuredStepProfile(step);
+    if (!hasModelSelection(step.runtimeSelection) && profile?.profile_id === providerProfile) return false;
     const options = tierOptionsIdentity(
       inheritModelSelection(modelSelection, step.runtimeSelection),
       modelTierPreviewsQuery.data?.previews[`step:${step.localId}`],
+      profile,
     );
     return options !== workflowModelOptions;
   };
-  // Distinct model/effort pairs have immutable step plans. Independent account,
-  // harness and native launch options still need their equivalent handoff.
-  const independentStepAuthority = steps.some((step) =>
-    (Boolean(step.runtimeProviderProfile.trim()) && step.runtimeProviderProfile !== providerProfile) ||
-    (Boolean(step.runtimeMode) && step.runtimeMode !== "omnigent" && step.runtimeMode !== harness) ||
-    stepHasIndependentModelOptions(step),
-  );
+  // Each configured step Profile has its own immutable account/harness plan.
+  // Keep the native route when that exact Profile or its options need it.
+  const independentStepAuthority = steps.some((step) => {
+    const profile = configuredStepProfile(step);
+    return (Boolean(step.runtimeMode) && step.runtimeMode !== "omnigent" && step.runtimeMode !== profile?.runtime_id) ||
+      stepHasIndependentModelOptions(step) ||
+      !profileHasOmnigentRoute(profile, [], profile?.runtime_id || harness, runtimeTargetCatalog);
+  });
   const backendOptions = harness
     ? backendOptionsForHarness(harness, runtimeTargetCatalog, {
         directRoute: !selectedConfiguredProfile?.execution_selection_error &&
@@ -12628,7 +12636,7 @@ function WorkflowStartPageContent({
               const stepBackendOptions = stepHarness
                 ? backendOptionsForHarness(stepHarness, runtimeTargetCatalog, {
                     directRoute: !stepPreviewProfile?.execution_selection_error &&
-                      (stepPreviewProfileId !== providerProfile || stepHasIndependentModelOptions(step) || !profileHasOmnigentRoute(stepPreviewProfile, [], stepHarness, runtimeTargetCatalog)),
+                      (stepHasIndependentModelOptions(step) || !profileHasOmnigentRoute(stepPreviewProfile, [], stepHarness, runtimeTargetCatalog)),
                     omnigentRoute: profileHasOmnigentRoute(stepPreviewProfile, activeProviderProfiles, stepHarness, runtimeTargetCatalog),
                   })
                 : [];

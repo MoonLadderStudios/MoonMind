@@ -8330,7 +8330,7 @@ async def _workflow_creation_defaults(
                 session=session, runtime_id=normalize_runtime_id(intended_runtime)
             )
             if provider is not None:
-                if not _steps_keep_profile_authority(provider, task_payload):
+                if not await _steps_keep_profile_authority(provider, task_payload, session=session):
                     return defaults
                 return replace(
                     defaults,
@@ -8351,8 +8351,8 @@ async def _workflow_creation_defaults(
     return defaults
 
 
-def _steps_keep_profile_authority(
-    provider: Any, task_payload: Mapping[str, Any]
+async def _steps_keep_profile_authority(
+    provider: Any, task_payload: Mapping[str, Any], *, session: Any
 ) -> bool:
     """Whether shared plans can preserve the authored account choices."""
     if has_unexpanded_task_template({"workflow": task_payload}):
@@ -8382,7 +8382,16 @@ def _steps_keep_profile_authority(
             normalize_runtime_id(provider.runtime_id),
         } and not profile_ref:
             return False
-        if model_selection_fields(runtime):
+        selected_provider = provider
+        if profile_ref and profile_ref != provider.profile_id:
+            # Inspect the exact step account's options, never another account's
+            # tier table. Missing lookup evidence keeps the narrow native route.
+            if not callable(getattr(session, "get", None)):
+                return False
+            selected_provider = await session.get(ManagedAgentProviderProfile, profile_ref)
+            if selected_provider is None:
+                return False
+        if model_selection_fields(runtime) or selected_provider is not provider:
             # Model and effort have per-step plans. Arbitrary tier options
             # still need their native adapter until the shared harness carries
             # those options through launch, rather than merely recording them.
@@ -8392,7 +8401,7 @@ def _steps_keep_profile_authority(
                 workflow_settings=settings.workflow,
             )
             selected = resolve_model_effort(
-                runtime_id=provider.runtime_id, profile=provider,
+                runtime_id=selected_provider.runtime_id, profile=selected_provider,
                 authored_runtime=merge_runtime_selection(task_runtime, runtime),
                 require_launch_ready=False, workflow_settings=settings.workflow,
             )
@@ -8441,7 +8450,7 @@ async def _profile_route_runtime(
         and (authored_runtime or (task_payload or {}).get("steps"))
         and normalize_runtime_id(provider_profile.runtime_id)
         in {"codex_cli", "claude_code"}
-        and not _steps_keep_profile_authority(provider_profile, task_payload or {})
+        and not await _steps_keep_profile_authority(provider_profile, task_payload or {}, session=session)
     ):
         return (
             None
@@ -9475,8 +9484,8 @@ async def _resolve_step_runtime_selections(
             task_target_runtime == "omnigent"
             and provider_profile is not None
             and canonical_step_runtime in {"codex_cli", "claude_code"}
-            and _steps_keep_profile_authority(
-                provider_profile, {"runtime": task_runtime, "steps": [step]}
+            and await _steps_keep_profile_authority(
+                provider_profile, {"runtime": task_runtime, "steps": [step]}, session=session
             )
         ):
             route = await _profile_route_runtime(
@@ -13060,6 +13069,10 @@ async def _resolve_recurring_runtime_selection(
         raw_initial_parameters = request_payload.get("initial_parameters")
     if isinstance(raw_initial_parameters, Mapping):
         parameter_payload = raw_initial_parameters
+    if "omnigentStepExecutionPlans" in parameter_payload:
+        raise _invalid_workflow_request(
+            "Step execution plans must be compiled by workflow admission."
+        )
 
     try:
         validate_workflow_runtime_targets(request_payload)
@@ -20778,6 +20791,7 @@ async def rerun_execution(
             repository=None,
             integration=None,
             _workflow_id=reserved_workflow_id,
+            _recovery_artifact_source=canonical,
         )
     except ProviderProfileRuntimeMismatchError as exc:
         # Provider Profiles are runtime-owned: the shared invariant is

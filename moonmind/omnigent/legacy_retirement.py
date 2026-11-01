@@ -174,7 +174,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         ),
         consumer=(
             "Opaque serialized ``codex_cli`` plans, native extension inputs/direct targets, "
-            "native choices with independent step accounts/harnesses, pools or unsupported tier options, "
+            "native choices with unresolved step pools or unsupported tier options, "
             "and Codex key Profiles the provider config cannot "
             "carry, which ``profile_route_runtime`` routes here; their "
             "queued starts, retries and recovery, "
@@ -199,9 +199,9 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "egress policy does not admit. Declared single-provider Responses "
             "configuration, including the rendered managed MiniMax recipe, "
             "uses ``omnigent-provider-config@1`` and its private Codex config. "
-            "Opaque serialized inputs, independent step accounts and native tier options "
-            "still need their own immutable shared-plan handoff; a root plan "
-            "cannot authorize a different step account. "
+            "Opaque serialized inputs, unresolved step pools and native tier options "
+            "still need equivalent shared-plan handoffs. Fixed step accounts "
+            "already have their own plans; the root cannot authorize another account. "
         ),
     ),
     LegacyPathRecord(
@@ -222,7 +222,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         ),
         consumer=(
             "Opaque serialized ``claude_code`` plans, native extension inputs/direct targets "
-            "and independent step account/harness, pool or unsupported tier options; Claude "
+            "and unresolved step pools or unsupported tier options; Claude "
             "Provider Profiles no Omnigent configuration accepts (key "
             "Profiles whose launch environment the provider config cannot "
             "carry, and every Claude Profile while generic Claude is "
@@ -248,7 +248,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "with their endpoint, model pins and non-secret launch tuning. "
             "Native Claude command rendering "
             "already uses the shared renderer through the admitted harness. "
-            "Opaque serialized inputs, independent step accounts and native tier options "
+            "Opaque serialized inputs, unresolved step pools and native tier options "
             "still need an equivalent immutable shared-plan handoff."
         ),
     ),

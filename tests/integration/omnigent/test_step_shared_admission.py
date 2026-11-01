@@ -136,6 +136,14 @@ async def test_independent_step_model_uses_its_own_shared_plan(native_journey, m
             await artifacts.read(artifact_id=successor_skillset, access=ArtifactAccessContext.for_execution("unrelated-workflow"))
         assert record.parameters["omnigentExecutionPlan"] == original_binding
         assert record.parameters["omnigentStepExecutionPlans"] == original_step_plans
+        if specialization == "model":
+            from tests.integration.omnigent.test_native_default_admission import _execute_admitted_generic_plan
+
+            journey.server.additional_models = [expected_model]
+            await _execute_admitted_generic_plan(journey, step_plan, SimpleNamespace(
+                workflow_id=record.workflow_id, run_id=record.run_id,
+                parameters={**record.parameters, **record.parameters["omnigentStepExecutionPlans"]["verify"]},
+            ))
         if specialization == "model" and journey.harness == "codex-native":
             from temporalio import activity
             from moonmind.workflows.temporal.activity_runtime import TemporalActivityRuntimeError, TemporalPlanActivities

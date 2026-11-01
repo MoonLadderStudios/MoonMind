@@ -874,7 +874,7 @@ async def test_native_translation_preserves_independent_step_authority(
 
 
 @pytest.mark.asyncio
-async def test_step_translation_cannot_reuse_another_accounts_workflow_plan(
+async def test_step_translation_keeps_its_own_account_for_plan_compilation(
     monkeypatch,
 ):
     from unittest.mock import AsyncMock
@@ -899,8 +899,29 @@ async def test_step_translation_cannot_reuse_another_accounts_workflow_plan(
         task_profile_id="parent-account",
         session=session,
     )
-    assert steps[0]["runtime"]["mode"] == "codex_cli"
+    assert steps[0]["runtime"]["mode"] == "omnigent"
     assert steps[0]["runtime"]["providerProfileRef"] == child.profile_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("child_options", [{}, {"native_option": "required"}])
+async def test_translation_checks_the_selected_step_accounts_tier_options(monkeypatch, child_options):
+    from unittest.mock import AsyncMock
+    from api_service.api.routers.executions import _profile_route_runtime
+
+    root = provider(runtime_id="codex_cli", model_tiers=[{"model": "root"}, {"model": "root-second"}])
+    child = provider(profile_id="child", runtime_id="codex_cli", model_tiers=[
+        {"model": "child"}, {"model": "child-second", "parameters": child_options},
+    ])
+    session = Row(get=AsyncMock(return_value=child))
+    monkeypatch.setattr("api_service.services.profile_execution_selection.profile_route_runtime", AsyncMock(return_value="omnigent"))
+    route = await _profile_route_runtime(
+        session=session, user=None, provider_profile=root, authored_runtime="codex_cli",
+        task_payload={"runtime": {"model": "root", "effort": None}, "steps": [{
+            "runtime": {"providerProfileRef": "child", "modelTier": 2},
+        }]},
+    )
+    assert route == (None if child_options else "omnigent")
 
 
 @pytest.mark.asyncio
