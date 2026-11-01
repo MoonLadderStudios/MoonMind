@@ -149,6 +149,10 @@ def _search_attribute_probe_pair(name, kind):
         return SearchAttributePair(SearchAttributeKey.for_keyword_list(name), ["test"])
     if kind == IndexedValueType.INDEXED_VALUE_TYPE_TEXT:
         return SearchAttributePair(SearchAttributeKey.for_text(name), "test")
+    if kind == IndexedValueType.INDEXED_VALUE_TYPE_BOOL:
+        return SearchAttributePair(SearchAttributeKey.for_bool(name), False)
+    if kind == IndexedValueType.INDEXED_VALUE_TYPE_INT:
+        return SearchAttributePair(SearchAttributeKey.for_int(name), 0)
     assert kind == IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD
     return SearchAttributePair(SearchAttributeKey.for_keyword(name), "test")
 
