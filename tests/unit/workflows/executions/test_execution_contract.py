@@ -632,6 +632,39 @@ def test_runtime_command_unsupported_runtime_does_not_require_recognition() -> N
     assert command["requiresRuntimeRecognition"] is False
 
 
+@pytest.mark.parametrize("runtime", [{}, {"mode": "omnigent"}])
+def test_shared_runtime_defers_command_recognition_to_the_admitted_harness(
+    runtime,
+) -> None:
+    snapshot = build_authoritative_workflow_input_snapshot(
+        task_payload={
+            "instructions": "/review\nCheck the requested changes.",
+            "runtime": runtime,
+        }
+    )
+
+    command = snapshot["objective"]["runtimeCommand"]
+    assert command["rawCommand"] == "/review"
+    assert command["instructionBody"] == "Check the requested changes."
+    assert command["recognitionMode"] == "selected_harness"
+    assert command["requiresRuntimeRecognition"] is True
+
+
+def test_shared_runtime_can_read_the_previous_saved_command_classification() -> None:
+    snapshot = build_authoritative_workflow_input_snapshot(
+        task_payload={
+            "instructions": "/review\nCheck the requested changes.",
+            "runtime": {"mode": "omnigent"},
+            "runtimeCommand": {
+                "command": "review",
+                "rawCommand": "/review",
+                "recognitionMode": "runtime_does_not_support_slash_commands",
+            },
+        }
+    )
+    assert snapshot["objective"]["runtimeCommand"]["rawCommand"] == "/review"
+
+
 def test_runtime_command_preview_config_includes_all_passthrough_runtime_ids() -> None:
     config = build_runtime_command_preview_config()
 
@@ -640,6 +673,7 @@ def test_runtime_command_preview_config_includes_all_passthrough_runtime_ids() -
     assert config["runtimes"]["claude"]["slashCommandPassthrough"] is True
     assert config["runtimes"]["claude_code"]["slashCommandPassthrough"] is True
     assert config["runtimes"]["universal"]["slashCommandPassthrough"] is True
+    assert config["runtimes"]["omnigent"]["recognitionMode"] == "selected_harness"
     assert "codex_cloud" not in config["runtimes"]
 
 

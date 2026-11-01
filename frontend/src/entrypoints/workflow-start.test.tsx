@@ -34,6 +34,7 @@ import {
   omnigentReadinessRefetchInterval,
   preferredTemplate,
   deriveExplicitWorkflowTitle,
+  deriveRuntimeCommandPreview,
   resolveDefaultProviderProfileId,
   resolveLoadedProviderProfileId,
   resolveObjectiveInstructions,
@@ -41,6 +42,24 @@ import {
   WORKFLOW_START_HEADING_QUOTES,
   WorkflowStartPage,
 } from "./workflow-start";
+
+describe("shared harness command preview", () => {
+  it("keeps the authored command pending the selected harness", () => {
+    const instructions = "/review\nCheck the selected changes.";
+    const preview = deriveRuntimeCommandPreview({
+      instructions,
+      runtime: "omnigent",
+      sourcePath: "objective.instructions",
+      config: { runtimes: { omnigent: { recognitionMode: "selected_harness" } } },
+      storedRuntimeCommand: undefined,
+    });
+    expect(preview?.rawInstructions).toBe(instructions);
+    expect(preview?.recognitionMode).toBe("selected_harness");
+    expect(preview?.requiresRuntimeRecognition).toBe(true);
+    expect(preview?.messageSeverity).toBe("info");
+    expect(preview?.description).toContain("selected harness");
+  });
+});
 
 vi.mock("../lib/navigation", () => ({
   navigateTo: vi.fn(),
