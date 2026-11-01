@@ -331,64 +331,26 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "``codex-profile-bound@1`` execution realizer registration and "
             "trusted planner selection."
         ),
-        retirementClass=RetirementClass.ACTIVE_PRODUCT_PATH,
+        retirementClass=RetirementClass.NEW_ADMISSION_DISABLED,
         surfaces=(
             "python:moonmind.omnigent.realizers.codex_profile_bound:"
             "CodexProfileBoundRealizer",
             "realizer:codex-profile-bound@1",
         ),
-        newAdmissionSource=(
-            "moonmind.omnigent.harness_platform.planner:select_execution_realizer"
-        ),
-        consumer=(
-            "Codex plans the trusted planner still routes to "
-            "``codex-profile-bound@1``: the explicit profile-bound opt-out, "
-            "restore controls and custom rollouts, plus admitted plans that "
-            "record this realizer."
-        ),
-        removalCondition=(
-            "The planner selects only ``generic-omnigent-host@1`` for new "
-            "Codex work and no open plan or history records "
-            "``codex-profile-bound@1``."
-        ),
-        sharedOperation=(
-            "``generic-omnigent-host@1``, a superset for on-demand Codex."
-        ),
-        missingOutcome=(
-            "Static-connected Codex (``codex-static@1``); the generic "
-            "host selector admits only on-demand host modes. The "
-            "generic-qualification opt-out and "
-            "``restore_legacy_or_direct_default`` rollback controls "
-            "select this realizer on purpose and lose their meaning once "
-            "it closes."
-        ),
+        consumer="Recorded ``codex-profile-bound@1`` plans, queued starts, retries, cancellation and recovery. New plans use the shared realizer, including static-connected hosts.",
+        removalCondition="No open plan or retained history can execute or retry ``codex-profile-bound@1``; historical evidence remains independently readable.",
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.profile_bound_execution",
         owner="omnigent-control-plane",
         description="Legacy profile-bound execution coordinator and routing.",
-        retirementClass=RetirementClass.ACTIVE_PRODUCT_PATH,
+        retirementClass=RetirementClass.NEW_ADMISSION_DISABLED,
         surfaces=(
             "python:moonmind.omnigent.profile_bound_execution:"
             "OmnigentProfileBoundExecutionCoordinator",
         ),
-        newAdmissionSource=(
-            "moonmind.omnigent.realizers.codex_profile_bound:CodexProfileBoundRealizer"
-        ),
-        consumer=(
-            "Execution, cancellation, retry and cleanup of plans admitted "
-            "through ``codex-profile-bound@1``, including replay of their "
-            "recorded histories."
-        ),
-        removalCondition="The profile-bound realizer row is deleted.",
-        sharedOperation=(
-            "The generic realizer's execution, cancellation and cleanup."
-        ),
-        missingOutcome=(
-            "Whatever the profile-bound realizer row names; plan "
-            "compilation also still imports this module's "
-            "persisted-launch helpers."
-        ),
+        consumer="Execution, cancellation, recovery, cleanup and saved-work publication for recorded ``codex-profile-bound@1`` plans.",
+        removalCondition="The profile-bound realizer is removable and persisted-launch helpers are consumed through their shared owner.",
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.oauth_host_runtime",
@@ -397,37 +359,12 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "Legacy OAuth host runtime that assembles Codex host launch, mount, "
             "credential-volume, and egress attestation argument vectors."
         ),
-        retirementClass=RetirementClass.ACTIVE_PRODUCT_PATH,
+        retirementClass=RetirementClass.NEW_ADMISSION_DISABLED,
         surfaces=(
             "python:moonmind.omnigent.oauth_host_runtime:OmnigentOAuthHostRuntime",
         ),
-        newAdmissionSource=(
-            "moonmind.omnigent.profile_bound_execution:"
-            "OmnigentProfileBoundExecutionCoordinator"
-        ),
-        consumer=(
-            "Codex OAuth host launch, credential-volume mounts and egress "
-            "attestation for profile-bound executions and static bindings, "
-            "plus OAuth credential maintenance (draining bound hosts before "
-            "an OAuth mutation and revalidating a reconnected bound host)."
-        ),
-        removalCondition=(
-            "The profile-bound execution row is deleted and OAuth credential "
-            "maintenance drains and revalidates hosts through the shared "
-            "host lifecycle."
-        ),
-        sharedOperation=(
-            "``codex-oauth-home@1`` materialization and attestation's "
-            "ended-login check in ``host_services``."
-        ),
-        missingOutcome=(
-            "OAuth credential maintenance for profile-bound and static "
-            "bindings (stopping their hosts before an OAuth mutation, "
-            "revalidating a reconnected or validated profile) and the "
-            "OAuth host-lease janitor. Generic hosts are already drained "
-            "before that mutation by ``GenericOmnigentHostJanitor."
-            "drain_profile`` and attest the login at each launch."
-        ),
+        consumer="Recorded profile-bound OAuth host launches and their maintenance, draining, attestation and cleanup; the shared static allocation adapter uses the same physical host ledger without this launcher.",
+        removalCondition="Retained profile-bound hosts and retries are gone and credential maintenance no longer needs their adapter.",
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.codex_static_host_startup",
@@ -454,12 +391,12 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "Static-connected Codex runs on the shared host image without "
             "this wrapper and no deployment enables the Compose profile."
         ),
-        sharedOperation=(
-            "The shared host image with a static Host Class."
-        ),
+        sharedOperation=("The shared host image with a static Host Class."),
         missingOutcome=(
-            "Generic static-connected host support (attach, drain and "
-            "no-remove semantics) for ``codex-static@1``."
+            "Nothing for shared executions: attach, drain and no-remove are "
+            "implemented. The retained Compose profile still initializes the "
+            "physical service and registered host state before an admitted "
+            "shared launch projects its execution configuration."
         ),
     ),
     LegacyPathRecord(
@@ -487,12 +424,12 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "Static-connected Claude runs on the shared host image without "
             "this wrapper and no deployment enables the Compose profile."
         ),
-        sharedOperation=(
-            "The shared host image with a static Host Class."
-        ),
+        sharedOperation=("The shared host image with a static Host Class."),
         missingOutcome=(
-            "Generic static-connected host support (attach, drain and "
-            "no-remove semantics) for ``claude-static@1``."
+            "Nothing for shared executions: attach, drain and no-remove are "
+            "implemented. The retained Compose profile still initializes the "
+            "physical service and registered host state before an admitted "
+            "shared launch projects its execution configuration."
         ),
     ),
     LegacyPathRecord(
@@ -519,9 +456,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "Runner projections start from the shared host image and no "
             "deployment enables the ``omnigent-host`` profile."
         ),
-        sharedOperation=(
-            "The shared host image expression."
-        ),
+        sharedOperation=("The shared host image expression."),
         missingOutcome=(
             "A runner-projection start path on the shared image; this "
             "service still resolves the legacy image variable."
@@ -554,9 +489,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "Each alias completes its obsolete-configuration deprecation "
             "window in ``OBSOLETE_CONFIGURATION``."
         ),
-        sharedOperation=(
-            "The canonical shared-image variable."
-        ),
+        sharedOperation=("The canonical shared-image variable."),
         missingOutcome=(
             "Nothing functional; deployments still supplying the old "
             "variables keep their pinned image until the deprecation "
@@ -619,12 +552,9 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "still resolves this variable."
         ),
         removalCondition="Pi runs from the shared host image through a runtime pack.",
-        sharedOperation=(
-            "A runtime pack on the shared host image."
-        ),
+        sharedOperation=("A runtime pack on the shared host image."),
         missingOutcome=(
-            "A Pi runtime pack; ``omnigent-pi@1`` has only its "
-            "per-provider image."
+            "A Pi runtime pack; ``omnigent-pi@1`` has only its " "per-provider image."
         ),
     ),
     LegacyPathRecord(
@@ -645,9 +575,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "event projection and no retained session needs the "
             "compatibility classifier."
         ),
-        sharedOperation=(
-            "The generic bridge event projection."
-        ),
+        sharedOperation=("The generic bridge event projection."),
         missingOutcome=(
             "A projection for retained direct and embedded sessions whose"
             " recorded events only this classifier reads."

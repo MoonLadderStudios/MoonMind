@@ -42,28 +42,15 @@ from moonmind.omnigent.control_plane.turn_admission import (
     RemediationAuthorityBroadenedError,
 )
 from moonmind.omnigent.control_plane.turn_commands import CanonicalTurnCommandService
-from moonmind.omnigent.harness_platform.agent_profile import OmnigentAgentProfileV2
-from moonmind.omnigent.harness_platform.catalog import (
-    HarnessImplementationIdentity,
-    TrustState,
-    classify_harness_trust,
-    create_catalog_snapshot,
-)
-from moonmind.omnigent.harness_platform.credential_bindings import create_binding_set
 from moonmind.omnigent.harness_platform.execution_plan import (
+    OmnigentExecutionPlanEnvelope,
     create_execution_plan_envelope,
 )
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
-from moonmind.omnigent.harness_platform.host_classes import HostClass
-from moonmind.omnigent.harness_platform.planner import compile_execution_plan
-from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet
 from moonmind.omnigent.harness_platform.support import KNOWN_REALIZERS
 from moonmind.omnigent.realizers.codex_profile_bound import CodexProfileBoundRealizer
 from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
 from moonmind.omnigent.realizers.turn_delivery import canonical_turn_source
-from moonmind.omnigent.runtime_provider_rollout import (
-    default_runtime_provider_rollout_policy,
-)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.workflows.temporal.remediation_loop import (
     ConsumedRemediationBudgets,
@@ -83,7 +70,7 @@ from moonmind.workflows.temporal.workflows.run import (
     MoonMindRunWorkflow,
 )
 
-PROVIDER_PROFILE_REF = "codex-profile-1"
+PROVIDER_PROFILE_REF = "codex"
 
 _CONTROL_PLANE_TABLES = (
     "omnigent_chat_binding_aliases",
@@ -123,150 +110,24 @@ async def turn_commands(session_factory):
 
 
 def _codex_execution_plan():
-    """Compile retained profile-bound authority for the realizer exercised here."""
+    """Read retained authority without reopening current new-plan admission."""
 
-    digest = "sha256:" + "e" * 64
-    catalog = create_catalog_snapshot(
-        endpointRef="default",
-        omnigentVersion="1.0.0",
-        omnigentBuildDigest="sha256:" + "b" * 64,
-        sourceDigest="sha256:" + "c" * 64,
-        harnesses=[
-            {
-                "id": "codex-native",
-                "aliases": [],
-                "label": "codex-native",
-                "implementation": {
-                    "sourceKind": "core",
-                    "package": "omnigent",
-                    "version": "1.0.0",
-                    "digest": digest,
-                    "pluginEntryPoint": None,
-                },
-                "runtimeRequirements": {},
-                "capabilities": {
-                    "integrationMode": "native-server",
-                    "authModel": "own-auth",
-                    "interrupt": True,
-                    "streaming": True,
-                },
-                "setupSteps": [],
-            }
-        ],
-        observedAt=datetime.now(UTC),
+    fixture = json.loads(
+        (
+            Path(__file__).parents[2]
+            / "fixtures/omnigent/retained_profile_bound_plans/codex-on-demand-1.json"
+        ).read_text()
     )
-    impl = HarnessImplementationIdentity.model_validate(
-        {
-            "sourceKind": "core",
-            "package": "omnigent",
-            "version": "1.0.0",
-            "digest": digest,
-            "pluginEntryPoint": None,
-        }
+    binding = fixture["request"]["omnigentExecutionPlan"]
+    plan = OmnigentExecutionPlanEnvelope.model_validate_json(
+        fixture["artifacts"][binding["planArtifactRef"]]
     )
-    trust = classify_harness_trust(
-        harnessId="codex-native",
-        implementation=impl,
-        trustState=TrustState.core_trusted,
-    )
-    profile = OmnigentAgentProfileV2.model_validate(
-        {
-            "schemaVersion": "moonmind.omnigent-agent-profile.v2",
-            "endpointRef": "default",
-            "source": {
-                "kind": "upstream",
-                "upstreamId": "codex-native-ui",
-                "upstreamVersion": "1.0.0",
-                "upstreamSnapshotDigest": "sha256:" + "d" * 64,
-            },
-            "harness": {
-                "id": "codex-native",
-                "catalogRef": catalog.catalogRef,
-                "implementationRef": impl.implementation_ref(),
-            },
-            "requirements": {
-                "harness": {"required": []},
-                "moonmind": {"required": []},
-                "host": {"required": []},
-            },
-            "credentialSlots": [
-                {
-                    "id": "primary-model",
-                    "optional": False,
-                    "acceptedAuthModels": ["oauth_volume"],
-                    "acceptedProviderIds": ["openai"],
-                }
-            ],
-            "model": {},
-            "workspace": {},
-            "skills": [],
-            "tools": [],
-            "capture": {},
-            "continuations": {},
-            "publish": {},
-            "allowedLaunchPolicyRefs": ["codex-on-demand@1"],
-        }
-    )
-    host_class = HostClass.model_validate(
-        {
-            "hostClassId": "omnigent-codex-current",
-            "version": 1,
-            "imageRef": "ghcr.io/example/codex-host@sha256:" + "d" * 64,
-            "omnigentVersion": "1.0.0",
-            "omnigentBuildDigest": "sha256:" + "b" * 64,
-            "architectures": ["linux/amd64"],
-            "declaredHarnessImplementations": [
-                {
-                    "harnessId": "codex-native",
-                    "implementationRef": impl.implementation_ref(),
-                    "runtimeDependencies": [],
-                }
-            ],
-            "integrationModes": ["native-server"],
-            "materializerRefs": ["codex-oauth-home@1"],
-            "features": {
-                "readOnlyRoot": True,
-                "restrictedEgress": True,
-                "workspaceBind": True,
-            },
-            "runtime": {"uid": 1000, "gid": 1000, "home": "/home/app"},
-        }
-    )
-    plan = compile_execution_plan(
-        agent_profile=profile,
-        harness_catalog=catalog,
-        trust_record=trust,
-        resolved_skills=ResolvedSkillSet.model_validate(
-            {
-                "resolvedSkillSetRef": "artifact:test",
-                "resolvedSkillSetDigest": "sha256:" + "a" * 64,
-                "skillDeliveryRef": "skill-delivery:sha256:" + "b" * 64,
-            }
-        ),
-        credential_binding_set=create_binding_set(
-            bindingSetId="codex",
-            version=1,
-            bindings={
-                "primary-model": {
-                    "providerProfileRef": PROVIDER_PROFILE_REF,
-                    "materializerRef": "codex-oauth-home@1",
-                }
-            },
-        ),
-        host_class_ref="omnigent-codex-current@1",
-        host_class=host_class,
-        launch_policy_ref="codex-on-demand@1",
-        model_qualified_id="gpt-5",
-        model_effort=None,
-        model_route_ref="openai",
-        model_normalized_options={},
-        # Only admission selects compatibility; later dispatch uses the recorded
-        # plan without changing the ordinary generic default for other tests.
-        rollout_policy=default_runtime_provider_rollout_policy(
-            env={"MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED": "false"}
-        ),
-    )
+    assert plan.planRef == binding["planRef"]
     assert plan.payload.executionRealizerRef == CodexProfileBoundRealizer.ref
+    assert (
+        plan.payload.credentialBindings["primary-model"].providerProfileRef
+        == PROVIDER_PROFILE_REF
+    )
     return plan
 
 

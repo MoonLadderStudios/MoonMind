@@ -1487,8 +1487,8 @@ async def compile_and_persist_execution_plan(
         session_factory=session_factory,
         db_session=db_session,
     )
-    from moonmind.omnigent.profile_bound_execution import (
-        _compile_persisted_effective_launch,
+    from moonmind.omnigent.execution_profiles import compile_persisted_effective_launch
+    from moonmind.omnigent.codex_execution_decisions import (
         compile_follow_up_retrieval_policy,
         enforce_required_follow_up_retrieval,
     )
@@ -1500,7 +1500,7 @@ async def compile_and_persist_execution_plan(
     )
     follow_up = compile_follow_up_retrieval_policy()
     enforce_required_follow_up_retrieval(authored_follow_up, follow_up)
-    effective_launch = _compile_persisted_effective_launch(
+    effective_launch = compile_persisted_effective_launch(
         policy_snapshot,
         provider_profile_id=provider_profile_ref,
         follow_up_retrieval=follow_up,

@@ -40,7 +40,7 @@ Rules match exact declared dimensions, use `*` as the selector wildcard, and app
 | Target | Built-in state |
 | --- | --- |
 | `codex.generic-omnigent` | `new_work_default` by default; explicit `MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED=false` disables it; explicitly configured linked-evidence constraints may keep it `explicit_only` |
-| `codex.legacy-profile-bound-omnigent` | `new_work_default` until generic Codex is promoted, then `retired_for_new_work` |
+| `codex.legacy-profile-bound-omnigent` | `retired_for_new_work`; recorded plans, retries and cleanup only |
 | `claude.generic-omnigent` | `explicit_only` (reached by choosing an Anthropic Profile); `disabled` when `MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED=false` |
 | `opencode.generic-omnigent` | `new_work_default`; `disabled` when `MOONMIND_OMNIGENT_OPENCODE_ENABLED=false` |
 | `codex.direct`, `claude.direct` | `direct_compatibility_only` (`codex_cli`, `claude_code`) |
@@ -62,7 +62,7 @@ Separate a supported-but-busy Profile from an unsupported configuration and an u
 - `stop_new_generic_codex_admission`, `stop_new_generic_claude_admission`, `stop_new_opencode_shared_image_admission`: disable that harness's generic rows.
 - `stop_all_new_omnigent_work`: disable every Omnigent row.
 - `disable_native_interactive_chat`: reported as `nativeInteractiveChatAllowed=false` in the migration status.
-- `restore_legacy_or_direct_default`: demote default generic rows to `explicit_only` and make legacy/direct rows that declare themselves restorable the default.
+- `restore_legacy_or_direct_default`: demote default generic rows to `explicit_only` and make still-supported direct rows that declare themselves restorable the default. Recorded profile-bound Codex plans cannot become a new-work default.
 
 Every control affects future admission only. None rewrites an active session or recorded plan, and a stop never substitutes another account or runtime. Explicitly set safety stops must not disappear or silently re-enable work when these controls are later simplified. Rolling back to an older installation is a separate operation subject to real data/schema/history compatibility.
 
@@ -103,7 +103,7 @@ Telemetry is observational: its failure must not change selection, execution, sa
 
 ## 9. Configuration
 
-Codex uses the shared realizer when its admission setting is omitted, blank or true. Explicit false retains profile-bound new admission; it is a compatibility choice, unlike `stop_new_generic_codex_admission`, which does not restore a legacy default. A configured custom policy or explicit runtime choice remains authoritative. Recorded profile-bound plans, planless/reference-only histories, and their cancellation, saving and cleanup keep their existing owners. The profile-bound realizer cannot be removed while those supported histories or explicit compatibility controls can invoke it; historical readers remain until retention or lossless migration permits removal. OAuth maintenance, reconnect and janitor callers also retain their runtime dependency until equivalent credential/resource ownership replaces it.
+Codex uses the shared realizer for new plans. Explicit false disables new shared Codex admission; it no longer creates profile-bound work. Custom policy and stop controls remain authoritative and fail closed when the shared row is unavailable. Recorded profile-bound plans, planless/reference-only histories, and their cancellation, saving and cleanup keep their existing owners. The retained realizer, OAuth maintenance and janitor adapters can be removed after those recorded consumers can no longer execute or retry; historical readers remain until retention or lossless migration permits removal.
 
 The rollout, rollback, cohort, and qualified/enabled inputs are read by `runtime_provider_rollout.py` and shipped in `.env-template`. `MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLOUT` is normally empty, selecting the built-in policy; a complete JSON policy document overrides it, and invalid configuration fails fast. Clear a stale upgraded value to follow the installed default. Ordinary versus strict certification is selected by `MOONMIND_OMNIGENT_EVIDENCE_POLICY`: omitted, blank, or `either` is certificate independent; explicit `protected` or `deployment` keeps strict validation ([Conformance and Live Smoke](ConformanceAndLiveSmoke.md#deployed-release-support-evidence)).
 
@@ -117,7 +117,7 @@ The [portable deployment controller](../Steps/DockerComposeUpdateSystem.md) owns
 
 1. Read `GET /api/omnigent/runtime-provider-migration` and confirm the affected row's `targetId`, `rolloutState`, `rolloutGeneration`, and `applicableRollbackControls`.
 2. Set `MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK` to the narrowest control that covers the incident. Prefer a per-harness control over `stop_all_new_omnigent_work`.
-3. If new work must keep flowing on a compatibility path, add `restore_legacy_or_direct_default` explicitly. Stopping generic admission alone fails closed by design.
+3. For a still-supported direct compatibility default, use `restore_legacy_or_direct_default` explicitly. It cannot reopen profile-bound Codex admission. Stopping shared admission fails closed; it does not substitute another lifecycle.
 4. Restart the API and worker services so the new policy is read.
 5. Confirm in the migration status that `activeRollbackControls` lists the control and the affected rows report the expected `defaultStatus`.
 6. Active executions keep running under their recorded plan and realizer. Historical reads, replay, artifacts, and cleanup are unaffected in every mode.

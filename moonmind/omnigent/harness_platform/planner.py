@@ -80,7 +80,6 @@ from moonmind.omnigent.runtime_provider_rollout import (
     RolloutSelectionContext,
     RuntimeProviderCombination,
     RuntimeProviderPathClass,
-    RuntimeProviderRollbackControl,
     RuntimeProviderRolloutPolicy,
     effective_rule_state,
     freeze_rollout_record,
@@ -350,43 +349,6 @@ def _record_support_evidence_denials(
             denial_reason=str(reason),
         )
 
-def _effective_default_prefers_legacy(
-    *, policy: RuntimeProviderRolloutPolicy,
-) -> bool:
-    """Return whether the effective default row for codex-native is legacy.
-
-    Compares the highest effective (post-rollback) state rank of the generic
-    row against the legacy profile-bound row. A restored legacy default
-    outranks a demoted generic row so new plans honor the rollback policy.
-    """
-
-    rank = {
-        "disabled": 0,
-        "retired_for_new_work": 1,
-        "direct_compatibility_only": 2,
-        "explicit_only": 3,
-        "canary": 4,
-        "preferred": 5,
-        "new_work_default": 6,
-    }
-
-    def _best_state(harness_id: str, path_class: RuntimeProviderPathClass) -> int:
-        best = -1
-        for rule in policy.rules_for(harness_id=harness_id, path_class=path_class):
-            state = effective_rule_state(rule, policy)[0]
-            best = max(best, rank.get(str(state), -1))
-        return best
-
-    generic_best = _best_state(
-        "codex-native", RuntimeProviderPathClass.generic_omnigent
-    )
-    legacy_best = _best_state(
-        "codex-native", RuntimeProviderPathClass.legacy_profile_bound_omnigent
-    )
-    return legacy_best >= rank["new_work_default"] and legacy_best > generic_best
-
-
-# Trusted realizer selection - never workflow-authored, never overridable via Agent Profile settings
 def select_execution_realizer(
     *,
     harness_id: str,
@@ -394,77 +356,31 @@ def select_execution_realizer(
     rollout_policy: RuntimeProviderRolloutPolicy | None = None,
     required_authority_kinds: tuple[str, ...] = ("model",),
 ) -> str:
-    """Select versioned execution realizer (section 6: executionRealizerRef is trusted planner only).
+    """Select the shared owner for a new plan, or fail closed.
 
-    The routing rule is capability-derived, not harness-name enumeration. The
-    one authority is the versioned runtime-provider rollout policy
-    (MoonLadderStudios/MoonMind#3833): each exact harness x path-class row
-    carries its own rollout state, so ``codex-native`` keeps the retained
-    profile-bound realizer while its generic row is ``disabled`` and moves to
-    ``generic-omnigent-host@1`` once that row is promoted. There is no silent
-    fallback — a row with no admissible realizer fails fast, and the same plan
-    always reconciles to the same realizer.
+    Recorded plans keep their versioned realizer and registry entry. A disabled
+    shared path must not create another lifecycle through the historical Codex
+    coordinator, including when a deployment restores a compatibility default.
     """
-
     policy = rollout_policy or load_runtime_provider_rollout_policy()
-    generic_admitted = _rollout_admits_new_authoring(
+    if not _rollout_admits_new_authoring(
         policy=policy,
         harness_id=harness_id,
         path_class=RuntimeProviderPathClass.generic_omnigent,
-    )
-    if harness_id == "codex-native" and is_codex:
-        from moonmind.omnigent.realizers.registry import realizer_authority_kinds
-
-        if not set(required_authority_kinds).issubset(
-            realizer_authority_kinds(LEGACY_CODEX_REALIZER_REF)
-        ):
-            restored_legacy_default = (
-                RuntimeProviderRollbackControl.restore_legacy_or_direct_default
-                in policy.rollback_controls
-                and _effective_default_prefers_legacy(policy=policy)
-            )
-            if generic_admitted and not restored_legacy_default:
-                return GENERIC_REALIZER_REF
-            raise HarnessPlatformError(
-                "no execution realizer is admitted for codex-native with "
-                f"authority kinds {sorted(required_authority_kinds)}; "
-                "the repository-capable generic path must be admitted and "
-                "the selected deployment rollback preserved",
-                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
-            )
-        # Honor the effective default row: a rollback control may restore the
-        # legacy row to new_work_default while demoting generic to
-        # explicit_only, in which case new plans must use the legacy path
-        # (MoonLadderStudios/MoonMind#3988).
-        if _effective_default_prefers_legacy(policy=policy):
-            if _rollout_admits_new_authoring(
-                policy=policy,
-                harness_id=harness_id,
-                path_class=(
-                    RuntimeProviderPathClass.legacy_profile_bound_omnigent
-                ),
-            ):
-                return LEGACY_CODEX_REALIZER_REF
-        if generic_admitted:
-            return GENERIC_REALIZER_REF
-        if _rollout_admits_new_authoring(
-            policy=policy,
-            harness_id=harness_id,
-            path_class=(
-                RuntimeProviderPathClass.legacy_profile_bound_omnigent
-            ),
-        ):
-            return LEGACY_CODEX_REALIZER_REF
+    ):
         raise HarnessPlatformError(
-            "no execution realizer is admitted for codex-native in this "
-            "deployment; runtime-provider rollout is fail-closed",
+            f"no execution realizer is admitted for {harness_id}; "
+            "the shared Omnigent path is disabled for new work",
             code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
         )
-    if not generic_admitted:
+    from moonmind.omnigent.realizers.registry import realizer_authority_kinds
+
+    if not set(required_authority_kinds).issubset(
+        realizer_authority_kinds(GENERIC_REALIZER_REF)
+    ):
         raise HarnessPlatformError(
-            f"execution realizer {GENERIC_REALIZER_REF} is not qualified "
-            f"for {harness_id} in this deployment; explicit generic "
-            "selection is fail-closed",
+            f"no execution realizer is admitted for {harness_id} with "
+            f"authority kinds {sorted(required_authority_kinds)}",
             code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
         )
     return GENERIC_REALIZER_REF
@@ -473,11 +389,9 @@ def select_execution_realizer(
 def selected_realizer_consumes_repository_authority(*, harness_id: str) -> bool:
     """Return whether new work for ``harness_id`` selects a repository-capable realizer.
 
-    Typed repository bindings are admitted only for a realizer that consumes
-    them. While the deployment policy keeps Codex on the model-only
-    profile-bound realizer (generic Codex unqualified, or a restored legacy
-    default), Codex repository work keeps that realizer's existing credential
-    path rather than becoming unrunnable.
+    Typed repository bindings are admitted only for an enabled shared owner
+    that consumes them. A disabled shared path cannot substitute the historical
+    model-only coordinator or its ambient repository-credential path.
     """
 
     from moonmind.omnigent.realizers.registry import realizer_authority_kinds

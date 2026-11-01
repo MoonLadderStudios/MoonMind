@@ -263,17 +263,8 @@ def test_two_rows_cannot_claim_the_same_surface() -> None:
 
 def test_profile_bound_admission_follows_the_code_owned_class() -> None:
     record = get_retirement_record("omnigent.legacy.profile_bound_realizer")
-    # The realizer still provides required behavior, so it keeps admitting.
-    assert record.retirement_class is RetirementClass.ACTIVE_PRODUCT_PATH
-    assert evaluate_new_admission(record).allowed is True
-
-    disabled = record.model_copy(
-        update={
-            "retirement_class": RetirementClass.NEW_ADMISSION_DISABLED,
-            "new_admission_source": "",
-        }
-    )
-    decision = evaluate_new_admission(disabled)
+    assert record.retirement_class is RetirementClass.NEW_ADMISSION_DISABLED
+    decision = evaluate_new_admission(record)
     assert decision.allowed is False
     assert decision.reason_code == "new_admission_disabled:new_admission_disabled"
 

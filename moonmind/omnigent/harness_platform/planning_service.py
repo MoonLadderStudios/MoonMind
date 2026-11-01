@@ -437,13 +437,13 @@ class OmnigentExecutionPlanningService:
             skills = await self._skills.resolve(request=request, profile=profile)
             policy_ref = self._launch_policy_ref(request, profile)
             from api_service.services.omnigent_policies import OmnigentPolicyService
-            from moonmind.omnigent.profile_bound_execution import (
-                _compile_persisted_effective_launch,
+            from moonmind.omnigent.execution_profiles import (
+                compile_persisted_effective_launch,
             )
 
             policy_service = OmnigentPolicyService(session)
             policy_snapshot = await policy_service.resolve_runtime_snapshot(policy_ref)
-            effective_launch = _compile_persisted_effective_launch(
+            effective_launch = compile_persisted_effective_launch(
                 policy_snapshot,
                 provider_profile_id=str(provider_profile.profile_id),
             )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -1403,34 +1404,46 @@ async def test_codex_oauth_profile_compiles_against_synchronized_inventory(
     )
     artifacts = _ArtifactService()
     plan_store = DbExecutionPlanStore(factory)
-    result = await service.compile_and_persist_execution_plan(
-        session_factory=factory,
-        artifact_service=artifacts,
-        principal="user-1",
-        workflow_id="mm:test-codex-synchronized-inventory",
-        agent_profile_snapshot=snapshot,
-        provider_profile=SimpleNamespace(
-            profile_id="codex-oauth", runtime_id="codex_cli", provider_id="openai"
-        ),
-        initial_parameters={
-            "model": "gpt-5.5",
-            "targetRuntime": "omnigent",
-            "publishMode": "none",
-            "maxAttempts": 2,
-            "workflow": {"instructions": "Read the repository."},
-        },
-        authored_request_ref="art_request_1",
-        authored_request_digest="sha256:" + "1" * 64,
-        task_input_snapshot_ref="art_request_1",
-        task_input_snapshot_digest="sha256:" + "1" * 64,
-        execution_plan_store=plan_store,
-        access=access_for_test("user-1"),
-    )
+    with (
+        nullcontext()
+        if generic_admitted
+        else pytest.raises(HarnessPlatformError, match="no execution realizer")
+    ):
+        result = await service.compile_and_persist_execution_plan(
+            session_factory=factory,
+            artifact_service=artifacts,
+            principal="user-1",
+            workflow_id="mm:test-codex-synchronized-inventory",
+            agent_profile_snapshot=snapshot,
+            provider_profile=SimpleNamespace(
+                profile_id="codex-oauth", runtime_id="codex_cli", provider_id="openai"
+            ),
+            initial_parameters={
+                "model": "gpt-5.5",
+                "targetRuntime": "omnigent",
+                "publishMode": "none",
+                "maxAttempts": 2,
+                "workflow": {"instructions": "Read the repository."},
+            },
+            authored_request_ref="art_request_1",
+            authored_request_digest="sha256:" + "1" * 64,
+            task_input_snapshot_ref="art_request_1",
+            task_input_snapshot_digest="sha256:" + "1" * 64,
+            execution_plan_store=plan_store,
+            access=access_for_test("user-1"),
+        )
+
+    if not generic_admitted:
+        assert all(
+            json.loads(body).get("schemaVersion")
+            != "moonmind.omnigent-execution-plan-envelope.v1"
+            for body in artifacts.payloads.values()
+        )
+        await engine.dispose()
+        return
 
     payload = result.envelope.payload
-    assert payload.executionRealizerRef == (
-        "generic-omnigent-host@1" if generic_admitted else "codex-profile-bound@1"
-    )
+    assert payload.executionRealizerRef == "generic-omnigent-host@1"
     assert payload.hostImageRef == host_image_ref
     assert payload.omnigentHostBuildDigest == host_build_digest
     assert payload.supportIdentity.omnigentHostBuildRef == host_build_digest
@@ -1494,29 +1507,42 @@ async def test_codex_admission_binds_installed_images_without_a_policy_version(
 
     monkeypatch.setattr(service, "_resolve_runtime_policy_snapshot", resolve_policy)
     artifacts = _ArtifactService()
-    result = await service.compile_and_persist_execution_plan(
-        session_factory=object(),
-        artifact_service=artifacts,
-        principal="user-1",
-        workflow_id="mm:codex-installed-host-image",
-        agent_profile_snapshot=_snapshot(
-            harness="codex-native", policy="codex-on-demand@1", provider_id="codex"
-        ),
-        provider_profile=SimpleNamespace(
-            profile_id="codex", runtime_id="codex_cli", provider_id="openai"
-        ),
-        initial_parameters={
-            "targetRuntime": "omnigent",
-            "publishMode": "none",
-            "workflow": {"instructions": "Use the installed host."},
-        },
-        authored_request_ref="art_request_1",
-        authored_request_digest="sha256:" + "1" * 64,
-        task_input_snapshot_ref="art_request_1",
-        task_input_snapshot_digest="sha256:" + "1" * 64,
-        execution_plan_store=_PlanStore(object()),
-        access=access_for_test("user-1"),
-    )
+    with (
+        nullcontext()
+        if generic_admitted
+        else pytest.raises(HarnessPlatformError, match="no execution realizer")
+    ):
+        result = await service.compile_and_persist_execution_plan(
+            session_factory=object(),
+            artifact_service=artifacts,
+            principal="user-1",
+            workflow_id="mm:codex-installed-host-image",
+            agent_profile_snapshot=_snapshot(
+                harness="codex-native", policy="codex-on-demand@1", provider_id="codex"
+            ),
+            provider_profile=SimpleNamespace(
+                profile_id="codex", runtime_id="codex_cli", provider_id="openai"
+            ),
+            initial_parameters={
+                "targetRuntime": "omnigent",
+                "publishMode": "none",
+                "workflow": {"instructions": "Use the installed host."},
+            },
+            authored_request_ref="art_request_1",
+            authored_request_digest="sha256:" + "1" * 64,
+            task_input_snapshot_ref="art_request_1",
+            task_input_snapshot_digest="sha256:" + "1" * 64,
+            execution_plan_store=_PlanStore(object()),
+            access=access_for_test("user-1"),
+        )
+
+    if not generic_admitted:
+        assert all(
+            json.loads(body).get("schemaVersion")
+            != "moonmind.omnigent-execution-plan-envelope.v1"
+            for body in artifacts.payloads.values()
+        )
+        return
 
     payload = result.envelope.payload
     assert payload.launchPolicyRef == "codex-on-demand@1"
@@ -2127,7 +2153,7 @@ async def test_repository_codex_product_admission_requires_capable_realizer(
         )
         assert await store.load(compiled.envelope.planRef) == compiled.envelope
     else:
-        with pytest.raises(HarnessPlatformError, match="realizer.*repository"):
+        with pytest.raises(HarnessPlatformError, match="no execution realizer"):
             await admit()
         assert store._plans == {}
         assert all(
@@ -2142,8 +2168,8 @@ async def test_repository_codex_product_admission_requires_capable_realizer(
     ("generic_admitted", "selection", "outcome"),
     [
         (True, "routed", "typed"),
-        (False, "explicit-default", "legacy"),
-        (False, "routed-default", "legacy"),
+        (False, "explicit-default", "disabled"),
+        (False, "routed-default", "disabled"),
         (False, "explicit-other", "reject"),
         (False, "routed-other", "reject"),
     ],
@@ -2151,14 +2177,10 @@ async def test_repository_codex_product_admission_requires_capable_realizer(
 async def test_repository_codex_default_admits_typed_authority_only_when_consumable(
     monkeypatch, tmp_path, generic_admitted, selection, outcome
 ) -> None:
-    """A default Codex repository task stays runnable in every rollout state.
+    """New repository work preserves selected authority or fails closed.
 
-    Typed repository authority is admitted only when the selected realizer can
-    consume it. While generic Codex is unqualified (the shipped default), the
-    retained profile-bound realizer keeps its existing credential path, which
-    is the legacy credential recorded as the default connection. A selection
-    that path cannot honor -- another explicit connection, or a route to one --
-    rejects before persistence instead of silently using that credential.
+    Disabling shared Codex cannot create a profile-bound plan or substitute the
+    legacy default credential for an explicit or routed connection.
     """
 
     from unittest.mock import AsyncMock
@@ -2256,6 +2278,11 @@ async def test_repository_codex_default_admits_typed_authority_only_when_consuma
         )
 
     try:
+        if outcome == "disabled":
+            with pytest.raises(HarnessPlatformError, match="no execution realizer"):
+                await admit()
+            assert store._plans == {}
+            return
         if outcome == "reject":
             with pytest.raises(ValueError, match="codex-repository.*profile-bound"):
                 await admit()
@@ -3576,7 +3603,7 @@ async def _native_review_preset_plan_test(monkeypatch, tmp_path, selection):
         await connection.run_sync(Base.metadata.create_all)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     _configure_ready_host_image_pair(monkeypatch)
-    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "False")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "true")
     monkeypatch.delenv("MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK", raising=False)
     monkeypatch.setenv(
         "OMNIGENT_SHARED_HOST_IMAGE_REF",
@@ -3679,7 +3706,7 @@ async def test_shipped_native_review_preset_admits_selected_authority_without_ag
     try:
         compiled = await context.compile()
         plan = compiled.envelope.payload
-        assert plan.executionRealizerRef == "codex-profile-bound@1"
+        assert plan.executionRealizerRef == "generic-omnigent-host@1"
         assert set(plan.credentialBindings) == {"primary-model", "collaboration"}
         access = plan.resolvedTools.get("repositoryAccess", {})
         assert set(access) == {"collaboration"}
@@ -3760,9 +3787,22 @@ async def test_default_codex_does_not_admit_native_review_authority_to_other_gra
         workflow["publish"]["mergeAutomation"]["finishMode"] = "fix_only"
     try:
         compiled = await context.compile(workflow=workflow)
-        assert compiled.envelope.payload.executionRealizerRef == "codex-profile-bound@1"
-        assert set(compiled.envelope.payload.credentialBindings) == {"primary-model"}
-        assert "repositoryAccess" not in compiled.envelope.payload.resolvedTools
+        assert (
+            compiled.envelope.payload.executionRealizerRef == "generic-omnigent-host@1"
+        )
+        plan = compiled.envelope.payload
+        # This is ordinary shared agent admission, not a native-review grant.
+        assert set(plan.credentialBindings) == {
+            "primary-model",
+            "source",
+            "collaboration",
+        }
+        assert set(plan.resolvedTools["repositoryAccess"]) == {
+            "source",
+            "collaboration",
+        }
+        for slot in ("source", "collaboration"):
+            assert plan.credentialBindings[slot].consumer == "agent"
     finally:
         await context.engine.dispose()
 
@@ -3828,8 +3868,18 @@ async def test_native_review_rejects_runtime_graph_replacement_and_dynamic_contr
         )
     try:
         compiled = await context.compile(workflow=workflow)
-        assert "repositoryAccess" not in compiled.envelope.payload.resolvedTools
-        assert set(compiled.envelope.payload.credentialBindings) == {"primary-model"}
+        plan = compiled.envelope.payload
+        assert set(plan.credentialBindings) == {
+            "primary-model",
+            "source",
+            "collaboration",
+        }
+        assert set(plan.resolvedTools["repositoryAccess"]) == {
+            "source",
+            "collaboration",
+        }
+        for slot in ("source", "collaboration"):
+            assert plan.credentialBindings[slot].consumer == "agent"
     finally:
         await context.engine.dispose()
 
@@ -3890,8 +3940,18 @@ async def test_generic_tool_executor_without_registered_native_handler_has_no_gr
     )
     try:
         compiled = await context.compile()
-        assert "repositoryAccess" not in compiled.envelope.payload.resolvedTools
-        assert set(compiled.envelope.payload.credentialBindings) == {"primary-model"}
+        plan = compiled.envelope.payload
+        assert set(plan.credentialBindings) == {
+            "primary-model",
+            "source",
+            "collaboration",
+        }
+        assert set(plan.resolvedTools["repositoryAccess"]) == {
+            "source",
+            "collaboration",
+        }
+        for slot in ("source", "collaboration"):
+            assert plan.credentialBindings[slot].consumer == "agent"
     finally:
         await context.engine.dispose()
 

@@ -148,9 +148,8 @@ def generic_codex_qualified(*, env: Mapping[str, Any] | None = None) -> bool:
     """Return whether generic Codex admission is enabled for this deployment.
 
     Ordinary Codex work uses the shared realizer without a rollout opt-in.
-    Explicit false preserves the supported profile-bound compatibility choice;
-    rollback controls independently stop new admission or restore a legacy
-    default. Runtime, credential and optional strict evidence checks still apply.
+    Explicit false stops new shared Codex admission; it cannot select the
+    retained profile-bound coordinator. Recorded plans keep their owner. Runtime, credential and optional strict evidence checks still apply.
     """
 
     source = env if env is not None else os.environ

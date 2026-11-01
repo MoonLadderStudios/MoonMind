@@ -76,9 +76,7 @@ async def test_saved_profile_default_and_explicit_backend_admit_same_plan_owner(
         assert "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED" not in os.environ
     else:
         monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "false")
-    expected_realizer = (
-        "generic-omnigent-host@1" if shared_default else "codex-profile-bound@1"
-    )
+    expected_realizer = "generic-omnigent-host@1"
     monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
     monkeypatch.setattr(settings.workflow, "github_repository", "")
     # Discovery's existing client adapter derives session.start from the stock
@@ -120,6 +118,10 @@ async def test_saved_profile_default_and_explicit_backend_admit_same_plan_owner(
                 response = await client.post(
                     "/api/executions", json={"type": "workflow", "payload": payload}
                 )
+                if not shared_default:
+                    assert response.status_code in {409, 422}, response.text
+                    assert "no execution realizer" in response.text
+                    continue
                 assert response.status_code == 201, response.text
                 record = await session.get(
                     TemporalExecutionCanonicalRecord, response.json()["workflowId"]
@@ -136,6 +138,10 @@ async def test_saved_profile_default_and_explicit_backend_admit_same_plan_owner(
                 assert plan.payload.harnessId == journey.harness
                 assert plan.payload.modelConfig.qualifiedId == journey.server.model
                 admitted.append((plan, record))
+        if not shared_default:
+            service._client_adapter.start_workflow.assert_not_awaited()
+            assert admitted == []
+            return
         assert service._client_adapter.start_workflow.await_count == 2
         assert admitted[0][0].payload.harnessId == admitted[1][0].payload.harnessId
         assert (
