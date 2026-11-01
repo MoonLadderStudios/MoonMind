@@ -34,6 +34,7 @@ with workflow.unsafe.imports_passed_through():
         ExecutionBudget,
         ExecutionBudgetContext,
         OmnigentExecutionPlanBinding,
+        RuntimeSessionContextReference,
         resolve_execution_budget,
     )
     from moonmind.omnigent.stock_agents import (
@@ -795,6 +796,7 @@ RUN_DEFER_WORKFLOW_SCOPED_SESSION_UNTIL_SLOT_PATCH = (
 RUN_WORKFLOW_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH = (
     "run-task-scoped-session-clear-between-steps-v1"
 )
+RUN_SHARED_RUNTIME_CONTEXT_PATCH = "run-shared-native-context-continuation-v1"
 RUN_WORKFLOW_SCOPED_SESSION_CLEAR_PER_EXECUTION_PATCH = (
     "run-task-scoped-session-clear-per-execution-v2"
 )
@@ -1966,6 +1968,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._last_publish_repair_node_id: str | None = None
         self._codex_session_handle: Any | None = None
         self._codex_session_binding: CodexManagedSessionBinding | None = None
+        self._shared_runtime_context: RuntimeSessionContextReference | None = None
         self._codex_session_cleared_before_step_attempts: set[str | tuple[str, int]] = (
             set()
         )
@@ -4334,6 +4337,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             if isinstance(trusted_issue, Mapping):
                 self._record_trusted_issue_context(trusted_issue)
         carried_session = continuation.get("managedSessionBinding")
+        if workflow.patched(RUN_SHARED_RUNTIME_CONTEXT_PATCH):
+            carried_context = continuation.get("sharedRuntimeContext")
+            if carried_context is not None:
+                context = RuntimeSessionContextReference.model_validate(carried_context)
+                if context.workflow_id != workflow.info().workflow_id:
+                    raise ValueError(
+                        "continued runtime context belongs to another workflow"
+                    )
+                self._shared_runtime_context = context
         if isinstance(carried_session, Mapping) and workflow.patched(
             RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH
         ):
@@ -4490,6 +4502,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 exclude_none=True,
             )
         payload["remediation_loop_continuation"] = continuation
+        if self._shared_runtime_context is not None and workflow.patched(
+            RUN_SHARED_RUNTIME_CONTEXT_PATCH
+        ):
+            continuation["sharedRuntimeContext"] = (
+                self._shared_runtime_context.model_dump(by_alias=True, mode="json")
+            )
         return cast(RunWorkflowInput, payload)
 
     def _sync_remediation_loop_projection(self) -> None:
@@ -13767,6 +13785,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                     ordered_nodes=ordered_nodes,
                                     current_index=index,
                                 )
+                            request = self._bind_shared_runtime_context(request)
                             await self._maybe_clear_workflow_scoped_session_before_step(
                                 request=request,
                                 logical_step_id=node_id,
@@ -14039,6 +14058,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             finally:
                                 self._active_agent_child_workflow_id = None
                                 self._active_agent_id = None
+                            self._record_shared_runtime_context(request, child_result)
                             execution_result = await self._hydrate_acceptance_result(
                                 self._map_agent_run_result(child_result)
                             )
@@ -17651,6 +17671,80 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             if agent_run_id:
                 refs["agentRunId"] = agent_run_id
         return refs
+
+    def _bind_shared_runtime_context(
+        self, request: AgentExecutionRequest
+    ) -> AgentExecutionRequest:
+        if not workflow.patched(RUN_SHARED_RUNTIME_CONTEXT_PATCH):
+            return request
+        step = request.step_execution
+        if (
+            request.agent_kind != "external"
+            or request.agent_id != "omnigent"
+            or step is None
+        ):
+            self._shared_runtime_context = None
+            return request
+        reference = None
+        if step.runtime_context_policy == "reuse_session_same_epoch":
+            reference = self._shared_runtime_context
+        else:
+            self._shared_runtime_context = None
+        return request.model_copy(
+            update={
+                "step_execution": step.model_copy(
+                    update={"runtime_session_context": reference}
+                )
+            }
+        )
+
+    def _record_shared_runtime_context(
+        self, request: AgentExecutionRequest, result: Any
+    ) -> None:
+        if not workflow.patched(RUN_SHARED_RUNTIME_CONTEXT_PATCH):
+            return
+        if (
+            request.agent_kind != "external"
+            or request.agent_id != "omnigent"
+            or request.step_execution is None
+        ):
+            return
+        metadata = (
+            result.get("metadata")
+            if isinstance(result, Mapping)
+            else getattr(result, "metadata", None)
+        )
+        reference = (
+            metadata.get("runtimeSessionContext")
+            if isinstance(metadata, Mapping)
+            else None
+        )
+        if (
+            reference is None
+            and isinstance(metadata, Mapping)
+            and metadata.get("runtimeBindingRef")
+        ):
+            # A queued pre-upgrade result may have no context receipt. Carry
+            # its identity so reuse reports unavailable authority instead of
+            # silently replacing the requested context with a fresh session.
+            reference = {
+                "workflowId": request.step_execution.workflow_id,
+                "runId": request.step_execution.run_id,
+                "stepExecutionId": request.step_execution.step_execution_id,
+                "runtimeBindingRef": metadata["runtimeBindingRef"],
+                "epoch": request.step_execution.step_execution_id,
+            }
+        if reference is None:
+            return
+        context = RuntimeSessionContextReference.model_validate(reference)
+        if (
+            context.workflow_id != request.step_execution.workflow_id
+            or context.step_execution_id != request.step_execution.step_execution_id
+        ):
+            raise ValueError(
+                "returned runtime context conflicts with its Step Execution"
+            )
+        self._shared_runtime_context = context
 
     async def _ensure_workflow_scoped_codex_session(
         self, request: AgentExecutionRequest
