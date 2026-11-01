@@ -1576,7 +1576,7 @@ async def assert_native_turn_saved_and_cleaned(
     )
     messages = [event for event in server.events if event.get("type") == "message"]
     assert len(messages) == expected_messages
-    assert "Generate a report." in messages[0]["data"]["content"][0]["text"]
+    assert request.parameters["omnigent"]["prompt"]["text"] in messages[0]["data"]["content"][0]["text"]
     if getattr(journey, "env_bundle", False):
         for name, value in {
             "API_TIMEOUT_MS": "3000000",
