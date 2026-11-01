@@ -1466,13 +1466,24 @@ class GenericOmnigentHostRealizer:
         phases = sink.binding.phaseResults or {}
         if "publication" in phases:
             return AgentRunResult.model_validate(phases["publication"])
-        from moonmind.omnigent.runtime_context import runtime_context_reference
+        from moonmind.omnigent.runtime_context import (
+            AUTHORITY_PHASE,
+            runtime_context_reference,
+        )
 
         context_reference = runtime_context_reference(sink.binding)
-        if context_reference is not None:
-            result = result.model_copy(update={"metadata": {
-                **(result.metadata or {}), "runtimeSessionContext": context_reference,
-            }})
+        if AUTHORITY_PHASE in phases:
+            # An explicit empty receipt means this context-aware attempt never
+            # created a native session. It must not replace its admitted source
+            # or be mistaken for a pre-upgrade result with no receipt field.
+            result = result.model_copy(
+                update={
+                    "metadata": {
+                        **(result.metadata or {}),
+                        "runtimeSessionContext": context_reference,
+                    }
+                }
+            )
         context = request.execution_budget
         if "workspace" in phases and "saved" not in phases:
             if context is not None:

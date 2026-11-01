@@ -533,3 +533,114 @@ def test_workflow_carries_context_only_for_explicit_reuse(monkeypatch):
         is None
     )
     assert flow._shared_runtime_context is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interrupted_write", ["metadata", "runner_ack"])
+async def test_execution_retry_finishes_attached_context_setup(
+    monkeypatch, tmp_path, interrupted_write
+):
+    from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
+    from moonmind.omnigent.execute import run_omnigent_execution
+    from tests.unit.omnigent.test_execute import _RecordingBridgeStore
+
+    class DeliveryLost(BaseException):
+        """A dead Activity process cannot return a terminal result."""
+
+    class SetupRecovered(BaseException):
+        """Stop at the durable launch receipt before dispatching a turn."""
+
+    client, sink, snapshot, _prepare = _fork_fixture()
+    snapshot.update(status="completed", summary="reattached native context", items=[])
+    store = _RecordingBridgeStore()
+
+    async def attach(_key, session_id):
+        store.row.omnigent_session_id = session_id
+        return store.row
+
+    store.attach_session = attach
+    if interrupted_write == "metadata":
+        client.update_session.side_effect = [DeliveryLost(), snapshot]
+    else:
+        launch = client.launch_runner.side_effect
+
+        async def lose_runner_ack(*args, **kwargs):
+            await launch(*args, **kwargs)
+            raise DeliveryLost()
+
+        client.launch_runner.side_effect = lose_runner_ack
+
+    client.post_event = AsyncMock(side_effect=AssertionError("premature turn dispatch"))
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.OmnigentHttpClient", lambda **_: client
+    )
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    with pytest.raises(DeliveryLost):
+        await run_omnigent_execution(
+            _request(),
+            artifact_gateway=gateway,
+            run_store=store,
+            session_authority_sink=sink,
+        )
+    assert store.row.omnigent_session_id == "fork"
+    client.post_event.assert_not_awaited()
+    record = sink.record_phase.side_effect
+
+    async def observe_recovered_setup(phase, value):
+        await record(phase, value)
+        if phase == "runtimeContextForkBound":
+            raise SetupRecovered()
+
+    sink.record_phase.side_effect = observe_recovered_setup
+    with pytest.raises(SetupRecovered):
+        await run_omnigent_execution(
+            _request(),
+            artifact_gateway=gateway,
+            run_store=store,
+            session_authority_sink=sink,
+        )
+    assert sink.binding.phaseResults["runtimeContextForkBound"] == {
+        "sessionId": "fork",
+        "hostId": "host",
+        "workspace": "/repo",
+        "runnerId": "runner",
+    }
+    client.fork_session.assert_awaited_once()
+    client.launch_runner.assert_awaited_once()
+    client.post_event.assert_not_awaited()
+
+
+@pytest.mark.parametrize("receipt_present", [False, True])
+def test_controller_distinguishes_sessionless_receipts_from_pre_upgrade_results(
+    monkeypatch, receipt_present
+):
+    from moonmind.schemas.agent_runtime_models import AgentRuntimeStepExecutionLaunch
+    from moonmind.workflows.temporal.workflows import run
+
+    monkeypatch.setattr(run.workflow, "patched", lambda _: True)
+    flow = run.MoonMindUserWorkflow()
+    request = _request().model_copy(
+        update={
+            "step_execution": AgentRuntimeStepExecutionLaunch(
+                workflowId="wf",
+                runId="run",
+                logicalStepId="step",
+                executionOrdinal=1,
+                stepExecutionId="wf:run:step:execution:1",
+                runtimeContextPolicy="fresh_agent_run",
+            )
+        }
+    )
+    metadata = {"runtimeBindingRef": "omnigent-runtime-binding:sha256:" + "2" * 64}
+    if receipt_present:
+        metadata["runtimeSessionContext"] = None
+    flow._record_shared_runtime_context(request, {"metadata": metadata})
+    if receipt_present:
+        assert flow._shared_runtime_context is None
+    else:
+        assert (
+            flow._shared_runtime_context.runtime_binding_ref
+            == metadata["runtimeBindingRef"]
+        )

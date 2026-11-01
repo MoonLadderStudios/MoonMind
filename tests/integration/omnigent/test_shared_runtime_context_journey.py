@@ -12,6 +12,7 @@ import hashlib
 import json
 import shutil
 
+import httpx
 import pytest
 from aiohttp import web
 
@@ -128,21 +129,22 @@ def context_provider(monkeypatch):
     monkeypatch.setattr(native, "NativeTurnServer", ContextNativeServer)
 
 
-def _next_request(journey, result):
+def _next_request(journey, result, *, ordinal=1):
     request = journey.request
-    step_id = request.step_execution.workflow_id + ":run:second:execution:1"
+    step_id = request.step_execution.workflow_id + f":run:second:execution:{ordinal}"
     payload = request.model_dump(mode="json", by_alias=True, exclude_none=True)
-    payload["idempotencyKey"] = "native-context-second"
+    payload["idempotencyKey"] = f"native-context-second-{ordinal}"
     payload["stepExecution"].update(
         logicalStepId="second",
         stepExecutionId=step_id,
+        executionOrdinal=ordinal,
         runtimeContextPolicy="reuse_session_same_epoch",
         runtimeSessionContext=result.metadata["runtimeSessionContext"],
     )
     payload["admittedProviderCapacity"].update(
         stepExecutionId=step_id,
         idempotencyKey=payload["idempotencyKey"],
-        agentRunRunId="agent-context-2",
+        agentRunRunId=f"agent-context-2-{ordinal}",
     )
     payload["workspaceSpec"] = {
         "workspaceCheckpointRestoreRef": result.metadata["savedWorkspaceCheckpoint"][
@@ -157,6 +159,59 @@ def _next_request(journey, result):
         },
     }
     return AgentExecutionRequest.model_validate(payload)
+
+
+@pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
+async def test_sessionless_continuation_retains_completed_context_for_retry(
+    native_journey, monkeypatch
+):
+    from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+    from moonmind.workflows.temporal.workflows import run
+
+    journey = native_journey
+    # Source, sessionless attempt and successful retry launch in one test
+    # window. Keep the real admission checks with capacity for all three.
+    monkeypatch.setattr(
+        journey.realizer._host_capacity_admission, "_cold_launch_burst", 3
+    )
+    first = await native.assert_native_turn_saved_and_cleaned(journey)
+    successor = _next_request(journey, first)
+    await journey.gateway.admit_execution_plan_inputs(
+        request=successor, plan=journey.plan
+    )
+    journey.manager.request = successor
+    source_ref = successor.step_execution.runtime_session_context
+    list_sessions = OmnigentHttpClient.list_sessions
+
+    async def fail_context_lookup(client, **kwargs):
+        if kwargs.get("agent_id"):
+            raise httpx.ConnectError("transient context lookup failure")
+        return await list_sessions(client, **kwargs)
+
+    monkeypatch.setattr(OmnigentHttpClient, "list_sessions", fail_context_lookup)
+    failed = await journey.realizer.execute(successor, journey.plan)
+    assert failed.failure_class == "integration_error", failed.summary
+    assert failed.retry_recommendation == "retry_step_execution"
+    binding = await journey.services.runtime_binding_store.get(
+        failed.metadata["runtimeBindingRef"]
+    )
+    assert binding.omnigentSessionId is None
+    assert failed.metadata["runtimeSessionContext"] is None
+    assert journey.server.forks == []
+    monkeypatch.setattr(run.workflow, "patched", lambda _: True)
+    owner = run.MoonMindUserWorkflow()
+    owner._shared_runtime_context = source_ref
+    owner._record_shared_runtime_context(successor, failed)
+    retry = owner._bind_shared_runtime_context(successor)
+    assert retry.step_execution.runtime_session_context == source_ref
+    monkeypatch.setattr(OmnigentHttpClient, "list_sessions", list_sessions)
+    retry = owner._bind_shared_runtime_context(_next_request(journey, first, ordinal=2))
+    await journey.gateway.admit_execution_plan_inputs(request=retry, plan=journey.plan)
+    journey.manager.request = retry
+    recovered = await journey.realizer.execute(retry, journey.plan)
+    assert recovered.failure_class is None, recovered.summary
+    assert recovered.metadata["runtimeSessionContext"]["epoch"] == source_ref.epoch
+    assert len(journey.server.forks) == 1
 
 
 @pytest.mark.parametrize(
