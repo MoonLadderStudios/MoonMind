@@ -323,6 +323,33 @@ async def test_step_alias_ownership_matches_existing_admission_boundary(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("alias", ALIASES)
+async def test_recurring_missing_step_account_cannot_fall_back(matrix_context, alias):
+    ctx = matrix_context
+    recorded = await submit(
+        ctx,
+        "recurring",
+        {
+            "instructions": "Keep the unavailable child account explicit",
+            "runtime": {"mode": "codex_cli"},
+            "steps": [
+                {"id": "one", "instructions": "Use the parent account"},
+                {
+                    "id": "two",
+                    "instructions": "Require the missing account",
+                    "runtime": {alias: "missing-account"},
+                },
+            ],
+        },
+    )
+    requests = agent_requests(recorded)
+    assert requests["two"].execution_profile_ref == "missing-account"
+    assert await choose(ctx, requests["two"]) is None
+    assert requests["one"].execution_profile_ref == "saved-codex_cli"
+    assert await choose(ctx, requests["one"]) == "saved-codex_cli"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("entrypoint", ["raw", "api", "recurring"])
 async def test_child_pool_replaces_parent_exact_and_pool(matrix_context, entrypoint):
     ctx = matrix_context
