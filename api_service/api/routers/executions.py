@@ -8354,7 +8354,7 @@ async def _workflow_creation_defaults(
 def _steps_keep_profile_authority(
     provider: Any, task_payload: Mapping[str, Any]
 ) -> bool:
-    """Whether one exact shared plan can preserve the authored step choices."""
+    """Whether shared plans can preserve the authored account choices."""
     if has_unexpanded_task_template({"workflow": task_payload}):
         return False
     if goal_from_payloads(
@@ -8364,7 +8364,6 @@ def _steps_keep_profile_authority(
     from moonmind.runtime_intent import merge_runtime_selection, model_selection_fields
 
     task_runtime = _coerce_mapping(task_payload.get("runtime"))
-    root_selection = None
     for index, step in enumerate(task_payload.get("steps") or []):
         if not isinstance(step, Mapping):
             continue
@@ -8386,33 +8385,20 @@ def _steps_keep_profile_authority(
         }:
             return False
         if model_selection_fields(runtime):
-            # The shared plan freezes one model/effort pair. Resolve with the
-            # native owner's inheritance rules before treating aliases as
-            # equivalent; a distinct step selection still needs its adapter.
-            if root_selection is None:
-                root_selection = resolve_model_effort(
-                    runtime_id=provider.runtime_id,
-                    profile=provider,
-                    authored_runtime=task_runtime,
-                    require_launch_ready=False,
-                    workflow_settings=settings.workflow,
-                )
-            step_selection = resolve_model_effort(
-                runtime_id=provider.runtime_id,
-                profile=provider,
-                authored_runtime=merge_runtime_selection(task_runtime, runtime),
-                require_launch_ready=False,
+            # Model and effort have per-step plans. Arbitrary tier options
+            # still need their native adapter until the shared harness carries
+            # those options through launch, rather than merely recording them.
+            root = resolve_model_effort(
+                runtime_id=provider.runtime_id, profile=provider,
+                authored_runtime=task_runtime, require_launch_ready=False,
                 workflow_settings=settings.workflow,
             )
-            if (
-                step_selection.model,
-                step_selection.effort,
-                step_selection.tier_parameters,
-            ) != (
-                root_selection.model,
-                root_selection.effort,
-                root_selection.tier_parameters,
-            ):
+            selected = resolve_model_effort(
+                runtime_id=provider.runtime_id, profile=provider,
+                authored_runtime=merge_runtime_selection(task_runtime, runtime),
+                require_launch_ready=False, workflow_settings=settings.workflow,
+            )
+            if selected.tier_parameters != root.tier_parameters:
                 return False
     return True
 
@@ -12764,14 +12750,7 @@ async def _create_execution_from_workflow_request(
                     "message": str(exc),
                 },
             ) from exc
-        initial_parameters["omnigentExecutionPlan"] = (
-            persisted_omnigent_plan.binding.model_dump(
-                mode="json", by_alias=True, exclude_none=True
-            )
-        )
-        initial_parameters["resolvedSkillsetRef"] = (
-            persisted_omnigent_plan.resolved_skillset_ref
-        )
+        initial_parameters.update(persisted_omnigent_plan.execution_parameters)
         # MoonLadderStudios/MoonMind#3833: record the frozen runtime-provider
         # rollout decision beside the plan binding so Workflow Detail and audit
         # evidence show the truthful selected path. It is a sibling key, not a
@@ -15479,6 +15458,10 @@ async def create_execution(
             _fresh_serialized_workflow_request(request) if existing is None else None
         )
         initial_parameters = dict(request.initial_parameters)
+        if existing is None and "omnigentStepExecutionPlans" in initial_parameters:
+            raise _invalid_workflow_request(
+                "Step execution plans must be compiled by workflow admission."
+            )
         if assessment_scope is not None:
             initial_parameters["assessmentScope"] = assessment_scope
         # Preserve every authored runtime before canonicalization. The resolved

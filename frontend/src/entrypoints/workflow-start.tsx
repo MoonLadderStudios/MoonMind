@@ -7905,32 +7905,29 @@ function WorkflowStartPageContent({
   const harnessProviderOptions = harness
     ? providerOptions.filter((option) => !option.runtimeId || option.runtimeId === harness)
     : providerOptions;
-  const modelAuthority = (selection: ModelSelection, preview?: ProviderProfileTierPreviewItem) => {
+  const tierOptionsIdentity = (selection: ModelSelection, preview?: ProviderProfileTierPreviewItem) => {
     const display = displayModelSelection(selection, selectedConfiguredProfile, preview);
     const usesTier = display.selected !== "custom" && !selection.model?.trim();
     const tier = usesTier && display.effective != null
       ? selectedConfiguredProfile?.model_tiers?.[display.effective - 1]
       : undefined;
-    return [
-      preview?.model !== undefined ? preview.model : display.model?.trim() || null,
-      preview?.effort !== undefined ? preview.effort : display.effort?.trim() || null,
-      JSON.stringify(tier?.parameters || {}),
-    ];
+    return JSON.stringify(tier?.parameters || {});
   };
-  const workflowModelAuthority = modelAuthority(modelSelection, modelTierPreviewsQuery.data?.previews.workflow);
-  const stepHasIndependentModelAuthority = (step: StepState) => {
+  const workflowModelOptions = tierOptionsIdentity(modelSelection, modelTierPreviewsQuery.data?.previews.workflow);
+  const stepHasIndependentModelOptions = (step: StepState) => {
     if (!hasModelSelection(step.runtimeSelection)) return false;
-    const authority = modelAuthority(
+    const options = tierOptionsIdentity(
       inheritModelSelection(modelSelection, step.runtimeSelection),
       modelTierPreviewsQuery.data?.previews[`step:${step.localId}`],
     );
-    return authority.some((value, index) => value !== workflowModelAuthority[index]);
+    return options !== workflowModelOptions;
   };
-  // One root plan cannot carry a different step model/effort or tier policy.
+  // Distinct model/effort pairs have immutable step plans. Independent account,
+  // harness and native launch options still need their equivalent handoff.
   const independentStepAuthority = steps.some((step) =>
     (Boolean(step.runtimeProviderProfile.trim()) && step.runtimeProviderProfile !== providerProfile) ||
     (Boolean(step.runtimeMode) && step.runtimeMode !== "omnigent" && step.runtimeMode !== harness) ||
-    stepHasIndependentModelAuthority(step),
+    stepHasIndependentModelOptions(step),
   );
   const backendOptions = harness
     ? backendOptionsForHarness(harness, runtimeTargetCatalog, {
@@ -12631,7 +12628,7 @@ function WorkflowStartPageContent({
               const stepBackendOptions = stepHarness
                 ? backendOptionsForHarness(stepHarness, runtimeTargetCatalog, {
                     directRoute: !stepPreviewProfile?.execution_selection_error &&
-                      (stepPreviewProfileId !== providerProfile || stepHasIndependentModelAuthority(step) || !profileHasOmnigentRoute(stepPreviewProfile, [], stepHarness, runtimeTargetCatalog)),
+                      (stepPreviewProfileId !== providerProfile || stepHasIndependentModelOptions(step) || !profileHasOmnigentRoute(stepPreviewProfile, [], stepHarness, runtimeTargetCatalog)),
                     omnigentRoute: profileHasOmnigentRoute(stepPreviewProfile, activeProviderProfiles, stepHarness, runtimeTargetCatalog),
                   })
                 : [];

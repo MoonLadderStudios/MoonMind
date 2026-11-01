@@ -6,6 +6,9 @@ import pytest
 
 from api_service.api.routers.executions import _fresh_serialized_workflow_request
 from moonmind.schemas.temporal_models import CreateExecutionRequest
+from tests.unit.api.routers import test_execution_saved_profile_boundaries as saved_fixture
+
+saved_profile_submission = saved_fixture.saved_profile_submission
 
 
 def raw_request(**changes):
@@ -132,3 +135,16 @@ def test_raw_tool_only_requests_keep_the_existing_product_boundary():
     body["initialParameters"]["workflow"].pop("runtime")
     request = CreateExecutionRequest.model_validate(body)
     assert _fresh_serialized_workflow_request(request) is None
+
+
+@pytest.mark.asyncio
+async def test_a_new_serialized_request_cannot_inject_step_plan_authority(saved_profile_submission):
+    context = saved_profile_submission
+    body = raw_request()
+    body["initialParameters"]["omnigentStepExecutionPlans"] = {
+        "verify": {"omnigentExecutionPlan": {"planRef": "another-workflows-plan"}},
+    }
+    response = await context.client.post("/api/executions", json=body)
+    assert response.status_code == 422, response.text
+    assert "Step execution plans must be compiled" in response.text
+    context.service._client_adapter.start_workflow.assert_not_awaited()

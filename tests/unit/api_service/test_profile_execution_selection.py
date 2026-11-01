@@ -906,19 +906,20 @@ async def test_step_translation_cannot_reuse_another_accounts_workflow_plan(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("authored", [True, False])
 @pytest.mark.parametrize(
-    "step_selection,equivalent",
+    "step_selection,tier_parameters,shared",
     [
-        ({}, True),
-        ({"model": "root-model", "effort": "high"}, True),
-        ({"model": "other-model"}, False),
-        ({"effort": "low"}, False),
-        ({"model": None, "effort": None}, False),
-        ({"modelTier": 1}, True),
-        ({"modelTier": 2}, False),
+        ({}, {}, True),
+        ({"model": "root-model", "effort": "high"}, {}, True),
+        ({"model": "other-model"}, {}, True),
+        ({"effort": "low"}, {}, True),
+        ({"model": None, "effort": None}, {}, True),
+        ({"modelTier": 1}, {}, True),
+        ({"modelTier": 2}, {}, True),
+        ({"modelTier": 2}, {"native_option": "required"}, False),
     ],
 )
 async def test_native_translation_preserves_step_model_selection(
-    monkeypatch, authored, step_selection, equivalent
+    monkeypatch, authored, step_selection, tier_parameters, shared
 ):
     from unittest.mock import AsyncMock
 
@@ -931,7 +932,7 @@ async def test_native_translation_preserves_step_model_selection(
         default_model_tier=1,
         model_tiers=[
             {"model": "root-model", "effort": "high"},
-            {"model": "other-model", "effort": "low"},
+            {"model": "other-model", "effort": "low", "parameters": tier_parameters},
         ],
     )
     candidate = configuration()
@@ -951,7 +952,7 @@ async def test_native_translation_preserves_step_model_selection(
         authored_runtime="codex_cli" if authored else None,
         task_payload=task,
     )
-    assert route == ("omnigent" if equivalent else (None if authored else "codex_cli"))
+    assert route == ("omnigent" if shared else (None if authored else "codex_cli"))
     assert task["steps"][0]["runtime"] == step_selection
 
 

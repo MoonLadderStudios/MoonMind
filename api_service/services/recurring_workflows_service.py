@@ -1493,14 +1493,7 @@ class RecurringWorkflowsService:
         if current_target_payload is not None:
             target["runtimeProviderTarget"] = current_target_payload
         target.pop(_RETIRED_SCHEDULE_TARGET_POLICY_KEY, None)
-        initial_parameters["omnigentExecutionPlan"] = (
-            persisted_plan.binding.model_dump(
-                mode="json", by_alias=True, exclude_none=True
-            )
-        )
-        initial_parameters["resolvedSkillsetRef"] = (
-            persisted_plan.resolved_skillset_ref
-        )
+        initial_parameters.update(persisted_plan.execution_parameters)
         target["initialParameters"] = initial_parameters
         target["agentProfileSnapshot"] = dict(snapshot)
         if "agentProfile" in initial_parameters:
@@ -1900,14 +1893,7 @@ class RecurringWorkflowsService:
             raise RecurringWorkflowValidationError(
                 f"invalid Omnigent schedule authority: {exc}"
             ) from exc
-        initial_parameters["omnigentExecutionPlan"] = (
-            persisted_plan.binding.model_dump(
-                mode="json", by_alias=True, exclude_none=True
-            )
-        )
-        initial_parameters["resolvedSkillsetRef"] = (
-            persisted_plan.resolved_skillset_ref
-        )
+        initial_parameters.update(persisted_plan.execution_parameters)
         # Record the creation result so the first refresh compares against
         # the initially compiled target instead of None
         # (MoonLadderStudios/MoonMind#3988).
