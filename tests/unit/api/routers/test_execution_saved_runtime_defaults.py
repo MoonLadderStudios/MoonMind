@@ -175,12 +175,14 @@ async def test_saved_runtime_matches_explicit_default(
     parameters = _parameters(context, entrypoint)
     assert parameters["targetRuntime"] == "claude_code"
     assert parameters["runtimeCutover"]["selectionSource"] == (
-        "authored" if explicit else "configured_default"
+        "authored" if explicit else ("configured_default" if selector else "profile")
     )
     assert parameters["workflow"]["runtime"]["mode"] == "claude_code"
     if selector:
         assert parameters["workflow"]["runtime"]["profileSelector"] == selector
         assert parameters.get("profileId") is None
+    else:
+        assert parameters["profileId"] == "pool-claude_code"
     assert settings.workflow.default_runtime == "codex_cli"
     # Runtime and Profile defaults share one real SettingsOverride query.
     assert len(context.settings_reads) == 1
@@ -273,8 +275,10 @@ async def test_saved_runtime_snapshot_survives_preset_expansion(
     parameters = _parameters(context, "api")
     assert captured["context"]["targetRuntime"] == "claude_code"
     assert parameters["targetRuntime"] == "claude_code"
-    assert parameters["runtimeCutover"]["selectionSource"] == "configured_default"
-    assert parameters.get("profileId") is None
+    assert parameters["runtimeCutover"]["selectionSource"] == (
+        "configured_default" if step_runtime else "profile"
+    )
+    assert parameters.get("profileId") == (None if step_runtime else "pool-claude_code")
     if step_runtime:
         assert parameters["workflow"]["steps"][0]["runtime"]["mode"] == step_runtime
 
@@ -319,7 +323,8 @@ async def test_untouched_runtime_remains_a_saved_default_fallback(
     assert response.status_code == 201, response.text
     parameters = _parameters(context, entrypoint)
     assert parameters["targetRuntime"] == "claude_code"
-    assert parameters["runtimeCutover"]["selectionSource"] == "configured_default"
+    assert parameters["runtimeCutover"]["selectionSource"] == "profile"
+    assert parameters["profileId"] == "pool-claude_code"
 
 
 @pytest.mark.asyncio
@@ -551,3 +556,76 @@ async def test_raw_preview_cannot_bypass_effective_omnigent_boundary(
     assert response.status_code == 422, response.text
     assert response.json()["detail"]["code"] == "omnigent_product_boundary_required"
     context.service._client_adapter.start_workflow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "saved_runtime,authored_runtime,profile_runtime",
+    [
+        ("codex_cli", None, "codex_cli"),
+        ("claude_code", None, "claude_code"),
+        ("claude_code", "omnigent", "claude_code"),
+        ("claude_code", "codex_cli", "codex_cli"),
+    ],
+)
+async def test_native_default_account_is_frozen_before_shared_translation(
+    monkeypatch, saved_runtime, authored_runtime, profile_runtime
+):
+    from api_service.api.routers import executions
+    from api_service.services.settings_catalog import WorkflowCreationDefaults
+
+    monkeypatch.setattr(
+        SettingsCatalogService,
+        "workflow_creation_defaults",
+        AsyncMock(
+            return_value=WorkflowCreationDefaults(
+                default_runtime=saved_runtime,
+                provider_profile_ref=None,
+            )
+        ),
+    )
+    account = SimpleNamespace(profile_id="same-account", runtime_id=profile_runtime)
+    load = AsyncMock(return_value=account)
+    monkeypatch.setattr(executions, "_load_default_provider_profile_for_runtime", load)
+    runtime = {"mode": authored_runtime} if authored_runtime else {}
+    task = {"instructions": "Keep the requested account.", "runtime": runtime}
+    session = object()
+    defaults = await executions._workflow_creation_defaults(
+        session=session,
+        task_payload=task,
+        parameter_payload={"workflow": task},
+        payloads=(runtime, task, {"workflow": task}),
+    )
+    assert defaults.default_runtime == saved_runtime
+    assert defaults.provider_profile_ref == account.profile_id
+    load.assert_awaited_once_with(session=session, runtime_id=profile_runtime)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code"])
+async def test_native_default_without_an_account_cannot_admit_ambient_direct_work(
+    monkeypatch, runtime
+):
+    from api_service.api.routers import executions
+    from api_service.services.settings_catalog import WorkflowCreationDefaults
+
+    monkeypatch.setattr(
+        SettingsCatalogService,
+        "workflow_creation_defaults",
+        AsyncMock(return_value=WorkflowCreationDefaults(runtime, None)),
+    )
+    monkeypatch.setattr(
+        executions,
+        "_load_default_provider_profile_for_runtime",
+        AsyncMock(return_value=None),
+    )
+    task = {"instructions": "Use the same configured account."}
+    with pytest.raises(executions.HTTPException) as error:
+        await executions._workflow_creation_defaults(
+            session=object(),
+            task_payload=task,
+            parameter_payload={"workflow": task},
+            payloads=({}, task, {"workflow": task}),
+        )
+    assert error.value.status_code == 422
+    assert "Provider Profile" in error.value.detail["message"]

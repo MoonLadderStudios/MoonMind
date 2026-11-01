@@ -135,7 +135,7 @@ export interface BackendOption {
 export function backendOptionsForHarness(
   harnessRuntimeId: string,
   catalog: RuntimeTargetCatalog | null | undefined,
-  { omnigentRoute }: { omnigentRoute: boolean },
+  { omnigentRoute, directRoute = true }: { omnigentRoute: boolean; directRoute?: boolean },
 ): BackendOption[] {
   const options: BackendOption[] = [];
   if (omnigentRoute) {
@@ -146,7 +146,7 @@ export function backendOptionsForHarness(
       target.pathClass === 'direct_compatibility' &&
       target.explicitSelectionAllowed,
   );
-  if (harnessRuntimeId && direct) {
+  if (harnessRuntimeId && direct && directRoute) {
     options.push({ runtimeId: harnessRuntimeId, label: direct.label });
   }
   return options;
