@@ -473,9 +473,9 @@ def codex_provider_config_endpoint(
     The direct Codex launch reads ``OPENAI_API_KEY`` and, for a custom
     endpoint, ``OPENAI_BASE_URL`` on Codex's built-in Responses provider; an
     ``openai`` provider-config family carries both. A Profile that brings its
-    own ``config.toml`` can carry one Responses provider, selected model and
-    retry/stream tuning through the same credential owner. Other settings
-    keep their direct launch with a concrete translation gap.
+    own ``config.toml`` can carry one Responses provider, model/retry tuning
+    and declared session preferences through the same credential owner.
+    Uncarried tool, authentication and launch settings retain their native route.
     """
 
     if (
