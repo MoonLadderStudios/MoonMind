@@ -198,8 +198,14 @@ def classify_support(
 
 # Realizer registry: executionRealizerRef is trusted planner selected, never workflow-authored
 KNOWN_REALIZERS = {
-    "codex-profile-bound@1": {"description": "Existing Codex profile-bound coordinator", "deprecated": False},
-    "generic-omnigent-host@1": {"description": "Generic Omnigent host realizer", "deprecated": False},
+    "codex-profile-bound@1": {
+        "description": "Recorded Codex profile-bound coordinator",
+        "deprecated": True,
+    },
+    "generic-omnigent-host@1": {
+        "description": "Generic Omnigent host realizer",
+        "deprecated": False,
+    },
 }
 
 

@@ -261,9 +261,9 @@ deletion removes its row in the same change rather than leaving a stale entry.
 | Direct Claude launch strategy | `omnigent.legacy.direct_claude_launch` | `active_product_path` |
 | `ManagedRuntimeLauncher` for the direct strategies | `omnigent.legacy.managed_runtime_launcher` | `active_product_path` |
 | Direct Codex `MoonMind.AgentSession`, session runtime and Docker controller | `omnigent.legacy.direct_agent_session` | `active_product_path` |
-| `codex-profile-bound@1` realizer | `omnigent.legacy.profile_bound_realizer` | `active_product_path` |
-| `profile_bound_execution.py` coordinator (and its default port selection) | `omnigent.legacy.profile_bound_execution` | `active_product_path` |
-| `oauth_host_runtime.py` launch, mount, credential-volume, and egress argument vectors | `omnigent.legacy.oauth_host_runtime` | `active_product_path` |
+| `codex-profile-bound@1` realizer | `omnigent.legacy.profile_bound_realizer` | `new_admission_disabled` |
+| `profile_bound_execution.py` coordinator (and its default port selection) | `omnigent.legacy.profile_bound_execution` | `new_admission_disabled` |
+| `oauth_host_runtime.py` launch, mount, credential-volume, and egress argument vectors | `omnigent.legacy.oauth_host_runtime` | `new_admission_disabled` |
 | Codex static host scripts and Compose profile | `omnigent.legacy.codex_static_host_startup` | `active_product_path` |
 | Claude static host scripts and Compose profile | `omnigent.legacy.claude_static_host_startup` | `active_product_path` |
 | Pre-consolidation `omnigent-host` service and projection entrypoint | `omnigent.legacy.projection_host_startup` | `active_product_path` |
@@ -273,10 +273,10 @@ deletion removes its row in the same change rather than leaving a stale entry.
 | `native_ui_compat.py` chat projection | `omnigent.legacy.native_ui_compat` | `active_product_path` |
 | Embedded host/runner transport admission | `omnigent.legacy.embedded_host_transport` | `new_admission_disabled` |
 
-The direct Codex/Claude launch, AgentSession, profile-bound and OAuth host
-rows retain Codex and Claude key Profiles with files or authentication outside
-the exact shared translation, sessions reused across a run's steps, and
-profile-bound launches with their OAuth credential maintenance. Supported
+Direct Codex/Claude and AgentSession adapters retain recorded work and
+Profiles whose files or authentication have no exact shared translation.
+Profile-bound execution and its OAuth host launcher admit no new plans;
+they retain queued starts, retries and cleanup under their recorded authority. Supported
 static-connected Codex/Claude hosts use the shared lifecycle.
 API-key Codex and Claude Profiles that translate exactly, including MiniMax's
 declared Claude environment bundle and Codex Responses file configuration, run
@@ -285,8 +285,7 @@ Credential maintenance drains
 a Profile's generic hosts through the generic host janitor before mutating its
 OAuth home. The durable consumer inventory is checked first, so Profiles without
 generic consumers do not require an execution plane for credential maintenance.
-Each row's
-`missingOutcome` names its own share; the Codex/Claude CLIs and Node stay in
+Each live row's `missingOutcome` names its concrete remaining consumer; the Codex/Claude CLIs and Node stay in
 the application image until those rows are deleted.
 
 Shared executions render leading commands through the selected harness after

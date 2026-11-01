@@ -1649,8 +1649,8 @@ class BootstrapController:
         from moonmind.omnigent.harness_platform.host_classes import (
             launch_policy_from_effective_launch,
         )
-        from moonmind.omnigent.profile_bound_execution import (
-            _compile_persisted_effective_launch,
+        from moonmind.omnigent.execution_profiles import (
+            compile_persisted_effective_launch,
         )
 
         async with async_session_maker() as session:
@@ -1658,7 +1658,7 @@ class BootstrapController:
             policy_snapshot = await policy_service.resolve_runtime_snapshot(
                 qualified_launch_policy_ref
             )
-        effective_launch = _compile_persisted_effective_launch(
+        effective_launch = compile_persisted_effective_launch(
             policy_snapshot,
             provider_profile_id=provider_profile_ref,
         )

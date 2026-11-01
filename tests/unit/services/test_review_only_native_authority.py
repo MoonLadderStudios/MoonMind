@@ -98,7 +98,7 @@ async def test_create_review_only_freezes_compiled_workspace_before_native_admis
         "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
         "ghcr.io/example/omnigent-host@sha256:" + "7" * 64,
     )
-    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "false")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "true")
     monkeypatch.delenv("MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK", raising=False)
     monkeypatch.setattr(
         service, "_try_load_real_harness_config", AsyncMock(return_value=None)
@@ -299,8 +299,8 @@ async def test_review_only_default_codex_admits_native_collaboration_authority(
 ) -> None:
     """The shipped closed native graph owns PR authority without an agent grant."""
 
-    generic_admitted = False
-    outcome = "reject" if graph_kind in {"agent", "mixed"} else "native"
+    generic_admitted = True
+    outcome = "agent" if graph_kind in {"agent", "mixed"} else "native"
     from unittest.mock import AsyncMock
 
     from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -535,17 +535,19 @@ async def test_review_only_default_codex_admits_native_collaboration_authority(
                 await admit()
             assert store._plans == {}
             return
-        if outcome == "reject":
-            with pytest.raises(ValueError, match="codex-repository.*profile-bound"):
-                await admit()
-            assert store._plans == {}
-            assert all(
-                json.loads(payload).get("schemaVersion")
-                != "moonmind.omnigent-execution-plan-envelope.v1"
-                for payload in artifacts.payloads.values()
-            )
-            return
         compiled = await admit()
+        if outcome == "agent":
+            plan = compiled.envelope.payload
+            assert set(plan.resolvedTools["repositoryAccess"]) == {
+                "source",
+                "collaboration",
+            }
+            for slot in ("source", "collaboration"):
+                binding = plan.credentialBindings[slot]
+                assert binding.consumer == "agent"
+                assert binding.connectionRef == "codex-repository"
+            assert await store.load(compiled.envelope.planRef) == compiled.envelope
+            return
         if graph_kind == "child-agent":
             workflow["steps"] = [
                 {
@@ -583,7 +585,7 @@ async def test_review_only_default_codex_admits_native_collaboration_authority(
         if selection_name == "explicit-default"
         else "codex-repository"
     )
-    assert plan.executionRealizerRef == "codex-profile-bound@1"
+    assert plan.executionRealizerRef == "generic-omnigent-host@1"
     assert await store.load(compiled.envelope.planRef) == compiled.envelope
 
 

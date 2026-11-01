@@ -622,7 +622,7 @@ async def test_revalidate_bound_host_resolves_missing_launch_metadata(
         "api_service.services.omnigent_policies.OmnigentPolicyService", PolicyService
     )
     monkeypatch.setattr(
-        "moonmind.omnigent.profile_bound_execution._compile_persisted_effective_launch",
+        "moonmind.omnigent.execution_profiles.compile_persisted_effective_launch",
         lambda _policy, *, provider_profile_id: launch,
     )
     monkeypatch.setattr(

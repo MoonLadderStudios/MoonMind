@@ -1011,29 +1011,21 @@ def default_runtime_provider_rollout_policy(
                 "execution_realizer_ref": _GENERIC_REALIZER,
                 "path_class": RuntimeProviderPathClass.generic_omnigent,
             },
-            description=(
-                "Shared-image Codex on the generic Omnigent host realizer."
-            ),
+            description=("Shared-image Codex on the generic Omnigent host realizer."),
         ),
         _rule(
             target_id="codex.legacy-profile-bound-omnigent",
             label="Codex via legacy profile-bound Omnigent",
-            state=(
-                RolloutState.retired_for_new_work
-                if codex_generic_promoted
-                else RolloutState.new_work_default
-            ),
+            state=RolloutState.retired_for_new_work,
             selector={
                 "harness_id": "codex-native",
                 "execution_realizer_ref": _LEGACY_CODEX_REALIZER,
-                "path_class": (
-                    RuntimeProviderPathClass.legacy_profile_bound_omnigent
-                ),
+                "path_class": (RuntimeProviderPathClass.legacy_profile_bound_omnigent),
             },
-            legacy_default_restorable=True,
+            legacy_default_restorable=False,
             description=(
-                "Retained profile-bound Codex coordinator. Compatibility path "
-                "once the generic Codex row is promoted."
+                "Recorded profile-bound Codex plans, retries and cleanup only. "
+                "New plans use the shared lifecycle."
             ),
         ),
         # Claude Code via Omnigent is reached by choosing an Anthropic Provider
@@ -1044,9 +1036,7 @@ def default_runtime_provider_rollout_policy(
             target_id="claude.generic-omnigent",
             label="Claude Code via generic Omnigent",
             state=(
-                RolloutState.explicit_only
-                if claude_generic
-                else RolloutState.disabled
+                RolloutState.explicit_only if claude_generic else RolloutState.disabled
             ),
             selector={
                 "harness_id": "claude-native",
@@ -1081,9 +1071,7 @@ def default_runtime_provider_rollout_policy(
                 "path_class": RuntimeProviderPathClass.direct_compatibility,
             },
             legacy_default_restorable=True,
-            description=(
-                "Direct managed Codex runtime. Migration compatibility path."
-            ),
+            description=("Direct managed Codex runtime. Migration compatibility path."),
         ),
         _rule(
             target_id="claude.direct",
