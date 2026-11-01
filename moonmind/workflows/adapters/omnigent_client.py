@@ -578,6 +578,31 @@ class OmnigentHttpClient:
     async def create_session(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         return await self._request("POST", "/v1/sessions", json=dict(payload))
 
+    async def fork_session(
+        self, source_id: str, payload: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        # Fork has no provider idempotency field. Its owning launch journal
+        # reconciles uncertain delivery before another attempt.
+        return await self._request_once(
+            "POST", f"/v1/sessions/{quote(source_id, safe='')}/fork", json=dict(payload)
+        )
+
+    async def update_session(
+        self, session_id: str, payload: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        return await self._request(
+            "PATCH", f"/v1/sessions/{quote(session_id, safe='')}", json=dict(payload)
+        )
+
+    async def launch_runner(
+        self, host_id: str, *, session_id: str, workspace: str
+    ) -> dict[str, Any]:
+        return await self._request_once(
+            "POST",
+            f"/v1/hosts/{quote(host_id, safe='')}/runners",
+            json={"session_id": session_id, "workspace": workspace},
+        )
+
     async def get_session(self, session_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/v1/sessions/{quote(session_id, safe='')}")
 

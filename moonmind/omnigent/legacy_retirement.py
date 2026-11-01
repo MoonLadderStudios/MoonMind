@@ -198,8 +198,6 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "egress policy does not admit. Declared single-provider Responses "
             "configuration, including the rendered managed MiniMax recipe, "
             "uses ``omnigent-provider-config@1`` and its private Codex config. "
-            "Also one session reused across a "
-            "run's steps (see the AgentSession row)."
         ),
     ),
     LegacyPathRecord(
@@ -319,9 +317,11 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "steering and attested host resume."
         ),
         missingOutcome=(
-            "One provider session reused across a run's steps with "
-            "same-epoch reuse; shared session identity is derived per "
-            "step execution (``control_plane.identities``)."
+            "Direct admission for configurations outside the exact shared "
+            "translation and retained AgentSession histories still invoke "
+            "this child. Ported Profiles use shared same-epoch native context "
+            "continuation with attempt-scoped session/resource authority; "
+            "a literal provider-session identity is not shared across attempts."
         ),
     ),
     LegacyPathRecord(
