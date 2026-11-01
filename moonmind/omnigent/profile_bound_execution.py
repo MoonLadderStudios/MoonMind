@@ -62,7 +62,7 @@ from moonmind.omnigent.repository_sources import (
 )
 from moonmind.omnigent.execution_profiles import (
     PROFILES,
-    seal_effective_launch_snapshot,
+    compile_persisted_effective_launch as _compile_persisted_effective_launch,
     selection_from_request,
 )
 from moonmind.omnigent.harness_platform.execution_plan import (
@@ -161,119 +161,6 @@ _REPOSITORY_PUBLICATION_CONTINUATION_DIGEST = compute_digest(
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _compile_persisted_effective_launch(
-    policy_snapshot: Mapping[str, Any],
-    *,
-    provider_profile_id: str,
-    follow_up_retrieval: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Compile the sole launch carrier from persisted immutable authority."""
-
-    boundaries = policy_snapshot["boundaries"]
-    host = boundaries["host"]
-    execution = boundaries["execution"]
-    endpoint = boundaries["endpoint"]
-    resources = boundaries["resources"]
-    network = boundaries["network"]
-    workspace = boundaries["workspace"]
-    session = boundaries["session"]
-    retention = boundaries["retention"]
-    from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
-
-    # Resolve the selected profile once and persist its normalized identity and
-    # grants.  The registry is launch-time input only; downstream enforcement
-    # never reads mutable profile state.
-    selected_profile = PROFILES.get(str(execution["profileRef"]))
-    profile_authority = (
-        selected_profile.model_dump(by_alias=True, mode="json")
-        if selected_profile is not None
-        else dict(execution)
-    )
-    execution_profile_digest = "sha256:" + hashlib.sha256(
-        json.dumps(profile_authority, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
-    profile_capabilities = dict.fromkeys(CAPABILITY_NAMES, True)
-    if selected_profile is not None:
-        profile_capabilities["changeModel"] = selected_profile.model is None
-        profile_capabilities["changeEffort"] = selected_profile.reasoning is None
-    session_capabilities = dict.fromkeys(CAPABILITY_NAMES, True)
-    launch_capabilities = dict.fromkeys(CAPABILITY_NAMES, False)
-    for capability in (
-        "viewTranscript", "readResources", "viewTerminal", "viewSubagents",
-        "sendMessage", "queueMessage", "resolveElicitation", "harvestEvidence",
-    ):
-        launch_capabilities[capability] = True
-    launch_capabilities["interruptTurn"] = bool(session["interruption"])
-    launch_capabilities["stopSession"] = bool(session["cancellation"])
-    launch_capabilities["replaceSession"] = bool(session["create"])
-    launch_capabilities["reconnectSession"] = bool(session["continuation"])
-    launch_capabilities["cleanupSession"] = session["cleanup"] in {"drain", "remove"}
-    for capability in ("uploadFiles", "mutateWorkspace"):
-        launch_capabilities[capability] = bool(workspace["repositoryMutation"])
-    payload = {
-        "schemaVersion": 3,
-        "executionProfileRef": execution["profileRef"],
-        "executionProfileDigest": execution_profile_digest,
-        "executionProfileAuthority": profile_authority,
-        "launchPolicyRef": policy_snapshot["policyRef"],
-        "providerProfileId": provider_profile_id,
-        "endpointRef": endpoint["ref"],
-        "agentName": execution["agentIdentities"][0],
-        "harness": execution["harness"],
-        "hostMode": host["mode"],
-        "backendRef": host["backendRef"],
-        "architectures": list(host["architectures"]),
-        "serverImageRef": host["serverImageRef"],
-        "hostImageRef": host["hostImageRef"],
-        "networkRef": network["attachmentRef"],
-        "egressProfileRef": network["egressProfileRef"],
-        "enforcedEgress": bool(network["egressProfileRef"]),
-        # Distinguishes launches that must have the post-launch bridge authority
-        # from pre-upgrade leases that require the janitor's bounded cutover.
-        "egressCleanupAuthorityRequired": True,
-        "limits": {
-            "cpuMillis": resources["cpuMillis"],
-            "memoryMiB": resources["memoryMiB"],
-            "processes": resources["processes"],
-            "timeoutSeconds": resources["timeoutSeconds"],
-            "temporaryStorageMiB": resources["temporaryStorageMiB"],
-        },
-        "mountClasses": list(workspace["mountClasses"]),
-        "repositoryMutation": bool(workspace["repositoryMutation"]),
-        "runtimeUid": workspace["runtimeUid"],
-        "runtimeGid": workspace["runtimeGid"],
-        # The Codex host substrate is intentionally stricter than selectable
-        # policy: it never permits a writable root filesystem.
-        "readOnlyRoot": True,
-        "capture": {
-            **dict(boundaries["capture"]),
-            "retentionDays": retention["days"],
-        },
-        "cleanup": {"mode": session["cleanup"], "janitor": True},
-        "controlCapabilities": [
-            "interrupt",
-            "terminate",
-            "clear_context",
-        ],
-        "agentProfileCapabilities": profile_capabilities,
-        "capabilities": launch_capabilities,
-        "sessionStateCapabilities": session_capabilities,
-        # Every policy section remains available to downstream enforcement
-        # consumers without reconstructing authority from environment or code.
-        "boundaries": dict(boundaries),
-        "policyAuthority": dict(policy_snapshot),
-    }
-    # The retrieval gateway reads follow-up (in-session) retrieval authority from
-    # this top-level block. It must be inside the digest so a mutated capability
-    # policy is rejected by ``validate_effective_launch_snapshot``.
-    payload["followUpRetrieval"] = (
-        dict(follow_up_retrieval)
-        if isinstance(follow_up_retrieval, Mapping)
-        else {"enabled": False}
-    )
-    return seal_effective_launch_snapshot(payload)
 
 
 class OmnigentProfileBoundExecutionCoordinator:

@@ -184,17 +184,27 @@ def test_unknown_surface_fails_fast():
 
 
 def test_default_follows_the_rollout_policy_not_a_literal():
-    # Explicit compatibility policy selects the legacy row without changing
-    # the canonical Omnigent runtime identity.
+    # With shared Codex disabled, omitted intention takes the remaining shared
+    # default without reopening the retired profile-bound row.
     unpromoted = _policy({_CODEX_GATE: "false"})
     assert resolve_default_runtime_id(policy=unpromoted) == "omnigent"
     selection = resolve_runtime_target_selection(
         surface=AuthoringSurface.workflow_create, policy=unpromoted
     )
-    assert selection.target_id == "codex.legacy-profile-bound-omnigent"
-    assert selection.path_class is (
-        RuntimeProviderPathClass.legacy_profile_bound_omnigent
+    assert selection.target_id == "opencode.generic-omnigent"
+    assert selection.path_class is RuntimeProviderPathClass.generic_omnigent
+    assert selection.source is SelectionSource.rollout_default
+    assert selection.available is True
+
+    explicit_codex = resolve_runtime_target_selection(
+        surface=AuthoringSurface.workflow_create,
+        requested_target_id="codex.generic-omnigent",
+        policy=unpromoted,
     )
+    assert explicit_codex.target_id == "codex.generic-omnigent"
+    assert explicit_codex.available is False
+    assert explicit_codex.replacement_required is True
+    assert explicit_codex.reason_code is RolloutReason.rollout_disabled
 
     promoted = _policy({_CODEX_GATE: "true"})
     promoted_selection = resolve_runtime_target_selection(
@@ -409,27 +419,40 @@ def test_rollback_can_restore_an_explicitly_supported_direct_default():
     )
     catalog = resolve_runtime_target_catalog(policy=policy)
     by_target = {view.target_id: view for view in catalog}
-    # The generic row is demoted to explicit-only; every explicitly supported
-    # legacy or direct row becomes a restored default for future executions.
+    # The shared row remains selectable. Restore controls may promote retained
+    # direct routes, but cannot reopen profile-bound new admission.
     assert by_target["codex.generic-omnigent"].rollout_state is (
         RolloutState.explicit_only
     )
     assert by_target["codex.legacy-profile-bound-omnigent"].rollout_state is (
-        RolloutState.new_work_default
+        RolloutState.retired_for_new_work
     )
+    assert (
+        by_target["codex.legacy-profile-bound-omnigent"].explicit_selection_allowed
+        is False
+    )
+    assert by_target["codex.legacy-profile-bound-omnigent"].default_eligible is False
     assert by_target["codex.direct"].rollout_state is (
         RolloutState.new_work_default
     )
-    # The configured runtime keeps its identity: the restored default is the
-    # legacy Omnigent row, not a substituted direct runtime.
+    # With no harness authored, the configured Omnigent runtime resolves an
+    # enabled shared row. It cannot select the retired profile-bound owner.
     selection = resolve_runtime_target_selection(
         surface=AuthoringSurface.workflow_create,
         workflow_settings=_settings("omnigent"),
         policy=policy,
     )
     assert selection.runtime_id == "omnigent"
-    assert selection.target_id == "codex.legacy-profile-bound-omnigent"
+    assert selection.path_class is RuntimeProviderPathClass.generic_omnigent
+    assert selection.source is SelectionSource.configured_default
     assert selection.available is True
+    explicit_codex = resolve_runtime_target_selection(
+        surface=AuthoringSurface.workflow_create,
+        requested_target_id="codex.generic-omnigent",
+        policy=policy,
+    )
+    assert explicit_codex.target_id == "codex.generic-omnigent"
+    assert explicit_codex.available is True
     # A deployment configured for direct Codex receives the restored direct row.
     direct_selection = resolve_runtime_target_selection(
         surface=AuthoringSurface.workflow_create,

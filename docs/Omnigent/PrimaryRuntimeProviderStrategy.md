@@ -54,7 +54,7 @@ New producers use one canonical runtime-input boundary. Known legacy values can 
 
 ## 4. Remaining alternatives
 
-Code still carries the direct `codex_cli` and `claude_code` compatibility Backends, the retained profile-bound Codex realizer (the Codex default until generic Codex is promoted), runtime-provider rollout rules, and the code-owned retirement inventory in `moonmind/omnigent/legacy_retirement.py`. Simplify them through their consumers. Do not set every gate true, install another policy facade, or strip an active resource owner without a safe transition. [RuntimeProviderRollout.md](RuntimeProviderRollout.md) describes the controls as they exist.
+Code still carries the direct `codex_cli` and `claude_code` compatibility Backends, the retained profile-bound Codex realizer for recorded plans and recovery, runtime-provider rollout rules, and the code-owned retirement inventory in `moonmind/omnigent/legacy_retirement.py`. Simplify them through their consumers. Do not set every gate true, install another policy facade, or strip an active resource owner without a safe transition. [RuntimeProviderRollout.md](RuntimeProviderRollout.md) describes the controls as they exist.
 
 ## 5. Governing principles
 

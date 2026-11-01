@@ -47,7 +47,7 @@ from moonmind.omnigent.checkpoints import (
     materialize_cold_restore_inputs,
     validate_restore_material,
 )
-from moonmind.omnigent.profile_bound_execution import (
+from moonmind.omnigent.codex_execution_decisions import (
     compile_follow_up_retrieval_policy,
     enforce_required_follow_up_retrieval,
 )
