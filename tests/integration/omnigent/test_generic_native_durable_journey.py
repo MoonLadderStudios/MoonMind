@@ -122,6 +122,7 @@ class NativeTurnServer(FakeOmnigentServer):
     def __init__(self, harness):
         super().__init__(supports_diff=False, terminal_status="idle")
         self.harness = harness
+        self.registered_harnesses = [harness]
         self.host_id = ""
         self.host_name = ""
         self.workspace: Path | None = None
@@ -233,15 +234,16 @@ class NativeTurnServer(FakeOmnigentServer):
                 "object": "list",
                 "data": [
                     {
-                        "id": self.harness + "-agent",
-                        "harness": self.harness,
+                        "id": registered + "-agent",
+                        "harness": registered,
                         "version": "1.0.0",
                         "name": {
                             "codex-native": "codex-native-ui",
                             "claude-native": "claude-native-ui",
                             "opencode-native": "opencode-native-ui",
-                        }[self.harness],
+                        }[registered],
                     }
+                    for registered in self.registered_harnesses
                 ],
                 "has_more": False,
             }

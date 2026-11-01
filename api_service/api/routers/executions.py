@@ -8376,13 +8376,11 @@ def _steps_keep_profile_authority(
         profile_ref = provider_profile_ref_from_mapping(
             runtime
         ) or provider_profile_ref_from_mapping(step)
-        if profile_ref and profile_ref != provider.profile_id:
-            return False
         mode = runtime.get("mode")
         if mode and normalize_runtime_id(mode) not in {
             "omnigent",
             normalize_runtime_id(provider.runtime_id),
-        }:
+        } and not profile_ref:
             return False
         if model_selection_fields(runtime):
             # Model and effort have per-step plans. Arbitrary tier options
@@ -9376,6 +9374,7 @@ async def _resolve_step_runtime_selections(
     task_profile_id: str | None,
     session: Any,
     defer_account_validation: bool = False,
+    task_authored_runtime: object = None,
 ) -> None:
     """Normalize step intent; recurring starts validate independent accounts at dispatch."""
     if not steps:
@@ -9450,6 +9449,16 @@ async def _resolve_step_runtime_selections(
                     profile_id=effective_profile_id,
                     selected_runtime=canonical_step_runtime,
                 )
+            if (
+                not defer_account_validation
+                and raw_step_profile_id and not runtime_payload.get("mode") and task_authored_runtime
+                and normalize_runtime_id(task_authored_runtime) in {"codex_cli", "claude_code"}
+            ):
+                # Translating the root does not erase its authored harness.
+                _require_provider_profile_runtime(
+                    profile=provider_profile, profile_id=effective_profile_id,
+                    selected_runtime=normalize_runtime_id(task_authored_runtime),
+                )
         elif _runtime_model_tier(runtime_payload) is not None and not step_selects_pool:
             # Resolve profile-less tier intent only after the step runtime is
             # known, then persist that selection for the eventual launch.
@@ -9465,7 +9474,6 @@ async def _resolve_step_runtime_selections(
         if (
             task_target_runtime == "omnigent"
             and provider_profile is not None
-            and provider_profile.profile_id == task_profile_id
             and canonical_step_runtime in {"codex_cli", "claude_code"}
             and _steps_keep_profile_authority(
                 provider_profile, {"runtime": task_runtime, "steps": [step]}
@@ -12397,6 +12405,7 @@ async def _create_execution_from_workflow_request(
         task_target_runtime=canonical_target_runtime,
         task_profile_id=raw_profile_id if _provider_profile is not None else None,
         session=session,
+        task_authored_runtime=authored_runtime,
     )
     if normalized_steps:
         normalized_task_for_planner["steps"] = normalized_steps
@@ -13181,6 +13190,7 @@ async def _resolve_recurring_runtime_selection(
             task_profile_id=raw_profile_id,
             session=session,
             defer_account_validation=True,
+            task_authored_runtime=authored_runtime,
         )
         task_payload = {**task_payload, "steps": normalized_steps}
 
