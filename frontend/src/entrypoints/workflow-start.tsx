@@ -573,6 +573,7 @@ interface DashboardConfig {
 
 interface RuntimeCommandCapability {
   slashCommandPassthrough?: boolean;
+  recognitionMode?: "selected_harness";
   renderMode?: string;
   commandHintsRef?: string;
 }
@@ -604,6 +605,7 @@ interface RuntimeCommandPreviewState {
     | "hinted_runtime_passthrough"
     | "runtime_passthrough"
     | "escaped_literal"
+    | "selected_harness"
     | "runtime_does_not_support_slash_commands";
   requiresRuntimeRecognition: boolean;
   messageSeverity: "info" | "warning" | "neutral";
@@ -1993,7 +1995,7 @@ function runtimeCommandMatchesInstructions(
   return Boolean(rawCommand) && rawCommand === firstLine && targetRuntime === runtime;
 }
 
-function deriveRuntimeCommandPreview({
+export function deriveRuntimeCommandPreview({
   instructions,
   runtime,
   sourcePath,
@@ -2081,6 +2083,8 @@ function deriveRuntimeCommandPreview({
   const supportsPassthrough = Boolean(
     config.runtimes?.[runtime]?.slashCommandPassthrough,
   );
+  const selectedHarnessRecognition =
+    config.runtimes?.[runtime]?.recognitionMode === "selected_harness";
   const source = runtimeCommandMatchesInstructions(
     storedRuntimeCommand,
     instructions,
@@ -2096,7 +2100,7 @@ function deriveRuntimeCommandPreview({
       : [];
   const warningSuffix =
     versionWarnings.length > 0 ? ` ${versionWarnings.join(" ")}` : "";
-  if (!supportsPassthrough) {
+  if (!supportsPassthrough && !selectedHarnessRecognition) {
     return {
       sourcePath,
       rawInstructions: instructions,
@@ -2125,12 +2129,16 @@ function deriveRuntimeCommandPreview({
     instructionBody: body,
     detectionStatus: "detected",
     hintStatus: hint ? "hinted" : "opaque",
-    recognitionMode: hint ? "hinted_runtime_passthrough" : "runtime_passthrough",
+    recognitionMode: selectedHarnessRecognition
+      ? "selected_harness"
+      : hint ? "hinted_runtime_passthrough" : "runtime_passthrough",
     requiresRuntimeRecognition: true,
     messageSeverity: "info",
     label: `Runtime command: /${command}`,
     description:
-      (hint?.description ||
+      (selectedHarnessRecognition
+        ? "The selected harness decides whether this runs as a command or is sent as literal text."
+        : hint?.description ||
         "Pass-through runtime command. No local hint is available; provider behavior will decide it.") +
       warningSuffix,
     source,

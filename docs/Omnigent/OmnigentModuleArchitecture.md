@@ -276,18 +276,23 @@ deletion removes its row in the same change rather than leaving a stale entry.
 The direct Codex/Claude launch, AgentSession, profile-bound and OAuth host
 rows stay live because the shared lifecycle still lacks the Codex and Claude
 key Profiles the Omnigent provider config cannot carry exactly (including
-MiniMax's custom Codex configuration), Claude slash-command passthrough, one
-session reused across a run's steps, static-connected Codex/Claude hosts, and
-OAuth credential maintenance of profile-bound and static hosts with its
-host-lease janitor.
+MiniMax's custom Codex configuration), one session reused across a run's steps,
+static-connected Codex/Claude hosts, and OAuth credential maintenance of
+profile-bound and static hosts with its host-lease janitor.
 API-key Codex and Claude Profiles that translate exactly, including MiniMax's
 declared Claude environment bundle, run on the shared lifecycle with their
 endpoint, model pins and non-secret launch tuning. Credential maintenance drains
 a Profile's generic hosts through the generic host janitor before mutating its
 OAuth home. The durable consumer inventory is checked first, so Profiles without
-generic consumers do not require an execution plane for credential maintenance. Each row's
+generic consumers do not require an execution plane for credential maintenance.
+Each row's
 `missingOutcome` names its own share; the Codex/Claude CLIs and Node stay in
 the application image until those rows are deleted.
+
+Shared executions render leading commands through the selected harness after
+Skill and repository context is prepared. Native Claude receives the command
+first; harnesses without command transport receive the complete authored text
+as literal input. Retries reuse the recorded prepared-message artifact.
 
 Three enforced-boundary exemptions are owned by rows above:
 `omnigent_catalog.py`'s in-handler readiness projection reading the materializer

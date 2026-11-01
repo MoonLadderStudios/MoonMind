@@ -36,6 +36,7 @@ class HarnessProductRegistration(BaseModel):
     materializerRef: str = Field(alias="materializerRef")
     authModel: str = Field(alias="authModel")
     integrationMode: str = Field("native-server", alias="integrationMode")
+    slashCommandPassthrough: bool = False
 
 
 _REGISTRATIONS: dict[str, HarnessProductRegistration] = {}
@@ -195,6 +196,7 @@ register_harness_product(
     HarnessProductRegistration.model_validate(
         {
             "harnessId": "claude-native",
+            "slashCommandPassthrough": True,
             "aliases": ["claude"],
             "executionTargetRef": "omnigent-claude@1",
             "hostClassRef": "omnigent-claude@1",

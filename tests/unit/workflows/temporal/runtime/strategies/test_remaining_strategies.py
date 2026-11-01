@@ -548,6 +548,27 @@ class TestRuntimeCommandRendering:
         assert "path/to/review.py" in result.rendered_instruction
         assert "Check this branch remains part of retrieved context." in result.rendered_instruction
 
+    @pytest.mark.parametrize("strategy", [CodexCliStrategy(), ClaudeCodeStrategy()])
+    @pytest.mark.parametrize("instruction_body", ["", "Check this branch."])
+    def test_command_renders_once_between_prepared_context_blocks(
+        self, strategy, instruction_body
+    ) -> None:
+        authored = "/review" + (f"\n{instruction_body}" if instruction_body else "")
+        before = "Active Skill context."
+        after = "Keep this quoted text: /review\nCheck this branch."
+        request = _make_request(
+            instruction_ref=f"{before}\n\n{authored}\n\n{after}",
+            runtime_command=_runtime_command(instruction_body=instruction_body),
+        )
+
+        result = strategy.render_runtime_command(request)
+
+        assert result.status == "ok"
+        expected = "\n\n".join(
+            part for part in ("/review", instruction_body, before, after) if part
+        )
+        assert result.rendered_instruction == expected
+
     def test_blank_recognized_command_metadata_fails_typed(self) -> None:
         strategy = CodexCliStrategy()
         request = _make_request(
