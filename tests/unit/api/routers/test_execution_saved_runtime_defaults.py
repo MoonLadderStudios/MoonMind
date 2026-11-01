@@ -175,7 +175,7 @@ async def test_saved_runtime_matches_explicit_default(
     parameters = _parameters(context, entrypoint)
     assert parameters["targetRuntime"] == "claude_code"
     assert parameters["runtimeCutover"]["selectionSource"] == (
-        "authored" if explicit else ("configured_default" if selector else "profile")
+        "authored" if explicit else "configured_default"
     )
     assert parameters["workflow"]["runtime"]["mode"] == "claude_code"
     if selector:
@@ -275,9 +275,7 @@ async def test_saved_runtime_snapshot_survives_preset_expansion(
     parameters = _parameters(context, "api")
     assert captured["context"]["targetRuntime"] == "claude_code"
     assert parameters["targetRuntime"] == "claude_code"
-    assert parameters["runtimeCutover"]["selectionSource"] == (
-        "configured_default" if step_runtime else "profile"
-    )
+    assert parameters["runtimeCutover"]["selectionSource"] == "configured_default"
     assert parameters.get("profileId") == (None if step_runtime else "pool-claude_code")
     if step_runtime:
         assert parameters["workflow"]["steps"][0]["runtime"]["mode"] == step_runtime
@@ -323,7 +321,7 @@ async def test_untouched_runtime_remains_a_saved_default_fallback(
     assert response.status_code == 201, response.text
     parameters = _parameters(context, entrypoint)
     assert parameters["targetRuntime"] == "claude_code"
-    assert parameters["runtimeCutover"]["selectionSource"] == "profile"
+    assert parameters["runtimeCutover"]["selectionSource"] == "configured_default"
     assert parameters["profileId"] == "pool-claude_code"
 
 

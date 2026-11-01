@@ -163,6 +163,11 @@ async def test_saved_profile_default_and_explicit_backend_admit_same_plan_owner(
                 parameters = record.parameters
                 assert parameters["targetRuntime"] == "omnigent"
                 assert parameters["profileId"] == PROFILE
+                assert parameters["runtimeCutover"]["selectionSource"] == (
+                    "authored"
+                    if explicit_backend
+                    else "profile" if saved_profile else "configured_default"
+                )
                 if step_backend:
                     assert (
                         parameters["workflow"]["steps"][0]["runtime"]["mode"]
