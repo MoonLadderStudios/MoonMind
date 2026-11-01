@@ -55,7 +55,10 @@ from moonmind.omnigent.execute import (
     normalize_omnigent_observation,
     run_omnigent_execution,
 )
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    RuntimeCommandInvocation,
+)
 
 
 def _captured_path(root, name):
@@ -72,6 +75,111 @@ def _request() -> AgentExecutionRequest:
         correlationId="corr-1",
         idempotencyKey="idem-1",
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected_skill", [False, True])
+@pytest.mark.parametrize(
+    "harness", ["claude-native", "codex-native", "opencode-native", None]
+)
+async def test_shared_command_transport_preserves_context_and_recorded_retry(
+    harness, selected_skill
+):
+    from types import SimpleNamespace
+
+    request = _request()
+    request.runtime_command = RuntimeCommandInvocation(
+        kind="slash_command",
+        source="leading_slash",
+        sourcePath="instructions",
+        command="review",
+        rawCommand="/review --local",
+        instructionBody="Check the requested changes.",
+        targetRuntime="omnigent",
+        detectionStatus="detected",
+        hintStatus="opaque",
+        recognitionMode="selected_harness",
+        requiresRuntimeRecognition=True,
+    )
+    text = "/review --local\nCheck the requested changes.\n\nPrepared Skill and repository context."
+    if selected_skill:
+        request.resolved_skillset_ref = "art-resolved-fix-comments"
+        request.parameters = {
+            "metadata": {"moonmind": {"selectedSkill": "fix-comments"}},
+            "omnigent": {
+                "_moonmindProfileAuthorization": {
+                    "providerProfileId": "selected-profile",
+                    "hostLeaseRef": "lease-1",
+                    "materializedInputPaths": {"review-context": "inputs/review.txt"},
+                }
+            },
+        }
+
+    class Gateway:
+        saved = None
+
+        async def write_json(self, *, payload, **_):
+            self.saved = json.dumps(payload)
+            return "artifact://prepared-command"
+
+        async def read_text(self, ref):
+            assert ref == "artifact://prepared-command"
+            return self.saved
+
+    gateway = Gateway()
+    first_message = await _build_omnigent_first_message(
+        request=request,
+        prompt={"text": text},
+        artifact_gateway=gateway,
+    )
+    if harness is None:
+        with pytest.raises(OmnigentContractError, match="admitted Omnigent harness"):
+            await _resolve_initial_context_message(
+                request=request,
+                first_message=first_message,
+                artifact_gateway=gateway,
+                run_store=None,
+                durable_row=None,
+                workspace="/repo",
+            )
+        assert gateway.saved is None
+        return
+    message, evidence = await _resolve_initial_context_message(
+        request=request,
+        first_message=first_message,
+        artifact_gateway=gateway,
+        run_store=None,
+        durable_row=None,
+        workspace="/repo",
+        runtime_command_harness_id=harness,
+    )
+    rendered = _first_message_text(message)
+    if harness == "claude-native":
+        assert rendered.startswith("/review --local\n")
+    else:
+        assert rendered.startswith("Literal runtime command text:\n")
+    assert rendered.count("/review --local") == 1
+    assert rendered.count("Check the requested changes.") == 1
+    assert rendered.count("Prepared Skill and repository context.") == 1
+    if selected_skill:
+        assert rendered.count("Selected skill: fix-comments") == 1
+        assert rendered.count("review-context: inputs/review.txt") == 1
+    assert rendered.count("MoonMind-Omnigent-Run:") == 1
+
+    # A retry reloads the prepared artifact, even if selection/context changes.
+    replayed, replay_evidence = await _resolve_initial_context_message(
+        request=request,
+        first_message={
+            "data": {"content": [{"type": "input_text", "text": "changed"}]}
+        },
+        artifact_gateway=gateway,
+        run_store=None,
+        durable_row=SimpleNamespace(metadata_={"initialRetrieval": evidence}),
+        workspace="/repo",
+        runtime_command_harness_id="opencode-native",
+    )
+    assert replayed == message
+    assert replay_evidence == evidence
 
 
 @pytest.mark.asyncio

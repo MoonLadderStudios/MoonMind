@@ -59,7 +59,7 @@ Unknown command tokens remain valid runtime command invocations when the selecte
 
 ### Runtime adapters own command rendering
 
-The Create page detects and previews the command, but it does not know how Codex CLI, Claude Code, or future runtime command markup works. Runtime-specific command rendering belongs in managed-runtime strategy code.
+The Create page detects and previews the command. Direct strategies and the shared Omnigent path reuse one renderer after context preparation. For `omnigent`, detection records `selected_harness`; the admitted harness's registration determines command transport. Native Claude receives the slash command first; native Codex and other harnesses without command transport receive the complete authored line as literal text. A retry restores its prepared message before any rendering, preserving commands already recorded or sent.
 
 ### Render at the last responsible moment
 

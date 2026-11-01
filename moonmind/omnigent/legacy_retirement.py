@@ -250,12 +250,8 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "egress policy. Exact API-key Profiles and declared MiniMax "
             "environment bundles run through ``omnigent-provider-config@1`` "
             "with their endpoint, model pins and non-secret launch tuning. "
-            "Also slash-command passthrough: "
-            "native Claude delivers a leading ``/command`` to its terminal, "
-            "but ``execution_contract`` classifies by runtime id, and "
-            "``omnigent`` also serves Codex, whose app-server input has no "
-            "slash commands, and the generic path has no counterpart to the "
-            "direct strategies' runtime-command rendering."
+            "Native Claude command rendering "
+            "already uses the shared renderer through the admitted harness."
         ),
     ),
     LegacyPathRecord(

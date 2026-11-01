@@ -877,6 +877,7 @@ async def _compile_plan(
     *,
     api_key=False,
     env_bundle=False,
+    instructions="Generate a report.",
 ):
     # Reuse the durable Skill producer, then expose its immutable body through
     # the real deployment catalog. Admission must resolve and persist its own
@@ -989,7 +990,7 @@ async def _compile_plan(
             "publishMode": "none",
             "model": "example/model",
             "workflow": {
-                "instructions": "Generate a report.",
+                "instructions": instructions,
                 "skill": {"id": _DURABLE_SKILL_NAME},
             },
         }
@@ -1035,9 +1036,25 @@ async def native_journey(
     )
     # ``<harness>-api-key`` is that harness's journey with an API-key Provider
     # Profile created by the guided Profile surface.
-    env_bundle = request.param.endswith("-env-bundle")
-    api_key = request.param.endswith("-api-key") or env_bundle
-    harness = request.param.removesuffix("-api-key").removesuffix("-env-bundle")
+    selection = (
+        request.param if isinstance(request.param, dict) else {"harness": request.param}
+    )
+    selected_harness = selection["harness"]
+    env_bundle = selected_harness.endswith("-env-bundle")
+    api_key = selected_harness.endswith("-api-key") or env_bundle
+    harness = selected_harness.removesuffix("-api-key").removesuffix("-env-bundle")
+    instructions = (
+        "/review --local\nGenerate a report."
+        if selection.get("command")
+        else "Generate a report."
+    )
+    from moonmind.workflows.executions.execution_contract import (
+        build_authoritative_workflow_input_snapshot,
+    )
+
+    command = build_authoritative_workflow_input_snapshot(
+        task_payload={"instructions": instructions, "runtime": {"mode": "omnigent"}}
+    )["objective"].get("runtimeCommand")
     # These are default-path journeys, independent of the test runner's rollout
     # configuration. Credential readiness and real plan authority stay intact.
     for key in (
@@ -1086,6 +1103,7 @@ async def native_journey(
             workflow_id,
             api_key=api_key,
             env_bundle=env_bundle,
+            instructions=instructions,
         )
         # Verify the public HTTP enums survive discovery, alongside the real
         # deployment overlay's native OAuth/API-key admission contracts.
@@ -1107,6 +1125,7 @@ async def native_journey(
                 "executionProfileRef": PROFILE,
                 "correlationId": workflow_id,
                 "idempotencyKey": "native-turn",
+                "runtimeCommand": command,
                 "resolvedSkillsetRef": compiled.resolved_skillset_ref,
                 "omnigentExecutionPlan": compiled.binding.model_dump(
                     by_alias=True, mode="json"
@@ -1150,8 +1169,9 @@ async def native_journey(
                 },
                 "parameters": {
                     "publishMode": "none",
+                    "metadata": {"moonmind": {"selectedSkill": _DURABLE_SKILL_NAME}},
                     "omnigent": {
-                        "prompt": {"text": "Generate a report."},
+                        "prompt": {"text": instructions},
                         "session": {},
                     },
                 },
@@ -1268,6 +1288,41 @@ async def test_registered_generic_native_turn_saves_result_and_cleans_owned_reso
     terminal_status,
 ):
     await assert_native_turn_saved_and_cleaned(native_journey, terminal_status)
+
+
+@pytest.mark.parametrize(
+    "native_journey",
+    [
+        {"harness": harness, "command": True}
+        for harness in (
+            "claude-native",
+            "claude-native-env-bundle",
+            "codex-native",
+            "opencode-native",
+        )
+    ],
+    indirect=True,
+)
+async def test_shared_commands_follow_admitted_harness_and_preserve_completed_effects(
+    native_journey,
+):
+    # Reuse production plan admission, real lifecycle/credential/artifact owners,
+    # wire delivery, post-cleanup download and completed-attempt reconciliation.
+    await assert_native_turn_saved_and_cleaned(native_journey)
+    messages = [
+        event
+        for event in native_journey.server.events
+        if event.get("type") == "message"
+    ]
+    assert len(messages) == 1
+    text = messages[0]["data"]["content"][0]["text"]
+    assert text.count("/review --local") == 1
+    assert text.count("Generate a report.") == 1
+    assert text.count(f"Selected skill: {_DURABLE_SKILL_NAME}") == 1
+    if native_journey.harness == "claude-native":
+        assert text.startswith("/review --local\n")
+    else:
+        assert text.startswith("Literal runtime command text:\n")
 
 
 async def assert_native_turn_saved_and_cleaned(
