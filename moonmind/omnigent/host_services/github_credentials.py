@@ -155,6 +155,13 @@ try:
             if current is not None and current != stamp:
                 fail()
             atomic(state_path, json.dumps({'reservation': stamp, 'retired': True}, sort_keys=True))
+            for candidate in [live, *root.glob('.hosts.yml.*')]:
+                candidate.unlink(missing_ok=True)
+            directory = os.open(root, os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
             print(json.dumps(stamp, sort_keys=True))
         else:
             if current != stamp or state.get('retired'):
@@ -980,9 +987,18 @@ class OmnigentGithubCredentialService:
                 },
             }
             await self._run_projection(legacy, image, 0, 0, "retire_legacy")
-        code, _out, _err = await self._backend.run(
+        code, _out, error = await self._backend.run(
             ["docker", "volume", "rm", volume], check=False
         )
+        if (
+            code != 0
+            and attachment.get("retainEmptyVolume") is True
+            and "in use" in error.lower()
+        ):
+            # A static service keeps the mount. Its locked retirement above
+            # erased hosts.yml and fences delayed publishers. The next Compose
+            # attachment removes this empty mount and reclaims its volume.
+            return
         if code != 0:
             raise HarnessPlatformError(
                 "GitHub credential cleanup is deferred",

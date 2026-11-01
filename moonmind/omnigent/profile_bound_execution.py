@@ -62,6 +62,7 @@ from moonmind.omnigent.repository_sources import (
 )
 from moonmind.omnigent.execution_profiles import (
     PROFILES,
+    seal_effective_launch_snapshot,
     selection_from_request,
 )
 from moonmind.omnigent.harness_platform.execution_plan import (
@@ -272,11 +273,7 @@ def _compile_persisted_effective_launch(
         if isinstance(follow_up_retrieval, Mapping)
         else {"enabled": False}
     )
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    payload["snapshotRef"] = "omnigent-launch:sha256:" + hashlib.sha256(
-        canonical.encode()
-    ).hexdigest()
-    return payload
+    return seal_effective_launch_snapshot(payload)
 
 
 class OmnigentProfileBoundExecutionCoordinator:

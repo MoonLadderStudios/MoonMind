@@ -56,7 +56,6 @@ from moonmind.omnigent.harness_platform.harness_registry import (
     harness_registration,
 )
 from moonmind.omnigent.harness_platform.host_classes import (
-    HostClass,
     OmnigentHostClassSelector,
 )
 from moonmind.omnigent.harness_platform.materializers import (
@@ -1559,80 +1558,14 @@ async def compile_and_persist_execution_plan(
         effective_launch.get("serverImageRef"),
         field_name="effective launch serverImageRef",
     )
-    # Retained static Codex uses its explicit policy-bound host adapter. All
-    # on-demand harnesses resolve the selected image's observed provenance
-    # through one selector; the catalog identifies the server, not that host.
-    if harness_id == "codex-native" and planner_launch_policy.hostMode in {
-        "static-connected",
-        "static_compose",
-    }:
-        architectures = [
-            value if "/" in value else f"linux/{value}"
-            for value in (
-                str(item).strip()
-                for item in (effective_launch.get("architectures") or [])
-            )
-            if value
-        ]
-        # Static Compose hosts run the installed shared host image. A policy
-        # naming another image family keeps its explicit host.
-        from moonmind.omnigent.harness_platform.host_classes import (
-            resolve_shared_host_image_ref,
-        )
-        from moonmind.omnigent.host_image_drift import is_compatible_image_drift
-
-        static_image_ref = str(effective_launch.get("hostImageRef") or "")
-        try:
-            installed_shared_ref = resolve_shared_host_image_ref()
-        except HarnessPlatformError:
-            installed_shared_ref = ""
-        if installed_shared_ref and is_compatible_image_drift(
-            static_image_ref, installed_shared_ref
-        ):
-            static_image_ref = installed_shared_ref
-        host_class = HostClass.model_validate(
-            {
-                "hostClassId": config["hostClassRef"].rpartition("@")[0],
-                "version": int(config["hostClassRef"].rpartition("@")[2]),
-                "imageRef": static_image_ref,
-                "omnigentVersion": catalog_omnigent_version,
-                "omnigentBuildDigest": omnigent_build_digest,
-                "architectures": architectures,
-                "declaredHarnessImplementations": [
-                    {
-                        "harnessId": harness_id,
-                        "implementationRef": implementation.implementation_ref(),
-                        "runtimeDependencies": [],
-                    }
-                ],
-                "integrationModes": [config["integrationMode"]],
-                "materializerRefs": [config["materializerRef"]],
-                "features": {
-                    "git": True,
-                    "tmux": True,
-                    "bubblewrap": True,
-                    "workspaceBind": True,
-                    "readOnlyRoot": bool(effective_launch.get("readOnlyRoot")),
-                    "restrictedEgress": bool(effective_launch.get("enforcedEgress")),
-                    "mountedSkills": True,
-                    "mountedTools": True,
-                },
-                "runtime": {
-                    "uid": int(effective_launch.get("runtimeUid") or 1000),
-                    "gid": int(effective_launch.get("runtimeGid") or 1000),
-                    "home": "/home/app",
-                },
-            }
-        )
-    else:
-        host_class = OmnigentHostClassSelector().select(
-            harness=harness_record,
-            omnigent_version=catalog_omnigent_version,
-            integration_mode=config["integrationMode"],
-            materializer_refs=[config["materializerRef"]],
-            requested_host_mode=str(effective_launch.get("hostMode") or ""),
-            requested_host_class_ref=config["hostClassRef"],
-        )
+    host_class = OmnigentHostClassSelector().select(
+        harness=harness_record,
+        omnigent_version=catalog_omnigent_version,
+        integration_mode=config["integrationMode"],
+        materializer_refs=[config["materializerRef"]],
+        requested_host_mode=str(effective_launch.get("hostMode") or ""),
+        requested_host_class_ref=config["hostClassRef"],
+    )
     # The persisted policy snapshot records the images current when that
     # policy version was written; Host Class selection and the installed
     # server come from current deployment evidence. A fresh attempt binds the
@@ -1659,6 +1592,24 @@ async def compile_and_persist_execution_plan(
             "host image family than the installed one"
         )
     effective_launch = reconciled
+    if planner_launch_policy.hostMode in {"static-connected", "static_compose"}:
+        from moonmind.omnigent.harness_platform.static_hosts import (
+            bind_static_host_selection,
+        )
+        from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
+
+        host_session_factory = session_factory
+        if db_session is not None:
+
+            @asynccontextmanager
+            async def host_session_factory():
+                yield db_session
+
+        effective_launch = await bind_static_host_selection(
+            repository=OmnigentOAuthHostRepository(host_session_factory),
+            effective_launch=effective_launch,
+            commit_binding=db_session is None,
+        )
     policy_artifact_ref, policy_artifact_digest = await persist_json_artifact(
         artifact_service=artifact_service,
         principal=principal,

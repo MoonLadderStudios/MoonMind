@@ -643,6 +643,7 @@ async def test_bootstrap_policies_activate_with_resolved_latest_images(
             "codex-static",
             "codex-on-demand",
             "claude-on-demand",
+            "claude-static",
             "omnigent-on-demand",
             "opencode-on-demand",
         }
@@ -657,7 +658,7 @@ async def test_bootstrap_policies_activate_with_resolved_latest_images(
             .scalars()
             .all()
         )
-        assert len(versions) == 6
+        assert len(versions) == 7
         assert all(version.state == "active" for version in versions)
         assert all(version.validation_json["valid"] is True for version in versions)
         assert all(
@@ -952,6 +953,7 @@ async def test_opencode_policies_launch_the_shared_image_without_the_opencode_va
             "codex-static",
             "codex-on-demand",
             "claude-on-demand",
+            "claude-static",
             "omnigent-on-demand",
             "opencode-on-demand",
         }
@@ -1074,7 +1076,7 @@ async def test_bootstrap_versions_image_authority_only_for_a_new_image_family(
             versions = list(
                 (await session.execute(select(OmnigentPolicyVersion))).scalars()
             )
-            assert len(versions) == 6
+            assert len(versions) == 7
             assert all(
                 row.document_json["host"]["serverImageRef"] == first_server
                 and row.document_json["host"]["hostImageRef"] == first_host
@@ -1096,6 +1098,7 @@ async def test_bootstrap_versions_image_authority_only_for_a_new_image_family(
             "codex-static",
             "codex-on-demand",
             "claude-on-demand",
+            "claude-static",
             "omnigent-on-demand",
             "opencode-on-demand",
         }
@@ -1112,7 +1115,7 @@ async def test_bootstrap_versions_image_authority_only_for_a_new_image_family(
             .scalars()
             .all()
         )
-        assert len(defaults) == 6
+        assert len(defaults) == 7
         assert all(
             row.document_json["host"]["serverImageRef"] == next_server
             for row in defaults
@@ -1392,7 +1395,6 @@ async def test_bootstrap_advances_stale_interrupted_draft_lineage(
         assert latest.state == PolicyState.ACTIVE.value
         assert latest.document_json["host"]["serverImageRef"] == next_server
         assert latest.document_json["host"]["hostImageRef"] == next_host
-
 
 
 # The retrieval section bootstrap seeded before native retrieval was retired

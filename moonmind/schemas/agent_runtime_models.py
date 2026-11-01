@@ -2087,6 +2087,11 @@ class OmnigentHostLease(BaseModel):
     credential_generation: int = Field(..., alias="credentialGeneration", ge=1)
     holder_workflow_id: str | None = Field(None, alias="holderWorkflowId")
     lease_purpose: str | None = Field("execution_omnigent", alias="leasePurpose")
+    runtime_binding_id: str | None = Field(
+        None,
+        alias="runtimeBindingId",
+        exclude_if=lambda value: value is None,
+    )
     container_id: str | None = Field(None, alias="containerId")
     container_name: str | None = Field(None, alias="containerName")
     omnigent_host_id: str | None = Field(None, alias="omnigentHostId")
