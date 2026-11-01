@@ -288,7 +288,9 @@ def test_compose_policy_selection_reaches_gateway_and_consumers(
         extra = {d.dns_name for d in module.OMNIGENT_EGRESS_PROFILE.destinations} - {
             d.dns_name for d in module.DEFAULT_EGRESS_PROFILE.destinations
         }
-        assert extra == ({"openrouter.ai"} if selection == "custom" else set())
+        assert extra == (
+            {"openrouter.ai"} if selection == "custom" else {"api.minimax.io"}
+        )
 
 
 @pytest.mark.asyncio

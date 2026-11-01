@@ -196,7 +196,8 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "exactly: the seeded MiniMax Profile writes its own "
             "``config.toml`` provider through a file template, and some "
             "Profiles name an endpoint the Omnigent egress profile does not "
-            "admit (it has no ``api.minimax.io``). Omnigent can pin that "
+            "admit. The public ``api.minimax.io`` endpoint is admitted. "
+            "Omnigent can pin that "
             "table by name (``cli-config``) or generate one (``key``), but "
             'it coerces ``wire_api = "chat"`` to ``responses``, because '
             "Codex 0.137 and later refuse ``chat`` at config load. That "
