@@ -42,7 +42,7 @@ The four canonical open-issue status labels are:
 | Needs attention | `status: needs-attention` | An unresolved decision, stop request, conflict, unsafe recovery, or exhausted budget requires intervention | Excluded from automatic implementation |
 | Closed | GitHub issue state is closed | GitHub records a terminal disposition | Excluded regardless of labels |
 
-Ordinary labels such as bug, feature, priority, or component are independent of this state machine. Existing dependency and blocker rules continue to apply. An issue without a status label can still be blocked by its prerequisites or outside the user's requested scope. The `manual-only` label is such a start blocker: people, not automation, must finish the issue (section 5.4).
+Labels such as bug, feature, priority and component do not alter lifecycle. Scope and prerequisite checks still apply: issue dependencies resolve on closure, explicit PR dependencies on merge. PR references cannot be tracked child issues. The `manual-only` label blocks automated implementation (section 5.4).
 
 Search distinguishes empty backlog from lifecycle, dependency, author-scope, ownership, budget, and cooldown exclusions. `searchEvidence` reports counts and bounded samples (20 candidates, up to 10 attempt/comment identities per ownership conflict), with explicit truncation. Ownership blocks report `unresolved_issue_attempts`; IDs are diagnostics, not writer proof. `selectedIssueAuthor` appears only after reservation succeeds.
 
