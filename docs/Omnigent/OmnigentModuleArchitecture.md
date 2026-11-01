@@ -275,10 +275,11 @@ deletion removes its row in the same change rather than leaving a stale entry.
 
 Direct Codex/Claude and AgentSession adapters retain recorded work, explicit
 serialized starts/direct target identities, Profiles without exact shared
-translation, and independent per-step account/harness or pool choices that
-cannot share one frozen plan. Compatible product submissions, native defaults
-and same-account step overrides use the shared route; selected harness policy
-is checked before translation. Replaced defaults never select ambient credentials.
+translation, and independent per-step account, harness, pool or model/effort
+choices that cannot share one frozen plan. Equivalent product submissions,
+native defaults and same-account step aliases use the shared route, including
+persisted schedule steps; selected harness policy is checked before translation.
+Replaced defaults never select ambient credentials.
 Profile-bound execution and its OAuth host launcher admit no new plans;
 they retain queued starts, retries and cleanup under their recorded authority. Supported
 static-connected Codex/Claude hosts use the shared lifecycle.

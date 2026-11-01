@@ -177,10 +177,16 @@ class _ScalarRows:
     def all(self) -> list[object]:
         return self._rows
 
+    def first(self) -> object | None:
+        return self._rows[0] if self._rows else None
+
 
 class _ExecuteResult:
     def __init__(self, rows: list[object]) -> None:
         self._rows = rows
+
+    def all(self) -> list[object]:
+        return self._rows
 
     def scalars(self) -> _ScalarRows:
         return _ScalarRows(self._rows)
@@ -513,7 +519,8 @@ def _artifact_session(rows: list[SimpleNamespace]) -> SimpleNamespace:
     from api_service.db.models import SettingsOverride
 
     async def execute(statement):
-        if statement.column_descriptions[0].get("entity") is SettingsOverride:
+        entity = statement.column_descriptions[0].get("entity")
+        if entity in {SettingsOverride, ManagedAgentProviderProfile}:
             return _ExecuteResult([])
         return _ExecuteResult(rows)
 
@@ -1915,6 +1922,7 @@ def test_create_task_shaped_execution_keeps_integration_as_metadata(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, user = client
+    test_client.app.dependency_overrides[get_async_session] = lambda: _artifact_session([])
     service.create_execution.return_value = _build_execution_record()
 
     response = test_client.post(
@@ -6665,6 +6673,7 @@ def test_create_remediation_convenience_route_uses_top_level_overrides(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, _user = client
+    test_client.app.dependency_overrides[get_async_session] = lambda: _artifact_session([])
     scheduled_for = datetime.now(UTC) + timedelta(minutes=5)
     record = _build_execution_record(state=MoonMindWorkflowState.SCHEDULED)
     record.scheduled_for = scheduled_for
@@ -7507,14 +7516,12 @@ def test_create_task_shaped_execution_accepts_provider_profile_alias() -> None:
     mock_service = AsyncMock()
     mock_service.create_execution.return_value = _build_execution_record()
     app.dependency_overrides[_get_service] = lambda: mock_service
-    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
-        get=AsyncMock(
-            return_value=SimpleNamespace(
-                runtime_id="codex_cli",
-                default_model="gpt-5-codex",
-            )
-        )
+    profile = SimpleNamespace(
+        profile_id="codex-provider-profile",
+        runtime_id="codex_cli",
+        default_model="gpt-5-codex",
     )
+    app.dependency_overrides[get_async_session] = lambda: _ProfileRouteSession(profile)
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=False)
 
@@ -7551,21 +7558,18 @@ def test_create_task_shaped_execution_resolves_model_tier_against_profile() -> N
     mock_service = AsyncMock()
     mock_service.create_execution.return_value = _build_execution_record()
     app.dependency_overrides[_get_service] = lambda: mock_service
-    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
-        get=AsyncMock(
-            return_value=SimpleNamespace(
-                profile_id="codex-provider-profile",
-                runtime_id="codex_cli",
-                default_model=None,
-                default_effort=None,
-                model_tiers=[
-                    {"label": "Review", "model": "gpt-5-mini", "effort": "low"},
-                    {"label": "Implement", "model": "gpt-5.5", "effort": "high"},
-                ],
-                default_model_tier=1,
-            )
-        )
+    profile = SimpleNamespace(
+        profile_id="codex-provider-profile",
+        runtime_id="codex_cli",
+        default_model=None,
+        default_effort=None,
+        model_tiers=[
+            {"label": "Review", "model": "gpt-5-mini", "effort": "low"},
+            {"label": "Implement", "model": "gpt-5.5", "effort": "high"},
+        ],
+        default_model_tier=1,
     )
+    app.dependency_overrides[get_async_session] = lambda: _ProfileRouteSession(profile)
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=False)
 
@@ -9569,7 +9573,14 @@ def caller_runtime_profile_session() -> SimpleNamespace:
             return provider_profile
         return None
 
-    return SimpleNamespace(get=AsyncMock(side_effect=get_row))
+    async def execute(statement):
+        if statement.column_descriptions[0].get("entity") is ManagedAgentProviderProfile:
+            return _ExecuteResult([provider_profile])
+        return _ExecuteResult([])
+
+    return SimpleNamespace(
+        get=AsyncMock(side_effect=get_row), execute=AsyncMock(side_effect=execute)
+    )
 
 
 @pytest.mark.parametrize("inheritance", ["caller", "parent"])
@@ -12226,9 +12237,12 @@ def test_create_task_shaped_recurring_schedule_rejects_invalid_step_runtime_tier
 
 def test_create_task_shaped_recurring_schedule_passes_metadata_and_response(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    caller_runtime_profile_session: SimpleNamespace,
 ) -> None:
     test_client, _service, _user = client
-    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    test_client.app.dependency_overrides[get_async_session] = (
+        lambda: caller_runtime_profile_session
+    )
     definition_id = uuid4()
     next_run_at = datetime.now(UTC) + timedelta(hours=1)
     policy = {"overlap": {"mode": "skip"}}
@@ -12428,10 +12442,13 @@ async def test_recurring_target_persists_normalized_tier_previews() -> None:
 
 def test_create_task_shaped_recurring_schedule_lifts_snake_case_artifact_aliases(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    caller_runtime_profile_session: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     test_client, _service, _user = client
-    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    test_client.app.dependency_overrides[get_async_session] = (
+        lambda: caller_runtime_profile_session
+    )
     next_run_at = datetime.now(UTC) + timedelta(hours=1)
     artifact_service = SimpleNamespace(
         read=AsyncMock(
@@ -12491,9 +12508,12 @@ def test_create_task_shaped_recurring_schedule_lifts_snake_case_artifact_aliases
 
 def test_create_task_shaped_recurring_schedule_preserves_missing_policy(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    caller_runtime_profile_session: SimpleNamespace,
 ) -> None:
     test_client, _service, _user = client
-    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    test_client.app.dependency_overrides[get_async_session] = (
+        lambda: caller_runtime_profile_session
+    )
     next_run_at = datetime.now(UTC) + timedelta(hours=1)
 
     with patch(
@@ -12532,11 +12552,14 @@ def test_create_task_shaped_recurring_schedule_preserves_missing_policy(
 
 def test_create_task_shaped_recurring_schedule_allows_global_scope_for_operator(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    caller_runtime_profile_session: SimpleNamespace,
 ) -> None:
     # Single-user (#4351): the admitted operator authors every scope; scope
     # persists as history-compatible provenance, never an owner gate.
     test_client, _service, _user = client
-    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    test_client.app.dependency_overrides[get_async_session] = (
+        lambda: caller_runtime_profile_session
+    )
     next_run_at = datetime.now(UTC) + timedelta(hours=1)
 
     with patch(
@@ -12577,9 +12600,12 @@ def test_create_task_shaped_recurring_schedule_allows_global_scope_for_operator(
 
 def test_create_task_shaped_recurring_schedule_validation_maps_to_422(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    caller_runtime_profile_session: SimpleNamespace,
 ) -> None:
     test_client, _service, _user = client
-    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    test_client.app.dependency_overrides[get_async_session] = (
+        lambda: caller_runtime_profile_session
+    )
 
     with patch(
         "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
@@ -20545,7 +20571,7 @@ async def test_mm3788_recurring_runtime_metadata_accepts_owned_profile() -> None
     profile = _mm3788_provider_profile(
         profile_id="claude_minimax_team", runtime_id="claude_code"
     )
-    session = SimpleNamespace(get=AsyncMock(return_value=profile))
+    session = _ProfileRouteSession(profile)
 
     metadata = await _resolve_recurring_runtime_metadata(
         {

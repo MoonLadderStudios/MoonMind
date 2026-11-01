@@ -629,3 +629,126 @@ async def test_native_default_without_an_account_cannot_admit_ambient_direct_wor
         )
     assert error.value.status_code == 422
     assert "Provider Profile" in error.value.detail["message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code"])
+@pytest.mark.parametrize("serialized", [False, True])
+async def test_recurring_equivalent_step_aliases_are_persisted_before_direct_cutoff(
+    saved_runtime_submission, monkeypatch, runtime, serialized
+):
+    context = saved_runtime_submission
+    monkeypatch.setattr(
+        "api_service.services.profile_execution_selection.profile_route_runtime",
+        AsyncMock(return_value="omnigent"),
+    )
+    if runtime == "codex_cli":
+        monkeypatch.setenv("MOONMIND_CODEX_DIRECT_RETIRED_AT", "2020-01-01T00:00:00Z")
+    workflow = {
+        "instructions": "Keep the same schedule authority.",
+        "runtime": {"mode": runtime, "providerProfileRef": f"pool-{runtime}"},
+        "steps": [
+            {"id": "first", "instructions": "Run", "runtime": {"mode": runtime}},
+            {"id": "second", "instructions": "Verify"},
+        ],
+    }
+    parameters = {"workflow": workflow}
+    payload = (
+        {"workflowType": "MoonMind.UserWorkflow", "initialParameters": parameters}
+        if serialized
+        else parameters
+    )
+    payload["schedule"] = {"mode": "recurring", "cron": "0 * * * *"}
+    body = payload if serialized else {"type": "workflow", "payload": payload}
+    response = await context.client.post("/api/executions", json=body)
+    assert response.status_code == 201, response.text
+    stored = _parameters(context, "recurring")
+    assert stored["targetRuntime"] == "omnigent"
+    assert stored["profileId"] == f"pool-{runtime}"
+    steps = stored["workflow"]["steps"]
+    assert steps[0]["runtime"]["mode"] == "omnigent"
+    assert steps[0]["runtime"]["inheritedProfileId"] == f"pool-{runtime}"
+    assert steps[0]["runtime"]["resolvedModel"] == f"{runtime}-model"
+    assert steps[1] == workflow["steps"][1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code"])
+@pytest.mark.parametrize("authored", [False, True])
+@pytest.mark.parametrize("selection", ["model", "effort", "tier"])
+async def test_native_step_model_overrides_keep_account_and_direct_requests(
+    saved_profile_submission, monkeypatch, runtime, authored, selection
+):
+    from moonmind.workflows.executions.model_resolver import resolve_model_effort
+
+    context = saved_profile_submission
+    profile_id = f"saved-{runtime}"
+    provider = await context.session.get(ManagedAgentProviderProfile, profile_id)
+    provider.model_tiers = [
+        {"model": "root-model", "effort": "high"},
+        {"model": "step-model", "effort": "low"},
+    ]
+    provider.default_model_tier = 1
+    await context.session.commit()
+    monkeypatch.setattr(
+        "api_service.services.profile_execution_selection.profile_route_runtime",
+        AsyncMock(return_value="omnigent"),
+    )
+    root = {
+        "providerProfileRef": profile_id,
+        "model": "root-model",
+        "effort": "high",
+    }
+    if authored:
+        root["mode"] = runtime
+    override = {
+        "model": {"model": "step-model"},
+        "effort": {"effort": "low"},
+        "tier": {"modelTier": 2},
+    }[selection]
+    response = await context.client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "workflow": {
+                    "instructions": "Preserve each model selection.",
+                    "runtime": root,
+                    "steps": [
+                        {
+                            "id": "first",
+                            "instructions": "Run",
+                            "runtime": {"mode": runtime, **override},
+                        },
+                        {"id": "second", "instructions": "Verify"},
+                    ],
+                },
+                "publishMode": "none",
+            },
+        },
+    )
+    parameters = await stored_parameters(context, response)
+    assert parameters["targetRuntime"] == runtime
+    assert parameters["profileId"] == profile_id
+    assert parameters.get("omnigentExecutionPlan") is None
+    assert parameters["workflow"]["steps"][0]["runtime"].items() >= override.items()
+    requests = agent_requests(parameters)
+    assert set(requests) == {"first", "second"}
+    first, second = requests["first"], requests["second"]
+    assert first.agent_id == second.agent_id == runtime
+    assert first.execution_profile_ref == second.execution_profile_ref == profile_id
+    assert first.parameters.items() >= override.items()
+    first_selection = resolve_model_effort(
+        runtime_id=runtime, profile=provider, authored_runtime=first.parameters
+    )
+    second_selection = resolve_model_effort(
+        runtime_id=runtime, profile=provider, authored_runtime=second.parameters
+    )
+    assert first_selection.model == (
+        "step-model" if selection in {"model", "tier"} else "root-model"
+    )
+    assert first_selection.effort == (
+        "low" if selection in {"effort", "tier"} else "high"
+    )
+    assert second_selection.model == "root-model"
+    assert second_selection.effort == "high"
