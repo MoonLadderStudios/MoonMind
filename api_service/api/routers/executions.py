@@ -11748,6 +11748,7 @@ async def _create_execution_from_workflow_request(
     session: Any = None,
     principal_context: dict[str, Any] | None = None,
     access: ArtifactAccessContext,
+    serialized_request: CreateExecutionRequest | None = None,
 ) -> ExecutionModel | ScheduleCreatedResponse:
     request_type = str(request.type).strip().lower()
     if request_type not in {"task", "workflow"}:
@@ -12798,11 +12799,11 @@ async def _create_execution_from_workflow_request(
             owner_type=getattr(user, "owner_type", None)
             if fanout_principal is not None
             else None,
-            title=derived_task_title,
+            title=(serialized_request.title if serialized_request else derived_task_title),
             input_artifact_ref=input_artifact_ref,
             plan_artifact_ref=plan_artifact_ref,
             manifest_artifact_ref=manifest_artifact_ref,
-            failure_policy=None,
+            failure_policy=(serialized_request.failure_policy if serialized_request else None),
             initial_parameters=initial_parameters,
             idempotency_key=task_payload.get("idempotencyKey")
             or payload.get("idempotencyKey"),
@@ -15274,6 +15275,67 @@ async def create_optional_quality_review(
     )
 
 
+def _fresh_serialized_workflow_request(
+    request: CreateExecutionRequest,
+) -> CreateJobRequest | None:
+    """Use the product owner for fresh, fully authored workflow inputs.
+
+    Opaque plans, recorded bindings, physical workspaces and extension fields
+    retain their serialized adapter. Reinterpreting them as a fresh product
+    request could discard work or authority. Accepted identities are checked
+    before this conversion, so this never replaces a persisted launch plan.
+    """
+    if (
+        request.workflow_type != "MoonMind.UserWorkflow"
+        or request.input_artifact_ref
+        or request.plan_artifact_ref
+        or request.manifest_artifact_ref
+        or (request.schedule is not None and request.schedule.mode == "recurring")
+    ):
+        return None
+    parameters = copy.deepcopy(request.initial_parameters)
+    if set(parameters) - {
+        "workflow", "task", "targetRuntime", "profileId", "providerProfileRef",
+        "repository", "integration", "requiredCapabilities",
+        "workspaceSpec", "publishMode", "assessmentScope", "dependsOn",
+        "mergeAutomation",
+    }:
+        return None
+    task_key, task = _recurring_workflow_payload(parameters)
+    if not task or {"workflow", "task"} <= parameters.keys():
+        return None
+    if set(task) - {
+        "instructions", "title", "runtime", "steps", "skill", "tool", "skills",
+        "inputs", "inputAttachments", "publish", "git", "repoRef",
+        "startingBranch", "branch", "dependsOn", "taskTemplate", "goalPreset",
+        "mergeAutomation", "reportOutput", "storyOutput", "remediation",
+    }:
+        return None
+    runtime = task.get("runtime")
+    if isinstance(runtime, Mapping) and set(runtime) - {
+        "mode", "authored", "providerProfileRef", "profileId",
+        "executionProfileRef", "model", "effort", "modelTier", "tierFallback",
+        "tierPreview", "hardOverrideAudit", "executionConfiguration",
+    }:
+        return None
+    workspace = parameters.pop("workspaceSpec", None)
+    if workspace is not None and (
+        not isinstance(workspace, Mapping)
+        or set(workspace) - {"workspaceSource"}
+        or not isinstance(workspace.get("workspaceSource"), Mapping)
+    ):
+        return None
+    parameters.pop(task_key)
+    parameters["workflow"] = task
+    if workspace is not None:
+        parameters["workspace"] = workspace
+    if request.idempotency_key is not None:
+        parameters["idempotencyKey"] = request.idempotency_key
+    return CreateJobRequest(
+        type="workflow", payload=parameters, schedule=request.schedule
+    )
+
+
 @router.post(
     "",
     response_model=ExecutionModel | ScheduleCreatedResponse,
@@ -15384,6 +15446,18 @@ async def create_execution(
             if request.idempotency_key
             else None
         )
+        if existing is None:
+            workflow_request = _fresh_serialized_workflow_request(request)
+            if workflow_request is not None:
+                return await _create_execution_from_workflow_request(
+                    request=workflow_request,
+                    service=service,
+                    user=user,
+                    session=session,
+                    principal_context=principal_context,
+                    access=access,
+                    serialized_request=request,
+                )
         initial_parameters = dict(request.initial_parameters)
         if assessment_scope is not None:
             initial_parameters["assessmentScope"] = assessment_scope
