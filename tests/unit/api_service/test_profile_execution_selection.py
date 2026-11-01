@@ -580,7 +580,27 @@ def test_api_key_claude_profile_moves_to_managed_api_key_configuration():
     "env",
     [
         {"API_TIMEOUT_MS": "3000000"},
+        {"ANTHROPIC_SMALL_FAST_MODEL": "MiniMax-M2.7"},
+        {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"},
         {"ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic"},
+    ],
+)
+def test_translatable_api_key_claude_profile_uses_shared_route(env):
+    stock_api_key = _claude_api_key_configuration("omnigent-claude-api-key")
+    api_key = _claude_api_key_provider(**env)
+
+    assert configuration_accepts_profile(stock_api_key[1].document, api_key)
+    assert not profile_has_native_inventory_route(api_key, [stock_api_key])
+    selected = select_execution_configuration(api_key, [stock_api_key])
+    assert selected["profileId"] == "omnigent-claude-api-key"
+    assert selected["harnessId"] == "claude-native"
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"CLAUDE_UNCARRIED_SETTING": "1"},
+        {"ANTHROPIC_BASE_URL": "https://api.unadmitted.example/anthropic"},
         {"ANTHROPIC_MODEL": "{{model}}"},
     ],
 )
@@ -664,10 +684,25 @@ def test_api_key_codex_profile_moves_to_managed_api_key_configuration():
     )
 
 
+def test_admitted_endpoint_only_codex_profile_uses_shared_route():
+    stock_api_key = _codex_configuration(
+        "omnigent-codex-api-key",
+        credential_source="secret_ref",
+        rollout_metadata={"managedBuiltin": "codex-api-key"},
+    )
+    api_key = _codex_api_key_provider(OPENAI_BASE_URL="https://api.minimax.io/v1")
+
+    assert configuration_accepts_profile(stock_api_key[1].document, api_key)
+    assert not profile_has_native_inventory_route(api_key, [stock_api_key])
+    selected = select_execution_configuration(api_key, [stock_api_key])
+    assert selected["profileId"] == "omnigent-codex-api-key"
+    assert selected["harnessId"] == "codex-native"
+
+
 @pytest.mark.parametrize(
     "env",
     [
-        {"OPENAI_BASE_URL": "https://api.minimax.io/v1"},
+        {"OPENAI_BASE_URL": "https://api.unadmitted.example/v1"},
         {"OPENAI_ORG_ID": "org-example"},
     ],
 )

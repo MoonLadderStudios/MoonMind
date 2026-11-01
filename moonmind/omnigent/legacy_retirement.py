@@ -196,7 +196,8 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "exactly: the seeded MiniMax Profile writes its own "
             "``config.toml`` provider through a file template, and some "
             "Profiles name an endpoint the Omnigent egress profile does not "
-            "admit (it has no ``api.minimax.io``). Omnigent can pin that "
+            "admit. The public ``api.minimax.io`` endpoint is admitted. "
+            "Omnigent can pin that "
             "table by name (``cli-config``) or generate one (``key``), but "
             'it coerces ``wire_api = "chat"`` to ``responses``, because '
             "Codex 0.137 and later refuse ``chat`` at config load. That "
@@ -245,15 +246,12 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "already the unset default."
         ),
         missingOutcome=(
-            "Custom-endpoint Claude key Profiles the Omnigent provider "
-            "config cannot carry exactly: the seeded MiniMax ``env_bundle`` "
-            "Profile sets ``API_TIMEOUT_MS``, "
-            "``CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`` and "
-            "``ANTHROPIC_SMALL_FAST_MODEL``, and an Omnigent provider family "
-            "has no environment field (native Claude sets only the base URL, "
-            "key helper and tier pins). Exact API-key Profiles already run "
-            "through ``omnigent-provider-config@1`` "
-            "(``omnigent-claude-api-key``). Native Claude command rendering "
+            "Claude key Profiles with file templates, HOME overrides, "
+            "uncarried environment settings or endpoints outside the installed "
+            "egress policy. Exact API-key Profiles and declared MiniMax "
+            "environment bundles run through ``omnigent-provider-config@1`` "
+            "with their endpoint, model pins and non-secret launch tuning. "
+            "Native Claude command rendering "
             "already uses the shared renderer through the admitted harness."
         ),
     ),

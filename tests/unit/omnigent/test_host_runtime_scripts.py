@@ -9,6 +9,93 @@ import pytest
 from moonmind.omnigent.host_services.runtime_scripts import OmnigentRuntimeScriptService
 
 
+def test_profile_owned_literal_environment_reaches_the_native_runner():
+    values = {
+        "ANTHROPIC_SMALL_FAST_MODEL": "MiniMax-M2.7",
+        "API_TIMEOUT_MS": "3000000",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    }
+    _script, environment = OmnigentRuntimeScriptService().build_entrypoint(
+        credential_handles=[
+            {
+                "credentialGeneration": 3,
+                "materializerRef": "omnigent-provider-config@1",
+                "attachments": [],
+                "runtimeEnvironment": {
+                    "OMNIGENT_CONFIG_HOME": "/home/app/.moonmind-provider-config",
+                    **values,
+                },
+            }
+        ],
+        skill_attachment={"targetPath": "/opt/moonmind-skills"},
+        step_execution_id="workflow:run:node:execution:1",
+        enable_claude_runtime=True,
+    )
+    assert {key: environment[key] for key in values} == values
+    assert set(values) <= set(environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(","))
+    assert "ANTHROPIC_API_KEY" not in environment
+    assert "ANTHROPIC_AUTH_TOKEN" not in environment
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"ANTHROPIC_API_KEY": "key"},
+        {"ANTHROPIC_AUTH_TOKEN": "key"},
+        {"PATH": "/other/bin"},
+        {"HOME": "/other/home"},
+        {"API_TIMEOUT_MS": "3000000\nextra"},
+        {"API_TIMEOUT_MS": "3000000\r"},
+        {"API_TIMEOUT_MS": "3000000\0"},
+        {"ANTHROPIC_SMALL_FAST_MODEL": ""},
+    ],
+)
+def test_provider_handles_cannot_pass_secrets_or_arbitrary_environment(values):
+    with pytest.raises(ValueError):
+        OmnigentRuntimeScriptService().build_entrypoint(
+            credential_handles=[
+                {
+                    "materializerRef": "omnigent-provider-config@1",
+                    "runtimeEnvironment": values,
+                    "attachments": [],
+                }
+            ],
+            skill_attachment={"targetPath": "/opt/moonmind-skills"},
+            step_execution_id="workflow:run:node:execution:1",
+        )
+
+
+def test_literal_environment_requires_the_provider_config_materializer():
+    with pytest.raises(ValueError, match="requires its credential materializer"):
+        OmnigentRuntimeScriptService().build_entrypoint(
+            credential_handles=[
+                {
+                    "materializerRef": "claude-oauth-home@1",
+                    "runtimeEnvironment": {"API_TIMEOUT_MS": "3000000"},
+                    "attachments": [],
+                }
+            ],
+            skill_attachment={"targetPath": "/opt/moonmind-skills"},
+            step_execution_id="workflow:run:node:execution:1",
+        )
+
+
+def test_conflicting_provider_handles_do_not_silently_choose_a_launch_value():
+    with pytest.raises(ValueError, match="conflicting credential runtime environment"):
+        OmnigentRuntimeScriptService().build_entrypoint(
+            credential_handles=[
+                {
+                    "materializerRef": "omnigent-provider-config@1",
+                    "runtimeEnvironment": {"API_TIMEOUT_MS": value},
+                    "attachments": [],
+                }
+                for value in ("3000000", "2000000")
+            ],
+            skill_attachment={"targetPath": "/opt/moonmind-skills"},
+            step_execution_id="workflow:run:node:execution:1",
+        )
+
+
 def _build(
     *,
     target_path: str,
