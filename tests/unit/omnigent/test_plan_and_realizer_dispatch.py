@@ -1073,7 +1073,6 @@ def test_plan_freezes_the_runtime_provider_rollout_decision(
 
 
 def test_retained_plan_keeps_its_recorded_legacy_compatibility_row():
-    import json
     from pathlib import Path
     from moonmind.omnigent.harness_platform.execution_plan import (
         OmnigentExecutionPlanEnvelope,
