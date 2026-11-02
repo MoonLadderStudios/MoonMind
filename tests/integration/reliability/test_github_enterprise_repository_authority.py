@@ -24,9 +24,7 @@ from moonmind.workflows.executions.repository_contract import (
     RepositoryIdentity,
     normalize_endpoint,
 )
-from moonmind.workflows.temporal.activities.omnigent_activities import (
-    _OnDemandTemporalArtifactService,
-)
+from moonmind.workflows.temporal.scoped_artifacts import ScopedTemporalArtifactService
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     TemporalArtifactService,
@@ -71,7 +69,7 @@ async def authority_context(tmp_path, monkeypatch):
     )
     async with temporal_db(tmp_path) as sessions:
         monkeypatch.setattr(base, "async_session_maker", sessions)
-        artifacts = _OnDemandTemporalArtifactService(sessions)
+        artifacts = ScopedTemporalArtifactService(sessions)
 
         async def read_repository_access_snapshot(ref, *, request):
             _metadata, payload = await artifacts.read(

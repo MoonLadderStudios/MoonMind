@@ -32,9 +32,7 @@ from moonmind.omnigent.workspace_publication import OmnigentWorkspacePublication
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.activities import omnigent_activities as children
 from moonmind.workflows.temporal.activities import omnigent_session_activities as reader
-from moonmind.workflows.temporal.activities.omnigent_activities import (
-    _OnDemandTemporalArtifactService,
-)
+from moonmind.workflows.temporal.scoped_artifacts import ScopedTemporalArtifactService
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     TemporalArtifactAuthorizationError,
@@ -152,7 +150,7 @@ async def repository_consumers(tmp_path, monkeypatch, request):
         await connection.run_sync(models.Base.metadata.create_all)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     monkeypatch.setattr(base, "async_session_maker", sessions)
-    artifacts = _OnDemandTemporalArtifactService(sessions)
+    artifacts = ScopedTemporalArtifactService(sessions)
     plans = DbExecutionPlanStore(sessions)
     gateway = TemporalOmnigentArtifactGateway(sessions)
 

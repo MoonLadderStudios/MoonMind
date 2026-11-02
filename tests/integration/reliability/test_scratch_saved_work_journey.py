@@ -53,9 +53,7 @@ from moonmind.omnigent.runtime_bindings import (
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.workflows.executions.repository_contract import DEFAULT_GIT_CONNECTION_REF
 from moonmind.workflows.temporal.activities import omnigent_session_activities as reader
-from moonmind.workflows.temporal.activities.omnigent_activities import (
-    _OnDemandTemporalArtifactService,
-)
+from moonmind.workflows.temporal.scoped_artifacts import ScopedTemporalArtifactService
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
@@ -125,7 +123,7 @@ async def authority_context(tmp_path, monkeypatch):
         lambda *_args, **_kwargs: (None, "uncertified"),
     )
     try:
-        yield sessions, _OnDemandTemporalArtifactService(sessions), None
+        yield sessions, ScopedTemporalArtifactService(sessions), None
     finally:
         await production.close_omnigent_transport_pool()
         await engine.dispose()

@@ -171,6 +171,8 @@ def build_generic_omnigent_execution_services(
             "generic Omnigent host endpoint and owner configuration is incomplete",
             code=HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY,
         )
+    from moonmind.workflows.temporal.scoped_artifacts import ScopedTemporalArtifactService
+
     artifacts = artifact_gateway or TemporalOmnigentArtifactGateway(session_factory)
     bridge_store = run_store or OmnigentBridgeSessionStore(session_factory)
     transport_pool = omnigent_transport_pool()
@@ -240,6 +242,7 @@ def build_generic_omnigent_execution_services(
             workspace_root=workspace_root,
             workspace_volume=workspace_volume,
             artifact_service=artifacts,
+            remediation_artifact_service=ScopedTemporalArtifactService(session_factory),
             repository_credential_service=repository_credentials,
         ),
         skill_service=OmnigentSkillDeliveryService(

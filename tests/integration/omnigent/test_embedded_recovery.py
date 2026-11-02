@@ -74,9 +74,7 @@ from moonmind.security.egress import (
 from moonmind.security.egress_conformance_evidence import (
     parse_and_verify_conformance_evidence,
 )
-from moonmind.workflows.temporal.activities.omnigent_activities import (
-    _OnDemandTemporalArtifactService,
-)
+from moonmind.workflows.temporal.scoped_artifacts import ScopedTemporalArtifactService
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
 )
@@ -524,7 +522,7 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
 
     store = OmnigentBridgeSessionStore(session_factory)
     repository = OmnigentOAuthHostRepository(session_factory)
-    artifact_service = _OnDemandTemporalArtifactService(session_factory)
+    artifact_service = ScopedTemporalArtifactService(session_factory)
     release_signals: list[dict[str, object]] = []
     release_times: list[datetime] = []
     command_order: list[str] = []

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import re
 import shlex
 import shutil
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
@@ -34,6 +36,7 @@ from moonmind.omnigent.workspace_artifacts import (
 from moonmind.omnigent.workspace_sources import (
     CompiledWorkspaceSource,
     ExistingWorkspaceGrantLedger,
+    OVERLAY_AUTHORITATIVE,
     WorkspaceSourceError,
     check_source_backend_supported,
     compile_workspace_source,
@@ -230,6 +233,7 @@ class OmnigentWorkspaceMaterializer:
         workspace_root: str | Path | None = None,
         workspace_volume: str | None = None,
         artifact_service: Any | None = None,
+        remediation_artifact_service: Any | None = None,
         repository_credential_service: Any | None = None,
     ) -> None:
         self._runner = command_runner
@@ -243,6 +247,7 @@ class OmnigentWorkspaceMaterializer:
             or "agent_workspaces"
         ).strip()
         self._artifact_projector = WorkspaceArtifactProjector(artifact_service)
+        self._remediation_artifacts = remediation_artifact_service or artifact_service
         self._repository_credentials = repository_credential_service
 
     async def materialize(
@@ -283,54 +288,60 @@ class OmnigentWorkspaceMaterializer:
             getattr(step_execution, "step_execution_id", None)
             or getattr(request, "idempotency_key", "")
         ).strip()
-        # Compile exactly one source plus its explicit overlay/input policy
-        # before any read or filesystem mutation. Raw workspacePath/path
-        # aliases are rejected here as a normal route; conflicting aliases
-        # fail before the locator, clone, or projection boundaries run.
+        # Every path validates its source aliases before reading artifacts or
+        # transferring workspace ownership. Remediation supplies the base tree;
+        # its later verified attempt save still uses the existing projector.
         try:
             source = compile_workspace_source(
-                spec,
-                workflow_id=owner_workflow_id,
-                step_execution_id=owner_step_execution_id,
-                runtime="omnigent",
+                spec, workflow_id=owner_workflow_id,
+                step_execution_id=owner_step_execution_id, runtime="omnigent",
             )
-        except WorkspaceSourceError as exc:
-            raise HarnessPlatformError(
-                str(exc),
-                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
-            ) from exc
-        # Unsupported backend/platform/source combinations fail before launch:
-        # an exclusive writable grant cannot be honored on a remote daemon
-        # view that cannot fence the owner's live checkout.
-        try:
             check_source_backend_supported(
-                source.kind,
-                resolve_workspace_backend(),
-                grant_mode=(
-                    source.existing_grant.mode
-                    if source.existing_grant is not None
-                    else None
-                ),
+                source.kind, resolve_workspace_backend(),
+                grant_mode=(source.existing_grant.mode if source.existing_grant else None),
             )
+            if getattr(request, "remediation_workspace", None) is not None and source.existing_grant:
+                raise WorkspaceSourceError(
+                    "WORKSPACE_SOURCE_CONFLICT",
+                    "remediation authority cannot replace an existing-workspace grant",
+                )
         except WorkspaceSourceError as exc:
             raise HarnessPlatformError(
-                str(exc),
-                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+                str(exc), code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             ) from exc
+        if (
+            getattr(request, "remediation_workspace", None) is not None
+            and source.kind == "checkpoint" and source.historical
+            and not spec.get("overlayPolicy") and not spec.get("overlay_policy")
+        ):
+            # This full verified attempt save supersedes the earlier loop
+            # head. An additive merge would resurrect files it deleted.
+            # Explicit overlay policies and retained direct launches keep
+            # their existing interpretation.
+            source = replace(source, overlay_policy=OVERLAY_AUTHORITATIVE)
+        remediation_resolution = await self._resolve_remediation_workspace(
+            request, plan=plan, workflow_id=owner_workflow_id,
+            step_execution_id=owner_step_execution_id, mutation=mutation,
+        )
         record_store: SandboxWorkspaceRecordStore | None = None
         workspace_id: str | None = None
-        candidate, record_store, workspace_id = await self._resolve_source_directory(
-            source,
-            spec=spec,
-            owner_workflow_id=owner_workflow_id,
-            owner_step_execution_id=owner_step_execution_id,
-            runtime_uid=runtime_uid,
-            runtime_gid=runtime_gid,
-            request=request,
-            plan=plan,
-            repository_owner_ref=repository_owner_ref or request.idempotency_key,
-            authority_sink=authority_sink,
-        )
+        if remediation_resolution is not None:
+            candidate = Path(remediation_resolution["workspacePath"]).resolve()
+            record_store = SandboxWorkspaceRecordStore(self._root)
+            workspace_id = remediation_resolution["workspaceLocator"]["workspaceId"]
+        else:
+            candidate, record_store, workspace_id = await self._resolve_source_directory(
+                source,
+                spec=spec,
+                owner_workflow_id=owner_workflow_id,
+                owner_step_execution_id=owner_step_execution_id,
+                runtime_uid=runtime_uid,
+                runtime_gid=runtime_gid,
+                request=request,
+                plan=plan,
+                repository_owner_ref=repository_owner_ref or request.idempotency_key,
+                authority_sink=authority_sink,
+            )
         if candidate == self._root or not candidate.is_relative_to(self._root):
             raise HarnessPlatformError(
                 "workspace attachment escapes the configured workspace root",
@@ -346,9 +357,11 @@ class OmnigentWorkspaceMaterializer:
             attempt_id=owner_step_execution_id,
         )
         materialization_complete = bool(
-            record_store is not None
-            and workspace_id is not None
+            record_store is not None and workspace_id is not None
             and record_store.is_ready(workspace_id, fingerprint)
+            # A recreated base is not the previously projected attempt save,
+            # even when its old readiness marker survived the host loss.
+            and (remediation_resolution is None or remediation_resolution.get("reusedAttempt"))
         )
         parameters = request.parameters if isinstance(request.parameters, dict) else {}
         # These are existing execution-contract fields, including persisted
@@ -480,7 +493,67 @@ class OmnigentWorkspaceMaterializer:
             "accessMode": access_mode,
             "cleanupRef": None,
             **({"materializedInputPaths": named_paths} if named_paths else {}),
+            **({"remediationResolution": {
+                key: remediation_resolution.get(key)
+                for key in ("workspaceState", "restoreEvidenceRef")
+            }} if remediation_resolution is not None else {}),
         }
+
+    async def _resolve_remediation_workspace(
+        self, request: AgentExecutionRequest, *, plan: Any | None,
+        workflow_id: str, step_execution_id: str, mutation: str,
+    ) -> dict[str, Any] | None:
+        raw = getattr(request, "remediation_workspace", None)
+        if raw is None:
+            return None
+        from moonmind.omnigent.remediation_workspace import (
+            ArtifactRemediationHeadLoader, ManagedServiceRemediationRestorer,
+            RemediationWorkspaceBinding, RemediationWorkspaceError,
+            SandboxRemediationWorkspaceOwner,
+        )
+        from moonmind.workflows.skills.run_projection import step_execution_artifact_access
+        from moonmind.workflows.temporal.runtime.checkpoint_restore import ManagedCheckpointRestoreService
+
+        binding = RemediationWorkspaceBinding.model_validate(raw)
+        identity = request.step_execution
+        if (
+            request.agent_kind != "external" or request.agent_id != "omnigent"
+            or identity is None or binding.workflow_id != workflow_id
+            or binding.step_execution_id != step_execution_id
+            or binding.run_id != identity.run_id
+            or binding.logical_step_id != identity.logical_step_id
+        ):
+            raise RemediationWorkspaceError("REMEDIATION_WORKSPACE_OWNER_MISMATCH", "binding belongs to a different execution")
+        if plan is None or self._remediation_artifacts is None or mutation == "read_only":
+            raise RemediationWorkspaceError("REMEDIATION_WORKSPACE_RESTORE_UNAVAILABLE", "shared remediation requires admitted writable workspace authority")
+        if request.execution_profile_ref and binding.execution_profile_ref != request.execution_profile_ref:
+            raise RemediationWorkspaceError("REMEDIATION_WORKSPACE_PROFILE_MISMATCH", "workspace account differs from the selected Provider Profile")
+        locator = request.workspace_spec.get("workspaceLocator")
+        if locator is not None and SandboxWorkspaceLocator.model_validate(locator) != binding.destination_workspace_locator:
+            raise RemediationWorkspaceError("REMEDIATION_WORKSPACE_OWNER_MISMATCH", "workspace locator differs from the controller destination")
+        access = await step_execution_artifact_access(request)
+        _record, body = await self._remediation_artifacts.read(
+            artifact_id=plan.payload.agentProfileSnapshotRef.removeprefix("artifact:").removeprefix("//"), access=access,
+        )
+        snapshot = json.loads(body)
+        if (
+            not isinstance(snapshot, dict)
+            or snapshot.get("providerProfileRef") != binding.execution_profile_ref
+            or snapshot.get("executionProfileRef") != binding.host_profile_ref
+            or plan.payload.launchPolicyRef != binding.launch_policy_ref
+        ):
+            raise RemediationWorkspaceError("REMEDIATION_WORKSPACE_LAUNCH_MISMATCH", "workspace authority differs from the admitted launch snapshot")
+        owner = SandboxRemediationWorkspaceOwner(
+            self._root,
+            restorer=ManagedServiceRemediationRestorer(
+                ManagedCheckpointRestoreService(authority_root=self._root, artifact_service=self._remediation_artifacts),
+                access=access,
+            ),
+            head_loader=ArtifactRemediationHeadLoader(self._remediation_artifacts, workflow_id=workflow_id),
+        )
+        return await owner.admit_and_resolve(
+            binding=binding, workflow_id=workflow_id, step_execution_id=step_execution_id,
+        )
 
     async def _resolve_source_directory(
         self,
