@@ -1,12 +1,4 @@
-"""Router tests for the retired embedded host transport.
-
-MoonLadderStudios/MoonMind#3955: new embedded-transport admission (session
-creation, host registration) is rejected with an explicit retired error that
-names the supported proxy alternative and creates no host, session, or
-credential consumer. Existing-session continuity (reads, controls, typed
-cleanup) and the native Workflow Chat ``embedded=1`` presentation option are
-unaffected.
-"""
+"""Retired transport URLs and read-only session history. New admission, late keys and controls cannot recreate the removed backend; generic proxy and native embedded presentation stay supported."""
 
 from __future__ import annotations
 
@@ -14,6 +6,7 @@ import importlib
 from typing import Any
 from unittest.mock import AsyncMock, Mock
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -21,12 +14,9 @@ from api_service.api.routers.omnigent_bridge import (
     OMNIGENT_BRIDGE_MOUNT_PATH,
     _get_bridge_proxy,
     _get_bridge_store,
-    _get_create_embedded_facade,
-    _get_embedded_host_facade,
     _get_execution_service,
     _get_launch_default_agent_selection,
     _require_bridge_enabled,
-    _require_embedded_mode,
     router,
 )
 from api_service.auth_providers import get_instance_access
@@ -41,7 +31,6 @@ from tests.unit.api.routers.test_omnigent_bridge import (
     _USER_ID,
     _create_body,
     _fake_store_dependency,
-    _FakeEmbeddedFacade,
     _FakeService,
     _mock_user,
 )
@@ -68,27 +57,13 @@ def _embedded_config() -> Any:
     )
 
 
-async def _passed_evidence(
-    _config: Any, **_kwargs: Any
-) -> dict[str, dict[str, Any]]:
-    return {
-        key: {
-            "status": "passed",
-            "supportedHostModes": ["static_compose", "on_demand_docker"],
-        }
-        for key in ("proxyConformance", "liveSmoke", "hostAuthConformance")
-    }
-
-
 def test_new_embedded_session_creates_nothing_and_names_proxy() -> None:
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
-    facade = _FakeEmbeddedFacade()
     app.dependency_overrides[get_instance_access] = _mock_user
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
     app.dependency_overrides[_require_bridge_enabled] = _embedded_config
     app.dependency_overrides[_get_bridge_proxy] = lambda: None
-    app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
     app.dependency_overrides[_get_bridge_store] = _fake_store_dependency
     app.dependency_overrides[_get_launch_default_agent_selection] = lambda: None
 
@@ -103,7 +78,6 @@ def test_new_embedded_session_creates_nothing_and_names_proxy() -> None:
     assert detail["supportedAlternative"] == HOST_PROTOCOL_MODE_PROXY
     assert HOST_PROTOCOL_MODE_PROXY in detail["message"]
     # No session or credential consumer was created through the facade.
-    assert facade.created == []
 
 
 def test_new_embedded_host_registration_creates_nothing() -> None:
@@ -111,8 +85,6 @@ def test_new_embedded_host_registration_creates_nothing() -> None:
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
     facade = Mock()
     facade.register_host = AsyncMock()
-    app.dependency_overrides[_require_embedded_mode] = _embedded_config
-    app.dependency_overrides[_get_embedded_host_facade] = lambda: facade
 
     response = TestClient(app).post(
         _REGISTER_PATH,
@@ -150,7 +122,6 @@ def test_embedded_readiness_reports_retirement_not_new_capacity(
     monkeypatch,
 ) -> None:
     module = importlib.import_module("api_service.api.routers.omnigent_bridge")
-    monkeypatch.setattr(module, "_resolve_embedded_evidence", _passed_evidence)
     monkeypatch.setattr(
         module,
         "_resolve_bridge_policy_authority",
@@ -168,11 +139,6 @@ def test_embedded_readiness_reports_retirement_not_new_capacity(
                 },
             }
         ),
-    )
-    monkeypatch.setattr(
-        module,
-        "evaluate_active_host_auth_readiness",
-        AsyncMock(return_value={"ready": True}),
     )
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
@@ -224,26 +190,20 @@ def _proxy_config() -> Any:
     )
 
 
-def test_embedded_retry_with_admitted_key_reconciles_instead_of_rejecting() -> None:
-    """P1: POST /v1/sessions retries reuse the recorded row (no 410, no recreate)."""
+@pytest.mark.parametrize("recorded_status", ["active", "completed"])
+def test_retained_key_cannot_recreate_removed_transport(recorded_status: str) -> None:
+    store = _RetryCapableStore(status=recorded_status)
+    store.get_existing = AsyncMock(wraps=store.get_existing)
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
-    facade = _FakeEmbeddedFacade()
     app.dependency_overrides[get_instance_access] = _mock_user
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
     app.dependency_overrides[_require_bridge_enabled] = _embedded_config
-    app.dependency_overrides[_get_bridge_proxy] = lambda: None
-    app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
-    app.dependency_overrides[_get_bridge_store] = _RetryCapableStore
-    app.dependency_overrides[_get_launch_default_agent_selection] = lambda: None
-
+    app.dependency_overrides[_get_bridge_store] = lambda: store
     response = TestClient(app).post(_CREATE_PATH, json=_create_body())
-
-    assert response.status_code == 200
-    assert response.json()["id"] == "sess-77"
-    # The retry reconciled the recorded row: nothing was newly admitted.
-    assert facade.created == []
-    assert facade.attached == ["sess-77"]
+    assert response.status_code == 410
+    assert response.json()["detail"]["code"] == "omnigent_embedded_transport_retired"
+    store.get_existing.assert_not_awaited()
 
 
 def test_embedded_retry_of_terminal_row_cannot_redispatch_runner() -> None:
@@ -254,12 +214,10 @@ def test_embedded_retry_of_terminal_row_cannot_redispatch_runner() -> None:
     """
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
-    facade = _FakeEmbeddedFacade()
     app.dependency_overrides[get_instance_access] = _mock_user
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
     app.dependency_overrides[_require_bridge_enabled] = _embedded_config
     app.dependency_overrides[_get_bridge_proxy] = lambda: None
-    app.dependency_overrides[_get_create_embedded_facade] = lambda: facade
     app.dependency_overrides[_get_bridge_store] = lambda: _RetryCapableStore(
         status="completed"
     )
@@ -269,8 +227,6 @@ def test_embedded_retry_of_terminal_row_cannot_redispatch_runner() -> None:
 
     assert response.status_code == 410
     assert response.json()["detail"]["code"] == "omnigent_embedded_transport_retired"
-    assert facade.created == []
-    assert facade.attached == []
 
 
 def test_new_embedded_admission_rejected_before_proxy_or_facade_errors() -> None:
@@ -290,7 +246,6 @@ def test_new_embedded_admission_rejected_before_proxy_or_facade_errors() -> None
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
     app.dependency_overrides[_require_bridge_enabled] = _embedded_config
     app.dependency_overrides[_get_bridge_proxy] = _stale_evidence_proxy
-    app.dependency_overrides[_get_create_embedded_facade] = _missing_launch_facade
     app.dependency_overrides[_get_bridge_store] = lambda: _RetryCapableStore(
         admitted=False
     )
@@ -304,16 +259,11 @@ def test_new_embedded_admission_rejected_before_proxy_or_facade_errors() -> None
     )
 
 
-def test_retained_embedded_row_reads_without_live_transport(monkeypatch) -> None:
+@pytest.mark.parametrize("known_binding", [True, False])
+def test_retained_embedded_row_reads_without_live_transport(monkeypatch, known_binding) -> None:
     """P1: historical reads decode the retained row when no facade exists."""
     from types import SimpleNamespace
 
-    module = importlib.import_module("api_service.api.routers.omnigent_bridge")
-
-    async def _no_facade(**_kwargs):
-        return (None, True)
-
-    monkeypatch.setattr(module, "_resolve_session_control_facade", _no_facade)
 
     retained_metadata = {
         "hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED,
@@ -341,7 +291,7 @@ def test_retained_embedded_row_reads_without_live_transport(monkeypatch) -> None
             return row if session_id == "sess-77" else None
 
         async def get_session_owner(self, session_id: str):
-            if session_id == "sess-77":
+            if session_id == "sess-77" and known_binding:
                 return SimpleNamespace(workflow_id="mm:w1", agent_run_id="ar-1")
             return None
 
@@ -357,12 +307,21 @@ def test_retained_embedded_row_reads_without_live_transport(monkeypatch) -> None
     app.dependency_overrides[get_instance_access] = _mock_user
     app.dependency_overrides[_get_execution_service] = lambda: _FakeService(_USER_ID)
     app.dependency_overrides[_require_bridge_enabled] = _proxy_config
-    app.dependency_overrides[_get_bridge_proxy] = lambda: None
-    app.dependency_overrides[_get_create_embedded_facade] = lambda: None
+    proxy = SimpleNamespace(
+        get_session=AsyncMock(side_effect=AssertionError("retained read reached live proxy")),
+        get_session_owner=AsyncMock(side_effect=AssertionError("retained read reached live proxy")),
+    )
+    app.dependency_overrides[_get_bridge_proxy] = lambda: proxy
     app.dependency_overrides[_get_bridge_store] = lambda: _RetainedStore()
 
     response = TestClient(app).get(f"{_CREATE_PATH}/sess-77")
+    proxy.get_session.assert_not_awaited()
+    proxy.get_session_owner.assert_not_awaited()
 
+    if not known_binding:
+        assert response.status_code == 404
+        assert "runner_tunnel_ready" not in response.text
+        return
     assert response.status_code == 200
     body = response.json()
     assert body["id"] == "sess-77"

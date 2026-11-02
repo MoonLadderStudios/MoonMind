@@ -1,5 +1,6 @@
 """Old native parents and new shared pool context handoffs replay unchanged."""
 
+import json
 from datetime import timedelta
 
 import pytest
@@ -7,12 +8,14 @@ from temporalio import activity, workflow
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
+from moonmind.omnigent.workspace_sources import compile_workspace_source
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.workflows.temporal.workflows.agent_run import (
     AGENT_RUN_POOL_CANONICAL_WORKSPACE_HANDOFF_PATCH_ID,
     MoonMindAgentRun,
 )
 from moonmind.workflows.temporal.workflows.run import (
+    RUN_DISPATCH_CHECKPOINT_SOURCE_PATCH,
     RUN_SHARED_RUNTIME_CONTEXT_PATCH,
     MoonMindUserWorkflow,
 )
@@ -35,6 +38,7 @@ def _request(step, policy):
         profileSelector={"tagsAll": ["selected-pool"]},
         correlationId=info.workflow_id,
         idempotencyKey=step,
+        workspaceSpec={"workspaceSource": {"kind": "scratch"}},
         stepExecution={
             "workflowId": info.workflow_id,
             "runId": info.run_id,
@@ -68,7 +72,7 @@ async def _result(request):
     ):
         metadata["dispatchPoolContext"] = {
             "executionProfileRef": "selected-account",
-            "workspaceCheckpointRestoreRef": "artifact:verified-saved-workspace",
+            "workspaceCheckpointRestoreRef": "artifact://verified-saved-workspace",
         }
     return {"metadata": metadata}
 
@@ -82,7 +86,7 @@ async def _observe(request):
         assert request["executionProfileRef"] == "selected-account"
         assert (
             request["workspaceSpec"]["workspaceCheckpointRestoreRef"]
-            == "artifact:verified-saved-workspace"
+            == "artifact://verified-saved-workspace"
         )
     return reference is not None
 
@@ -126,25 +130,59 @@ class _CurrentFixture(_PoolContextFixture):
 
 
 @pytest.mark.asyncio
-async def test_retained_native_and_new_pool_context_histories_replay():
+async def test_retained_native_and_new_pool_context_histories_replay(monkeypatch):
+    patched = workflow.patched
     async with await WorkflowEnvironment.start_time_skipping() as environment:
-        for index, implementation in enumerate((_LegacyFixture, _CurrentFixture)):
+        for index, (implementation, normalize_source) in enumerate(
+            (
+                (_LegacyFixture, False),
+                (_CurrentFixture, False),
+                (_CurrentFixture, True),
+            )
+        ):
             queue = f"dispatch-pool-context-{index}"
-            async with Worker(
-                environment.client,
-                task_queue=queue,
-                workflows=[implementation],
-                activities=[_result, _observe],
-                workflow_runner=UnsandboxedWorkflowRunner(),
-            ):
-                handle = await environment.client.start_workflow(
-                    implementation.run,
-                    id=queue,
+            with monkeypatch.context() as recorded_version:
+                if not normalize_source:
+                    # Generate the retained command stream without the new
+                    # patch marker, then replay it with current workflow code.
+                    recorded_version.setattr(
+                        workflow,
+                        "patched",
+                        lambda marker: False
+                        if marker == RUN_DISPATCH_CHECKPOINT_SOURCE_PATCH
+                        else patched(marker),
+                    )
+                async with Worker(
+                    environment.client,
                     task_queue=queue,
-                    execution_timeout=timedelta(seconds=20),
+                    workflows=[implementation],
+                    activities=[_result, _observe],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ):
+                    handle = await environment.client.start_workflow(
+                        implementation.run,
+                        id=queue,
+                        task_queue=queue,
+                        execution_timeout=timedelta(seconds=20),
+                    )
+                    assert await handle.result() is bool(index)
+                    history = await handle.fetch_history()
+            observed = next(
+                json.loads(
+                    event.activity_task_scheduled_event_attributes.input.payloads[0].data
                 )
-                assert await handle.result() is bool(index)
-                history = await handle.fetch_history()
+                for event in history.events
+                if event.HasField("activity_task_scheduled_event_attributes")
+                and event.activity_task_scheduled_event_attributes.activity_type.name
+                == "pool_context.fixture_observe"
+            )
+            if normalize_source:
+                assert (
+                    compile_workspace_source(observed["workspaceSpec"]).kind
+                    == "checkpoint"
+                )
+            else:
+                assert observed["workspaceSpec"]["workspaceSource"] == {"kind": "scratch"}
             await Replayer(
                 workflows=[_CurrentFixture], workflow_runner=UnsandboxedWorkflowRunner()
             ).replay_workflow(history)

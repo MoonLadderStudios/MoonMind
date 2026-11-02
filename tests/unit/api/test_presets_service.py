@@ -35,9 +35,13 @@ from api_service.services.presets.catalog import (
 from api_service.services.presets.save import PresetSaveService
 from moonmind.config.settings import settings
 from moonmind.security.operator_admission import OperatorAdmission
+from moonmind.workflows.executions.model_resolver import resolve_model_effort
 from moonmind.workflows.temporal.artifacts import ArtifactAccessContext
 from moonmind.workflows.temporal.service import TemporalExecutionService
 from tests.helpers.step_type_payloads import preset_step, skill_step, tool_step
+from tests.unit.api.routers.test_execution_saved_profile_boundaries import (
+    agent_requests,
+)
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -172,7 +176,14 @@ async def test_mm1171_preset_runtime_tier_intent_is_validated_and_preserved(tmp_
     assert expanded["steps"][0]["runtime"] == runtime
 
 
-async def test_github_issue_3796_preset_tier_resolves_per_profile_policy(tmp_path):
+@pytest.mark.parametrize(
+    "tier_parameters",
+    [{}, {"native_option": "required"}],
+    ids=["model-effort", "native-options"],
+)
+async def test_github_issue_3796_preset_tier_resolves_per_profile_policy(
+    tmp_path, tier_parameters
+):
     """MoonLadderStudios/MoonMind#3796: prove one preset is tier-portable."""
     profiles = [
         ManagedAgentProviderProfile(
@@ -188,6 +199,7 @@ async def test_github_issue_3796_preset_tier_resolves_per_profile_policy(tmp_pat
                     "label": "Implement",
                     "model": "codex-implementation",
                     "effort": "xhigh",
+                    "parameters": tier_parameters,
                 },
             ],
             default_model_tier=1,
@@ -205,6 +217,7 @@ async def test_github_issue_3796_preset_tier_resolves_per_profile_policy(tmp_pat
                     "label": "Implement",
                     "model": "claude-implementation",
                     "effort": "high",
+                    "parameters": tier_parameters,
                 },
             ],
             default_model_tier=1,
@@ -276,7 +289,13 @@ async def test_github_issue_3796_preset_tier_resolves_per_profile_policy(tmp_pat
                                     "payload": {
                                         "repository": "MoonLadderStudios/MoonMind",
                                         "targetRuntime": profile.runtime_id,
-                                        "workflow": deepcopy(expanded),
+                                        "workflow": {
+                                            **deepcopy(expanded),
+                                            "instructions": (
+                                                "Implement the issue using the selected "
+                                                "Profile tier."
+                                            ),
+                                        },
                                     },
                                 }
                             ),
@@ -290,9 +309,22 @@ async def test_github_issue_3796_preset_tier_resolves_per_profile_policy(tmp_pat
                     launch_runtime = created.input_parameters["workflow"]["steps"][0][
                         "runtime"
                     ]
+                    # Admission may freeze the account on the root or step;
+                    # the effective request must retain that exact authority.
+                    (launch_request,) = agent_requests(created.input_parameters).values()
+                    assert launch_request.agent_id == profile.runtime_id
+                    assert launch_request.parameters["modelTier"] == 2
+                    launch_selection = resolve_model_effort(
+                        runtime_id=launch_request.agent_id,
+                        profile=profile,
+                        authored_runtime=launch_request.parameters,
+                    )
+                    assert launch_selection.model == launch_runtime["resolvedModel"]
+                    assert launch_selection.effort == launch_runtime["resolvedEffort"]
+                    assert launch_selection.tier_parameters == tier_parameters
                     outcomes.append(
                         (
-                            launch_runtime["profileId"],
+                            launch_request.execution_profile_ref,
                             launch_runtime["resolvedModel"],
                             launch_runtime["resolvedEffort"],
                             launch_runtime["modelTierResolution"]["providerProfileId"],

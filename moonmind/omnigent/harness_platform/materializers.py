@@ -331,13 +331,6 @@ class ProviderConfigEndpoint(BaseModel):
         return validate_provider_literal_launch_environment(value)
 
 
-class ProviderConfigurationSnapshotRef(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    artifactRef: str = Field(pattern=r"^artifact:[^\s]+$")
-    contentDigest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
-
-
 class ProviderLaunchEnvironment(BaseModel):
     """Admitted nonsecret tuning, independent of an enrolled OAuth home."""
 
@@ -451,7 +444,9 @@ def untranslated_oauth_launch_options(profile: Any) -> str | None:
     fields = ["file_templates"] if getattr(profile, "file_templates", None) else []
     if getattr(profile, "env_template", None):
         try:
-            ProviderLaunchEnvironment(launchEnvironment=profile.env_template)
+            environment = ProviderLaunchEnvironment(launchEnvironment=profile.env_template)
+            if any("{{" in value for value in environment.launchEnvironment.values()):
+                fields.append("env_template")
         except ValueError:
             fields.append("env_template")
     home_overrides = dict(getattr(profile, "home_path_overrides", None) or {})

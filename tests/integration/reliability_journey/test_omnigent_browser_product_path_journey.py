@@ -42,10 +42,9 @@ from tests.unit.omnigent.test_oauth_profile_lifecycle import (
 from tests.unit.omnigent.test_policy_authority import policy_document
 
 # The rollout gate deliberately composes the production-owner fixtures rather
-# than replacing bridge and embedded-host behavior with journey-local fakes.
+# than replacing bridge and executor behavior with journey-local fakes.
 pytest_plugins = (
     "tests.integration.omnigent.test_bridge_conformance",
-    "tests.integration.omnigent.test_embedded_recovery",
     "tests.integration.omnigent.test_execute_fake_server",
 )
 
@@ -375,25 +374,34 @@ async def test_controlling_bridge_failure_and_recovery_owners(
     )
 
 
-async def test_controlling_restart_owner(store, session_factory) -> None:
-    """Execute the durable disconnect/restart authorization owner."""
+@pytest.mark.parametrize(
+    ("boundary", "expected_posts"),
+    [("not_prepared", 1), ("prepared", 1), ("posting", 0), ("posted", 0), ("terminal", 0)],
+)
+async def test_controlling_restart_owner(
+    bridge_harness, boundary: str, expected_posts: int
+) -> None:
+    """Recreate the supported proxy at every durable first-message boundary."""
 
-    from tests.integration.omnigent import test_embedded_recovery as recovery
+    from tests.integration.omnigent import test_bridge_conformance as bridge
 
-    await recovery.test_disconnect_restart_reconnect_and_retry_matrix(
-        store, session_factory
+    await bridge.test_each_first_message_restart_boundary_is_exactly_once(
+        bridge_harness, boundary, expected_posts
     )
 
 
 async def test_controlling_first_message_reconciliation_owner(
-    store, session_factory
+    bridge_harness,
 ) -> None:
-    """Execute response-before-persist reconciliation at the durable owner."""
+    """Reconcile accepted messages once and reject a changed durable digest."""
 
-    from tests.integration.omnigent import test_embedded_recovery as recovery
+    from tests.integration.omnigent import test_bridge_conformance as bridge
 
-    await recovery.test_embedded_response_before_persist_reconciles_and_digest_change_fails_closed(
-        store, session_factory
+    await bridge.test_first_message_crash_matrix_reconciles_response_before_persist_once(
+        bridge_harness
+    )
+    await bridge.test_partial_post_before_ack_is_ambiguous_and_never_reposted(
+        bridge_harness
     )
 
 

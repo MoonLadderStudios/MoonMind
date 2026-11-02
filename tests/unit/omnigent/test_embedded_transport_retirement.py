@@ -1,20 +1,4 @@
-"""Retirement of the experimental embedded host transport.
-
-MoonLadderStudios/MoonMind#3955: the experimental embedded host/runner
-transport no longer admits new work, while in-flight sessions drain through
-their recorded mode/endpoint and cleanup owner. These tests pin the Stage-1
-(new-admission-disabled) contract:
-
-* the code-owned retirement row disables new admission but keeps its
-  drain/historical-read dependencies, so removal stays blocked;
-* parsing an embedded-selected document still succeeds (deployments with
-  in-flight sessions must boot and drain);
-* new admission through an embedded-selected config is rejected with an
-  actionable proxy alternative (never a silent substitution);
-* readiness advertises the retirement instead of offering new capacity;
-* the native Workflow Chat ``embedded=1`` presentation option is unrelated
-  and stays supported.
-"""
+"""Removed embedded transport configuration and diagnostic compatibility. The executable retirement row is gone; historical literals, stable diagnostics and the independent native presentation remain."""
 
 from __future__ import annotations
 
@@ -32,10 +16,7 @@ from moonmind.omnigent.bridge_config import (
     parse_bridge_config,
 )
 from moonmind.omnigent.legacy_retirement import (
-    LegacyAdmissionRejected,
-    RetirementClass,
-    assert_new_admission_allowed,
-    evaluate_new_admission,
+    RetirementGuardError,
     get_retirement_record,
 )
 
@@ -62,21 +43,9 @@ def _embedded_config():
 # ------------------------------------------------------- code-owned retirement
 
 
-def test_retirement_row_disables_new_admission() -> None:
-    record = get_retirement_record(EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID)
-
-    assert record.retirement_class is RetirementClass.NEW_ADMISSION_DISABLED
-    # A class that no longer admits must not name a new-admission source.
-    assert record.new_admission_source == ""
-    assert record.admits_new_work is False
-
-    decision = evaluate_new_admission(record)
-    assert decision.allowed is False
-    assert decision.reason_code.startswith("new_admission_disabled")
-
-    with pytest.raises(LegacyAdmissionRejected) as exc_info:
-        assert_new_admission_allowed(EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID)
-    assert exc_info.value.path_id == EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID
+def test_removed_transport_has_no_retained_execution_adapter() -> None:
+    with pytest.raises(RetirementGuardError, match="unknown retirement path"):
+        get_retirement_record(EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID)
 
 
 # ------------------------------------------------- parse vs admission boundary

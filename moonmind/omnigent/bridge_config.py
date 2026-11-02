@@ -78,8 +78,7 @@ HOST_PROTOCOL_MODE_EMBEDDED = "embedded_omnigent_compatible_server"
 
 # MoonLadderStudios/MoonMind#3955: the experimental embedded host/runner
 # transport no longer admits new work. The literal stays valid so deployments
-# with in-flight embedded sessions still boot and drain, and so retained
-# bridge rows keep decoding their recorded ``hostProtocolMode``; selecting it
+# with retained bridge rows keep decoding their recorded ``hostProtocolMode``; selecting it
 # for *new* sessions, hosts, or credential consumers is rejected at the
 # admission boundary with an actionable proxy alternative (never a silent
 # substitution). The native Workflow Chat ``embedded=1`` presentation option
@@ -87,11 +86,11 @@ HOST_PROTOCOL_MODE_EMBEDDED = "embedded_omnigent_compatible_server"
 EMBEDDED_TRANSPORT_RETIRED_CODE = "omnigent_embedded_transport_retired"
 EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID = "omnigent.legacy.embedded_host_transport"
 EMBEDDED_TRANSPORT_RETIRED_MESSAGE = (
-    "The experimental embedded Omnigent host transport no longer admits new "
-    "sessions, hosts, or credential consumers "
-    f"(retirement row {EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID}). Select "
-    f"'{HOST_PROTOCOL_MODE_PROXY}' for new work; existing sessions retain "
-    "their recorded bridge mode, endpoint, and cleanup owner until drained."
+    "The experimental embedded Omnigent host transport has been removed "
+    f"({EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID}). Select "
+    f"'{HOST_PROTOCOL_MODE_PROXY}' for new work. Recorded session metadata, "
+    "event journals and captured artifacts remain readable without reconnecting "
+    "the retired transport."
 )
 
 HostProtocolMode = Literal[
@@ -593,8 +592,8 @@ class OmnigentBridgeConfig(BaseModel):
                 "(and the matching hostConnection.mode) instead. The embedded "
                 "value is preserved only for decoding retained session rows and "
                 "historical evidence; it is never silently substituted with proxy "
-                "mode. Existing sessions retain their recorded mode/endpoint and "
-                "cleanup owner until drained."
+                "mode. Recorded session metadata and captured evidence remain "
+                "readable without reconnecting the removed transport."
             )
         return self
 
@@ -706,8 +705,8 @@ def embedded_transport_retirement() -> dict[str, Any]:
     """Return the non-secret retirement projection for the embedded transport.
 
     Shared by config readiness, support diagnostics, startup detection, and
-    the HTTP admission boundary so every surface names the same code-owned
-    retirement row, the same stable reason code, and the same supported
+    the HTTP admission boundary so every surface names the same historical
+    transport identifier, the same stable reason code, and the same supported
     proxy alternative.
     """
 
@@ -726,11 +725,8 @@ def embedded_transport_retirement_notice(
 ) -> str | None:
     """Return an actionable startup notice when embedded mode is selected.
 
-    Returns ``None`` for proxy/disabled deployments. An embedded-selected
-    deployment still boots (in-flight sessions must drain), but the operator
-    must see that new admission is retired and which supported alternative
-    to select. This is the detection half of the #3955 acceptance criterion
-    "removed configuration is detected at actual API/worker startup".
+    Returns ``None`` for proxy deployments. Disabled historical configuration
+    can still decode; an enabled embedded selection is rejected by the parser.
     """
 
     if config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
@@ -740,9 +736,8 @@ def embedded_transport_retirement_notice(
         f"('{HOST_PROTOCOL_MODE_EMBEDDED}'). New sessions, hosts, and "
         f"credential consumers are rejected "
         f"({EMBEDDED_TRANSPORT_RETIRED_CODE}); select "
-        f"'{HOST_PROTOCOL_MODE_PROXY}' for new work. Existing sessions retain "
-        "their recorded bridge mode, endpoint, and cleanup owner until "
-        f"drained (retirement row {EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID})."
+        f"'{HOST_PROTOCOL_MODE_PROXY}' for new work. Recorded history remains "
+        f"readable ({EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID})."
     )
 
 

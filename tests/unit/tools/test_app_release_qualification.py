@@ -58,12 +58,19 @@ def _image_value(expression, candidate):
     if match is None:
         return expression
     parts = match[1].split("||", 1)
-    assert parts[0].strip() == "inputs.candidate_image"
+    assert parts[0].strip() in {
+        "inputs.candidate_image",
+        "needs.prepare-app-image.outputs.image_ref",
+    }
     return candidate or (ast.literal_eval(parts[1].strip()) if len(parts) == 2 else "")
 
 
 def _qualification_context(
-    *, assembly="success", source="success", migration="success"
+    *,
+    assembly="success",
+    source="success",
+    migration="success",
+    source_receipt="success",
 ):
     jobs = _workflow("docker-publish.yml")["jobs"]
     context = {}
@@ -72,6 +79,8 @@ def _qualification_context(
             context[name] = {"result": source}
         elif job.get("uses") == "./.github/workflows/alembic-migration-gate.yml":
             context[name] = {"result": migration}
+        elif name == "verify-source-receipt":
+            context[name] = {"result": source_receipt}
         elif "image_ref" in job.get("outputs", {}):
             context[name] = {"result": assembly, "outputs": {"image_ref": CANDIDATE}}
         elif "image_name" in job.get("outputs", {}):
@@ -88,6 +97,7 @@ def _run_writer(
     assembly="success",
     source="success",
     migration="success",
+    source_receipt="success",
     ref="refs/heads/main",
     main_head="candidate-commit",
     candidate=CANDIDATE,
@@ -95,7 +105,10 @@ def _run_writer(
 ):
     writer = step if step is not None else _writer()[2]
     needs = _qualification_context(
-        assembly=assembly, source=source, migration=migration
+        assembly=assembly,
+        source=source,
+        migration=migration,
+        source_receipt=source_receipt,
     )
     for value in needs.values():
         if "image_ref" in value.get("outputs", {}):
@@ -163,7 +176,7 @@ def _run_writer(
     return result, channel.read_text(), commands
 
 
-@pytest.mark.parametrize("gate", ["assembly", "source", "migration"])
+@pytest.mark.parametrize("gate", ["assembly", "source", "migration", "source_receipt"])
 @pytest.mark.parametrize(
     "outcome", ["failure", "cancelled", "timed_out", "skipped", ""]
 )
@@ -223,7 +236,16 @@ def test_default_writer_depends_on_existing_source_migration_and_image_owners():
     writer_name, writer, step = _writer()
     qualifications = {
         path: next(
-            (name for name, job in jobs.items() if job.get("uses") == path), None
+            (
+                name
+                for name, job in jobs.items()
+                if job.get("uses") == path
+                and (
+                    path.endswith("alembic-migration-gate.yml")
+                    or job.get("with", {}).get("candidate_image")
+                )
+            ),
+            None,
         )
         for path in (
             "./.github/workflows/pytest-unit-tests.yml",
@@ -279,86 +301,60 @@ def test_assembly_preserves_version_and_sha_tags_without_moving_default_channel(
     assert (tmp_path / "outputs").read_text().strip() == "image_ref=" + CANDIDATE
 
 
-def test_existing_installed_image_consumers_use_the_optional_release_manifest():
+def test_existing_installed_image_consumers_use_one_shared_immutable_manifest():
     config = _workflow("pytest-unit-tests.yml")
     events = config.get("on", config.get(True))
     assert events["workflow_call"]["inputs"]["candidate_image"]["default"] == ""
-    installed_jobs = [
-        job
-        for job in config["jobs"].values()
-        if any(
-            "first_run_journey_3938.sh" in step.get("run", "")
-            or "gather_exact_artifact_runtime_evidence.py" in step.get("run", "")
-            for step in job.get("steps", [])
-        )
+    jobs = config["jobs"]
+    producer = jobs["prepare-app-image"]
+    builds = [
+        step
+        for step in producer["steps"]
+        if step.get("with", {}).get("file") == "api_service/Dockerfile"
     ]
-    assert len(installed_jobs) == 2
-    for job in installed_jobs:
-        steps = job["steps"]
+    assert len(builds) == 1
+    assert builds[0]["with"]["outputs"].startswith("type=oci,")
+    assert builds[0]["with"].get("push", False) is False
+    for name in ("integration-ci", "omnigent-exact-artifact", "omnigent-host-recovery"):
+        job = jobs[name]
+        assert "prepare-app-image" in _ancestors(jobs, name)
+        assert not any(
+            step.get("with", {}).get("file") == "api_service/Dockerfile"
+            for step in job["steps"]
+        )
         pulls = [
             step
-            for step in steps
-            if re.search(r"docker(?:\s+image)?\s+pull\s", step.get("run", ""))
-            and "CANDIDATE_IMAGE" in step.get("env", {})
+            for step in job["steps"]
+            if 'docker pull "$CANDIDATE_IMAGE"' in step.get("run", "")
         ]
         assert len(pulls) == 1
         assert _image_value(pulls[0]["env"]["CANDIDATE_IMAGE"], CANDIDATE) == CANDIDATE
-        builds = [
-            step
-            for step in steps
-            if step.get("with", {}).get("file", "").removeprefix("./")
-            == "api_service/Dockerfile"
-            and step["with"].get("target") != "test-runtime"
-        ]
-        assert len(builds) == 1
-        # The optional input owns whether the existing local build or registry
-        # pull runs; keep ordinary empty-input builds available.
-        assert "inputs.candidate_image" in builds[0]["if"]
-        assert "inputs.candidate_image" in pulls[0]["if"]
-    integration = next(
-        job
-        for job in installed_jobs
-        if any(
-            "first_run_journey_3938.sh" in step.get("run", "") for step in job["steps"]
-        )
-    )
-    image_consumers = [
+        assert "org.opencontainers.image.revision" in pulls[0]["run"]
+    journeys = [
         step
-        for step in integration["steps"]
+        for step in jobs["integration-ci"]["steps"]
         if "first_run_journey_3938.sh" in step.get("run", "")
     ]
-    assert len(image_consumers) == 3
-    local_image = next(
-        step["with"]["tags"]
-        for step in integration["steps"]
-        if step.get("with", {}).get("file", "").removeprefix("./")
-        == "api_service/Dockerfile"
-        and step["with"].get("target") != "test-runtime"
-    )
+    assert len(journeys) == 3
     assert all(
         _image_value(step["env"]["MOONMIND_IMAGE"], CANDIDATE) == CANDIDATE
-        for step in image_consumers
-    )
-    assert all(
-        _image_value(step["env"]["MOONMIND_IMAGE"], "") == local_image
-        for step in image_consumers
+        for step in journeys
     )
     journal = next(
         step
-        for step in integration["steps"]
+        for step in jobs["integration-ci"]["steps"]
         if "MOONMIND_TEST_JOURNAL_APP_IMAGE" in step.get("env", {})
     )
     assert (
         _image_value(journal["env"]["MOONMIND_TEST_JOURNAL_APP_IMAGE"], CANDIDATE)
         == CANDIDATE
     )
-    assert (
-        _image_value(journal["env"]["MOONMIND_TEST_JOURNAL_APP_IMAGE"], "")
-        == local_image
-    )
 
 
-@pytest.mark.parametrize("release_image", ["", CANDIDATE])
+@pytest.mark.parametrize(
+    "release_image",
+    ["localhost:5001/moonmind-test-qualification@sha256:" + "d" * 64, CANDIDATE],
+)
 def test_exact_probe_and_recovery_consumers_keep_registry_and_local_identities_distinct(
     tmp_path, release_image
 ):
@@ -398,18 +394,21 @@ def test_exact_probe_and_recovery_consumers_keep_registry_and_local_identities_d
     )
     assert result.returncode == 0, result.stderr
     values = dict(line.split("=", 1) for line in output.read_text().splitlines())
-    expected = release_image or "sha256:" + "d" * 64
+    expected = release_image
     assert values["runnable"] == expected
-    assert values["digest"] == ("sha256:" + ("a" if release_image else "d") * 64)
-    assert values["ref"] == (
-        release_image or "moonmind-exact-artifact@sha256:" + "d" * 64
-    )
+    assert values["digest"] == release_image.rsplit("@", 1)[1]
+    assert values["ref"] == release_image
     for consumer, flag in (
         ("gather_exact_artifact_runtime_evidence.py", "--image"),
         ("run_omnigent_exact_artifact_conformance.py", "--runnable-image"),
         ("run_credential_free_host_recovery.py", "--moonmind-image"),
     ):
-        step = next(step for step in job["steps"] if consumer in step.get("run", ""))
+        step = next(
+            step
+            for candidate_job in jobs
+            for step in candidate_job.get("steps", [])
+            if consumer in step.get("run", "")
+        )
         argument = re.search(re.escape(flag) + r'\s+"([^"\n]+)"', step["run"])[1]
         match = re.fullmatch(
             r"\$\{\{\s*steps\."
@@ -451,6 +450,8 @@ def test_supplied_image_selects_every_required_journey_on_a_narrow_pr(
             "GITHUB_OUTPUT": str(output),
             "QUALIFICATION_IMAGE": candidate,
             "QUALIFICATION_ARCHIVE": "",
+            "MOONMIND_CI_PHASE": "full",
+            "SOURCE_RECEIPT": "",
         },
         text=True,
         capture_output=True,
@@ -479,16 +480,10 @@ def test_isolated_caller_qualifies_one_archive_without_a_publication_path():
         for name, job in jobs.items()
         if job.get("uses") == "./.github/workflows/pytest-unit-tests.yml"
     )
-    producers = []
-    for key in ("candidate_image", "candidate_oci_artifact"):
-        producer, output = re.fullmatch(
-            r"\$\{\{\s*needs\.([^.]+)\.outputs\.([^\s]+)\s*\}\}", caller["with"][key]
-        ).groups()
-        assert producer in _ancestors(jobs, caller_name)
-        assert output in jobs[producer]["outputs"]
-        producers.append(producer)
-    assert len(set(producers)) == 1, "One owner must assemble the shared candidate"
-    builder = jobs[producers[0]]
+    events = fixture.get("on", fixture.get(True))
+    assert "pull_request" not in events
+    assert caller.get("with", {}).get("candidate_image", "") == ""
+    builder = _workflow("pytest-unit-tests.yml")["jobs"]["prepare-app-image"]
     image_builds = [
         step
         for step in builder["steps"]
@@ -533,7 +528,7 @@ def test_isolated_caller_qualifies_one_archive_without_a_publication_path():
             step
             for step in steps
             if step.get("with", {}).get("name")
-            == "${{ inputs.candidate_oci_artifact }}"
+            == "${{ needs.prepare-app-image.outputs.artifact_name }}"
         ]
         assert len(downloads) == 1
         assert steps.index(downloads[0]) < steps.index(restore)
@@ -551,6 +546,11 @@ def _concurrency_value(expression, context):
 
     def field(token):
         token = token.strip()
+        if "==" in token:
+            left, right = token.split("==", 1)
+            return str(field(left)) == str(field(right))
+        if token.startswith("'") or token.isdecimal():
+            return ast.literal_eval(token)
         assert re.fullmatch(r"[\w.]+", token), f"Unsupported concurrency field: {token}"
         value = context
         for key in token.split("."):
@@ -633,3 +633,70 @@ def test_ordinary_ci_keeps_latest_run_cancellation_within_its_existing_owner(
         assert group("same-run", number=73) != group("same-run", number=74)
     else:
         assert group("same-run") != group("same-run", ref="refs/heads/another")
+
+
+def test_release_source_checks_start_before_assembly_and_only_once():
+    config = _workflow("docker-publish.yml")
+    source = config["jobs"]["source-checks"]
+    assert source["uses"] == "./.github/workflows/pytest-unit-tests.yml"
+    assert source["with"]["verification_phase"] == "source"
+    assert "assemble" not in _ancestors(config["jobs"], "source-checks")
+    assert config["jobs"]["qualify"]["with"]["verification_phase"] == "artifact"
+    assert "source-checks" not in _ancestors(config["jobs"], "qualify")
+    assert "prepare-recovery-images" in _ancestors(config["jobs"], "qualify")
+    assert "assemble" not in _ancestors(config["jobs"], "prepare-recovery-images")
+    proof = config["jobs"]["verify-source-receipt"]
+    assert {"source-checks", "qualify", "assemble"} <= set(proof["needs"])
+    assert "verify-source-receipt" in _ancestors(config["jobs"], _writer()[0])
+    test_events = _workflow("pytest-unit-tests.yml")
+    events = test_events.get("on", test_events.get(True))
+    assert "push" not in events
+
+
+def test_one_pr_candidate_is_consumed_by_every_installed_lane():
+    jobs = _workflow("pytest-unit-tests.yml")["jobs"]
+    assert "prepare-app-image" in jobs
+    for name in ("integration-ci", "omnigent-exact-artifact"):
+        assert "prepare-app-image" in _ancestors(jobs, name)
+        assert not any(
+            step.get("with", {}).get("file", "").removeprefix("./")
+            == "api_service/Dockerfile"
+            for step in jobs[name]["steps"]
+        )
+    assert "prepare-app-image" not in _ancestors(jobs, "integration-hermetic")
+
+
+def test_review_readiness_keeps_the_existing_same_head_verification():
+    for name in ("pytest-unit-tests.yml", "alembic-migration-gate.yml"):
+        workflow = _workflow(name)
+        events = workflow.get("on", workflow.get(True))
+        assert {"opened", "synchronize", "reopened"} <= set(
+            events["pull_request"]["types"]
+        )
+        assert "ready_for_review" not in events["pull_request"]["types"]
+
+
+def test_explicit_release_reruns_cannot_cancel_current_publication():
+    config = _workflow("docker-publish.yml")["concurrency"]
+
+    def values(run_id, *, event="push", attempt=1):
+        context = {
+            "github": {
+                "event_name": event,
+                "ref": "refs/heads/main",
+                "run_id": run_id,
+                "run_attempt": str(attempt),
+            }
+        }
+        return (
+            _concurrency_value(config["group"], context),
+            _concurrency_value(config["cancel-in-progress"], context) == "True",
+        )
+
+    current_group, current_cancels = values("current-run")
+    older_group, older_cancels = values("older-run")
+    assert current_group == older_group and current_cancels and older_cancels
+    for arguments in ({"attempt": 2}, {"event": "workflow_dispatch"}):
+        group, cancels = values("older-run", **arguments)
+        assert group != current_group
+        assert not cancels

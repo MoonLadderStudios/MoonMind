@@ -40,7 +40,6 @@ from aiohttp import web
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api_service.db.models import (
-    Base,
     ManagedAgentProviderProfile,
     ProviderCredentialSource,
     ProviderProfileAuthMethod,
@@ -92,10 +91,8 @@ RESULT_PATH = "skill-delivery.txt"
 
 
 @pytest_asyncio.fixture()
-async def session_factory(tmp_path, monkeypatch):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/codex-journey.db")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
+async def session_factory(tmp_path, monkeypatch, empty_sqlite_database):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{empty_sqlite_database}")
     factory = async_sessionmaker(engine, expire_on_commit=False)
     monkeypatch.setattr("api_service.db.base.async_session_maker", factory)
     monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")

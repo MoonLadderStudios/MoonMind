@@ -4,6 +4,7 @@ import inspect
 import os
 import select
 import signal
+import shutil
 import subprocess
 import sys
 import threading
@@ -42,6 +43,33 @@ _TEMPORAL_BOUNDARY_TEST_PATHS = {
 }
 
 _TEMPORAL_BOUNDARY_TEST_PATH_PREFIXES = (Path("tests/unit/workflows/temporal"),)
+
+
+@pytest.fixture(scope="session")
+def sqlite_schema_template(tmp_path_factory):
+    """One closed, empty schema per worker; never share engines or test data."""
+    from sqlalchemy import create_engine
+
+    from api_service.db.models import Base
+
+    path = tmp_path_factory.mktemp("sqlite-schema") / "empty.db"
+    engine = create_engine(f"sqlite:///{path}")
+    try:
+        Base.metadata.create_all(engine)
+        with engine.connect() as connection:
+            connection.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
+            connection.exec_driver_sql("PRAGMA journal_mode=DELETE")
+    finally:
+        engine.dispose()
+    path.chmod(0o444)
+    return path
+
+
+@pytest.fixture
+def empty_sqlite_database(sqlite_schema_template, tmp_path):
+    path = tmp_path / "database.db"
+    shutil.copyfile(sqlite_schema_template, path)
+    return path
 
 
 @pytest_asyncio.fixture()

@@ -91,21 +91,12 @@ from moonmind.omnigent.bridge_config import parse_bridge_config
 from api_service.api.routers.omnigent_bridge_composition import (
     OmnigentBridgeModeUnsupportedError,
     build_bridge_session_proxy,
-    build_embedded_host_facade,
 )
 
 proxy = build_bridge_session_proxy(
     config=parse_bridge_config({}), forward_headers={}
 )
 assert proxy is not None, "proxy composition must not require launch modules"
-
-try:
-    build_embedded_host_facade(parse_bridge_config({}))
-except OmnigentBridgeModeUnsupportedError as exc:
-    assert "upstream_omnigent_server_proxy" in str(exc), str(exc)
-    assert "omnigent.legacy.embedded_host_transport" in str(exc), str(exc)
-else:
-    raise AssertionError("embedded builder must fail actionably without launch modules")
 
 from moonmind.omnigent.embedded_drain import summarize_embedded_drain
 

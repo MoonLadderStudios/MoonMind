@@ -1,4 +1,4 @@
-"""Preserve provider work when an execution's SSE transport fails."""
+"""Preserve provider work when stream or snapshot observation fails."""
 
 from __future__ import annotations
 
@@ -16,6 +16,9 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stream_error_type", [httpx.ReadTimeout, httpx.ReadError, httpx.RemoteProtocolError]
+)
 @pytest.mark.parametrize(
     "pooled,resources_available,stall",
     [
@@ -38,9 +41,16 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
     ],
 )
 async def test_stream_failure_captures_work_without_repeating_provider_effects(
-    monkeypatch, tmp_path, pooled, resources_available, stall
+    monkeypatch, tmp_path, pooled, resources_available, stall, stream_error_type
 ) -> None:
     posted = asyncio.Event()
+    observation_interrupted = asyncio.Event()
+    recoverable_read = stream_error_type in (httpx.ReadError, httpx.RemoteProtocolError)
+    expected_failure = (
+        "snapshot timed out after observation interruption"
+        if recoverable_read
+        else "stream disconnected after accepted work"
+    )
     requests: list[tuple[str, str]] = []
     clients: list[httpx.AsyncClient] = []
     session_path = "/v1/sessions/session-1"
@@ -71,7 +81,8 @@ async def test_stream_failure_captures_work_without_repeating_provider_effects(
                     + b"x" * (64 * 1024)
                     + b"\n\n"
                 )
-            raise httpx.ReadError("stream disconnected after accepted work")
+            observation_interrupted.set()
+            raise stream_error_type("stream disconnected after accepted work")
 
     async def handle(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -93,6 +104,11 @@ async def test_stream_failure_captures_work_without_repeating_provider_effects(
             finally:
                 read_cancelled.set()
         if path == session_path:
+            if recoverable_read and observation_interrupted.is_set():
+                # A broken read now leaves the marked-turn observer active.
+                # Fail its snapshot read without replaying the accepted turn;
+                # the existing failure-capture and harvest budgets still apply.
+                raise httpx.ReadTimeout(expected_failure, request=request)
             return httpx.Response(200, json={"status": "idle", "items": []})
         if path == f"{session_path}/stream":
             return httpx.Response(
@@ -137,6 +153,9 @@ async def test_stream_failure_captures_work_without_repeating_provider_effects(
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
     monkeypatch.setenv("OMNIGENT_API_TOKEN", "test-capture-token")
     monkeypatch.setattr("moonmind.omnigent.transport.httpx.AsyncClient", create_client)
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._TERMINAL_RECONCILIATION_INTERVAL_SECONDS", 0.01
+    )
     if stall:
         # Artifact I/O and scheduling must not spend this scenario's budget
         # before it reaches the chosen blocked read. Its real timeout cancels
@@ -189,12 +208,9 @@ async def test_stream_failure_captures_work_without_repeating_provider_effects(
         assert result.failure_class == "integration_error"
         assert result.provider_error_code == "omnigent_http_error"
         assert result.retry_recommendation is None
-        assert "stream disconnected after accepted work" in result.summary
+        assert expected_failure in result.summary
         diagnostics = json.loads(await gateway.read_text(result.diagnostics_ref))
-        assert (
-            "stream disconnected after accepted work"
-            in diagnostics["diagnostics"]["message"]
-        )
+        assert expected_failure in diagnostics["diagnostics"]["message"]
         manifest = json.loads(
             await gateway.read_text(result.metadata["captureManifestRef"])
         )
@@ -271,6 +287,13 @@ async def test_stream_failure_captures_work_without_repeating_provider_effects(
         external_state = json.loads(
             await gateway.read_text(result.metadata["externalStateRef"])
         )
+        if recoverable_read:
+            interruption = external_state["observationDiagnostics"][0]
+            assert interruption["code"] == "omnigent_stream_read_interrupted"
+            assert interruption["transportError"] == stream_error_type.__name__
+            assert "stream disconnected after accepted work" in interruption["message"]
+        else:
+            assert "observationDiagnostics" not in external_state
         assert external_state["firstMessage"]["posted"] is True
         assert external_state["patchEvidence"]["patchUnavailable"] is patch_missing
         if stall == "diff":
@@ -284,6 +307,7 @@ async def test_stream_failure_captures_work_without_repeating_provider_effects(
             ("POST", "/v1/sessions"),
             ("POST", f"{session_path}/events"),
         ]
+        assert requests.count(("GET", f"{session_path}/stream")) == 1
         if pooled:
             assert len(clients) == 1
             assert not clients[0].is_closed
