@@ -280,6 +280,7 @@ RepositoryOperation = Literal[
     "review_request",
     "merge_request",
     "issues",
+    "projects",
     # Read existing code-scanning, Dependabot and secret-scanning alerts.
     "security_read",
 ]
@@ -553,6 +554,7 @@ def reconcile_default_git_connection(
             "review_request",
             "merge_request",
             "issues",
+            "projects",
             "security_read",
         ),
         clientPolicy=client_policy,

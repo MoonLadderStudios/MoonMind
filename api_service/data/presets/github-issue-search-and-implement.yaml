@@ -48,6 +48,11 @@ annotations:
     type: object
     required: []
     properties:
+      project_source:
+        type: object
+        title: Project source
+        description: Optional structured project source; GitHub Project Implement supplies its ordinary configuration fields here.
+        default: {}
       issue_search:
         type: string
         title: GitHub issue search
@@ -88,6 +93,8 @@ annotations:
         description: Optional refs/heads/ branch ref; blank uses the remote default branch.
         default: ''
   uiSchema:
+    project_source:
+      advanced: true
     completion_target_ref:
       widget: text
       advanced: true
@@ -100,6 +107,7 @@ annotations:
       widget: text
       advanced: true
   defaults:
+    project_source: {}
     completion_target_ref: ''
     include_all_authors: false
     run_verify: true
@@ -183,6 +191,8 @@ steps:
       repository: '{{ inputs.repository or context.get(''repository'', '''') }}'
       issueSearch: '{{ inputs.issue_search }}'
       includeAllAuthors: '{{ inputs.include_all_authors }}'
+      projectSource: '{{ inputs.project_source }}'
+      completionTargetRef: '{{ inputs.completion_target_ref }}'
       artifactPath: artifacts/github-issue-implement-brief.json
       constraints: '{{ inputs.constraints }}'
       predecessorStopped: '{{ context.get(''predecessorStopped'', context.get(''predecessor_stopped'', '''')) }}'

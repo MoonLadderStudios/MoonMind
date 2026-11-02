@@ -718,6 +718,8 @@ def _render_value(
                 # as "false". Keep actual boolean/numeric rendering below.
                 if isinstance(native, str):
                     return native
+                if isinstance(native, (dict, list)):
+                    return native
                 rendered = str(native)
             else:
                 rendered = env.from_string(value).render(**variables)
@@ -1487,6 +1489,36 @@ def _normalize_seed_annotations(item: Mapping[str, Any]) -> dict[str, Any]:
         annotations,
         raw_inputs if isinstance(raw_inputs, list) else None,
     )
+
+
+def _effective_template_inputs(
+    template: Preset, context: Mapping[str, Any] | None
+) -> list[dict[str, Any]]:
+    """Apply the same typed input contract at root and nested preset boundaries."""
+    schema = _effective_inputs_schema(
+        slug=template.slug,
+        inputs_schema=template.inputs_schema or [],
+        context=context,
+    )
+    annotations = template.annotations or {}
+    annotated = annotations.get("inputSchema")
+    if not isinstance(annotated, Mapping):
+        return schema
+    definitions = _schema_contract_input_definitions(
+        input_schema=annotated,
+        ui_schema=(
+            annotations.get("uiSchema")
+            if isinstance(annotations.get("uiSchema"), Mapping)
+            else {}
+        ),
+        defaults=(
+            annotations.get("defaults")
+            if isinstance(annotations.get("defaults"), Mapping)
+            else {}
+        ),
+    )
+    names = {str(field.get("name") or "").strip() for field in schema}
+    return [*schema, *(field for field in definitions if field["name"] not in names)]
 
 
 def _normalize_preset_annotations(
@@ -2812,10 +2844,8 @@ class PresetCatalogService:
                         include_path=include_path,
                     )
                 try:
-                    child_schema = _effective_inputs_schema(
-                        slug=child_template.slug,
-                        inputs_schema=child_template.inputs_schema or [],
-                        context=variables.get("context"),
+                    child_schema = _effective_template_inputs(
+                        child_template, variables.get("context")
                     )
                     submitted_child_inputs = _apply_contextual_input_overrides(
                         slug=child_template.slug,
@@ -2988,40 +3018,7 @@ class PresetCatalogService:
             if isinstance(input_repository, str) and input_repository.strip():
                 effective_context["repository"] = input_repository.strip()
                 effective_context["repo"] = input_repository.strip()
-        effective_schema = _effective_inputs_schema(
-            slug=template.slug,
-            inputs_schema=template.inputs_schema or [],
-            context=effective_context,
-        )
-        annotated_schema = (template.annotations or {}).get("inputSchema")
-        if isinstance(annotated_schema, Mapping):
-            annotated_ui_schema = (template.annotations or {}).get("uiSchema")
-            annotated_defaults = (template.annotations or {}).get("defaults")
-            contract_definitions = _schema_contract_input_definitions(
-                input_schema=annotated_schema,
-                ui_schema=(
-                    annotated_ui_schema
-                    if isinstance(annotated_ui_schema, Mapping)
-                    else {}
-                ),
-                defaults=(
-                    annotated_defaults
-                    if isinstance(annotated_defaults, Mapping)
-                    else {}
-                ),
-            )
-            existing_names = {
-                str(definition.get("name") or "").strip()
-                for definition in effective_schema
-            }
-            effective_schema = [
-                *effective_schema,
-                *[
-                    definition
-                    for definition in contract_definitions
-                    if definition["name"] not in existing_names
-                ],
-            ]
+        effective_schema = _effective_template_inputs(template, effective_context)
         submitted_inputs = _apply_contextual_input_overrides(
             slug=template.slug,
             inputs_schema=effective_schema,

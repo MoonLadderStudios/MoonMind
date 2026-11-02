@@ -1,0 +1,131 @@
+slug: github-project-implement
+title: GitHub Project Implement
+releaseStatus: active
+description: Discover the selected repository's project or use an explicit project URL, consume one eligible real GitHub issue from ordered columns, and synchronize its board phase through the shared implementation workflow. Draft issues and pull requests never qualify. Blank source columns select Ready or one unambiguous Ready equivalent.
+tags: [github, project, implementation, pull-request]
+requiredCapabilities: [git, gh, docker]
+annotations:
+  issueProvider: github
+  output: pull-request
+  titleEnrichment:
+    enabled: true
+    provider: github
+    sourceTool: github.load_issue_preset_brief
+    targetStyle: base-colon-hash
+  inputSchema:
+    type: object
+    required: []
+    properties:
+      project_url:
+        type: string
+        title: GitHub project URL (optional)
+        description: Blank discovers an open linked project for the selected repository, preferring a unique same-name match when several are linked. With no linked project, use a unique same-name project under the repository owner. An explicit organization/user project or /views/N URL overrides discovery.
+        default: ''
+      source_columns:
+        type: string
+        title: Pull columns in priority order
+        description: One column name per line. Blank selects Ready, otherwise one unambiguous Selected for Development or Ready for Development equivalent. Never falls back to Backlog.
+        default: ''
+      column_field:
+        type: string
+        title: Column field
+        default: Status
+      within_column_order:
+        type: string
+        title: Order within each column
+        enum: [oldest, priority]
+        default: oldest
+      priority_field:
+        type: string
+        title: Priority field
+        description: Used for priority ordering. Lower numbers or earlier single-select options run first; oldest issue breaks ties.
+        default: Priority
+      in_progress_column:
+        type: string
+        title: In Progress column
+        description: Blank discovers In Progress. Enter an existing column name to override.
+        default: ''
+      review_column:
+        type: string
+        title: Review column
+        description: Blank discovers one of In Review, Code Review, or Review. PR-only runs finish here.
+        default: ''
+      done_column:
+        type: string
+        title: Done column
+        description: Blank discovers one of Done, Completed, or Complete. Applied only after verified completion.
+        default: ''
+      recovery_column:
+        type: string
+        title: Recovery column
+        description: Blank discovers Recovery Needed when present. An unmapped exceptional phase remains visible in issue lifecycle labels and the run summary.
+        default: ''
+      attention_column:
+        type: string
+        title: Attention column
+        description: Blank discovers Needs Attention when present. Cancellation remains a hold and starts no successor.
+        default: ''
+      include_all_authors:
+        type: boolean
+        title: Include issues created by other users
+        default: true
+      constraints:
+        type: string
+        title: Constraints
+        default: ''
+      run_verify:
+        type: boolean
+        title: Run verification
+        default: true
+      completion_target_ref:
+        type: string
+        title: Completion target ref
+        default: ''
+  uiSchema:
+    source_columns: {widget: textarea}
+    column_field: {advanced: true}
+    priority_field: {advanced: true}
+    in_progress_column: {advanced: true}
+    review_column: {advanced: true}
+    done_column: {advanced: true}
+    recovery_column: {advanced: true}
+    attention_column: {advanced: true}
+    completion_target_ref: {advanced: true}
+  defaults:
+    project_url: ''
+    source_columns: ''
+    column_field: Status
+    within_column_order: oldest
+    priority_field: Priority
+    in_progress_column: ''
+    review_column: ''
+    done_column: ''
+    recovery_column: ''
+    attention_column: ''
+    include_all_authors: true
+    constraints: ''
+    run_verify: true
+    completion_target_ref: ''
+steps:
+- kind: include
+  slug: github-issue-search-and-implement
+  alias: implement-project-issue
+  inputMapping:
+    repository: '{{ context.get("repository", "") }}'
+    issue_search: ''
+    include_all_authors: '{{ inputs.include_all_authors }}'
+    constraints: '{{ inputs.constraints }}'
+    run_verify: '{{ inputs.run_verify }}'
+    completion_target_ref: '{{ inputs.completion_target_ref }}'
+    project_source:
+      url: '{{ inputs.project_url }}'
+      columns: '{{ inputs.source_columns }}'
+      field: '{{ inputs.column_field }}'
+      order: '{{ inputs.within_column_order }}'
+      priorityField: '{{ inputs.priority_field }}'
+      phases:
+        in_progress: '{{ inputs.in_progress_column }}'
+        code_review: '{{ inputs.review_column }}'
+        closed: '{{ inputs.done_column }}'
+        recovery_needed: '{{ inputs.recovery_column }}'
+        needs_attention: '{{ inputs.attention_column }}'

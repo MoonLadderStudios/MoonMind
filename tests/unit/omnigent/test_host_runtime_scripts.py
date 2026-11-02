@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from moonmind.omnigent.host_services.runtime_scripts import OmnigentRuntimeScriptService
+from tests.helpers.provider_egress import minimax_egress  # noqa: F401
 
 
 def test_profile_owned_literal_environment_reaches_the_native_runner():
@@ -37,6 +38,7 @@ def test_profile_owned_literal_environment_reaches_the_native_runner():
     assert "ANTHROPIC_AUTH_TOKEN" not in environment
 
 
+@pytest.mark.usefixtures("minimax_egress")
 def test_custom_codex_projection_runs_through_the_native_executable_boundary(tmp_path):
     import os
 

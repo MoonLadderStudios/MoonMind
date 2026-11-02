@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -117,9 +118,16 @@ def is_parent_epic(issue: Mapping[str, Any]) -> bool:
     )
 
 
-def declared_dependencies(
+@dataclass(frozen=True)
+class _DependencyDeclarations:
+    scopes: dict[tuple[str, int], str]
+    children: set[tuple[str, int]]
+    prose_children: set[tuple[str, int]]
+
+
+def _declared_dependencies(
     body: str, repository: str, *, parent_epic: bool = False
-) -> dict[tuple[str, int], str]:
+) -> _DependencyDeclarations:
     """Read declared dependencies and child lists, never contextual issue links.
 
     Each reference carries its declared scope. Only a declaration whose own
@@ -134,7 +142,7 @@ def declared_dependencies(
     the same shape to divide scope with siblings, so it stays contextual there.
     """
     declarations = [
-        (match.group("refs"), _declaration_scope(match.group("keyword")), False)
+        (match.group("refs"), _declaration_scope(match.group("keyword")), "dependency")
         for match in _PREREQUISITE_DECLARATION_RE.finditer(body)
     ]
     # Child lists declare dependencies even when a stale checkbox claims
@@ -169,7 +177,7 @@ def declared_dependencies(
             # Only each sentence's leading reference list is consumed below,
             # so later contextual mentions in the same sentence stay prose.
             declarations.extend(
-                (sentence, PREREQUISITE_SCOPE_START, True)
+                (sentence, PREREQUISITE_SCOPE_START, "prose")
                 for sentence in _SENTENCE_BOUNDARY_RE.split(token.content)
                 if _declares_tracked_child(sentence)
             )
@@ -193,11 +201,14 @@ def declared_dependencies(
                 and context_section_level is None
                 and _declares_tracked_child(entry)
             ):
-                declarations.append((entry, PREREQUISITE_SCOPE_START, True))
+                declarations.append((entry, PREREQUISITE_SCOPE_START, "child"))
     scopes: dict[tuple[str, int], str] = {}
-    for declaration, scope, is_child in declarations:
+    children: set[tuple[str, int]] = set()
+    prose_children: set[tuple[str, int]] = set()
+    dependencies: set[tuple[str, int]] = set()
+    for declaration, scope, kind in declarations:
         text = _normalize_issue_references(declaration)
-        if is_child:
+        if kind != "dependency":
             # A spaced dash introduces a title, including numeric titles such
             # as "2FA support". A spaced range must name its endpoint with #.
             text = re.split(r"\s+[-\u2013\u2014]\s+(?![\s#])", text, maxsplit=1)[0]
@@ -221,11 +232,42 @@ def declared_dependencies(
                 # nothing useful can start until it is resolved.
                 if scopes.get(key) != PREREQUISITE_SCOPE_START:
                     scopes[key] = scope
+                if kind == "child":
+                    children.add(key)
+                elif kind == "prose":
+                    prose_children.add(key)
+                else:
+                    dependencies.add(key)
             text = text[match.end():].lstrip(" \t,;/")
             text = re.sub(r"^(?:and\b|&)\s*", "", text, flags=re.IGNORECASE)
     if len(scopes) > 100:
         raise ValueError("GitHub prerequisite declaration exceeds 100 issues.")
-    return scopes
+    return _DependencyDeclarations(
+        scopes, children, prose_children - children - dependencies
+    )
+
+
+def declared_dependencies(
+    body: str, repository: str, *, parent_epic: bool = False
+) -> dict[tuple[str, int], str]:
+    """Declared dependency scopes, retaining start-blocking precedence."""
+
+    return _declared_dependencies(body, repository, parent_epic=parent_epic).scopes
+
+
+def _observed_prerequisite_state(payload: Mapping[str, Any]) -> str:
+    github_state = str(payload["state"])
+    if "pull_request" not in payload or github_state != "closed":
+        return github_state
+    merged_at = payload["pull_request"].get("merged_at")
+    if isinstance(merged_at, str):
+        try:
+            if datetime.fromisoformat(merged_at).tzinfo is not None:
+                return "merged"
+        except ValueError:
+            pass
+    # Closing a PR without merging, or missing merge evidence, cannot satisfy it.
+    return github_state
 
 
 def declared_prerequisites(
@@ -262,23 +304,21 @@ async def check_prerequisites(
 ) -> list[dict[str, Any]]:
     """Resolve prerequisite state through authenticated GitHub reads only.
 
-    Only an open start-blocking prerequisite denies selection. Open completion
+    An unresolved start-blocking prerequisite denies selection. Unresolved completion
     dependencies are recorded on ``lookup.completion_dependencies`` (when
     ``include_completion`` authorizes the extra reads) so the completion gate
     can hold closure without stopping independently useful implementation.
     """
     body = str(issue.get("body") or "")
     parent_epic = is_parent_epic(issue)
-    scopes = declared_dependencies(body, repository, parent_epic=parent_epic)
+    declarations = _declared_dependencies(body, repository, parent_epic=parent_epic)
+    scopes = declarations.scopes
     # An epic's prose naming another epic describes a peer program, not a
     # child; open peers that name each other would otherwise block both
     # forever. PR references in prose likewise describe implementation context,
-    # not child issues. Explicit declarations and tracking lists stay strict.
-    prose_children = (
-        set(scopes) - set(declared_dependencies(body, repository))
-        if parent_epic
-        else set()
-    )
+    # not child issues. Tracked children stay issue-only; an explicit dependency
+    # on a PR is satisfied by authenticated merge evidence, never closure alone.
+    prose_children = declarations.prose_children
     refs = [
         (repo, number, scope)
         for (repo, number), scope in scopes.items()
@@ -324,21 +364,24 @@ async def check_prerequisites(
                     raise ValueError(
                         "GitHub prerequisite identity or state is invalid."
                     )
-                lookup.states[key] = payload["state"]
+                lookup.states[key] = _observed_prerequisite_state(payload)
                 if "pull_request" in payload:
                     lookup.pull_requests.add(key)
                 if is_parent_epic(payload):
                     lookup.epics.add(key)
-                prerequisite_state = payload["state"]
+                prerequisite_state = lookup.states[key]
             if key in lookup.pull_requests:
-                if (dependency_repo, number) not in prose_children:
+                if (dependency_repo, number) in prose_children:
+                    continue
+                if (dependency_repo, number) in declarations.children:
                     raise ValueError(
                         "GitHub prerequisite identity or state is invalid: "
                         f"{dependency_repo}#{number} is a pull request, not a child issue "
                         f"of {repository}#{issue.get('number')}."
                     )
-                continue
-            if prerequisite_state != "open":
+                if prerequisite_state == "merged":
+                    continue
+            elif prerequisite_state != "open":
                 continue
             if (dependency_repo, number) in prose_children and key in lookup.epics:
                 continue
@@ -779,6 +822,7 @@ async def resolve_issue(
     writers_settled: bool | None = None,
     reserve_candidate: Callable[[int], Awaitable[bool]] | None = None,
     include_all_authors: bool = False,
+    project_source: Mapping[str, Any] | None = None,
 ) -> tuple[int | None, dict[str, Any]]:
     """Select the best search match, or first unblocked open issue, within 500 rows.
 
@@ -845,6 +889,17 @@ async def resolve_issue(
         }
     }
     counts = evidence["searchEvidence"]
+    project_queue = None
+    if project_source:
+        from moonmind.workflows.temporal.github_project import ProjectError, discover_project_queue
+
+        if not is_blank_search:
+            return None, {**evidence, "reasonCode": "conflicting_project_search", "error": "Use project columns and view filters instead of combining a project with issue search."}
+        try:
+            project_queue = await discover_project_queue(github_service, repository, project_source)
+        except ProjectError as exc:
+            return None, {**evidence, "reasonCode": exc.code, "error": str(exc)}
+        counts["project"] = project_queue.evidence
     token, error = await github_service.resolve_github_token(
         repo=repository, operations=ISSUE_OPERATIONS
     )
@@ -889,7 +944,9 @@ async def resolve_issue(
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         for page in range(1, 6):
-            if not is_blank_search:
+            if project_queue is not None:
+                payload = project_queue.items[(page - 1) * 100:page * 100]
+            elif not is_blank_search:
                 url = "https://api.github.com/search/issues"
                 if include_all_authors:
                     scoped_q = f"{normalized_query} repo:{repository} is:issue is:open"
@@ -914,11 +971,14 @@ async def resolve_issue(
                 if not include_all_authors and authenticated_user is not None:
                     params["creator"] = str(authenticated_user["login"])
             try:
-                response = await client.get(
-                    url, params=params, headers=github_service._github_headers(token)
-                )
-                response.raise_for_status()
-                payload = response.json()
+                if project_queue is not None:
+                    response = None
+                else:
+                    response = await client.get(
+                        url, params=params, headers=github_service._github_headers(token)
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code
                 if status in {401, 403}:
@@ -974,6 +1034,25 @@ async def resolve_issue(
                 }
             for candidate in candidates:
                 counts["candidatesExamined"] += 1
+                if project_queue is not None:
+                    number = candidate["content"]["number"]
+                    try:
+                        response = await client.get(
+                            f"https://api.github.com/repos/{repository}/issues/{number}",
+                            headers=github_service._github_headers(token),
+                        )
+                        response.raise_for_status()
+                        candidate = response.json()
+                    except (httpx.HTTPError, ValueError):
+                        return None, {**evidence, "reasonCode": "project_read_incomplete", "error": "Project issue detail could not be read."}
+                    if not isinstance(candidate, dict) or candidate.get("number") != number:
+                        return None, {**evidence, "reasonCode": "project_read_incomplete", "error": "Project issue detail does not match its selected identity."}
+                    if candidate.get("state") == "closed":
+                        _record_rejection(counts, number, "candidate_closed")
+                        continue
+                    if not project_queue.matches(candidate, project_queue.bindings[number]):
+                        _record_rejection(counts, number, "project_view_filter")
+                        continue
                 if not isinstance(candidate, Mapping):
                     return None, {
                         **evidence,
@@ -1187,6 +1266,20 @@ async def resolve_issue(
                         )
                         continue
                 try:
+                    if project_queue is not None:
+                        from moonmind.workflows.temporal.github_project import ProjectClient, ProjectError
+
+                        binding = project_queue.bindings[int(candidate["number"])]
+                        if not project_queue.matches(current, binding):
+                            _record_rejection(counts, candidate["number"], "project_view_filter")
+                            continue
+                        try:
+                            observed = await ProjectClient(github_service, repository).read_item(binding)
+                        except ProjectError as exc:
+                            return None, {**evidence, "reasonCode": exc.code, "error": str(exc)}
+                        if observed["optionId"] != binding["sourceOptionId"]:
+                            _record_rejection(counts, candidate["number"], "project_column_changed")
+                            continue
                     if reserve_candidate is not None and not await reserve_candidate(
                         int(candidate["number"])
                     ):
@@ -1215,11 +1308,19 @@ async def resolve_issue(
                 if selected_author is not None:
                     counts["selectedIssueAuthor"] = dict(selected_author)
                 evidence["selectedIssue"] = dict(current)
+                if project_queue is not None:
+                    evidence["selectedProjectItem"] = dict(project_queue.bindings[candidate["number"]])
+                    counts["project"]["selectedColumn"] = project_queue.bindings[candidate["number"]]["sourceColumn"]
                 return candidate["number"], evidence
-            if len(candidates) < 100:
+            if (project_queue is not None and page * 100 >= len(project_queue.items)) or (project_queue is None and len(candidates) < 100):
                 # An idle search is a completed search that selected nothing;
                 # lead with that and the operational causes, not author scope.
                 idle = "Search completed without selecting an issue."
+                if project_queue is not None:
+                    skipped = project_queue.evidence["skipped"]
+                    idle = "Project scan completed without selecting an issue."
+                    if skipped:
+                        idle += " Excluded project items: " + ", ".join(f"{reason}={count}" for reason, count in sorted(skipped.items())) + "."
                 if any(
                     counts.get("rejectionCounts", {}).get(reason)
                     for reason in RESERVATION_EXCLUSIONS

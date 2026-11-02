@@ -1084,7 +1084,7 @@ async def _compile_plan(
         fields["clear_env_keys"] = list(isolation.keys)
         fields["env_template"] = {
             "ANTHROPIC_AUTH_TOKEN": {"from_secret_ref": "provider_api_key"},
-            "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
+            "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
             "API_TIMEOUT_MS": "3000000",
             "ANTHROPIC_SMALL_FAST_MODEL": "model",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
@@ -1095,6 +1095,11 @@ async def _compile_plan(
         )
 
         templates = minimax_file_templates()
+        # Exercise file-backed provider tuning with a default-admitted endpoint.
+        # Optional providers have their own explicit-policy materializer tests.
+        templates[0]["content_template"]["model_providers"]["minimax"][
+            "base_url"
+        ] = "https://api.openai.com/v1"
         templates[0]["content_template"]["model"] = "model"
         templates[0]["content_template"]["profiles"]["m27"]["model"] = "model"
         fields.update(
@@ -1629,10 +1634,7 @@ async def assert_native_turn_saved_and_cleaned(
             "claude-native": ("anthropic", "https://api.anthropic.com"),
             "codex-native": ("openai", "https://api.openai.com/v1"),
         }[journey.harness]
-        if getattr(journey, "env_bundle", False):
-            base_url = "https://api.minimax.io/anthropic"
         if getattr(journey, "codex_config", False):
-            base_url = "https://api.minimax.io/v1"
             configuration = docker.codex_configuration
             assert configuration["document"]["model"] == "model"
             assert configuration["provider"]["request_max_retries"] == 4

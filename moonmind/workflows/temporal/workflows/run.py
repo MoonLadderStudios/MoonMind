@@ -98,6 +98,7 @@ with workflow.unsafe.imports_passed_through():
         merge_automation_candidates,
     )
     from moonmind.workflows.executions.preset_readiness import (
+        GITHUB_ISSUE_SEARCH_MAPPED_SCOPE_PATCH,
         GITHUB_ISSUE_SEARCH_SCOPE_REFRESH_PATCH,
         INSTANCE_PRESET_CAPABILITY_READINESS_PATCH,
         SAVED_PRESET_CAPABILITY_READINESS_PATCH,
@@ -12718,7 +12719,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 # issues continue without a new search downstream.
                 if workflow.patched(GITHUB_ISSUE_SEARCH_SCOPE_REFRESH_PATCH):
                     scope_refresh = github_issue_search_scope_refresh_needed(
-                        parameters
+                        parameters,
+                        # Retained histories keep the original rejection of
+                        # mapped scope until their recorded runs retire.
+                        include_mapped_scope=workflow.patched(
+                            GITHUB_ISSUE_SEARCH_MAPPED_SCOPE_PATCH
+                        ),
                     )
                     if scope_refresh is not None:
                         raise exceptions.ApplicationError(
