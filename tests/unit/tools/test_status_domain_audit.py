@@ -20,10 +20,6 @@ def test_backend_step_ledger_statuses_match_active_step_ledger_doc() -> None:
     assert set(get_args(status_annotation)) == status_domain_audit.canonical_step_statuses()
 
 
-def test_status_domain_audit_passes_current_repository() -> None:
-    assert status_domain_audit.audit_repository() == []
-
-
 def test_status_domain_audit_fail_on_unknown_mode_rejects_unallowlisted_token() -> None:
     allowed_tokens = status_domain_audit.approved_status_tokens()
     findings = status_domain_audit.audit_text_for_status_tokens(

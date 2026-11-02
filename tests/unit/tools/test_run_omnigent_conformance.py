@@ -9,6 +9,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from tools.ci.write_backend_matrix_summary import (
+    environment_fingerprint,
+    environment_path,
+    observed_environment,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "tools/run_omnigent_conformance.py"
 
@@ -19,6 +25,206 @@ def _load_runner():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [None, "coverage", "source", "attempt", "owner", "interrupted", "outside-layer"],
+)
+def test_owner_receipts_require_current_complete_collected_coverage(
+    tmp_path, monkeypatch, damage
+):
+    runner = _load_runner()
+    path = "tests/unit/omnigent/test_witness.py"
+    nodeid = path + "::test_witness"
+    identity = dict(revision="a" * 40, runId="123", attempt="2")
+    manifest = {
+        "schema": "moonmind.test-ownership/v1",
+        **identity,
+        "nodes": [
+            {"nodeid": nodeid, "path": path, "eligible": True, "owners": ["unit-fast"]}
+        ],
+    }
+    receipt = {
+        "schema": "moonmind.pytest-verification/v1",
+        **identity,
+        "suite": "unit-fast",
+        "status": "passed",
+        "exitCode": 0,
+        "python": "3.12.12",
+        "errors": [],
+        "expectedNodeIds": [nodeid],
+        "cases": [
+            {
+                "nodeid": nodeid,
+                "outcome": "passed",
+                "phases": {
+                    phase: {"outcome": "passed", "seconds": 0.01}
+                    for phase in ("setup", "call", "teardown")
+                },
+            }
+        ],
+    }
+    environment = observed_environment()
+    receipt.update(environment)
+    receipt["arguments"] = [path]
+    receipt["environmentFingerprint"] = environment_fingerprint(environment)
+    environment_path(tmp_path / "owner.receipt.json").write_text(
+        json.dumps(
+            {
+                "schema": "moonmind.pytest-environment/v1",
+                **identity,
+                "suite": "unit-fast",
+                "environment": environment,
+                "fingerprint": environment_fingerprint(environment),
+                "expectedPython": f"{sys.version_info.major}.{sys.version_info.minor}",
+                "pytestArguments": [path],
+            }
+        )
+    )
+    if damage == "coverage":
+        manifest["nodes"].append(
+            {
+                "nodeid": path + "::test_missing",
+                "path": path,
+                "eligible": True,
+                "owners": ["unit-fast"],
+            }
+        )
+    if damage == "source":
+        receipt["revision"] = "b" * 40
+    if damage == "attempt":
+        receipt["attempt"] = "1"
+    if damage == "owner":
+        receipt["suite"] = "temporal-boundary"
+    if damage == "interrupted":
+        receipt["cases"][0]["phases"].pop("teardown")
+    if damage == "outside-layer":
+        manifest["nodes"].append(
+            {
+                "nodeid": "tests/unit/core/test_missing.py::test_missing",
+                "path": "tests/unit/core/test_missing.py",
+                "eligible": True,
+                "owners": ["unit-fast"],
+            }
+        )
+    (tmp_path / "owner.receipt.json").write_text(json.dumps(receipt))
+    manifest_path = tmp_path / "ownership.json"
+    manifest_path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(runner, "COMMANDS", ((sys.executable, "-m", "pytest", path),))
+    if damage:
+        with pytest.raises(ValueError):
+            runner.owner_receipt_commands(
+                tmp_path,
+                manifest_path,
+                revision="a" * 40,
+                run_id="123",
+                attempt="2",
+                require_full_source=True,
+            )
+    else:
+        results = runner.owner_receipt_commands(
+            tmp_path, manifest_path, revision="a" * 40, run_id="123", attempt="2"
+        )
+        assert results[0]["nodeIds"] == [nodeid]
+        assert results[0]["ownerReceiptRefs"]
+        retained = tmp_path / "pytest-unit-fast-attempt-2"
+        retained.mkdir()
+        (tmp_path / "owner.receipt.json").rename(retained / "owner.receipt.json")
+        environment_path(tmp_path / "owner.receipt.json").rename(
+            environment_path(retained / "owner.receipt.json")
+        )
+        # Actions retains successful jobs during a failed-job rerun. Their
+        # immutable artifact attempt is explicit; another head/run is denied.
+        assert runner.owner_receipt_commands(
+            tmp_path,
+            manifest_path,
+            revision="a" * 40,
+            run_id="123",
+            attempt="3",
+            manifest_attempt="2",
+            require_full_source=True,
+        )
+        current = tmp_path / "pytest-unit-fast-attempt-3"
+        current.mkdir()
+        receipt.update(attempt="3", status="incomplete")
+        (current / "owner.receipt.json").write_text(json.dumps(receipt))
+        with pytest.raises(ValueError):
+            runner.owner_receipt_commands(
+                tmp_path,
+                manifest_path,
+                revision="a" * 40,
+                run_id="123",
+                attempt="3",
+                manifest_attempt="2",
+            )
+
+
+def test_source_evidence_does_not_claim_the_installed_recovery_owner(
+    tmp_path, monkeypatch
+):
+    runner = _load_runner()
+    source_path = "tests/integration/omnigent/test_replay.py"
+    source_node = source_path + "::test_replay"
+    installed_path = "tests/integration/omnigent/test_exact_docker_n_way_concurrency.py"
+    installed_node = (
+        installed_path
+        + "::test_exact_host_replacement_resumes_same_session_without_provider_input"
+    )
+    identity = dict(revision="a" * 40, runId="123", attempt="1")
+    manifest = {
+        "schema": "moonmind.test-ownership/v1",
+        **identity,
+        "nodes": [
+            {
+                "nodeid": source_node,
+                "path": source_path,
+                "eligible": True,
+                "owners": ["integration-ci"],
+            },
+            {
+                "nodeid": installed_node,
+                "path": installed_path,
+                "eligible": True,
+                "owners": ["omnigent-exact-artifact"],
+            },
+        ],
+    }
+    manifest_path = tmp_path / "ownership.json"
+    manifest_path.write_text(json.dumps(manifest))
+    (tmp_path / "source.receipt.json").touch()
+    monkeypatch.setattr(
+        runner,
+        "validate_receipt",
+        lambda *_args, **_kwargs: {
+            "suite": "integration-hermetic",
+            "cases": [{"nodeid": source_node, "outcome": "passed"}],
+        },
+    )
+    # Exercise the real layer's exclusion list. The installed recovery gate
+    # independently executes its Docker node; source receipts cannot prove it.
+    monkeypatch.setattr(
+        runner,
+        "COMMANDS",
+        (
+            (
+                sys.executable,
+                "-m",
+                "pytest",
+                "tests/integration/omnigent",
+                *(arg for arg in runner.COMMANDS[0] if arg.startswith("--ignore=")),
+            ),
+        ),
+    )
+    results = runner.owner_receipt_commands(
+        tmp_path,
+        manifest_path,
+        revision=identity["revision"],
+        run_id="123",
+        attempt="1",
+        require_full_source=True,
+    )
+    assert results[0]["nodeIds"] == [source_node]
 
 
 def test_cumulative_remediation_stays_pending_until_production_shaped_proof() -> None:
@@ -399,7 +605,9 @@ def test_recovery_evidence_retains_its_executed_command_and_failure(
 
 
 @pytest.mark.parametrize(
-    "secret", ["", "Authorization: Bearer fixture-token_123456789"]
+    "secret",
+    ["", "Authorization: Bearer fixture-token_123456789"],
+    ids=["ordinary-diagnostic", "credential-diagnostic"],
 )
 def test_failed_layer_diagnostics_are_readable_without_artifact_downloads(
     monkeypatch, tmp_path: Path, capsys, secret: str

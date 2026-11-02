@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import yaml
@@ -170,31 +169,23 @@ def test_docker_publish_writes_build_summary_for_promotion() -> None:
     assert "VERSION=\"${{ needs.metadata.outputs.version_tag }}\"" in run
 
 
-
-
-def test_docker_publish_frontend_checks_do_not_duplicate_production_build() -> None:
+def test_docker_publish_source_owner_checks_frontend_while_image_builds():
     workflow = _load_workflow()
-    build_steps = workflow["jobs"]["build"]["steps"]
-
-    frontend_step = next(
-        (
-            step
-            for step in build_steps
-            if step.get("name") == "Check frontend and generated contracts"
-        ),
-        None,
+    source = workflow["jobs"]["source-checks"]
+    assert source["with"]["verification_phase"] == "source"
+    assert not source.get("needs")
+    assert not any(
+        "npm run ui:test" in step.get("run", "")
+        for step in workflow["jobs"]["build"]["steps"]
     )
-    assert frontend_step, "Frontend and contracts check step not found"
-
-    run = frontend_step["run"]
-    assert "npm ci" in run
-    assert "npm run ui:typecheck" in run
-    assert "npm run ui:lint" in run
-    assert "npm run ui:test" in run
-    assert "npm run contracts:check" in run
-    assert "npm run frontend:ci" not in run
-    assert "npm run ui:build" not in run
-    assert "npm run ui:build:check" not in run
+    tests = yaml.safe_load(
+        (REPO_ROOT / ".github/workflows/pytest-unit-tests.yml").read_text()
+    )
+    assert any(
+        "npm run frontend:ci" in step.get("run", "")
+        for step in tests["jobs"]["frontend-static"]["steps"]
+    )
+    assert "run-generated-contracts" in tests["jobs"]
 
 
 def test_dockerfile_uses_buildkit_package_cache_mounts() -> None:
@@ -207,57 +198,17 @@ def test_dockerfile_uses_buildkit_package_cache_mounts() -> None:
     assert 'Binary::apt::APT::Keep-Downloaded-Packages "true";' in dockerfile
 
 
-def test_docker_publish_persists_buildkit_cache_mounts() -> None:
-    workflow = _load_workflow()
-    build_steps = workflow["jobs"]["build"]["steps"]
-
-    setup_buildx = next(
-        (
-            step
-            for step in build_steps
-            if step.get("uses", "").startswith("docker/setup-buildx-action@")
-        ),
-        None,
+def test_docker_publish_reuses_layers_without_exporting_cache_mount_contents():
+    steps = _load_workflow()["jobs"]["build"]["steps"]
+    assert not any("cache-dance" in step.get("uses", "") for step in steps)
+    build = next(
+        step
+        for step in steps
+        if step.get("uses", "").startswith("docker/build-push-action@")
     )
-    assert setup_buildx is not None, "Docker Buildx setup step not found"
-    assert setup_buildx["id"] == "setup-buildx"
-
-    cache_step = next(
-        (
-            step
-            for step in build_steps
-            if step.get("name") == "Cache BuildKit mount directories"
-        ),
-        None,
-    )
-    assert cache_step is not None, "BuildKit cache mount cache step not found"
-    assert cache_step["uses"].startswith("actions/cache@")
-    assert cache_step["id"] == "buildkit-cache"
-    cache_with = cache_step["with"]
-    assert cache_with["path"] == "${{ runner.temp }}/buildkit-cache-mounts"
-    assert "api_service/Dockerfile" in cache_with["key"]
-    assert "package-lock.json" in cache_with["key"]
-    assert "poetry.lock" in cache_with["key"]
-    assert "steps.meta.outputs.pair" in cache_with["key"]
-
-    restore_step = next(
-        (
-            step
-            for step in build_steps
-            if step.get("name") == "Restore BuildKit cache mounts"
-        ),
-        None,
-    )
-    assert restore_step is not None, "BuildKit cache mount restore step not found"
-    assert re.fullmatch(
-        r"reproducible-containers/buildkit-cache-dance@[0-9a-f]{40}",
-        restore_step["uses"],
-    )
-    restore_with = restore_step["with"]
-    assert restore_with["builder"] == "${{ steps.setup-buildx.outputs.name }}"
-    assert restore_with["cache-dir"] == "${{ runner.temp }}/buildkit-cache-mounts"
-    assert restore_with["dockerfile"] == "api_service/Dockerfile"
-    assert restore_with["skip-extraction"] == "${{ steps.buildkit-cache.outputs.cache-hit }}"
+    assert build["with"]["cache-from"].startswith("type=gha,scope=build-")
+    assert build["with"]["cache-to"].startswith(build["with"]["cache-from"])
+    assert build["with"]["outputs"].endswith("push=true")
 
 
 def test_runtime_project_install_precedes_non_package_asset_copies() -> None:

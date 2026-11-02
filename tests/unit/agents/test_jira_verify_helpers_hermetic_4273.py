@@ -62,7 +62,20 @@ SECRET_CANARIES = [
 ]
 
 
-@pytest.mark.parametrize("canary", SECRET_CANARIES)
+@pytest.mark.parametrize(
+    "canary",
+    SECRET_CANARIES,
+    ids=[
+        "github-classic",
+        "github-fine-grained",
+        "atlassian",
+        "google",
+        "aws",
+        "private-key",
+        "token-assignment",
+        "bearer-header",
+    ],
+)
 def test_jira_helper_secret_canary_blocks_post(jira_helper, tmp_path, canary) -> None:
     body_file = tmp_path / "comment.md"
     body_file.write_text(f"Verification PASS for ENG-1\n{canary}\n", encoding="utf-8")
@@ -74,7 +87,20 @@ def test_jira_helper_clean_body_passes_scan(jira_helper) -> None:
     jira_helper._scan("Verification PASS for ENG-1: evidence table only.")
 
 
-@pytest.mark.parametrize("canary", SECRET_CANARIES)
+@pytest.mark.parametrize(
+    "canary",
+    SECRET_CANARIES,
+    ids=[
+        "github-classic",
+        "github-fine-grained",
+        "atlassian",
+        "google",
+        "aws",
+        "private-key",
+        "token-assignment",
+        "bearer-header",
+    ],
+)
 def test_pr_helper_secret_canary_blocks_dispatch(
     pr_helper, tmp_path, monkeypatch, canary
 ) -> None:

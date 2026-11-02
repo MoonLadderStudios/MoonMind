@@ -47,6 +47,7 @@ def test_current_workflows_have_stable_names() -> None:
         "omnigent-upstream-pin-updater.yml": "Omnigent Upstream Pin Updater",
         "promote-ghcr-stable.yml": "Release / Promote Stable",
         "pytest-unit-tests.yml": "CI / Test Suite",
+        "prepare-recovery-images.yml": "CI / Prepare Recovery Images",
         "upstream-assessment-images.yml": "Qualify / Upstream Assessment Images",
     }
 
