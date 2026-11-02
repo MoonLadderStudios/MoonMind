@@ -15546,9 +15546,9 @@ async def create_execution(
             )
             authored_runtime = authored_runtimes[0] if authored_runtimes else None
             selects_omnigent = "omnigent" in authored_runtimes
-            # Explicit serialized native starts do not carry the product
-            # envelope's compiled shared plan. Preserve that existing adapter;
-            # ordinary workflow/CLI and schedule producers translate above.
+            # Resolve native authority before considering shared admission.
+            # Canonical inputs join the compiler only through an equivalent
+            # Profile; native-only inputs retain their serialized adapter.
             profile_runtime = (
                 None
                 if authored_runtime
