@@ -1489,6 +1489,93 @@ async def test_registered_generic_native_turn_saves_result_and_cleans_owned_reso
 
 
 @pytest.mark.parametrize(
+    "native_journey", ["codex-native", "claude-native", "opencode-native"], indirect=True
+)
+@pytest.mark.parametrize("error_type", [httpx.ReadError, httpx.RemoteProtocolError])
+@pytest.mark.parametrize("remain_running", [False, True])
+async def test_accepted_turn_reconciles_a_broken_observation_stream(
+    native_journey, monkeypatch, error_type, remain_running, caplog
+):
+    from contextlib import aclosing
+
+    from moonmind.workflows.adapters.omnigent_client import (
+        OmnigentClientError,
+        OmnigentHttpClient,
+    )
+    original_stream = OmnigentHttpClient.stream_events
+
+    async def broken_stream(client, session_id, *, on_admitted=None):
+        async with aclosing(
+            original_stream(client, session_id, on_admitted=on_admitted)
+        ) as stream:
+            async for event in stream:
+                if native_journey.server.first_message_posted.is_set():
+                    error = error_type(
+                        "controlled observation disconnect",
+                        request=httpx.Request(
+                            "GET", f"https://omnigent.test/v1/sessions/{session_id}/stream"
+                        ),
+                    )
+                    raise OmnigentClientError("controlled observation disconnect") from error
+                yield event
+
+    # Only the external live-tail transport fails. Compilation, provider leases,
+    # turn submission, ordered snapshot reconciliation, saves and cleanup remain
+    # the production owners used by the ordinary native journey.
+    monkeypatch.setattr(OmnigentHttpClient, "stream_events", broken_stream)
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._TERMINAL_RECONCILIATION_INTERVAL_SECONDS", 0.005
+    )
+    if remain_running:
+        original_snapshot = native_journey.server.snapshot
+        observing_active_turn = True
+        active_observations = 0
+        observed_active_turn = asyncio.Event()
+
+        def active_snapshot(session_id):
+            nonlocal active_observations
+            snapshot = original_snapshot(session_id)
+            if observing_active_turn and native_journey.server.first_message_posted.is_set():
+                active_observations += 1
+                if active_observations >= 3:
+                    observed_active_turn.set()
+                snapshot.update(
+                    status="running",
+                    active_response_id="native-turn-in-progress",
+                    active_response={"id": "native-turn-in-progress", "status": "in_progress"},
+                )
+            return snapshot
+
+        monkeypatch.setattr(native_journey.server, "snapshot", active_snapshot)
+        compute = asyncio.create_task(
+            native_journey.realizer.execute(native_journey.request, native_journey.plan)
+        )
+        try:
+            await asyncio.wait_for(observed_active_turn.wait(), timeout=5)
+            assert not compute.done()
+            assert native_journey.server.host_alive
+            assert not native_journey.server.stopped_sessions
+            assert len(native_journey.server.session_ids) == 1
+            assert sum(e["type"] == "message" for e in native_journey.server.events) == 1
+            observing_active_turn = False
+            await asyncio.wait_for(compute, timeout=5)
+        finally:
+            if not compute.done():
+                compute.cancel()
+            await asyncio.gather(compute, return_exceptions=True)
+
+    result = await assert_native_turn_saved_and_cleaned(native_journey)
+    assert "observation stream interrupted after dispatch" in caplog.text
+    external_state = json.loads(
+        await native_journey.gateway.read_text(result.metadata["externalStateRef"])
+    )
+    diagnostic = external_state["observationDiagnostics"][0]
+    assert diagnostic["code"] == "omnigent_stream_read_interrupted"
+    assert diagnostic["transportError"] == error_type.__name__
+    assert diagnostic["message"] == "controlled observation disconnect"
+
+
+@pytest.mark.parametrize(
     "native_journey",
     [
         {"harness": harness, "command": True}
