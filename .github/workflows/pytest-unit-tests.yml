@@ -2468,7 +2468,10 @@ jobs:
     needs:
       - ci-required
       - select-test-suites
-    if: inputs.verification_phase == 'source'
+    if: >-
+      ${{ !cancelled() && inputs.verification_phase == 'source' &&
+          needs.ci-required.result == 'success' &&
+          needs.select-test-suites.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:

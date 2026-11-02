@@ -196,6 +196,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Require the selected source handoff before downloading
+        shell: bash
+        env:
+          SOURCE_ARTIFACT: ${{ needs.source-checks.outputs.source_receipt_artifact }}
+        run: |
+          if [[ -z "$SOURCE_ARTIFACT" ]]; then
+            echo "::error::Required source verification artifact is missing."
+            exit 1
+          fi
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
