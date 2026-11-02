@@ -587,6 +587,22 @@ def load_repository_connection(path: Path, connection_ref: str) -> RepositoryCon
     return connection
 
 
+def repository_work_branch_arguments(parameters: Mapping[str, Any]) -> dict[str, Any]:
+    """Decode authoring metadata without changing the prepared checkout branch."""
+    origin = str(parameters.get("workBranchOrigin") or "").strip().lower()
+    if origin and origin not in {
+        "generated", "selected", "review_mapping", "historical_branch",
+    }:
+        raise RepositoryContractError(
+            "REPOSITORY_TARGET_INVALID", f"unsupported work branch origin {origin!r}",
+        )
+    return {
+        "work_branch": str(parameters.get("workBranch") or "").strip() or None,
+        "work_branch_id": str(parameters.get("workBranchId") or "").strip() or None,
+        "work_branch_origin": origin or None,
+    }
+
+
 def materialize_resolved_repository_target(
     target: AuthoredRepositoryTarget,
     *,
@@ -1548,6 +1564,7 @@ __all__ = [
     "reconcile_verified_rename",
     "repository_branch_from_value",
     "repository_name_from_value",
+    "repository_work_branch_arguments",
     "resolve_selected_git_credential",
     "route_diagnostic",
     "route_key_for",
