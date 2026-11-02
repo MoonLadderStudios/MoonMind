@@ -5327,7 +5327,7 @@ export interface components {
             /** Repository */
             repository: string;
             /** Operations */
-            operations?: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request" | "issues" | "security_read")[];
+            operations?: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request" | "issues" | "projects" | "security_read")[];
             /**
              * Revision
              * @default 1
@@ -6658,7 +6658,7 @@ export interface components {
             /** Token */
             token?: string | null;
             /** Allowedoperations */
-            allowedOperations?: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request" | "issues" | "security_read")[] | null;
+            allowedOperations?: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request" | "issues" | "projects" | "security_read")[] | null;
         };
         /** ContainerJobAccepted */
         ContainerJobAccepted: {
@@ -9361,7 +9361,7 @@ export interface components {
              *       "read"
              *     ]
              */
-            allowedOperations: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request" | "issues" | "security_read")[];
+            allowedOperations: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request" | "issues" | "projects" | "security_read")[];
         };
         /** GitHubAppBeginResponse */
         GitHubAppBeginResponse: {
@@ -10395,7 +10395,7 @@ export interface components {
              */
             token: string;
             /** Allowedoperations */
-            allowedOperations?: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request" | "issues" | "security_read")[];
+            allowedOperations?: ("read" | "write" | "branch_write" | "lock" | "review_request" | "merge_request" | "issues" | "projects" | "security_read")[];
         };
         /**
          * PinArtifactRequest

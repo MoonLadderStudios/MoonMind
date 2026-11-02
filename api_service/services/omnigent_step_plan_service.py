@@ -103,6 +103,14 @@ async def compile_step_execution_plans(
         parameters = copy.deepcopy(dict(initial_parameters))
         for field in ("omnigentExecutionPlan", "omnigentStepExecutionPlans", "resolvedSkillsetRef"):
             parameters.pop(field, None)
+        # The root's explicit rollout target constrains only its own plan.
+        # A specialized plan validates the step's target against its own Profile.
+        specialized_task = parameters.get("workflow") or parameters.get("task")
+        specialized_runtime = copy.deepcopy(dict(parent_runtime))
+        specialized_task["runtime"] = specialized_runtime
+        specialized_runtime.pop("targetId", None)
+        if runtime.get("targetId"):
+            specialized_runtime["targetId"] = runtime["targetId"]
         if foreign_profile:
             from api_service.services.omnigent_agent_profile_selection import compile_agent_profile_snapshot_parameters
 
