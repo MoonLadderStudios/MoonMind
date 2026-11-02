@@ -52,7 +52,7 @@ class RestoreDestination(BaseModel):
 
 class SandboxRestoreDestination(SandboxWorkspaceLocator):
     relative_path: Literal["repo"] = Field("repo", alias="relativePath")
-    repository: str = Field(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+    repository: str | None = Field(None, pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
     step_execution_id: str = Field(alias="stepExecutionId", min_length=1)
 
 
@@ -64,7 +64,7 @@ class ManagedWorkspaceRestoreRequest(BaseModel):
     checkpoint: WorktreeArchiveCheckpoint
     destination: RestoreDestination | SandboxRestoreDestination
     workspace_policy: Literal[
-        "restore_pre_execution", "restore_publication_candidate"
+        "restore_pre_execution", "restore_publication_candidate", "restore_step_input"
     ] = Field(alias="workspacePolicy")
     resume_phase: Literal[
         "rerun_failed_step", "continue_to_remediation", "resume_publication"
@@ -96,10 +96,20 @@ class ManagedWorkspaceRestoreRequest(BaseModel):
     def validate_distinct_identities(self) -> "ManagedWorkspaceRestoreRequest":
         if self.restores_original_owner:
             return self
+        step_input = self.workspace_policy == "restore_step_input"
+        if step_input and (
+            self.resume_phase != "rerun_failed_step"
+            or self.source.checkpoint_boundary not in {"after_execution", "before_publication"}
+            or not isinstance(self.source.source_workspace_locator, SandboxWorkspaceLocator)
+            or not isinstance(self.destination, SandboxRestoreDestination)
+            or self.source.model_dump(include={"workflow_id", "run_id", "logical_step_id", "execution_ordinal"})
+                == self.recovery_identity.model_dump()
+        ):
+            raise ValueError("step input restore requires a distinct sandbox Step Execution")
         if (self.source.workflow_id, self.source.run_id) == (
             self.recovery_identity.workflow_id,
             self.recovery_identity.run_id,
-        ):
+        ) and not step_input:
             raise ValueError(
                 "source and recovery workflow/run identities must be distinct"
             )

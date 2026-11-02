@@ -431,8 +431,9 @@ async def test_cold_restore_survives_source_deletion_and_is_idempotent(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("sandbox_without_origin", [False, True])
 async def test_self_contained_cold_restore_needs_no_source_credential_or_host(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sandbox_without_origin
 ) -> None:
     """A checkpoint without an origin baseline restores with no credential.
 
@@ -500,10 +501,18 @@ async def test_self_contained_cold_restore_needs_no_source_credential_or_host(
     service = ManagedCheckpointRestoreService(
         authority_root=tmp_path / "authority", artifact_store=store
     )
+    if sandbox_without_origin:
+        from moonmind.workflows.temporal.runtime.workspace_locators import SandboxWorkspaceRecord, SandboxWorkspaceRecordStore
+        workspace_id = hashlib.sha256(b"recovery:implement-2").hexdigest()[:24]
+        SandboxWorkspaceRecordStore(service.root).ensure(SandboxWorkspaceRecord(workspace_id, "recovery", "implement-2", "repo"))
+        request["destination"] = {"kind": "sandbox", "workspaceId": workspace_id, "stepExecutionId": "implement-2"}
 
     await service.restore(request, access=access_for_test("workflow:source"))
 
     restored = tmp_path / "authority" / "new-run" / "repo"
+    if sandbox_without_origin:
+        restored = service.root / "temporal_sandbox" / workspace_id / "repo"
+        assert not subprocess.check_output(["git", "remote"], cwd=restored)
     restored_head = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=restored, text=True
     ).strip()
@@ -520,6 +529,7 @@ async def test_self_contained_cold_restore_needs_no_source_credential_or_host(
         ("frozen_plan", "synthetic-selected-pat"),
         ("frozen_anonymous", None),
         ("conflicting_target", "unavailable"),
+        ("missing_repository", "unavailable"),
     ],
 )
 async def test_cold_restore_needing_origin_objects_uses_source_run_admitted_access(
@@ -629,6 +639,12 @@ async def test_cold_restore_needing_origin_objects_uses_source_run_admitted_acce
         authority_root=tmp_path / "authority", artifact_store=store
     )
 
+    if authority == "missing_repository":
+        from moonmind.workflows.temporal.runtime.workspace_locators import SandboxWorkspaceRecord, SandboxWorkspaceRecordStore
+        workspace_id = hashlib.sha256(b"recovery:implement-2").hexdigest()[:24]
+        SandboxWorkspaceRecordStore(service.root).ensure(SandboxWorkspaceRecord(workspace_id, "recovery", "implement-2", "repo"))
+        request["destination"] = {"kind": "sandbox", "workspaceId": workspace_id, "stepExecutionId": "implement-2"}
+
     try:
         if expected_token == "unavailable":
             with pytest.raises(
@@ -693,6 +709,35 @@ def test_restore_contract_rejects_reused_identity_and_arbitrary_destination_path
     }
     with pytest.raises(ValidationError):
         ManagedWorkspaceRestoreRequest.model_validate(base)
+
+
+@pytest.mark.parametrize("fault", [None, "same-step", "same-workspace", "publication-phase", "managed-destination", "pre-execution"])
+@pytest.mark.parametrize("boundary", ["after_execution", "before_publication"])
+def test_step_input_restore_requires_a_distinct_sandbox_step(fault, boundary):
+    request = _request(checkpoint_ref="checkpoint", capture={"workspace": {
+        "archiveRef": "archive", "archiveDigest": "sha256:" + "0" * 64,
+        "manifestRef": "manifest", "manifestDigest": "sha256:" + "1" * 64,
+    }}, base="a" * 40)
+    request["source"].update(workflowId="recovery", runId="recovery-run", checkpointBoundary=boundary, sourceWorkspaceLocator={
+        "kind": "sandbox", "workspaceId": "source-step", "relativePath": "repo",
+    })
+    request["destination"] = {"kind": "sandbox", "workspaceId": "destination-step", "relativePath": "repo", "stepExecutionId": "recovery:recovery-run:implement:execution:2", "repository": "MoonLadderStudios/MoonMind"}
+    request["workspacePolicy"] = "restore_step_input"
+    if fault == "same-step":
+        request["recoveryIdentity"]["executionOrdinal"] = 1
+    elif fault == "same-workspace":
+        request["destination"]["workspaceId"] = "source-step"
+    elif fault == "publication-phase":
+        request["resumePhase"] = "resume_publication"
+    elif fault == "managed-destination":
+        request["destination"] = {"runtimeId": "codex_cli", "agentRunId": "new-run", "repository": "MoonLadderStudios/MoonMind"}
+    elif fault == "pre-execution":
+        request["source"]["checkpointBoundary"] = "before_execution"
+    if fault:
+        with pytest.raises(ValidationError):
+            ManagedWorkspaceRestoreRequest.model_validate(request)
+    else:
+        assert ManagedWorkspaceRestoreRequest.model_validate(request).workspace_policy == "restore_step_input"
 
 
 def test_secure_extractor_rejects_traversal_special_files_and_unsafe_symlink(

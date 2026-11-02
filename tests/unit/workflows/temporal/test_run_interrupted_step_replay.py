@@ -133,6 +133,8 @@ async def _plan(activity_type: str, _payload: Any, **_kwargs: Any) -> bytes:
 
 @workflow.defn(name="InterruptedStepReplayFixture")
 class _InterruptedStepFixture:
+    git_checkpoint = False
+
     @workflow.run
     async def run(self) -> int:
         run = MoonMindRunWorkflow()
@@ -159,6 +161,7 @@ class _InterruptedStepFixture:
                 "workspaceIdentityDigest": "sha256:" + "b" * 64,
                 "checkpointManifestRef": "artifact://checkpoints/manifest",
                 "workspaceArchiveRef": _ARCHIVE,
+                **({"baseCommit": "a" * 40} if self.git_checkpoint else {}),
             }
             return ref
 
@@ -297,6 +300,61 @@ async def test_interrupted_step_pre_and_post_patch_histories_replay(
     await replayer.replay_workflow(legacy_history)
     await replayer.replay_workflow(workspace_history)
     await replayer.replay_workflow(current_history)
+
+
+@pytest.mark.parametrize("canonical", [False, True])
+@pytest.mark.parametrize("git_checkpoint", [False, True])
+def test_new_run_handoffs_keep_the_complete_git_checkpoint(monkeypatch, canonical, git_checkpoint):
+    marker = "run-omnigent-canonical-git-workspace-handoff-v1"
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch: canonical if patch == marker else True)
+    owner = MoonMindRunWorkflow()
+    owner._remediation_loop_runtime = {"mode": "omnigent"}
+    owner._step_checkpoint_workspace_evidence_by_boundary[_STEP] = {"after_execution": {
+        "checkpointRef": "artifact://complete-checkpoint", "workspaceArchiveRef": _ARCHIVE,
+        "workspaceKind": "worktree_archive", "workspaceDigest": "sha256:" + "a" * 64,
+        "workspaceIdentityDigest": "sha256:" + "b" * 64, "checkpointManifestRef": "artifact://manifest",
+        **({"baseCommit": "a" * 40} if git_checkpoint else {}),
+    }}
+    owner._carry_interrupted_omnigent_step_workspace(_STEP, next_attempt=2)
+    expected = "artifact://complete-checkpoint" if canonical and git_checkpoint else _ARCHIVE
+    assert owner._interrupted_step_restore_refs[owner._step_execution_launch_block_key(_STEP, 2)] == expected
+    assert owner._canonical_remediation_checkpoint_evidence(_STEP)["checkpointRef"] == expected
+
+
+@pytest.mark.asyncio
+async def test_interrupted_git_checkpoint_child_payloads_survive_real_replay(monkeypatch):
+    _patch_environment(monkeypatch)
+    monkeypatch.setattr(_InterruptedStepFixture, "git_checkpoint", True)
+    _ADMISSION_RESULT.clear()
+    _ADMISSION_RESULT.update(disposition="admitted", omnigentExecutionPlan=dict(_INSTALLED), resolvedSkillsetRef="art_skills_installed")
+    emitted = []
+    execute_child = workflow.execute_child_workflow
+
+    async def observe_child(name, request, **kwargs):
+        if name == "MoonMind.AgentRun":
+            emitted.append(request.workspace_spec.get("workspaceCheckpointRestoreRef"))
+        return await execute_child(name, request, **kwargs)
+
+    monkeypatch.setattr(workflow, "execute_child_workflow", observe_child)
+    marker = "run-omnigent-canonical-git-workspace-handoff-v1"
+    async with await WorkflowEnvironment.start_time_skipping(data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER) as env:
+        agent_worker, admission_worker = _workers(env)
+        histories = []
+        async with agent_worker, admission_worker:
+            for index, patches in enumerate((_CURRENT_PATCHES, _CURRENT_PATCHES | {marker})):
+                emitted.clear()
+                history, requests = await _record(env, monkeypatch, patches, f"interrupted-git-save-{index}")
+                expected = "artifact://checkpoints/interrupted-step-manifest" if index else _ARCHIVE
+                assert requests[1].workspace_spec["workspaceCheckpointRestoreRef"] == expected
+                assert emitted == [None, expected]
+                histories.append((history, expected))
+        _enable(monkeypatch, _CURRENT_PATCHES | {marker})
+        for history, expected in histories:
+            emitted.clear()
+            await Replayer(workflows=[_InterruptedStepFixture], workflow_runner=UnsandboxedWorkflowRunner(), data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER).replay_workflow(history)
+            # Check actual child command payloads as well as the SDK command
+            # sequence; the SDK itself does not compare argument bytes.
+            assert emitted == [None, expected]
 
 
 @pytest.mark.asyncio
