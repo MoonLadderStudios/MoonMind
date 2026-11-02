@@ -1037,6 +1037,7 @@ async def _compile_plan(
     session_settings=None,
     additional_files=None,
     oauth_tuning=None,
+    oauth_private_config=False,
     instructions="Generate a report.",
 ):
     # Reuse the durable Skill producer, then expose its immutable body through
@@ -1144,6 +1145,14 @@ async def _compile_plan(
             mapping=get_first_party_oauth_profile(runtime_id, provider_id),
             validated_at=datetime.now(UTC),
         )
+    if oauth_private_config:
+        assert oauth and runtime_id == "codex_cli"
+        profile.home_path_overrides = {"CODEX_HOME": "{{runtime_support_dir}}/codex-home"}
+        profile.file_templates = [{
+            "path": "{{runtime_support_dir}}/codex-home/config.toml", "format": "toml",
+            "merge_strategy": "deep_merge", "permissions": "0600",
+            "content_template": dict(session_settings or {}),
+        }, *(additional_files or [])]
     async with session_factory() as session:
         artifacts = TemporalArtifactService(TemporalArtifactRepository(session))
         _snapshot_row, skill_snapshot_bytes = await artifacts.read(
@@ -1319,6 +1328,7 @@ async def native_journey(
                 session_settings=selection.get("sessionSettings"),
                 additional_files=selection.get("additionalFiles"),
                 oauth_tuning=selection.get("oauthTuning"),
+                oauth_private_config=bool(selection.get("oauthPrivateConfiguration")),
                 instructions=instructions,
             )
         # Verify the public HTTP enums survive discovery, alongside the real
@@ -1535,6 +1545,38 @@ async def test_declared_codex_session_preferences_survive_shared_lifecycle(nativ
     assert document["developer_instructions"] == "Preserve completed work and the requested account."
     assert document["history"] == {"persistence": "none", "max_bytes": 1048576}
     assert document["project_doc_fallback_filenames"] == ["PROJECT.md"]
+
+
+@pytest.mark.parametrize("native_journey", [{
+    "harness": "codex-native", "static": static, "oauthPrivateConfiguration": True,
+    "sessionSettings": {"developer_instructions": "Keep the admitted OAuth preferences."},
+    "additionalFiles": [{
+        "path": "{{runtime_support_dir}}/codex-home/AGENTS.md", "format": "text",
+        "merge_strategy": "append", "permissions": "0600", "content_template": "Admitted file.\n",
+    }],
+} for static in (False, True)], indirect=True)
+@pytest.mark.parametrize("edit_after_admission", [False, True])
+async def test_admitted_oauth_private_configuration_reaches_shared_lifecycle(native_journey, edit_after_admission):
+    journey = native_journey
+    if edit_after_admission:
+        async with journey.session_factory() as session:
+            profile = await session.get(ManagedAgentProviderProfile, PROFILE)
+            profile.file_templates = []
+            profile.home_path_overrides = {"CODEX_HOME": "/later-home"}
+            await session.commit()
+    if journey.static_mode:
+        from tests.integration.omnigent.test_generic_static_host_journey import (
+            assert_static_native_turn_saved_and_retained,
+        )
+
+        await assert_static_native_turn_saved_and_retained(journey)
+    else:
+        await assert_native_turn_saved_and_cleaned(journey)
+    configuration = json.loads(journey.docker.launch_env["MOONMIND_CODEX_PROFILE_CONFIGURATION"])
+    assert configuration["document"] == {"developer_instructions": "Keep the admitted OAuth preferences."}
+    assert configuration["additionalFiles"][0]["content_template"] == "Admitted file.\n"
+    assert journey.docker.launch_env["CODEX_HOME"] == "/home/app/.codex"
+    assert "codex-configuration.py prepare" in journey.docker.script
 
 
 @pytest.mark.parametrize("native_journey", [{
