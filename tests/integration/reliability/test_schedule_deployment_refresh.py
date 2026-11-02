@@ -8,7 +8,9 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 
-from api_service.services.omnigent_execution_plan_service import PersistedOmnigentExecutionPlan
+from api_service.services.omnigent_execution_plan_service import (
+    PersistedOmnigentExecutionPlan,
+)
 from api_service.db.models import (
     OmnigentExecutionPlanRecord,
     OmnigentPolicyVersion,
@@ -243,8 +245,8 @@ async def test_scheduled_image_update_reaches_dispatch_with_matching_authority(
                 lambda _: current_host.replace("2" * 64, "3" * 64),
             )
         return PersistedOmnigentExecutionPlan(
-                   artifact_access=access_for_test("operator"),
-                   resolved_skillset_digest="sha256:" + "d" * 64,
+            artifact_access=access_for_test("operator"),
+            resolved_skillset_digest="sha256:" + "d" * 64,
             envelope=SimpleNamespace(payload=plan_payloads[-1]),
             binding=binding.model_copy(
                 update={
