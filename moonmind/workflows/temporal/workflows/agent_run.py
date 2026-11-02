@@ -483,6 +483,7 @@ AGENT_RUN_UNTRANSLATED_SHARED_CONTEXT_PATCH_ID = "agent-run-untranslated-shared-
 AGENT_RUN_POOL_PARENT_HANDOFF_PATCH_ID = "agent-run-pool-parent-handoff-v1"
 AGENT_RUN_POOL_CONTEXT_RECEIPT_PATCH_ID = "agent-run-pool-context-receipt-v1"
 AGENT_RUN_POOL_CANONICAL_WORKSPACE_HANDOFF_PATCH_ID = "agent-run-pool-canonical-workspace-handoff-v1"
+AGENT_RUN_SHARED_POOL_STEP_RETRY_PATCH_ID = "agent-run-shared-pool-step-retry-v1"
 AGENT_RUN_MANAGED_NO_PROGRESS_RECONCILIATION_PATCH_ID = (
     "agent-run-managed-no-progress-reconciliation-v1"
 )
@@ -6750,6 +6751,17 @@ class MoonMindAgentRun:
                                           timeout=timedelta(seconds=240))
             result = self._pool_plan_response
             if result.get("disposition") == "native":
+                metadata = request.parameters.get("metadata")
+                hints = metadata.get("moonmind") if isinstance(metadata, Mapping) else None
+                if (
+                    isinstance(hints, Mapping)
+                    and hints.get("sharedCheckpointRequired") is True
+                    and self._workflow_patch_enabled(AGENT_RUN_SHARED_POOL_STEP_RETRY_PATCH_ID)
+                ):
+                    raise ApplicationError(
+                        "Selected Profile settings cannot restore the admitted shared checkpoint",
+                        type="SelectedProfileSharedCheckpointUnavailable", non_retryable=True,
+                    )
                 if (
                     request.step_execution is not None
                     and request.step_execution.runtime_session_context is not None
@@ -6826,6 +6838,23 @@ class MoonMindAgentRun:
                 }
             }
         )
+
+    def _shared_pool_step_retry_result(
+        self, request: AgentExecutionRequest, result: AgentRunResult
+    ) -> AgentRunResult | None:
+        metadata = request.parameters.get("metadata")
+        hints = metadata.get("moonmind") if isinstance(metadata, Mapping) else None
+        if (
+            not self._workflow_patch_enabled(AGENT_RUN_SHARED_POOL_STEP_RETRY_PATCH_ID)
+            or not isinstance(hints, Mapping)
+            or hints.get("sharedStepRecovery") is not True
+            or self._pool_native_request is None
+            or self._omnigent_capacity_state != "released"
+        ):
+            return None
+        # The delivered journal remains immutable. The parent owns the fresh
+        # Step Execution, its remaining budget and the remotely saved inputs.
+        return result.model_copy(update={"retry_recommendation": "retry_step_execution"})
 
     def _uses_selected_pool_shared_admission(self, request: AgentExecutionRequest, runtime_id: str) -> bool:
         metadata = request.parameters.get("metadata")
@@ -9656,30 +9685,39 @@ class MoonMindAgentRun:
                 else:
                     requires_provider_cooldown = False
 
+                cooldown_profile_id = self._omnigent_capacity_profile_id
                 if (
                     requires_provider_cooldown
                     and self._pool_native_request is not None
                     and self._omnigent_capacity_state == "released"
                 ):
-                    # The shared realizer positively drained the attempt.
-                    # Re-enter the existing pool retry policy with its original
-                    # selector, requested account and remaining step budget.
-                    request = self._pool_native_request.model_copy(deep=True)
-                    request.execution_budget = self._execution_budget
-                    if self._workflow_patch_enabled(AGENT_RUN_POOL_CONTEXT_RECEIPT_PATCH_ID):
-                        saved_workspace = self._saved_pool_workspace_ref(self.final_result)
-                        if saved_workspace is not None:
-                            request.workspace_spec = {
-                                **request.workspace_spec,
-                                "workspaceCheckpointRestoreRef": saved_workspace,
-                            }
-                    self._pool_native_request = None
-                    self.agent_kind = "managed"
-                    self.run_id = None
-                    self._external_agent_id = None
-                    manager_handle = workflow.get_external_workflow_handle(
-                        self._manager_workflow_id(self._managed_runtime_id(request.agent_id))
+                    step_retry = self._shared_pool_step_retry_result(
+                        request, self.final_result
                     )
+                    if step_retry is not None:
+                        self.final_result = step_retry
+                        # Release clears the lease ownership marker. The
+                        # admitted request still identifies the failed account.
+                        cooldown_profile_id = request.execution_profile_ref
+                    else:
+                        # Retained parents keep their recorded provider retry
+                        # decision and original selector/account/budget.
+                        request = self._pool_native_request.model_copy(deep=True)
+                        request.execution_budget = self._execution_budget
+                        if self._workflow_patch_enabled(AGENT_RUN_POOL_CONTEXT_RECEIPT_PATCH_ID):
+                            saved_workspace = self._saved_pool_workspace_ref(self.final_result)
+                            if saved_workspace is not None:
+                                request.workspace_spec = {
+                                    **request.workspace_spec,
+                                    "workspaceCheckpointRestoreRef": saved_workspace,
+                                }
+                        self._pool_native_request = None
+                        self.agent_kind = "managed"
+                        self.run_id = None
+                        self._external_agent_id = None
+                        manager_handle = workflow.get_external_workflow_handle(
+                            self._manager_workflow_id(self._managed_runtime_id(request.agent_id))
+                        )
 
                 provider_retry_budget_enabled = workflow.patched(
                     AGENT_RUN_PROVIDER_COOLDOWN_RETRY_BUDGET_PATCH_ID
@@ -9703,7 +9741,7 @@ class MoonMindAgentRun:
                 if (
                     requires_provider_cooldown
                     and request.agent_kind != "managed"
-                    and self._omnigent_capacity_profile_id
+                    and cooldown_profile_id
                     and workflow.patched(
                         OMNIGENT_PROVIDER_COOLDOWN_REPORT_PATCH_ID
                     )
@@ -9711,7 +9749,7 @@ class MoonMindAgentRun:
                     # Plan-bound generic Omnigent capacity is workflow-owned, so
                     # this workflow is the only reporter the manager will hear.
                     omnigent_cooldown_seconds = self._cooldown_seconds_for_profile(
-                        self._omnigent_capacity_profile_id
+                        cooldown_profile_id
                     )
                     if (
                         prefer_structured_failure
@@ -9723,7 +9761,8 @@ class MoonMindAgentRun:
                             default_seconds=omnigent_cooldown_seconds,
                         )
                     await self._report_omnigent_provider_cooldown(
-                        cooldown_seconds=omnigent_cooldown_seconds
+                        cooldown_seconds=omnigent_cooldown_seconds,
+                        profile_id=cooldown_profile_id,
                     )
 
                 if (

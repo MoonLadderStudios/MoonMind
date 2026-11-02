@@ -12,6 +12,7 @@ from moonmind.workflows.temporal.workflows.agent_run import (
     AGENT_RUN_SELECTED_FIXED_SHARED_PLAN_PATCH_ID,
     AGENT_RUN_UNTRANSLATED_SHARED_CONTEXT_PATCH_ID,
     AGENT_RUN_SELECTED_POOL_SHARED_PLAN_PATCH_ID,
+    AGENT_RUN_SHARED_POOL_STEP_RETRY_PATCH_ID,
     MoonMindAgentRun,
 )
 from tests.unit.workflows.temporal.workflows.test_agent_run_omnigent_capacity_admission import (
@@ -48,6 +49,14 @@ class _BeforeContextFallback(MoonMindAgentRun):
     @staticmethod
     def _workflow_patch_enabled(marker):
         if marker == AGENT_RUN_UNTRANSLATED_SHARED_CONTEXT_PATCH_ID:
+            return False
+        return MoonMindAgentRun._workflow_patch_enabled(marker)
+
+
+class _BeforeCheckpointFallback(MoonMindAgentRun):
+    @staticmethod
+    def _workflow_patch_enabled(marker):
+        if marker == AGENT_RUN_SHARED_POOL_STEP_RETRY_PATCH_ID:
             return False
         return MoonMindAgentRun._workflow_patch_enabled(marker)
 
@@ -92,6 +101,7 @@ class _PoolFixture:
     implementation = MoonMindAgentRun
     fixed_account = False
     native_fallback = False
+    shared_checkpoint = False
 
     def __init__(self):
         self.agent = self.implementation()
@@ -130,7 +140,10 @@ class _PoolFixture:
             request = MoonMindUserWorkflow()._bind_shared_runtime_context(request)
         self.agent._assigned_profile_id = request.execution_profile_ref
         self.agent._assigned_slot_fencing_generation = 7
-        if self.native_fallback:
+        if self.shared_checkpoint:
+            request.workspace_spec["workspaceCheckpointRestoreRef"] = "artifact://verified/child-save"
+            request.parameters.setdefault("metadata", {}).setdefault("moonmind", {})["sharedCheckpointRequired"] = True
+        elif self.native_fallback:
             request.step_execution.runtime_context_policy = "reuse_session_same_epoch"
             from moonmind.schemas.agent_runtime_models import RuntimeSessionContextReference
 
@@ -151,6 +164,9 @@ class _PoolFixture:
                 )
             except ApplicationError as error:
                 assert self.native_fallback
+                if self.shared_checkpoint:
+                    assert error.type == "SelectedProfileSharedCheckpointUnavailable"
+                    return "blocked-shared-checkpoint"
                 assert error.type == "SelectedProfileSharedContextUnavailable"
                 return "blocked-shared-context"
         await workflow.sleep(1)
@@ -220,6 +236,27 @@ class _CurrentContextFallbackFixture(_PoolFixture):
         return await self.execute()
 
 
+@workflow.defn(name="SharedCheckpointFallbackReplayFixture")
+class _LegacyCheckpointFallbackFixture(_PoolFixture):
+    implementation = _BeforeCheckpointFallback
+    native_fallback = True
+    shared_checkpoint = True
+
+    @workflow.run
+    async def run(self):
+        return await self.execute()
+
+
+@workflow.defn(name="SharedCheckpointFallbackReplayFixture")
+class _CurrentCheckpointFallbackFixture(_PoolFixture):
+    native_fallback = True
+    shared_checkpoint = True
+
+    @workflow.run
+    async def run(self):
+        return await self.execute()
+
+
 @pytest.mark.asyncio
 async def test_retained_native_and_shared_pool_handoffs_replay():
     histories = []
@@ -247,6 +284,8 @@ async def test_retained_native_and_shared_pool_handoffs_replay():
                 ("current-fixed", _CurrentFixedFixture, "omnigent"),
                 ("retained-context-fallback", _LegacyContextFallbackFixture, "codex_cli"),
                 ("current-context-fallback", _CurrentContextFallbackFixture, "blocked-shared-context"),
+                ("retained-checkpoint-fallback", _LegacyCheckpointFallbackFixture, "codex_cli"),
+                ("current-checkpoint-fallback", _CurrentCheckpointFallbackFixture, "blocked-shared-checkpoint"),
             ):
                 queue = f"pool-replay-{label}"
                 async with Worker(
@@ -267,7 +306,7 @@ async def test_retained_native_and_shared_pool_handoffs_replay():
             await manager.signal("finish")
             await manager.result()
     replayer = Replayer(
-        workflows=[_CurrentFixture, _CurrentFixedFixture, _CurrentContextFallbackFixture],
+        workflows=[_CurrentFixture, _CurrentFixedFixture, _CurrentContextFallbackFixture, _CurrentCheckpointFallbackFixture],
         workflow_runner=UnsandboxedWorkflowRunner(),
     )
     for history in histories:

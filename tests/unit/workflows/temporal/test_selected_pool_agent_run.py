@@ -20,8 +20,9 @@ from tests.unit.workflows.temporal.workflows.test_agent_run_omnigent_capacity_ad
 @pytest.mark.parametrize("runtime", ["codex_cli", "claude_code"])
 @pytest.mark.parametrize("cooldown", [False, True])
 @pytest.mark.parametrize("account_selection", ["pool", "fixed", "implicit"])
+@pytest.mark.parametrize("parent_step_recovery", [False, True], ids=["retained-parent", "step-owner"])
 async def test_pool_step_uses_shared_loop_and_preserves_retry_authority(
-    monkeypatch, runtime, cooldown, account_selection
+    monkeypatch, runtime, cooldown, account_selection, parent_step_recovery
 ):
     _configure_workflow_runtime(monkeypatch)
     run = MoonMindAgentRun()
@@ -146,9 +147,17 @@ async def test_pool_step_uses_shared_loop_and_preserves_retry_authority(
     from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
 
     request = MoonMindUserWorkflow()._bind_shared_runtime_context(request)
+    if not parent_step_recovery:
+        request.parameters["metadata"]["moonmind"].pop("sharedStepRecovery")
     result = await run.run(request)
 
-    assert result.summary == "Shared success" and result.failure_class is None
+    if cooldown and parent_step_recovery:
+        assert result.summary == "Provider temporarily busy"
+        assert result.failure_class == "integration_error"
+        assert result.provider_error_code == "provider_capacity"
+        assert result.retry_recommendation == "retry_step_execution"
+    else:
+        assert result.summary == "Shared success" and result.failure_class is None
     if runtime == "codex_cli":
         assert (
             result.metadata["dispatchPoolContext"]["executionProfileRef"]
@@ -158,12 +167,12 @@ async def test_pool_step_uses_shared_loop_and_preserves_retry_authority(
             result.metadata["dispatchPoolContext"]["workspaceCheckpointRestoreRef"]
             == "artifact:accepted-workspace"
         )
-        if cooldown:
+        if cooldown and not parent_step_recovery:
             assert (
                 executions[1].workspace_spec["workspaceCheckpointRestoreRef"]
                 == "artifact:accepted-workspace"
             )
-    assert len(executions) == len(prepared) == (2 if cooldown else 1)
+    assert len(executions) == len(prepared) == (2 if cooldown and not parent_step_recovery else 1)
     assert all(
         item.agent_kind == "external" and item.agent_id == "omnigent"
         for item in executions

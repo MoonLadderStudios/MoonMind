@@ -296,6 +296,12 @@ Profile edits cannot change that evidence; ordinary explicit metadata keeps its
 existing precedence over tier defaults. Codex same-epoch successors carry the selected
 account, durable context and verified saved workspace through the parent,
 including Continue-As-New. Old parents without this handoff keep native dispatch.
+After a drained shared turn reports provider cooldown, new parents restart the
+logical step through its existing retry owner and remaining budget. The parent
+verifies and adopts the child's scoped canonical save after worker cleanup;
+it does not recapture the deleted tree or rebind the delivered runtime journal.
+Cancellation starts no successor. A selected Profile that cannot restore this
+save reports the missing capability instead of starting from different inputs.
 Fresh native steps with equivalent configuration use this same fenced handoff
 after fixed, implicit or pool account selection, without rewriting their stored
 submission. Older parents without the handoff retain their recorded commands.
