@@ -761,6 +761,7 @@ def codex_provider_config_endpoint(
                     secretRole=configuration["secretRole"],
                     baseUrl=base_url,
                     defaultModel=configuration["document"].get("model"),
+                    launchEnvironment=configuration.pop("launchEnvironment", {}),
                     codexConfiguration=configuration,
                 ),
                 "",
