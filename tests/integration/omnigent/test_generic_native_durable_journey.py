@@ -1125,6 +1125,19 @@ async def _compile_plan(
         auth_state="connected",
         last_auth_method="oauth_volume" if oauth else "secret_ref",
     )
+    if oauth:
+        from api_service.services.provider_profile_service import (
+            apply_oauth_connected_state,
+            get_first_party_oauth_profile,
+        )
+
+        # Exercise the actual post-enrollment producer, including its persisted
+        # home selectors; a pre-connection Profile omits this metadata.
+        apply_oauth_connected_state(
+            profile,
+            mapping=get_first_party_oauth_profile(runtime_id, provider_id),
+            validated_at=datetime.now(UTC),
+        )
     async with session_factory() as session:
         artifacts = TemporalArtifactService(TemporalArtifactRepository(session))
         _snapshot_row, skill_snapshot_bytes = await artifacts.read(
