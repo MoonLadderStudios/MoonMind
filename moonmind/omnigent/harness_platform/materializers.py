@@ -514,6 +514,12 @@ def untranslated_oauth_launch_options(profile: Any) -> str | None:
     ):
         return None
     fields = []
+    if str(profile.runtime_id) == "codex_cli" and (
+        getattr(profile, "command_behavior", None) or {}
+    ).get("suppress_default_model_flag"):
+        # The native command deliberately delegates model selection to the
+        # enrolled home. A compiled shared plan must not substitute its default.
+        fields.append("command_behavior.suppress_default_model_flag")
     private_configuration = None
     if getattr(profile, "file_templates", None):
         if str(profile.runtime_id) == "codex_cli":

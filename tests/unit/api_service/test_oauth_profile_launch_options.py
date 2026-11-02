@@ -97,6 +97,17 @@ def test_plain_oauth_profiles_keep_the_equivalent_shared_route(runtime, schema):
     assert not profile_has_native_inventory_route(profile, [configuration])
 
 
+@pytest.mark.parametrize("schema", ["v1", "v2"])
+@pytest.mark.parametrize("suppress_model", [False, True])
+def test_oauth_native_model_default_suppression_is_not_silently_dropped(
+    schema, suppress_model,
+):
+    profile, configuration = profile_and_configuration("codex_cli", schema)
+    profile.command_behavior = {"suppress_default_model_flag": suppress_model}
+    assert configuration_accepts_profile(configuration[1].document, profile) is not suppress_model
+    assert profile_has_native_inventory_route(profile, [configuration]) is suppress_model
+
+
 def private_codex_profile(
     schema="v2", *, home_path="{{runtime_support_dir}}/codex-home", declare_home=True,
 ):

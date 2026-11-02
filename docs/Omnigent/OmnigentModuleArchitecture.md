@@ -317,9 +317,9 @@ without overriding private HOME or editing the enrolled home. Codex OAuth
 preferences and nonsecret files authored for a run-support or enrolled HOME use
 the same configuration artifact and portable renderer. They apply only in the
 native owner's private app-server HOME, preserving its model, provider, tools and
-agent instructions; preparation never edits enrollment. Protected environment,
-model/tool/auth configuration and other HOME choices retain their native adapter
-until an equivalent handoff exists.
+agent instructions; preparation never edits enrollment. Protected settings,
+native model-default suppression, uncarried tool/auth configuration and other
+HOME choices retain their adapter until an equivalent handoff exists.
 Recorded plans retain their original materializer identity.
 Profile-bound execution and its OAuth host launcher admit no new plans;
 they retain queued starts, retries and cleanup under their recorded authority. Supported
