@@ -374,7 +374,7 @@ async def execute_selected_pool_source(
                 )
             ).one()
             assert row.lease_state == "held" and row.execution_plan_ref is None
-            return
+            return None
         assert result["disposition"] == "shared", result
         shared = AgentExecutionRequest.model_validate(result["request"])
         assert shared.agent_kind == "external" and shared.agent_id == "omnigent"
@@ -417,7 +417,7 @@ async def execute_selected_pool_source(
             assert shared.parameters["publishMode"] == "pr"
             assert shared.parameters["publishBaseBranch"] == "selected-target"
             assert shared.parameters["commitMessage"] == "Publish selected pool work"
-            return
+            return None
         assert plan.payload.harnessId == journey.harness
         if scenario == "model_alias":
             assert request.parameters["model"] == "selected-pool-alias"
