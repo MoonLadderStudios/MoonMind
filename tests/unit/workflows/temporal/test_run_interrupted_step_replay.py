@@ -151,10 +151,13 @@ async def _plan(activity_type: str, _payload: Any, **_kwargs: Any) -> bytes:
         reference = getattr(_payload, "artifact_ref", "")
         if reference.startswith("artifact://checkpoints/shared-child-save-"):
             _SAVED_READS.append(reference)
+            if _InterruptedStepFixture.child_save_failure == "unavailable":
+                raise ConnectionError("saved child checkpoint is temporarily unavailable")
             return json.dumps(build_step_checkpoint_payload(
                 identity=StepExecutionIdentityModel(
                     workflowId=workflow.info().workflow_id, runId=workflow.info().run_id,
-                    logicalStepId=_STEP, executionOrdinal=int(reference.rsplit("-", 1)[1]),
+                    logicalStepId=_STEP,
+                    executionOrdinal=99 if _InterruptedStepFixture.child_save_failure == "identity" else int(reference.rsplit("-", 1)[1]),
                 ),
                 boundary="after_execution", task_input_snapshot_ref="art_original_task", plan_ref="artifact://original-plan",
                 workspace=_shared_workspace(), created_at=workflow.now(),
@@ -183,6 +186,7 @@ class _InterruptedStepFixture:
     git_checkpoint = False
     shared_child_save = False
     cancel_after_child = False
+    child_save_failure = None
 
     @workflow.run
     async def run(self) -> int:
@@ -233,14 +237,23 @@ class _InterruptedStepFixture:
         else:
             run._record_canonical_step_checkpoint = record_checkpoint
         run._record_step_execution_manifest = record_manifest
-        await run._run_execution_stage(
-            parameters={
-                "publishMode": "none",
-                "omnigentExecutionPlan": dict(_RECORDED),
-                "resolvedSkillsetRef": "art_skills_recorded",
-            },
-            plan_ref="plan-ref",
-        )
+        try:
+            await run._run_execution_stage(
+                parameters={
+                    "publishMode": "none",
+                    "omnigentExecutionPlan": dict(_RECORDED),
+                    "resolvedSkillsetRef": "art_skills_recorded",
+                },
+                plan_ref="plan-ref",
+            )
+        except ValueError as error:
+            if not self.child_save_failure:
+                raise
+            assert "saved work" in str(error).lower()
+            assert "no successor" in str(error).lower()
+            row = run._step_ledger_row_for(_STEP)
+            assert row["executionOutcome"]["status"] == "failed"
+            assert "shared-child-save-1" in row["finalizationOutcome"]["message"]
         return run._step_execution_for(_STEP) or 0
 
 
@@ -420,11 +433,15 @@ async def test_interrupted_git_checkpoint_child_payloads_survive_real_replay(mon
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cancel", [False, True], ids=["successor", "cancelled"])
-async def test_selected_pool_child_save_drives_the_existing_step_owner_and_replays(monkeypatch, cancel):
+@pytest.mark.parametrize("mode", ["successor", "cancelled", "unavailable", "identity"])
+async def test_selected_pool_child_save_drives_the_existing_step_owner_and_replays(monkeypatch, mode):
+    cancel = mode == "cancelled"
+    blocked = mode in {"unavailable", "identity"}
+    expected_count = 1 if cancel or blocked else 2
     _patch_environment(monkeypatch)
     monkeypatch.setattr(_InterruptedStepFixture, "shared_child_save", True)
     monkeypatch.setattr(_InterruptedStepFixture, "cancel_after_child", cancel)
+    monkeypatch.setattr(_InterruptedStepFixture, "child_save_failure", mode if blocked else None)
     monkeypatch.setattr(_InterruptedAgentRun, "shared_child_save", True)
     _ADMISSION_RESULT.clear()
     _ADMISSION_RESULT.update(disposition="admitted", omnigentExecutionPlan=dict(_INSTALLED), resolvedSkillsetRef="art_skills_installed")
@@ -440,7 +457,7 @@ async def test_selected_pool_child_save_drives_the_existing_step_owner_and_repla
 
     monkeypatch.setattr(workflow, "execute_child_workflow", observe_child)
     _enable(monkeypatch, _SHARED_RECOVERY_PATCHES)
-    name = "shared-checkpoint-cancel" if cancel else "shared-checkpoint-successor"
+    name = f"shared-checkpoint-{mode}"
     async with await WorkflowEnvironment.start_time_skipping(data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER) as env:
         agent_worker, admission_worker = _workers(env)
         async with agent_worker, admission_worker, Worker(
@@ -448,13 +465,13 @@ async def test_selected_pool_child_save_drives_the_existing_step_owner_and_repla
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(_InterruptedStepFixture.run, id=name, task_queue=name)
-            assert await asyncio.wait_for(handle.result(), timeout=30) == (1 if cancel else 2)
+            assert await asyncio.wait_for(handle.result(), timeout=30) == expected_count
             history = await handle.fetch_history()
-    assert len(_CHILD_REQUESTS) == len(emitted) == (1 if cancel else 2)
+    assert len(_CHILD_REQUESTS) == len(emitted) == expected_count
     first = emitted[0]
     assert first.agent_id == "codex_cli" and first.profile_selector.tags_all == ["accepted-pool"]
     assert first.parameters["metadata"]["moonmind"]["sharedStepRecovery"] is True
-    if not cancel:
+    if expected_count == 2:
         second = emitted[1]
         assert second.step_execution.execution_ordinal == 2
         assert second.step_execution.step_execution_id != first.step_execution.step_execution_id

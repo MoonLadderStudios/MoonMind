@@ -7619,25 +7619,26 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         *,
         updated_at: datetime,
         child_saved_checkpoint: tuple[Any, Any] | None = None,
-    ) -> None:
-        """Isolate idempotent checkpoint finalization from the primary result."""
+    ) -> bool:
+        """Preserve the primary result; refuse a successor if save adoption fails."""
 
         row = self._step_ledger_row_for(logical_step_id)
         if not isinstance(row, dict):
-            return
+            return True
         previous_outcome = row.get("finalizationOutcome")
         if (
             isinstance(previous_outcome, Mapping)
             and previous_outcome.get("status") == "succeeded"
             and self._coerce_text(previous_outcome.get("checkpointRef"), max_chars=500)
         ):
-            return
+            return True
         retry_count = (
             int(previous_outcome.get("retryCount") or 0)
             if isinstance(previous_outcome, Mapping)
             else 0
         )
         criticality = self._checkpoint_criticality(logical_step_id)
+        adopting_child_save = child_saved_checkpoint is not None
         try:
             adopted = (
                 await self._adopt_shared_child_saved_checkpoint(
@@ -7646,6 +7647,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 if child_saved_checkpoint is not None
                 else False
             )
+            adopting_child_save = False
             if adopted and criticality == "unsupported":
                 # The selected shared runtime already supplied a real save;
                 # the authored native runtime's lack of capture is obsolete.
@@ -7660,7 +7662,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     "message": "Checkpoint capture is unsupported by this workspace.",
                     "updatedAt": updated_at.isoformat(),
                 }
-                return
+                return True
             checkpoint_ref = await self._record_canonical_step_checkpoint(
                 logical_step_id,
                 boundary="after_execution",
@@ -7668,6 +7670,19 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             )
         except Exception as exc:
             status = "degraded" if criticality == "recoverability_only" else "failed"
+            message = self._bounded_operator_failure(exc)
+            if adopting_child_save:
+                source_result = child_saved_checkpoint[1]
+                metadata = (
+                    source_result.get("metadata")
+                    if isinstance(source_result, Mapping) else source_result.metadata
+                )
+                saved = metadata.get("savedWorkspaceCheckpoint") or {}
+                reference = self._bounded_story_loop_artifact_ref(saved.get("checkpointRef"))
+                message = (
+                    f"Saved work checkpoint {reference or 'in the child result'} "
+                    f"could not be adopted; no successor started. {message}"
+                )
             row["finalizationOutcome"] = {
                 "status": status,
                 "phase": "after_execution_checkpoint",
@@ -7675,19 +7690,20 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 "failureCode": FINALIZATION_CHECKPOINT_FAILED,
                 "terminalFailureCode": FINALIZATION_RETRY_EXHAUSTED,
                 "retryCount": retry_count + 1,
-                "message": self._bounded_operator_failure(exc),
+                "message": message,
                 "updatedAt": workflow.now().isoformat(),
             }
             self._summary = (
-                "Execution succeeded; finalization failed during the "
-                "after-execution checkpoint."
+                "Saved work could not be verified for recovery; no successor was started."
+                if adopting_child_save else
+                "Execution succeeded; finalization failed during the after-execution checkpoint."
             )
             self._attention_required = criticality == "required"
             if criticality == "required":
                 self._publish_status = "failed"
                 self._publish_reason = self._summary
             self._update_memo()
-            return
+            return not adopting_child_save
         capture_outcome = self._step_checkpoint_capture_outcomes.get(logical_step_id)
         if not checkpoint_ref and isinstance(capture_outcome, Mapping):
             capability_criticality = str(
@@ -7739,7 +7755,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 self._summary = self._publish_reason
                 self._attention_required = True
                 self._update_memo()
-            return
+            return True
         row["finalizationOutcome"] = {
             "status": "succeeded" if checkpoint_ref else "unsupported",
             "phase": "after_execution_checkpoint",
@@ -7758,6 +7774,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._summary = "Execution succeeded; finalization retry completed."
             self._attention_required = False
             self._update_memo()
+        return True
 
     def _record_publication_finalization_failure(
         self,
@@ -13694,6 +13711,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     )
 
                     child_saved_checkpoint = None
+                    checkpoint_retry_safe = True
                     if tool_type != "agent_runtime" and step_execution_manifest_enabled:
                         await self._record_step_execution_manifest(
                             node_id,
@@ -14507,7 +14525,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             recorded_at=outcome_recorded_at,
                         )
                         self._update_memo()
-                        await self._finalize_after_execution_checkpoint(
+                        checkpoint_retry_safe = await self._finalize_after_execution_checkpoint(
                             node_id,
                             updated_at=outcome_recorded_at,
                             child_saved_checkpoint=child_saved_checkpoint,
@@ -14618,6 +14636,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 failure_message == "execution_error"
                                 and tool_type == "agent_runtime"
                             )
+                        if retryable and checkpoint_retry_safe is False:
+                            retryable = False
+                            step_failure_summary = (
+                                f"{step_failure_summary}; saved work could not be "
+                                "verified for recovery, so no successor was started"
+                            )
+                            provider_failure_summary = step_failure_summary
+                            self._attention_required = True
                         outputs = self._get_from_result(execution_result, "outputs")
                         if (
                             retryable
