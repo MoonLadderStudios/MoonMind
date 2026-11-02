@@ -1,22 +1,4 @@
-"""Retirement of the experimental embedded host transport (#3955).
-
-MoonLadderStudios/MoonMind#3955 retires the experimental embedded host/runner
-transport without removing native chat or historical evidence:
-
-* new embedded-transport admission fails fast at the trusted bridge-config
-  selection boundary with an actionable proxy alternative (never a silent
-  substitution);
-* the proxy-only production path never requires the retired embedded launch
-  modules;
-* the native Workflow Chat ``embedded=1`` presentation option and the shared
-  bridge/session/event/credential contracts are preserved;
-* removed configuration is detected at API/worker startup, and readiness no
-  longer advertises the removed transport.
-
-Physical removal of the launch code follows once bounded drain probes
-establish no active or cleanup owner remains; these tests pin disabled
-admission, not the deletion.
-"""
+"""Historical embedded decoding, disabled admission and native presentation. Shared first-message, session, event and credential records survive removal of the executable transport and its import fallbacks."""
 
 from __future__ import annotations
 
@@ -177,8 +159,6 @@ def test_proxy_operates_with_embedded_launch_modules_unavailable() -> None:
             "from moonmind.omnigent.bridge_proxy import BridgeSessionCreateRequest, BridgeSessionEventRequest",
             "BridgeSessionCreateRequest(labels={'moonmind.workflow_id': 'wf-1'})",
             "BridgeSessionEventRequest(type='message')",
-            "from moonmind.omnigent.embedded_host_requests import EmbeddedHostRegisterRequest",
-            "EmbeddedHostRegisterRequest(hostId='h-1')",
             "import api_service.api.routers.omnigent_bridge_composition as composition",
             "assert callable(composition.build_bridge_session_proxy)",
             "assert callable(composition.build_bridge_session_store)",
@@ -247,7 +227,7 @@ def test_shared_contracts_preserved() -> None:
     """First-message, bridge, event, and credential contracts are untouched."""
 
     from moonmind.omnigent import bridge_store
-    from moonmind.omnigent import host_auth_store
+    from api_service.db.models import OmnigentHostAuthProfileRecord
 
     assert tuple(CANONICAL_FIRST_MESSAGE_STATES) == (
         "not_prepared",
@@ -262,7 +242,7 @@ def test_shared_contracts_preserved() -> None:
     # first-message idempotency and event persistence live beside it.
     assert bridge_store.EMBEDDED_LAUNCH_KEY == "embedded_runner_launch"
     assert hasattr(bridge_store.OmnigentBridgeSessionStore, "list_event_page")
-    assert hasattr(host_auth_store.HostAuthProfileStore, "get_active")
+    assert OmnigentHostAuthProfileRecord.__tablename__ == "omnigent_host_auth_profiles"
     assert isinstance(OmnigentBridgeConfig().idempotency.first_message_state_machine, tuple)
 
 
@@ -317,8 +297,8 @@ def test_tunnel_retirement_close_carries_reason() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("recorded_status", ["active", "completed"])
-async def test_retained_embedded_sessions_drain_under_proxy_mode(recorded_status) -> None:
-    """Persisted-mode dispatch keeps retained drain paths on their owner (#3955)."""
+async def test_retained_embedded_ids_do_not_attach_to_proxy(recorded_status) -> None:
+    """Recorded embedded ids stay on the read-only owner after transport removal."""
 
     from types import SimpleNamespace
 
@@ -345,12 +325,12 @@ async def test_retained_embedded_sessions_drain_under_proxy_mode(recorded_status
         session_id="sess-1",
         config=config,
         proxy=proxy,  # type: ignore[arg-type]
-        embedded_facade=None,
         store=_Store(embedded_row),  # type: ignore[arg-type]
     )
     assert selected is True
-    assert facade is not None and facade is not proxy
-    assert getattr(facade, "_drain_retained_sessions", False) is True
+    assert facade is None
+    assert embedded_row.status == recorded_status
+    assert embedded_row.metadata_ == {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED}
 
     proxy_row = SimpleNamespace(
         metadata_={"hostProtocolMode": HOST_PROTOCOL_MODE_PROXY}
@@ -360,8 +340,7 @@ async def test_retained_embedded_sessions_drain_under_proxy_mode(recorded_status
             session_id="sess-1",
             config=config,
             proxy=proxy,  # type: ignore[arg-type]
-            embedded_facade=None,
-            store=_Store(proxy_row),  # type: ignore[arg-type]
+                store=_Store(proxy_row),  # type: ignore[arg-type]
         )
     )
     assert facade_proxy is proxy
@@ -372,51 +351,8 @@ async def test_retained_embedded_sessions_drain_under_proxy_mode(recorded_status
             session_id="sess-unknown",
             config=config,
             proxy=proxy,  # type: ignore[arg-type]
-            embedded_facade=None,
-            store=_Store(None),  # type: ignore[arg-type]
+                store=_Store(None),  # type: ignore[arg-type]
         )
     )
     assert facade_unknown is proxy
     assert selected_unknown is False
-
-
-@pytest.mark.asyncio
-async def test_drain_facade_refuses_new_admission() -> None:
-    """A drain facade drains retained rows but never admits new work (#3955)."""
-
-    from moonmind.omnigent.bridge_embedded import (
-        OmnigentEmbeddedHostProtocolFacade,
-    )
-
-    config = parse_bridge_config({})
-    assert config.host_protocol_mode == HOST_PROTOCOL_MODE_PROXY
-
-    class _Store:
-        pass
-
-    facade = OmnigentEmbeddedHostProtocolFacade(
-        run_store=_Store(),  # type: ignore[arg-type]
-        config=config,
-        drain_retained_sessions=True,
-    )
-    for operation in (
-        ("create_session", {"request": None, "binding": None}),
-        ("dispatch_runner", {"idempotency_key": "key"}),
-        ("register_host", {"request": None, "auth": None}),
-        ("heartbeat", {"host_id": "h", "request": None, "auth": None}),
-        (
-            "ingest_session_event",
-            {"host_id": "h", "session_id": "s", "request": None, "auth": None},
-        ),
-    ):
-        name, kwargs = operation
-        try:
-            await getattr(facade, name)(**kwargs)  # type: ignore[arg-type]
-        except Exception as exc:  # noqa: BLE001 - asserting mapped denial below
-            assert getattr(exc, "status_code", None) == 410, name
-            assert (
-                getattr(exc, "code", "")
-                == "omnigent_embedded_transport_retired"
-            ), name
-        else:
-            raise AssertionError(f"{name} admitted new work")

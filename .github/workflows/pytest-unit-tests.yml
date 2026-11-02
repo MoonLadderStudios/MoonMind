@@ -318,9 +318,8 @@ jobs:
       - name: Download hermetic owner receipts and logs
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          path: artifacts/owner-receipts/hermetic
-          pattern: integration-ci-hermetic-attempt-*
-          merge-multiple: false
+          name: integration-ci-hermetic-attempt-${{ needs.integration-hermetic.outputs.attempt }}
+          path: artifacts/owner-receipts/hermetic/integration-ci-hermetic-attempt-${{ needs.integration-hermetic.outputs.attempt }}
       - name: Download frontend owner receipt
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
@@ -1076,6 +1075,8 @@ jobs:
     # definitive failure except on schedules, which keep collecting evidence.
     needs: select-test-suites
     if: needs.select-test-suites.outputs.integration_hermetic == 'true'
+    outputs:
+      attempt: ${{ github.run_attempt }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

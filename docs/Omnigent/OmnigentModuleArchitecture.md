@@ -39,7 +39,6 @@ dependency direction.
 | `moonmind/omnigent/harness_platform/` value modules (`agent_profile`, `attestation`, `capabilities`, `catalog`, `credential_bindings`, `execution_plan`, `failures`, `harness_registry`, `runtime_binding`, `skills`, `support`) | Immutable schemas, capability/support decisions, approved-harness registration data | Pure |
 | `moonmind/omnigent/codex_execution_decisions.py` | Launch classification, budget authority, request identity, and authored-request binding for the legacy Codex realizer | Pure |
 | `moonmind/omnigent/host_failures.py` | Host failure vocabulary | Pure |
-| `moonmind/omnigent/host_auth_contracts.py` | Embedded host-auth profile, failure, and rotation vocabulary | Pure |
 | `moonmind/omnigent/host_ports.py`, `execution_ports.py` | Narrow ports for host realization and profile-bound execution | Pure |
 | `moonmind/omnigent/control_plane/turn_commands.py` | Canonical turn command use case | Application |
 | `moonmind/omnigent/host_runtime.py` | Harness-neutral host realization and cleanup use case | Application |
@@ -49,7 +48,6 @@ dependency direction.
 | `moonmind/omnigent/execution_adapters.py` | Provider Profile authority, execution policy snapshot, and Temporal attempt adapters | Persistence |
 | `moonmind/omnigent/host_services/` | Docker/Compose launcher, workspace, skills, mounted tools, GitHub credentials, egress, registration, attestation, cleanup, legacy host container inventory | Adapter |
 | `moonmind/omnigent/mounted_tool_preflight.py` | Shared GitHub credential visibility and repository-access checks for generic and retained profile-bound hosts | Adapter |
-| `moonmind/omnigent/host_auth_profile.py`, `host_auth_store.py` | Embedded host-auth SecretRef resolution, readiness projection, durable profile row | Adapter |
 | `moonmind/omnigent/harness_platform/materializers.py`, `credential_materializers.py` | Credential materializer descriptors and provisioning | Adapter |
 | `moonmind/omnigent/bridge_*.py`, `execute.py`, `oauth_host_runtime.py`, `profile_bound_execution.py` | Replay-visible legacy Codex transport, session driver, host lifecycle, and coordinator | Adapter (legacy) |
 | `moonmind/omnigent/workspace_publication.py`, `bridge_artifacts.py`, `remediation_workspace.py` | Workspace publication, artifact/evidence, checkpoint adapters | Adapter |
@@ -224,9 +222,8 @@ legacy surface that no row classifies.
 | `active_product_path` | Still the supported path for new work. |
 | `new_admission_disabled` | No new plan may select it; recorded work continues. |
 
-Plan compilation (`harness_platform/planner.py:compile_execution_plan`), runtime
-selection (`cutover.py:select_runtime` via `new_work_runtime.py`), and the
-embedded-transport bridge boundary (`omnigent_bridge.py`) consult the class
+Plan compilation (`harness_platform/planner.py:compile_execution_plan`) and runtime
+selection (`cutover.py:select_runtime` via `new_work_runtime.py`) consult the class
 before admitting, so a trusted planner default, an alternate API client's
 explicit selection, a schedule, and a preset are all held to the same
 code-owned state. Disabling new admission never affects execution,
@@ -244,7 +241,8 @@ with the owner of the affected behavior:
   (`tests/unit/workflows/temporal/test_legacy_generation_replay.py` and the
   retained workflow histories);
 - historical reads — the read-model tests of the component that serves them;
-  terminal embedded snapshots use durable rows without constructing a transport;
+  retained embedded metadata, event cursors and captured terminal transcripts
+  use the durable read owners without constructing a transport;
 - active work and cleanup — the existing drain and cleanup owners
   (`codex_cutover_drain.py`, `embedded_drain.py`, the host janitors), used only
   for components that actually have active or cleanup consumers;
@@ -272,7 +270,6 @@ deletion removes its row in the same change rather than leaving a stale entry.
 | OpenCode image variable for existing deployments / legacy Host Classes | `omnigent.legacy.opencode_host_image_alias` | `active_product_path` |
 | Pi host image variable | `omnigent.legacy.pi_host_image_alias` | `active_product_path` |
 | `native_ui_compat.py` chat projection | `omnigent.legacy.native_ui_compat` | `active_product_path` |
-| Embedded host/runner transport admission | `omnigent.legacy.embedded_host_transport` | `new_admission_disabled` |
 
 Direct Codex/Claude and AgentSession adapters retain recorded work, opaque
 serialized plans, native extension inputs/direct targets, Profiles without exact shared

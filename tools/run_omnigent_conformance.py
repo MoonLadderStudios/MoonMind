@@ -95,7 +95,7 @@ EVIDENCE_GROUPS = {
     "failureAndRestartMatrix": (
         "tests/integration/reliability_journey/"
         "test_omnigent_cumulative_remediation_journey.py",
-        "tests/integration/omnigent/test_embedded_recovery.py",
+        "tests/integration/omnigent/test_generic_native_durable_journey.py",
     ),
     "rolloutAndReplay": (
         "tests/unit/workflows/adapters/test_external_adapter_registry.py",
@@ -117,17 +117,13 @@ COMMANDS = (
         "tests/unit/omnigent",
         "tests/integration/omnigent",
         "tests/unit/tools/test_run_omnigent_live_conformance.py",
-        # This production-Postgres serialization check belongs to the
-        # compose-backed integration-ci job; the deterministic runner does not
-        # provision a database service.
-        "--ignore=tests/integration/omnigent/test_host_auth_lifecycle.py",
         # Actual Docker recovery belongs to the separate required installed-
         # image owner. Source receipts cannot qualify that runtime boundary.
         "--ignore=tests/integration/omnigent/test_exact_docker_n_way_concurrency.py",
         # The second layer runs this module explicitly and owns its recovery
         # evidence. Exclude it here to avoid executing the same nodes twice
         # with the same interpreter, environment, and pytest options.
-        "--ignore=tests/integration/omnigent/test_embedded_recovery.py",
+        "--ignore=tests/integration/omnigent/test_generic_native_durable_journey.py",
         "-q",
         "--tb=short",
         *_PYTEST_PARALLEL_ARGS,
@@ -141,7 +137,7 @@ COMMANDS = (
         "test_omnigent_cumulative_remediation_journey.py",
         "tests/unit/workflows/temporal/test_remediation_workspace_head.py",
         "tests/unit/workflows/temporal/workflows/test_run_integration.py",
-        "tests/integration/omnigent/test_embedded_recovery.py",
+        "tests/integration/omnigent/test_generic_native_durable_journey.py",
         "tests/unit/workflows/adapters/test_external_adapter_registry.py",
         "tests/unit/workflows/temporal/test_temporal_workers.py",
         "tests/unit/workflows/temporal/workflows/test_run_bounded_story_loop.py",

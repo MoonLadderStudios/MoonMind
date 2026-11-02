@@ -3022,7 +3022,7 @@ export interface paths {
         };
         /**
          * Get Omnigent Bridge Readiness
-         * @description Expose selected protocol and conformance gates without secret material.
+         * @description Expose supported proxy readiness and decode retired configuration.
          */
         get: operations["get_omnigent_bridge_readiness_api_omnigent_readiness_get"];
         put?: never;
@@ -3420,7 +3420,7 @@ export interface paths {
         get?: never;
         /**
          * Put Embedded Host Auth Profile
-         * @description Atomically select safe managed metadata after resolving its SecretRef.
+         * @description Keep a bounded retirement response for recorded transport URLs.
          */
         put: operations["put_embedded_host_auth_profile_api_omnigent_host_auth_profile_put"];
         post?: never;
@@ -3441,7 +3441,7 @@ export interface paths {
         put?: never;
         /**
          * Rotate Embedded Host Auth Profile
-         * @description Validate a new generation before atomically replacing durable metadata.
+         * @description Keep a bounded retirement response for recorded transport URLs.
          */
         post: operations["rotate_embedded_host_auth_profile_api_omnigent_host_auth_rotate_post"];
         delete?: never;
@@ -3459,7 +3459,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Revoke Embedded Host Auth Profile */
+        /**
+         * Revoke Embedded Host Auth Profile
+         * @description Keep a bounded retirement response for recorded transport URLs.
+         */
         post: operations["revoke_embedded_host_auth_profile_api_omnigent_host_auth_revoke_post"];
         delete?: never;
         options?: never;
@@ -3478,7 +3481,7 @@ export interface paths {
         put?: never;
         /**
          * Register Embedded Omnigent Host
-         * @description Register an unchanged host against MoonMind's embedded host facade.
+         * @description Keep a bounded retirement response for recorded transport URLs.
          */
         post: operations["register_embedded_omnigent_host_api_omnigent_v1_hosts_register_post"];
         delete?: never;
@@ -3498,7 +3501,7 @@ export interface paths {
         put?: never;
         /**
          * Heartbeat Embedded Omnigent Host
-         * @description Accept a host heartbeat through the embedded host facade.
+         * @description Keep a bounded retirement response for recorded transport URLs.
          */
         post: operations["heartbeat_embedded_omnigent_host_api_omnigent_v1_hosts__host_id__heartbeat_post"];
         delete?: never;
@@ -3518,7 +3521,7 @@ export interface paths {
         put?: never;
         /**
          * Ingest Embedded Omnigent Host Event
-         * @description Ingest host/session events into the canonical bridge projection.
+         * @description Keep a bounded retirement response for recorded transport URLs.
          */
         post: operations["ingest_embedded_omnigent_host_event_api_omnigent_v1_hosts__host_id__sessions__session_id__events_post"];
         delete?: never;
@@ -7745,50 +7748,6 @@ export interface components {
              */
             busy: boolean;
         };
-        /**
-         * EmbeddedHostHeartbeatRequest
-         * @description Host heartbeat payload.
-         */
-        EmbeddedHostHeartbeatRequest: {
-            /** Status */
-            status?: string | null;
-            /** Capabilities */
-            capabilities?: {
-                [key: string]: unknown;
-            };
-        } & {
-            [key: string]: unknown;
-        };
-        /**
-         * EmbeddedHostRegisterRequest
-         * @description Host registration payload accepted from an unchanged Omnigent host.
-         */
-        EmbeddedHostRegisterRequest: {
-            /** Hostid */
-            hostId?: string | null;
-            /** Runnerid */
-            runnerId?: string | null;
-            /** Capabilities */
-            capabilities?: {
-                [key: string]: unknown;
-            };
-        } & {
-            [key: string]: unknown;
-        };
-        /**
-         * EmbeddedHostSessionEventRequest
-         * @description Host-to-MoonMind session event payload.
-         */
-        EmbeddedHostSessionEventRequest: {
-            /** Type */
-            type: string;
-            /** Data */
-            data?: {
-                [key: string]: unknown;
-            };
-        } & {
-            [key: string]: unknown;
-        };
         /** EndpointPolicy */
         EndpointPolicy: {
             /** Ref */
@@ -9505,28 +9464,6 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
-        };
-        /** HostAuthProfilePutRequest */
-        HostAuthProfilePutRequest: {
-            /** Profileid */
-            profileId: string;
-            /** Currentsecretref */
-            currentSecretRef: string;
-            /**
-             * Currentgeneration
-             * @default 1
-             */
-            currentGeneration: number;
-        };
-        /** HostAuthRotateRequest */
-        HostAuthRotateRequest: {
-            /** Newsecretref */
-            newSecretRef: string;
-            /**
-             * Overlapseconds
-             * @default 900
-             */
-            overlapSeconds: number;
         };
         /** HostPolicy */
         HostPolicy: {
@@ -21865,11 +21802,7 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["HostAuthProfilePutRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -21877,18 +21810,16 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": unknown;
                 };
             };
-            /** @description Validation Error */
-            422: {
+            /** @description Embedded host transport retired (omnigent_embedded_transport_retired). */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["OmnigentPublicErrorResponse"];
                 };
             };
         };
@@ -21900,11 +21831,7 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["HostAuthRotateRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -21912,18 +21839,16 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": unknown;
                 };
             };
-            /** @description Validation Error */
-            422: {
+            /** @description Embedded host transport retired (omnigent_embedded_transport_retired). */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["OmnigentPublicErrorResponse"];
                 };
             };
         };
@@ -21943,35 +21868,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-        };
-    };
-    register_embedded_omnigent_host_api_omnigent_v1_hosts_register_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EmbeddedHostRegisterRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": unknown;
                 };
             };
             /** @description Embedded host transport retired (omnigent_embedded_transport_retired). */
@@ -21983,13 +21880,33 @@ export interface operations {
                     "application/json": components["schemas"]["OmnigentPublicErrorResponse"];
                 };
             };
-            /** @description Validation Error */
-            422: {
+        };
+    };
+    register_embedded_omnigent_host_api_omnigent_v1_hosts_register_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": unknown;
+                };
+            };
+            /** @description Embedded host transport retired (omnigent_embedded_transport_retired). */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OmnigentPublicErrorResponse"];
                 };
             };
         };
@@ -22003,11 +21920,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EmbeddedHostHeartbeatRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -22015,9 +21928,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": unknown;
                 };
             };
             /** @description Embedded host transport retired (omnigent_embedded_transport_retired). */
@@ -22050,11 +21961,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EmbeddedHostSessionEventRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -22062,9 +21969,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": unknown;
                 };
             };
             /** @description Embedded host transport retired (omnigent_embedded_transport_retired). */
