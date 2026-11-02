@@ -1040,6 +1040,8 @@ async def _compile_plan(
     api_key_tuning=None,
     oauth_private_config=False,
     private_profile_config=False,
+    private_configuration_home=None,
+    declare_configuration_home=True,
     instructions="Generate a report.",
 ):
     # Reuse the durable Skill producer, then expose its immutable body through
@@ -1153,9 +1155,10 @@ async def _compile_plan(
     if oauth_private_config or private_profile_config:
         assert runtime_id == "codex_cli"
         assert oauth or private_profile_config
-        profile.home_path_overrides = {"CODEX_HOME": "{{runtime_support_dir}}/codex-home"}
+        configuration_home = private_configuration_home or "{{runtime_support_dir}}/codex-home"
+        profile.home_path_overrides = {"CODEX_HOME": configuration_home} if declare_configuration_home else {}
         profile.file_templates = [{
-            "path": "{{runtime_support_dir}}/codex-home/config.toml", "format": "toml",
+            "path": configuration_home + "/config.toml", "format": "toml",
             "merge_strategy": "deep_merge", "permissions": "0600",
             "content_template": dict(session_settings or {}),
         }, *(additional_files or [])]
@@ -1337,6 +1340,8 @@ async def native_journey(
                 api_key_tuning=selection.get("apiKeyTuning"),
                 oauth_private_config=bool(selection.get("oauthPrivateConfiguration")),
                 private_profile_config=bool(selection.get("privateProfileConfiguration")),
+                private_configuration_home=selection.get("privateConfigurationHome"),
+                declare_configuration_home=selection.get("declareConfigurationHome", True),
                 instructions=instructions,
             )
         # Verify the public HTTP enums survive discovery, alongside the real
@@ -1579,12 +1584,18 @@ async def test_plain_api_key_private_preferences_use_the_existing_shared_provide
 
 @pytest.mark.parametrize("native_journey", [{
     "harness": "codex-native", "static": static, "oauthPrivateConfiguration": True,
+    "privateConfigurationHome": configuration_home,
+    "declareConfigurationHome": declare_home,
     "sessionSettings": {"developer_instructions": "Keep the admitted OAuth preferences."},
     "additionalFiles": [{
-        "path": "{{runtime_support_dir}}/codex-home/AGENTS.md", "format": "text",
+        "path": configuration_home + "/AGENTS.md", "format": "text",
         "merge_strategy": "append", "permissions": "0600", "content_template": "Admitted file.\n",
     }],
-} for static in (False, True)], indirect=True)
+} for static in (False, True) for configuration_home, declare_home in (
+    ("{{runtime_support_dir}}/codex-home", True),
+    ("/home/app/.codex", True),
+    ("/home/app/.codex", False),
+)], indirect=True)
 @pytest.mark.parametrize("edit_after_admission", [False, True])
 async def test_admitted_oauth_private_configuration_reaches_shared_lifecycle(native_journey, edit_after_admission):
     journey = native_journey
