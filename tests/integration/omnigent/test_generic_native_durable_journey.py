@@ -1035,6 +1035,7 @@ async def _compile_plan(
     env_bundle=False,
     codex_config=False,
     session_settings=None,
+    oauth_tuning=None,
     instructions="Generate a report.",
 ):
     # Reuse the durable Skill producer, then expose its immutable body through
@@ -1109,6 +1110,9 @@ async def _compile_plan(
             default_model="model",
             command_behavior={"suppress_default_model_flag": True},
         )
+    if oauth_tuning:
+        assert oauth and runtime_id == "claude_code"
+        fields["env_template"] = dict(oauth_tuning)
     profile = ManagedAgentProviderProfile(
         profile_id=PROFILE,
         runtime_id=runtime_id,
@@ -1311,6 +1315,7 @@ async def native_journey(
                 env_bundle=env_bundle,
                 codex_config=codex_config,
                 session_settings=selection.get("sessionSettings"),
+                oauth_tuning=selection.get("oauthTuning"),
                 instructions=instructions,
             )
         # Verify the public HTTP enums survive discovery, alongside the real
@@ -1527,6 +1532,76 @@ async def test_declared_codex_session_preferences_survive_shared_lifecycle(nativ
     assert document["developer_instructions"] == "Preserve completed work and the requested account."
     assert document["history"] == {"persistence": "none", "max_bytes": 1048576}
     assert document["project_doc_fallback_filenames"] == ["PROJECT.md"]
+
+
+@pytest.mark.parametrize("native_journey", [{
+    "harness": "claude-native",
+    "oauthTuning": {
+        "API_TIMEOUT_MS": "300000",
+        "ANTHROPIC_SMALL_FAST_MODEL": "selected-small-model",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    },
+}], indirect=True)
+@pytest.mark.parametrize("edit_after_admission", [False, True])
+async def test_admitted_claude_oauth_tuning_reaches_the_shared_runner(
+    native_journey, edit_after_admission
+):
+    if edit_after_admission:
+        async with native_journey.session_factory() as session:
+            profile = await session.get(ManagedAgentProviderProfile, PROFILE)
+            profile.env_template = {"API_TIMEOUT_MS": "later-value"}
+            await session.commit()
+    await assert_native_turn_saved_and_cleaned(native_journey)
+    environment = native_journey.docker.launch_env
+    assert environment["API_TIMEOUT_MS"] == "300000"
+    assert environment["ANTHROPIC_SMALL_FAST_MODEL"] == "selected-small-model"
+    assert environment["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
+    assert "API_TIMEOUT_MS" in environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(",")
+    assert not any("api_key" in item.lower() for item in environment)
+
+
+@pytest.mark.parametrize("native_journey", [{
+    "harness": "claude-native", "oauthTuning": {"API_TIMEOUT_MS": "300000"},
+}], indirect=True)
+@pytest.mark.parametrize("refresh", [False, True], ids=["frozen", "fresh-scheduled"])
+async def test_frozen_and_fresh_claude_oauth_tuning_keep_their_admission_owner(
+    native_journey, refresh
+):
+    from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
+
+    journey = native_journey
+    snapshot = json.loads(await journey.gateway.read_admitted_input(
+        journey.plan.payload.agentProfileSnapshotRef, request=journey.request,
+    ))
+    parameters = json.loads(await journey.gateway.read_admitted_input(
+        journey.plan.payload.authority.taskInputSnapshotRef, request=journey.request,
+    ))
+    async with journey.session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, PROFILE)
+        profile.env_template = {"API_TIMEOUT_MS": "100000"}
+        await session.flush()
+        artifacts = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            transaction_ownership=ArtifactTransactionOwnership.CALLER,
+        )
+        compiled = await plan_writer.compile_frozen_execution_plan(
+            db_session=session, artifact_service=artifacts,
+            workflow_id=journey.request.correlation_id, principal="system",
+            snapshot=snapshot, provider_profile=profile, initial_parameters=parameters,
+            binding=journey.request.omnigent_execution_plan,
+            access=access_for_test("system", admitted_principal=f"workflow:{journey.request.correlation_id}"),
+            refresh_step_selections=refresh,
+        )
+        saved = compiled.envelope.payload.providerConfigurationSnapshot
+        _row, content = await artifacts.read(
+            artifact_id=saved.artifactRef.removeprefix("artifact:"),
+            access=access_for_test("system"),
+        )
+        await session.commit()
+    expected = "100000" if refresh else "300000"
+    assert json.loads(content)["primary-model"]["launchEnvironment"] == {"API_TIMEOUT_MS": expected}
+    changed = plan_writer.changed_admitted_intent(journey.plan.payload, compiled.envelope.payload)
+    assert ("providerConfiguration" in changed) is refresh
 
 
 @pytest.mark.parametrize("native_journey", [{

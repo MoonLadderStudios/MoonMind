@@ -97,6 +97,96 @@ def test_plain_oauth_profiles_keep_the_equivalent_shared_route(runtime, schema):
     assert not profile_has_native_inventory_route(profile, [configuration])
 
 
+@pytest.mark.parametrize("schema", ["v1", "v2"])
+def test_supported_claude_oauth_tuning_uses_its_shared_credential_owner(schema):
+    profile, configuration = profile_and_configuration("claude_code", schema)
+    profile.env_template = {
+        "API_TIMEOUT_MS": "300000",
+        "ANTHROPIC_SMALL_FAST_MODEL": "selected-small-model",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    }
+    before = deepcopy(vars(profile))
+    assert configuration_accepts_profile(configuration[1].document, profile)
+    assert not profile_has_native_inventory_route(profile, [configuration])
+    assert vars(profile) == before
+
+
+def test_claude_oauth_tuning_is_frozen_with_its_bound_account():
+    import hashlib
+    import json
+
+    from moonmind.omnigent.harness_platform.materializers import (
+        ProviderConfigurationSnapshotRef,
+        load_provider_configuration_snapshot,
+        provider_configuration_snapshot_bytes,
+        snapshot_provider_configuration,
+    )
+
+    profile, _ = profile_and_configuration("claude_code", "v2")
+    profile.env_template = {"API_TIMEOUT_MS": "300000"}
+    bindings = {"model": SimpleNamespace(
+        providerProfileRef=profile.profile_id,
+        materializerRef="claude-oauth-home@1",
+    )}
+    content = provider_configuration_snapshot_bytes(
+        bindings, {"model": snapshot_provider_configuration(profile)}
+    )
+    snapshot = ProviderConfigurationSnapshotRef(
+        artifactRef="artifact:admitted-settings",
+        contentDigest="sha256:" + hashlib.sha256(content).hexdigest(),
+    )
+    profile.env_template["API_TIMEOUT_MS"] = "later-value"
+    restored = load_provider_configuration_snapshot(content, snapshot, bindings)
+    assert restored["model"].launchEnvironment == {"API_TIMEOUT_MS": "300000"}
+    assert "300000" in json.loads(content)["model"]["launchEnvironment"].values()
+    bindings["model"].providerProfileRef = "a-different-account"
+    with pytest.raises(ValueError, match="account"):
+        load_provider_configuration_snapshot(content, snapshot, bindings)
+
+
+@pytest.mark.parametrize("environment", [
+    {"API_TIMEOUT_MS": "300000\nexport SECRET=value"},
+    {"API_TIMEOUT_MS": {"from_secret_ref": "extra-secret"}},
+    {"HTTPS_PROXY": "https://unselected-proxy.example"},
+    {"ANTHROPIC_API_KEY": "unselected-key"},
+])
+def test_oauth_tuning_never_admits_credentials_or_another_launch_owner(environment):
+    profile, configuration = profile_and_configuration("claude_code", "v2")
+    profile.env_template = environment
+    assert not configuration_accepts_profile(configuration[1].document, profile)
+    assert profile_has_native_inventory_route(profile, [configuration])
+
+
+def test_old_provider_snapshot_does_not_invent_oauth_launch_settings():
+    import hashlib
+
+    from moonmind.omnigent.harness_platform.materializers import (
+        ProviderConfigEndpoint,
+        ProviderConfigurationSnapshotRef,
+        load_provider_configuration_snapshot,
+        provider_configuration_snapshot_bytes,
+    )
+
+    bindings = {
+        "key": SimpleNamespace(
+            providerProfileRef="key-profile", materializerRef="omnigent-provider-config@1",
+        ),
+        "oauth": SimpleNamespace(
+            providerProfileRef="oauth-profile", materializerRef="claude-oauth-home@1",
+        ),
+    }
+    endpoint = ProviderConfigEndpoint(
+        family="anthropic", secretRole="api_key", baseUrl="https://api.anthropic.com",
+    )
+    content = provider_configuration_snapshot_bytes(bindings, {"key": endpoint})
+    snapshot = ProviderConfigurationSnapshotRef(
+        artifactRef="artifact:before-oauth-snapshots",
+        contentDigest="sha256:" + hashlib.sha256(content).hexdigest(),
+    )
+    restored = load_provider_configuration_snapshot(content, snapshot, bindings)
+    assert restored == {"key": endpoint}
+
+
 @pytest.mark.parametrize(
     "runtime,expected",
     [("codex_cli", "codex-oauth-home@1"), ("claude_code", "claude-oauth-home@1")],

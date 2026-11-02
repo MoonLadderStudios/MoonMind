@@ -54,6 +54,7 @@ from moonmind.omnigent.harness_platform.host_classes import (
     launch_policy_from_effective_launch,
 )
 from moonmind.omnigent.harness_platform.materializers import (
+    PROVIDER_CONFIGURATION_MATERIALIZERS,
     get_materializer,
     materializer_ref_for_profile,
     snapshot_provider_configuration,
@@ -553,7 +554,7 @@ class OmnigentExecutionPlanningService:
             )
             provider_configurations = {}
             for slot, binding in model_bindings_of(binding_set.bindings).items():
-                if binding.materializerRef != "omnigent-provider-config@1":
+                if binding.materializerRef not in PROVIDER_CONFIGURATION_MATERIALIZERS:
                     continue
                 configured = await session.get(
                     ManagedAgentProviderProfile, binding.providerProfileRef

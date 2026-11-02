@@ -9,7 +9,8 @@ import pytest
 from moonmind.omnigent.host_services.runtime_scripts import OmnigentRuntimeScriptService
 
 
-def test_profile_owned_literal_environment_reaches_the_native_runner():
+@pytest.mark.parametrize("materializer", ["omnigent-provider-config@1", "claude-oauth-home@1"])
+def test_profile_owned_literal_environment_reaches_the_native_runner(materializer):
     values = {
         "ANTHROPIC_SMALL_FAST_MODEL": "MiniMax-M2.7",
         "API_TIMEOUT_MS": "3000000",
@@ -19,10 +20,11 @@ def test_profile_owned_literal_environment_reaches_the_native_runner():
         credential_handles=[
             {
                 "credentialGeneration": 3,
-                "materializerRef": "omnigent-provider-config@1",
+                "materializerRef": materializer,
                 "attachments": [],
                 "runtimeEnvironment": {
-                    "OMNIGENT_CONFIG_HOME": "/home/app/.moonmind-provider-config",
+                    **({"OMNIGENT_CONFIG_HOME": "/home/app/.moonmind-provider-config"}
+                       if materializer == "omnigent-provider-config@1" else {}),
                     **values,
                 },
             }

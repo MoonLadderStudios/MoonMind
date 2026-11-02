@@ -62,6 +62,7 @@ from moonmind.omnigent.harness_platform.host_classes import (
     OmnigentHostClassSelector,
 )
 from moonmind.omnigent.harness_platform.materializers import (
+    PROVIDER_CONFIGURATION_MATERIALIZERS,
     get_materializer,
     is_api_key_launch_profile,
     materializer_ref_for_profile,
@@ -2007,7 +2008,7 @@ async def compile_and_persist_execution_plan(
             configuration_body, recorded, binding_set.bindings
         )
         provider_configuration_snapshot = recorded.model_dump(mode="json")
-    elif _recorded_provider_configuration_snapshot == "capture" and config["materializerRef"] == "omnigent-provider-config@1":
+    elif _recorded_provider_configuration_snapshot == "capture" and config["materializerRef"] in PROVIDER_CONFIGURATION_MATERIALIZERS:
         configuration_body = provider_configuration_snapshot_bytes(
             binding_set.bindings,
             {"primary-model": snapshot_provider_configuration(provider_profile)},

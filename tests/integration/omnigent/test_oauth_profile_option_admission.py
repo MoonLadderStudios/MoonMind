@@ -45,6 +45,7 @@ session_factory = native_fixture.session_factory
         "home_path_overrides",
         "model_overrides",
         "step_model_overrides",
+        "claude_oauth_tuning",
     ],
 )
 async def test_product_creation_preserves_the_exact_oauth_profile_options(
@@ -52,6 +53,8 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
 ):
     journey = native_journey
     runtime = "codex_cli" if journey.harness == "codex-native" else "claude_code"
+    if option == "claude_oauth_tuning" and runtime != "claude_code":
+        pytest.skip("These tuning values belong to the Claude harness.")
     monkeypatch.setattr(settings.workflow, "default_runtime", runtime)
     monkeypatch.setattr(settings.workflow, "github_repository", "")
     values = {
@@ -66,6 +69,7 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
         "home_path_overrides": {"HOME": "{{runtime_support_dir}}/accepted-home"},
         "model_overrides": {"selected-model-alias": journey.server.model},
         "step_model_overrides": {"selected-model-alias": journey.server.model},
+        "claude_oauth_tuning": {"API_TIMEOUT_MS": "300000"},
     }
     inventory = await OmnigentHttpClient(base_url=resolved_server_url()).list_agents()
     async with journey.session_factory() as session:
@@ -74,7 +78,10 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
             str(getattr(profile.credential_source, "value", profile.credential_source))
             == "oauth_volume"
         )
-        field = "model_overrides" if option == "step_model_overrides" else option
+        field = (
+            "env_template" if option == "claude_oauth_tuning"
+            else "model_overrides" if option == "step_model_overrides" else option
+        )
         setattr(profile, field, values[option])
         await session.commit()
         await reconcile_bootstrap_agent_profile(session, inventory=inventory)
@@ -103,7 +110,8 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
                                 **(
                                     {"model": "selected-model-alias"}
                                     if option == "model_overrides"
-                                    else {}
+                                    else {"model": journey.server.model}
+                                    if option == "claude_oauth_tuning" else {}
                                 ),
                             },
                             "steps": [
@@ -129,7 +137,7 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
             TemporalExecutionCanonicalRecord, response.json()["workflowId"]
         )
         request = agent_requests(record.parameters)["work"]
-        if field == "model_overrides":
+        if field == "model_overrides" or option == "claude_oauth_tuning":
             assert record.parameters["targetRuntime"] == "omnigent"
             assert request.agent_kind == "external" and request.agent_id == "omnigent"
             plan = await DbExecutionPlanStore(journey.session_factory).load(

@@ -223,7 +223,13 @@ class OmnigentRuntimeScriptService:
                 if key not in allowed_runtime_environment
             }
             if literals:
-                if handle.get("materializerRef") != "omnigent-provider-config@1":
+                if not (
+                    handle.get("materializerRef") == "omnigent-provider-config@1"
+                    or (
+                        handle.get("materializerRef") == "claude-oauth-home@1"
+                        and enable_claude_runtime
+                    )
+                ):
                     raise ValueError(
                         "provider launch environment requires its credential materializer"
                     )
