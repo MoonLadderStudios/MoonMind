@@ -2265,6 +2265,7 @@ async def _enqueue_stream_events(
     queue: asyncio.Queue[tuple[dict[str, Any], bool] | BaseException | None],
     message_posted: asyncio.Event,
     admitted: asyncio.Event | None = None,
+    observation_diagnostics: list[dict[str, Any]] | None = None,
 ) -> None:
     try:
         if admitted is not None:
@@ -2285,7 +2286,32 @@ async def _enqueue_stream_events(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        await queue.put(exc)
+        if (
+            message_posted.is_set()
+            and observation_diagnostics is not None
+            and isinstance(exc, OmnigentClientError)
+            and isinstance(exc.__cause__, (httpx.ReadError, httpx.RemoteProtocolError))
+        ):
+            # The stream is closed and its admission slot has been released.
+            # Keep the consumer's existing idle ticks observing the same turn
+            # until its marked-turn checks, deadline or cancellation settle it.
+            # Never submit a replacement turn or replay a live-tail stream.
+            diagnostic = exc.diagnostics()
+            _logger.warning(
+                "Omnigent observation stream interrupted after dispatch; "
+                "reconciling the same session: %s",
+                diagnostic["message"],
+            )
+            observation_diagnostics.append(
+                {
+                    "code": "omnigent_stream_read_interrupted",
+                    "transportError": type(exc.__cause__).__name__,
+                    **diagnostic,
+                }
+            )
+            await asyncio.Future()
+        else:
+            await queue.put(exc)
     finally:
         await queue.put(None)
 
@@ -2719,6 +2745,7 @@ async def run_omnigent_execution(
             endpoint_ref=selection.endpoint_ref or "default",
             idempotency_key=request.idempotency_key,
         )
+        observation_diagnostics: list[dict[str, Any]] = []
         profile_authorization = _profile_authorization_evidence(request)
         external_state.update(profile_authorization)
         delete_after_harvest = bool(
@@ -3284,6 +3311,7 @@ async def run_omnigent_execution(
                         queue=stream_queue,
                         message_posted=message_posted_gate,
                         admitted=stream_admitted,
+                        observation_diagnostics=observation_diagnostics,
                     )
                 )
                 # Reserve observation capacity before mutating provider
@@ -3540,6 +3568,7 @@ async def run_omnigent_execution(
                             session_id=session_id,
                             queue=stream_queue,
                             message_posted=live_stream_gate,
+                            observation_diagnostics=observation_diagnostics,
                         )
                     )
                 stream_events = _queued_stream_events(
@@ -3834,6 +3863,8 @@ async def run_omnigent_execution(
             finally:
                 await cancel_and_wait(heartbeat_task)
                 await cancel_and_wait(stream_task)
+                if observation_diagnostics:
+                    external_state["observationDiagnostics"] = observation_diagnostics
             await journal.flush()
 
             final_snapshot_observed_at: float | None = None

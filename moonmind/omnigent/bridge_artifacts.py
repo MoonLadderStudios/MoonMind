@@ -3219,6 +3219,7 @@ async def _build_capture_bundle_impl(
             "firstMessage": first_message_state,
             "retry": external_state.get("retry", {}),
             "terminalReconciliation": external_state.get("terminalReconciliation"),
+            "observationDiagnostics": external_state.get("observationDiagnostics"),
             "reattachState": {
                 "idempotencyKey": request.idempotency_key,
                 "initialSnapshotRef": refs.get("initialSnapshotRef"),
