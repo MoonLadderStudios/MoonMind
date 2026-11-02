@@ -11752,6 +11752,8 @@ async def _create_execution_from_workflow_request(
     session: Any = None,
     principal_context: dict[str, Any] | None = None,
     access: ArtifactAccessContext,
+    serialized_request: CreateExecutionRequest | None = None,
+    creation_defaults_snapshot: WorkflowCreationDefaults | None = None,
 ) -> ExecutionModel | ScheduleCreatedResponse:
     request_type = str(request.type).strip().lower()
     if request_type not in {"task", "workflow"}:
@@ -11960,6 +11962,7 @@ async def _create_execution_from_workflow_request(
         session=session,
         payloads=(_coerce_mapping(task_payload.get("runtime")), task_payload, payload),
         infer_native_profile=False,
+        defaults=creation_defaults_snapshot,
     )
     default_profile_ref = creation_defaults.provider_profile_ref
     if default_profile_ref:
@@ -12802,11 +12805,11 @@ async def _create_execution_from_workflow_request(
             owner_type=getattr(user, "owner_type", None)
             if fanout_principal is not None
             else None,
-            title=derived_task_title,
+            title=(serialized_request.title if serialized_request else derived_task_title),
             input_artifact_ref=input_artifact_ref,
             plan_artifact_ref=plan_artifact_ref,
             manifest_artifact_ref=manifest_artifact_ref,
-            failure_policy=None,
+            failure_policy=(serialized_request.failure_policy if serialized_request else None),
             initial_parameters=initial_parameters,
             idempotency_key=task_payload.get("idempotencyKey")
             or payload.get("idempotencyKey"),
@@ -15278,6 +15281,90 @@ async def create_optional_quality_review(
     )
 
 
+def _fresh_serialized_workflow_request(
+    request: CreateExecutionRequest,
+) -> CreateJobRequest | None:
+    """Use the product owner for fresh, fully authored workflow inputs.
+
+    Opaque plans, recorded bindings, physical workspaces and extension fields
+    retain their serialized adapter. Reinterpreting them as a fresh product
+    request could discard work or authority. Accepted identities are checked
+    before this conversion, so this never replaces a persisted launch plan.
+    """
+    if (
+        request.workflow_type != "MoonMind.UserWorkflow"
+        or request.input_artifact_ref
+        or request.plan_artifact_ref
+        or request.manifest_artifact_ref
+        or (request.schedule is not None and request.schedule.mode == "recurring")
+    ):
+        return None
+    parameters = copy.deepcopy(request.initial_parameters)
+    if len(set(resolve_launch_target_profile_selection({"initialParameters": parameters}).runtime_ids)) > 1:
+        return None
+    if set(parameters) - {
+        "workflow", "task", "targetRuntime", "profileId", "providerProfileRef",
+        "repository", "integration", "requiredCapabilities",
+        "workspaceSpec", "publishMode", "assessmentScope", "dependsOn",
+        "mergeAutomation",
+    }:
+        return None
+    task_key, task = _recurring_workflow_payload(parameters)
+    if not task or {"workflow", "task"} <= parameters.keys():
+        return None
+    if not workflow_requires_agent(task, parameters):
+        return None
+    for step in task.get("steps") or []:
+        if not isinstance(step, Mapping):
+            continue
+        step_runtime = _coerce_mapping(step.get("runtime"))
+        if set(step_runtime) - {
+            "mode", "model", "effort", "modelTier", "tierFallback",
+            "tierPreview", "hardOverrideAudit",
+        }:
+            return None
+        if (
+            provider_profile_ref_from_mapping(step_runtime)
+            or provider_profile_ref_from_mapping(step)
+            or has_profile_selector(step_runtime)
+            or step_runtime.get("agentProfile") is not None
+        ):
+            # These raw shapes deliberately defer account matching to dispatch;
+            # the envelope also validates ownership at submission. Preserve
+            # their existing persistence semantics until that handoff is shared.
+            return None
+    if set(task) - {
+        "instructions", "title", "runtime", "steps", "skill", "tool", "skills",
+        "inputs", "inputAttachments", "publish", "git", "repoRef",
+        "startingBranch", "branch", "dependsOn", "taskTemplate", "goalPreset",
+        "mergeAutomation", "reportOutput", "storyOutput", "remediation",
+    }:
+        return None
+    runtime = task.get("runtime")
+    if isinstance(runtime, Mapping) and set(runtime) - {
+        "mode", "authored", "providerProfileRef", "profileId",
+        "executionProfileRef", "model", "effort", "modelTier", "tierFallback",
+        "tierPreview", "hardOverrideAudit", "executionConfiguration",
+    }:
+        return None
+    workspace = parameters.pop("workspaceSpec", None)
+    if workspace is not None and (
+        not isinstance(workspace, Mapping)
+        or set(workspace) - {"workspaceSource"}
+        or not isinstance(workspace.get("workspaceSource"), Mapping)
+    ):
+        return None
+    parameters.pop(task_key)
+    parameters["workflow"] = task
+    if workspace is not None:
+        parameters["workspace"] = workspace
+    if request.idempotency_key is not None:
+        parameters["idempotencyKey"] = request.idempotency_key
+    return CreateJobRequest(
+        type="workflow", payload=parameters, schedule=request.schedule
+    )
+
+
 @router.post(
     "",
     response_model=ExecutionModel | ScheduleCreatedResponse,
@@ -15388,6 +15475,9 @@ async def create_execution(
             if request.idempotency_key
             else None
         )
+        workflow_request = (
+            _fresh_serialized_workflow_request(request) if existing is None else None
+        )
         initial_parameters = dict(request.initial_parameters)
         if assessment_scope is not None:
             initial_parameters["assessmentScope"] = assessment_scope
@@ -15456,9 +15546,9 @@ async def create_execution(
             )
             authored_runtime = authored_runtimes[0] if authored_runtimes else None
             selects_omnigent = "omnigent" in authored_runtimes
-            # Explicit serialized native starts do not carry the product
-            # envelope's compiled shared plan. Preserve that existing adapter;
-            # ordinary workflow/CLI and schedule producers translate above.
+            # Resolve native authority before considering shared admission.
+            # Canonical inputs join the compiler only through an equivalent
+            # Profile; native-only inputs retain their serialized adapter.
             profile_runtime = (
                 None
                 if authored_runtime
@@ -15517,6 +15607,32 @@ async def create_execution(
             # Omnigent requests retain the product-boundary rejection below.
             initial_parameters["targetRuntime"] = selection.runtime_id
             initial_parameters["runtimeCutover"] = new_work_evidence(selection)
+            if workflow_request is not None:
+                shared_route = selection.runtime_id == "omnigent"
+                candidate = provider_profile
+                if not shared_route and selection.runtime_id in {"codex_cli", "claude_code"}:
+                    from api_service.services.provider_profile_readiness import provider_profile_launch_ready
+
+                    candidate = candidate or await _load_default_provider_profile_for_runtime(
+                        session=session, runtime_id=selection.runtime_id,
+                    )
+                    if candidate is not None and provider_profile_launch_ready(candidate):
+                        shared_route = await _profile_route_runtime(
+                            session=session, user=user, provider_profile=candidate,
+                            authored_runtime=selection.runtime_id, task_payload=task_payload,
+                        ) == "omnigent"
+                if shared_route:
+                    if candidate is not None and not profile_ref:
+                        creation_defaults = replace(
+                            creation_defaults, provider_profile_ref=candidate.profile_id,
+                            provider_profile_inferred=True,
+                        )
+                    return await _create_execution_from_workflow_request(
+                        request=workflow_request, service=service, user=user,
+                        session=session, principal_context=principal_context,
+                        access=access, serialized_request=request,
+                        creation_defaults_snapshot=creation_defaults,
+                    )
 
         skill_validation = await validate_skill_step_inputs(
             initial_parameters=initial_parameters,
