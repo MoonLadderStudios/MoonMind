@@ -124,8 +124,10 @@ def test_claude_oauth_tuning_is_frozen_with_its_bound_account():
     import hashlib
     import json
 
-    from moonmind.omnigent.harness_platform.materializers import (
+    from moonmind.omnigent.harness_platform.execution_plan import (
         ProviderConfigurationSnapshotRef,
+    )
+    from moonmind.omnigent.harness_platform.materializers import (
         load_provider_configuration_snapshot,
         provider_configuration_snapshot_bytes,
         snapshot_provider_configuration,
@@ -180,9 +182,11 @@ def test_oauth_tuning_never_admits_credentials_or_another_launch_owner(environme
 def test_old_provider_snapshot_does_not_invent_oauth_launch_settings():
     import hashlib
 
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        ProviderConfigurationSnapshotRef,
+    )
     from moonmind.omnigent.harness_platform.materializers import (
         ProviderConfigEndpoint,
-        ProviderConfigurationSnapshotRef,
         load_provider_configuration_snapshot,
         provider_configuration_snapshot_bytes,
     )
