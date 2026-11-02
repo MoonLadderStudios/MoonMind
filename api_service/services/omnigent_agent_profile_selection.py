@@ -114,9 +114,16 @@ def _provider_materializer_error(
     from moonmind.omnigent.harness_platform.materializers import (
         get_materializer,
         materializer_ref_for_profile,
+        untranslated_oauth_launch_options,
         validate_binding_materializer,
     )
 
+    untranslated = untranslated_oauth_launch_options(profile)
+    if untranslated:
+        return HarnessPlatformError(
+            untranslated,
+            code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+        )
     harness_selection = document.get("harness") or {}
     try:
         materializer_ref = materializer_ref_for_profile(profile)

@@ -1035,6 +1035,7 @@ async def _compile_plan(
     static_mode=False,
     env_bundle=False,
     codex_config=False,
+    session_settings=None,
     instructions="Generate a report.",
 ):
     # Reuse the durable Skill producer, then expose its immutable body through
@@ -1104,6 +1105,9 @@ async def _compile_plan(
         templates[0]["content_template"]["model_providers"]["minimax"][
             "base_url"
         ] = "https://api.openai.com/v1"
+
+
+        templates[0]["content_template"].update(session_settings or {})
         templates[0]["content_template"]["model"] = "model"
         templates[0]["content_template"]["profiles"]["m27"]["model"] = "model"
         fields.update(
@@ -1129,6 +1133,19 @@ async def _compile_plan(
         auth_state="connected",
         last_auth_method="oauth_volume" if oauth else "secret_ref",
     )
+    if oauth:
+        from api_service.services.provider_profile_service import (
+            apply_oauth_connected_state,
+            get_first_party_oauth_profile,
+        )
+
+        # Exercise the actual post-enrollment producer, including its persisted
+        # home selectors; a pre-connection Profile omits this metadata.
+        apply_oauth_connected_state(
+            profile,
+            mapping=get_first_party_oauth_profile(runtime_id, provider_id),
+            validated_at=datetime.now(UTC),
+        )
     async with session_factory() as session:
         artifacts = TemporalArtifactService(TemporalArtifactRepository(session))
         _snapshot_row, skill_snapshot_bytes = await artifacts.read(
@@ -1291,6 +1308,7 @@ async def native_journey(
             static_mode=static_mode,
             env_bundle=env_bundle,
             codex_config=codex_config,
+            session_settings=selection.get("sessionSettings"),
             instructions=instructions,
         )
         # Verify the public HTTP enums survive discovery, alongside the real
@@ -1697,6 +1715,22 @@ async def test_cancel_during_observation_recovery_saves_work_without_replay(
         )
         assert provider_lease.lease_state == "held"
         assert provider_lease.released_at is None
+
+
+@pytest.mark.parametrize("native_journey", [{
+    "harness": "codex-native-file-config",
+    "sessionSettings": {
+        "developer_instructions": "Preserve completed work and the requested account.",
+        "history": {"persistence": "none", "max_bytes": 1048576},
+        "project_doc_fallback_filenames": ["PROJECT.md"],
+    },
+}], indirect=True)
+async def test_declared_codex_session_preferences_survive_shared_lifecycle(native_journey):
+    await assert_native_turn_saved_and_cleaned(native_journey)
+    document = native_journey.docker.codex_configuration["document"]
+    assert document["developer_instructions"] == "Preserve completed work and the requested account."
+    assert document["history"] == {"persistence": "none", "max_bytes": 1048576}
+    assert document["project_doc_fallback_filenames"] == ["PROJECT.md"]
 
 
 @pytest.mark.parametrize(
