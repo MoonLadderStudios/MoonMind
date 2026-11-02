@@ -28,8 +28,9 @@ transport. Event streams read the committed journal with durable sequence
 cursors, retention-gap reporting and a final drain confirmation before terminal
 closure. Workflow Chat serves captured terminal transcripts, metadata and its
 scoped catalog through the existing binding authorization and identity
-virtualization. A missing or unreadable capture reports unavailable evidence;
-it does not grant access to another session or recreate a provider runtime.
+virtualization. Authorized diagnostic-only captures keep metadata and catalog
+reads available; transcript reads report unavailable evidence. Missing, denied
+or corrupt captures remain errors, without falling back to the current proxy.
 
 Live runner resources and mutations are unavailable after transport removal.
 Previously captured resource projections and artifacts remain with the existing

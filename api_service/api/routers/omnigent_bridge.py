@@ -3098,12 +3098,9 @@ async def _terminal_bootstrap_snapshot(
     if captured is not None:
         return {**captured, **snapshot}
     if facade is None:
-        raise WorkflowChatFacadeError(
-            "The captured evidence contains diagnostics but no retained transcript.",
-            failure_class="integration_error",
-            status_code=503,
-            code="omnigent_bridge_terminal_evidence_unavailable",
-        )
+        # Legacy embedded harvests can contain only durable diagnostics. Their
+        # metadata remains readable without a transport or an invented transcript.
+        return snapshot
     return await facade.get_session(row.omnigent_session_id)
 
 
@@ -3167,7 +3164,7 @@ def _captured_native_item(item: Any) -> Any:
 
 
 async def _captured_terminal_snapshot(row: Any) -> dict[str, Any] | None:
-    """Read authorized history, or retain live reads for diagnostic-only captures."""
+    """Read authorized history, distinguishing diagnostic-only captures."""
     from moonmind.workflows.temporal.artifacts import TemporalArtifactError
 
     ref = str(getattr(row, "final_snapshot_ref", None) or "").strip()
@@ -3241,6 +3238,13 @@ async def _durable_terminal_items_page(
         )
     captured = await _captured_terminal_snapshot(row)
     if captured is None:
+        if decode_embedded_retained_session(dict(row.metadata_ or {}))["isEmbedded"]:
+            raise WorkflowChatFacadeError(
+                "The capture contains diagnostics but no retained transcript.",
+                failure_class="integration_error",
+                status_code=503,
+                code="omnigent_bridge_terminal_evidence_unavailable",
+            )
         return None
     raw_items = captured.get("items") if isinstance(captured, dict) else None
     items = [item for item in (raw_items or []) if isinstance(item, dict)]

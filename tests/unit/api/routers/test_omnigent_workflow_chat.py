@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -2736,6 +2736,94 @@ def test_retained_embedded_snapshot_is_read_only_and_binding_scoped() -> None:
     assert "host_id" not in body
     assert "moonmind" not in body
     assert _PROVIDER_SESSION_ID not in response.text
+    assert proxy.sessions == []
+
+
+@pytest.mark.parametrize("catalog", [False, True], ids=["bootstrap", "catalog"])
+@pytest.mark.parametrize(
+    "capture_state", ["diagnostics", "denied", "corrupt", "foreign", "invalid_items"]
+)
+def test_retained_embedded_diagnostic_capture_keeps_authorized_metadata(
+    monkeypatch, catalog: bool, capture_state: str
+) -> None:
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactAuthorizationError
+
+    row = _retained_embedded_row(
+        status="failed", final_snapshot_ref="artifact:art_legacy_final"
+    )
+    captured = {"id": _PROVIDER_SESSION_ID, "status": "failed", "summary": None}
+    if capture_state == "foreign":
+        captured["id"] = "foreign-session"
+    elif capture_state == "invalid_items":
+        captured["items"] = {}
+    read = AsyncMock(return_value=json.dumps(captured))
+    if capture_state == "denied":
+        read.side_effect = TemporalArtifactAuthorizationError("capture access denied")
+    elif capture_state == "corrupt":
+        read.return_value = "{"
+    gateway = Mock(return_value=SimpleNamespace(read_text=read))
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.TemporalOmnigentArtifactGateway",
+        gateway,
+    )
+    client, proxy, store = _build(store=_FakeStore(row=row))
+
+    path = "v1/sessions" if catalog else f"v1/sessions/{_CHAT_BINDING_ID}"
+    response = client.get(_path(path))
+
+    if capture_state == "diagnostics":
+        assert response.status_code == 200
+        body = response.json()["data"][0] if catalog else response.json()
+        assert body["id"] == _CHAT_BINDING_ID
+        assert body["status"] == "failed"
+        assert body["readOnly"] is True
+        assert body["providerSessionAvailable"] is False
+        assert body["capabilities"][CAP_SEND_MESSAGE] is False
+        assert "items" not in body
+    else:
+        assert response.status_code == 503
+        assert response.json()["detail"]["code"] == (
+            "omnigent_bridge_terminal_evidence_unavailable"
+        )
+    assert _PROVIDER_SESSION_ID not in response.text
+    assert proxy.sessions == []
+    assert store.lifecycle == []
+    read.assert_awaited_once_with(row.final_snapshot_ref)
+    assert gateway.call_args.kwargs["principal"] == (
+        f"workflow:{row.moonmind_workflow_id}"
+    )
+    assert gateway.call_args.kwargs["access"].execution_principal == (
+        f"workflow:{row.moonmind_workflow_id}"
+    )
+
+
+def test_retained_embedded_diagnostic_capture_has_no_live_transcript(
+    monkeypatch,
+) -> None:
+    row = _retained_embedded_row(
+        status="failed", final_snapshot_ref="artifact:art_legacy_final"
+    )
+    read = AsyncMock(
+        return_value=json.dumps({"id": _PROVIDER_SESSION_ID, "status": "failed"})
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.TemporalOmnigentArtifactGateway",
+        Mock(return_value=SimpleNamespace(read_text=read)),
+    )
+    upstream = Mock(side_effect=AssertionError("retired history cannot use the proxy"))
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.aiohttp.ClientSession", upstream
+    )
+    client, proxy, _ = _build(store=_FakeStore(row=row))
+
+    response = client.get(_path(f"v1/sessions/{_CHAT_BINDING_ID}/items"))
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == (
+        "omnigent_bridge_terminal_evidence_unavailable"
+    )
+    read.assert_awaited_once_with(row.final_snapshot_ref)
+    upstream.assert_not_called()
     assert proxy.sessions == []
 
 
