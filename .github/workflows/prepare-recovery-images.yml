@@ -35,27 +35,15 @@ jobs:
           actual="$(git -C omnigent rev-parse HEAD)"
           test "$actual" = "$expected"
           echo "commit=$actual" >> "$GITHUB_OUTPUT"
-      - name: Build the pinned recovery server
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      - name: Build the pinned recovery server and host graph
+        timeout-minutes: 15
+        uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7.5.0
         with:
-          context: omnigent
-          file: omnigent/deploy/docker/Dockerfile
-          load: true
-          tags: moonmind-test-omnigent-server:candidate
-          labels: org.opencontainers.image.revision=${{ steps.recovery-source.outputs.commit }}
-          cache-from: type=gha,scope=credential-free-recovery-server
-          cache-to: type=gha,scope=credential-free-recovery-server,mode=max
-      - name: Build the pinned recovery host base
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: omnigent
-          file: omnigent/deploy/docker/Dockerfile
-          target: host
-          load: true
-          tags: moonmind-test-omnigent-host-base:candidate
-          labels: org.opencontainers.image.revision=${{ steps.recovery-source.outputs.commit }}
-          cache-from: type=gha,scope=credential-free-recovery-host
-          cache-to: type=gha,scope=credential-free-recovery-host,mode=max
+          source: .
+          files: tools/ci/recovery-images.hcl
+        env:
+          UPSTREAM_COMMIT: ${{ steps.recovery-source.outputs.commit }}
+          CACHE_EXPORTS: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt == 1 }}
       - name: Resolve job-local immutable recovery artifacts
         id: recovery-images
         shell: bash
