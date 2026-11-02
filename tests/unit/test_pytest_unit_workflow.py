@@ -1577,3 +1577,15 @@ def test_required_gate_rejects_missing_or_duplicate_reliability_partition(tmp_pa
 @pytest.mark.parametrize("flag", ["full_backend", "full_frontend"])
 def test_required_gate_rejects_empty_full_selection(tmp_path, flag):
     assert _run_required_gate(tmp_path, outputs={flag: "true"}).returncode != 0
+
+
+def test_source_receipt_runs_after_intentional_skips_without_accepting_failure():
+    job = _load_workflow()["jobs"]["source-receipt"]
+    assert set(job["needs"]) == {"ci-required", "select-test-suites"}
+    condition = job["if"]
+    # An explicit status function prevents GitHub's implicit success() from
+    # suppressing this proof after the source phase skips installed-image jobs.
+    assert "!cancelled()" in condition
+    assert "inputs.verification_phase == 'source'" in condition
+    for dependency in job["needs"]:
+        assert f"needs.{dependency}.result == 'success'" in condition
