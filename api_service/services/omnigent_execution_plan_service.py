@@ -45,6 +45,7 @@ from moonmind.omnigent.harness_platform.execution_plan import (
     AdmissionAuthority,
     OmnigentExecutionPlanEnvelope,
     OmnigentExecutionPlanPayload,
+    ProviderConfigurationSnapshotRef,
     create_execution_plan_envelope,
     logical_step_plan_digests,
     verify_execution_plan_envelope,
@@ -69,7 +70,6 @@ from moonmind.omnigent.harness_platform.materializers import (
     materializer_ref_for_provider,
     snapshot_provider_configuration,
     provider_configuration_snapshot_bytes,
-    ProviderConfigurationSnapshotRef,
     load_provider_configuration_snapshot,
 )
 from moonmind.omnigent.harness_platform.planner import (
