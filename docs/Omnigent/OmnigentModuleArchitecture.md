@@ -294,12 +294,21 @@ Fresh serialized canonical agent workflows use the same product admission compil
 their title, failure policy and accepted retry identity survive translation.
 Raw deferred step-account matching and tool-only boundary validation remain intact.
 Replaced defaults never select ambient credentials.
+OAuth-home delivery attaches the enrollment-owned volume; it does not apply
+additional per-run Profile environment, file or HOME settings. Such explicit
+native choices keep their adapter until a shared configuration handoff carries
+those settings. Recorded plans retain their original materializer identity.
 Profile-bound execution and its OAuth host launcher admit no new plans;
 they retain queued starts, retries and cleanup under their recorded authority. Supported
 static-connected Codex/Claude hosts use the shared lifecycle.
 API-key Codex and Claude Profiles that translate exactly, including MiniMax's
 declared Claude environment bundle and Codex Responses file configuration, run
 on the shared lifecycle with their endpoint, model pins and non-secret tuning.
+Codex developer instructions, project-instruction discovery and history preferences
+also reach its private session config. Native Profile aliases translate a requested
+model once during shared compilation, using the same lookup as direct launch.
+Tool/authentication and launch settings
+without an equivalent projection retain their native route.
 Explicit same-epoch Codex context reuse forks durable native history through
 the shared lifecycle while keeping each attempt's resources and cleanup fenced.
 Credential maintenance drains

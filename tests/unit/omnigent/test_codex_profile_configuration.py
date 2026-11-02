@@ -193,6 +193,23 @@ def test_selected_profile_is_flattened_without_leaving_unselected_configuration(
     assert "profiles" not in endpoint.codexConfiguration["document"]
 
 
+@pytest.mark.parametrize("settings", [
+    {"developer_instructions": ["not a string"]},
+    {"hide_agent_reasoning": "false"},
+    {"project_doc_max_bytes": True},
+    {"project_doc_fallback_filenames": "PROJECT.md"},
+    {"history": {"persistence": "other"}},
+    {"history": {"max_bytes": -1}},
+    {"history": {"path": "/outside/the/private/home"}},
+])
+def test_invalid_session_preferences_never_reach_shared_materialization(settings):
+    selected = profile()
+    selected.file_templates[0]["content_template"].update(settings)
+    endpoint, reason = codex_provider_config_endpoint(selected)
+    assert endpoint is None
+    assert "configuration" in reason
+
+
 @pytest.mark.asyncio
 async def test_custom_configuration_uses_the_existing_private_credential_volume(
     tmp_path,
@@ -235,7 +252,18 @@ async def test_custom_configuration_uses_the_existing_private_credential_volume(
     )
 
 
-def test_installed_launch_shim_preserves_native_generated_configuration(tmp_path):
+@pytest.mark.parametrize("session_settings", [
+    {},
+    {
+        "developer_instructions": "Preserve the requested behavior and verified progress.",
+        "hide_agent_reasoning": True,
+        "show_raw_agent_reasoning": False,
+        "project_doc_max_bytes": 65536,
+        "project_doc_fallback_filenames": ["PROJECT.md", "GUIDANCE.md"],
+        "history": {"persistence": "none", "max_bytes": 1048576},
+    },
+])
+def test_installed_launch_shim_preserves_native_generated_configuration(tmp_path, session_settings):
     import json
     import os
     import subprocess
@@ -244,7 +272,9 @@ def test_installed_launch_shim_preserves_native_generated_configuration(tmp_path
     from pathlib import Path
     from moonmind.provider_profiles import codex_configuration
 
-    endpoint, reason = codex_provider_config_endpoint(profile())
+    selected = profile()
+    selected.file_templates[0]["content_template"].update(session_settings)
+    endpoint, reason = codex_provider_config_endpoint(selected)
     assert endpoint is not None, reason
     configuration = endpoint.codexConfiguration
     config = tmp_path / "profile.json"
@@ -308,6 +338,8 @@ def test_installed_launch_shim_preserves_native_generated_configuration(tmp_path
         capture_output=True,
     )
     captured = tomllib.loads((tmp_path / "captured.toml").read_text())
+    for key, value in session_settings.items():
+        assert captured[key] == value
     assert captured["model_providers"]["generated"]["request_max_retries"] == 4
     assert captured["model_providers"]["generated"]["stream_max_retries"] == 10
     assert (

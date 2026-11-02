@@ -334,6 +334,24 @@ def _enum_value(raw: Any) -> str:
     return str(getattr(raw, "value", raw) or "").strip()
 
 
+def untranslated_oauth_launch_options(profile: Any) -> str | None:
+    """Identify per-run settings an enrolled-home attachment cannot carry.
+
+    Admission uses this before translating a native choice. Recorded plans
+    retain their materializer identity and delivery behavior.
+    """
+    if (
+        str(getattr(profile, "runtime_id", "")) not in {"codex_cli", "claude_code"}
+        or _enum_value(getattr(profile, "credential_source", None)) != "oauth_volume"
+    ):
+        return None
+    fields = [name for name in ("env_template", "file_templates", "home_path_overrides")
+              if getattr(profile, name, None)]
+    if fields:
+        return "OAuth-home delivery does not apply per-run Profile settings: " + ", ".join(fields)
+    return None
+
+
 def _omnigent_egress_admits(url: str) -> bool:
     from urllib.parse import urlsplit
 
@@ -473,9 +491,9 @@ def codex_provider_config_endpoint(
     The direct Codex launch reads ``OPENAI_API_KEY`` and, for a custom
     endpoint, ``OPENAI_BASE_URL`` on Codex's built-in Responses provider; an
     ``openai`` provider-config family carries both. A Profile that brings its
-    own ``config.toml`` can carry one Responses provider, selected model and
-    retry/stream tuning through the same credential owner. Other settings
-    keep their direct launch with a concrete translation gap.
+    own ``config.toml`` can carry one Responses provider, model/retry tuning
+    and declared session preferences through the same credential owner.
+    Uncarried tool, authentication and launch settings retain their native route.
     """
 
     if (

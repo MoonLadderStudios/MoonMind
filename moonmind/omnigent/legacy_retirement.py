@@ -193,12 +193,14 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "already the unset default."
         ),
         missingOutcome=(
+            "OAuth Profiles with per-run environment, file or HOME settings; "
             "Codex key Profiles the Omnigent provider config cannot carry "
-            "exactly: additional files, non-model settings, authentication "
+            "exactly: additional files, uncarried tool/launch settings, authentication "
             "outside the selected key SecretRef, or endpoints the existing "
             "egress policy does not admit. Declared single-provider Responses "
             "configuration, including the rendered managed MiniMax recipe, "
-            "uses ``omnigent-provider-config@1`` and its private Codex config. "
+            "uses ``omnigent-provider-config@1`` and its private Codex config, "
+            "including developer instructions, project-document discovery and history preferences. "
             "Opaque serialized inputs, unresolved step pools and native tier options "
             "still need equivalent shared-plan handoffs. Fixed step accounts "
             "already have their own plans; the root cannot authorize another account. "
@@ -241,6 +243,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "already the unset default."
         ),
         missingOutcome=(
+            "OAuth Profiles with per-run environment, file or HOME settings; "
             "Claude key Profiles with file templates, HOME overrides, "
             "uncarried environment settings or endpoints outside the installed "
             "egress policy. Exact API-key Profiles and declared MiniMax "
