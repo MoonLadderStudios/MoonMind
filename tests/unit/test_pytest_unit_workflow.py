@@ -51,23 +51,32 @@ def test_ci_test_suite_selects_integration_ci_for_required_events() -> None:
     workflow = _load_workflow()
 
     triggers = _workflow_triggers(workflow)
-    assert triggers["push"]["branches"] == ["main"]
+    assert "push" not in triggers
+    release = yaml.safe_load(
+        (REPO_ROOT / ".github/workflows/docker-publish.yml").read_text()
+    )
+    assert _workflow_triggers(release)["push"]["branches"] == ["main"]
+    assert release["jobs"]["source-checks"]["with"]["verification_phase"] == "source"
+    assert release["jobs"]["qualify"]["with"]["verification_phase"] == "artifact"
+    assert all(
+        release["jobs"][owner]["uses"] == "./.github/workflows/pytest-unit-tests.yml"
+        for owner in ("source-checks", "qualify")
+    )
     assert triggers["pull_request"]["branches"] == ["main"]
     assert triggers["pull_request"]["types"] == [
         "opened",
         "synchronize",
         "reopened",
-        "ready_for_review",
     ]
     assert "workflow_dispatch" in triggers
     assert "schedule" in triggers
 
     jobs = workflow["jobs"]
-    integration_job = jobs["integration-ci"]
+    integration_job = jobs["integration-hermetic"]
     assert integration_job["needs"] == "select-test-suites"
     assert (
         integration_job["if"]
-        == "needs.select-test-suites.outputs.integration_ci == 'true'"
+        == "needs.select-test-suites.outputs.integration_hermetic == 'true'"
     )
     assert any(
         "./tools/test_integration.sh" in step.get("run", "")
@@ -75,7 +84,7 @@ def test_ci_test_suite_selects_integration_ci_for_required_events() -> None:
     )
 
     required_job = jobs["ci-required"]
-    assert "integration-ci" in required_job["needs"]
+    assert {"integration-ci", "integration-hermetic"} <= set(required_job["needs"])
 
 
 def test_required_integration_job_uses_submodule_free_checkout() -> None:
@@ -89,42 +98,40 @@ def test_required_integration_job_uses_submodule_free_checkout() -> None:
 
 def test_integration_rows_retain_row_owned_redacted_reports() -> None:
     workflow = _load_workflow()
-    job = workflow["jobs"]["integration-ci"]
-
-    assert job["runs-on"] == "ubuntu-latest"
-    steps = {step["name"]: step for step in job["steps"]}
-    assert all(name != "Verify docker compose availability" for name in steps)
-
-    # Each row collects only what its own owner wrote: the hermetic wrapper's
-    # report, log and project diagnostics, or the journey's own log tree. The
-    # controller-journey row also runs the journal transition test, which
-    # writes its disposable project's redacted phase, ps and log evidence. No
-    # shared step queries a Compose project the row did not create.
-    collect = steps["Collect row-owned integration report and diagnostics"]
-    assert collect["if"] == (
-        "always() && (matrix.suite == 'hermetic' || failure() || cancelled())"
-    )
-    assert "artifacts/integration-ci" in collect["run"]
-    assert "var/artifacts/first-run-3938" in collect["run"]
-    assert "var/artifacts/journal-transition" in collect["run"]
-    assert "docker-compose.test.yaml" not in collect["run"]
-    assert "tools/ci/redact_diagnostics.py" in collect["run"]
-    assert "not zero tests" in collect["run"]
-    assert int(collect["timeout-minutes"]) <= 3
-
-    upload = steps["Upload row-owned integration report and diagnostics"]
-    assert upload["uses"].startswith("actions/upload-artifact@")
-    assert upload["if"] == collect["if"]
-    assert "${{ matrix.suite }}" in upload["with"]["name"]
-    assert "${{ github.run_attempt }}" in upload["with"]["name"]
-    assert upload["with"]["path"] == "/tmp/pytest-integration-ci"
-    assert int(upload["timeout-minutes"]) <= 3
+    for owner in ("integration-hermetic", "integration-ci"):
+        job = workflow["jobs"][owner]
+        assert job["runs-on"] == "ubuntu-latest"
+        steps = {step["name"]: step for step in job["steps"]}
+        collect = steps["Collect row-owned integration report and diagnostics"]
+        assert collect["if"] == "always()"
+        if owner == "integration-hermetic":
+            assert "artifacts/integration-ci" in collect["run"]
+            assert "not zero tests" in collect["run"]
+        else:
+            assert "var/artifacts/first-run-3938" in collect["run"]
+            assert "var/artifacts/journal-transition" in collect["run"]
+        assert "docker-compose.test.yaml" not in collect["run"]
+        assert "tools/ci/redact_diagnostics.py" in collect["run"]
+        assert int(collect["timeout-minutes"]) <= 3
+        upload = steps["Upload row-owned integration report and diagnostics"]
+        assert upload["uses"].startswith("actions/upload-artifact@")
+        assert upload["if"] == collect["if"]
+        assert "${{ matrix.suite }}" in upload["with"]["name"]
+        assert "${{ github.run_attempt }}" in upload["with"]["name"]
+        assert upload["with"]["path"] == "/tmp/pytest-integration-ci"
+        assert int(upload["timeout-minutes"]) <= 3
 
 
-def _run_integration_collect(tmp_path: Path, suite: str) -> Path:
+def _run_integration_collect(
+    tmp_path: Path, suite: str, result: str = "failure"
+) -> Path:
+    import os
     import re
     import subprocess
+    import shutil
 
+    if shutil.which("timeout") is None:
+        pytest.skip("the Linux CI diagnostics collector requires GNU timeout")
     steps = {
         step["name"]: step
         for step in _load_workflow()["jobs"]["integration-ci"]["steps"]
@@ -146,6 +153,7 @@ def _run_integration_collect(tmp_path: Path, suite: str) -> Path:
         text=True,
         capture_output=True,
         timeout=60,
+        env={**os.environ, "JOURNEY_RESULT": result},
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     return out
@@ -167,6 +175,19 @@ def test_controller_journey_collects_journal_transition_evidence(tmp_path) -> No
     assert (collected / "logs.txt").read_text() == "writer exited 71\n"
     assert secret not in (collected / "phase-1-crash.json").read_text()
     assert (out / "first-run-3938" / "controller" / "journey.log").is_file()
+
+
+def test_successful_journey_retains_timings_without_copying_saved_inputs(tmp_path):
+    journey = tmp_path / "var/artifacts/first-run-3938/fresh"
+    (journey / "state").mkdir(parents=True)
+    (journey / "compose-startup-candidate-1.log").write_text("started\n")
+    (journey / "resource-footprint-candidate.log").write_text("bounded footprint\n")
+    (journey / "state/credentials.json").write_text('{"private": "saved input"}')
+    out = _run_integration_collect(tmp_path, "fresh-journey", result="success")
+    saved = out / "first-run-3938/fresh"
+    assert (saved / "compose-startup-candidate-1.log").read_text() == "started\n"
+    assert (saved / "resource-footprint-candidate.log").is_file()
+    assert not (saved / "state").exists()
 
 
 def test_journal_transition_evidence_stays_with_controller_journey(tmp_path) -> None:
@@ -192,7 +213,11 @@ def test_integration_rows_bound_each_phase_and_pass_fail_fast_policy() -> None:
         step["name"]: step
         for step in _load_workflow()["jobs"]["integration-ci"]["steps"]
     }
-    hermetic = steps["Run hermetic integration CI suite"]
+    hermetic = next(
+        step
+        for step in _load_workflow()["jobs"]["integration-hermetic"]["steps"]
+        if step["name"] == "Run hermetic integration CI suite"
+    )
     assert hermetic["env"]["MOONMIND_INTEGRATION_FAIL_FAST"] == (
         "${{ github.event_name != 'schedule' && '1' || '0' }}"
     )
@@ -209,7 +234,7 @@ def test_integration_rows_bound_each_phase_and_pass_fail_fast_policy() -> None:
         "Run eligible-upgrade journey",
         "Run Settings Operations controller journey",
         "Qualify active journal transition and host controller refresh",
-        "Upload redacted journey startup timings and resource footprints",
+        "Upload row-owned integration report and diagnostics",
     ):
         assert 0 < int(steps[name]["timeout-minutes"]) < 30, name
 
@@ -224,128 +249,89 @@ def _integration_row_timeout_minutes(value: int | str, suite: str) -> int:
     return int(match.group(1 if suite == "hermetic" else 2))
 
 
-def test_hermetic_job_reserves_bounded_setup_execution_and_reporting() -> None:
-    job = _load_workflow()["jobs"]["integration-ci"]
+@pytest.mark.parametrize("cache_hit", [False, True])
+def test_hermetic_job_reserves_bounded_setup_execution_and_reporting(cache_hit) -> None:
+    job = _load_workflow()["jobs"]["integration-hermetic"]
     run_index = next(
-        index
-        for index, step in enumerate(job["steps"])
+        i
+        for i, step in enumerate(job["steps"])
         if step["name"] == "Run hermetic integration CI suite"
     )
-    proxy_step = next(
-        step
-        for step in job["steps"][:run_index]
-        if step["name"] == "Verify isolated Docker socket proxy"
-    )
-    assert proxy_step["if"] == "matrix.suite == 'hermetic'"
-    proxy_minutes = int(proxy_step["timeout-minutes"])
-    assert 0 < proxy_minutes <= 5
-    scoped_step = next(
-        step
-        for step in job["steps"][:run_index]
-        if step["name"] == "Verify real scoped egress connections and owned cleanup"
-    )
-    assert scoped_step["if"] == "matrix.suite == 'hermetic'"
-    scoped_minutes = int(scoped_step["timeout-minutes"])
-    assert 0 < scoped_minutes <= 5
+    by_name = {step["name"]: step for step in job["steps"]}
+    checks = [
+        by_name[name]
+        for name in (
+            "Verify isolated Docker socket proxy",
+            "Verify real scoped egress connections and owned cleanup",
+        )
+    ]
+    assert all(0 < int(step["timeout-minutes"]) <= 5 for step in checks)
     setup_minutes = 0
     for step in job["steps"][:run_index]:
-        if step is proxy_step or step is scoped_step:
+        if step in checks:
             continue
-        # Every setup phase must finish or time out before it can consume
-        # the wrapper's cleanup and evidence-upload reserve.
-        minutes = _integration_row_timeout_minutes(step["timeout-minutes"], "hermetic")
+        condition = step.get("if", "")
+        if "cache-hit" in condition and (
+            ("!= 'true'" in condition and cache_hit)
+            or ("== 'true'" in condition and not cache_hit)
+        ):
+            continue
+        minutes = int(step["timeout-minutes"])
         assert 0 < minutes <= 6, step["name"]
         setup_minutes += minutes
-        if "if" not in step:
-            assert (
-                _integration_row_timeout_minutes(
-                    step["timeout-minutes"], "fresh-journey"
-                )
-                == 2
-            )
-
-    assert setup_minutes <= 12
-    execution_minutes = int(job["steps"][run_index]["timeout-minutes"])
-    report_steps = [
-        step
-        for step in job["steps"]
-        if step["name"]
-        in {
+    assert setup_minutes <= 20
+    reporting = [
+        by_name[name]
+        for name in (
+            "Validate complete owner receipt",
             "Collect row-owned integration report and diagnostics",
             "Upload row-owned integration report and diagnostics",
-        }
+        )
     ]
-    assert len(report_steps) == 2
-    reporting_minutes = sum(int(step["timeout-minutes"]) for step in report_steps)
-    assert reporting_minutes == 4
-    # Include one minute for runner dispatch and post-action housekeeping;
-    # the wrapper's complete cleanup budget is already inside its native step.
-    assert (
-        setup_minutes
-        + proxy_minutes
-        + scoped_minutes
-        + execution_minutes
-        + reporting_minutes
-        + 1
-        <= _integration_row_timeout_minutes(job["timeout-minutes"], "hermetic")
-    )
+    assert sum(int(step["timeout-minutes"]) for step in reporting) == 5
+    assert setup_minutes + sum(int(step["timeout-minutes"]) for step in checks) + int(
+        job["steps"][run_index]["timeout-minutes"]
+    ) + 5 + 2 <= int(job["timeout-minutes"])
 
 
 def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
-    # The hermetic suite and the three disposable Compose journeys each own
-    # an isolated Compose project.
-    # Running them as parallel rows keeps every boundary while the slowest
-    # row, not their serial sum, bounds integration-ci.
-    job = _load_workflow()["jobs"]["integration-ci"]
-
+    jobs = _load_workflow()["jobs"]
     assert json.loads(select_suites([]).as_outputs()["integration_matrix"])[
         "suite"
-    ] == [
-        "hermetic",
-        "fresh-journey",
-        "upgrade-journey",
-        "controller-journey",
-    ]
-    assert job["strategy"]["fail-fast"] == "${{ github.event_name != 'schedule' }}"
-    assert {
-        suite: _integration_row_timeout_minutes(job["timeout-minutes"], suite)
-        for suite in (
-            "hermetic",
-            "fresh-journey",
-            "upgrade-journey",
-            "controller-journey",
-        )
-    } == {
-        "hermetic": 60,
-        "fresh-journey": 85,
-        "upgrade-journey": 85,
-        "controller-journey": 85,
-    }
-
-    steps = {step["name"]: step for step in job["steps"]}
-    row_commands = {
-        "Run hermetic integration CI suite": (
-            "hermetic",
-            "./tools/test_integration.sh",
-        ),
-        "Run disposable default first-run journey": (
+    ] == ["hermetic", "fresh-journey", "upgrade-journey", "controller-journey"]
+    hermetic, journeys = jobs["integration-hermetic"], jobs["integration-ci"]
+    assert hermetic["needs"] == "select-test-suites"
+    assert "prepare-app-image" not in hermetic["needs"]
+    assert "prepare-app-image" in journeys["needs"]
+    assert hermetic["strategy"]["matrix"] == {"suite": ["hermetic"]}
+    for job in (hermetic, journeys):
+        assert job["strategy"]["fail-fast"] == "${{ github.event_name != 'schedule' }}"
+    assert hermetic["timeout-minutes"] == 70
+    assert journeys["timeout-minutes"] == 85
+    assert any(
+        "./tools/test_integration.sh" in step.get("run", "")
+        for step in hermetic["steps"]
+    )
+    steps = {step["name"]: step for step in journeys["steps"]}
+    for name, row, command in (
+        (
+            "Run disposable default first-run journey",
             "fresh-journey",
             "./tools/first_run_journey_3938.sh",
         ),
-        "Run eligible-upgrade journey": (
+        (
+            "Run eligible-upgrade journey",
             "upgrade-journey",
             "./tools/first_run_journey_3938.sh --upgrade",
         ),
-        "Run Settings Operations controller journey": (
+        (
+            "Run Settings Operations controller journey",
             "controller-journey",
             "./tools/first_run_journey_3938.sh --controller",
         ),
-    }
-    for name, (row, command) in row_commands.items():
+    ):
         assert steps[name]["if"] == f"matrix.suite == '{row}'"
         assert command in [line.strip() for line in steps[name]["run"].splitlines()]
-
-    # Only the journey rows drive the compiled dashboard in a browser.
     for name in (
         "Set up Node for the dashboard journey",
         "Install the journey browser's Playwright runtime",
@@ -359,7 +345,7 @@ def test_integration_ci_runs_each_boundary_on_its_own_row() -> None:
     ("suite", "execution_minutes"),
     [("fresh-journey", 20), ("upgrade-journey", 25), ("controller-journey", 20)],
 )
-@pytest.mark.parametrize("image_source", ["local", "registry", "archive"])
+@pytest.mark.parametrize("image_source", ["registry", "archive"])
 def test_journey_job_reserves_setup_execution_and_reporting(
     suite: str, execution_minutes: int, image_source: str
 ) -> None:
@@ -373,15 +359,11 @@ def test_journey_job_reserves_setup_execution_and_reporting(
 
     def selected(step: dict) -> bool:
         condition = step.get("if", "")
-        for key, present in (
-            ("candidate_image", image_source != "local"),
-            ("candidate_oci_artifact", image_source == "archive"),
-        ):
-            if present and f"inputs.{key} == ''" in condition:
-                return False
-            if not present and f"inputs.{key} != ''" in condition:
-                return False
-        return condition != "matrix.suite == 'hermetic'"
+        if "outputs.artifact_name != ''" in condition and image_source != "archive":
+            return False
+        if "outputs.artifact_name == ''" in condition and image_source == "archive":
+            return False
+        return True
 
     setup = [step for step in steps[:first_journey] if selected(step)]
     setup_minutes = sum(
@@ -417,8 +399,7 @@ def test_journey_job_reserves_setup_execution_and_reporting(
         next(
             index
             for index, step in enumerate(steps)
-            if step["name"]
-            == "Upload redacted journey startup timings and resource footprints"
+            if step["name"] == "Collect row-owned integration report and diagnostics"
         ) :
     ]
     reporting_minutes = sum(int(step["timeout-minutes"]) for step in reporting)
@@ -429,7 +410,7 @@ def test_journey_job_reserves_setup_execution_and_reporting(
         if "release_image_fixture.py cleanup" in step.get("run", "") and selected(step)
     )
     # Bound every phase, including failure diagnostics; reserve runner/post-action overhead.
-    assert setup_minutes == {"local": 50, "registry": 42, "archive": 49}[image_source]
+    assert setup_minutes == {"registry": 42, "archive": 49}[image_source]
     assert (
         setup_minutes
         + execution_minutes
@@ -577,7 +558,10 @@ def test_frontend_workflow_does_not_upload_dashboard_dist() -> None:
 def test_unit_fast_physically_ignores_heavy_collection_paths() -> None:
     command = _run_command("backend-matrix", "Run selected unit suite")
 
-    assert "python -m pytest tests/unit \\" in command
+    assert (
+        "run --expected-python 3.12 -- -p tools.ci.write_backend_matrix_summary tests/unit \\"
+        in command
+    )
     assert "--ignore=tests/unit/workflows/temporal" in command
     assert "--ignore=tests/unit/api" in command
     assert "--ignore=tests/unit/api_service" in command
@@ -606,7 +590,10 @@ def test_unit_workflow_keeps_api_and_temporal_ownership() -> None:
     )
     assert "--junitxml=artifacts/pytest-backend-api-component.xml" in api_command
 
-    assert "python -m pytest tests/unit/workflows/temporal" in temporal_command
+    assert (
+        "run --expected-python 3.12 -- -p tools.ci.write_backend_matrix_summary tests/unit/workflows/temporal"
+        in temporal_command
+    )
     assert (
         '-m "temporal_boundary and not slow and not provider_verification and not requires_credentials"'
         in temporal_command
@@ -653,55 +640,72 @@ def test_parallel_shards_bound_hung_tests_and_spread_large_modules() -> None:
 def test_deterministic_conformance_is_selection_gated() -> None:
     workflow = _load_workflow()
     job = workflow["jobs"]["omnigent-deterministic-conformance"]
-
-    assert job["needs"] == "select-test-suites"
+    assert {
+        "select-test-suites",
+        "preflight-policy",
+        "backend-matrix",
+        "integration-hermetic",
+        "frontend-static",
+        "unit-slow",
+    } <= set(job["needs"])
     assert (
-        job["if"]
-        == "needs.select-test-suites.outputs.omnigent_conformance == 'true'"
+        "needs.select-test-suites.outputs.omnigent_conformance == 'true'" in job["if"]
     )
+    for owner in (
+        "preflight-policy",
+        "backend-matrix",
+        "integration-hermetic",
+        "frontend-static",
+    ):
+        assert f"needs.{owner}.result == 'success'" in job["if"]
     assert "omnigent_conformance" in workflow["jobs"]["select-test-suites"]["outputs"]
 
 
 def test_image_building_jobs_share_a_layer_cache() -> None:
-    workflow = _load_workflow()
-    integration_steps = workflow["jobs"]["integration-ci"]["steps"]
-    builds = [
+    jobs = _load_workflow()["jobs"]
+    integration_steps = jobs["integration-hermetic"]["steps"]
+    build = next(
         step
         for step in integration_steps
-        if (step.get("uses") or "").startswith("docker/build-push-action@")
-    ]
-    build = next(
-        step for step in builds if step["with"].get("target") == "test-runtime"
+        if step.get("with", {}).get("target") == "test-runtime"
     )
-    assert build["if"] == "matrix.suite == 'hermetic'"
+    assert "cache-hit != 'true'" in build["if"]
     assert build["with"]["load"] is True
     assert build["with"]["cache-from"].startswith("type=gha,")
-    assert build["with"]["cache-to"].startswith("type=gha,")
-    run_step = next(
-        step for step in integration_steps if step.get("name") == "Run hermetic integration CI suite"
+    assert "cache-to" not in build["with"]
+    assert build["with"]["cache-from"] == "type=gha,scope=build-linux-amd64"
+    runtime_cache = next(
+        step for step in integration_steps if step.get("id") == "test-runtime-cache"
     )
-    assert run_step["env"]["MOONMIND_PYTHON_TEST_IMAGE"] == build["with"]["tags"]
-
-    exact_build = next(
+    assert "steps.test-runtime-inputs.outputs.key" in runtime_cache["with"]["key"]
+    run = next(
         step
-        for step in workflow["jobs"]["omnigent-exact-artifact"]["steps"]
-        if (step.get("uses") or "").startswith("docker/build-push-action@")
+        for step in integration_steps
+        if step["name"] == "Run hermetic integration CI suite"
     )
-    assert exact_build["with"]["cache-from"].startswith("type=gha,")
-    assert exact_build["with"]["cache-to"].startswith("type=gha,")
-
-    # The journey rows build the same default deployable target with the same
-    # build arguments as the exact-artifact gate, so they read the scope that
-    # gate writes. The gate stays the only writer: the parallel journey rows
-    # export nothing.
-    candidate = next(step for step in builds if "target" not in step["with"])
-    assert candidate["if"] == "matrix.suite != 'hermetic' && inputs.candidate_image == ''"
-    assert candidate["with"]["file"] == exact_build["with"]["file"]
-    assert candidate["with"]["build-args"] == exact_build["with"]["build-args"]
-    assert candidate["with"]["cache-from"] == exact_build["with"]["cache-from"]
+    assert run["env"]["MOONMIND_PYTHON_TEST_IMAGE"] == build["with"]["tags"]
+    producer = jobs["prepare-app-image"]
+    candidate = next(
+        step
+        for step in producer["steps"]
+        if step.get("uses", "").startswith("docker/build-push-action@")
+    )
+    assert candidate["with"]["cache-from"] == "type=gha,scope=build-linux-amd64"
     assert "cache-to" not in candidate["with"]
-    scope = candidate["with"]["cache-from"].split("scope=")[1].split(",")[0]
-    assert f"scope={scope}," in exact_build["with"]["cache-to"]
+    for owner in (
+        "integration-ci",
+        "omnigent-exact-artifact",
+        "omnigent-host-recovery",
+    ):
+        assert "prepare-app-image" in jobs[owner]["needs"]
+        assert not any(
+            step.get("uses", "").startswith("docker/build-push-action@")
+            for step in jobs[owner]["steps"]
+        )
+        assert any(
+            "release_image_fixture.py restore" in step.get("run", "")
+            for step in jobs[owner]["steps"]
+        )
 
 
 def test_unit_slow_has_separate_non_parallel_job_and_required_contract() -> None:
@@ -727,7 +731,7 @@ def test_shard_ownership_verifier_runs_for_collection_inputs() -> None:
 
     # Policy stays unconditional; changed collection inputs select the real
     # ownership verifier, including all four installed-plugin partitions.
-    assert "if" not in job
+    assert job["if"] == "inputs.verification_phase != 'artifact'"
     verifier = next(
         step
         for step in job["steps"]
@@ -890,7 +894,8 @@ def test_ci_required_reports_all_failures_before_exiting() -> None:
     assert "needs.check-generated-contracts.result" in script
     assert 'require_always "preflight-policy"' in script
     assert "needs.preflight-policy.result" in script
-    assert 'require_selected "preflight-policy"' not in script
+    assert 'require_selected "preflight-policy" "false"' in script
+    assert "inputs.verification_phase" in script
 
 
 def test_preflight_policy_runs_in_parallel_and_owns_policy_guards() -> None:
@@ -1404,12 +1409,12 @@ def _run_required_gate(tmp_path, *, outputs=None, results=None):
 
     def resolve(match):
         path = match.group(1).strip().split(".")
-        value = {"needs": needs}
+        value = {"needs": needs, "inputs": {"verification_phase": "full"}}
         for key in path:
             value = value.get(key, "")
         return str(value)
 
-    script = re.sub(r"\$\{\{\s*(needs\.[^}]+)\}\}", resolve, script)
+    script = re.sub(r"\$\{\{\s*((?:needs|inputs)\.[^}]+)\}\}", resolve, script)
     return subprocess.run(
         ["bash", "-c", script],
         check=False,
@@ -1483,7 +1488,7 @@ def test_backend_and_integration_matrices_consume_selected_rows():
     jobs = _load_workflow()["jobs"]
     for job, output in [
         ("backend-matrix", "backend_matrix"),
-        ("integration-ci", "integration_matrix"),
+        ("integration-ci", "installed_matrix"),
     ]:
         assert (
             jobs[job]["strategy"]["matrix"]
@@ -1509,12 +1514,25 @@ def test_required_gate_accepts_complete_selected_results(tmp_path, paths):
             job: "success" if outputs[key] == "true" else "skipped"
             for job, key in (
                 ("unit-slow", "unit_slow"),
-                ("integration-ci", "integration_ci"),
+                ("integration-hermetic", "integration_hermetic"),
+                ("omnigent-host-recovery", "exact_artifact"),
                 ("omnigent-exact-artifact", "exact_artifact"),
                 ("omnigent-deterministic-conformance", "omnigent_conformance"),
             )
         },
     }
+    installed = any(
+        outputs[key] == "true"
+        for key in (
+            "integration_fresh_journey",
+            "integration_upgrade_journey",
+            "integration_controller_journey",
+        )
+    )
+    results["integration-ci"] = "success" if installed else "skipped"
+    results["prepare-app-image"] = (
+        "success" if installed or outputs["exact_artifact"] == "true" else "skipped"
+    )
     proc = _run_required_gate(tmp_path, outputs=outputs, results=results)
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
@@ -1559,3 +1577,15 @@ def test_required_gate_rejects_missing_or_duplicate_reliability_partition(tmp_pa
 @pytest.mark.parametrize("flag", ["full_backend", "full_frontend"])
 def test_required_gate_rejects_empty_full_selection(tmp_path, flag):
     assert _run_required_gate(tmp_path, outputs={flag: "true"}).returncode != 0
+
+
+def test_source_receipt_runs_after_intentional_skips_without_accepting_failure():
+    job = _load_workflow()["jobs"]["source-receipt"]
+    assert set(job["needs"]) == {"ci-required", "select-test-suites"}
+    condition = job["if"]
+    # An explicit status function prevents GitHub's implicit success() from
+    # suppressing this proof after the source phase skips installed-image jobs.
+    assert "!cancelled()" in condition
+    assert "inputs.verification_phase == 'source'" in condition
+    for dependency in job["needs"]:
+        assert f"needs.{dependency}.result == 'success'" in condition

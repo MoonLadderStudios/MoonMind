@@ -698,6 +698,56 @@ async def test_webhook_loss_recovers_through_fallback_polling(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("progress_patch_enabled", [True, False])
+async def test_ci_handoffs_do_not_consume_a_heads_first_review(
+    monkeypatch, progress_patch_enabled
+):
+    signature = f"{HEAD_1}||"
+
+    def child_results(child_id, attempt):
+        result = _request_review_result(
+            child_workflow_id=child_id,
+            head_sha=HEAD_1,
+            progress_signature=signature,
+        )
+        if attempt <= 2:
+            result["mergeAutomationDisposition"] = "reenter_gate"
+            result["gatedContinuation"].update(
+                schemaVersion="gated-continuation/v1",
+                action="reenter_gate",
+                reason="ci_signal_degraded",
+                retryAfterSeconds=60,
+            )
+        elif attempt == 4:
+            return {"status": "success", "mergeAutomationDisposition": "merged"}
+        return result
+
+    harness = _Harness(
+        monkeypatch,
+        readiness=[_ready(HEAD_1)] * 4,
+        child_results=child_results,
+        request_results=[_posted(HEAD_1)],
+    )
+    patched = merge_automation_module.workflow.patched
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "patched",
+        lambda name: progress_patch_enabled
+        if name == "merge-automation-first-review-progress-v1"
+        else patched(name),
+    )
+    outcome = await MoonMindMergeAutomationWorkflow().run(_payload())
+    if progress_patch_enabled:
+        assert outcome["status"] == "merged"
+        assert len(harness.request_payloads) == 1
+        assert harness.request_payloads[0]["expectedHeadSha"] == HEAD_1
+    else:
+        assert outcome["status"] == "blocked"
+        assert outcome["blockers"][0]["kind"] == "review_loop_no_progress"
+        assert not harness.request_payloads
+
+
+@pytest.mark.asyncio
 async def test_repeated_signature_stops_for_manual_review(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

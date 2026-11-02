@@ -30,21 +30,6 @@ _LAUNCH_MODULES = frozenset(
     }
 )
 
-# Symbols the router uses from the retired launch path. Every one must still
-# resolve (real or fail-closed fallback) when the launch modules are gone.
-_FALLBACK_NAMES = frozenset(
-    {
-        "EmbeddedHostRegisterRequest",
-        "EmbeddedHostHeartbeatRequest",
-        "EmbeddedHostSessionEventRequest",
-        "OmnigentEmbeddedHostProtocolFacade",
-        "EmbeddedEvidenceError",
-        "validate_embedded_evidence",
-        "EmbeddedHostChannelError",
-        "embedded_host_channels",
-    }
-)
-
 
 def _parse_router() -> ast.Module:
     return ast.parse(ROUTER_MODULE.read_text(encoding="utf-8"))
@@ -63,67 +48,22 @@ def test_router_has_no_unconditional_top_level_launch_import() -> None:
     assert not unconditional, sorted(unconditional)
 
 
-def _importfrom_bound_names(node: ast.ImportFrom) -> set[str]:
-    return {
-        alias.asname or alias.name.split(".")[0] for alias in node.names
-    }
+def test_retired_tunnels_close_without_loading_transport() -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+    from api_service.api.routers.omnigent_bridge import router
 
-
-def test_router_defines_fail_closed_launch_fallbacks() -> None:
-    # The router carries no fail-closed import shim for the launch path: its
-    # design is lazy imports plus one annotation fallback. Every launch-path
-    # symbol the router uses must therefore resolve without importing the
-    # launch modules — assigned as a fallback, imported at top level from a
-    # non-launch module, or imported lazily inside a function whose failure
-    # maps to an actionable retirement error.
-    tree = _parse_router()
-    assigned: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    assigned.add(target.id)
-                elif isinstance(target, ast.Attribute):
-                    assigned.add(target.attr)
-    top_level_imported: set[str] = set()
-    for node in tree.body:
-        if isinstance(node, ast.ImportFrom):
-            if node.module not in _LAUNCH_MODULES:
-                top_level_imported.update(_importfrom_bound_names(node))
-        elif isinstance(node, ast.Import):
-            top_level_imported.update(
-                alias.asname or alias.name.split(".")[0]
-                for alias in node.names
-            )
-    lazy_imported: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            for child in ast.walk(node):
-                if isinstance(child, ast.ImportFrom):
-                    lazy_imported.update(_importfrom_bound_names(child))
-    resolvable = assigned | top_level_imported | lazy_imported
-    assert _FALLBACK_NAMES <= resolvable, sorted(
-        _FALLBACK_NAMES - resolvable
-    )
-
-
-def test_tunnel_handlers_fail_actionably_without_launch_modules() -> None:
-    tree = _parse_router()
-    for fn_name in (
-        "embedded_omnigent_host_tunnel",
-        "embedded_omnigent_runner_tunnel",
-    ):
-        fn = next(
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == fn_name
-        )
-        referenced = {
-            node.id for node in ast.walk(fn) if isinstance(node, ast.Name)
-        }
-        assert "OmnigentBridgeModeUnsupportedError" in referenced, fn_name
-        assert "EMBEDDED_TRANSPORT_RETIRED_CODE" in referenced, fn_name
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    for path in ("/v1/hosts/old/tunnel", "/v1/runners/old/tunnel"):
+        with pytest.raises(WebSocketDisconnect) as exc:
+            with client.websocket_connect(path):
+                pass
+        assert exc.value.code == 4404
+        assert "omnigent_embedded_transport_retired" in exc.value.reason
+        assert "upstream_omnigent_server_proxy" in exc.value.reason
 
 
 _ISOLATION_PROBE = """
@@ -151,7 +91,7 @@ except ImportError:
 else:
     raise AssertionError("launch modules must be unavailable in this probe")
 
-assert router.OmnigentEmbeddedHostProtocolFacade is typing.Any
+assert not hasattr(router, "build_embedded_host_facade")
 
 from moonmind.omnigent.bridge_config import parse_bridge_config
 from api_service.api.routers.omnigent_bridge_composition import (

@@ -59,6 +59,7 @@ from api_service.services.profile_execution_selection import (
     profile_execution_selection,
     profile_route_runtime,
 )
+from tests.helpers.provider_egress import minimax_egress  # noqa: F401
 
 TRUST_CORE_TRUSTED = "core_trusted"
 
@@ -454,7 +455,14 @@ def _api_key_claude_provider(profile_id: str, **env):
     ],
 )
 async def test_api_key_claude_profiles_route_through_managed_api_key_configuration(
-    session, monkeypatch, mode, provider_id, configuration_id, marker, provider_ids
+    session,
+    monkeypatch,
+    mode,
+    provider_id,
+    configuration_id,
+    marker,
+    provider_ids,
+    request,
 ):
     monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
     monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "true")
@@ -475,6 +483,7 @@ async def test_api_key_claude_profiles_route_through_managed_api_key_configurati
     api_key.provider_id = provider_id
     api_key.runtime_materialization_mode = mode
     if mode == "env_bundle":
+        request.getfixturevalue("minimax_egress")
         api_key.env_template.update(
             {
                 "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
@@ -613,6 +622,7 @@ async def test_api_key_codex_profiles_route_through_managed_api_key_configuratio
     )
 
 
+@pytest.mark.usefixtures("minimax_egress")
 async def test_declared_codex_file_profile_routes_through_managed_configuration(
     session,
 ):

@@ -23,7 +23,16 @@ def test_gate_runs_for_merge_candidates_and_merge_queue() -> None:
 
     assert triggers["pull_request"]["branches"] == ["main"]
     assert triggers["merge_group"]["types"] == ["checks_requested"]
-    assert triggers["push"]["branches"] == ["main"]
+    assert "push" not in triggers
+    release = yaml.safe_load(
+        (REPO_ROOT / ".github/workflows/docker-publish.yml").read_text()
+    )
+    assert _triggers(release)["push"]["branches"] == ["main"]
+    assert (
+        release["jobs"]["qualify-migrations"]["uses"]
+        == "./.github/workflows/alembic-migration-gate.yml"
+    )
+    assert "qualify-migrations" in release["jobs"]["publish-latest"]["needs"]
 
     checkout = workflow["jobs"]["migration-gate"]["steps"][0]
     assert checkout["name"] == "Check out merge candidate"

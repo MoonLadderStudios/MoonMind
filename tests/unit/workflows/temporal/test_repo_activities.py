@@ -57,6 +57,7 @@ async def test_repo_create_pr_activity_delegates(monkeypatch, high_security_mode
         "Authorization: Bearer unit-test-pr-bearer-value",
         "password=unit-test-pr-password-value",
     ],
+    ids=["bearer-header", "password-assignment"],
 )
 @pytest.mark.parametrize("high_security_mode", [False, True])
 async def test_repo_create_pr_activity_scans_final_text_before_github(

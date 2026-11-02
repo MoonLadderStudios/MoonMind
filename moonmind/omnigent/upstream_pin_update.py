@@ -67,7 +67,7 @@ AFFECTED_ASSETS = (
 #: session/control, native UI/facade, evidence, cleanup).
 QUALIFICATION_SHARDS = (
     "tests/unit/omnigent/test_adapter_contracts.py",
-    "tests/unit/omnigent/test_host_protocol_adapter.py",
+    "tests/integration/omnigent/test_generic_bound_native_chat.py",
     "tests/unit/omnigent/test_host_registration_inventory.py",
     "tests/unit/omnigent/test_oauth_home_materializers.py",
     "tests/unit/omnigent/test_omnigent_session_timeline_api.py",

@@ -59,6 +59,7 @@ class ClaimReceipt:
     finalization_json: dict[str, Any] | None = None
     ownership_ended: bool = False
     ownership_ended_reason: str | None = None
+    project_binding_json: dict[str, Any] | None = None
 
     @classmethod
     def from_row(cls, row):
@@ -91,6 +92,18 @@ class IssueClaimStore:
 
             session_factory = async_session_maker
         self.sessions = session_factory
+
+    async def bind_project(self, owner: str, binding: Mapping[str, Any]) -> None:
+        """Pin provider-derived project identity before announcing the attempt."""
+        async with self.locked(owner) as row:
+            if (str(binding.get("repository", "")).casefold(), binding.get("issueNumber")) != (row.repository, row.issue_number):
+                raise ValueError("substitution_denied: project item targets another issue")
+            if row.project_binding_json is not None:
+                keys = ("projectId", "itemId", "fieldId", "repository", "issueNumber")
+                if any(row.project_binding_json.get(key) != binding.get(key) for key in keys):
+                    raise ValueError("substitution_denied: execution already selected another project item")
+                return
+            row.project_binding_json = dict(binding)
 
     async def get(self, owner: str) -> ClaimReceipt | None:
         async with self.sessions() as session:

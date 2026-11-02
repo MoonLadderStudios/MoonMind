@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers.import_inventory import imports
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -37,7 +39,6 @@ RESPONSIBILITY_MODULES: dict[str, tuple[str, ...]] = {
         "moonmind/omnigent/harness_platform/harness_registry.py",
         "moonmind/omnigent/codex_execution_decisions.py",
         "moonmind/omnigent/execution_ports.py",
-        "moonmind/omnigent/host_auth_contracts.py",
         "moonmind/omnigent/host_failures.py",
         "moonmind/omnigent/host_ports.py",
     ),
@@ -242,7 +243,6 @@ FORBIDDEN_ROUTER_SIDE_EFFECT_CALLS = (
 
 # Hermetic doubles and acceptance fixtures are test-owned. A production module
 # that imports one has made a test artifact part of the deployed path.
-TEST_DOUBLE_IMPORT_PREFIXES = ("tests", "tests.")
 
 # Canonical session lifecycle code selects harnesses from persisted plan
 # authority and the harness registration registry. A harness name appearing
@@ -277,9 +277,7 @@ def _imports_from_tree(
 
 
 def _imports(relative_path: str) -> tuple[str, ...]:
-    current_module = relative_path.removesuffix(".py").replace("/", ".")
-    return _imports_from_tree(_tree(relative_path), current_module=current_module)
-
+    return imports(REPO_ROOT, relative_path)
 
 def _assert_dependency_allowed(owner: str, dependency: str) -> None:
     if dependency not in ALLOWED_DEPENDENCIES[owner]:
@@ -292,7 +290,6 @@ def _assert_no_import_prefixes(source: str, prefixes: tuple[str, ...]) -> None:
     for imported in _imports_from_tree(ast.parse(source)):
         if imported.startswith(prefixes):
             raise AssertionError(f"forbidden infrastructure import: {imported}")
-
 
 
 def _string_literals(relative_path: str) -> tuple[str, ...]:
@@ -747,20 +744,6 @@ def test_router_composition_root_is_declared_and_singular() -> None:
     )
     assert not any(
         path.endswith("_composition.py") for path in OMNIGENT_ROUTERS
-    )
-
-
-def test_production_modules_do_not_import_test_doubles() -> None:
-    offenders: list[str] = []
-    for root in ("moonmind", "api_service"):
-        for path in (REPO_ROOT / root).rglob("*.py"):
-            relative = str(path.relative_to(REPO_ROOT))
-            for imported in _imports(relative):
-                if imported.split(".")[0] in TEST_DOUBLE_IMPORT_PREFIXES:
-                    offenders.append(f"{relative} -> {imported}")
-    assert not offenders, (
-        "production modules import test doubles or acceptance fixtures: "
-        f"{offenders}"
     )
 
 

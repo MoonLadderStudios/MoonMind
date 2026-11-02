@@ -16,7 +16,9 @@ from api_service.api.routers.executions import (
     router,
 )
 from api_service.db.models import MoonMindWorkflowState, TemporalWorkflowType
-from tests.unit.api.routers.test_executions import _override_user_dependencies
+from tests.helpers.execution_api import (
+    _override_user_dependencies,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 

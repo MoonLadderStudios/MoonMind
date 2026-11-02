@@ -388,6 +388,41 @@ async def test_create_session_rejects_cross_workflow_idempotency_key() -> None:
     assert not store.created_events
 
 
+@pytest.mark.parametrize("operation", ["create", "attach"])
+@pytest.mark.parametrize("recorded_status", ["active", "completed"])
+@pytest.mark.parametrize("recorded_session_id", [None, "sess-existing"])
+async def test_retained_embedded_key_never_attaches_to_current_proxy(
+    operation: str,
+    recorded_status: str,
+    recorded_session_id: str | None,
+) -> None:
+    store, client = _FakeStore(), _FakeClient()
+    row = _FakeRow(
+        session_id=recorded_session_id, workflow_id="mm:w1", agent_run_id="ar-1"
+    )
+    row.status = recorded_status
+    row.metadata_ = {"hostProtocolMode": "embedded_omnigent_compatible_server"}
+    store.rows["idem-1"] = row
+    proxy = _proxy(store, client)
+    with pytest.raises(OmnigentBridgeError) as excinfo:
+        if operation == "create":
+            await proxy.create_session(
+                request=BridgeSessionCreateRequest(agent_id="agent-1"),
+                binding=_binding(),
+            )
+        else:
+            await proxy.attach_session(session_id="sess-existing", binding=_binding())
+    assert excinfo.value.status_code == 410
+    assert excinfo.value.code == "omnigent_embedded_transport_retired"
+    assert client.created_payloads == []
+    assert client.get_calls == []
+    assert client.list_agents_calls == 0
+    assert store.attached == []
+    assert store.created_events == []
+    assert row.omnigent_session_id == recorded_session_id
+    assert row.status == recorded_status
+
+
 async def test_attach_rejects_provider_session_owned_by_another_workflow() -> None:
     store, client = _FakeStore(), _FakeClient()
     store.rows["idem-1"] = _FakeRow(workflow_id="mm:w1", agent_run_id="ar-1")

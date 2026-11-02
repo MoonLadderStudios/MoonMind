@@ -189,7 +189,7 @@ async def project_remediation_action_inputs(link: Any, *, session: AsyncSession)
         reasons = []
         ready = False
         for row, native in candidates:
-            if kind == "session.interrupt_turn" and (row.metadata_ or {}).get(
+            if (row.metadata_ or {}).get(
                 "hostProtocolMode"
             ) in {HOST_PROTOCOL_MODE_EMBEDDED, "embedded"}:
                 reasons.append("omnigent_bridge_mode_unsupported")
