@@ -48,7 +48,9 @@ from tests.integration.omnigent.test_generic_native_durable_journey import (
     PROFILE,
     assert_native_turn_saved_and_cleaned,
 )
-from tests.unit.api.routers.test_executions import _override_user_dependencies
+from tests.helpers.execution_api import (
+    _override_user_dependencies,
+)
 from tests.unit.api.routers.test_execution_saved_profile_boundaries import (
     agent_requests,
 )

@@ -63,6 +63,14 @@ def test_sanitize_drops_unknown_keys_and_keeps_bounded_values():
         "line one\nline two transcript",
         "x" * (spans.MAX_ATTRIBUTE_VALUE_LEN + 1),
     ],
+    ids=[
+        "github-token",
+        "signed-url",
+        "secret-path",
+        "private-key",
+        "multiline",
+        "oversized",
+    ],
 )
 def test_sanitize_drops_secret_like_and_oversized_values(forbidden_value):
     safe = spans.sanitize_span_attributes({"reason_code": forbidden_value})

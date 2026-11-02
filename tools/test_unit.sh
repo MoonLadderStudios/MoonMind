@@ -224,10 +224,16 @@ if [[ "$RUN_DASHBOARD_TESTS" == "1" ]]; then
         fi
     fi
 
+    # CI records the actual assertion inventory; local runs keep their normal
+    # output. Report generation never substitutes for Vitest's exit status.
+    if [[ -n "${MOONMIND_UI_TEST_REPORT:-}" ]]; then
+        mkdir -p "$(dirname "$MOONMIND_UI_TEST_REPORT")"
+        UI_TEST_ARGS_EFFECTIVE+=(--reporter=default --reporter=json "--outputFile=$MOONMIND_UI_TEST_REPORT")
+    fi
     # Allow targeted frontend test runs via --ui-args (e.g. --ui-args src/components/App.tsx).
     if [[ ${#UI_TEST_ARGS[@]} -gt 0 ]]; then
         (cd "$UI_REPO_ROOT" && "$UI_VITEST_BIN" run --config frontend/vite.config.ts "${UI_TEST_ARGS_EFFECTIVE[@]}")
     else
-        (cd "$UI_REPO_ROOT" && "$UI_VITEST_BIN" run --config frontend/vite.config.ts)
+        (cd "$UI_REPO_ROOT" && "$UI_VITEST_BIN" run --config frontend/vite.config.ts ${UI_TEST_ARGS_EFFECTIVE[@]+"${UI_TEST_ARGS_EFFECTIVE[@]}"})
     fi
 fi
