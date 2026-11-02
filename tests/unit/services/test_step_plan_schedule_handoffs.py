@@ -53,3 +53,49 @@ async def test_schedule_cache_ignores_generated_refs_and_tracks_authored_step_se
     assert await digest(generated) != before
     generated["workflow"]["steps"][0]["runtime"]["modelTier"] = 1
     assert await digest(generated) != before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pinned", [False, True])
+@pytest.mark.parametrize("change", ["active_configuration", "step_policy"])
+async def test_schedule_cache_tracks_resolved_step_authority(monkeypatch, pinned, change):
+    from tests.unit.api_service.test_profile_execution_selection import (
+        configuration,
+        provider,
+    )
+
+    root = provider(profile_id="root")
+    step = provider(profile_id="step")
+    row, original = configuration("step-configuration")
+    updated = deepcopy(original)
+    updated.version = 2
+    updated.digest = "sha256:" + "b" * 64
+    updated.document["execution"]["allowedLaunchPolicyRefs"] = ["isolated@2"]
+    if pinned:
+        step.execution_configuration = {"profileId": row.profile_id, "version": original.version, "digest": original.digest}
+    monkeypatch.setattr("api_service.services.profile_execution_selection.load_execution_configurations", AsyncMock(return_value=[(row, original), (row, updated)]))
+    policies = {"root@1": {"policy": "root"}, "isolated@1": {"policy": "step"}, "isolated@2": {"policy": "step-2"}}
+    monkeypatch.setattr("api_service.services.omnigent_policies.OmnigentPolicyService.resolve_runtime_snapshot", AsyncMock(side_effect=lambda ref: policies[ref]))
+    session = AsyncMock()
+    session.get.return_value = step
+    service = RecurringWorkflowsService(session)
+    parameters = {
+        "targetRuntime": "omnigent", "agentProfileSnapshot": {"launchPolicyRef": "root@1"},
+        "workflow": {"steps": [{"id": "selected", "runtime": {"providerProfileRef": step.profile_id}}]},
+    }
+    async def digest():
+        return await service._schedule_plan_inputs_digest(
+            target={}, initial_parameters=parameters, provider_profile=root,
+            binding=SimpleNamespace(task_input_snapshot_digest="sha256:" + "c" * 64),
+        )
+    before = await digest()
+    assert before is not None
+    if change == "active_configuration":
+        row.active_version = updated.version
+    else:
+        policies["isolated@1"] = {"policy": "updated-step-policy"}
+    after = await digest()
+    if pinned and change == "active_configuration":
+        assert after == before
+    else:
+        assert after != before
