@@ -35,6 +35,7 @@ with workflow.unsafe.imports_passed_through():
         ExecutionBudgetContext,
         OmnigentExecutionPlanBinding,
         RuntimeSessionContextReference,
+        DispatchPoolContextReceipt,
         resolve_execution_budget,
     )
     from moonmind.omnigent.stock_agents import (
@@ -797,6 +798,7 @@ RUN_WORKFLOW_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH = (
     "run-task-scoped-session-clear-between-steps-v1"
 )
 RUN_SHARED_RUNTIME_CONTEXT_PATCH = "run-shared-native-context-continuation-v1"
+RUN_DISPATCH_POOL_CONTEXT_PATCH = "run-dispatch-pool-shared-context-v1"
 RUN_WORKFLOW_SCOPED_SESSION_CLEAR_PER_EXECUTION_PATCH = (
     "run-task-scoped-session-clear-per-execution-v2"
 )
@@ -1970,6 +1972,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._codex_session_handle: Any | None = None
         self._codex_session_binding: CodexManagedSessionBinding | None = None
         self._shared_runtime_context: RuntimeSessionContextReference | None = None
+        self._dispatch_pool_context: DispatchPoolContextReceipt | None = None
         self._codex_session_cleared_before_step_attempts: set[str | tuple[str, int]] = (
             set()
         )
@@ -4347,6 +4350,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         "continued runtime context belongs to another workflow"
                     )
                 self._shared_runtime_context = context
+            carried_pool = continuation.get("dispatchPoolContext")
+            if carried_pool is not None and workflow.patched(
+                RUN_DISPATCH_POOL_CONTEXT_PATCH
+            ):
+                if self._shared_runtime_context is None:
+                    raise ValueError("pool context has no shared runtime context")
+                self._dispatch_pool_context = DispatchPoolContextReceipt.model_validate(
+                    carried_pool
+                )
         if isinstance(carried_session, Mapping) and workflow.patched(
             RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH
         ):
@@ -4509,6 +4521,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             continuation["sharedRuntimeContext"] = (
                 self._shared_runtime_context.model_dump(by_alias=True, mode="json")
             )
+            if self._dispatch_pool_context is not None and workflow.patched(
+                RUN_DISPATCH_POOL_CONTEXT_PATCH
+            ):
+                continuation["dispatchPoolContext"] = (
+                    self._dispatch_pool_context.model_dump(
+                        by_alias=True, mode="json", exclude_none=True
+                    )
+                )
         return cast(RunWorkflowInput, payload)
 
     def _sync_remediation_loop_projection(self) -> None:
@@ -17684,20 +17704,65 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if not workflow.patched(RUN_SHARED_RUNTIME_CONTEXT_PATCH):
             return request
         step = request.step_execution
+        pool_request = (
+            request.agent_kind == "managed"
+            and str(request.agent_id).strip().lower().replace("-", "_")
+            in {"codex", "codex_cli", "claude", "claude_code"}
+            and has_profile_selector(
+                {"profileSelector": request.profile_selector.model_dump(by_alias=True)}
+            )
+        )
+        pool_handoff = pool_request and workflow.patched(RUN_DISPATCH_POOL_CONTEXT_PATCH)
+        pool_context_handoff = (
+            pool_handoff and self._managed_session_runtime_id(request) == "codex_cli"
+        )
+        if pool_handoff:
+            parameters = dict(request.parameters)
+            raw_metadata = parameters.get("metadata")
+            metadata = dict(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
+            raw_hints = metadata.get("moonmind")
+            moonmind = dict(raw_hints) if isinstance(raw_hints, Mapping) else {}
+            moonmind["poolContextHandoff"] = True
+            metadata["moonmind"] = moonmind
+            parameters["metadata"] = metadata
+            request = request.model_copy(update={"parameters": parameters})
         if (
-            request.agent_kind != "external"
-            or request.agent_id != "omnigent"
-            or step is None
+            step is None
+            or not (
+                pool_context_handoff
+                or request.agent_kind == "external" and request.agent_id == "omnigent"
+            )
         ):
             self._shared_runtime_context = None
+            self._dispatch_pool_context = None
             return request
         reference = None
         if step.runtime_context_policy == "reuse_session_same_epoch":
             reference = self._shared_runtime_context
         else:
             self._shared_runtime_context = None
+            self._dispatch_pool_context = None
+        updates = {}
+        if pool_context_handoff and reference is not None:
+            receipt = self._dispatch_pool_context
+            if receipt is None:
+                raise ValueError("shared pool context lacks its selected-account handoff")
+            if request.execution_profile_ref not in {None, receipt.execution_profile_ref}:
+                raise ValueError("shared pool context conflicts with the selected account")
+            workspace = dict(request.workspace_spec)
+            if not workspace.get("workspaceCheckpointRestoreRef"):
+                if receipt.workspace_checkpoint_restore_ref is None:
+                    raise ValueError("shared pool context has no verified saved workspace")
+                workspace["workspaceCheckpointRestoreRef"] = (
+                    receipt.workspace_checkpoint_restore_ref
+                )
+            updates.update(
+                workspace_spec=workspace,
+                execution_profile_ref=receipt.execution_profile_ref,
+            )
         return request.model_copy(
             update={
+                **updates,
                 "step_execution": step.model_copy(
                     update={"runtime_session_context": reference}
                 )
@@ -17709,17 +17774,35 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
     ) -> None:
         if not workflow.patched(RUN_SHARED_RUNTIME_CONTEXT_PATCH):
             return
-        if (
-            request.agent_kind != "external"
-            or request.agent_id != "omnigent"
-            or request.step_execution is None
-        ):
-            return
         metadata = (
             result.get("metadata")
             if isinstance(result, Mapping)
             else getattr(result, "metadata", None)
         )
+        pool_receipt = (
+            metadata.get("dispatchPoolContext") if isinstance(metadata, Mapping) else None
+        )
+        older_shared_receipt = (
+            isinstance(metadata, Mapping)
+            and isinstance(metadata.get("runtimeSessionContext"), Mapping)
+            and metadata.get("runtimeBindingRef")
+            == metadata["runtimeSessionContext"].get("runtimeBindingRef")
+            and bool(metadata.get("runtimeBindingRef"))
+        )
+        pool_request = (
+            request.agent_kind == "managed"
+            and self._managed_session_runtime_id(request) == "codex_cli"
+            and has_profile_selector(
+                {"profileSelector": request.profile_selector.model_dump(by_alias=True)}
+            )
+            and (pool_receipt is not None or older_shared_receipt)
+            and workflow.patched(RUN_DISPATCH_POOL_CONTEXT_PATCH)
+        )
+        if request.step_execution is None or not (
+            pool_request
+            or request.agent_kind == "external" and request.agent_id == "omnigent"
+        ):
+            return
         reference = (
             metadata.get("runtimeSessionContext")
             if isinstance(metadata, Mapping)
@@ -17751,7 +17834,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             raise ValueError(
                 "returned runtime context conflicts with its Step Execution"
             )
+        receipt = (
+            DispatchPoolContextReceipt.model_validate(pool_receipt)
+            if pool_request and pool_receipt is not None
+            else None
+        )
+        if receipt is not None and request.execution_profile_ref not in {
+            None, receipt.execution_profile_ref
+        }:
+            raise ValueError("returned pool context conflicts with the selected account")
         self._shared_runtime_context = context
+        self._dispatch_pool_context = receipt
 
     async def _ensure_workflow_scoped_codex_session(
         self, request: AgentExecutionRequest

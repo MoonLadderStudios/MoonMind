@@ -573,6 +573,22 @@ class CanonicalTurnLineage(BaseModel):
         )
 
 
+class DispatchPoolContextReceipt(BaseModel):
+    """Selected account and verified save returned by a shared pool attempt."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    execution_profile_ref: str = Field(
+        alias="executionProfileRef", min_length=1, max_length=255
+    )
+    workspace_checkpoint_restore_ref: str | None = Field(
+        None,
+        alias="workspaceCheckpointRestoreRef",
+        pattern=r"^artifact:(?://)?\S+$",
+        max_length=1024,
+    )
+
+
 class RuntimeSessionContextReference(BaseModel):
     """Controller-carried reference to one completed shared native context."""
 

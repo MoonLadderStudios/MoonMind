@@ -7,6 +7,7 @@ from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.workflows.agent_run import (
+    AGENT_RUN_POOL_PARENT_HANDOFF_PATCH_ID,
     AGENT_RUN_SELECTED_POOL_SHARED_PLAN_PATCH_ID,
     MoonMindAgentRun,
 )
@@ -20,6 +21,14 @@ class _BeforePoolHandoff(MoonMindAgentRun):
     @staticmethod
     def _workflow_patch_enabled(marker):
         if marker == AGENT_RUN_SELECTED_POOL_SHARED_PLAN_PATCH_ID:
+            return False
+        return MoonMindAgentRun._workflow_patch_enabled(marker)
+
+
+class _BeforeParentHandoff(MoonMindAgentRun):
+    @staticmethod
+    def _workflow_patch_enabled(marker):
+        if marker == AGENT_RUN_POOL_PARENT_HANDOFF_PATCH_ID:
             return False
         return MoonMindAgentRun._workflow_patch_enabled(marker)
 
@@ -87,6 +96,15 @@ class _PoolFixture:
                 "runtimeContextPolicy": "fresh_agent_run",
             },
         )
+        from moonmind.workflows.temporal.workflows.run import (
+            MoonMindUserWorkflow,
+            RUN_SHARED_RUNTIME_CONTEXT_PATCH,
+        )
+
+        if self.implementation is not MoonMindAgentRun:
+            workflow.patched(RUN_SHARED_RUNTIME_CONTEXT_PATCH)
+        else:
+            request = MoonMindUserWorkflow()._bind_shared_runtime_context(request)
         self.agent._assigned_profile_id = request.execution_profile_ref
         self.agent._assigned_slot_fencing_generation = 7
         if self.agent._uses_selected_pool_shared_admission(request, "codex_cli"):
@@ -118,6 +136,15 @@ class _CurrentFixture(_PoolFixture):
         return await self.execute()
 
 
+@workflow.defn(name="SelectedPoolPlanReplayFixture")
+class _ConvertedLegacyFixture(_PoolFixture):
+    implementation = _BeforeParentHandoff
+
+    @workflow.run
+    async def run(self):
+        return await self.execute()
+
+
 @pytest.mark.asyncio
 async def test_retained_native_and_shared_pool_handoffs_replay():
     histories = []
@@ -135,6 +162,11 @@ async def test_retained_native_and_shared_pool_handoffs_replay():
             )
             for label, fixture, expected in (
                 ("retained", _LegacyFixture, "codex_cli"),
+                (
+                    "converted-before-parent-handoff",
+                    _ConvertedLegacyFixture,
+                    "omnigent",
+                ),
                 ("current", _CurrentFixture, "omnigent"),
             ):
                 queue = f"pool-replay-{label}"

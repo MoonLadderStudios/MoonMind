@@ -103,6 +103,21 @@ async def test_pool_step_uses_shared_loop_and_preserves_retry_authority(
                 "summary": "Shared success",
                 "metadata": {"admittedProviderCapacityCleanupCompleted": True},
             }
+            if runtime == "codex_cli":
+                step = payload.step_execution
+                result["metadata"].update(
+                    runtimeSessionContext={
+                        "workflowId": step.workflow_id,
+                        "runId": step.run_id,
+                        "stepExecutionId": step.step_execution_id,
+                        "epoch": step.step_execution_id,
+                        "runtimeBindingRef": "omnigent-runtime-binding:sha256:"
+                        + "a" * 64,
+                    },
+                    savedWorkspaceCheckpoint={
+                        "archiveRef": "artifact:accepted-workspace"
+                    },
+                )
             if cooldown and len(executions) == 1:
                 result.update(
                     summary="Provider temporarily busy",
@@ -126,9 +141,26 @@ async def test_pool_step_uses_shared_loop_and_preserves_retry_authority(
         assert predicate(), "the transport must deliver the fenced response"
 
     monkeypatch.setattr(module.workflow, "wait_condition", wait_condition)
+    from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
+
+    request = MoonMindUserWorkflow()._bind_shared_runtime_context(request)
     result = await run.run(request)
 
     assert result.summary == "Shared success" and result.failure_class is None
+    if runtime == "codex_cli":
+        assert (
+            result.metadata["dispatchPoolContext"]["executionProfileRef"]
+            == "selected-account"
+        )
+        assert (
+            result.metadata["dispatchPoolContext"]["workspaceCheckpointRestoreRef"]
+            == "artifact:accepted-workspace"
+        )
+        if cooldown:
+            assert (
+                executions[1].workspace_spec["workspaceCheckpointRestoreRef"]
+                == "artifact:accepted-workspace"
+            )
     assert len(executions) == len(prepared) == (2 if cooldown else 1)
     assert all(
         item.agent_kind == "external" and item.agent_id == "omnigent"

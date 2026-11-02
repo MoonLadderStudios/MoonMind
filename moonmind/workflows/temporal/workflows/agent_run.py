@@ -44,6 +44,7 @@ with workflow.unsafe.imports_passed_through():
         AgentExecutionRequest,
         AgentRunHandle,
         AgentRunResult,
+        DispatchPoolContextReceipt,
         AgentRunStatus as AgentRunStatusModel,
         ExecutionBudget,
         ExecutionBudgetContext,
@@ -477,6 +478,8 @@ AGENT_RUN_SELECTED_MODEL_CAPACITY_RETRY_PATCH_ID = (
     "agent-run-selected-model-capacity-retry-v1"
 )
 AGENT_RUN_SELECTED_POOL_SHARED_PLAN_PATCH_ID = "agent-run-selected-pool-shared-plan-v1"
+AGENT_RUN_POOL_PARENT_HANDOFF_PATCH_ID = "agent-run-pool-parent-handoff-v1"
+AGENT_RUN_POOL_CONTEXT_RECEIPT_PATCH_ID = "agent-run-pool-context-receipt-v1"
 AGENT_RUN_MANAGED_NO_PROGRESS_RECONCILIATION_PATCH_ID = (
     "agent-run-managed-no-progress-reconciliation-v1"
 )
@@ -3289,6 +3292,7 @@ class MoonMindAgentRun:
         request: AgentExecutionRequest,
         result: AgentRunResult,
     ) -> AgentRunResult:
+        result = self._with_dispatch_pool_context(result)
         context = getattr(self, "_execution_budget", None)
         if context is not None:
             result = result.model_copy(
@@ -6766,12 +6770,61 @@ class MoonMindAgentRun:
             self._pool_plan_request_id = None
             self._pool_plan_fence = None
 
+    @staticmethod
+    def _saved_pool_workspace_ref(result: AgentRunResult | None) -> str | None:
+        saved = (
+            result.metadata.get("savedWorkspaceCheckpoint")
+            if result is not None
+            else None
+        )
+        reference = saved.get("archiveRef") if isinstance(saved, Mapping) else None
+        if (
+            isinstance(reference, str)
+            and reference.startswith("artifact:")
+            and not any(character.isspace() for character in reference)
+            and len(reference) <= 1024
+        ):
+            return reference
+        return None
+
+    def _with_dispatch_pool_context(self, result: AgentRunResult) -> AgentRunResult:
+        original = self._pool_native_request
+        if (
+            original is None
+            or self._managed_runtime_id(original.agent_id) != "codex_cli"
+            or not isinstance(result.metadata.get("runtimeSessionContext"), Mapping)
+            or not self._workflow_patch_enabled(AGENT_RUN_POOL_CONTEXT_RECEIPT_PATCH_ID)
+        ):
+            return result
+        receipt = DispatchPoolContextReceipt(
+            executionProfileRef=original.execution_profile_ref,
+            workspaceCheckpointRestoreRef=self._saved_pool_workspace_ref(result),
+        )
+        return result.model_copy(
+            update={
+                "metadata": {
+                    **result.metadata,
+                    "dispatchPoolContext": receipt.model_dump(
+                        by_alias=True, mode="json", exclude_none=True
+                    ),
+                }
+            }
+        )
+
     def _uses_selected_pool_shared_admission(self, request: AgentExecutionRequest, runtime_id: str) -> bool:
+        metadata = request.parameters.get("metadata")
+        hints = metadata.get("moonmind") if isinstance(metadata, Mapping) else None
+        # Old parents cannot carry the converted child's account/context receipt.
+        # This capability hint selects the transition, never launch authority.
         return (
             runtime_id in {"codex_cli", "claude_code"}
             and self._profile_selector_has_constraints(request.profile_selector)
             and self._assigned_slot_fencing_generation is not None
             and self._workflow_patch_enabled(AGENT_RUN_SELECTED_POOL_SHARED_PLAN_PATCH_ID)
+            and (
+                not self._workflow_patch_enabled(AGENT_RUN_POOL_PARENT_HANDOFF_PATCH_ID)
+                or isinstance(hints, Mapping) and hints.get("poolContextHandoff") is True
+            )
         )
 
     @workflow.update(name="Pause")
@@ -9593,6 +9646,13 @@ class MoonMindAgentRun:
                     # selector, requested account and remaining step budget.
                     request = self._pool_native_request.model_copy(deep=True)
                     request.execution_budget = self._execution_budget
+                    if self._workflow_patch_enabled(AGENT_RUN_POOL_CONTEXT_RECEIPT_PATCH_ID):
+                        saved_workspace = self._saved_pool_workspace_ref(self.final_result)
+                        if saved_workspace is not None:
+                            request.workspace_spec = {
+                                **request.workspace_spec,
+                                "workspaceCheckpointRestoreRef": saved_workspace,
+                            }
                     self._pool_native_request = None
                     self.agent_kind = "managed"
                     self.run_id = None
