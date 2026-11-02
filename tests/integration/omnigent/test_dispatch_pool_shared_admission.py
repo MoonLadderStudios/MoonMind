@@ -61,7 +61,10 @@ session_factory = native_fixture.session_factory
 @pytest.mark.parametrize(
     "native_journey", ["codex-native", "claude-native"], indirect=True
 )
-@pytest.mark.parametrize("scenario", ["ordinary", "disabled", "publish", "model_alias", "tier_resolution", "native_tier_option"])
+@pytest.mark.parametrize("scenario", [
+    "ordinary", "disabled", "publish", "model_alias", "tier_resolution", "native_tier_option",
+    "tier_launch_defaults", "tier_launch_explicit", "tier_publish", "retained_handoff", "tier_environment", "tier_removed_default",
+])
 async def test_pool_selected_account_compiles_once_and_preserves_its_original_inputs(
     native_journey, monkeypatch, scenario
 ):
@@ -107,13 +110,15 @@ async def execute_selected_pool_source(
 ):
     """Exercise the first admitted pool turn, optionally retaining a second step."""
     journey = native_journey
+    publish_scenario = scenario in {"publish", "tier_publish"}
+    tier_launch = scenario in {"tier_launch_defaults", "tier_launch_explicit", "tier_publish"}
     runtime = "codex_cli" if journey.harness == "codex-native" else "claude_code"
     monkeypatch.setattr(settings.workflow, "default_runtime", runtime)
     monkeypatch.setattr(settings.workflow, "github_repository", "")
     inventory = await OmnigentHttpClient(base_url=resolved_server_url()).list_agents()
     async with journey.session_factory() as session:
         repository = None
-        if scenario == "publish":
+        if publish_scenario:
             from api_service.services.repository_connections import (
                 RepositoryConnectionService,
             )
@@ -150,12 +155,18 @@ async def execute_selected_pool_source(
         provider.tags = ["selected-pool"]
         if scenario == "model_alias":
             provider.model_overrides = {"selected-pool-alias": journey.server.model}
-        if scenario in {"tier_resolution", "native_tier_option"}:
+        if scenario in {"tier_resolution", "native_tier_option", "tier_environment"} or tier_launch:
             provider.model_tiers = [{
                 "model": journey.server.model,
                 "parameters": (
                     {"metadata": {"operatorTrace": "accepted-tier-default"}}
-                    if scenario == "tier_resolution" else {"native_option": "preserve-direct-setting"}
+                    if scenario == "tier_resolution" else (
+                        {"commitMessage": "Tier-selected commit", "publishBaseBranch": "tier-selected-target"}
+                        if tier_launch else (
+                            {"envOverrides": {"MODE": "preserve-native-environment"}}
+                            if scenario == "tier_environment" else {"native_option": "preserve-direct-setting"}
+                        )
+                    )
                 ),
             }]
         await session.commit()
@@ -182,9 +193,11 @@ async def execute_selected_pool_source(
                             "runtime": {
                                 "mode": runtime,
                                 "profileSelector": {"tagsAll": ["selected-pool"]},
+                                **({"parameters": {"commitMessage": "Explicit runtime commit"}}
+                                   if scenario == "tier_launch_explicit" else {}),
                                 **(
                                     {"modelTier": 1}
-                                    if scenario in {"tier_resolution", "native_tier_option"}
+                                    if scenario in {"tier_resolution", "native_tier_option", "tier_environment"} or tier_launch
                                     else {"model": "selected-pool-alias" if scenario == "model_alias" else journey.server.model}
                                 ),
                             },
@@ -197,11 +210,12 @@ async def execute_selected_pool_source(
                                     **(
                                         {
                                             "publishMode": "pr",
-                                            "publishBaseBranch": "selected-target",
-                                            "commitMessage": "Publish selected pool work",
+                                            **({
+                                                "publishBaseBranch": "selected-target",
+                                                "commitMessage": "Publish selected pool work",
+                                            } if scenario == "publish" else {}),
                                         }
-                                        if scenario == "publish"
-                                        else {}
+                                        if publish_scenario else {}
                                     ),
                                 },
                                 *(
@@ -236,10 +250,18 @@ async def execute_selected_pool_source(
         )["work"]
         assert request.execution_profile_ref == (native_fixture.PROFILE if fixed_serialized else None)
         assert request.profile_selector.tags_all == ([] if fixed_serialized else ["selected-pool"])
+        if scenario == "tier_removed_default":
+            # A recorded request may carry defaults from a previous native
+            # resolution. The selected Profile no longer supplies this value.
+            request.parameters["commitMessage"] = "Previous injected tier message"
+            metadata = request.parameters.setdefault("metadata", {})
+            metadata.setdefault("moonmind", {})["modelEffortResolution"] = {
+                "tierParameterDefaults": {"commitMessage": "Previous injected tier message"},
+            }
         selected = request.model_copy(
             update={"execution_profile_ref": native_fixture.PROFILE}
         )
-        if scenario == "publish":
+        if publish_scenario:
             assert record.parameters["publishMode"] == "none"
             assert request.parameters["publishMode"] == "pr"
         original_parameters, original_memo = dict(record.parameters), dict(record.memo)
@@ -347,7 +369,7 @@ async def execute_selected_pool_source(
             select(func.count(OmnigentExecutionPlanRecord.plan_ref))
         )
         expected_selection = selected.model_copy(deep=True)
-        if scenario == "tier_resolution":
+        if scenario in {"tier_resolution", "tier_removed_default"} or tier_launch:
             from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
             current_provider = await session.get(ManagedAgentProviderProfile, native_fixture.PROFILE)
             ManagedRuntimeLauncher._apply_resolved_tier_policy(
@@ -356,10 +378,12 @@ async def execute_selected_pool_source(
         result = await prepare_selected_pool_plan(
             session, runtime_id=runtime, payload=payload, client=transport
         )
-        if scenario in {"disabled", "native_tier_option"}:
+        if scenario in {"disabled", "native_tier_option", "tier_environment"}:
             assert result["disposition"] == "native", result
             if scenario == "native_tier_option":
                 assert result["reason"] == "native_parameter_defaults_require_an_equivalent_handoff"
+            if scenario == "tier_environment":
+                assert result["reason"] == "native_environment_overrides_require_their_current_adapter"
             assert (
                 await session.scalar(
                     select(func.count(OmnigentExecutionPlanRecord.plan_ref))
@@ -385,10 +409,21 @@ async def execute_selected_pool_source(
         assert shared.execution_budget == request.execution_budget
         assert shared.terminal_contract == request.terminal_contract
         assert shared.profile_selector == request.profile_selector
-        if scenario == "tier_resolution":
-            assert "operatorTrace" not in expected_selection.parameters["metadata"]
+        if scenario in {"tier_resolution", "tier_removed_default"} or tier_launch:
+            if scenario == "tier_resolution":
+                assert "operatorTrace" not in expected_selection.parameters["metadata"]
+            if tier_launch:
+                for key in ("commitMessage", "publishBaseBranch"):
+                    assert shared.parameters[key] == expected_selection.parameters[key]
+                assert shared.parameters["commitMessage"] == (
+                    "Explicit runtime commit" if scenario == "tier_launch_explicit" else "Tier-selected commit"
+                )
             assert shared.parameters["metadata"] == expected_selection.parameters["metadata"]
-            assert shared.parameters["modelTierResolution"] == expected_selection.parameters["modelTierResolution"]
+            assert ("modelTierResolution" in shared.parameters) == ("modelTierResolution" in expected_selection.parameters)
+            assert shared.parameters.get("modelTierResolution") == expected_selection.parameters.get("modelTierResolution")
+        if scenario == "tier_removed_default":
+            assert "commitMessage" not in expected_selection.parameters
+            assert "commitMessage" not in shared.parameters
         if fixed_serialized:
             assert record.parameters["operatorExtension"] == {"accepted": "preserve-original-input"}
             assert shared.parameters.get("operatorExtension") == request.parameters.get("operatorExtension")
@@ -404,7 +439,7 @@ async def execute_selected_pool_source(
         plan = await DbExecutionPlanStore(journey.session_factory).load(
             shared.omnigent_execution_plan.plan_ref
         )
-        if scenario == "publish":
+        if publish_scenario:
             from moonmind.omnigent.harness_platform.credential_bindings import (
                 repository_bindings_of,
             )
@@ -415,9 +450,12 @@ async def execute_selected_pool_source(
                 for binding in bindings.values()
             )
             assert shared.parameters["publishMode"] == "pr"
-            assert shared.parameters["publishBaseBranch"] == "selected-target"
-            assert shared.parameters["commitMessage"] == "Publish selected pool work"
-            return
+            assert shared.parameters["publishBaseBranch"] == (
+                "tier-selected-target" if tier_launch else "selected-target"
+            )
+            assert shared.parameters["commitMessage"] == (
+                "Tier-selected commit" if tier_launch else "Publish selected pool work"
+            )
         assert plan.payload.harnessId == journey.harness
         if scenario == "model_alias":
             assert request.parameters["model"] == "selected-pool-alias"
@@ -438,6 +476,15 @@ async def execute_selected_pool_source(
                 )
             )
         ).one()
+        if scenario == "retained_handoff":
+            # Retained grants from the previous writer have model evidence,
+            # but no frozen launch-parameter field. Keep their interpretation.
+            metadata = dict(row.safe_metadata_json)
+            metadata["preparedPoolPlan"] = {
+                key: value for key, value in metadata["preparedPoolPlan"].items()
+                if key != "launchParameters"
+            }
+            row.safe_metadata_json = metadata
         selected_lease_id = row.id
         assert row.fencing_generation == 7 and row.scope_generation == 3
         assert row.execution_plan_ref == plan.planRef
@@ -451,10 +498,11 @@ async def execute_selected_pool_source(
             ManagedAgentProviderProfile, native_fixture.PROFILE
         )
         provider.enabled = False
-        if scenario == "tier_resolution":
+        if scenario in {"tier_resolution", "tier_removed_default"} or tier_launch:
             provider.model_tiers = [{
                 "model": journey.server.model,
-                "parameters": {"metadata": {"operatorTrace": "later-profile-edit"}},
+                "parameters": {"metadata": {"operatorTrace": "later-profile-edit"},
+                               "commitMessage": "A later Profile edit", "publishBaseBranch": "later-target"},
             }]
         await session.commit()
         repeated = await prepare_selected_pool_plan(
@@ -464,9 +512,15 @@ async def execute_selected_pool_source(
             repeated["request"]["omnigentExecutionPlan"]
             == result["request"]["omnigentExecutionPlan"]
         )
-        if scenario == "tier_resolution":
+        if scenario in {"retained_handoff", "tier_removed_default"}:
+            assert repeated["request"]["parameters"] == result["request"]["parameters"]
+        if scenario in {"tier_resolution", "tier_removed_default"} or tier_launch:
             assert repeated["request"]["parameters"]["metadata"] == result["request"]["parameters"]["metadata"]
-            assert repeated["request"]["parameters"]["modelTierResolution"] == result["request"]["parameters"]["modelTierResolution"]
+            assert ("modelTierResolution" in repeated["request"]["parameters"]) == ("modelTierResolution" in result["request"]["parameters"])
+            assert repeated["request"]["parameters"].get("modelTierResolution") == result["request"]["parameters"].get("modelTierResolution")
+            if tier_launch:
+                for key in ("commitMessage", "publishBaseBranch"):
+                    assert repeated["request"]["parameters"][key] == result["request"]["parameters"][key]
         assert (
             await session.scalar(
                 select(func.count(OmnigentExecutionPlanRecord.plan_ref))
@@ -498,6 +552,9 @@ async def execute_selected_pool_source(
         )
         provider.enabled = True
         await session.commit()
+
+    if publish_scenario:
+        return
 
     # The real AgentRun capacity handoff reuses the selected grant. Only
     # Temporal signal delivery and host-capacity observation are transports.
