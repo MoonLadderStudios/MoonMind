@@ -763,15 +763,20 @@ class ManagedCheckpointRestoreService:
             try:
                 if self.repository_source_root is not None:
                     repo_url = str(self.repository_source_root)
-                else:
+                elif req.destination.repository:
                     repo_url = f"https://github.com/{req.destination.repository}.git"
+                else:
+                    repo_url = None
                 history = manifest.get("gitHistory")
                 if history and history.get("requiresSourceObjects") is False:
                     # The bundle carries every object: no clone, so no
                     # repository credential is looked up for this restore.
                     self._git(["init", str(staging)])
-                    self._git(["remote", "add", "origin", repo_url], staging)
+                    if repo_url is not None:
+                        self._git(["remote", "add", "origin", repo_url], staging)
                 else:
+                    if repo_url is None:
+                        raise CheckpointRestoreError("CHECKPOINT_REPOSITORY_UNAVAILABLE", "checkpoint needs its admitted origin repository")
                     clone_env: Mapping[str, str] | None = None
                     if self.repository_source_root is None:
                         # Origin objects come through the repository access the

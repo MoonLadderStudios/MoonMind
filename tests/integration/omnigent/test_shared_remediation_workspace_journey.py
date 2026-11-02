@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 from dataclasses import asdict
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from moonmind.omnigent.remediation_workspace import RemediationLoopHead
 from moonmind.omnigent.runtime_bindings import stable_binding_id
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal import activity_runtime
+from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
     TemporalArtifactRepository,
@@ -55,6 +57,9 @@ async def _admit_remediation_head(journey, monkeypatch):
     source.joinpath("obsolete.txt").write_text(
         "Deleted during the interrupted attempt."
     )
+    subprocess.run(["git", "add", "obsolete.txt"], cwd=source, check=True)
+    subprocess.run(["git", "commit", "-m", "Accepted baseline"], cwd=source, check=True, capture_output=True)
+    base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source).decode().strip()
     SandboxWorkspaceRecordStore(root).ensure(
         SandboxWorkspaceRecord(
             workspace_id=source_id,
@@ -191,18 +196,36 @@ async def _admit_remediation_head(journey, monkeypatch):
     ["codex-native-api-key", "claude-native-api-key", "opencode-native"],
     indirect=True,
 )
+@pytest.mark.parametrize("with_remediation", [False, True], ids=["ordinary-step", "controller-head"])
 async def test_shared_remediation_restores_head_then_latest_attempt_save(
-    native_journey, monkeypatch
+    native_journey, monkeypatch, with_remediation
 ):
     journey = native_journey
     await _admit_remediation_head(journey, monkeypatch)
     request, plan = journey.request, journey.plan
     observed = []
+    ownership = []
+    saved_git = {}
     command = journey.docker.command
+
+    def git(workspace, *args):
+        return subprocess.check_output([
+            "git", "-c", f"safe.directory={workspace}", "-C", str(workspace), *args,
+        ]).decode().strip()
+
+    def verify_git(workspace):
+        assert git(workspace, "rev-parse", "HEAD") == saved_git["head"]
+        assert git(workspace, "show", ":tracked.txt") == "Staged interrupted work."
+        assert workspace.joinpath("tracked.txt").read_text() == "Unstaged interrupted work."
 
     async def observe_launch(argv, **kwargs):
         if list(argv[:2]) == ["docker", "create"]:
             workspace = Path(_mounts(list(argv))["/workspaces/run"]["src"])
+            expected_owner = (journey.docker.host_class.runtime["uid"], journey.docker.host_class.runtime["gid"])
+            ownership.append((expected_owner, [
+                (path.stat().st_uid, path.stat().st_gid)
+                for path in (workspace, workspace / ".git", workspace / ".git/objects", workspace / "accepted-work.txt")
+            ]))
             observed.append(
                 (
                     workspace.joinpath("accepted-work.txt").read_text(),
@@ -215,8 +238,16 @@ async def test_shared_remediation_restores_head_then_latest_attempt_save(
                 # The controlled native transport edits the mounted repository;
                 # the interrupted attempt's real save must preserve deletion.
                 workspace.joinpath("obsolete.txt").unlink()
+                workspace.joinpath("unpublished.txt").write_text("Unpublished interrupted commit.")
+                git(workspace, "add", "unpublished.txt")
+                git(workspace, "commit", "-m", "Interrupted unpublished work")
+                saved_git["head"] = git(workspace, "rev-parse", "HEAD")
+                workspace.joinpath("tracked.txt").write_text("Staged interrupted work.")
+                git(workspace, "add", "tracked.txt", "obsolete.txt")
+                workspace.joinpath("tracked.txt").write_text("Unstaged interrupted work.")
             else:
                 assert not workspace.joinpath("obsolete.txt").exists()
+                verify_git(workspace)
                 # Lose the worker's restored tree while its owner/readiness
                 # records survive, then redeliver the same preparation.
                 shutil.rmtree(workspace)
@@ -230,6 +261,7 @@ async def test_shared_remediation_restores_head_then_latest_attempt_save(
                 assert recovered["sourceRef"] == str(workspace)
                 assert workspace.joinpath(RESULT_PATH).read_bytes() == GENERATED
                 assert not workspace.joinpath("obsolete.txt").exists()
+                verify_git(workspace)
                 workspace.joinpath("candidate-edit.txt").write_text(
                     "Preserve preparation retry edits."
                 )
@@ -243,12 +275,14 @@ async def test_shared_remediation_restores_head_then_latest_attempt_save(
                     workspace.joinpath("candidate-edit.txt").read_text()
                     == "Preserve preparation retry edits."
                 )
+                verify_git(workspace)
         return await command(argv, **kwargs)
 
     monkeypatch.setattr(docker_backend, "run_runtime_command", observe_launch)
     monkeypatch.setattr(credential_materializers, "run_runtime_command", observe_launch)
     interrupted = await assert_native_turn_saved_and_cleaned(journey, "failed")
     saved = interrupted.metadata["savedWorkspaceCheckpoint"]
+    assert all(actual == ownership[0][0] for actual in ownership[0][1]), ownership[0]
     assert observed == [("Accepted loop head.", None)]
     assert not journey.server.workspace.exists()
     binding_id = stable_binding_id(
@@ -256,6 +290,17 @@ async def test_shared_remediation_restores_head_then_latest_attempt_save(
     )
     prior = await journey.services.runtime_binding_store.get(binding_id)
     step_id = request.step_execution.workflow_id + ":run:implement:execution:2"
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda marker: True)
+    owner = run_workflow_module.MoonMindUserWorkflow()
+    owner._step_checkpoint_workspace_evidence_by_boundary["implement"] = {"after_execution": {
+        "checkpointRef": saved["checkpointRef"], "workspaceArchiveRef": saved["archiveRef"],
+        "workspaceKind": saved["kind"], "workspaceDigest": saved["workspaceDigest"],
+        "workspaceIdentityDigest": saved["workspaceIdentityDigest"], "checkpointManifestRef": saved["manifestRef"],
+        "baseCommit": saved["baseCommit"],
+    }}
+    owner._carry_interrupted_omnigent_step_workspace("implement", next_attempt=2)
+    restore_ref = owner._interrupted_step_restore_refs[owner._step_execution_launch_block_key("implement", 2)]
+    assert restore_ref == saved["checkpointRef"]
     payload = request.model_dump(mode="json", by_alias=True, exclude_none=True)
     payload["idempotencyKey"] = "native-turn-2"
     payload["stepExecution"].update(executionOrdinal=2, stepExecutionId=step_id)
@@ -267,12 +312,14 @@ async def test_shared_remediation_restores_head_then_latest_attempt_save(
         "relativePath": "repo",
     }
     payload["workspaceSpec"] = {
-        "workspaceCheckpointRestoreRef": saved["archiveRef"],
+        "workspaceCheckpointRestoreRef": restore_ref,
         "workspaceLocator": locator,
     }
     payload["remediationWorkspace"].update(
         stepExecutionId=step_id, destinationWorkspaceLocator=locator
     )
+    if not with_remediation:
+        payload.pop("remediationWorkspace")
     payload["admittedProviderCapacity"].update(
         stepExecutionId=step_id,
         idempotencyKey="native-turn-2",
@@ -285,6 +332,7 @@ async def test_shared_remediation_restores_head_then_latest_attempt_save(
     journey.server.items, journey.server.events = [], []
     result = await journey.realizer.execute(successor, plan)
     assert result.failure_class is None, result
+    assert all(actual == ownership[1][0] for actual in ownership[1][1]), ownership[1]
     assert observed == [
         ("Accepted loop head.", None),
         ("Accepted loop head.", GENERATED),

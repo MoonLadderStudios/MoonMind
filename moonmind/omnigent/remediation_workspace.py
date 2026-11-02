@@ -358,6 +358,7 @@ class SandboxRemediationWorkspaceOwner:
         if binding.workflow_id != workflow_id or binding.step_execution_id != step_execution_id:
             raise RemediationWorkspaceError("REMEDIATION_WORKSPACE_OWNER_MISMATCH", "binding belongs to a different execution")
         head = await self._authoritative_head(binding)
+        repository = ((head.restore_request or {}).get("destination") or {}).get("repository")
         locator = binding.destination_workspace_locator
         record = SandboxWorkspaceRecord(
             workspace_id=locator.workspace_id, workflow_id=workflow_id,
@@ -420,6 +421,7 @@ class SandboxRemediationWorkspaceOwner:
                     "workspacePath": str(resolved), "workspaceState": state,
                     "restoreEvidenceRef": evidence.get("restoreEvidenceRef"),
                     "reusedAttempt": reused_attempt,
+                    "repository": repository,
                 }
 
         live_resolution = self._try_live_reuse(binding, head)
@@ -441,6 +443,7 @@ class SandboxRemediationWorkspaceOwner:
                 "workspaceLocator": locator.model_dump(by_alias=True, mode="json"),
                 "workspacePath": str(destination), "workspaceState": "live_reused",
                 "restoreEvidenceRef": None,
+                "repository": repository,
             }
 
         if self.restorer is None:
@@ -470,6 +473,7 @@ class SandboxRemediationWorkspaceOwner:
             "workspaceLocator": locator.model_dump(by_alias=True, mode="json"),
             "workspacePath": str(resolved), "workspaceState": "cold_restored",
             "restoreEvidenceRef": result["restoreEvidenceRef"],
+            "repository": repository,
         }
 
 

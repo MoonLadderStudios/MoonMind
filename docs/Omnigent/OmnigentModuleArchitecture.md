@@ -172,9 +172,11 @@ The generic workspace port and retained coordinator use the same remediation
 owner and canonical checkpoint restore service. The port validates the controller
 head, execution identity and admitted Profile/launch snapshot before transferring
 or restoring its attempt-owned workspace. Preparation retries preserve candidate
-edits; interrupted transfers reconcile their recorded intent. A later full
-verified attempt save supersedes the loop head, including deletions, and is
-projected again after local workspace loss. An existing candidate without admission
+edits; interrupted transfers reconcile their recorded intent. New Git save
+handoffs use the canonical checkpoint to restore HEAD, index and worktree,
+including deletions, after local workspace loss; recorded archive handoffs retain
+their additive interpretation. Restored directories and contents transfer to the
+selected runtime UID. An existing candidate without admission
 proof is preserved with an explicit uncertainty error. Both paths use the scoped
 Temporal artifact adapter; model and repository credentials remain separate.
 

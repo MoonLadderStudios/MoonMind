@@ -121,6 +121,28 @@ def test_published_history_compaction_keeps_the_context_handoff():
         assert compact["metadata"][key] == payload["metadata"][key]
 
 
+@pytest.mark.parametrize("canonical_handoff", [False, True])
+@pytest.mark.parametrize("git_checkpoint", [False, True])
+def test_new_pool_handoffs_carry_complete_git_checkpoints(monkeypatch, canonical_handoff, git_checkpoint):
+    from moonmind.schemas.agent_runtime_models import AgentRunResult
+    from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+
+    child = MoonMindAgentRun()
+    child._pool_native_request = request().model_copy(update={"execution_profile_ref": "selected-account"})
+    monkeypatch.setattr(child, "_workflow_patch_enabled", lambda marker: canonical_handoff if marker == "agent-run-pool-canonical-workspace-handoff-v1" else True)
+    payload = result()
+    payload["metadata"].pop("dispatchPoolContext")
+    payload["metadata"]["savedWorkspaceCheckpoint"] = {
+        "archiveRef": "artifact:verified-archive",
+        "checkpointRef": "artifact:verified-checkpoint",
+        "baseCommit": "a" * 40 if git_checkpoint else None,
+    }
+    delivered = child._with_dispatch_pool_context(AgentRunResult.model_validate(payload))
+    assert delivered.metadata["dispatchPoolContext"]["workspaceCheckpointRestoreRef"] == (
+        "artifact:verified-checkpoint" if canonical_handoff and git_checkpoint else "artifact:verified-archive"
+    )
+
+
 def test_older_converted_result_cannot_silently_become_a_fresh_native_context(
     monkeypatch,
 ):
