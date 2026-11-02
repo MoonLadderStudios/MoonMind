@@ -7,6 +7,7 @@ can be packaged into a host without importing MoonMind or its database.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import math
 import os
@@ -16,6 +17,7 @@ import sys
 import tempfile
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 
 _CONFIG_PATH = "{{runtime_support_dir}}/codex-home/config.toml"
 _CODEX_HOME = "{{runtime_support_dir}}/codex-home"
@@ -169,6 +171,54 @@ def _has_authority(value):
     return isinstance(value, str) and ("{{" in value or "\0" in value)
 
 
+def _additional_file(template, home_path):
+    """Translate a declared private-home file without granting auth/history writes."""
+    prefix = home_path.rstrip("/") + "/"
+    path = str(template["path"] or "")
+    if not path.startswith(prefix):
+        raise ValueError("additional Codex files must remain within the declared HOME")
+    relative = Path(path[len(prefix):])
+    if (
+        relative.is_absolute() or ".." in relative.parts or not relative.parts
+        or relative.parts[0] in {"auth.json", "config.toml", "sessions", "archived_sessions"}
+        or any(part.startswith(".moonmind-") for part in relative.parts)
+    ):
+        raise ValueError("additional Codex files cannot replace authentication or history")
+    if int(template["permissions"], 8) != 0o600:
+        raise ValueError("additional Codex files require private permissions")
+    if template["format"] not in {"text", "json", "toml"} or template["merge_strategy"] not in {"replace", "deep_merge", "append"}:
+        raise ValueError("additional Codex file rendering is unsupported")
+
+    def translate(value):
+        if isinstance(value, str):
+            if home_path != "{{runtime_support_dir}}":
+                parts = value.split(home_path)
+                if (
+                    any("{{runtime_support_dir}}" in part for part in parts)
+                    or any(part and not part.startswith("/") for part in parts[1:])
+                ):
+                    raise ValueError("additional Codex files reference an untranslated support path")
+                value = "{{runtime_support_dir}}".join(parts)
+            # The shared host supplies these two paths for this exact attempt.
+            checked = value.replace("{{runtime_support_dir}}", "").replace("{{workspace_path}}", "")
+            if _has_authority(checked):
+                raise ValueError("additional Codex files must not contain credential templates")
+            return value
+        if isinstance(value, dict):
+            if _has_authority({key: None for key in value}):
+                raise ValueError("additional Codex files cannot introduce authentication")
+            return {key: translate(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [translate(item) for item in value]
+        return value
+
+    return {
+        **template,
+        "path": "{{runtime_support_dir}}/" + relative.as_posix(),
+        "content_template": translate(template["content_template"]),
+    }
+
+
 def configuration_for_profile(profile):
     """Return one declared Codex config and its selected key role, or a reason."""
     try:
@@ -183,12 +233,15 @@ def configuration_for_profile(profile):
         ):
             return None, "Codex HOME must be within its run support directory"
         document = {}
+        additional_files = []
         if not templates:
             return None, "Codex file templates are empty"
         for template in templates:
+            if template["path"] != home_path.rstrip("/") + "/config.toml":
+                additional_files.append(_additional_file(template, home_path))
+                continue
             if (
-                template["path"] != home_path.rstrip("/") + "/config.toml"
-                or template["format"] != "toml"
+                template["format"] != "toml"
             ):
                 return (
                     None,
@@ -306,6 +359,7 @@ def configuration_for_profile(profile):
             "providerName": provider_name,
             "secretRole": role,
             "managedRecipeRepaired": repaired,
+            **({"additionalFiles": additional_files} if additional_files else {}),
         }, ""
     except (TypeError, ValueError, KeyError):
         return None, "Codex file templates contain invalid configuration"
@@ -370,6 +424,49 @@ def _write(path, document):
 
 def configure_home(configuration, home):
     _write(Path(home) / "config.toml", configuration["document"])
+
+
+def configure_profile_files(configuration, home, workspace):
+    """Render per-run files only in the native process's private Codex home.
+
+    A completed projection is reused on process restart. An interrupted write
+    stops visibly rather than repeating append operations whose effect is
+    uncertain; ordinary step recovery provisions a fresh private home.
+    """
+    templates = [
+        _additional_file(_template(template), "{{runtime_support_dir}}")
+        for template in configuration.get("additionalFiles") or []
+    ]
+    if not templates:
+        return
+    if __package__:
+        from .template_renderer import ProfileTemplateRenderer
+    else:
+        from template_renderer import ProfileTemplateRenderer
+
+    home = Path(home).resolve()
+    workspace = Path(workspace).resolve()
+    digest = hashlib.sha256(json.dumps(
+        {"templates": templates, "workspace": str(workspace)},
+        sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+    marker = home / ".moonmind-profile-file-digest"
+    if marker.is_symlink():
+        raise ValueError("Profile file projection marker is not privately owned")
+    if marker.exists():
+        if marker.read_text() == digest:
+            return
+        raise ValueError("Profile file projection is interrupted or conflicts with this launch")
+    with marker.open("x") as stream:
+        marker.chmod(0o600)
+        stream.write("preparing")
+    renderer = ProfileTemplateRenderer(toml_serializer=render_toml)
+    for template in templates:
+        renderer._materialize_file_template(
+            SimpleNamespace(**template),
+            {"runtime_support_dir": str(home), "workspace_path": str(workspace)},
+        )
+    marker.write_text(digest)
 
 
 def preserve_provider_settings(configuration, home, arguments):
@@ -471,6 +568,8 @@ if __name__ == "__main__":
         if os.environ.get("MOONMIND_CODEX_REQUIRE_CONTEXT") == "1":
             require_reusable_context(os.environ["CODEX_HOME"], arguments)
         if configuration is not None:
+            if "app-server" in arguments:
+                configure_profile_files(configuration, os.environ["CODEX_HOME"], Path.cwd())
             preserve_provider_settings(
                 configuration, os.environ["CODEX_HOME"], arguments
             )

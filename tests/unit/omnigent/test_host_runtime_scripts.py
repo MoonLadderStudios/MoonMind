@@ -92,7 +92,8 @@ def test_profile_shell_value_survives_the_native_executable_boundary(tmp_path, h
     assert (home / ".omnigent/moonmind/runtime-context/provider-PROJECT_RUNTIME_STYLE").stat().st_mode & 0o777 == 0o600
 
 
-def test_custom_codex_projection_runs_through_the_native_executable_boundary(tmp_path):
+@pytest.mark.parametrize("additional_file", [False, True])
+def test_custom_codex_projection_runs_through_the_native_executable_boundary(tmp_path, additional_file):
     import os
 
     from moonmind.omnigent.harness_platform.materializers import (
@@ -105,7 +106,14 @@ def test_custom_codex_projection_runs_through_the_native_executable_boundary(tmp
         directory.mkdir()
     projection = home / ".moonmind-provider-config"
     projection.mkdir()
-    endpoint, reason = codex_provider_config_endpoint(profile())
+    selected = profile()
+    if additional_file:
+        selected.file_templates.append({
+            "path": "{{runtime_support_dir}}/codex-home/AGENTS.md",
+            "format": "text", "merge_strategy": "append",
+            "content_template": "Selected global instructions.\n", "permissions": "0600",
+        })
+    endpoint, reason = codex_provider_config_endpoint(selected)
     assert endpoint is not None, reason
     (projection / "codex-profile.json").write_text(
         json.dumps(endpoint.codexConfiguration)
@@ -119,7 +127,9 @@ def test_custom_codex_projection_runs_through_the_native_executable_boundary(tmp
         "config=tomllib.loads((pathlib.Path(os.environ['CODEX_HOME'])/'config.toml').read_text())\n"
         "print(json.dumps({'home':os.environ['CODEX_HOME'],'step':os.environ['MOONMIND_STEP_EXECUTION_ID'],"
         "'skills':os.environ['MOONMIND_ACTIVE_SKILLS_DIR'],'model':config['model'],"
-        "'retries':config['model_providers']['custom']['request_max_retries']}))\n"
+        "'retries':config['model_providers']['custom']['request_max_retries'],"
+        "'globalInstructions':(pathlib.Path(os.environ['CODEX_HOME'])/'AGENTS.md').read_text() "
+        "if (pathlib.Path(os.environ['CODEX_HOME'])/'AGENTS.md').exists() else None}))\n"
     )
     native.chmod(0o700)
     omnigent = binaries / "omnigent"
@@ -169,7 +179,9 @@ def test_custom_codex_projection_runs_through_the_native_executable_boundary(tmp
         "skills": str(skills),
         "model": "example-model",
         "retries": 4,
+        "globalInstructions": "Selected global instructions.\n" if additional_file else None,
     }
+    assert not (home / ".codex/AGENTS.md").exists()
     passthrough = set(environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(","))
     assert {"CODEX_HOME", "OMNIGENT_CODEX_PATH"} <= passthrough
 
