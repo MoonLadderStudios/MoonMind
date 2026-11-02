@@ -1465,6 +1465,9 @@ async def compile_and_persist_execution_plan(
     access: ArtifactAccessContext,
     _compile_step_plans: bool = True,
     _recorded_step_parameters: Mapping[str, Mapping[str, Any]] | None = None,
+    _recorded_step_provider_configurations: Mapping[
+        str, ProviderConfigurationSnapshotRef | None
+    ] | None = None,
     _recorded_provider_configuration_snapshot: ProviderConfigurationSnapshotRef | None | Literal["capture"] = "capture",
     recorded_skillset_ref: str | None = None,
 ) -> PersistedOmnigentExecutionPlan:
@@ -2227,6 +2230,7 @@ async def compile_and_persist_execution_plan(
         compiled_steps = await compile_step_execution_plans(
             root_plan=plan,
             recorded_step_parameters=_recorded_step_parameters,
+            recorded_provider_configurations=_recorded_step_provider_configurations,
             session_factory=session_factory,
             artifact_service=artifact_service,
             principal=principal,
@@ -2429,16 +2433,33 @@ async def compile_frozen_execution_plan(
     compilation_parameters = dict(initial_parameters)
     compilation_parameters.pop("omnigentExecutionPlan", None)
     compilation_parameters.pop("resolvedSkillsetRef", None)
-    recorded_plan = await SessionExecutionPlanStore(db_session).load(binding.plan_ref)
+    plan_store = SessionExecutionPlanStore(db_session)
+    recorded_plan = await plan_store.load(binding.plan_ref)
     if recorded_plan is None:
         raise ValueError("the recorded execution plan is unavailable")
     recorded_plan = verify_execution_plan_envelope(recorded_plan)
     recorded_steps = initial_parameters.get("omnigentStepExecutionPlans")
     if logical_step_plan_digests(recorded_steps) != (recorded_plan.payload.logicalStepPlans or {}):
         raise ValueError("logical step plan authority conflicts with its recorded root plan")
+    recorded_step_configurations = None
+    if not (refresh_step_selections or refresh_provider_configuration):
+        recorded_step_configurations = {}
+        for step_id, step in (recorded_steps or {}).items():
+            step_binding = OmnigentExecutionPlanBinding.model_validate(
+                step.get("omnigentExecutionPlan")
+            )
+            saved_step = await plan_store.load(step_binding.plan_ref)
+            if saved_step is None:
+                raise ValueError(f"the recorded execution plan for step {step_id} is unavailable")
+            saved_step = verify_execution_plan_envelope(saved_step)
+            if saved_step.planRef != step_binding.plan_ref:
+                raise ValueError(f"the recorded execution plan for step {step_id} conflicts with its binding")
+            # Each step owns its settings, including a legacy plan's absent
+            # snapshot; the root account's configuration cannot replace them.
+            recorded_step_configurations[step_id] = saved_step.payload.providerConfigurationSnapshot
     return await compile_and_persist_execution_plan(
         session_factory=None,
-        execution_plan_store=SessionExecutionPlanStore(db_session),
+        execution_plan_store=plan_store,
         artifact_service=artifact_service,
         principal=principal,
         workflow_id=workflow_id,
@@ -2454,6 +2475,7 @@ async def compile_frozen_execution_plan(
         access=access,
         _compile_step_plans=refresh_step_selections or bool(recorded_steps),
         _recorded_step_parameters=None if refresh_step_selections else recorded_steps,
+        _recorded_step_provider_configurations=recorded_step_configurations,
         _recorded_provider_configuration_snapshot=(
             recorded_plan.payload.providerConfigurationSnapshot
             if not (refresh_step_selections or refresh_provider_configuration) and any(

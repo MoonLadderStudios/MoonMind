@@ -299,8 +299,9 @@ The immutable root plan binds each complete step handoff by digest and retains
 its verified artifact inputs for saved schedules. Admission, planning and
 continuation reject a replaced or missing handoff. Retained plans
 without this field preserve their original bytes and plan identities.
-Frozen successors retain each step's saved Profile snapshot. Exact reruns
-inherit their admitted artifact grants before Temporal can start.
+Frozen successors retain each step's saved Profile and provider configuration
+snapshots. Exact reruns inherit their admitted artifact grants before Temporal
+can start.
 Generated remediation, verification and evidence retries inherit their controller's
 admitted step plan; a replay patch preserves older histories' recorded requests.
 Schedule admission shares ordinary submission's step ID defaults and aliases.
