@@ -113,9 +113,9 @@ class ManagedRuntimeStrategy(ABC):
         requested_model = parameters.get("model")
 
         if requested_model:
-            overrides = getattr(profile, "model_overrides", {}) or {}
-            resolved = overrides.get(requested_model, requested_model)
-            return resolved
+            from moonmind.workflows.executions.model_resolver import apply_profile_model_alias
+
+            return apply_profile_model_alias(profile, requested_model)
 
         if parameters.get("modelTier") is not None:
             from moonmind.workflows.executions.model_resolver import resolve_model_effort
