@@ -516,7 +516,9 @@ def test_main_rejects_interactive_stdin(monkeypatch, capsys) -> None:
         "api_service/services/workspace_checkpoints.py",
         "moonmind/omnigent/bridge_store.py",
         "moonmind/workflows/temporal/workflows/run_bounded_story_loop.py",
+        # A deleted legacy recovery path must still select the replacement gate.
         "tests/integration/omnigent/test_embedded_recovery.py",
+        "tests/integration/omnigent/test_generic_native_durable_journey.py",
     ],
 )
 def test_cumulative_remediation_boundaries_select_reliability_journey(
@@ -550,7 +552,9 @@ def test_cumulative_remediation_boundaries_select_reliability_journey(
         # Omnigent compatibility, conformance, and fault fixtures/tooling.
         "tools/run_omnigent_live_conformance.py",
         "tools/build_omnigent_conformance_report.py",
+        # A deleted legacy recovery path must still select the replacement gate.
         "tests/integration/omnigent/test_embedded_recovery.py",
+        "tests/integration/omnigent/test_generic_native_durable_journey.py",
         "tests/unit/omnigent/test_conformance.py",
     ],
 )

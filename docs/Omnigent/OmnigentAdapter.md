@@ -80,13 +80,9 @@ The workflow request never supplies a Docker volume name, credential body, arbit
 
 The supported proxy topology uses the published Omnigent server and an unchanged upstream `omnigent-host`. MoonMind may configure, launch, observe, and stop the host, but it must not fork the host protocol or require MoonMind-specific runner behavior.
 
-The experimental embedded topology is governed by
-[Embedded host authentication compatibility](EmbeddedHostAuthCompatibility.md).
-Static and on-demand embedded rows remain unavailable independently until each
-has current credentialed stock-host evidence; implementation or hermetic
-fixtures alone do not establish support.
-
-Embedded compatibility mode, when enabled, must reuse upstream authentication and host/runner protocol components rather than inventing a MoonMind-only protocol.
+The experimental embedded transport has been removed. Recorded metadata,
+journals and captured artifacts remain readable without reconnecting it; see
+[retained embedded transport history](EmbeddedHostAuthCompatibility.md).
 
 ### 2.4 MoonMind remains the evidence authority
 

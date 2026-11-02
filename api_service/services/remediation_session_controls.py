@@ -105,7 +105,6 @@ class RemediationSessionControlService:
         from api_service.api.routers.omnigent_bridge_composition import (
             build_bridge_session_proxy,
             build_bridge_session_store,
-            build_embedded_host_facade,
         )
         from api_service.retrieval_capabilities import RetrievalCapabilityRegistry
         from moonmind.omnigent.bridge_config import (
@@ -140,25 +139,22 @@ class RemediationSessionControlService:
             run_id=target.pinned_run_id,
             params=params,
         )
+        if (row.metadata_ or {}).get("hostProtocolMode") in {
+            HOST_PROTOCOL_MODE_EMBEDDED,
+            "embedded",
+        }:
+            raise ValueError("The persisted embedded session transport is retired")
         config = self._config or resolve_bridge_config()
         store = self._store or build_bridge_session_store()
         proxy = self._proxy or build_bridge_session_proxy(
             config=config, forward_headers={}
         )
-        embedded_facade = (
-            build_embedded_host_facade(config, drain_retained_sessions=True)
-            if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
-            else None
-        )
-        facade, embedded = await native._resolve_session_control_facade(
+        facade, _ = await native._resolve_session_control_facade(
             session_id=row.omnigent_session_id,
             config=config,
             proxy=proxy,
-            embedded_facade=embedded_facade,
             store=store,
         )
-        if embedded and kind == "session.interrupt_turn":
-            raise ValueError("The persisted host protocol does not support interrupt")
         if facade is None:
             raise ValueError("The persisted session control owner is unavailable")
         event = BridgeSessionEventRequest(
@@ -297,7 +293,6 @@ class RemediationSessionControlService:
                     config=config,
                     actor=actor,
                     proxy=proxy,
-                    embedded_facade=facade if embedded else None,
                     registry=self._registry or RetrievalCapabilityRegistry(),
                     store=store,
                 )
