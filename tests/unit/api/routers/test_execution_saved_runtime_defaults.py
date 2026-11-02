@@ -684,9 +684,10 @@ async def test_recurring_equivalent_step_aliases_are_persisted_before_direct_cut
 @pytest.mark.parametrize("runtime", ["codex_cli", "claude_code"])
 @pytest.mark.parametrize("authored", [False, True])
 @pytest.mark.parametrize("selection", ["model", "effort", "tier"])
-async def test_native_step_model_overrides_keep_account_and_direct_requests(
-    saved_profile_submission, monkeypatch, runtime, authored, selection
+async def test_native_only_step_model_overrides_keep_account_and_direct_requests(
+    saved_profile_submission, runtime, authored, selection
 ):
+    from api_service.services.profile_execution_selection import profile_route_runtime
     from moonmind.workflows.executions.model_resolver import resolve_model_effort
 
     context = saved_profile_submission
@@ -698,10 +699,9 @@ async def test_native_step_model_overrides_keep_account_and_direct_requests(
     ]
     provider.default_model_tier = 1
     await context.session.commit()
-    monkeypatch.setattr(
-        "api_service.services.profile_execution_selection.profile_route_runtime",
-        AsyncMock(return_value="omnigent"),
-    )
+    # This Profile has no shared configuration. Independent model selections
+    # can use shared plans, but cannot make this native-only account shared.
+    assert await profile_route_runtime(context.session, None, provider) == runtime
     root = {
         "providerProfileRef": profile_id,
         "model": "root-model",

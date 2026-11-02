@@ -2802,6 +2802,10 @@ class TemporalExecutionService:
                     params.get("omnigentExecutionPlan")
                 )
                 != _admitted_execution_plan.binding
+                or params.get("omnigentStepExecutionPlans")
+                != _admitted_execution_plan.execution_parameters.get(
+                    "omnigentStepExecutionPlans"
+                )
             ):
                 raise TemporalExecutionValidationError(
                     "Execution input delegation conflicts with admitted plan authority"
@@ -2846,17 +2850,21 @@ class TemporalExecutionService:
                 # The application owns the canonical record and its entire
                 # verified grant closure. Lower-level operations only flush.
                 try:
-                    admitted_refs = (
-                        await link_verified_execution_plan_inputs_in_session(
+                    admitted_refs = []
+                    for admitted_plan in (
+                        _admitted_execution_plan,
+                        *_admitted_execution_plan.step_plans,
+                    ):
+                        linked_refs = await link_verified_execution_plan_inputs_in_session(
                             session=self._session,
-                            plan=_admitted_execution_plan.envelope,
-                            binding=_admitted_execution_plan.binding,
+                            plan=admitted_plan.envelope,
+                            binding=admitted_plan.binding,
                             workflow_id=workflow_id,
                             run_id=run_id,
                             namespace=self._namespace,
-                            access=_admitted_execution_plan.artifact_access,
+                            access=admitted_plan.artifact_access,
                         )
-                    )
+                        admitted_refs.extend(linked_refs)
                     record.artifact_refs = list(
                         dict.fromkeys([*record.artifact_refs, *admitted_refs])
                     )
@@ -3704,6 +3712,7 @@ class TemporalExecutionService:
             assert_plan_matches_deployed_runtime,
         )
         from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+        from moonmind.omnigent.harness_platform.execution_plan import logical_step_plan_digests
         from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
         from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 
@@ -3712,6 +3721,17 @@ class TemporalExecutionService:
             plan = await SessionExecutionPlanStore(self._session).load(
                 binding.plan_ref
             )
+            plans = [plan] if plan is not None else []
+            if plan is not None:
+                step_parameters = parameters.get("omnigentStepExecutionPlans")
+                if logical_step_plan_digests(step_parameters) != (getattr(plan.payload, "logicalStepPlans", None) or {}):
+                    raise ValueError("The recorded logical step plan authority changed")
+                for step in (step_parameters or {}).values():
+                    step_binding = OmnigentExecutionPlanBinding.model_validate(step["omnigentExecutionPlan"])
+                    step_plan = await SessionExecutionPlanStore(self._session).load(step_binding.plan_ref)
+                    if step_plan is None or step_binding.plan_digest != "sha256:" + step_plan.planRef.rsplit(":", 1)[-1]:
+                        raise ValueError("The recorded logical step plan is unavailable")
+                    plans.append(step_plan)
         except (ValidationError, TypeError, ValueError) as exc:
             raise TemporalExecutionRerunPlanError(
                 "Exact rerun cannot verify the recorded Omnigent execution plan. "
@@ -3725,7 +3745,8 @@ class TemporalExecutionService:
                 code="exact_rerun_execution_plan_unavailable",
             )
         try:
-            await assert_plan_matches_deployed_runtime(plan.payload)
+            for recorded_plan in plans:
+                await assert_plan_matches_deployed_runtime(recorded_plan.payload)
         except OmnigentDeploymentNotReady as exc:
             raise TemporalExecutionRerunPlanError(
                 "Exact rerun is waiting for deployment evidence. Retry the same "
@@ -6230,6 +6251,7 @@ class TemporalExecutionService:
             repository=repository,
             integration=None,
             summary=f"Rerun of {record.workflow_id}.",
+            _recovery_artifact_source=record,
         )
         return {
             "accepted": True,

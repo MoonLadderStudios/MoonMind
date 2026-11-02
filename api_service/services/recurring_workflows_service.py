@@ -563,6 +563,9 @@ class RecurringWorkflowsService:
                     plan=plan,
                     binding=binding,
                     access=access,
+                    admitted_step_plans=(target.get("initialParameters") or {}).get(
+                        "omnigentStepExecutionPlans"
+                    ),
                     planning_parameters=(
                         {
                             "system": {
@@ -1225,7 +1228,10 @@ class RecurringWorkflowsService:
         binds them at its own admission (``admit_occurrence_execution_plan``).
         """
 
+        from fastapi import HTTPException
+
         from api_service.services.omnigent_execution_plan_service import (
+            _workflow_payload,
             json_artifact_digest,
         )
         from api_service.services.omnigent_policies import (
@@ -1233,29 +1239,63 @@ class RecurringWorkflowsService:
             PolicyConflict,
             PolicyNotFound,
         )
+        from api_service.services.profile_execution_selection import (
+            profile_execution_selection,
+        )
 
         snapshot = initial_parameters.get("agentProfileSnapshot") or {}
+        policy_service = OmnigentPolicyService(self._session)
         try:
-            policy_snapshot = await OmnigentPolicyService(
-                self._session
-            ).resolve_runtime_snapshot(str(snapshot.get("launchPolicyRef") or ""))
+            policy_snapshot = await policy_service.resolve_runtime_snapshot(
+                str(snapshot.get("launchPolicyRef") or "")
+            )
         except (PolicyConflict, PolicyNotFound):
             # Compilation reports why this authority is not ready.
             return None
+        from api_service.db.models import ManagedAgentProviderProfile
+        from moonmind.runtime_intent import provider_profile_ref_from_mapping
+
+        def profile_inputs(profile):
+            return {name: getattr(profile, name, None) for name in (
+                "profile_id", "runtime_id", "provider_id", "default_model",
+                "default_effort", "default_model_tier", "model_tiers", "execution_configuration",
+            )}
+
+        profiles = {provider_profile.profile_id: profile_inputs(provider_profile)}
+        for step in _workflow_payload(initial_parameters).get("steps") or []:
+            if not isinstance(step, Mapping):
+                continue
+            profile_ref = provider_profile_ref_from_mapping(step.get("runtime") or {}) or provider_profile_ref_from_mapping(step)
+            if profile_ref and profile_ref not in profiles:
+                selected = await self._session.get(ManagedAgentProviderProfile, profile_ref)
+                if selected is None:
+                    return None
+                try:
+                    selection = await profile_execution_selection(self._session, selected, None)
+                    step_policy = await policy_service.resolve_runtime_snapshot(
+                        str(selection.get("launchPolicyRef") or "")
+                    )
+                except (HTTPException, PolicyConflict, PolicyNotFound):
+                    # The compiler reports unavailable step authority; never
+                    # reuse a cached plan whose current selection is unknown.
+                    return None
+                profiles[profile_ref] = {
+                    **profile_inputs(selected),
+                    "resolvedExecutionConfiguration": {
+                        key: selection[key] for key in ("profileId", "version", "digest", "launchPolicyRef")
+                    },
+                    "policySnapshotDigest": json_artifact_digest(step_policy),
+                }
         return json_artifact_digest(
             {
                 "initialParameters": {
                     key: value
                     for key, value in initial_parameters.items()
-                    if key not in {"omnigentExecutionPlan", "resolvedSkillsetRef"}
+                    if key not in {"omnigentExecutionPlan", "resolvedSkillsetRef", "omnigentStepExecutionPlans"}
                 },
                 "runtimeProviderTarget": target.get("runtimeProviderTarget"),
                 "taskInputSnapshotDigest": binding.task_input_snapshot_digest,
-                "providerProfile": {
-                    "profileId": getattr(provider_profile, "profile_id", None),
-                    "runtimeId": getattr(provider_profile, "runtime_id", None),
-                    "providerId": getattr(provider_profile, "provider_id", None),
-                },
+                "providerProfiles": profiles,
                 "policySnapshotDigest": json_artifact_digest(policy_snapshot),
             }
         )
@@ -1300,6 +1340,7 @@ class RecurringWorkflowsService:
             access=await frozen_execution_artifact_access(
                 self._session, binding, workflow_id=workflow_id
             ),
+            refresh_step_selections=True,
         )
 
     async def admit_occurrence_execution_plan(
@@ -1493,14 +1534,7 @@ class RecurringWorkflowsService:
         if current_target_payload is not None:
             target["runtimeProviderTarget"] = current_target_payload
         target.pop(_RETIRED_SCHEDULE_TARGET_POLICY_KEY, None)
-        initial_parameters["omnigentExecutionPlan"] = (
-            persisted_plan.binding.model_dump(
-                mode="json", by_alias=True, exclude_none=True
-            )
-        )
-        initial_parameters["resolvedSkillsetRef"] = (
-            persisted_plan.resolved_skillset_ref
-        )
+        initial_parameters.update(persisted_plan.execution_parameters)
         target["initialParameters"] = initial_parameters
         target["agentProfileSnapshot"] = dict(snapshot)
         if "agentProfile" in initial_parameters:
@@ -1900,14 +1934,7 @@ class RecurringWorkflowsService:
             raise RecurringWorkflowValidationError(
                 f"invalid Omnigent schedule authority: {exc}"
             ) from exc
-        initial_parameters["omnigentExecutionPlan"] = (
-            persisted_plan.binding.model_dump(
-                mode="json", by_alias=True, exclude_none=True
-            )
-        )
-        initial_parameters["resolvedSkillsetRef"] = (
-            persisted_plan.resolved_skillset_ref
-        )
+        initial_parameters.update(persisted_plan.execution_parameters)
         # Record the creation result so the first refresh compares against
         # the initially compiled target instead of None
         # (MoonLadderStudios/MoonMind#3988).
