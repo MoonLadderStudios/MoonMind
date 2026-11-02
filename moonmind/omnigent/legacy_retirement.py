@@ -246,8 +246,9 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "already the unset default."
         ),
         missingOutcome=(
-            "OAuth Profiles with per-run environment, file or HOME settings; "
-            "Claude key Profiles with file templates, HOME overrides, "
+            "OAuth Profiles with per-run environment outside the supported "
+            "nonsecret tuning, file or HOME settings; Claude key Profiles "
+            "with file templates, HOME overrides, "
             "uncarried environment settings or endpoints outside the installed "
             "egress policy. Exact API-key Profiles and declared MiniMax "
             "environment bundles run through ``omnigent-provider-config@1`` "

@@ -26,6 +26,7 @@ from moonmind.omnigent.harness_platform.materializers import (
     OPENCODE_AUTH_UID,
     PROVIDER_CONFIG_MATERIALIZER_REF,
     ProviderConfigEndpoint,
+    ProviderLaunchEnvironment,
     build_opencode_auth_json_bytes,
 )
 from moonmind.omnigent.provider_leases import AcquiredProviderLease
@@ -98,6 +99,7 @@ class CredentialMaterializationContext:
     # The endpoint an API-key Provider Profile declares; ``None`` uses the
     # provider config's default route endpoints.
     provider_endpoint: ProviderConfigEndpoint | None = None
+    provider_launch_environment: ProviderLaunchEnvironment | None = None
 
 
 class DockerCommandBackend(Protocol):
@@ -914,6 +916,13 @@ class DockerOauthHomeMaterializer(_DockerMaterializerBackendMixin):
     ) -> CredentialRuntimeHandle:
         acquired = context.acquired
         home = context.profile_credential_home
+        launch_environment = context.provider_launch_environment
+        if launch_environment is not None and self.ref != "claude-oauth-home@1":
+            context.secrets.clear()
+            raise HarnessPlatformError(
+                "launch tuning does not belong to this OAuth materializer",
+                code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+            )
         if home is None or home.volume_ref == "" or home.target_path == "":
             context.secrets.clear()
             raise HarnessPlatformError(
@@ -1032,6 +1041,10 @@ class DockerOauthHomeMaterializer(_DockerMaterializerBackendMixin):
                 "credentialGeneration": acquired.credential_generation,
                 "materializerRef": self.ref,
                 "attachments": [attachment],
+                "runtimeEnvironment": (
+                    launch_environment.launchEnvironment
+                    if launch_environment is not None else {}
+                ),
                 "cleanupRef": f"credential-cleanup:sha256:{digest}",
                 "attestationRef": attestation_ref,
             }
@@ -1392,6 +1405,12 @@ class OmnigentCredentialProvisioningService:
                                     getattr(plan.payload, "omnigentVersion", "") or ""
                                 ),
                                 provider_endpoint=provider_endpoint,
+                                provider_launch_environment=(
+                                    configurations.get(slot)
+                                    if configurations is not None
+                                    and isinstance(configurations.get(slot), ProviderLaunchEnvironment)
+                                    else None
+                                ),
                             )
                         )
                     finally:
