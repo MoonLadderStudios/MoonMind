@@ -173,8 +173,8 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "moonmind.workflows.temporal.runtime.strategies:RUNTIME_STRATEGIES"
         ),
         consumer=(
-            "Opaque serialized ``codex_cli`` plans, native extension inputs/direct targets, "
-            "native choices with unresolved step pools or unsupported tier options, "
+            "Untranslated serialized ``codex_cli`` plans and native extensions/direct targets, "
+            "native choices with retained context/workspaces or unsupported tier options, "
             "and Codex key Profiles the provider config cannot "
             "carry, which ``profile_route_runtime`` routes here; their "
             "queued starts, retries and recovery, "
@@ -193,7 +193,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "already the unset default."
         ),
         missingOutcome=(
-            "OAuth Profiles with per-run environment, file or HOME settings; "
+            "OAuth Profiles with protected or untranslated per-run environment, file or HOME settings; "
             "Codex key Profiles the Omnigent provider config cannot carry "
             "exactly: additional files, uncarried tool/launch settings, authentication "
             "outside the selected key SecretRef, or endpoints the existing "
@@ -201,8 +201,12 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "configuration, including the rendered managed MiniMax recipe, "
             "uses ``omnigent-provider-config@1`` and its private Codex config, "
             "including developer instructions, project-document discovery and history preferences. "
-            "Opaque serialized inputs, unresolved step pools and native tier options "
-            "still need equivalent shared-plan handoffs. Fixed step accounts "
+            "Serialized inputs without original admitted snapshots, untranslated native contexts/workspaces and tier "
+            "parameters still need equivalent shared-plan handoffs. Pool accounts bind "
+            "their selected plan to the existing fenced grant; Codex same-epoch successors "
+            "carry selected account, context and verified workspace through the parent. "
+            "Fresh fixed and implicit accounts use the same dispatch handoff; "
+            "queued older parents without it retain native dispatch. Fixed step accounts "
             "already have their own plans; the root cannot authorize another account. "
         ),
     ),
@@ -223,8 +227,8 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "moonmind.workflows.temporal.runtime.strategies:RUNTIME_STRATEGIES"
         ),
         consumer=(
-            "Opaque serialized ``claude_code`` plans, native extension inputs/direct targets "
-            "and unresolved step pools or unsupported tier options; Claude "
+            "Untranslated serialized ``claude_code`` plans and native extensions/direct targets "
+            "and native contexts/workspaces or unsupported tier options; Claude "
             "Provider Profiles no Omnigent configuration accepts (key "
             "Profiles whose launch environment the provider config cannot "
             "carry, and every Claude Profile while generic Claude is "
@@ -243,16 +247,18 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "already the unset default."
         ),
         missingOutcome=(
-            "OAuth Profiles with per-run environment, file or HOME settings; "
-            "Claude key Profiles with file templates, HOME overrides, "
+            "OAuth Profiles with per-run environment outside the supported "
+            "nonsecret tuning and safe shell values, file or HOME settings; Claude key Profiles "
+            "with file templates, HOME overrides, "
             "uncarried environment settings or endpoints outside the installed "
             "egress policy. Exact API-key Profiles and declared MiniMax "
             "environment bundles run through ``omnigent-provider-config@1`` "
             "with their endpoint, model pins and non-secret launch tuning. "
             "Native Claude command rendering "
             "already uses the shared renderer through the admitted harness. "
-            "Opaque serialized inputs, unresolved step pools and native tier options "
-            "still need an equivalent immutable shared-plan handoff."
+            "Serialized inputs without original admitted snapshots, native contexts/workspaces and tier parameters "
+            "still need an equivalent immutable shared-plan handoff. Fresh fixed, "
+            "implicit and pool accounts bind their selected plan to the existing fenced grant."
         ),
     ),
     LegacyPathRecord(

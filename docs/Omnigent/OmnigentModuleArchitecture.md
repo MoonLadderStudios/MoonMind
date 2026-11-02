@@ -273,8 +273,24 @@ deletion removes its row in the same change rather than leaving a stale entry.
 
 Direct Codex/Claude and AgentSession adapters retain recorded work, opaque
 serialized plans, native extension inputs/direct targets, Profiles without exact shared
-translation, and per-step pools or native options without an equivalent plan
-handoff. Fixed step accounts, harnesses and distinct model/effort pairs have
+translation, and native context or options without an equivalent plan handoff.
+Codex/Claude pool steps resolve their account at dispatch through the existing
+Profile Manager, then bind that account's immutable plan to the same fenced slot.
+Preparation retries reuse the plan, recorded Skill manifest and selected account's
+model-resolution evidence without another account choice or capacity unit. Later
+Profile edits cannot change that evidence; ordinary explicit metadata keeps its
+existing precedence over tier defaults. Codex same-epoch successors carry the selected
+account, durable context and verified saved workspace through the parent,
+including Continue-As-New and provider cooldown retries. Restoring that workspace
+replaces its inherited scratch source; replay preserves older recorded requests.
+Old parents without this handoff keep native dispatch.
+Fresh native steps with equivalent configuration use this same fenced handoff
+after fixed, implicit or pool account selection, without rewriting their stored
+submission. Older parents without the handoff retain their recorded commands.
+Untranslated native context/workspaces and tier parameters retain their adapter.
+An admitted shared context cannot fall back to a fresh direct session when a
+later Profile edit introduces unsupported settings; the step reports that gap.
+Fixed step accounts, harnesses and distinct model/effort pairs have
 their own immutable plans compiled by the same admission owner, linked
 through the existing artifact owner and carried across successor attempts.
 An explicit root rollout target constrains the root plan; independent steps
@@ -283,8 +299,9 @@ The immutable root plan binds each complete step handoff by digest and retains
 its verified artifact inputs for saved schedules. Admission, planning and
 continuation reject a replaced or missing handoff. Retained plans
 without this field preserve their original bytes and plan identities.
-Frozen successors retain each step's saved Profile snapshot. Exact reruns
-inherit their admitted artifact grants before Temporal can start.
+Frozen successors retain each step's saved Profile and provider configuration
+snapshots. Exact reruns inherit their admitted artifact grants before Temporal
+can start.
 Generated remediation, verification and evidence retries inherit their controller's
 admitted step plan; a replay patch preserves older histories' recorded requests.
 Schedule admission shares ordinary submission's step ID defaults and aliases.
@@ -299,16 +316,27 @@ Fresh serialized canonical agent workflows use the same product admission compil
 their title, failure policy and accepted retry identity survive translation.
 Raw deferred step-account matching and tool-only boundary validation remain intact.
 Replaced defaults never select ambient credentials.
-OAuth-home delivery attaches the enrollment-owned volume; it does not apply
-additional per-run Profile environment, file or HOME settings. Such explicit
-native choices keep their adapter until a shared configuration handoff carries
-those settings. Recorded plans retain their original materializer identity.
+OAuth-home delivery attaches the enrollment-owned volume. Codex/Claude nonsecret
+shell settings use the existing project-value guard and admitted configuration
+artifact; native executable wrappers restore them after child environment filtering
+without overriding private HOME or editing the enrolled home. Templated or protected
+environment, file or HOME choices retain their native adapter until an equivalent
+handoff exists.
+Recorded plans retain their original materializer identity.
 Profile-bound execution and its OAuth host launcher admit no new plans;
 they retain queued starts, retries and cleanup under their recorded authority. Supported
 static-connected Codex/Claude hosts use the shared lifecycle.
 API-key Codex and Claude Profiles that translate exactly, including MiniMax's
 declared Claude environment bundle and Codex Responses file configuration, run
 on the shared lifecycle with their endpoint, model pins and non-secret tuning.
+New plans reference a verified artifact containing those settings per credential
+slot, so queued starts and frozen successors keep their admitted configuration
+after a Profile edit. Refused successor cleanup preserves the original artifact.
+Fresh scheduled occurrences resolve current settings without changing recorded
+step selections.
+Secret values still resolve
+after acquisition under the existing credential-generation fence. Older plans
+without this snapshot retain their recorded interpretation.
 Codex developer instructions, project-instruction discovery and history preferences
 also reach its private session config. Native Profile aliases translate explicit
 model overrides once during shared compilation, using the same lookup as direct

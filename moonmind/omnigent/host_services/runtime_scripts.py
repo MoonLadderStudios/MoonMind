@@ -21,6 +21,15 @@ def validate_provider_literal_launch_environment(
     """Validate the non-secret tuning values carried by the shared host."""
     unknown = set(values) - PROVIDER_LITERAL_LAUNCH_ENV
     if unknown:
+        from moonmind.omnigent.host_services.project_environment import (
+            is_safe_project_environment_entry,
+        )
+
+        unknown = {
+            key for key in unknown
+            if not is_safe_project_environment_entry(key, values[key])
+        }
+    if unknown:
         raise ValueError(
             f"unsupported provider launch environment keys: {sorted(unknown)}"
         )
@@ -144,6 +153,7 @@ class OmnigentRuntimeScriptService:
         control_credential_available: bool = True,
         enable_opencode_runtime: bool = False,
         enable_claude_runtime: bool = False,
+        enable_codex_runtime: bool = False,
         runtime_environment: dict[str, str] | None = None,
     ) -> tuple[str, dict[str, str]]:
         generation_checks: list[str] = []
@@ -223,7 +233,17 @@ class OmnigentRuntimeScriptService:
                 if key not in allowed_runtime_environment
             }
             if literals:
-                if handle.get("materializerRef") != "omnigent-provider-config@1":
+                if not (
+                    handle.get("materializerRef") == "omnigent-provider-config@1"
+                    or (
+                        handle.get("materializerRef") == "claude-oauth-home@1"
+                        and enable_claude_runtime
+                    )
+                    or (
+                        handle.get("materializerRef") == "codex-oauth-home@1"
+                        and enable_codex_runtime
+                    )
+                ):
                     raise ValueError(
                         "provider launch environment requires its credential materializer"
                     )
@@ -231,7 +251,11 @@ class OmnigentRuntimeScriptService:
             for key, value in selected_environment.items():
                 if key in literals:
                     existing = environment.get(key)
-                    if existing is not None and existing != value:
+                    if (
+                        key in provider_environment and provider_environment[key] != value
+                        or existing is not None and existing != value
+                        and key not in project_environment
+                    ):
                         raise ValueError(
                             f"conflicting credential runtime environment {key}"
                         )
@@ -260,7 +284,11 @@ class OmnigentRuntimeScriptService:
                         )
                     codex_configuration = True
                 environment[key] = str(value)
-        if codex_configuration or require_codex_context:
+        profile_environment = dict(provider_environment)
+        codex_wrapper = codex_configuration or require_codex_context or (
+            enable_codex_runtime and bool(profile_environment)
+        )
+        if codex_wrapper:
             provider_environment.update(
                 {
                     "CODEX_HOME": "/home/app/.codex",
@@ -268,6 +296,10 @@ class OmnigentRuntimeScriptService:
                 }
             )
             environment.update(provider_environment)
+        runtime_env_files.update(
+            {key: f"provider-{key}" for key in profile_environment}
+        )
+        context_environment = {**supplied_runtime_environment, **profile_environment}
         control_path = (
             f"{control_attachment['targetPath']}/api-token"
             if control_attachment is not None and control_credential_available
@@ -323,12 +355,12 @@ class OmnigentRuntimeScriptService:
         runtime_context_writes = "".join(
             f"printf '%s\\n' \"${key}\" > {runtime_context_dir}/{filename}; "
             for key, filename in runtime_env_files.items()
-            if key in supplied_runtime_environment
+            if key in context_environment
         )
         runtime_context_exports = "".join(
             f"'export {key}=$(cat {runtime_context_dir}/{filename})' "
             for key, filename in runtime_env_files.items()
-            if key in supplied_runtime_environment
+            if key in context_environment
         )
         # Native harnesses filter their child environment after the runner
         # passthrough. Restore the same run-owned, non-secret projection at
@@ -377,7 +409,7 @@ class OmnigentRuntimeScriptService:
                 f"> {_RUNTIME_BIN_DIR}/moonmind; chmod 0700 {_RUNTIME_BIN_DIR}/moonmind; "
             )
         codex_setup = f"rm -f {_RUNTIME_BIN_DIR}/codex {runtime_context_dir}/codex-configuration.py; "
-        if codex_configuration or require_codex_context:
+        if codex_wrapper:
             source_path = (
                 Path(__file__).resolve().parents[2]
                 / "provider_profiles"
@@ -389,6 +421,14 @@ class OmnigentRuntimeScriptService:
                 f'codex_binary=$(command -v codex); test -n "$codex_binary"; '
                 f"printf '%s\\n' {shlex.quote(source)} > {helper}; chmod 0700 {helper}; "
                 f'python3 {helper} prepare "${{MOONMIND_CODEX_PROFILE_CONFIG_FILE:--}}" "$codex_binary" {_RUNTIME_BIN_DIR}/codex {context_wrapper}; '
+            )
+        claude_wrapper = f"{_RUNTIME_BIN_DIR}/claude"
+        claude_setup = f"rm -f {claude_wrapper}; "
+        if enable_claude_runtime and profile_environment:
+            claude_setup += (
+                'claude_binary=$(command -v claude); test -n "$claude_binary"; '
+                f"printf '%s\\n' '#!/bin/sh' 'exec {context_wrapper} '\"\\\"$claude_binary\\\"\"' \"$@\"' "
+                f"> {claude_wrapper}; chmod 0700 {claude_wrapper}; "
             )
         script = (
             "set -eu; "
@@ -403,6 +443,7 @@ class OmnigentRuntimeScriptService:
             'IFS=$oldifs; test -d "$MOONMIND_ACTIVE_SKILLS_DIR"; '
             + context_setup
             + codex_setup
+            + claude_setup
             + 'if [ "${MOONMIND_OPENCODE_RUNTIME:-0}" = 1 ]; then '
             "mkdir -p "
             + opencode_data

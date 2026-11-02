@@ -6,10 +6,11 @@ Trusted boundary that turns leased Provider Profile + generation into runtime st
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -330,6 +331,101 @@ class ProviderConfigEndpoint(BaseModel):
         return validate_provider_literal_launch_environment(value)
 
 
+class ProviderLaunchEnvironment(BaseModel):
+    """Admitted nonsecret tuning, independent of an enrolled OAuth home."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    launchEnvironment: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("launchEnvironment")
+    @classmethod
+    def _validate_environment(cls, value):
+        from moonmind.omnigent.host_services.runtime_scripts import (
+            validate_provider_literal_launch_environment,
+        )
+
+        return validate_provider_literal_launch_environment(value)
+
+
+PROVIDER_CONFIGURATION_MATERIALIZERS = frozenset(
+    {PROVIDER_CONFIG_MATERIALIZER_REF, "claude-oauth-home@1", "codex-oauth-home@1"}
+)
+
+
+class ProviderConfigurationSlot(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    providerProfileRef: str
+    materializerRef: Literal["omnigent-provider-config@1", "claude-oauth-home@1", "codex-oauth-home@1"]
+    endpoint: ProviderConfigEndpoint | None
+    launchEnvironment: dict[str, str] = Field(
+        default_factory=dict, exclude_if=lambda value: not value,
+    )
+
+    @model_validator(mode="after")
+    def _validate_delivery(self):
+        if self.materializerRef in {"claude-oauth-home@1", "codex-oauth-home@1"}:
+            if self.endpoint is not None:
+                raise ValueError("OAuth configuration cannot replace its credential owner")
+            ProviderLaunchEnvironment(launchEnvironment=self.launchEnvironment)
+        elif self.launchEnvironment:
+            raise ValueError("provider-config tuning belongs to its endpoint")
+        return self
+
+
+def provider_configuration_snapshot_bytes(bindings, configurations) -> bytes:
+    slots = {
+        slot: ProviderConfigurationSlot(
+            providerProfileRef=bindings[slot].providerProfileRef,
+            materializerRef=bindings[slot].materializerRef,
+            endpoint=endpoint if not isinstance(endpoint, ProviderLaunchEnvironment) else None,
+            launchEnvironment=(
+                endpoint.launchEnvironment
+                if isinstance(endpoint, ProviderLaunchEnvironment) else {}
+            ),
+        ).model_dump(mode="json")
+        for slot, endpoint in configurations.items()
+    }
+    return json.dumps(slots, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+
+
+def load_provider_configuration_snapshot(content, snapshot, bindings):
+    if "sha256:" + hashlib.sha256(content).hexdigest() != snapshot.contentDigest:
+        raise ValueError("provider configuration snapshot digest does not match")
+    slots = json.loads(content)
+    expected = {
+        slot: binding for slot, binding in bindings.items()
+        if binding.materializerRef == "omnigent-provider-config@1"
+    }
+    permitted = {
+        slot: binding for slot, binding in bindings.items()
+        if binding.materializerRef in PROVIDER_CONFIGURATION_MATERIALIZERS
+    }
+    # Earlier snapshots captured provider-config slots only. Their omitted
+    # OAuth settings retain the original empty delivery; new plans capture it.
+    if (
+        not isinstance(slots, dict)
+        or not set(expected) <= set(slots)
+        or not set(slots) <= set(permitted)
+    ):
+        raise ValueError("provider configuration snapshot slots do not match")
+    result = {}
+    for slot in slots:
+        binding = permitted[slot]
+        saved = ProviderConfigurationSlot.model_validate(slots[slot])
+        if (
+            saved.providerProfileRef != binding.providerProfileRef
+            or saved.materializerRef != binding.materializerRef
+        ):
+            raise ValueError("provider configuration snapshot account does not match")
+        result[slot] = (
+            ProviderLaunchEnvironment(launchEnvironment=saved.launchEnvironment)
+            if saved.materializerRef in {"claude-oauth-home@1", "codex-oauth-home@1"} else saved.endpoint
+        )
+    return result
+
+
 def _enum_value(raw: Any) -> str:
     return str(getattr(raw, "value", raw) or "").strip()
 
@@ -345,8 +441,14 @@ def untranslated_oauth_launch_options(profile: Any) -> str | None:
         or _enum_value(getattr(profile, "credential_source", None)) != "oauth_volume"
     ):
         return None
-    fields = [name for name in ("env_template", "file_templates")
-              if getattr(profile, name, None)]
+    fields = ["file_templates"] if getattr(profile, "file_templates", None) else []
+    if getattr(profile, "env_template", None):
+        try:
+            environment = ProviderLaunchEnvironment(launchEnvironment=profile.env_template)
+            if any("{{" in value for value in environment.launchEnvironment.values()):
+                fields.append("env_template")
+        except ValueError:
+            fields.append("env_template")
     home_overrides = dict(getattr(profile, "home_path_overrides", None) or {})
     if home_overrides:
         # OAuth enrollment records these selectors even for an uncustomized
@@ -369,6 +471,33 @@ def untranslated_oauth_launch_options(profile: Any) -> str | None:
     if fields:
         return "OAuth-home delivery does not apply per-run Profile settings: " + ", ".join(fields)
     return None
+
+
+def snapshot_provider_configuration(
+    profile: Any,
+) -> ProviderConfigEndpoint | ProviderLaunchEnvironment | None:
+    """Capture nonsecret provider settings while admission owns the Profile."""
+    if (
+        str(getattr(profile, "runtime_id", "")) in {"codex_cli", "claude_code"}
+        and _enum_value(getattr(profile, "credential_source", None)) == "oauth_volume"
+    ):
+        reason = untranslated_oauth_launch_options(profile)
+        if reason:
+            raise HarnessPlatformError(
+                reason, code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+            )
+        return ProviderLaunchEnvironment(
+            launchEnvironment=dict(getattr(profile, "env_template", None) or {}),
+        )
+    if not is_api_key_launch_profile(profile):
+        return None
+    endpoint, reason = provider_config_endpoint(profile)
+    if endpoint is None:
+        raise HarnessPlatformError(
+            f"API-key Provider Profile cannot run on Omnigent: {reason}",
+            code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+        )
+    return endpoint
 
 
 def _omnigent_egress_admits(url: str) -> bool:

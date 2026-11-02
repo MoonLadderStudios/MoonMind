@@ -583,6 +583,10 @@ class DockerOmnigentHostLauncher:
                 item.harnessId == "claude-native"
                 for item in host_class.declaredHarnessImplementations
             ),
+            enable_codex_runtime=any(
+                item.harnessId == "codex-native"
+                for item in host_class.declaredHarnessImplementations
+            ),
             runtime_environment=supplied_runtime_environment,
         )
         command = [

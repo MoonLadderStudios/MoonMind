@@ -108,6 +108,21 @@ class AgentSkillsActivities:
 
         updated_skills = []
         for skill in resolved_set.skills:
+            if skill.content_ref and skill.provenance.source_kind.value == "deployment":
+                # The server-side resolver selected this catalog content.
+                # Bind its verified bytes to this execution now, so queued
+                # launches keep their admitted Skill after catalog removal.
+                content_id = str(skill.content_ref).removeprefix("artifact://").removeprefix("artifact:")
+                access = ArtifactAccessContext.for_execution(activity_info.workflow_id)._with_verified_inputs((content_id,))
+                _, payload = await self._artifact_service.read(artifact_id=content_id, access=access)
+                if "sha256:" + hashlib.sha256(payload).hexdigest() != skill.content_digest:
+                    raise ValueError("selected catalog Skill differs from its recorded digest")
+                await self._artifact_service.link_artifact(
+                    artifact_id=content_id, principal=f"workflow:{activity_info.workflow_id}",
+                    execution_ref=ExecutionRef(namespace=activity_info.namespace,
+                        workflow_id=activity_info.workflow_id, run_id=activity_info.workflow_run_id,
+                        link_type="input.agent_skill_body"),
+                )
             if skill.content_ref or not skill.provenance.source_path:
                 updated_skills.append(skill)
                 continue
