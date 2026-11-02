@@ -3863,10 +3863,9 @@ async def run_omnigent_execution(
             finally:
                 await cancel_and_wait(heartbeat_task)
                 await cancel_and_wait(stream_task)
+                if observation_diagnostics:
+                    external_state["observationDiagnostics"] = observation_diagnostics
             await journal.flush()
-
-            if observation_diagnostics:
-                external_state["observationDiagnostics"] = observation_diagnostics
 
             final_snapshot_observed_at: float | None = None
             final_snapshot_completed_at: float | None = None
