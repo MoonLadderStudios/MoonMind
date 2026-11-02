@@ -174,7 +174,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         ),
         consumer=(
             "Opaque serialized ``codex_cli`` plans, native extension inputs/direct targets, "
-            "native choices with unresolved step pools or unsupported tier options, "
+            "native choices with retained context/workspaces or unsupported tier options, "
             "and Codex key Profiles the provider config cannot "
             "carry, which ``profile_route_runtime`` routes here; their "
             "queued starts, retries and recovery, "
@@ -201,8 +201,11 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "configuration, including the rendered managed MiniMax recipe, "
             "uses ``omnigent-provider-config@1`` and its private Codex config, "
             "including developer instructions, project-document discovery and history preferences. "
-            "Opaque serialized inputs, unresolved step pools and native tier options "
-            "still need equivalent shared-plan handoffs. Fixed step accounts "
+            "Opaque serialized inputs, untranslated native contexts/workspaces and tier "
+            "parameters still need equivalent shared-plan handoffs. Pool accounts bind "
+            "their selected plan to the existing fenced grant; Codex same-epoch successors "
+            "carry selected account, context and verified workspace through the parent. "
+            "Queued older parents without that handoff retain native dispatch. Fixed step accounts "
             "already have their own plans; the root cannot authorize another account. "
         ),
     ),
@@ -224,7 +227,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         ),
         consumer=(
             "Opaque serialized ``claude_code`` plans, native extension inputs/direct targets "
-            "and unresolved step pools or unsupported tier options; Claude "
+            "and native contexts/workspaces or unsupported tier options; Claude "
             "Provider Profiles no Omnigent configuration accepts (key "
             "Profiles whose launch environment the provider config cannot "
             "carry, and every Claude Profile while generic Claude is "
@@ -251,8 +254,9 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "with their endpoint, model pins and non-secret launch tuning. "
             "Native Claude command rendering "
             "already uses the shared renderer through the admitted harness. "
-            "Opaque serialized inputs, unresolved step pools and native tier options "
-            "still need an equivalent immutable shared-plan handoff."
+            "Opaque serialized inputs, native contexts/workspaces and tier parameters "
+            "still need an equivalent immutable shared-plan handoff. Fresh pool "
+            "accounts bind their selected plan to the existing fenced grant."
         ),
     ),
     LegacyPathRecord(

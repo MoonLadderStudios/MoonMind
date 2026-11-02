@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from api_service.db.models import TemporalArtifactRetentionClass
 from api_service.services.provider_profile_runtime import OMNIGENT_RUNTIME_ID
@@ -66,6 +66,10 @@ from moonmind.omnigent.harness_platform.materializers import (
     is_api_key_launch_profile,
     materializer_ref_for_profile,
     materializer_ref_for_provider,
+    snapshot_provider_configuration,
+    provider_configuration_snapshot_bytes,
+    ProviderConfigurationSnapshotRef,
+    load_provider_configuration_snapshot,
 )
 from moonmind.omnigent.harness_platform.planner import (
     compile_execution_plan,
@@ -532,8 +536,49 @@ async def _resolve_and_persist_skills(
     initial_parameters: Mapping[str, Any],
     db_session: Any | None = None,
     access: ArtifactAccessContext,
+    recorded_skillset_ref: str | None = None,
 ) -> tuple[AgentResolvedSkillSet, str, str, tuple[str, ...]]:
     """Resolve once at admission and persist exact content plus its manifest."""
+
+    if recorded_skillset_ref:
+        # Dispatch-time account selection happens after UserWorkflow resolved
+        # its Skill. Read that execution-granted immutable snapshot rather
+        # than consulting a catalog that may have changed during the wait.
+        from moonmind.workflows.temporal.artifacts import ArtifactDependency
+
+        manifest_id = recorded_skillset_ref.removeprefix("artifact://").removeprefix("artifact:")
+        artifact, body = await artifact_service.read(artifact_id=manifest_id, access=access)
+        frozen = json.loads(body)
+        resolved = AgentResolvedSkillSet.model_validate(frozen)
+        dependencies = [ArtifactDependency(artifact_id=manifest_id, sha256=artifact.sha256,
+                                           required=True, role="input.original_skill_snapshot")]
+        for skill in resolved.skills:
+            if not skill.content_ref or not str(skill.content_digest or "").startswith("sha256:"):
+                raise ValueError("recorded Skill snapshot lacks immutable content evidence")
+            content_id = str(skill.content_ref).removeprefix("artifact://").removeprefix("artifact:")
+            # A readable manifest is not authority over arbitrary referenced
+            # content. Keep the original execution's grants before sealing a
+            # new dependency closure.
+            _, content = await artifact_service.read(artifact_id=content_id, access=access)
+            if "sha256:" + hashlib.sha256(content).hexdigest() != skill.content_digest:
+                raise ValueError("recorded Skill content does not match its admitted digest")
+            dependencies.append(ArtifactDependency(
+                artifact_id=content_id,
+                sha256=skill.content_digest.removeprefix("sha256:"), required=True, role="input.skill_content",
+            ))
+        # Native manifests predate canonical JSON storage. Preserve their
+        # exact document in the shared serialization and retain the original
+        # artifact in the verified dependency closure.
+        shared_ref, shared_digest = await persist_json_artifact(
+            artifact_service=artifact_service, principal=principal,
+            artifact_class="omnigent.resolved_skill_set", payload=frozen,
+        )
+        await artifact_service.record_verified_dependencies(
+            root_artifact_id=shared_ref, dependencies=tuple(dependencies),
+            access=access._with_verified_inputs((shared_ref, *(entry.artifact_id for entry in dependencies))),
+        )
+        return (resolved.model_copy(update={"manifest_ref": shared_ref}), shared_ref,
+                shared_digest, tuple(str(skill.content_ref) for skill in resolved.skills))
 
     snapshot_seed = hashlib.sha256(
         f"{workflow_id}:{task_input_snapshot_digest}".encode()
@@ -563,6 +608,7 @@ async def _resolve_and_persist_skills(
 
     content_refs: list[str] = []
     created_refs: list[str] = []
+    catalog_refs: list[str] = []
     persisted_entries = []
     for skill in resolved.skills:
         if skill.content_ref:
@@ -571,6 +617,12 @@ async def _resolve_and_persist_skills(
                     f"selected Skill '{skill.skill_name}' lacks content digest evidence"
                 )
             content_refs.append(skill.content_ref)
+            # These references came from the deployment's Skill catalog, not
+            # request-supplied artifact pointers. This admission owner may
+            # delegate precisely the selected catalog content to a workflow;
+            # the dependency writer still verifies its digest and policy.
+            if skill.provenance.source_kind.value == "deployment":
+                catalog_refs.append(str(skill.content_ref).removeprefix("artifact://").removeprefix("artifact:"))
             persisted_entries.append(skill)
             continue
         source_path = str(skill.provenance.source_path or "").strip()
@@ -629,7 +681,7 @@ async def _resolve_and_persist_skills(
             )
             for skill in persisted_entries
         ),
-        access=access._with_verified_inputs((manifest_ref, *created_refs)),
+        access=access._with_verified_inputs((manifest_ref, *created_refs, *catalog_refs)),
     )
     resolved = resolved.model_copy(update={"manifest_ref": manifest_ref})
     return resolved, manifest_ref, manifest_digest, tuple(content_refs)
@@ -1412,6 +1464,8 @@ async def compile_and_persist_execution_plan(
     access: ArtifactAccessContext,
     _compile_step_plans: bool = True,
     _recorded_step_parameters: Mapping[str, Mapping[str, Any]] | None = None,
+    _recorded_provider_configuration_snapshot: ProviderConfigurationSnapshotRef | None | Literal["capture"] = "capture",
+    recorded_skillset_ref: str | None = None,
 ) -> PersistedOmnigentExecutionPlan:
     """Compile and persist one plan before Temporal or provider side effects."""
 
@@ -1711,6 +1765,7 @@ async def compile_and_persist_execution_plan(
         task_input_snapshot_digest=task_input_snapshot_digest,
         initial_parameters=initial_parameters,
         access=access,
+        recorded_skillset_ref=recorded_skillset_ref,
     )
     skill_delivery_ref = _digest_ref(
         "skill-delivery",
@@ -1940,6 +1995,33 @@ async def compile_and_persist_execution_plan(
         profile_document=dict(document),
         trusted_repository_declarations=trusted_repository_declarations,
     )
+    provider_configuration_snapshot = None
+    configuration_ref = None
+    if isinstance(_recorded_provider_configuration_snapshot, ProviderConfigurationSnapshotRef):
+        recorded = _recorded_provider_configuration_snapshot
+        configuration_ref = recorded.artifactRef.removeprefix("artifact:")
+        _artifact, configuration_body = await artifact_service.read(
+            artifact_id=configuration_ref, access=access
+        )
+        load_provider_configuration_snapshot(
+            configuration_body, recorded, binding_set.bindings
+        )
+        provider_configuration_snapshot = recorded.model_dump(mode="json")
+    elif _recorded_provider_configuration_snapshot == "capture" and config["materializerRef"] == "omnigent-provider-config@1":
+        configuration_body = provider_configuration_snapshot_bytes(
+            binding_set.bindings,
+            {"primary-model": snapshot_provider_configuration(provider_profile)},
+        )
+        configuration_ref, configuration_digest = await persist_json_artifact(
+            artifact_service=artifact_service,
+            principal=principal,
+            artifact_class="omnigent.provider_configuration_snapshot",
+            payload=json.loads(configuration_body),
+        )
+        provider_configuration_snapshot = {
+            "artifactRef": f"artifact:{configuration_ref}",
+            "contentDigest": configuration_digest,
+        }
     plan = compile_execution_plan(
         agent_profile=resolved_profile,
         harness_catalog=catalog,
@@ -1947,6 +2029,7 @@ async def compile_and_persist_execution_plan(
         trust_record=trust,
         resolved_skills=resolved_skills,
         credential_binding_set=binding_set,
+        provider_configuration_snapshot=provider_configuration_snapshot,
         repository_slot_requirements=repository_slot_requirements,
         workspace_source_kind=workspace_source_kind,
         workspace_access_snapshot_ref=workspace_access_snapshot_ref,
@@ -2213,6 +2296,7 @@ async def compile_and_persist_execution_plan(
             policy_artifact_ref,
             effective_launch_ref,
             profile_snapshot_ref,
+            *((configuration_ref,) if configuration_ref is not None else ()),
             *_evidence_refs,
             *skill_content_refs,
             *(access["artifactRef"] for access in repository_access.values()),
@@ -2362,6 +2446,13 @@ async def compile_frozen_execution_plan(
         access=access,
         _compile_step_plans=refresh_step_selections or bool(recorded_steps),
         _recorded_step_parameters=None if refresh_step_selections else recorded_steps,
+        _recorded_provider_configuration_snapshot=(
+            recorded_plan.payload.providerConfigurationSnapshot
+            if not refresh_step_selections and any(
+                getattr(bound, "providerProfileRef", None) == provider_profile.profile_id
+                for bound in recorded_plan.payload.credentialBindings.values()
+            ) else "capture"
+        ),
     )
 
 
@@ -2436,7 +2527,7 @@ def changed_admitted_intent(
     snapshot artifact refs, and time-bounded repository access snapshot refs
     move with the installed runtime; ``changed_repository_selection`` compares
     what those snapshots select. Harness, Provider Profile account, model and
-    effort, launch (cost/egress) and capture (privacy) policy, source, and
+    effort, recorded provider configuration, launch (cost/egress) and capture (privacy) policy, source, and
     publication intent belong to the request and must not.
     """
 
@@ -2465,6 +2556,12 @@ def changed_admitted_intent(
                 }
                 for slot, binding in payload.credentialBindings.items()
             },
+            "providerConfiguration": (
+                payload.providerConfigurationSnapshot.contentDigest
+                if recorded.providerConfigurationSnapshot is not None
+                and payload.providerConfigurationSnapshot is not None
+                else None
+            ),
             "authority": payload.authority,
             "workspace": (payload.workspaceIntentRef, payload.workspaceMutation),
             "runtimeProviderTarget": rollout.targetId if rollout else None,

@@ -1387,6 +1387,71 @@ class MoonMindProviderProfileManagerWorkflow:
     # -- Signals ---------------------------------------------------------------
 
     @workflow.signal
+    async def prepare_shared_execution_plan(self, payload: dict[str, Any]) -> None:
+        """Compile a dispatch-selected account while retaining its one grant.
+
+        Only the existing durable lease owner can enrich an unused native
+        grant. The persistence activity commits the plan, artifact authority
+        and binding together; an uncertain result never authorizes native
+        execution alongside a possibly committed shared plan.
+        """
+        await self._await_restored_ledger()
+        owner = str(payload.get("owner_id") or "")
+        run_id = str(payload.get("runId") or "")
+        profile_id = str(payload.get("profile_id") or "")
+        request_id = str((payload.get("request") or {}).get("idempotencyKey") or "")
+        fence = payload.get("fencing_generation")
+        if not owner or not run_id or not request_id:
+            return
+
+        def current_grant():
+            profile = self._profiles.get(profile_id)
+            metadata = (profile.lease_metadata.get(owner) or {}) if profile else {}
+            if (
+                profile is None or owner not in profile.current_leases
+                or type(fence) is not int or fence < 1
+                or profile.lease_fencing_generation(owner) != fence
+                or metadata.get("runId") != run_id
+            ):
+                return None
+            return profile
+
+        result = {"disposition": "failed", "reason": "pool_grant_identity_conflict"}
+        if not self._lease_transition_contract:
+            result = {"disposition": "native", "reason": "retained_manager_has_no_fenced_plan_handoff"}
+        elif current_grant() is not None:
+            if self._lease_grant_is_pending(owner):
+                await self._await_pending_grant_handoff(owner)
+            if current_grant() is not None:
+                self._begin_grant_handoff(owner)
+                try:
+                    result = await workflow.execute_activity(
+                        "provider_profile.sync_slot_leases",
+                        {"runtime_id": self._runtime_id, "action": "prepare_pool_plan", "leases": [payload]},
+                        task_queue=ACTIVITY_TASK_QUEUE,
+                        start_to_close_timeout=timedelta(seconds=60),
+                        schedule_to_close_timeout=timedelta(seconds=180),
+                        retry_policy=RetryPolicy(maximum_attempts=3),
+                    )
+                    profile = current_grant()
+                    if profile is None:
+                        result = {"disposition": "failed", "reason": "pool_grant_released_during_preparation"}
+                    elif result.get("disposition") == "shared":
+                        profile.lease_metadata[owner] = {
+                            **profile.lease_metadata[owner], **result["leaseMetadata"],
+                        }
+                        self._event_count += 1
+                        self._has_new_events = True
+                except Exception:
+                    self._get_logger().exception("Selected pool plan preparation failed for %s", owner)
+                    result = {"disposition": "failed", "reason": "pool_plan_preparation_unconfirmed"}
+                finally:
+                    self._end_grant_handoff(owner)
+        await workflow.get_external_workflow_handle(owner, run_id=run_id).signal(
+            "pool_plan_prepared", {**result, "requestId": request_id, "fencingGeneration": fence},
+        )
+
+    @workflow.signal
     async def request_slot(self, payload: dict[str, Any]) -> None:
         """An AgentRun requests a profile slot for this runtime family."""
         await self._await_restored_ledger()

@@ -275,8 +275,15 @@ deletion removes its row in the same change rather than leaving a stale entry.
 
 Direct Codex/Claude and AgentSession adapters retain recorded work, opaque
 serialized plans, native extension inputs/direct targets, Profiles without exact shared
-translation, and per-step pools or native options without an equivalent plan
-handoff. Fixed step accounts, harnesses and distinct model/effort pairs have
+translation, and native context or options without an equivalent plan handoff.
+Codex/Claude pool steps resolve their account at dispatch through the existing
+Profile Manager, then bind that account's immutable plan to the same fenced slot.
+Preparation retries reuse the plan and recorded Skill manifest without another
+account choice or capacity unit. Codex same-epoch successors carry the selected
+account, durable context and verified saved workspace through the parent,
+including Continue-As-New. Old parents without this handoff keep native dispatch.
+Untranslated native context/workspaces and tier parameters retain their adapter.
+Fixed step accounts, harnesses and distinct model/effort pairs have
 their own immutable plans compiled by the same admission owner, linked
 through the existing artifact owner and carried across successor attempts.
 The immutable root plan binds each complete step handoff by digest; admission,
@@ -304,6 +311,12 @@ static-connected Codex/Claude hosts use the shared lifecycle.
 API-key Codex and Claude Profiles that translate exactly, including MiniMax's
 declared Claude environment bundle and Codex Responses file configuration, run
 on the shared lifecycle with their endpoint, model pins and non-secret tuning.
+New plans reference a verified artifact containing those settings per credential
+slot, so queued starts and frozen successors keep their admitted configuration
+after a Profile edit. Fresh scheduled occurrences resolve current settings.
+Secret values still resolve
+after acquisition under the existing credential-generation fence. Older plans
+without this snapshot retain their recorded interpretation.
 Codex developer instructions, project-instruction discovery and history preferences
 also reach its private session config. Native Profile aliases translate a requested
 model once during shared compilation, using the same lookup as direct launch.

@@ -8837,6 +8837,9 @@ class TemporalArtifactActivities:
             the committed row; conflicting reuse of a live identity fails
             without creating another unit of authority.
 
+        **bind_plan**: bind an unlaunched pool-selected execution grant to its
+            compiled plan, preserving the acquired lease, scope and expiry.
+
         **release_one** / **request_cleanup** / **heartbeat**: fenced state
             transitions that return an explicit
             :class:`~moonmind.provider_profiles.lease_client.LeaseTransitionOutcome`.
@@ -8908,7 +8911,7 @@ class TemporalArtifactActivities:
                 ),
             }
 
-        async def _lease_row(session: Any, lease_id: str) -> Any:
+        async def _lease_row(session: Any, lease_id: str, *, lock: bool = False) -> Any:
             """Resolve one lease row inside the runtime that issued it.
 
             MoonLadderStudios/MoonMind#3883: lease identity is runtime-scoped.
@@ -8918,14 +8921,11 @@ class TemporalArtifactActivities:
             and report a permanent identity conflict to its real holder.
             """
 
-            return (
-                await session.execute(
-                    select(ProviderProfileSlotLease).where(
-                        ProviderProfileSlotLease.runtime_id == runtime_id,
-                        ProviderProfileSlotLease.lease_id == lease_id,
-                    )
-                )
-            ).scalars().first()
+            statement = select(ProviderProfileSlotLease).where(
+                ProviderProfileSlotLease.runtime_id == runtime_id,
+                ProviderProfileSlotLease.lease_id == lease_id,
+            )
+            return (await session.execute(statement.with_for_update() if lock else statement)).scalars().first()
 
         def _admission_generation_conflict(
             row: Any, payload: dict[str, Any]
@@ -9269,6 +9269,21 @@ class TemporalArtifactActivities:
                 )
                 await session.commit()
                 return {"removed": True}
+
+            elif action == "prepare_pool_plan":
+                from api_service.services.native_pool_execution_plan import prepare_selected_pool_plan
+
+                return await prepare_selected_pool_plan(session, runtime_id=runtime_id, payload=(leases or [{}])[0])
+
+            elif action == "bind_plan":
+                from moonmind.provider_profiles.plan_handoff import bind_selected_pool_plan
+
+                payload = (leases or [{}])[0]
+                row = await _lease_row(session, str(payload.get("lease_id") or ""), lock=True)
+                result = bind_selected_pool_plan(row, payload, runtime_id=runtime_id)
+                if result.get("bound") and not result.get("duplicate"):
+                    await session.commit()
+                return result
 
             elif action == "grant":
                 payload = (leases or [{}])[0]

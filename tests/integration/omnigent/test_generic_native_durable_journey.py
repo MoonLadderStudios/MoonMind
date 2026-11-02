@@ -1279,17 +1279,27 @@ async def native_journey(
         catalog = await DbHarnessCatalogRepository(session_factory).load(
             synchronized["catalogRef"]
         )
-        compiled = await _compile_plan(
-            session_factory,
-            harness,
-            workflow_id,
-            api_key=api_key,
-            static_mode=static_mode,
-            env_bundle=env_bundle,
-            codex_config=codex_config,
-            session_settings=selection.get("sessionSettings"),
-            instructions=instructions,
-        )
+        with monkeypatch.context() as writer_mode:
+            if selection.get("legacyProviderConfiguration"):
+                current_writer = plan_writer.compile_execution_plan
+
+                def legacy_writer(**kwargs):
+                    # The pre-upgrade writer had no provider snapshot field.
+                    kwargs.pop("provider_configuration_snapshot", None)
+                    return current_writer(**kwargs)
+
+                writer_mode.setattr(plan_writer, "compile_execution_plan", legacy_writer)
+            compiled = await _compile_plan(
+                session_factory,
+                harness,
+                workflow_id,
+                api_key=api_key,
+                static_mode=static_mode,
+                env_bundle=env_bundle,
+                codex_config=codex_config,
+                session_settings=selection.get("sessionSettings"),
+                instructions=instructions,
+            )
         # Verify the public HTTP enums survive discovery, alongside the real
         # deployment overlay's native OAuth/API-key admission contracts.
         observed = {row.id: row for row in catalog.snapshot.harnesses}
@@ -1459,6 +1469,7 @@ async def native_journey(
             static_mode=static_mode,
             env_bundle=env_bundle,
             codex_config=codex_config,
+            legacy_configuration=bool(selection.get("legacyProviderConfiguration")),
         )
     finally:
         await running.runner.cleanup()
@@ -1505,6 +1516,163 @@ async def test_declared_codex_session_preferences_survive_shared_lifecycle(nativ
     assert document["project_doc_fallback_filenames"] == ["PROJECT.md"]
 
 
+@pytest.mark.parametrize("native_journey", [{
+    "harness": "codex-native-file-config",
+    "sessionSettings": {"developer_instructions": "Use the admitted instructions."},
+}], indirect=True)
+async def test_queued_plan_keeps_its_admitted_provider_configuration(native_journey):
+    from copy import deepcopy
+    from api_service.db.models import ManagedAgentProviderProfile
+
+    async with native_journey.session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, PROFILE)
+        templates = deepcopy(profile.file_templates)
+        templates[0]["content_template"]["developer_instructions"] = "A later edit."
+        profile.file_templates = templates
+        await session.commit()
+
+    await assert_native_turn_saved_and_cleaned(native_journey)
+    document = native_journey.docker.codex_configuration["document"]
+    assert document["developer_instructions"] == "Use the admitted instructions."
+
+
+@pytest.mark.parametrize("native_journey", [{
+    "harness": "codex-native-file-config",
+    "sessionSettings": {"developer_instructions": "Keep the selected account. " * 1500},
+}], indirect=True)
+async def test_large_provider_settings_remain_artifact_owned(native_journey):
+    await assert_native_turn_saved_and_cleaned(native_journey)
+    instructions = "Keep the selected account. " * 1500
+    assert native_journey.docker.codex_configuration["document"]["developer_instructions"] == instructions
+    assert instructions not in native_journey.plan.payload.model_dump_json()
+
+
+@pytest.mark.parametrize("native_journey", [
+    {"harness": "codex-native-file-config", "legacyProviderConfiguration": legacy,
+     "sessionSettings": {"developer_instructions": "Use the admitted instructions."}}
+    for legacy in (False, True)
+], indirect=True)
+@pytest.mark.parametrize("refresh", [False, True], ids=["frozen", "fresh-scheduled"])
+async def test_frozen_recompilation_preserves_the_provider_settings(native_journey, refresh):
+    from copy import deepcopy
+    from api_service.db.models import ManagedAgentProviderProfile
+    from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
+
+    journey = native_journey
+    snapshot = json.loads(await journey.gateway.read_admitted_input(
+        journey.plan.payload.agentProfileSnapshotRef, request=journey.request
+    ))
+    parameters = json.loads(await journey.gateway.read_admitted_input(
+        journey.plan.payload.authority.taskInputSnapshotRef, request=journey.request
+    ))
+    async with journey.session_factory() as session:
+        provider = await session.get(ManagedAgentProviderProfile, PROFILE)
+        templates = deepcopy(provider.file_templates)
+        templates[0]["content_template"]["developer_instructions"] = "A later edit."
+        provider.file_templates = templates
+        await session.flush()
+        artifacts = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            transaction_ownership=ArtifactTransactionOwnership.CALLER,
+        )
+        frozen = await plan_writer.compile_frozen_execution_plan(
+            db_session=session, artifact_service=artifacts,
+            workflow_id=journey.request.correlation_id,
+            principal="system", snapshot=snapshot, provider_profile=provider,
+            initial_parameters=parameters,
+            binding=journey.request.omnigent_execution_plan,
+            access=access_for_test("system", admitted_principal=f"workflow:{journey.request.correlation_id}"),
+            refresh_step_selections=refresh,
+        )
+        saved = frozen.envelope.payload.providerConfigurationSnapshot
+        if journey.legacy_configuration and not refresh:
+            assert saved is None
+        else:
+            _row, content = await artifacts.read(
+                artifact_id=saved.artifactRef.removeprefix("artifact:"),
+                access=access_for_test("system"),
+            )
+        await session.commit()
+    if saved is None:
+        await assert_native_turn_saved_and_cleaned(journey)
+        assert journey.docker.codex_configuration["document"]["developer_instructions"] == "A later edit."
+        assert "providerConfigurationSnapshot" not in frozen.envelope.payload.model_dump(mode="json")
+        return
+    expected = "A later edit." if refresh else "Use the admitted instructions."
+    assert json.loads(content)["primary-model"]["endpoint"]["codexConfiguration"]["document"]["developer_instructions"] == expected
+    changed = plan_writer.changed_admitted_intent(journey.plan.payload, frozen.envelope.payload)
+    if not journey.legacy_configuration:
+        assert ("providerConfiguration" in changed) is refresh
+
+
+@pytest.mark.parametrize("native_journey", ["claude-native-env-bundle"], indirect=True)
+async def test_queued_claude_plan_keeps_its_endpoint_and_launch_tuning(native_journey):
+    from api_service.db.models import ManagedAgentProviderProfile
+
+    async with native_journey.session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, PROFILE)
+        profile.env_template = {
+            **profile.env_template,
+            "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
+            "API_TIMEOUT_MS": "1000",
+        }
+        await session.commit()
+
+    await assert_native_turn_saved_and_cleaned(native_journey)
+    assert native_journey.docker.launch_env["API_TIMEOUT_MS"] == "3000000"
+
+
+@pytest.mark.parametrize(
+    "native_journey", ["codex-native-api-key", "claude-native-api-key"], indirect=True
+)
+async def test_implicit_binding_uses_the_selected_profiles_authentication(native_journey):
+    import hashlib
+    from types import SimpleNamespace
+    from api_service.db.models import (
+        ManagedAgentProviderProfile,
+        OmnigentCredentialBindingSetRecord,
+    )
+    from moonmind.omnigent.harness_platform.planning_service import (
+        OmnigentExecutionPlanningService,
+    )
+    from moonmind.omnigent.harness_platform.credential_bindings import create_binding_set
+
+    profile_contract = SimpleNamespace(
+        credentialSlots=[SimpleNamespace(id="primary-model", optional=False)],
+        snapshot_ref=lambda: native_journey.plan.payload.agentProfileSnapshotRef,
+    )
+    planner = OmnigentExecutionPlanningService.__new__(OmnigentExecutionPlanningService)
+    async with native_journey.session_factory() as session:
+        provider = await session.get(ManagedAgentProviderProfile, PROFILE)
+        old_id = "implicit-" + hashlib.sha256(
+            f"{profile_contract.snapshot_ref()}\0{PROFILE}".encode()
+        ).hexdigest()[:24]
+        old = create_binding_set(
+            bindingSetId=old_id, version=1,
+            bindings={"primary-model": {
+                "providerProfileRef": PROFILE,
+                "materializerRef": native_journey.harness.removesuffix("-native") + "-oauth-home@1",
+            }},
+        )
+        old_row = OmnigentCredentialBindingSetRecord(
+            binding_set_id=old.bindingSetId, version=old.version,
+            digest=old.digest, ref=old.ref,
+            canonical_json=old.model_dump(mode="json", by_alias=True),
+        )
+        session.add(old_row)
+        await session.flush()
+        binding = await planner._resolve_binding_set(
+            session,
+            request=native_journey.request,
+            profile=profile_contract,
+            provider_profile=provider,
+            record_type=OmnigentCredentialBindingSetRecord,
+        )
+        assert binding.ref != old.ref
+        assert old_row.canonical_json == old.model_dump(mode="json", by_alias=True)
+    assert binding.bindings["primary-model"].materializerRef == "omnigent-provider-config@1"
+
+
 @pytest.mark.parametrize(
     "native_journey",
     [
@@ -1544,6 +1712,7 @@ async def assert_native_turn_saved_and_cleaned(
     journey, terminal_status="idle", *, expected_messages=1
 ):
     """Reuse the full durable lifecycle proof for separately admitted plans."""
+    from moonmind.omnigent.realizers.turn_delivery import admission_epoch
     request, plan, services = journey.request, journey.plan, journey.services
     realizer, server, docker = journey.realizer, journey.server, journey.docker
     manager, gateway, worker_root = (
@@ -1634,7 +1803,8 @@ async def assert_native_turn_saved_and_cleaned(
         assert provider_lease.released_at is None
     binding = await services.runtime_binding_store.get(
         stable_binding_id(
-            execution_plan_ref=plan.planRef, idempotency_key=request.idempotency_key
+            execution_plan_ref=plan.planRef, idempotency_key=request.idempotency_key,
+            admission_epoch=admission_epoch(request),
         )
     )
     assert binding.state is RuntimeBindingState.cleaned

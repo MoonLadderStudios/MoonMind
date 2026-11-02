@@ -44,6 +44,7 @@ with workflow.unsafe.imports_passed_through():
         AgentExecutionRequest,
         AgentRunHandle,
         AgentRunResult,
+        DispatchPoolContextReceipt,
         AgentRunStatus as AgentRunStatusModel,
         ExecutionBudget,
         ExecutionBudgetContext,
@@ -476,6 +477,9 @@ AGENT_RUN_PROVIDER_COOLDOWN_RETRY_BUDGET_PATCH_ID = (
 AGENT_RUN_SELECTED_MODEL_CAPACITY_RETRY_PATCH_ID = (
     "agent-run-selected-model-capacity-retry-v1"
 )
+AGENT_RUN_SELECTED_POOL_SHARED_PLAN_PATCH_ID = "agent-run-selected-pool-shared-plan-v1"
+AGENT_RUN_POOL_PARENT_HANDOFF_PATCH_ID = "agent-run-pool-parent-handoff-v1"
+AGENT_RUN_POOL_CONTEXT_RECEIPT_PATCH_ID = "agent-run-pool-context-receipt-v1"
 AGENT_RUN_MANAGED_NO_PROGRESS_RECONCILIATION_PATCH_ID = (
     "agent-run-managed-no-progress-reconciliation-v1"
 )
@@ -1290,6 +1294,10 @@ class MoonMindAgentRun:
         # while the grant predates fenced assignments; the release is then
         # honoured as legacy unfenced.
         self._assigned_slot_fencing_generation: int | None = None
+        self._pool_plan_response: dict[str, Any] | None = None
+        self._pool_plan_request_id: str | None = None
+        self._pool_plan_fence: int | None = None
+        self._pool_native_request: AgentExecutionRequest | None = None
         self._external_agent_id: str | None = None
         self._omnigent_session_workflow_id: str | None = None
         self._profile_snapshots: dict[str, dict[str, Any]] = {}
@@ -3284,6 +3292,7 @@ class MoonMindAgentRun:
         request: AgentExecutionRequest,
         result: AgentRunResult,
     ) -> AgentRunResult:
+        result = self._with_dispatch_pool_context(result)
         context = getattr(self, "_execution_budget", None)
         if context is not None:
             result = result.model_copy(
@@ -5708,6 +5717,9 @@ class MoonMindAgentRun:
             request_queue_metadata=self._request_queue_metadata(request),
             lease_metadata=fence_metadata,
             lease_purpose=lease_purpose,
+            **({"profile_selector": request.profile_selector.model_dump(by_alias=True, exclude_none=True)}
+               if self._profile_selector_has_constraints(request.profile_selector)
+               and self._workflow_patch_enabled(AGENT_RUN_SELECTED_POOL_SHARED_PLAN_PATCH_ID) else {}),
         )
         self._omnigent_capacity_runtime_id = runtime_id
         waited_seconds = 0
@@ -6704,6 +6716,116 @@ class MoonMindAgentRun:
         )
         self._capacity_ever_granted = True
         self.slot_assigned_event.set()
+
+    @workflow.signal
+    def pool_plan_prepared(self, payload: dict) -> None:
+        """Accept only the response for this selected, still-fenced grant."""
+        if (
+            self._pool_plan_request_id is not None
+            and payload.get("requestId") == self._pool_plan_request_id
+            and payload.get("fencingGeneration") == self._pool_plan_fence
+            and self._assigned_slot_fencing_generation == self._pool_plan_fence
+        ):
+            self._pool_plan_response = payload
+
+    async def _prepare_selected_pool_shared_request(
+        self, *, request: AgentExecutionRequest, runtime_id: str,
+        manager_handle: Any, original_profile_ref: str | None,
+    ) -> AgentExecutionRequest:
+        self._pool_plan_response = None
+        self._pool_plan_request_id = request.idempotency_key
+        self._pool_plan_fence = self._assigned_slot_fencing_generation
+        try:
+            await manager_handle.signal("prepare_shared_execution_plan", {
+                "owner_id": workflow.info().workflow_id, "runId": workflow.info().run_id,
+                "profile_id": request.execution_profile_ref,
+                "fencing_generation": self._pool_plan_fence,
+                "originalProfileRef": original_profile_ref,
+                "request": request.model_dump(mode="json", by_alias=True),
+            })
+            await workflow.wait_condition(lambda: self._pool_plan_response is not None,
+                                          timeout=timedelta(seconds=240))
+            result = self._pool_plan_response
+            if result.get("disposition") == "native":
+                return request
+            if result.get("disposition") != "shared":
+                raise ApplicationError(
+                    "Selected pool plan preparation is unconfirmed: " + str(result.get("reason")),
+                    type="SelectedPoolPlanPreparationFailed", non_retryable=True,
+                )
+            selected = AgentExecutionRequest.model_validate(result["request"])
+            unchanged = ("execution_profile_ref", "correlation_id", "idempotency_key", "instruction_ref",
+                         "runtime_command", "input_refs", "timeout_policy", "execution_budget", "terminal_contract")
+            if (
+                selected.agent_kind != "external" or selected.agent_id != "omnigent"
+                or selected.omnigent_execution_plan is None
+                or any(getattr(selected, key) != getattr(request, key) for key in unchanged)
+                or selected.step_execution is None
+                or selected.step_execution.step_execution_id != request.step_execution.step_execution_id
+            ):
+                raise ApplicationError("Selected pool plan changed its admitted request",
+                                       type="SelectedPoolPlanIdentityConflict", non_retryable=True)
+            return selected
+        finally:
+            self._pool_plan_request_id = None
+            self._pool_plan_fence = None
+
+    @staticmethod
+    def _saved_pool_workspace_ref(result: AgentRunResult | None) -> str | None:
+        saved = (
+            result.metadata.get("savedWorkspaceCheckpoint")
+            if result is not None
+            else None
+        )
+        reference = saved.get("archiveRef") if isinstance(saved, Mapping) else None
+        if (
+            isinstance(reference, str)
+            and reference.startswith("artifact:")
+            and not any(character.isspace() for character in reference)
+            and len(reference) <= 1024
+        ):
+            return reference
+        return None
+
+    def _with_dispatch_pool_context(self, result: AgentRunResult) -> AgentRunResult:
+        original = self._pool_native_request
+        if (
+            original is None
+            or self._managed_runtime_id(original.agent_id) != "codex_cli"
+            or not isinstance(result.metadata.get("runtimeSessionContext"), Mapping)
+            or not self._workflow_patch_enabled(AGENT_RUN_POOL_CONTEXT_RECEIPT_PATCH_ID)
+        ):
+            return result
+        receipt = DispatchPoolContextReceipt(
+            executionProfileRef=original.execution_profile_ref,
+            workspaceCheckpointRestoreRef=self._saved_pool_workspace_ref(result),
+        )
+        return result.model_copy(
+            update={
+                "metadata": {
+                    **result.metadata,
+                    "dispatchPoolContext": receipt.model_dump(
+                        by_alias=True, mode="json", exclude_none=True
+                    ),
+                }
+            }
+        )
+
+    def _uses_selected_pool_shared_admission(self, request: AgentExecutionRequest, runtime_id: str) -> bool:
+        metadata = request.parameters.get("metadata")
+        hints = metadata.get("moonmind") if isinstance(metadata, Mapping) else None
+        # Old parents cannot carry the converted child's account/context receipt.
+        # This capability hint selects the transition, never launch authority.
+        return (
+            runtime_id in {"codex_cli", "claude_code"}
+            and self._profile_selector_has_constraints(request.profile_selector)
+            and self._assigned_slot_fencing_generation is not None
+            and self._workflow_patch_enabled(AGENT_RUN_SELECTED_POOL_SHARED_PLAN_PATCH_ID)
+            and (
+                not self._workflow_patch_enabled(AGENT_RUN_POOL_PARENT_HANDOFF_PATCH_ID)
+                or isinstance(hints, Mapping) and hints.get("poolContextHandoff") is True
+            )
+        )
 
     @workflow.update(name="Pause")
     def pause(self) -> None:
@@ -8440,6 +8562,23 @@ class MoonMindAgentRun:
                     ):
                         self._synchronize_runtime_selection_authority(request)
 
+                    if self._uses_selected_pool_shared_admission(request, runtime_id):
+                        selected = await self._prepare_selected_pool_shared_request(
+                            request=request, runtime_id=runtime_id, manager_handle=manager_handle,
+                            original_profile_ref=requested_execution_profile_ref,
+                        )
+                        if selected.agent_kind == "external":
+                            self._pool_native_request = request.model_copy(deep=True)
+                            request = selected
+                            self.agent_kind = "external"
+                            self._external_agent_id = "omnigent"
+                            self._omnigent_capacity_runtime_id = runtime_id
+                            self._omnigent_capacity_profile_id = request.execution_profile_ref
+                            self._omnigent_capacity_state = "granted"
+                            # Reuse the existing shared capacity/host owner on
+                            # the next loop, retaining this committed unit.
+                            continue
+
                     # Slot release is owned by the ProviderProfileManager through
                     # verified consumer teardown (MoonLadderStudios/MoonMind#1089):
                     # the child no longer notifies the parent of its assignment.
@@ -9497,6 +9636,31 @@ class MoonMindAgentRun:
                 else:
                     requires_provider_cooldown = False
 
+                if (
+                    requires_provider_cooldown
+                    and self._pool_native_request is not None
+                    and self._omnigent_capacity_state == "released"
+                ):
+                    # The shared realizer positively drained the attempt.
+                    # Re-enter the existing pool retry policy with its original
+                    # selector, requested account and remaining step budget.
+                    request = self._pool_native_request.model_copy(deep=True)
+                    request.execution_budget = self._execution_budget
+                    if self._workflow_patch_enabled(AGENT_RUN_POOL_CONTEXT_RECEIPT_PATCH_ID):
+                        saved_workspace = self._saved_pool_workspace_ref(self.final_result)
+                        if saved_workspace is not None:
+                            request.workspace_spec = {
+                                **request.workspace_spec,
+                                "workspaceCheckpointRestoreRef": saved_workspace,
+                            }
+                    self._pool_native_request = None
+                    self.agent_kind = "managed"
+                    self.run_id = None
+                    self._external_agent_id = None
+                    manager_handle = workflow.get_external_workflow_handle(
+                        self._manager_workflow_id(self._managed_runtime_id(request.agent_id))
+                    )
+
                 provider_retry_budget_enabled = workflow.patched(
                     AGENT_RUN_PROVIDER_COOLDOWN_RETRY_BUDGET_PATCH_ID
                 )
@@ -9723,6 +9887,8 @@ class MoonMindAgentRun:
 
         except asyncio.TimeoutError:
             self.run_status = RunStatus.timed_out
+            if self._pool_native_request is not None:
+                await self._release_omnigent_provider_capacity(request=request)
             if request.agent_kind == "managed" and hasattr(request, "execution_profile_ref") and request.execution_profile_ref:
                 try:
                     runtime_mapping = {"claude": "claude_code", "codex": "codex_cli"}
@@ -9752,6 +9918,8 @@ class MoonMindAgentRun:
 
         except (CancelledError, asyncio.CancelledError):
             tasks = []
+            if self._pool_native_request is not None:
+                tasks.append(asyncio.shield(self._release_omnigent_provider_capacity(request=request)))
 
             if request.agent_kind == "managed" and getattr(request, "execution_profile_ref", None):
                 runtime_mapping = {"claude": "claude_code", "codex": "codex_cli"}
@@ -9810,6 +9978,8 @@ class MoonMindAgentRun:
             raise
 
         except Exception:
+            if self._pool_native_request is not None:
+                await self._release_omnigent_provider_capacity(request=request)
             if request.agent_kind == "managed" and getattr(request, "execution_profile_ref", None):
                 runtime_mapping = {"claude": "claude_code", "codex": "codex_cli"}
                 runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)

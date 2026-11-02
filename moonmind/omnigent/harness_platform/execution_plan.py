@@ -1,6 +1,7 @@
 """Execution plan payload + envelope (sections 16, 4.5, 4.6, 16.2).
 
-Plan records pre-host decisions only. No credential generations, host ids, lease refs, volumes, env.
+Plan records admitted settings only. Credential values and generations, host ids,
+lease refs, volumes and the realized environment belong in runtime bindings.
 Plan digest is non-self-referential: payload bytes hashed, ref stored outside payload.
 """
 
@@ -31,6 +32,7 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
 )
+from moonmind.omnigent.harness_platform.materializers import ProviderConfigurationSnapshotRef
 from moonmind.omnigent.harness_platform.support import (
     SupportKeyPayload,
     compute_support_combination_key,
@@ -304,6 +306,7 @@ class OmnigentExecutionPlanPayload(BaseModel):
     credentialBindings: dict[
         str, CredentialBinding | ModelAuthorityBinding | RepositoryAuthorityBinding
     ] = Field(alias="credentialBindings")
+    providerConfigurationSnapshot: ProviderConfigurationSnapshotRef | None = None
     # Compact validated repository snapshot refs (slot -> access snapshot).
     # Pre-host decisions only: acquired secret revision/issuance, use
     # ownership, generations, materialized paths, and cleanup handles live
@@ -369,6 +372,8 @@ class OmnigentExecutionPlanPayload(BaseModel):
             payload.pop("repositoryAuthorityRefs", None)
         if self.logicalStepPlans is None:
             payload.pop("logicalStepPlans", None)
+        if self.providerConfigurationSnapshot is None:
+            payload.pop("providerConfigurationSnapshot", None)
         return payload
 
     @model_validator(mode="after")

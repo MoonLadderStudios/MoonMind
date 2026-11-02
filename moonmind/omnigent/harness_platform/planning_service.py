@@ -55,7 +55,9 @@ from moonmind.omnigent.harness_platform.host_classes import (
 )
 from moonmind.omnigent.harness_platform.materializers import (
     get_materializer,
-    materializer_ref_for_provider,
+    materializer_ref_for_profile,
+    snapshot_provider_configuration,
+    provider_configuration_snapshot_bytes,
 )
 from moonmind.omnigent.harness_platform.planner import compile_execution_plan
 from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet
@@ -549,6 +551,35 @@ class OmnigentExecutionPlanningService:
                 profile_document=dict(version_row.document),
                 trusted_repository_declarations=trusted_repository_declarations,
             )
+            provider_configurations = {}
+            for slot, binding in model_bindings_of(binding_set.bindings).items():
+                if binding.materializerRef != "omnigent-provider-config@1":
+                    continue
+                configured = await session.get(
+                    ManagedAgentProviderProfile, binding.providerProfileRef
+                )
+                if configured is None:
+                    raise HarnessPlatformError(
+                        "Provider Profile configuration is unavailable at admission",
+                        code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+                    )
+                provider_configurations[slot] = snapshot_provider_configuration(configured)
+            configuration_snapshot = None
+            if provider_configurations:
+                content = provider_configuration_snapshot_bytes(
+                    binding_set.bindings, provider_configurations
+                )
+                configuration_ref = await self._artifacts.write_bytes(
+                    request=request,
+                    name="provider-configuration.json",
+                    payload=content,
+                    content_type="application/json",
+                    link_type="input.provider_configuration",
+                )
+                configuration_snapshot = {
+                    "artifactRef": configuration_ref,
+                    "contentDigest": "sha256:" + hashlib.sha256(content).hexdigest(),
+                }
             return compile_execution_plan(
                 agent_profile=profile,
                 harness_catalog=catalog_result.snapshot,
@@ -556,6 +587,7 @@ class OmnigentExecutionPlanningService:
                 trust_record=trust,
                 resolved_skills=skills,
                 credential_binding_set=binding_set,
+                provider_configuration_snapshot=configuration_snapshot,
                 repository_slot_requirements=repository_slot_requirements,
                 workspace_source_kind=workspace_source_kind,
                 workspace_access_snapshot_ref=workspace_access_snapshot_ref,
@@ -777,9 +809,7 @@ class OmnigentExecutionPlanningService:
                 )
             return CredentialBindingSet.model_validate(row.canonical_json)
 
-        materializer_ref = materializer_ref_for_provider(
-            provider_profile.runtime_id, provider_profile.provider_id
-        )
+        materializer_ref = materializer_ref_for_profile(provider_profile)
         get_materializer(materializer_ref)
         required_slots = [
             slot.id for slot in profile.credentialSlots if not slot.optional
@@ -790,7 +820,7 @@ class OmnigentExecutionPlanningService:
                 code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_BINDING_SET_CONFLICT,
             )
         binding_identity = hashlib.sha256(
-            f"{profile.snapshot_ref()}\0{provider_profile.profile_id}".encode("utf-8")
+            f"{profile.snapshot_ref()}\0{provider_profile.profile_id}\0{materializer_ref}".encode("utf-8")
         ).hexdigest()[:24]
         binding_id = f"implicit-{binding_identity}"
         binding = create_binding_set(
