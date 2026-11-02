@@ -19,10 +19,41 @@ from tools.ci.write_backend_matrix_summary import (
     parse_junit,
     write_durations_snapshot,
     write_slowest_report,
+    summarize_workflow_jobs,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "pytest-unit-tests.yml"
+
+
+def test_workflow_timing_separates_queue_and_additive_usage_from_wall_time(tmp_path):
+    job = {
+        "name": "source/unit",
+        "id": 1,
+        "html_url": "https://example.test/job/1",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-11-02T00:00:00Z",
+        "started_at": "2026-11-02T00:00:10Z",
+        "completed_at": "2026-11-02T00:01:10Z",
+        "steps": [
+            {
+                "name": "tests",
+                "started_at": "2026-11-02T00:00:20Z",
+                "completed_at": "2026-11-02T00:01:00Z",
+                "conclusion": "success",
+            }
+        ],
+    }
+    payload = summarize_workflow_jobs(
+        [{"jobs": [job, {**job, "id": 2}]}],
+        tmp_path / "timing.json",
+        tmp_path / "summary",
+    )
+    assert payload["runnerSeconds"] == 120
+    assert payload["queueSeconds"] == 20
+    assert payload["jobs"][0]["steps"][0]["seconds"] == 40
+    assert payload["incompleteJobs"] == []
 
 
 def _junit_file(tmp_path: Path) -> Path:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +15,55 @@ MANIFEST = b'{"schemaVersion":2,"manifests":[]}'
 DIGEST = "sha256:" + hashlib.sha256(MANIFEST).hexdigest()
 IMAGE = fixture.REPOSITORY + "@" + DIGEST
 OWNER = "run-123/attempt-1/exact-artifact"
+
+
+@pytest.mark.parametrize("damage", [None, "archive", "source", "attempt", "content"])
+def test_recovery_archive_is_bound_to_source_content_and_run(
+    tmp_path, monkeypatch, damage
+):
+    archive, state = tmp_path / "images.tar", tmp_path / "identity.json"
+    identity = dict(revision="a" * 40, upstream="b" * 40, run_id="123", attempt="2")
+    image_id = ["sha256:" + "c" * 64]
+    calls = []
+
+    def command(args):
+        calls.append(args)
+        if args[1] == "save":
+            Path(args[3]).write_bytes(b"real archive bytes")
+        if args[1:3] == ["image", "inspect"]:
+            payload = [
+                {
+                    "Id": image_id[0],
+                    "Config": {
+                        "Labels": {
+                            "org.opencontainers.image.revision": "b" * 40,
+                            "moonmind.source.revision": "a" * 40,
+                        }
+                    },
+                }
+            ]
+            return subprocess.CompletedProcess(args, 0, json.dumps(payload).encode())
+        return subprocess.CompletedProcess(args, 0, b"")
+
+    monkeypatch.setattr(fixture, "_run", command)
+    fixture.recovery_archive(archive, state, **identity)
+    calls.clear()
+    if damage == "archive":
+        archive.write_bytes(b"different archive")
+    if damage == "source":
+        identity["revision"] = "d" * 40
+    if damage == "attempt":
+        identity["attempt"] = "1"
+    if damage == "content":
+        image_id[0] = "sha256:" + "d" * 64
+    if damage:
+        with pytest.raises(fixture.FixtureError):
+            fixture.recovery_archive(archive, state, **identity, restore_archive=True)
+        if damage != "content":
+            assert not any(call[1] == "load" for call in calls)
+    else:
+        fixture.recovery_archive(archive, state, **identity, restore_archive=True)
+        assert calls[0] == ["docker", "load", "--input", str(archive)]
 
 
 class Commands:

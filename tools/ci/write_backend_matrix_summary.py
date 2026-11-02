@@ -5,7 +5,7 @@ MoonLadderStudios/MoonMind#4370, #4371: each backend-matrix row streams its pyte
 output through ``tee`` to a text log, keeps its JUnit report, and then calls
 this small reporting hook to derive the slowest-test report, a per-shard
 duration-hints snapshot, and a ``$GITHUB_STEP_SUMMARY`` section from standard
-pytest/JUnit output. No new metrics service is introduced.
+pytest/JUnit output. No new metrics service is introduced. Verification receipts use separate strict validation; an incomplete receipt fails its owning job.
 
 Contract guarantees (checked by unit tests, not by live Actions runs):
 
@@ -13,7 +13,7 @@ Contract guarantees (checked by unit tests, not by live Actions runs):
   ``unavailable``/``interrupted`` -- never as zero tests or a passing suite.
 - No progress-percentage parsing is used; counts come from the JUnit
   ``testsuite`` attributes only.
-- A parsing problem never fails the job: ``main()`` always exits 0 and
+- An advisory timing parsing problem never fails the job: ``main()`` exits 0 and
   records the error in the summary instead.
 - The committed partition input is never modified: duration hints are
   written only to the caller-supplied per-shard snapshot path, which must
@@ -34,10 +34,16 @@ from __future__ import annotations
 
 import argparse
 import json
+from importlib import metadata
 import math
+import os
+import platform
 import sys
+import time
+import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 
@@ -51,6 +57,278 @@ DURATION_REPORT_PROPERTY = "junit_duration_report"
 # ``junit_duration_report = total``, i.e. setup + call + teardown of a case.
 DURATION_SEMANTICS = "pytest-junit-total:setup+call+teardown"
 SNAPSHOT_SCHEMA = "moonmind.reliability-durations-snapshot/v1"
+RECEIPT_SCHEMA = "moonmind.pytest-verification/v1"
+
+
+def pytest_configure(config) -> None:
+    path = os.environ.get("MOONMIND_CI_RECEIPT")
+    if path and not hasattr(config, "workerinput"):
+        config.pluginmanager.register(_VerificationReceipt(config, Path(path)))
+
+
+class _VerificationReceipt:
+    """One controller writes complete collection evidence, including xdist."""
+
+    def __init__(self, config, path: Path):
+        self.config, self.path = config, path
+        self.started = time.monotonic()
+        self.collected_at = None
+        self.expected: set[str] | None = None
+        self.cases: dict[str, dict] = {}
+        self.errors: list[str] = []
+        self.workers: set[str] = set()
+
+    def _collection(self, ids):
+        ids = list(ids)
+        if len(ids) != len(set(ids)):
+            self.errors.append("duplicate collected node IDs")
+        if self.expected is not None and self.expected != set(ids):
+            self.errors.append("workers collected different node IDs")
+        self.expected = set(ids)
+        if self.collected_at is None:
+            self.collected_at = time.monotonic()
+
+    def pytest_collection_finish(self, session):
+        if not self.config.getoption("numprocesses", default=0):
+            self._collection(item.nodeid for item in session.items)
+
+    def pytest_xdist_node_collection_finished(self, node, ids):
+        self.workers.add(node.gateway.id)
+        self._collection(ids)
+
+    def pytest_runtest_logreport(self, report):
+        case = self.cases.setdefault(
+            report.nodeid, {"nodeid": report.nodeid, "phases": {}}
+        )
+        if report.when in case["phases"]:
+            self.errors.append(f"duplicate phase: {report.nodeid} {report.when}")
+        case["phases"][report.when] = {
+            "outcome": report.outcome,
+            "seconds": report.duration,
+        }
+        if report.failed:
+            case["outcome"] = "failed"
+        elif report.skipped:
+            case["outcome"] = "xfailed" if hasattr(report, "wasxfail") else "skipped"
+        else:
+            case.setdefault("outcome", "passed")
+
+    def pytest_sessionfinish(self, session, exitstatus):
+        expected = self.expected or set()
+        complete = (
+            bool(expected)
+            and expected == self.cases.keys()
+            and all(
+                "teardown" in case["phases"]
+                and (
+                    "call" in case["phases"]
+                    or case["outcome"] in {"skipped", "xfailed"}
+                )
+                for case in self.cases.values()
+            )
+        )
+        payload = {
+            "schema": RECEIPT_SCHEMA,
+            "suite": os.environ.get("MOONMIND_CI_SUITE", ""),
+            "revision": os.environ.get("MOONMIND_CI_REVISION", ""),
+            "runId": os.environ.get("GITHUB_RUN_ID", ""),
+            "attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+            "status": (
+                "passed"
+                if int(exitstatus) == 0 and complete and not self.errors
+                else "incomplete"
+            ),
+            "exitCode": int(exitstatus),
+            "expectedNodeIds": sorted(expected),
+            "cases": [self.cases[key] for key in sorted(self.cases)],
+            "errors": self.errors,
+            "workers": len(self.workers) or 1,
+            "python": platform.python_version(),
+            "dependencies": sorted(
+                (dist.metadata["Name"], dist.version)
+                for dist in metadata.distributions()
+            ),
+            "environmentInputs": os.environ.get(
+                "MOONMIND_CI_ENVIRONMENT", "host-python:" + platform.python_version()
+            ),
+            "platform": platform.platform(),
+            "arguments": list(self.config.invocation_params.args),
+            "collectionSeconds": (
+                (self.collected_at - self.started) if self.collected_at else None
+            ),
+            "elapsedSeconds": time.monotonic() - self.started,
+        }
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(payload, indent=2) + "\n")
+
+
+_VerificationReceipt.pytest_xdist_node_collection_finished.pytest_impl = {
+    "optionalhook": True
+}
+_VerificationReceipt.pytest_sessionfinish.pytest_impl = {"trylast": True}
+
+
+def validate_receipt(path: Path, *, revision: str, run_id: str, attempt: str) -> dict:
+    """Verification is strict; the advisory timing summary below stays tolerant."""
+    try:
+        receipt = json.loads(path.read_text())
+        for key, value in {
+            "schema": RECEIPT_SCHEMA,
+            "revision": revision,
+            "runId": run_id,
+            "attempt": attempt,
+            "status": "passed",
+            "exitCode": 0,
+        }.items():
+            if receipt[key] != value:
+                raise ValueError(f"{key} mismatch")
+        expected = receipt["expectedNodeIds"]
+        cases = receipt["cases"]
+        actual = [case["nodeid"] for case in cases]
+        if (
+            not expected
+            or len(expected) != len(set(expected))
+            or set(expected) != set(actual)
+            or len(actual) != len(set(actual))
+        ):
+            raise ValueError("missing, duplicate or extra node IDs")
+        if receipt["errors"] or not receipt["suite"] or not receipt["python"]:
+            raise ValueError("missing environment or collection failure")
+        for case in cases:
+            if (
+                case["outcome"] not in {"passed", "skipped", "xfailed"}
+                or "teardown" not in case["phases"]
+            ):
+                raise ValueError("unsuccessful or interrupted case")
+            if "call" not in case["phases"] and case["outcome"] == "passed":
+                raise ValueError("missing call")
+            for phase in case["phases"].values():
+                if (
+                    phase["outcome"] not in {"passed", "skipped"}
+                    or not math.isfinite(phase["seconds"])
+                    or phase["seconds"] < 0
+                ):
+                    raise ValueError("invalid phase")
+        return receipt
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ValueError(f"Invalid verification receipt {path}: {error}") from error
+
+
+def write_frontend_receipt(report: Path, receipt: Path) -> None:
+    payload = json.loads(report.read_text())
+    assertions = [
+        case for suite in payload["testResults"] for case in suite["assertionResults"]
+    ]
+    if (
+        payload.get("success") is not True
+        or not assertions
+        or payload["numTotalTests"] != len(assertions)
+        or any(
+            case["status"] not in {"passed", "pending", "todo", "skipped"}
+            for case in assertions
+        )
+    ):
+        raise ValueError("Incomplete or unsuccessful frontend verification")
+    receipt.parent.mkdir(parents=True, exist_ok=True)
+    receipt.write_text(
+        json.dumps(
+            {
+                "schema": "moonmind.vitest-verification/v1",
+                "revision": os.environ["MOONMIND_CI_REVISION"],
+                "runId": os.environ["GITHUB_RUN_ID"],
+                "attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+                "report": payload,
+            }
+        )
+        + "\n"
+    )
+
+
+def summarize_workflow_jobs(pages: list[dict], output: Path, summary: Path) -> dict:
+    """Keep queue/runner/step observations separate from estimated savings."""
+
+    def seconds(start, end):
+        if not start or not end:
+            return None
+        return max(
+            0,
+            (
+                datetime.fromisoformat(end.replace("Z", "+00:00"))
+                - datetime.fromisoformat(start.replace("Z", "+00:00"))
+            ).total_seconds(),
+        )
+
+    jobs = [
+        {
+            "name": job["name"],
+            "id": job["id"],
+            "url": job["html_url"],
+            "status": job["status"],
+            "conclusion": job.get("conclusion"),
+            "queueSeconds": seconds(job.get("created_at"), job.get("started_at")),
+            "runnerSeconds": seconds(job.get("started_at"), job.get("completed_at")),
+            "steps": [
+                {
+                    "name": step["name"],
+                    "conclusion": step.get("conclusion"),
+                    "seconds": seconds(
+                        step.get("started_at"), step.get("completed_at")
+                    ),
+                }
+                for step in job.get("steps", [])
+            ],
+        }
+        for page in pages
+        for job in page["jobs"]
+    ]
+    payload = {
+        "schema": "moonmind.ci-job-timings/v1",
+        "jobs": jobs,
+        "runnerSeconds": sum(job["runnerSeconds"] or 0 for job in jobs),
+        "queueSeconds": sum(job["queueSeconds"] or 0 for job in jobs),
+        "incompleteJobs": [job["name"] for job in jobs if job["status"] != "completed"],
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(payload, indent=2) + "\n")
+    with summary.open("a") as destination:
+        destination.write(
+            "\n## Observed CI timing\n\n| Job | Queue seconds | Runner seconds | Result |\n|---|---:|---:|---|\n"
+        )
+        for job in jobs:
+            destination.write(
+                f"| [{job['name']}]({job['url']}) | {job['queueSeconds']} | {job['runnerSeconds']} | {job['conclusion']} |\n"
+            )
+        destination.write(
+            "\nActive jobs remain incomplete; runner seconds are additive usage, not wall-clock duration.\n"
+        )
+    return payload
+
+
+def fetch_public_job_timings(
+    repository: str, run_id: str, attempt: str, output: Path, summary: Path
+) -> None:
+    """Public run metadata needs no extra token permission or credentials."""
+    pages = []
+    try:
+        for page in range(1, 101):
+            url = f"https://api.github.com/repos/{repository}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100&page={page}"
+            request = urllib.request.Request(
+                url, headers={"User-Agent": "MoonMind-CI-timing"}
+            )
+            with urllib.request.urlopen(request, timeout=20) as response:
+                payload = json.load(response)
+            pages.append(payload)
+            if len(payload["jobs"]) < 100:
+                summarize_workflow_jobs(pages, output, summary)
+                return
+        raise ValueError("Job timing pagination exceeded its bound")
+    except (OSError, ValueError, KeyError) as error:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps({"status": "unavailable", "reason": str(error)}) + "\n"
+        )
+        with summary.open("a") as destination:
+            destination.write(f"\nCI timing metadata unavailable: {error}\n")
 
 
 def pytest_itemcollected(item) -> None:  # noqa: ANN001 -- pytest plugin hook

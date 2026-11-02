@@ -14,13 +14,95 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools.ci.source_verification import artifact_attempt
+
 REPOSITORY = "localhost:5001/moonmind-test-qualification"
 OWNER_LABEL = "moonmind.test.release-image-owner"
 NAME_PREFIX = "moonmind-test-release-registry-"
+RECOVERY_IMAGES = (
+    "moonmind-test-omnigent-server:candidate",
+    "moonmind-test-omnigent-host:candidate",
+)
 
 
 class FixtureError(RuntimeError):
     """The isolated image fixture could not be established or cleaned up."""
+
+
+def _file_digest(path: Path) -> str:
+    with path.open("rb") as source:
+        return "sha256:" + hashlib.file_digest(source, "sha256").hexdigest()
+
+
+def recovery_archive(
+    archive: Path,
+    state: Path,
+    *,
+    revision: str,
+    upstream: str,
+    run_id: str,
+    attempt: str,
+    restore_archive: bool = False,
+    artifact: str | None = None,
+) -> None:
+    """Transport prepared runtimes without rebuilding or trusting mutable tags."""
+    if artifact:
+        attempt = artifact_attempt(
+            artifact, prefix="recovery-images", run_id=run_id, current_attempt=attempt
+        )
+    identity = {
+        "revision": revision,
+        "upstream": upstream,
+        "runId": run_id,
+        "attempt": attempt,
+    }
+    if (
+        not all(re.fullmatch(r"[0-9a-f]{40}", value) for value in (revision, upstream))
+        or not run_id.isdecimal()
+        or not attempt.isdecimal()
+    ):
+        raise FixtureError("Missing immutable recovery source/run identity")
+    if restore_archive:
+        payload = json.loads(state.read_text())
+        if (
+            payload.get("schema") != "moonmind.recovery-images/v1"
+            or any(payload.get(key) != value for key, value in identity.items())
+            or set(payload.get("images", {})) != set(RECOVERY_IMAGES)
+            or payload.get("archiveDigest") != _file_digest(archive)
+        ):
+            raise FixtureError(
+                "Recovery archive differs from the current source/run/attempt"
+            )
+        _run(["docker", "load", "--input", str(archive)])
+    else:
+        payload = {"schema": "moonmind.recovery-images/v1", **identity, "images": {}}
+    for image in RECOVERY_IMAGES:
+        inspected = json.loads(_run(["docker", "image", "inspect", image]).stdout)[0]
+        labels = inspected.get("Config", {}).get("Labels", {}) or {}
+        image_id = inspected["Id"]
+        if (
+            not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id)
+            or labels.get("org.opencontainers.image.revision") != upstream
+        ):
+            raise FixtureError("Recovery runtime lacks its pinned source identity")
+        if (
+            image == RECOVERY_IMAGES[1]
+            and labels.get("moonmind.source.revision") != revision
+        ):
+            raise FixtureError("Recovery host overlay belongs to another source")
+        if restore_archive and payload["images"][image] != image_id:
+            raise FixtureError(
+                "Restored recovery image content differs from its receipt"
+            )
+        payload["images"][image] = image_id
+    if not restore_archive:
+        _run(["docker", "save", "--output", str(archive), *RECOVERY_IMAGES])
+        payload["archiveDigest"] = _file_digest(archive)
+        state.write_text(json.dumps(payload, indent=2) + "\n")
 
 
 def _run(arguments: list[str]) -> subprocess.CompletedProcess[bytes]:
@@ -168,12 +250,30 @@ def main(argv: list[str] | None = None) -> int:
     for command in (restoration, commands.add_parser("cleanup")):
         command.add_argument("--state", type=Path, required=True)
         command.add_argument("--owner", required=True)
+    for action in ("save-recovery", "restore-recovery"):
+        command = commands.add_parser(action)
+        for flag in ("archive", "state"):
+            command.add_argument("--" + flag, type=Path, required=True)
+        for flag in ("revision", "upstream", "run-id", "attempt"):
+            command.add_argument("--" + flag, required=True)
+        command.add_argument("--artifact")
     args = parser.parse_args(argv)
     try:
         if args.command == "describe":
             print(json.dumps(describe(args.archive)))
         elif args.command == "restore":
             restore(args.archive, args.image, args.state, args.owner)
+        elif args.command in {"save-recovery", "restore-recovery"}:
+            recovery_archive(
+                args.archive,
+                args.state,
+                revision=args.revision,
+                upstream=args.upstream,
+                run_id=args.run_id,
+                attempt=args.attempt,
+                restore_archive=args.command == "restore-recovery",
+                artifact=args.artifact,
+            )
         else:
             cleanup(args.state, args.owner)
     except (FixtureError, OSError, ValueError, subprocess.CalledProcessError) as error:

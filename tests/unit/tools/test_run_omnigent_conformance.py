@@ -21,6 +21,119 @@ def _load_runner():
     return module
 
 
+@pytest.mark.parametrize(
+    "damage",
+    [None, "coverage", "source", "attempt", "owner", "interrupted", "outside-layer"],
+)
+def test_owner_receipts_require_current_complete_collected_coverage(
+    tmp_path, monkeypatch, damage
+):
+    runner = _load_runner()
+    path = "tests/unit/omnigent/test_witness.py"
+    nodeid = path + "::test_witness"
+    identity = dict(revision="a" * 40, runId="123", attempt="2")
+    manifest = {
+        "schema": "moonmind.test-ownership/v1",
+        **identity,
+        "nodes": [
+            {"nodeid": nodeid, "path": path, "eligible": True, "owners": ["unit-fast"]}
+        ],
+    }
+    receipt = {
+        "schema": "moonmind.pytest-verification/v1",
+        **identity,
+        "suite": "unit-fast",
+        "status": "passed",
+        "exitCode": 0,
+        "python": "3.12.12",
+        "errors": [],
+        "expectedNodeIds": [nodeid],
+        "cases": [
+            {
+                "nodeid": nodeid,
+                "outcome": "passed",
+                "phases": {
+                    phase: {"outcome": "passed", "seconds": 0.01}
+                    for phase in ("setup", "call", "teardown")
+                },
+            }
+        ],
+    }
+    if damage == "coverage":
+        manifest["nodes"].append(
+            {
+                "nodeid": path + "::test_missing",
+                "path": path,
+                "eligible": True,
+                "owners": ["unit-fast"],
+            }
+        )
+    if damage == "source":
+        receipt["revision"] = "b" * 40
+    if damage == "attempt":
+        receipt["attempt"] = "1"
+    if damage == "owner":
+        receipt["suite"] = "temporal-boundary"
+    if damage == "interrupted":
+        receipt["cases"][0]["phases"].pop("teardown")
+    if damage == "outside-layer":
+        manifest["nodes"].append(
+            {
+                "nodeid": "tests/unit/core/test_missing.py::test_missing",
+                "path": "tests/unit/core/test_missing.py",
+                "eligible": True,
+                "owners": ["unit-fast"],
+            }
+        )
+    (tmp_path / "owner.receipt.json").write_text(json.dumps(receipt))
+    manifest_path = tmp_path / "ownership.json"
+    manifest_path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(runner, "COMMANDS", ((sys.executable, "-m", "pytest", path),))
+    if damage:
+        with pytest.raises(ValueError):
+            runner.owner_receipt_commands(
+                tmp_path,
+                manifest_path,
+                revision="a" * 40,
+                run_id="123",
+                attempt="2",
+                require_full_source=True,
+            )
+    else:
+        results = runner.owner_receipt_commands(
+            tmp_path, manifest_path, revision="a" * 40, run_id="123", attempt="2"
+        )
+        assert results[0]["nodeIds"] == [nodeid]
+        assert results[0]["ownerReceiptRefs"]
+        retained = tmp_path / "pytest-unit-fast-attempt-2"
+        retained.mkdir()
+        (tmp_path / "owner.receipt.json").rename(retained / "owner.receipt.json")
+        # Actions retains successful jobs during a failed-job rerun. Their
+        # immutable artifact attempt is explicit; another head/run is denied.
+        assert runner.owner_receipt_commands(
+            tmp_path,
+            manifest_path,
+            revision="a" * 40,
+            run_id="123",
+            attempt="3",
+            manifest_attempt="2",
+            require_full_source=True,
+        )
+        current = tmp_path / "pytest-unit-fast-attempt-3"
+        current.mkdir()
+        receipt.update(attempt="3", status="incomplete")
+        (current / "owner.receipt.json").write_text(json.dumps(receipt))
+        with pytest.raises(ValueError):
+            runner.owner_receipt_commands(
+                tmp_path,
+                manifest_path,
+                revision="a" * 40,
+                run_id="123",
+                attempt="3",
+                manifest_attempt="2",
+            )
+
+
 def test_cumulative_remediation_stays_pending_until_production_shaped_proof() -> None:
     runner = _load_runner()
 

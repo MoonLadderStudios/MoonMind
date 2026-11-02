@@ -48,6 +48,7 @@ cleanup() {
   fi
   if [[ -n "$TEMP_COMPOSE_PROJECT_DIR" ]]; then
     for report in "$TEMP_COMPOSE_PROJECT_DIR/$REPORT_PATH/"*.xml \
+      "$TEMP_COMPOSE_PROJECT_DIR/$REPORT_PATH/"*.receipt.json \
       "$TEMP_COMPOSE_PROJECT_DIR/$REPORT_PATH/storage-images.json" \
       "$TEMP_COMPOSE_PROJECT_DIR/$REPORT_PATH/storage-public-port.txt"; do
       if [[ -f "$report" ]]; then
@@ -142,8 +143,12 @@ fi
 # MOONMIND_INTEGRATION_TIMEOUT bounds the run in seconds. The deadline sends
 #   SIGINT so pytest writes its report, then kills after a 30s grace; the run
 #   then exits 124 (137 for the kill).
-INTEGRATION_WORKERS="${MOONMIND_INTEGRATION_WORKERS:-2}"
-pytest_args="tests/integration -m 'integration_ci' --tb=short --timeout 120 --timeout-method=thread --durations=10 -n $INTEGRATION_WORKERS --dist loadfile --junitxml=$REPORT_PATH/$JUNIT_NAME"
+INTEGRATION_WORKERS="${MOONMIND_INTEGRATION_WORKERS:-$(python3 "$SCRIPT_DIR/test_worker_count.py")}"
+if [[ ! "$INTEGRATION_WORKERS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Error: MOONMIND_INTEGRATION_WORKERS must be a positive integer." >&2
+  exit 2
+fi
+pytest_args="tests/integration -m 'integration_ci' -p tools.ci.write_backend_matrix_summary --tb=short --timeout 120 --timeout-method=thread --durations=10 -n $INTEGRATION_WORKERS --dist loadfile --junitxml=$REPORT_PATH/$JUNIT_NAME"
 if [[ "${MOONMIND_INTEGRATION_FAIL_FAST:-0}" == "1" ]]; then
   pytest_args+=" --maxfail=1"
 fi
@@ -210,12 +215,16 @@ run_phase "" "${pipeline_compose[@]}" run --rm \
 # Persist saved inputs, remove their worker workspace, restart the real store,
 # then retrieve historical bytes and independent claims through the adapter.
 run_phase "$REPORT_DIR/storage-images.json" "${pipeline_compose[@]}" images --format json
-run_phase "" "${pipeline_compose[@]}" run --rm pytest bash -lc \
-  "pytest -q tests/integration/temporal/test_storage_restart.py::test_seed_migrated_saved_inputs --timeout 90 --junitxml=$REPORT_PATH/storage-restart-seed.xml"
+run_phase "" "${pipeline_compose[@]}" run --rm \
+  -e "MOONMIND_CI_RECEIPT=${MOONMIND_CI_RECEIPT:+$REPORT_PATH/storage-seed.receipt.json}" \
+  pytest bash -lc \
+  "pytest -q -p tools.ci.write_backend_matrix_summary tests/integration/temporal/test_storage_restart.py::test_seed_migrated_saved_inputs --timeout 90 --junitxml=$REPORT_PATH/storage-restart-seed.xml"
 run_phase "" "${pipeline_compose[@]}" restart minio
 run_phase "" "${pipeline_compose[@]}" up -d --no-recreate --wait --wait-timeout 90 minio
-run_phase "" "${pipeline_compose[@]}" run --rm pytest bash -lc \
-  "pytest -q tests/integration/temporal/test_storage_restart.py::test_retrieve_migrated_saved_inputs_after_restart --timeout 90 --junitxml=$REPORT_PATH/storage-restart-verify.xml"
+run_phase "" "${pipeline_compose[@]}" run --rm \
+  -e "MOONMIND_CI_RECEIPT=${MOONMIND_CI_RECEIPT:+$REPORT_PATH/storage-verify.receipt.json}" \
+  pytest bash -lc \
+  "pytest -q -p tools.ci.write_backend_matrix_summary tests/integration/temporal/test_storage_restart.py::test_retrieve_migrated_saved_inputs_after_restart --timeout 90 --junitxml=$REPORT_PATH/storage-restart-verify.xml"
 
 if (( TEST_STATUS != 0 )); then
   compose "$CLEANUP_TIMEOUT" ps -a > "$REPORT_DIR/compose-ps.txt" 2>&1 \

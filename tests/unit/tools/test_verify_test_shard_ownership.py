@@ -17,6 +17,7 @@ from tools.verify_test_shard_ownership import (
     verify,
     verify_physical_partitions,
     verify_physical_reliability_partitions,
+    verify_audited_test_domains,
 )
 from tools.verify_test_shard_ownership import (
     _run_collection_command as _real_run_collection_command,
@@ -25,6 +26,28 @@ from tools.verify_test_shard_ownership import (
 
 def _node(path: str, *markers: str) -> CollectedNode:
     return CollectedNode(path, path, frozenset(markers))
+
+
+def test_test_only_domain_map_is_checked_against_real_consumer_ownership(tmp_path):
+    from tools.select_test_suites import AUDITED_HERMETIC_TEST_PATHS
+
+    nodes = []
+    for path in AUDITED_HERMETIC_TEST_PATHS:
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("def helper(): pass\n")
+        nodes.append(_node(path, "integration_ci"))
+    assert verify_audited_test_domains(nodes, repo_root=tmp_path) == []
+    consumer = "tests/unit/test_new_consumer.py"
+    (tmp_path / consumer).parent.mkdir(parents=True)
+    (tmp_path / consumer).write_text(
+        "from tests.integration.omnigent.test_generic_bound_native_chat import helper\n"
+    )
+    nodes.append(_node(consumer, "unit_fast"))
+    assert any(
+        consumer in error
+        for error in verify_audited_test_domains(nodes, repo_root=tmp_path)
+    )
 
 
 def test_each_backend_shard_has_one_owner() -> None:
