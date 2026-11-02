@@ -288,6 +288,7 @@ Frozen successors retain each step's saved Profile snapshot. Exact reruns
 inherit their admitted artifact grants before Temporal can start.
 Generated remediation, verification and evidence retries inherit their controller's
 admitted step plan; a replay patch preserves older histories' recorded requests.
+Schedule admission shares ordinary submission's step ID defaults and aliases.
 Fresh scheduled occurrences resolve current step configuration; their cache
 tracks Profile tiers, resolved configuration versions and selected policy authority,
 excluding generated plan refs.
