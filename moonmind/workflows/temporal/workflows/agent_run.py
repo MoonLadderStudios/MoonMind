@@ -478,6 +478,8 @@ AGENT_RUN_SELECTED_MODEL_CAPACITY_RETRY_PATCH_ID = (
     "agent-run-selected-model-capacity-retry-v1"
 )
 AGENT_RUN_SELECTED_POOL_SHARED_PLAN_PATCH_ID = "agent-run-selected-pool-shared-plan-v1"
+AGENT_RUN_SELECTED_FIXED_SHARED_PLAN_PATCH_ID = "agent-run-selected-fixed-shared-plan-v1"
+AGENT_RUN_UNTRANSLATED_SHARED_CONTEXT_PATCH_ID = "agent-run-untranslated-shared-context-v1"
 AGENT_RUN_POOL_PARENT_HANDOFF_PATCH_ID = "agent-run-pool-parent-handoff-v1"
 AGENT_RUN_POOL_CONTEXT_RECEIPT_PATCH_ID = "agent-run-pool-context-receipt-v1"
 AGENT_RUN_MANAGED_NO_PROGRESS_RECONCILIATION_PATCH_ID = (
@@ -6747,6 +6749,15 @@ class MoonMindAgentRun:
                                           timeout=timedelta(seconds=240))
             result = self._pool_plan_response
             if result.get("disposition") == "native":
+                if (
+                    request.step_execution is not None
+                    and request.step_execution.runtime_session_context is not None
+                    and self._workflow_patch_enabled(AGENT_RUN_UNTRANSLATED_SHARED_CONTEXT_PATCH_ID)
+                ):
+                    raise ApplicationError(
+                        "Selected Profile settings cannot carry the admitted shared context",
+                        type="SelectedProfileSharedContextUnavailable", non_retryable=True,
+                    )
                 return request
             if result.get("disposition") != "shared":
                 raise ApplicationError(
@@ -6818,7 +6829,11 @@ class MoonMindAgentRun:
         # This capability hint selects the transition, never launch authority.
         return (
             runtime_id in {"codex_cli", "claude_code"}
-            and self._profile_selector_has_constraints(request.profile_selector)
+            and (
+                self._profile_selector_has_constraints(request.profile_selector)
+                or bool(request.execution_profile_ref)
+                and self._workflow_patch_enabled(AGENT_RUN_SELECTED_FIXED_SHARED_PLAN_PATCH_ID)
+            )
             and self._assigned_slot_fencing_generation is not None
             and self._workflow_patch_enabled(AGENT_RUN_SELECTED_POOL_SHARED_PLAN_PATCH_ID)
             and (

@@ -75,8 +75,35 @@ async def test_pool_selected_api_key_settings_reach_the_shared_host(native_journ
     await execute_selected_pool_source(native_journey, monkeypatch)
 
 
+@pytest.mark.parametrize(
+    "native_journey", ["codex-native", "claude-native"], indirect=True,
+)
+async def test_fixed_serialized_account_uses_the_same_fenced_plan_owner(
+    native_journey, monkeypatch,
+):
+    await execute_selected_pool_source(native_journey, monkeypatch, fixed_serialized=True)
+
+
+def _submission(payload, *, fixed_serialized, runtime):
+    if not fixed_serialized:
+        return payload
+    parameters = payload["payload"]
+    selected = parameters["workflow"]["runtime"]
+    selected.pop("profileSelector")
+    selected["providerProfileRef"] = native_fixture.PROFILE
+    return {
+        "workflowType": "MoonMind.UserWorkflow",
+        "initialParameters": {
+            **parameters, "targetRuntime": runtime,
+            "profileId": native_fixture.PROFILE,
+            "operatorExtension": {"accepted": "preserve-original-input"},
+        },
+    }
+
+
 async def execute_selected_pool_source(
-    native_journey, monkeypatch, *, scenario="ordinary", include_successor=False
+    native_journey, monkeypatch, *, scenario="ordinary", include_successor=False,
+    fixed_serialized=False,
 ):
     """Exercise the first admitted pool turn, optionally retaining a second step."""
     journey = native_journey
@@ -139,7 +166,7 @@ async def execute_selected_pool_source(
         ) as client:
             response = await client.post(
                 "/api/executions",
-                json={
+                json=_submission({
                     "type": "workflow",
                     "payload": {
                         "workflow": {
@@ -188,7 +215,7 @@ async def execute_selected_pool_source(
                         "publishMode": "none",
                         **({"repository": repository} if repository else {}),
                     },
-                },
+                }, fixed_serialized=fixed_serialized, runtime=runtime),
             )
         assert response.status_code == 201, response.text
         record = await session.get(
@@ -199,8 +226,8 @@ async def execute_selected_pool_source(
         request = agent_requests(
             record.parameters, workflow_id=record.workflow_id, run_id=record.run_id
         )["work"]
-        assert request.execution_profile_ref is None
-        assert request.profile_selector.tags_all == ["selected-pool"]
+        assert request.execution_profile_ref == (native_fixture.PROFILE if fixed_serialized else None)
+        assert request.profile_selector.tags_all == ([] if fixed_serialized else ["selected-pool"])
         selected = request.model_copy(
             update={"execution_profile_ref": native_fixture.PROFILE}
         )
@@ -297,7 +324,7 @@ async def execute_selected_pool_source(
         "profile_id": native_fixture.PROFILE,
         "runId": owner_run,
         "fencing_generation": 7,
-        "originalProfileRef": None,
+        "originalProfileRef": native_fixture.PROFILE if fixed_serialized else None,
         "request": selected.model_dump(mode="json", by_alias=True),
     }
     if scenario == "disabled":
@@ -341,6 +368,9 @@ async def execute_selected_pool_source(
         assert shared.execution_budget == request.execution_budget
         assert shared.terminal_contract == request.terminal_contract
         assert shared.profile_selector == request.profile_selector
+        if fixed_serialized:
+            assert record.parameters["operatorExtension"] == {"accepted": "preserve-original-input"}
+            assert shared.parameters.get("operatorExtension") == request.parameters.get("operatorExtension")
         artifacts = TemporalArtifactService(TemporalArtifactRepository(session))
         access = ArtifactAccessContext.for_execution(parent_id)
         _, frozen_skill_bytes = await artifacts.read(
@@ -486,9 +516,13 @@ async def execute_selected_pool_source(
         request=shared, admission=admission, parent_info=None
     )
     assert len(requests) == 1
-    assert requests[0]["profile_selector"] == shared.profile_selector.model_dump(
-        by_alias=True, exclude_none=True
-    )
+    if fixed_serialized:
+        assert requests[0]["execution_profile_ref"] == native_fixture.PROFILE
+        assert "profile_selector" not in requests[0]
+    else:
+        assert requests[0]["profile_selector"] == shared.profile_selector.model_dump(
+            by_alias=True, exclude_none=True
+        )
     assert admitted.admitted_provider_capacity.lease_owner_id == owner
     assert admitted.admitted_provider_capacity.execution_plan_ref == plan.planRef
     journey.plan, journey.request, journey.provider_lease_id = (
