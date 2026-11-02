@@ -53,7 +53,7 @@ jsonschema = { version = "^4.26.0", optional = true }
 aiosqlite = { version = ">=0.19.0,<0.23.0", optional = true }
 typer = ">=0.23.1,<0.28.0"
 click = "8.5.0"
-temporalio = ">=1.25,<1.35"
+temporalio = ">=1.25,<1.36"
 protobuf = ">=6.33.6,<8.0"
 opentelemetry-api = "^1.45.1"
 opentelemetry-sdk = "^1.25.0"
