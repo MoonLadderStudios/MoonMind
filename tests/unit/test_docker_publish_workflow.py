@@ -188,6 +188,32 @@ def test_docker_publish_source_owner_checks_frontend_while_image_builds():
     assert "run-generated-contracts" in tests["jobs"]
 
 
+def test_missing_source_handoff_fails_before_artifact_download(tmp_path):
+    import os
+    import subprocess
+
+    steps = _load_workflow()["jobs"]["verify-source-receipt"]["steps"]
+    guard = next(
+        step for step in steps
+        if step.get("name") == "Require the selected source handoff before downloading"
+    )
+    download = next(
+        step for step in steps
+        if step.get("uses", "").startswith("actions/download-artifact@")
+    )
+    assert steps.index(guard) < steps.index(download)
+    assert guard["env"]["SOURCE_ARTIFACT"] == download["with"]["name"]
+    for artifact, accepted in [("", False), ("source-verification-123-1", True)]:
+        result = subprocess.run(
+            ["bash", "-eu", "-c", guard["run"]],
+            cwd=tmp_path,
+            env={"PATH": os.environ["PATH"], "SOURCE_ARTIFACT": artifact},
+            capture_output=True,
+            text=True,
+        )
+        assert (result.returncode == 0) == accepted, result.stdout + result.stderr
+
+
 def test_dockerfile_uses_buildkit_package_cache_mounts() -> None:
     dockerfile = DOCKERFILE_PATH.read_text(encoding="utf-8")
 
