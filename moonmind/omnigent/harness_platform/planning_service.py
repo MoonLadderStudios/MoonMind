@@ -64,7 +64,10 @@ from moonmind.omnigent.harness_platform.stores import (
     OmnigentExecutionPlanUsageStore,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
-from moonmind.workflows.executions.model_resolver import resolve_model_effort
+from moonmind.workflows.executions.model_resolver import (
+    apply_profile_model_alias,
+    resolve_model_effort,
+)
 
 
 def _digest(value: Any) -> str:
@@ -876,6 +879,11 @@ class OmnigentExecutionPlanningService:
                 code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
             ) from exc
         model = str(resolved.model or self._deployment_default_model).strip()
+        if (
+            str(provider.runtime_id) in {"codex_cli", "claude_code"}
+            and resolved.model_source == "task_override"
+        ):
+            model = apply_profile_model_alias(provider, model)
         if not model:
             raise HarnessPlatformError(
                 "no model authority is available for generic Omnigent execution",

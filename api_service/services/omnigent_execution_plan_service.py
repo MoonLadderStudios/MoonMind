@@ -1971,6 +1971,16 @@ async def compile_and_persist_execution_plan(
     }
     model = document.get("model")
     model_mapping = dict(model) if isinstance(model, Mapping) else {}
+    raw_selected_model = (
+        initial_parameters["model"]
+        if "model" in initial_parameters
+        else model_mapping.get("model")
+    )
+    selected_model = str(raw_selected_model or "").strip() or None
+    if str(getattr(provider_profile, "runtime_id", "")) in {"codex_cli", "claude_code"}:
+        from moonmind.workflows.executions.model_resolver import apply_profile_model_alias
+
+        selected_model = apply_profile_model_alias(provider_profile, selected_model)
     # MoonLadderStudios/MoonMind#4009: repository slot declarations derive
     # from admitted profile authority plus trusted delivery / publication
     # declarations when those owners supply them (#4011/#1090; issuance is
@@ -1995,12 +2005,7 @@ async def compile_and_persist_execution_plan(
         host_class=host_class,
         launch_policy_ref=launch_policy_ref,
         launch_policy=planner_launch_policy,
-        model_qualified_id=(
-            str(
-                (initial_parameters["model"] if "model" in initial_parameters else model_mapping.get("model")) or ""
-            ).strip()
-            or None
-        ),
+        model_qualified_id=selected_model,
         model_effort=(
             str(
                 (initial_parameters["effort"] if "effort" in initial_parameters else model_mapping.get("effort")) or ""
