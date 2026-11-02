@@ -1037,6 +1037,7 @@ async def _compile_plan(
     session_settings=None,
     additional_files=None,
     oauth_tuning=None,
+    api_key_tuning=None,
     oauth_private_config=False,
     private_profile_config=False,
     instructions="Generate a report.",
@@ -1117,6 +1118,9 @@ async def _compile_plan(
     if oauth_tuning:
         assert oauth and runtime_id in {"codex_cli", "claude_code"}
         fields["env_template"] = dict(oauth_tuning)
+    if api_key_tuning:
+        assert api_key and runtime_id in {"codex_cli", "claude_code"}
+        fields["env_template"] = {**(fields.get("env_template") or {}), **api_key_tuning}
     profile = ManagedAgentProviderProfile(
         profile_id=PROFILE,
         runtime_id=runtime_id,
@@ -1330,6 +1334,7 @@ async def native_journey(
                 session_settings=selection.get("sessionSettings"),
                 additional_files=selection.get("additionalFiles"),
                 oauth_tuning=selection.get("oauthTuning"),
+                api_key_tuning=selection.get("apiKeyTuning"),
                 oauth_private_config=bool(selection.get("oauthPrivateConfiguration")),
                 private_profile_config=bool(selection.get("privateProfileConfiguration")),
                 instructions=instructions,
@@ -1656,6 +1661,19 @@ async def test_admitted_oauth_environment_templates_use_the_attempt_context(nati
     assert journey.docker.launch_env["PROJECT_REPORT_ROOT"] == "/workspaces/run/reports"
     assert journey.docker.launch_env["PROJECT_SUPPORT_ROOT"] == "/home/app/.omnigent/moonmind/runtime-context"
     assert journey.docker.launch_env["PROJECT_RUNTIME_STYLE"] == "literal $(not-executed)"
+
+
+@pytest.mark.parametrize("native_journey", [
+    {"harness": harness, "apiKeyTuning": {"PROJECT_RUNTIME_STYLE": "  exact $(not-executed) literal  "}}
+    for harness in ("codex-native-api-key", "claude-native-api-key")
+], indirect=True)
+async def test_admitted_api_key_shell_values_keep_the_selected_snapshot(native_journey):
+    async with native_journey.session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, PROFILE)
+        profile.env_template = {**profile.env_template, "PROJECT_RUNTIME_STYLE": "later Profile edit"}
+        await session.commit()
+    await assert_native_turn_saved_and_cleaned(native_journey)
+    assert native_journey.docker.launch_env["PROJECT_RUNTIME_STYLE"] == "  exact $(not-executed) literal  "
 
 
 @pytest.mark.parametrize("native_journey", [

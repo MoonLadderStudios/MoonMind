@@ -621,7 +621,7 @@ def _declared_key_launch(
     """Split an API-key Profile's launch environment into key role and literals.
 
     Returns ``(key_role, literals, "")`` when the declared environment is one
-    key SecretRef plus literals the provider config has a field for, or
+    key SecretRef plus provider fields and validated nonsecret project values, or
     ``("", {}, reason)`` naming why it cannot be carried exactly.
     """
 
@@ -641,14 +641,19 @@ def _declared_key_launch(
                 return "", {}, f"secret role {role!r} has no SecretRef"
             key_role = role
         elif isinstance(value, str) and value.strip() and "{{" not in value:
-            literals[name] = value.strip()
+            literals[name] = value.strip() if name in carried_literal_env else value
         else:
             return "", {}, f"{name} is not a literal value"
     if not key_role:
         return "", {}, f"no {' or '.join(sorted(key_env))} SecretRef"
     uncarried = sorted(set(literals) - carried_literal_env)
     if uncarried:
-        return "", {}, f"launch environment {uncarried} has no provider-config field"
+        from moonmind.omnigent.host_services.runtime_scripts import validate_provider_literal_launch_environment
+
+        try:
+            validate_provider_literal_launch_environment({key: literals[key] for key in uncarried})
+        except ValueError:
+            return "", {}, f"launch environment {uncarried} cannot use nonsecret delivery"
     return key_role, literals, ""
 
 
@@ -689,7 +694,7 @@ def claude_provider_config_endpoint(
             {
                 key: value
                 for key, value in literals.items()
-                if key in PROVIDER_LITERAL_LAUNCH_ENV
+                if key in PROVIDER_LITERAL_LAUNCH_ENV or key not in _CLAUDE_CARRIED_LITERAL_ENV
             }
         )
     except ValueError as error:
@@ -776,6 +781,7 @@ def codex_provider_config_endpoint(
         ProviderConfigEndpoint(
             family="openai", secretRole=key_role, baseUrl=base_url,
             codexConfiguration=private_preferences,
+            launchEnvironment={key: value for key, value in literals.items() if key not in _CODEX_CARRIED_LITERAL_ENV},
         ),
         "",
     )
