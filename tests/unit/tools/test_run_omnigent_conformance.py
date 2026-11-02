@@ -258,7 +258,7 @@ def test_3480_report_declares_failure_rollout_and_parent_linkage() -> None:
     assert runner.EVIDENCE_GROUPS["failureAndRestartMatrix"] == (
         "tests/integration/reliability_journey/"
         "test_omnigent_cumulative_remediation_journey.py",
-        "tests/integration/omnigent/test_embedded_recovery.py",
+        "tests/integration/omnigent/test_generic_native_durable_journey.py",
     )
     assert runner.EVIDENCE_GROUPS["rolloutAndReplay"] == (
         "tests/unit/workflows/adapters/test_external_adapter_registry.py",
@@ -533,16 +533,16 @@ def test_deterministic_python_layers_select_each_module_once() -> None:
             modules = target.rglob("test_*.py") if target.is_dir() else (target,)
             selected.update(module for module in modules if module not in ignored)
 
-    recovery = REPO_ROOT / "tests/integration/omnigent/test_embedded_recovery.py"
+    recovery = REPO_ROOT / "tests/integration/omnigent/test_generic_native_durable_journey.py"
     assert selected[recovery] == 1
     assert all(count == 1 for count in selected.values()), selected
-    # Keep the ordinary integration modules and the existing DB exclusion.
+    # Ordinary integration still runs; installed-image recovery has its own owner.
     assert (
         selected[REPO_ROOT / "tests/integration/omnigent/test_bridge_conformance.py"]
         == 1
     )
     assert (
-        selected[REPO_ROOT / "tests/integration/omnigent/test_host_auth_lifecycle.py"]
+        selected[REPO_ROOT / "tests/integration/omnigent/test_exact_docker_n_way_concurrency.py"]
         == 0
     )
 
@@ -552,7 +552,7 @@ def test_recovery_evidence_retains_its_executed_command_and_failure(
     monkeypatch, tmp_path: Path, recovery_exit_code: int
 ) -> None:
     runner = _load_runner()
-    recovery = "tests/integration/omnigent/test_embedded_recovery.py"
+    recovery = "tests/integration/omnigent/test_generic_native_durable_journey.py"
     commands_run = []
 
     def run(command, **kwargs):

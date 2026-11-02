@@ -76,7 +76,6 @@ async def chat(tmp_path, monkeypatch):
     app.dependency_overrides[bridge._get_execution_service] = lambda: None
     app.dependency_overrides[bridge._get_bridge_store] = lambda: store
     app.dependency_overrides[bridge._get_bridge_proxy] = lambda: proxy
-    app.dependency_overrides[bridge._get_create_embedded_facade] = lambda: None
     app.dependency_overrides[bridge.get_capability_registry] = _fake_registry
     app.dependency_overrides[bridge._require_bridge_enabled] = lambda: SimpleNamespace(
         enabled=True, host_protocol_mode="upstream_omnigent_server_proxy"

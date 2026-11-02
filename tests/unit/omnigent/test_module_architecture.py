@@ -39,7 +39,6 @@ RESPONSIBILITY_MODULES: dict[str, tuple[str, ...]] = {
         "moonmind/omnigent/harness_platform/harness_registry.py",
         "moonmind/omnigent/codex_execution_decisions.py",
         "moonmind/omnigent/execution_ports.py",
-        "moonmind/omnigent/host_auth_contracts.py",
         "moonmind/omnigent/host_failures.py",
         "moonmind/omnigent/host_ports.py",
     ),

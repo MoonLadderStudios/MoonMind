@@ -46,7 +46,15 @@ MoonMind treats the bundled Omnigent UI as trusted first-party code, so same-ori
 
 **Proxy mode** is the only selectable `hostProtocolMode` (`upstream_omnigent_server_proxy`), because stock Omnigent Server already owns the host/runner tunnel. The bridge persists bindings, idempotency state, and event and artifact refs, and calls stock session/event/resource/control APIs; the host speaks its native protocol, which the bridge treats as a versioned compatibility profile.
 
-**Embedded mode** (`embedded_omnigent_compatible_server`) is retired and admits no new work. Selecting it fails fast naming the proxy alternative, and embedded host routes answer `410 Gone` with `omnigent_embedded_transport_retired` (WebSocket denials use the same code as the close reason). The value remains decodable so retained sessions keep their recorded mode: session-scoped controls dispatch by each row's recorded mode, so retained embedded sessions keep their cleanup owner. See [`EmbeddedHostAuthCompatibility.md`](EmbeddedHostAuthCompatibility.md). The Workflow Chat `embedded=1` presentation option is unrelated.
+**Embedded mode** (`embedded_omnigent_compatible_server`) has been removed.
+Enabling it fails configuration validation. Old host and host-auth URLs answer
+`410 Gone` with `omnigent_embedded_transport_retired`; host and runner tunnels
+close with `4404` and the proxy alternative. Retained session metadata, event
+journals and captured terminal transcripts remain readable through the existing
+binding and artifact owners. Old identities never attach to the current proxy,
+and late retries or controls cannot recreate the removed transport. See
+[`EmbeddedHostAuthCompatibility.md`](EmbeddedHostAuthCompatibility.md). The
+Workflow Chat `embedded=1` presentation option is unrelated.
 
 **Direct Codex compatibility** routes the bridge event model through the direct Codex managed-session adapter. It is a compatibility and historical-read path that emits bridge-shaped diagnostic evidence, not a second primary Chat renderer; see [`CodexSupportAndCutover.md`](./CodexSupportAndCutover.md).
 
