@@ -278,8 +278,10 @@ serialized plans, native extension inputs/direct targets, Profiles without exact
 translation, and native context or options without an equivalent plan handoff.
 Codex/Claude pool steps resolve their account at dispatch through the existing
 Profile Manager, then bind that account's immutable plan to the same fenced slot.
-Preparation retries reuse the plan and recorded Skill manifest without another
-account choice or capacity unit. Codex same-epoch successors carry the selected
+Preparation retries reuse the plan, recorded Skill manifest and selected account's
+model-resolution evidence without another account choice or capacity unit. Later
+Profile edits cannot change that evidence; ordinary explicit metadata keeps its
+existing precedence over tier defaults. Codex same-epoch successors carry the selected
 account, durable context and verified saved workspace through the parent,
 including Continue-As-New. Old parents without this handoff keep native dispatch.
 Fresh native steps with equivalent configuration use this same fenced handoff
