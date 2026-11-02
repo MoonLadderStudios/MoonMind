@@ -5,6 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 
+def oauth_home_path_keys(runtime_id: str) -> tuple[str, ...]:
+    """Environment selectors persisted by first-party OAuth enrollment."""
+    return {
+        "codex_cli": ("CODEX_HOME",),
+        "claude_code": ("CLAUDE_HOME", "CLAUDE_CONFIG_DIR"),
+    }.get(runtime_id, ())
+
+
 CODEX_OAUTH_EXCLUSIVE_CAPACITY_ERROR = (
     "Codex OAuth Provider Profiles require max_parallel_runs=1 because the "
     "OAuth home contains mutable refresh-token and credential state."
