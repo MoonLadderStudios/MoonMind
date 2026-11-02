@@ -408,6 +408,7 @@ async def test_queued_direct_materialization_repairs_only_the_unchanged_managed_
 @pytest.mark.parametrize("format_,content,filename,expected", [
     ("text", "Keep project instructions from the selected Profile.\n", "AGENTS.md", "Keep project instructions"),
     ("json", {"project": "{{workspace_path}}", "style": "concise"}, "preferences/settings.json", '"style": "concise"'),
+    ("text", "Bound to the current workspace.", "workspace-{{workspace_path}}.txt", "current workspace"),
 ])
 def test_additional_profile_files_reach_the_private_native_home(tmp_path, format_, content, filename, expected):
     from moonmind.provider_profiles.codex_configuration import (
@@ -434,7 +435,7 @@ def test_additional_profile_files_reach_the_private_native_home(tmp_path, format
     from moonmind.provider_profiles.codex_configuration import configure_profile_files
 
     configure_profile_files(configuration, private_home, workspace)
-    actual = private_home / filename
+    actual = private_home / filename.replace("{{workspace_path}}", str(workspace))
     assert expected in actual.read_text()
     assert actual.stat().st_mode & 0o777 == 0o600
     if format_ == "json":
@@ -444,6 +445,25 @@ def test_additional_profile_files_reach_the_private_native_home(tmp_path, format
     assert vars(selected) == before
     configure_profile_files(configuration, private_home, workspace)
     assert expected in actual.read_text()
+
+
+@pytest.mark.parametrize("relative_path", [
+    "{{provider_api_key}}.txt", "{{ provider_api_key }}.txt", "nested/{{unavailable}}.json",
+])
+def test_additional_file_paths_requiring_unavailable_context_keep_native_delivery(relative_path):
+    from moonmind.provider_profiles.codex_configuration import configuration_for_profile
+
+    selected = profile()
+    selected.file_templates.append({
+        "path": "{{runtime_support_dir}}/codex-home/" + relative_path,
+        "format": "text", "merge_strategy": "replace", "permissions": "0600",
+        "content_template": "Nonsecret file content.",
+    })
+    before = copy.deepcopy(vars(selected))
+    configuration, reason = configuration_for_profile(selected)
+    assert configuration is None
+    assert reason
+    assert vars(selected) == before
 
 
 @pytest.mark.parametrize("path", ["auth.json", "config.toml", "sessions/history.jsonl", "archived_sessions/history.jsonl", "../outside", ".moonmind-profile-file-digest"])

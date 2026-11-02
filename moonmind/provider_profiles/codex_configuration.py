@@ -184,6 +184,12 @@ def _additional_file(template, home_path):
         or any(part.startswith(".moonmind-") for part in relative.parts)
     ):
         raise ValueError("additional Codex files cannot replace authentication or history")
+    # The private-home prefix was already translated above. Only workspace
+    # context remains equivalent in the relative filename; SecretRef aliases
+    # and other support-directory substitutions require their native owner.
+    available_path = re.sub(r"{{\s*workspace_path\s*}}", "", str(relative))
+    if _has_authority(available_path):
+        raise ValueError("additional Codex file paths require available nonsecret context")
     if int(template["permissions"], 8) != 0o600:
         raise ValueError("additional Codex files require private permissions")
     if template["format"] not in {"text", "json", "toml"} or template["merge_strategy"] not in {"replace", "deep_merge", "append"}:
