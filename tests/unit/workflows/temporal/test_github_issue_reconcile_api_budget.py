@@ -188,8 +188,10 @@ async def test_a_retained_settled_status_is_not_re_read_until_the_issue_changes(
 
 @pytest.mark.asyncio
 async def test_one_repository_is_swept_once_whatever_its_spelling(monkeypatch, tmp_path) -> None:
+    from unittest.mock import AsyncMock
     from moonmind.config.settings import settings
     from moonmind.workflows.temporal import github_issue_claim_recovery as recovery
+    from moonmind.workflows.temporal import github_project
 
     async def local_claims(*, state):
         return {"repositories": ["moonladderstudios/moonmind"], "results": []}
@@ -202,6 +204,7 @@ async def test_one_repository_is_swept_once_whatever_its_spelling(monkeypatch, t
 
     monkeypatch.setattr(recovery, "reconcile_local_claims", local_claims)
     monkeypatch.setattr(acts, "reconcile_github_issue_handoffs", sweep)
+    monkeypatch.setattr(github_project, "reconcile_project_claims", AsyncMock(return_value=[]))
     monkeypatch.setattr(settings.workflow, "github_repository", "MoonLadderStudios/MoonMind")
 
     await acts.reconcile_local_github_issue_claims(state_dir=str(tmp_path))
