@@ -32,6 +32,10 @@ jobs:
     uses: ./.github/workflows/pytest-unit-tests.yml
     with:
       verification_phase: source
+  prepare-recovery-images:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/prepare-recovery-images.yml
   build:
     needs: metadata
     runs-on: ${{ matrix.runner }}
@@ -171,7 +175,7 @@ jobs:
   qualify:
     needs:
       - assemble
-      - source-checks
+      - prepare-recovery-images
     permissions:
       contents: read
       packages: read
@@ -180,8 +184,7 @@ jobs:
       candidate_image: ${{ needs.assemble.outputs.image_ref }}
 
       verification_phase: artifact
-      source_receipt_artifact: ${{ needs.source-checks.outputs.source_receipt_artifact }}
-      recovery_images_artifact: ${{ needs.source-checks.outputs.recovery_images_artifact }}
+      recovery_images_artifact: ${{ needs.prepare-recovery-images.outputs.artifact }}
   qualify-migrations:
     permissions:
       contents: read
@@ -189,6 +192,32 @@ jobs:
     with:
       qualification_run_id: ${{ github.run_id }}
 
+  verify-source-receipt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Download current source receipt
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: ${{ needs.source-checks.outputs.source_receipt_artifact }}
+          path: artifacts/source-verification
+      - name: Verify the immutable source/run/attempt handoff
+        run: |
+          python3 tools/ci/source_verification.py verify artifacts/source-verification/receipt.json \
+            --revision "$MOONMIND_CI_REVISION" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --artifact "$SOURCE_ARTIFACT"
+        env:
+          SOURCE_ARTIFACT: ${{ needs.source-checks.outputs.source_receipt_artifact }}
+          MOONMIND_CI_REVISION: ${{ github.sha }}
+    needs:
+      - source-checks
+      - qualify
+      - assemble
+      - qualify-migrations
   publish-latest:
     needs:
       - metadata
@@ -196,6 +225,7 @@ jobs:
       - qualify
       - qualify-migrations
       - source-checks
+      - verify-source-receipt
     runs-on: ubuntu-latest
     # Preserve ordering when multiple qualified builds finish out of order.
     concurrency:
@@ -222,10 +252,11 @@ jobs:
           QUALIFICATION_RESULT: ${{ needs.qualify.result }}
           MIGRATION_RESULT: ${{ needs.qualify-migrations.result }}
           SOURCE_RESULT: ${{ needs.source-checks.result }}
+          SOURCE_RECEIPT_RESULT: ${{ needs.verify-source-receipt.result }}
         run: |
           set -euo pipefail
           # Job dependencies and the actual mutation boundary both fail closed.
-          for gate in ASSEMBLY_RESULT SOURCE_RESULT QUALIFICATION_RESULT MIGRATION_RESULT; do
+          for gate in ASSEMBLY_RESULT SOURCE_RESULT SOURCE_RECEIPT_RESULT QUALIFICATION_RESULT MIGRATION_RESULT; do
             if [[ "${!gate:-}" != "success" ]]; then
               echo "::error::Required release result $gate did not succeed"
               exit 1

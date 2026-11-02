@@ -49,6 +49,7 @@ cleanup() {
   if [[ -n "$TEMP_COMPOSE_PROJECT_DIR" ]]; then
     for report in "$TEMP_COMPOSE_PROJECT_DIR/$REPORT_PATH/"*.xml \
       "$TEMP_COMPOSE_PROJECT_DIR/$REPORT_PATH/"*.receipt.json \
+      "$TEMP_COMPOSE_PROJECT_DIR/$REPORT_PATH/"*.environment.json \
       "$TEMP_COMPOSE_PROJECT_DIR/$REPORT_PATH/storage-images.json" \
       "$TEMP_COMPOSE_PROJECT_DIR/$REPORT_PATH/storage-public-port.txt"; do
       if [[ -f "$report" ]]; then
@@ -210,7 +211,7 @@ fi
 run_phase "" "${pipeline_compose[@]}" run --rm \
   -e MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS=1 \
   pytest \
-  bash -lc "pytest $pytest_args"
+  bash -lc "python tools/ci/write_backend_matrix_summary.py run -- $pytest_args"
 
 # Persist saved inputs, remove their worker workspace, restart the real store,
 # then retrieve historical bytes and independent claims through the adapter.
@@ -218,13 +219,13 @@ run_phase "$REPORT_DIR/storage-images.json" "${pipeline_compose[@]}" images --fo
 run_phase "" "${pipeline_compose[@]}" run --rm \
   -e "MOONMIND_CI_RECEIPT=${MOONMIND_CI_RECEIPT:+$REPORT_PATH/storage-seed.receipt.json}" \
   pytest bash -lc \
-  "pytest -q -p tools.ci.write_backend_matrix_summary tests/integration/temporal/test_storage_restart.py::test_seed_migrated_saved_inputs --timeout 90 --junitxml=$REPORT_PATH/storage-restart-seed.xml"
+  "python tools/ci/write_backend_matrix_summary.py run -- -q -p tools.ci.write_backend_matrix_summary tests/integration/temporal/test_storage_restart.py::test_seed_migrated_saved_inputs --timeout 90 --junitxml=$REPORT_PATH/storage-restart-seed.xml"
 run_phase "" "${pipeline_compose[@]}" restart minio
 run_phase "" "${pipeline_compose[@]}" up -d --no-recreate --wait --wait-timeout 90 minio
 run_phase "" "${pipeline_compose[@]}" run --rm \
   -e "MOONMIND_CI_RECEIPT=${MOONMIND_CI_RECEIPT:+$REPORT_PATH/storage-verify.receipt.json}" \
   pytest bash -lc \
-  "pytest -q -p tools.ci.write_backend_matrix_summary tests/integration/temporal/test_storage_restart.py::test_retrieve_migrated_saved_inputs_after_restart --timeout 90 --junitxml=$REPORT_PATH/storage-restart-verify.xml"
+  "python tools/ci/write_backend_matrix_summary.py run -- -q -p tools.ci.write_backend_matrix_summary tests/integration/temporal/test_storage_restart.py::test_retrieve_migrated_saved_inputs_after_restart --timeout 90 --junitxml=$REPORT_PATH/storage-restart-verify.xml"
 
 if (( TEST_STATUS != 0 )); then
   compose "$CLEANUP_TIMEOUT" ps -a > "$REPORT_DIR/compose-ps.txt" 2>&1 \

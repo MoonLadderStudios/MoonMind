@@ -103,6 +103,12 @@ def main() -> None:
     }
     identity = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     print("key=" + identity)
+    python_version = re.search(
+        r"^ARG PYTHON_BASE=python:(\d+\.\d+)", dockerfile, re.MULTILINE
+    )
+    if not python_version:
+        raise ValueError("Test-runtime Python verification profile is unknown")
+    print("python=" + python_version[1])
     for name, image in bases.items():
         print(name + "=" + image)
 

@@ -66,7 +66,11 @@ def _image_value(expression, candidate):
 
 
 def _qualification_context(
-    *, assembly="success", source="success", migration="success"
+    *,
+    assembly="success",
+    source="success",
+    migration="success",
+    source_receipt="success",
 ):
     jobs = _workflow("docker-publish.yml")["jobs"]
     context = {}
@@ -75,6 +79,8 @@ def _qualification_context(
             context[name] = {"result": source}
         elif job.get("uses") == "./.github/workflows/alembic-migration-gate.yml":
             context[name] = {"result": migration}
+        elif name == "verify-source-receipt":
+            context[name] = {"result": source_receipt}
         elif "image_ref" in job.get("outputs", {}):
             context[name] = {"result": assembly, "outputs": {"image_ref": CANDIDATE}}
         elif "image_name" in job.get("outputs", {}):
@@ -91,6 +97,7 @@ def _run_writer(
     assembly="success",
     source="success",
     migration="success",
+    source_receipt="success",
     ref="refs/heads/main",
     main_head="candidate-commit",
     candidate=CANDIDATE,
@@ -98,7 +105,10 @@ def _run_writer(
 ):
     writer = step if step is not None else _writer()[2]
     needs = _qualification_context(
-        assembly=assembly, source=source, migration=migration
+        assembly=assembly,
+        source=source,
+        migration=migration,
+        source_receipt=source_receipt,
     )
     for value in needs.values():
         if "image_ref" in value.get("outputs", {}):
@@ -166,7 +176,7 @@ def _run_writer(
     return result, channel.read_text(), commands
 
 
-@pytest.mark.parametrize("gate", ["assembly", "source", "migration"])
+@pytest.mark.parametrize("gate", ["assembly", "source", "migration", "source_receipt"])
 @pytest.mark.parametrize(
     "outcome", ["failure", "cancelled", "timed_out", "skipped", ""]
 )
@@ -396,7 +406,7 @@ def test_exact_probe_and_recovery_consumers_keep_registry_and_local_identities_d
         step = next(
             step
             for candidate_job in jobs
-            for step in candidate_job["steps"]
+            for step in candidate_job.get("steps", [])
             if consumer in step.get("run", "")
         )
         argument = re.search(re.escape(flag) + r'\s+"([^"\n]+)"', step["run"])[1]
@@ -627,7 +637,12 @@ def test_release_source_checks_start_before_assembly_and_only_once():
     assert source["with"]["verification_phase"] == "source"
     assert "assemble" not in _ancestors(config["jobs"], "source-checks")
     assert config["jobs"]["qualify"]["with"]["verification_phase"] == "artifact"
-    assert "source-checks" in _ancestors(config["jobs"], "qualify")
+    assert "source-checks" not in _ancestors(config["jobs"], "qualify")
+    assert "prepare-recovery-images" in _ancestors(config["jobs"], "qualify")
+    assert "assemble" not in _ancestors(config["jobs"], "prepare-recovery-images")
+    proof = config["jobs"]["verify-source-receipt"]
+    assert {"source-checks", "qualify", "assemble"} <= set(proof["needs"])
+    assert "verify-source-receipt" in _ancestors(config["jobs"], _writer()[0])
     test_events = _workflow("pytest-unit-tests.yml")
     events = test_events.get("on", test_events.get(True))
     assert "push" not in events
@@ -644,3 +659,13 @@ def test_one_pr_candidate_is_consumed_by_every_installed_lane():
             for step in jobs[name]["steps"]
         )
     assert "prepare-app-image" not in _ancestors(jobs, "integration-hermetic")
+
+
+def test_review_readiness_keeps_the_existing_same_head_verification():
+    for name in ("pytest-unit-tests.yml", "alembic-migration-gate.yml"):
+        workflow = _workflow(name)
+        events = workflow.get("on", workflow.get(True))
+        assert {"opened", "synchronize", "reopened"} <= set(
+            events["pull_request"]["types"]
+        )
+        assert "ready_for_review" not in events["pull_request"]["types"]
