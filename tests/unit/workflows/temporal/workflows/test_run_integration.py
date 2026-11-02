@@ -15,7 +15,6 @@ from moonmind.workflows.temporal.workflows.run import (
     NATIVE_PR_LEASE_CONFLICT_GATE_PATCH,
     NATIVE_PR_PUSH_STATUS_GATE_PATCH,
     RUN_CONDITIONAL_REGISTRY_READ_PATCH,
-    RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH,
     RUN_DURABLE_PUBLISH_CONTEXT_MERGE_HANDOFF_PATCH,
     RUN_EMPTY_AGENT_SKILLSET_SNAPSHOT_PATCH,
     RUN_EXPLICIT_STEP_RETRY_RECOMMENDATION_PATCH,
@@ -6773,6 +6772,61 @@ def test_omnigent_remediation_restores_head_before_agent_launch(
     assert not mock_run_workflow._remediation_workspace_materialization_required(
         node
     )
+
+
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code"])
+@pytest.mark.parametrize("shared_recovery", [False, True])
+def test_shared_pool_successor_keeps_its_trusted_checkpoint(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+    runtime: str,
+    shared_recovery: bool,
+) -> None:
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda marker: shared_recovery
+        if marker == "run-shared-step-recovery-v1" else True,
+    )
+    inputs = {
+        "runtime": {"mode": runtime, "profileSelector": {"tagsAll": ["accepted"]}},
+        "instructions": "Preserve the saved edits.",
+    }
+    args = dict(
+        node_inputs=inputs,
+        node_id="work",
+        tool_name=runtime,
+        workflow_parameters={},
+        step_execution=2,
+        trusted_remediation_checkpoint_restore_ref="artifact://verified/child-save",
+    )
+    if not shared_recovery:
+        with pytest.raises(ValueError, match="requires external/omnigent"):
+            mock_run_workflow._build_agent_execution_request(**args)
+        return
+    request = mock_run_workflow._build_agent_execution_request(**args)
+    assert request.agent_kind == "managed"
+    assert request.agent_id == runtime
+    assert request.workspace_spec["workspaceCheckpointRestoreRef"] == "artifact://verified/child-save"
+    assert request.parameters["metadata"]["moonmind"]["sharedCheckpointRequired"] is True
+    assert request.profile_selector.tags_all == ["accepted"]
+    assert "metadata" not in inputs
+
+
+def test_authored_native_checkpoint_does_not_claim_shared_recovery(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda marker: True)
+    request = mock_run_workflow._build_agent_execution_request(
+        node_inputs={
+            "runtime": {"mode": "codex_cli"},
+            "workspaceSpec": {"workspaceCheckpointRestoreRef": "artifact://authored/save"},
+        },
+        node_id="work", tool_name="codex_cli", workflow_parameters={}, step_execution=1,
+    )
+    assert request.workspace_spec["workspaceCheckpointRestoreRef"] == "artifact://authored/save"
+    assert not request.parameters.get("metadata", {}).get("moonmind", {}).get("sharedCheckpointRequired")
 
 
 def test_initial_omnigent_verifier_restores_latest_candidate_before_launch(

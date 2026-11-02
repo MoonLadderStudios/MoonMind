@@ -163,6 +163,7 @@ with workflow.unsafe.imports_passed_through():
         ExecutionProgressModel,
         FAILED_RUN_RECOVERY_MANIFEST_CONTENT_TYPE,
         STEP_EXECUTION_MANIFEST_CONTENT_TYPE,
+        StepExecutionCheckpointModel,
         StepExecutionIdentityModel,
         StepExecutionManifestModel,
         StepLedgerSnapshotModel,
@@ -794,6 +795,7 @@ RUN_WORKFLOW_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH = (
     "run-task-scoped-session-clear-between-steps-v1"
 )
 RUN_SHARED_RUNTIME_CONTEXT_PATCH = "run-shared-native-context-continuation-v1"
+RUN_SHARED_STEP_RECOVERY_PATCH = "run-shared-step-recovery-v1"
 RUN_DISPATCH_POOL_CONTEXT_PATCH = "run-dispatch-pool-shared-context-v1"
 RUN_DISPATCH_FIXED_CONTEXT_PATCH = "run-dispatch-fixed-shared-context-v1"
 RUN_WORKFLOW_SCOPED_SESSION_CLEAR_PER_EXECUTION_PATCH = (
@@ -7294,6 +7296,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         identity = self._canonical_step_checkpoint_identity(logical_step_id)
         if identity is None:
             return None
+        saved = (
+            self._step_checkpoint_workspace_evidence_by_boundary.get(logical_step_id)
+            or {}
+        ).get("after_execution")
+        if (
+            boundary == "after_execution"
+            and self._workflow_patch_enabled(RUN_SHARED_STEP_RECOVERY_PATCH)
+            and isinstance(saved, Mapping)
+            and saved.get("sourceChildStepExecutionId") == build_step_execution_id(identity)
+        ):
+            return saved["checkpointRef"]
         task_input_snapshot_ref = (
             self._input_ref
             or f"temporal://{identity.workflow_id}/{identity.run_id}/task-input"
@@ -7387,6 +7400,114 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                    and self._patched_or_false_outside_workflow(RUN_OMNIGENT_CANONICAL_GIT_WORKSPACE_HANDOFF_PATCH) else {}),
             }
         return checkpoint_ref or None
+
+    async def _adopt_shared_child_saved_checkpoint(
+        self,
+        logical_step_id: str,
+        request: AgentExecutionRequest,
+        result: AgentRunResult | Mapping[str, Any],
+    ) -> bool:
+        """Adopt a verified child save after its disposable worker was cleaned."""
+        if not self._workflow_patch_enabled(RUN_SHARED_STEP_RECOVERY_PATCH):
+            return False
+        identity = request.step_execution
+        metadata = (
+            result.get("metadata")
+            if isinstance(result, Mapping)
+            else result.metadata
+        )
+        if (
+            identity is None
+            or not isinstance(metadata, Mapping)
+            or metadata.get("workPreserved") is not True
+            or not str(metadata.get("runtimeBindingRef") or "").startswith(
+                "omnigent-runtime-binding:sha256:"
+            )
+            or not (
+                request.agent_kind == "external" and request.agent_id == "omnigent"
+                or self._uses_dispatch_shared_plan(request)
+            )
+        ):
+            return False
+        saved = metadata.get("savedWorkspaceCheckpoint")
+        if not isinstance(saved, Mapping):
+            return False
+        reference = self._bounded_story_loop_artifact_ref(saved.get("checkpointRef"))
+        if reference is None:
+            return False
+        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.read")
+        body = await execute_typed_activity(
+            "artifact.read", ArtifactReadInput(artifact_ref=reference),
+            **self._execute_kwargs_for_route(route),
+        )
+        if not isinstance(body, bytes) or len(body) > 4 * 1024 * 1024:
+            raise ValueError(
+                "shared child checkpoint descriptor is unavailable or exceeds its bound"
+            )
+        checkpoint = StepExecutionCheckpointModel.model_validate_json(body)
+        expected = {
+            key: getattr(identity, key)
+            for key in (
+                "workflow_id", "run_id", "logical_step_id", "execution_ordinal"
+            )
+        }
+        workspace = checkpoint.workspace.model_dump(
+            by_alias=True, mode="json", exclude_none=True
+        )
+
+        def same_value(key: str, value: Any) -> Any:
+            if key.endswith("Ref") and isinstance(value, str):
+                return value.removeprefix("artifact:").removeprefix("//")
+            return value
+
+        if (
+            logical_step_id != identity.logical_step_id
+            or checkpoint.source.model_dump() != expected
+            or checkpoint.boundary != "after_execution"
+            or workspace.get("kind") != "worktree_archive"
+            or any(
+                same_value(key, workspace.get(key)) != same_value(key, saved.get(key))
+                for key in (
+                    "kind", "baseCommit", "archiveRef", "archiveDigest",
+                    "manifestRef", "manifestDigest",
+                )
+            )
+            or not str(workspace.get("workspaceDigest") or "").startswith("sha256:")
+            or not str(workspace.get("workspaceIdentityDigest") or "").startswith("sha256:")
+        ):
+            raise ValueError(
+                "shared child checkpoint differs from its Step Execution or verified save"
+            )
+        self._step_external_agent_ids[logical_step_id] = "omnigent"
+        self._step_checkpoint_refs[logical_step_id] = reference
+        self._step_checkpoint_workspace_evidence_by_boundary.setdefault(
+            logical_step_id, {}
+        )["after_execution"] = {
+            "checkpointRef": reference,
+            "workspaceKind": "worktree_archive",
+            "workspaceDigest": workspace["workspaceDigest"],
+            "workspaceIdentityDigest": workspace["workspaceIdentityDigest"],
+            "checkpointManifestRef": workspace["manifestRef"],
+            "workspaceArchiveRef": workspace["archiveRef"],
+            "sourceChildStepExecutionId": identity.step_execution_id,
+            **({"baseCommit": workspace["baseCommit"]} if workspace.get("baseCommit") else {}),
+        }
+        if self._step_ledger_row_for(logical_step_id) is None:
+            return True
+        updated_at = workflow.now()
+        try:
+            mark_step_checkpoint_evidence(
+                self._step_ledger_rows, logical_step_id, updated_at=updated_at,
+                step_checkpoint_ref=reference, boundary="after_execution",
+            )
+        except KeyError:
+            pass
+        else:
+            self._step_checkpoint_refs_by_boundary.setdefault(
+                logical_step_id, {}
+            )["after_execution"] = reference
+            self._sync_progress_snapshot(updated_at=updated_at)
+        return True
 
     def _record_primary_execution_outcome(
         self,
@@ -7497,6 +7618,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         logical_step_id: str,
         *,
         updated_at: datetime,
+        child_saved_checkpoint: tuple[Any, Any] | None = None,
     ) -> None:
         """Isolate idempotent checkpoint finalization from the primary result."""
 
@@ -7516,18 +7638,29 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             else 0
         )
         criticality = self._checkpoint_criticality(logical_step_id)
-        if criticality == "unsupported":
-            row["finalizationOutcome"] = {
-                "status": "unsupported",
-                "phase": "after_execution_checkpoint",
-                "criticality": criticality,
-                "failureCode": None,
-                "retryCount": 0,
-                "message": "Checkpoint capture is unsupported by this workspace.",
-                "updatedAt": updated_at.isoformat(),
-            }
-            return
         try:
+            adopted = (
+                await self._adopt_shared_child_saved_checkpoint(
+                    logical_step_id, *child_saved_checkpoint
+                )
+                if child_saved_checkpoint is not None
+                else False
+            )
+            if adopted and criticality == "unsupported":
+                # The selected shared runtime already supplied a real save;
+                # the authored native runtime's lack of capture is obsolete.
+                criticality = "recoverability_only"
+            if criticality == "unsupported":
+                row["finalizationOutcome"] = {
+                    "status": "unsupported",
+                    "phase": "after_execution_checkpoint",
+                    "criticality": criticality,
+                    "failureCode": None,
+                    "retryCount": 0,
+                    "message": "Checkpoint capture is unsupported by this workspace.",
+                    "updatedAt": updated_at.isoformat(),
+                }
+                return
             checkpoint_ref = await self._record_canonical_step_checkpoint(
                 logical_step_id,
                 boundary="after_execution",
@@ -13560,6 +13693,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         RUN_STEP_EXECUTION_MANIFEST_PATCH
                     )
 
+                    child_saved_checkpoint = None
                     if tool_type != "agent_runtime" and step_execution_manifest_enabled:
                         await self._record_step_execution_manifest(
                             node_id,
@@ -14095,6 +14229,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 self._active_agent_child_workflow_id = None
                                 self._active_agent_id = None
                             self._record_shared_runtime_context(request, child_result)
+                            child_saved_checkpoint = (request, child_result)
                             execution_result = await self._hydrate_acceptance_result(
                                 self._map_agent_run_result(child_result)
                             )
@@ -14375,6 +14510,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         await self._finalize_after_execution_checkpoint(
                             node_id,
                             updated_at=outcome_recorded_at,
+                            child_saved_checkpoint=child_saved_checkpoint,
                         )
                     else:
                         await self._record_canonical_step_checkpoint(
@@ -14462,6 +14598,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             )
                             == "omnigent"
                         )
+                        if (
+                            self._workflow_patch_enabled(RUN_SHARED_STEP_RECOVERY_PATCH)
+                            and self._step_external_agent_ids.get(node_id) == "omnigent"
+                        ):
+                            omnigent_step = True
                         if workflow.patched(
                             RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH
                         ):
@@ -17738,6 +17879,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             raw_hints = metadata.get("moonmind")
             moonmind = dict(raw_hints) if isinstance(raw_hints, Mapping) else {}
             moonmind["poolContextHandoff"] = True
+            if (
+                self._workflow_patch_enabled(RUN_SHARED_STEP_RECOVERY_PATCH)
+                and self._workflow_patch_enabled(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH)
+            ):
+                moonmind["sharedStepRecovery"] = True
             metadata["moonmind"] = moonmind
             parameters["metadata"] = metadata
             request = request.model_copy(update={"parameters": parameters})
@@ -22939,6 +23085,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             ws_val = node_inputs.get(ws_key)
             if ws_val is not None:
                 workspace_spec[ws_key] = ws_val
+        shared_checkpoint_required = False
         if trusted_remediation_checkpoint_restore_ref is not None:
             restore_ref = str(
                 trusted_remediation_checkpoint_restore_ref or ""
@@ -22947,8 +23094,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 raise ValueError(
                     "trusted remediation checkpoint restore must be an artifact ref"
                 )
+            shared_checkpoint_required = (
+                agent_kind == "managed"
+                and _normalize_agent_runtime_id(agent_id) in {"codex_cli", "claude_code"}
+                and self._workflow_patch_enabled(RUN_SHARED_STEP_RECOVERY_PATCH)
+            )
             if not (
-                agent_kind == "external"
+                shared_checkpoint_required
+                or agent_kind == "external"
                 and _normalize_agent_runtime_id(agent_id) == "omnigent"
             ):
                 raise ValueError(
@@ -23160,6 +23313,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 parameters["publishMode"] = "none"
             else:
                 parameters["repositoryMutationRequired"] = True
+        if shared_checkpoint_required:
+            raw_metadata = parameters.get("metadata")
+            metadata = dict(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
+            raw_hints = metadata.get("moonmind")
+            hints = dict(raw_hints) if isinstance(raw_hints, Mapping) else {}
+            hints["sharedCheckpointRequired"] = True
+            metadata["moonmind"] = hints
+            parameters["metadata"] = metadata
         publish_mode = str(parameters.get("publishMode") or "").strip().lower()
         identity_request = AgentExecutionRequest(
             agentKind=agent_kind,

@@ -143,6 +143,26 @@ def test_new_pool_handoffs_carry_complete_git_checkpoints(monkeypatch, canonical
     )
 
 
+@pytest.mark.parametrize("marker,parent_support,drained", [(False,True,True),(True,False,True),(True,True,False),(True,True,True)])
+def test_shared_cooldown_uses_the_existing_parent_step_owner(monkeypatch, marker, parent_support, drained):
+    from moonmind.schemas.agent_runtime_models import AgentRunResult
+    from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+
+    child = MoonMindAgentRun()
+    child._pool_native_request = request()
+    child._omnigent_capacity_state = "released" if drained else "held"
+    monkeypatch.setattr(child, "_workflow_patch_enabled", lambda patch: marker)
+    execution = request().model_copy(update={"agent_kind":"external","agent_id":"omnigent","parameters":{"metadata":{"moonmind":{"sharedStepRecovery":parent_support}}}})
+    source = AgentRunResult(failureClass="execution_error", providerErrorCode="429", retryRecommendation="retry", metadata={"savedWorkspaceCheckpoint":{"checkpointRef":"artifact:verified-save"},"workPreserved":True})
+    carried = child._shared_pool_step_retry_result(execution, source)
+    if marker and parent_support and drained:
+        assert carried.retry_recommendation == "retry_step_execution"
+        assert carried.model_dump(exclude={"retry_recommendation"}) == source.model_dump(exclude={"retry_recommendation"})
+    else:
+        assert carried is None
+    assert execution.parameters["metadata"]["moonmind"]["sharedStepRecovery"] is parent_support
+
+
 def test_older_converted_result_cannot_silently_become_a_fresh_native_context(
     monkeypatch,
 ):
