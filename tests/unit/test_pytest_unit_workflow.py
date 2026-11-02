@@ -690,8 +690,8 @@ def test_image_building_jobs_share_a_layer_cache() -> None:
         for step in producer["steps"]
         if step.get("uses", "").startswith("docker/build-push-action@")
     )
-    assert candidate["with"]["cache-from"].startswith("type=gha,")
-    assert candidate["with"]["cache-to"].startswith("type=gha,")
+    assert candidate["with"]["cache-from"] == "type=gha,scope=build-linux-amd64"
+    assert "cache-to" not in candidate["with"]
     for owner in (
         "integration-ci",
         "omnigent-exact-artifact",

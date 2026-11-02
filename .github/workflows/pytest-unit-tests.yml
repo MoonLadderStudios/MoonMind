@@ -1033,8 +1033,9 @@ jobs:
           build-args: |
             MOONMIND_BUILD_SHA=${{ github.event.pull_request.head.sha || github.sha }}
             MOONMIND_BUILD_ID=qualification-${{ github.run_id }}-${{ github.run_attempt }}
-          cache-from: type=gha,scope=exact-artifact-api-runtime
-          cache-to: type=gha,scope=exact-artifact-api-runtime,mode=max
+          # Release builds own the reusable platform cache. PR consumers share
+          # this archive instead of exporting source-heavy layers per branch.
+          cache-from: type=gha,scope=build-linux-amd64
         if: inputs.candidate_image == ''
       - name: Identify the archived manifest
         id: identity
