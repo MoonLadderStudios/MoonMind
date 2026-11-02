@@ -283,8 +283,9 @@ model-resolution evidence without another account choice or capacity unit. Later
 Profile edits cannot change that evidence; ordinary explicit metadata keeps its
 existing precedence over tier defaults. Codex same-epoch successors carry the selected
 account, durable context and verified saved workspace through the parent,
-including Continue-As-New. Restoring that workspace replaces its inherited
-scratch source. Old parents without this handoff keep native dispatch.
+including Continue-As-New and provider cooldown retries. Restoring that workspace
+replaces its inherited scratch source; replay preserves older recorded requests.
+Old parents without this handoff keep native dispatch.
 Fresh native steps with equivalent configuration use this same fenced handoff
 after fixed, implicit or pool account selection, without rewriting their stored
 submission. Older parents without the handoff retain their recorded commands.
