@@ -135,8 +135,7 @@ OWNERSHIP_TABLE: tuple[UpstreamOwnershipRow, ...] = (
         candidate_id="credential-lease-vs-runner-token",
         production_entrypoint=(
             "moonmind/omnigent/provider_leases.py::"
-            "OmnigentProviderLeaseCoordinator + "
-            "moonmind/omnigent/host_auth_adapter.py::OmnigentHostAuthAdapter"
+            "OmnigentProviderLeaseCoordinator"
         ),
         state_decision_owned=(
             "Purpose-aware Provider Profile lease, exclusive OAuth-home "
@@ -147,9 +146,8 @@ OWNERSHIP_TABLE: tuple[UpstreamOwnershipRow, ...] = (
             "authorization; host-lease refs; janitor cleanup evidence",
         ),
         upstream_api_at_pinned_commit=(
-            "Pinned runner-tunnel verifier only (host_auth_adapter); it proves "
-            "host identity, not profile-lease ownership, capacity, or "
-            "release ordering"
+            "Upstream runtime authentication does not own MoonMind Profile "
+            "capacity, generation fencing, or release ordering"
         ),
         surviving_owner="MoonMind credential lease (upstream owns only token-bound runner identity proof)",
         evidence_test=(

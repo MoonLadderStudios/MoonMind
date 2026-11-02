@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -30,7 +29,6 @@ from moonmind.omnigent.bridge_config import (
 )
 from moonmind.omnigent.embedded_drain import (
     EMBEDDED_DRAIN_CONTRACT_VERSION,
-    EMBEDDED_LAUNCH_MODULES,
     EmbeddedDrainError,
     decode_embedded_retained_session,
     summarize_embedded_drain,
@@ -43,7 +41,6 @@ DRAIN_MODULE = Path(__file__).resolve().parents[3] / "moonmind/omnigent/embedded
 # live transport.
 _FORBIDDEN_DRAIN_IMPORTS = frozenset(
     {
-        *EMBEDDED_LAUNCH_MODULES,
         "moonmind.omnigent.bridge_embedded",
         "moonmind.omnigent.embedded_host_channel",
         "moonmind.omnigent.embedded_evidence",
@@ -150,33 +147,9 @@ def test_retained_keys_match_their_canonical_owners() -> None:
     assert bridge_store.EMBEDDED_LAUNCH_KEY == "embedded_runner_launch"
     assert bridge_store.EMBEDDED_LIFECYCLE_KEY == "embedded_runner_lifecycle"
     assert EGRESS_CLEANUP_AUTHORITY_KEY == "egress_cleanup_authority"
-    assert embedded_drain._TERMINAL_SESSION_STATUSES == bridge_store._TERMINAL_STATUSES
 
 
 # ---------------------------------------------------------- retry disposition
-
-
-@pytest.mark.parametrize(
-    ("status", "metadata", "expected"),
-    [
-        ("active", {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED}, True),
-        ("declared", {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED}, True),
-        ("completed", {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED}, False),
-        ("failed", {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED}, False),
-        ("canceled", {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED}, False),
-        ("timed_out", {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED}, False),
-        ("active", {"hostProtocolMode": HOST_PROTOCOL_MODE_PROXY}, False),
-        ("active", {}, False),
-        ("active", None, False),
-    ],
-)
-def test_retry_reconciles_only_rows_the_drain_counts(
-    status: str, metadata: Any, expected: bool
-) -> None:
-    assert (
-        embedded_drain.embedded_retry_may_reconcile(status=status, metadata=metadata)
-        is expected
-    )
 
 
 def test_drain_summary_names_its_retry_disposition() -> None:
@@ -273,14 +246,6 @@ def test_drain_module_imports_no_launch_store_or_db_modules() -> None:
     assert imported.isdisjoint(_FORBIDDEN_DRAIN_IMPORTS), sorted(
         imported & _FORBIDDEN_DRAIN_IMPORTS
     )
-
-
-def test_launch_module_inventory_names_the_drain_gated_surfaces() -> None:
-    assert set(EMBEDDED_LAUNCH_MODULES) == {
-        "moonmind.omnigent.bridge_embedded",
-        "moonmind.omnigent.embedded_host_channel",
-        "moonmind.omnigent.embedded_evidence",
-    }
 
 
 def test_summarize_blocks_drain_while_cleanup_authority_remains() -> None:

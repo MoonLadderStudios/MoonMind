@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from tools.ci.write_backend_matrix_summary import (
     environment_fingerprint,
@@ -27,12 +28,13 @@ def _load_runner():
     return module
 
 
+@pytest.mark.parametrize("owner", ["unit-fast", "integration-hermetic"])
 @pytest.mark.parametrize(
     "damage",
     [None, "coverage", "source", "attempt", "owner", "interrupted", "outside-layer"],
 )
 def test_owner_receipts_require_current_complete_collected_coverage(
-    tmp_path, monkeypatch, damage
+    tmp_path, monkeypatch, damage, owner
 ):
     runner = _load_runner()
     path = "tests/unit/omnigent/test_witness.py"
@@ -42,13 +44,20 @@ def test_owner_receipts_require_current_complete_collected_coverage(
         "schema": "moonmind.test-ownership/v1",
         **identity,
         "nodes": [
-            {"nodeid": nodeid, "path": path, "eligible": True, "owners": ["unit-fast"]}
+            {
+                "nodeid": nodeid,
+                "path": path,
+                "eligible": True,
+                "owners": [
+                    "integration-ci" if owner == "integration-hermetic" else owner
+                ],
+            }
         ],
     }
     receipt = {
         "schema": "moonmind.pytest-verification/v1",
         **identity,
-        "suite": "unit-fast",
+        "suite": owner,
         "status": "passed",
         "exitCode": 0,
         "python": "3.12.12",
@@ -74,7 +83,7 @@ def test_owner_receipts_require_current_complete_collected_coverage(
             {
                 "schema": "moonmind.pytest-environment/v1",
                 **identity,
-                "suite": "unit-fast",
+                "suite": owner,
                 "environment": environment,
                 "fingerprint": environment_fingerprint(environment),
                 "expectedPython": f"{sys.version_info.major}.{sys.version_info.minor}",
@@ -128,8 +137,36 @@ def test_owner_receipts_require_current_complete_collected_coverage(
         )
         assert results[0]["nodeIds"] == [nodeid]
         assert results[0]["ownerReceiptRefs"]
-        retained = tmp_path / "pytest-unit-fast-attempt-2"
-        retained.mkdir()
+        if owner == "integration-hermetic":
+            jobs = yaml.safe_load(
+                (REPO_ROOT / ".github/workflows/pytest-unit-tests.yml").read_text()
+            )["jobs"]
+            download = next(
+                step
+                for step in jobs["omnigent-deterministic-conformance"]["steps"]
+                if step["name"] == "Download hermetic owner receipts and logs"
+            )
+            producer_attempt = (
+                jobs["integration-hermetic"].get("outputs", {}).get("attempt", "")
+            ).replace("${{ github.run_attempt }}", "2")
+            upload = next(
+                step
+                for step in jobs["integration-hermetic"]["steps"]
+                if step["name"] == "Upload row-owned integration report and diagnostics"
+            )
+            assert download["with"]["name"].replace(
+                "${{ needs.integration-hermetic.outputs.attempt }}", producer_attempt
+            ) == upload["with"]["name"].replace(
+                "${{ matrix.suite }}", "hermetic"
+            ).replace(
+                "${{ github.run_attempt }}", "2"
+            )
+            retained = tmp_path / download["with"]["path"].replace(
+                "${{ needs.integration-hermetic.outputs.attempt }}", producer_attempt
+            )
+        else:
+            retained = tmp_path / "pytest-unit-fast-attempt-2"
+        retained.mkdir(parents=True)
         (tmp_path / "owner.receipt.json").rename(retained / "owner.receipt.json")
         environment_path(tmp_path / "owner.receipt.json").rename(
             environment_path(retained / "owner.receipt.json")
@@ -145,7 +182,12 @@ def test_owner_receipts_require_current_complete_collected_coverage(
             manifest_attempt="2",
             require_full_source=True,
         )
-        current = tmp_path / "pytest-unit-fast-attempt-3"
+        artifact_prefix = (
+            "integration-ci-hermetic"
+            if owner == "integration-hermetic"
+            else "pytest-unit-fast"
+        )
+        current = tmp_path / f"{artifact_prefix}-attempt-3"
         current.mkdir()
         receipt.update(attempt="3", status="incomplete")
         (current / "owner.receipt.json").write_text(json.dumps(receipt))
@@ -258,7 +300,7 @@ def test_3480_report_declares_failure_rollout_and_parent_linkage() -> None:
     assert runner.EVIDENCE_GROUPS["failureAndRestartMatrix"] == (
         "tests/integration/reliability_journey/"
         "test_omnigent_cumulative_remediation_journey.py",
-        "tests/integration/omnigent/test_embedded_recovery.py",
+        "tests/integration/omnigent/test_generic_native_durable_journey.py",
     )
     assert runner.EVIDENCE_GROUPS["rolloutAndReplay"] == (
         "tests/unit/workflows/adapters/test_external_adapter_registry.py",
@@ -533,16 +575,21 @@ def test_deterministic_python_layers_select_each_module_once() -> None:
             modules = target.rglob("test_*.py") if target.is_dir() else (target,)
             selected.update(module for module in modules if module not in ignored)
 
-    recovery = REPO_ROOT / "tests/integration/omnigent/test_embedded_recovery.py"
+    recovery = (
+        REPO_ROOT / "tests/integration/omnigent/test_generic_native_durable_journey.py"
+    )
     assert selected[recovery] == 1
     assert all(count == 1 for count in selected.values()), selected
-    # Keep the ordinary integration modules and the existing DB exclusion.
+    # Ordinary integration still runs; installed-image recovery has its own owner.
     assert (
         selected[REPO_ROOT / "tests/integration/omnigent/test_bridge_conformance.py"]
         == 1
     )
     assert (
-        selected[REPO_ROOT / "tests/integration/omnigent/test_host_auth_lifecycle.py"]
+        selected[
+            REPO_ROOT
+            / "tests/integration/omnigent/test_exact_docker_n_way_concurrency.py"
+        ]
         == 0
     )
 
@@ -552,7 +599,7 @@ def test_recovery_evidence_retains_its_executed_command_and_failure(
     monkeypatch, tmp_path: Path, recovery_exit_code: int
 ) -> None:
     runner = _load_runner()
-    recovery = "tests/integration/omnigent/test_embedded_recovery.py"
+    recovery = "tests/integration/omnigent/test_generic_native_durable_journey.py"
     commands_run = []
 
     def run(command, **kwargs):
