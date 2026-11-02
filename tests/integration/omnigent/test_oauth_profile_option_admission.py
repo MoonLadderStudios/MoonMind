@@ -45,6 +45,8 @@ session_factory = native_fixture.session_factory
         "home_path_overrides",
         "model_overrides",
         "step_model_overrides",
+        "profile_default_tier",
+        "requested_model_tier",
     ],
 )
 async def test_product_creation_preserves_the_exact_oauth_profile_options(
@@ -66,6 +68,8 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
         "home_path_overrides": {"HOME": "{{runtime_support_dir}}/accepted-home"},
         "model_overrides": {"selected-model-alias": journey.server.model},
         "step_model_overrides": {"selected-model-alias": journey.server.model},
+        "profile_default_tier": {journey.server.model: "unwanted-alias-target"},
+        "requested_model_tier": {journey.server.model: "unwanted-alias-target"},
     }
     inventory = await OmnigentHttpClient(base_url=resolved_server_url()).list_agents()
     async with journey.session_factory() as session:
@@ -74,8 +78,15 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
             str(getattr(profile.credential_source, "value", profile.credential_source))
             == "oauth_volume"
         )
-        field = "model_overrides" if option == "step_model_overrides" else option
+        field = (
+            option
+            if option in {"env_template", "file_templates", "home_path_overrides"}
+            else "model_overrides"
+        )
         setattr(profile, field, values[option])
+        if option in {"profile_default_tier", "requested_model_tier"}:
+            profile.model_tiers = [{"model": journey.server.model}]
+            profile.default_model_tier = 1
         await session.commit()
         await reconcile_bootstrap_agent_profile(session, inventory=inventory)
         service = TemporalExecutionService(session)
@@ -103,6 +114,11 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
                                 **(
                                     {"model": "selected-model-alias"}
                                     if option == "model_overrides"
+                                    else {}
+                                ),
+                                **(
+                                    {"modelTier": 1}
+                                    if option == "requested_model_tier"
                                     else {}
                                 ),
                             },
@@ -136,6 +152,17 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
                 request.omnigent_execution_plan.plan_ref
             )
             assert plan.payload.modelConfig.qualifiedId == journey.server.model
+            if option != "step_model_overrides":
+                root_plan = await DbExecutionPlanStore(journey.session_factory).load(
+                    record.parameters["omnigentExecutionPlan"]["planRef"]
+                )
+                assert root_plan.payload.modelConfig.qualifiedId == journey.server.model
+            expected_source = {
+                "profile_default_tier": "profile_default_tier",
+                "requested_model_tier": "requested_tier",
+            }.get(option)
+            if expected_source:
+                assert record.parameters["modelSource"] == expected_source
         else:
             assert record.parameters["targetRuntime"] == runtime
             assert not record.parameters.get("omnigentExecutionPlan")

@@ -312,8 +312,9 @@ API-key Codex and Claude Profiles that translate exactly, including MiniMax's
 declared Claude environment bundle and Codex Responses file configuration, run
 on the shared lifecycle with their endpoint, model pins and non-secret tuning.
 Codex developer instructions, project-instruction discovery and history preferences
-also reach its private session config. Native Profile aliases translate a requested
-model once during shared compilation, using the same lookup as direct launch.
+also reach its private session config. Native Profile aliases translate explicit
+model overrides once during shared compilation, using the same lookup as direct
+launch. Resolved defaults and tiers keep their selected model.
 Tool/authentication and launch settings
 without an equivalent projection retain their native route.
 Explicit same-epoch Codex context reuse forks durable native history through
