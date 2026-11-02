@@ -423,7 +423,7 @@ def compile_execution_plan(
     model_effort: str | None,
     model_route_ref: str | None,
     model_normalized_options: dict[str, Any],
-    provider_configurations: dict[str, Any] | None = None,
+    provider_configuration_snapshot: dict[str, Any] | None = None,
     workflow_requirements: list[str] | None = None,
     bridge_capabilities: dict[str, bool] | None = None,
     platform_capabilities: dict[str, bool] | None = None,
@@ -930,7 +930,7 @@ def compile_execution_plan(
                 if is_repository_authority(binding)
             }
             or None,
-            "providerConfigurations": provider_configurations,
+            "providerConfigurationSnapshot": provider_configuration_snapshot,
             "hostClassRef": selected_host_class.ref,
             "hostImageRef": host_image_ref,
             "omnigentHostBuildDigest": omnigent_host_build_digest,

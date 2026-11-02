@@ -32,7 +32,7 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
 )
-from moonmind.omnigent.harness_platform.materializers import ProviderConfigEndpoint
+from moonmind.omnigent.harness_platform.materializers import ProviderConfigurationSnapshotRef
 from moonmind.omnigent.harness_platform.support import (
     SupportKeyPayload,
     compute_support_combination_key,
@@ -306,9 +306,7 @@ class OmnigentExecutionPlanPayload(BaseModel):
     credentialBindings: dict[
         str, CredentialBinding | ModelAuthorityBinding | RepositoryAuthorityBinding
     ] = Field(alias="credentialBindings")
-    # None preserves recorded plans; new writers capture every provider-config
-    # slot, including an explicit None for its unchanged built-in endpoint.
-    providerConfigurations: dict[str, ProviderConfigEndpoint | None] | None = None
+    providerConfigurationSnapshot: ProviderConfigurationSnapshotRef | None = None
     # Compact validated repository snapshot refs (slot -> access snapshot).
     # Pre-host decisions only: acquired secret revision/issuance, use
     # ownership, generations, materialized paths, and cleanup handles live
@@ -374,19 +372,12 @@ class OmnigentExecutionPlanPayload(BaseModel):
             payload.pop("repositoryAuthorityRefs", None)
         if self.logicalStepPlans is None:
             payload.pop("logicalStepPlans", None)
-        if self.providerConfigurations is None:
-            payload.pop("providerConfigurations", None)
+        if self.providerConfigurationSnapshot is None:
+            payload.pop("providerConfigurationSnapshot", None)
         return payload
 
     @model_validator(mode="after")
     def validate_no_forbidden(self) -> "OmnigentExecutionPlanPayload":
-        if self.providerConfigurations is not None:
-            expected = {
-                slot for slot, binding in self.credentialBindings.items()
-                if binding.materializerRef == "omnigent-provider-config@1"
-            }
-            if set(self.providerConfigurations) != expected:
-                raise ValueError("providerConfigurations must match provider-config slots")
         if self.omnigentVersion is not None:
             from moonmind.omnigent.compatibility import compatibility_series
 

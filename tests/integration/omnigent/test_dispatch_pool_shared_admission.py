@@ -68,6 +68,13 @@ async def test_pool_selected_account_compiles_once_and_preserves_its_original_in
     await execute_selected_pool_source(native_journey, monkeypatch, scenario=scenario)
 
 
+@pytest.mark.parametrize(
+    "native_journey", ["codex-native-api-key", "claude-native-api-key"], indirect=True
+)
+async def test_pool_selected_api_key_settings_reach_the_shared_host(native_journey, monkeypatch):
+    await execute_selected_pool_source(native_journey, monkeypatch)
+
+
 async def execute_selected_pool_source(
     native_journey, monkeypatch, *, scenario="ordinary", include_successor=False
 ):

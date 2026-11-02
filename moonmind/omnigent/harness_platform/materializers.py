@@ -6,10 +6,11 @@ Trusted boundary that turns leased Provider Profile + generation into runtime st
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -328,6 +329,55 @@ class ProviderConfigEndpoint(BaseModel):
         )
 
         return validate_provider_literal_launch_environment(value)
+
+
+class ProviderConfigurationSnapshotRef(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    artifactRef: str = Field(pattern=r"^artifact:[^\s]+$")
+    contentDigest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+
+class ProviderConfigurationSlot(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    providerProfileRef: str
+    materializerRef: Literal["omnigent-provider-config@1"]
+    endpoint: ProviderConfigEndpoint | None
+
+
+def provider_configuration_snapshot_bytes(bindings, configurations) -> bytes:
+    slots = {
+        slot: ProviderConfigurationSlot(
+            providerProfileRef=bindings[slot].providerProfileRef,
+            materializerRef=bindings[slot].materializerRef,
+            endpoint=endpoint,
+        ).model_dump(mode="json")
+        for slot, endpoint in configurations.items()
+    }
+    return json.dumps(slots, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+
+
+def load_provider_configuration_snapshot(content, snapshot, bindings):
+    if "sha256:" + hashlib.sha256(content).hexdigest() != snapshot.contentDigest:
+        raise ValueError("provider configuration snapshot digest does not match")
+    slots = json.loads(content)
+    expected = {
+        slot: binding for slot, binding in bindings.items()
+        if binding.materializerRef == "omnigent-provider-config@1"
+    }
+    if not isinstance(slots, dict) or set(slots) != set(expected):
+        raise ValueError("provider configuration snapshot slots do not match")
+    result = {}
+    for slot, binding in expected.items():
+        saved = ProviderConfigurationSlot.model_validate(slots[slot])
+        if (
+            saved.providerProfileRef != binding.providerProfileRef
+            or saved.materializerRef != binding.materializerRef
+        ):
+            raise ValueError("provider configuration snapshot account does not match")
+        result[slot] = saved.endpoint
+    return result
 
 
 def _enum_value(raw: Any) -> str:

@@ -635,6 +635,11 @@ def _execution_plan_input_refs(
                 else getattr(authority, "taskInputSnapshotRef", None)
             ),
             plan.payload.agentProfileSnapshotRef,
+            (
+                plan.payload.providerConfigurationSnapshot.artifactRef
+                if getattr(plan.payload, "providerConfigurationSnapshot", None) is not None
+                else None
+            ),
             plan.payload.policySnapshotRef,
             plan.payload.effectiveLaunchSnapshotRef,
             (

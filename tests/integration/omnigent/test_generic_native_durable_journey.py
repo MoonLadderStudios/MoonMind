@@ -1525,6 +1525,65 @@ async def test_queued_plan_keeps_its_admitted_provider_configuration(native_jour
     assert document["developer_instructions"] == "Use the admitted instructions."
 
 
+@pytest.mark.parametrize("native_journey", [{
+    "harness": "codex-native-file-config",
+    "sessionSettings": {"developer_instructions": "Keep the selected account. " * 1500},
+}], indirect=True)
+async def test_large_provider_settings_remain_artifact_owned(native_journey):
+    await assert_native_turn_saved_and_cleaned(native_journey)
+    instructions = "Keep the selected account. " * 1500
+    assert native_journey.docker.codex_configuration["document"]["developer_instructions"] == instructions
+    assert instructions not in native_journey.plan.payload.model_dump_json()
+
+
+@pytest.mark.parametrize("native_journey", [{
+    "harness": "codex-native-file-config",
+    "sessionSettings": {"developer_instructions": "Use the admitted instructions."},
+}], indirect=True)
+@pytest.mark.parametrize("refresh", [False, True], ids=["frozen", "fresh-scheduled"])
+async def test_frozen_recompilation_preserves_the_provider_settings(native_journey, refresh):
+    from copy import deepcopy
+    from api_service.db.models import ManagedAgentProviderProfile
+    from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
+
+    journey = native_journey
+    snapshot = json.loads(await journey.gateway.read_admitted_input(
+        journey.plan.payload.agentProfileSnapshotRef, request=journey.request
+    ))
+    parameters = json.loads(await journey.gateway.read_admitted_input(
+        journey.plan.payload.authority.taskInputSnapshotRef, request=journey.request
+    ))
+    async with journey.session_factory() as session:
+        provider = await session.get(ManagedAgentProviderProfile, PROFILE)
+        templates = deepcopy(provider.file_templates)
+        templates[0]["content_template"]["developer_instructions"] = "A later edit."
+        provider.file_templates = templates
+        await session.flush()
+        artifacts = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            transaction_ownership=ArtifactTransactionOwnership.CALLER,
+        )
+        frozen = await plan_writer.compile_frozen_execution_plan(
+            db_session=session, artifact_service=artifacts,
+            workflow_id=journey.request.correlation_id,
+            principal="system", snapshot=snapshot, provider_profile=provider,
+            initial_parameters=parameters,
+            binding=journey.request.omnigent_execution_plan,
+            access=access_for_test("system", admitted_principal=f"workflow:{journey.request.correlation_id}"),
+            refresh_step_selections=refresh,
+        )
+        saved = frozen.envelope.payload.providerConfigurationSnapshot
+        _row, content = await artifacts.read(
+            artifact_id=saved.artifactRef.removeprefix("artifact:"),
+            access=access_for_test("system"),
+        )
+        await session.commit()
+    expected = "A later edit." if refresh else "Use the admitted instructions."
+    assert json.loads(content)["primary-model"]["endpoint"]["codexConfiguration"]["document"]["developer_instructions"] == expected
+    changed = plan_writer.changed_admitted_intent(journey.plan.payload, frozen.envelope.payload)
+    assert ("providerConfiguration" in changed) is refresh
+
+
 @pytest.mark.parametrize("native_journey", ["claude-native-env-bundle"], indirect=True)
 async def test_queued_claude_plan_keeps_its_endpoint_and_launch_tuning(native_journey):
     from api_service.db.models import ManagedAgentProviderProfile
