@@ -2190,6 +2190,7 @@ async def compile_and_persist_execution_plan(
         plan=persisted,
         binding=binding,
         access=access,
+        admitted_step_plans=step_parameters,
     )
     frozen_rollout = persisted.payload.runtimeProviderRollout
     _evidence_refs: tuple[str, ...] = ()

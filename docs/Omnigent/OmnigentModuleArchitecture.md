@@ -281,8 +281,9 @@ their own immutable plans compiled by the same admission owner, linked
 through the existing artifact owner and carried across successor attempts.
 An explicit root rollout target constrains the root plan; independent steps
 validate their own targets against their selected Profiles.
-The immutable root plan binds each complete step handoff by digest; admission,
-planning and continuation reject a replaced or missing handoff. Retained plans
+The immutable root plan binds each complete step handoff by digest and retains
+its verified artifact inputs for saved schedules. Admission, planning and
+continuation reject a replaced or missing handoff. Retained plans
 without this field preserve their original bytes and plan identities.
 Frozen successors retain each step's saved Profile snapshot. Exact reruns
 inherit their admitted artifact grants before Temporal can start.
