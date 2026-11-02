@@ -69,7 +69,7 @@ def _request_digest(request, original_profile):
     )
 
 
-def _shared_request(request, *, snapshot, binding, plan, skill_ref):
+def _shared_request(request, *, snapshot, binding, plan, skill_ref, model_resolution=None):
     parameters = compile_agent_profile_snapshot_parameters(
         request.parameters, snapshot=snapshot
     )
@@ -85,6 +85,23 @@ def _shared_request(request, *, snapshot, binding, plan, skill_ref):
         omnigentExecutionPlan=binding.model_dump(mode="json", by_alias=True),
         resolvedSkillsetRef=skill_ref,
     )
+    if isinstance(model_resolution, Mapping):
+        metadata = deepcopy(parameters.get("metadata") or {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        moonmind = metadata.setdefault("moonmind", {})
+        if not isinstance(moonmind, dict):
+            moonmind = {}
+            metadata["moonmind"] = moonmind
+        moonmind["modelEffortResolution"] = deepcopy(dict(model_resolution))
+        parameters["metadata"] = metadata
+        if model_resolution.get("effectiveModelTier") is not None:
+            parameters["modelTierResolution"] = {
+                **deepcopy(dict(model_resolution)),
+                "providerProfileId": request.execution_profile_ref,
+            }
+        else:
+            parameters.pop("modelTierResolution", None)
     parameters["omnigent"] = deepcopy(parameters.get("omnigent") or {})
     parameters["omnigent"]["prompt"] = {
         **parameters["omnigent"].get("prompt", {}),
@@ -384,6 +401,7 @@ async def prepare_selected_pool_plan(
             "requestDigest": request_digest,
             "binding": binding.model_dump(mode="json", by_alias=True),
             "resolvedSkillsetRef": skill_ref,
+            "modelResolution": deepcopy(resolution),
         }
     result = bind_selected_pool_plan(
         lease,
@@ -402,7 +420,8 @@ async def prepare_selected_pool_plan(
     if not result.get("bound"):
         raise ValueError("pool plan handoff was fenced: " + str(result.get("reason")))
     shared = _shared_request(
-        request, snapshot=snapshot, binding=binding, plan=plan, skill_ref=skill_ref
+        request, snapshot=snapshot, binding=binding, plan=plan, skill_ref=skill_ref,
+        model_resolution=saved.get("modelResolution"),
     )
     await session.commit()
     return {
