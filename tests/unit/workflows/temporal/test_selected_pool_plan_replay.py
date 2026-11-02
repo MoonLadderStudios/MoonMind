@@ -1,13 +1,18 @@
 """Retained native pool histories keep their commands; new handoffs replay."""
 
+import json
+from datetime import timedelta
+
 import pytest
 from temporalio import workflow
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.omnigent.workspace_sources import compile_workspace_source
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.workflows.temporal.workflows.agent_run import (
+    AGENT_RUN_POOL_CHECKPOINT_SOURCE_PATCH_ID,
     AGENT_RUN_POOL_PARENT_HANDOFF_PATCH_ID,
     AGENT_RUN_SELECTED_FIXED_SHARED_PLAN_PATCH_ID,
     AGENT_RUN_UNTRANSLATED_SHARED_CONTEXT_PATCH_ID,
@@ -52,6 +57,14 @@ class _BeforeContextFallback(MoonMindAgentRun):
         return MoonMindAgentRun._workflow_patch_enabled(marker)
 
 
+class _BeforeCooldownCheckpointSource(MoonMindAgentRun):
+    @staticmethod
+    def _workflow_patch_enabled(marker):
+        if marker == AGENT_RUN_POOL_CHECKPOINT_SOURCE_PATCH_ID:
+            return False
+        return MoonMindAgentRun._workflow_patch_enabled(marker)
+
+
 @workflow.defn
 class _PreparationTransport:
     def __init__(self):
@@ -92,6 +105,7 @@ class _PoolFixture:
     implementation = MoonMindAgentRun
     fixed_account = False
     native_fallback = False
+    cooldown = False
 
     def __init__(self):
         self.agent = self.implementation()
@@ -109,6 +123,9 @@ class _PoolFixture:
             correlationId="parent",
             idempotencyKey="request-1",
             instructionRef="Preserve the accepted task.",
+            workspaceSpec=(
+                {"workspaceSource": {"kind": "scratch"}} if self.cooldown else {}
+            ),
             parameters={"native_fallback_fixture": self.native_fallback},
             stepExecution={
                 "workflowId": "parent",
@@ -124,7 +141,11 @@ class _PoolFixture:
             RUN_SHARED_RUNTIME_CONTEXT_PATCH,
         )
 
-        if self.implementation is not MoonMindAgentRun and not self.native_fallback:
+        if (
+            self.implementation is not MoonMindAgentRun
+            and not self.native_fallback
+            and not self.cooldown
+        ):
             workflow.patched(RUN_SHARED_RUNTIME_CONTEXT_PATCH)
         else:
             request = MoonMindUserWorkflow()._bind_shared_runtime_context(request)
@@ -140,6 +161,7 @@ class _PoolFixture:
                 runtimeBindingRef="omnigent-runtime-binding:sha256:" + "a" * 64,
             )
         if self.agent._uses_selected_pool_shared_admission(request, "codex_cli"):
+            native_request = request.model_copy(deep=True)
             try:
                 request = await self.agent._prepare_selected_pool_shared_request(
                     request=request,
@@ -153,6 +175,25 @@ class _PoolFixture:
                 assert self.native_fallback
                 assert error.type == "SelectedProfileSharedContextUnavailable"
                 return "blocked-shared-context"
+            if self.cooldown:
+                self.agent._execution_budget = native_request.execution_budget
+                self.agent.final_result = AgentRunResult(
+                    summary="Provider temporarily busy",
+                    metadata={
+                        "savedWorkspaceCheckpoint": {
+                            "archiveRef": "artifact://accepted-workspace"
+                        }
+                    },
+                )
+                request = self.agent._pool_cooldown_retry_request(native_request)
+                request = await self.agent._prepare_selected_pool_shared_request(
+                    request=request,
+                    runtime_id="codex_cli",
+                    original_profile_ref=None,
+                    manager_handle=workflow.get_external_workflow_handle(
+                        "pool-preparation-transport"
+                    ),
+                )
         await workflow.sleep(1)
         return request.agent_id
 
@@ -220,6 +261,25 @@ class _CurrentContextFallbackFixture(_PoolFixture):
         return await self.execute()
 
 
+@workflow.defn(name="SelectedPoolCooldownReplayFixture")
+class _LegacyCooldownFixture(_PoolFixture):
+    implementation = _BeforeCooldownCheckpointSource
+    cooldown = True
+
+    @workflow.run
+    async def run(self):
+        return await self.execute()
+
+
+@workflow.defn(name="SelectedPoolCooldownReplayFixture")
+class _CurrentCooldownFixture(_PoolFixture):
+    cooldown = True
+
+    @workflow.run
+    async def run(self):
+        return await self.execute()
+
+
 @pytest.mark.asyncio
 async def test_retained_native_and_shared_pool_handoffs_replay():
     histories = []
@@ -247,6 +307,8 @@ async def test_retained_native_and_shared_pool_handoffs_replay():
                 ("current-fixed", _CurrentFixedFixture, "omnigent"),
                 ("retained-context-fallback", _LegacyContextFallbackFixture, "codex_cli"),
                 ("current-context-fallback", _CurrentContextFallbackFixture, "blocked-shared-context"),
+                ("retained-cooldown", _LegacyCooldownFixture, "omnigent"),
+                ("current-cooldown", _CurrentCooldownFixture, "omnigent"),
             ):
                 queue = f"pool-replay-{label}"
                 async with Worker(
@@ -256,18 +318,54 @@ async def test_retained_native_and_shared_pool_handoffs_replay():
                     workflow_runner=UnsandboxedWorkflowRunner(),
                 ):
                     handle = await env.client.start_workflow(
-                        fixture.run, id=queue, task_queue=queue
+                        fixture.run,
+                        id=queue,
+                        task_queue=queue,
+                        execution_timeout=timedelta(seconds=30),
                     )
                     # Keep the idle transport alive between fixture runs; global
                     # time skipping could otherwise advance to its execution timeout.
                     with env.auto_time_skipping_disabled():
                         result = await handle.result()
                     assert result == expected
-                    histories.append(await handle.fetch_history())
+                    history = await handle.fetch_history()
+                    histories.append(history)
+                    if fixture.cooldown:
+                        preparations = []
+                        for event in history.events:
+                            if not event.HasField(
+                                "signal_external_workflow_execution_initiated_event_attributes"
+                            ):
+                                continue
+                            signal = event.signal_external_workflow_execution_initiated_event_attributes
+                            if signal.signal_name == "prepare_shared_execution_plan":
+                                preparations.append(
+                                    json.loads(signal.input.payloads[0].data)["request"]
+                                )
+                        assert len(preparations) == 2
+                        retry_workspace = preparations[1]["workspaceSpec"]
+                        assert (
+                            retry_workspace["workspaceCheckpointRestoreRef"]
+                            == "artifact://accepted-workspace"
+                        )
+                        if fixture is _CurrentCooldownFixture:
+                            assert (
+                                compile_workspace_source(retry_workspace).kind
+                                == "checkpoint"
+                            )
+                        else:
+                            assert retry_workspace["workspaceSource"] == {
+                                "kind": "scratch"
+                            }
             await manager.signal("finish")
             await manager.result()
     replayer = Replayer(
-        workflows=[_CurrentFixture, _CurrentFixedFixture, _CurrentContextFallbackFixture],
+        workflows=[
+            _CurrentFixture,
+            _CurrentFixedFixture,
+            _CurrentContextFallbackFixture,
+            _CurrentCooldownFixture,
+        ],
         workflow_runner=UnsandboxedWorkflowRunner(),
     )
     for history in histories:

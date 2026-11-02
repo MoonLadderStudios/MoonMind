@@ -12,9 +12,7 @@ persistence, transport, or credential objects in handler scope.
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
-from datetime import timedelta
-from typing import TYPE_CHECKING, Any, AsyncIterator, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from api_service.db.base import async_session_maker
 from api_service.services.omnigent_agent_profile_service import (
@@ -23,29 +21,13 @@ from api_service.services.omnigent_agent_profile_service import (
 )
 from api_service.services.omnigent_policies import OmnigentPolicyService
 from moonmind.omnigent.bridge_config import (
-    EMBEDDED_TRANSPORT_RETIRED_CODE,
-    EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID,
     HOST_PROTOCOL_MODE_EMBEDDED,
     HOST_PROTOCOL_MODE_PROXY,
     OmnigentBridgeConfig,
 )
-# NOTE (#3955): the embedded launch facade is imported lazily inside
-# build_embedded_host_facade / verify_embedded_host_request so the proxy-only
-# production path never requires the retired embedded launch modules.
 from moonmind.omnigent.bridge_proxy import OmnigentBridgeSessionProxy
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.embedded_drain import probe_embedded_drain
-from moonmind.omnigent.host_auth_contracts import (
-    HostAuthCredentialProfile,
-    HostAuthProfileError,
-    rotate_host_auth_profile,
-)
-from moonmind.omnigent.host_auth_profile import (
-    host_auth_readiness,
-    load_host_auth_profile,
-    resolve_host_auth_credentials,
-)
-from moonmind.omnigent.host_auth_store import HostAuthProfileStore
 from moonmind.omnigent.settings import (
     resolved_api_token,
     resolved_default_agent_name,
@@ -53,14 +35,7 @@ from moonmind.omnigent.settings import (
     resolved_server_url,
 )
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
-from moonmind.workflows.temporal.artifacts import (
-    ArtifactTransactionOwnership,
-    TemporalArtifactRepository,
-    TemporalArtifactService,
-)
 
-if TYPE_CHECKING:  # pragma: no cover - annotation only; runtime import stays lazy
-    from moonmind.omnigent.bridge_embedded import OmnigentEmbeddedHostProtocolFacade
 
 # The bridge resolves its persisted default runtime authority under one runtime
 # id. Which runtime backs the bridge is composition, not a route decision.
@@ -71,20 +46,6 @@ class OmnigentBridgeModeUnsupportedError(RuntimeError):
     """The configured host protocol mode cannot own this operation."""
 
     code = "omnigent_bridge_mode_unsupported"
-
-
-class HostAuthProfileConflictError(RuntimeError):
-    """A durable host-auth profile transition lost its expected-state check.
-
-    Credential *validation* failures keep raising ``HostAuthProfileError`` so
-    the router maps one vocabulary to HTTP. This error is the separate,
-    non-credential outcome of an administration operation that raced or was
-    applied to the wrong lifecycle state.
-    """
-
-    def __init__(self, code: str) -> None:
-        super().__init__(code)
-        self.code = code
 
 
 def build_bridge_session_store() -> OmnigentBridgeSessionStore:
@@ -109,138 +70,6 @@ async def probe_embedded_transport_drain(
 
     owned = store if store is not None else build_bridge_session_store()
     return await probe_embedded_drain(owned)
-
-
-def build_host_auth_store() -> HostAuthProfileStore:
-    return HostAuthProfileStore(async_session_maker)
-
-
-async def resolve_active_host_auth_profile() -> HostAuthCredentialProfile:
-    """Return the managed host-auth profile, or the deployment default."""
-
-    managed = await build_host_auth_store().get_active()
-    return managed or load_host_auth_profile()
-
-
-async def evaluate_active_host_auth_readiness() -> dict[str, Any]:
-    """Project readiness for the active managed host-auth profile.
-
-    Profile *resolution* failures (revoked, disabled, unconfigured, incompatible)
-    and credential *resolution* failures share one redacted projection shape, so
-    a caller never has to know which boundary failed to render readiness.
-    """
-
-    try:
-        profile = await resolve_active_host_auth_profile()
-    except HostAuthProfileError as exc:
-        return {"ready": False, "code": exc.code}
-    return await host_auth_readiness(profile=profile)
-
-
-async def evaluate_embedded_host_auth_readiness(
-    config: OmnigentBridgeConfig,
-) -> dict[str, Any]:
-    """Evaluate the selected embedded contract at the enablement boundary."""
-
-    if not config.enabled or config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED:
-        return {"ready": True, "code": "host_auth_not_selected"}
-    return await evaluate_active_host_auth_readiness()
-
-
-async def verify_embedded_host_request(
-    *, headers: Mapping[str, str], config: OmnigentBridgeConfig
-):
-    """Resolve host-auth credentials and verify one embedded host request."""
-
-    # MoonLadderStudios/MoonMind#3955: the embedded launch modules stay out of
-    # this module's top-level imports so proxy-only composition never requires
-    # them. An embedded drain route that can no longer import them fails
-    # actionably (naming the retirement row and the supported proxy
-    # alternative) instead of crashing on a bare ImportError.
-    try:
-        from moonmind.omnigent.bridge_embedded import verify_embedded_host_auth
-    except ImportError as exc:
-        raise OmnigentBridgeModeUnsupportedError(
-            "The embedded Omnigent host transport is unavailable "
-            f"({EMBEDDED_TRANSPORT_RETIRED_CODE}, retirement row "
-            f"{EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID}); select "
-            f"'{HOST_PROTOCOL_MODE_PROXY}' for new work."
-        ) from exc
-    resolved = await resolve_host_auth_credentials(
-        profile=await resolve_active_host_auth_profile()
-    )
-    return verify_embedded_host_auth(
-        headers=headers,
-        config=config,
-        configured_credentials=resolved.tokens_by_generation,
-        credential_profile_id=resolved.profile.profile_id,
-    )
-
-
-async def connected_host_frame_is_authorized(auth: Any) -> bool:
-    """Re-resolve credential authority for one frame of a connected tunnel.
-
-    Immediate revocation and overlap expiry must drain tunnels that were already
-    accepted, so the durable profile and its live generation set are re-read per
-    frame rather than trusted from the handshake.
-    """
-
-    active = await resolve_host_auth_credentials(
-        profile=await resolve_active_host_auth_profile()
-    )
-    return (
-        active.profile.profile_id == auth.credential_profile_id
-        and auth.credential_generation in active.tokens_by_generation
-    )
-
-
-async def configure_active_host_auth_profile(
-    candidate: HostAuthCredentialProfile,
-) -> HostAuthCredentialProfile:
-    """Validate a candidate profile's SecretRef, then durably select it.
-
-    Selection is initial-only: an already-configured deployment rotates instead,
-    so the durable row is never replaced by an unversioned write.
-    """
-
-    await resolve_host_auth_credentials(profile=candidate)
-    store = build_host_auth_store()
-    if await store.get_active() is not None:
-        raise HostAuthProfileConflictError("host_auth_already_configured")
-    try:
-        return await store.put(candidate, expected_generation=0)
-    except RuntimeError as exc:
-        raise HostAuthProfileConflictError("host_auth_already_configured") from exc
-
-
-async def rotate_active_host_auth_profile(
-    *, new_secret_ref: str, overlap: timedelta
-) -> HostAuthCredentialProfile:
-    """Validate the next generation before atomically replacing durable metadata."""
-
-    store = build_host_auth_store()
-    current = await store.get_active()
-    if current is None:
-        raise HostAuthProfileConflictError("host_auth_unconfigured")
-    candidate = rotate_host_auth_profile(
-        current, new_secret_ref=new_secret_ref, overlap=overlap
-    )
-    await resolve_host_auth_credentials(profile=candidate)
-    try:
-        return await store.put(
-            candidate, expected_generation=current.current_generation
-        )
-    except RuntimeError as exc:
-        raise HostAuthProfileConflictError("host_auth_generation_conflict") from exc
-
-
-async def revoke_active_host_auth_profile() -> HostAuthCredentialProfile:
-    """Immediately revoke the durable profile without resolving either secret."""
-
-    try:
-        return await build_host_auth_store().revoke()
-    except LookupError as exc:
-        raise HostAuthProfileConflictError("host_auth_unconfigured") from exc
 
 
 def build_bridge_session_proxy(
@@ -273,17 +102,6 @@ def build_bridge_session_proxy(
         config=config,
         default_agent_name=resolved_default_agent_name(),
     )
-
-
-@asynccontextmanager
-async def bridge_artifact_service() -> AsyncIterator[TemporalArtifactService]:
-    """Open the artifact service the bridge reads embedded evidence through."""
-
-    async with async_session_maker() as session:
-        yield TemporalArtifactService(
-            TemporalArtifactRepository(session),
-            transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
-        )
 
 
 async def resolve_default_bridge_policy_snapshot() -> dict[str, Any]:
@@ -327,60 +145,13 @@ async def project_upstream_inventory_failure(
         )
 
 
-def build_embedded_host_facade(
-    config: OmnigentBridgeConfig,
-    *,
-    drain_retained_sessions: bool = False,
-) -> OmnigentEmbeddedHostProtocolFacade:
-    """Build the embedded host facade for admission or retained-row drain.
-
-    ``drain_retained_sessions=True`` (#3955) bypasses the global-mode gate so
-    stop, terminal cleanup, delete, and reads for already-recorded embedded
-    rows keep reaching their recorded owner while the deployment runs proxy
-    mode; new admission stays refused inside the facade.
-
-    Imported lazily so proxy-only composition (and its tests) succeed with
-    the embedded launch modules unavailable; the error names the retirement
-    row and the supported proxy alternative instead of a bare ImportError.
-    """
-
-    try:
-        from moonmind.omnigent.bridge_embedded import (
-            OmnigentEmbeddedHostProtocolFacade as _EmbeddedFacade,
-        )
-    except ImportError as exc:
-        raise OmnigentBridgeModeUnsupportedError(
-            "The embedded Omnigent host transport is unavailable "
-            f"({EMBEDDED_TRANSPORT_RETIRED_CODE}, retirement row "
-            f"{EMBEDDED_TRANSPORT_RETIREMENT_PATH_ID}); select "
-            f"'{HOST_PROTOCOL_MODE_PROXY}' for new work."
-        ) from exc
-    return _EmbeddedFacade(
-        run_store=build_bridge_session_store(),
-        config=config,
-        drain_retained_sessions=drain_retained_sessions,
-    )
-
-
 __all__ = [
     "BRIDGE_POLICY_RUNTIME_ID",
-    "HostAuthProfileConflictError",
     "OmnigentBridgeModeUnsupportedError",
-    "bridge_artifact_service",
     "build_bridge_session_proxy",
     "build_bridge_session_store",
-    "build_embedded_host_facade",
-    "build_host_auth_store",
-    "configure_active_host_auth_profile",
-    "connected_host_frame_is_authorized",
-    "evaluate_active_host_auth_readiness",
-    "evaluate_embedded_host_auth_readiness",
     "project_upstream_inventory",
     "project_upstream_inventory_failure",
     "probe_embedded_transport_drain",
-    "resolve_active_host_auth_profile",
     "resolve_default_bridge_policy_snapshot",
-    "revoke_active_host_auth_profile",
-    "rotate_active_host_auth_profile",
-    "verify_embedded_host_request",
 ]

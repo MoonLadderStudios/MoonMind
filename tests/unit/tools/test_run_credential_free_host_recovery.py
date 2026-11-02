@@ -205,6 +205,8 @@ def test_expected_harness_identity_is_observed_from_exact_image_offline(
     }
     monkeypatch.setitem(sys.modules, "omnigent.harness_plugins", registry)
     monkeypatch.setattr(importlib.metadata, "version", lambda _name: "1.2.3")
+    application_image = "sha256:" + "a" * 64
+    probes = []
 
     def command(args):
         assert args[:6] == [
@@ -215,10 +217,12 @@ def test_expected_harness_identity_is_observed_from_exact_image_offline(
             "none",
             "--entrypoint",
         ]
-        assert args[7] == IMAGE_ID
+        assert args[7] == (IMAGE_ID if not probes else application_image)
+        probes.append(args[7])
         assert not {"--env", "--mount", "--publish", "--privileged"}.intersection(args)
         probe = tmp_path / "artifact-probe.py"
-        probe.write_text(args[-1])
+        probe.write_text(args[9])
+        monkeypatch.setattr(sys, "argv", [str(probe), *args[10:]])
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             runpy.run_path(str(probe), run_name="__main__")
@@ -228,15 +232,20 @@ def test_expected_harness_identity_is_observed_from_exact_image_offline(
     if not native_available:
         with pytest.raises(driver.RecoveryError, match="native recovery harness"):
             driver.observe_harness_identity(
-                IMAGE_ID, HARNESS_IDENTITY["omnigentBuildDigest"]
+                IMAGE_ID,
+                HARNESS_IDENTITY["omnigentBuildDigest"],
+                moonmind_image=application_image,
             )
     else:
         assert (
             driver.observe_harness_identity(
-                IMAGE_ID, HARNESS_IDENTITY["omnigentBuildDigest"]
+                IMAGE_ID,
+                HARNESS_IDENTITY["omnigentBuildDigest"],
+                moonmind_image=application_image,
             )
             == HARNESS_IDENTITY
         )
+        assert probes == [IMAGE_ID, application_image]
 
 
 @pytest.mark.parametrize(
@@ -502,12 +511,12 @@ def test_candidate_command_does_not_overlay_application_source(tmp_path):
     assert any(arg.endswith("::" + driver.TEST_NAME) for arg in command)
 
 
-def test_existing_exact_artifact_job_owns_required_recovery_invocation():
+def test_independent_recovery_owner_remains_required_for_the_exact_candidate():
     root = Path(__file__).resolve().parents[3]
     workflow = yaml.safe_load(
         (root / ".github/workflows/pytest-unit-tests.yml").read_text()
     )
-    job = workflow["jobs"]["omnigent-exact-artifact"]
+    job = workflow["jobs"]["omnigent-host-recovery"]
     steps = job["steps"]
     owning = [
         step
@@ -527,6 +536,9 @@ def test_existing_exact_artifact_job_owns_required_recovery_invocation():
         in owning[0]["run"]
     )
     assert "omnigent-exact-artifact" in workflow["jobs"]["ci-required"]["needs"]
+    assert "omnigent-host-recovery" in workflow["jobs"]["ci-required"]["needs"]
+    assert "prepare-app-image" in job["needs"]
+    assert "needs.select-test-suites.outputs.exact_artifact == 'true'" in job["if"]
 
 
 @pytest.mark.parametrize("location", ["root", "before", "after"])
@@ -754,11 +766,15 @@ def test_main_checks_exact_server_then_probes_before_recovery(
         elif args[:6] == ["docker", "run", "--rm", "--network", "none", "--entrypoint"]:
             assert args[7] == IMAGE_ID
             assert args[args.index("--network") + 1] == "none"
-            output = json.dumps(
-                {
-                    "version": "1.2.3",
-                    "harness": {"id": "opencode-native", "capabilities": {}},
-                }
+            output = (
+                json.dumps(HARNESS_IDENTITY)
+                if "from moonmind." in args[9]
+                else json.dumps(
+                    {
+                        "version": "1.2.3",
+                        "harness": {"id": "opencode-native", "capabilities": {}},
+                    }
+                )
             )
         return SimpleNamespace(stdout=output, stderr="", returncode=0)
 

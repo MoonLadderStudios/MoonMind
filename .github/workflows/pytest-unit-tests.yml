@@ -1,11 +1,9 @@
 name: CI / Test Suite
 
 on:
-  push:
-    branches: [ main ]
   pull_request:
-    branches: [ main ]
-    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+    types: [opened, synchronize, reopened]
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
@@ -21,6 +19,20 @@ on:
         required: false
         type: string
         default: ''
+      verification_phase:
+        description: 'Owners to execute: full, source, or artifact'
+        required: false
+        type: string
+        default: full
+      recovery_images_artifact:
+        description: Same-run prebuilt recovery runtimes
+        required: false
+        type: string
+        default: ''
+    outputs:
+      source_receipt_artifact:
+        description: Complete current source verification
+        value: ${{ jobs.source-receipt.outputs.artifact }}
   schedule:
     - cron: "17 9 * * *"
 
@@ -28,7 +40,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pytest-unit-tests-${{ github.workflow }}-${{ inputs.candidate_image && github.run_id || github.event.pull_request.number || github.ref }}
+  group: pytest-unit-tests-${{ github.workflow }}-${{ inputs.verification_phase }}-${{ inputs.verification_phase && github.run_id || inputs.candidate_image && github.run_id || github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -56,6 +68,7 @@ jobs:
       integration_upgrade_journey: ${{ steps.select.outputs.integration_upgrade_journey }}
       integration_controller_journey: ${{ steps.select.outputs.integration_controller_journey }}
       generated_contracts: ${{ steps.detect-openapi.outputs.generated_contracts }}
+      installed_matrix: ${{ steps.installed.outputs.matrix }}
     steps:
       - name: Check out code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -82,8 +95,13 @@ jobs:
           GITHUB_REF_NAME: ${{ github.ref_name }}
           QUALIFICATION_IMAGE: ${{ inputs.candidate_image }}
           QUALIFICATION_ARCHIVE: ${{ inputs.candidate_oci_artifact }}
+          MOONMIND_CI_PHASE: ${{ inputs.verification_phase || 'full' }}
         run: |
           set -euo pipefail
+          if [[ "$MOONMIND_CI_PHASE" == "artifact" && -z "$QUALIFICATION_IMAGE" ]]; then
+            echo "::error::Artifact verification requires its immutable application image"
+            exit 1
+          fi
           if [[ -n "$QUALIFICATION_ARCHIVE" && -z "$QUALIFICATION_IMAGE" ]]; then
             echo "::error::OCI qualification requires its immutable image identity"
             exit 1
@@ -104,7 +122,9 @@ jobs:
           # resolution path as test selection
           # (MoonLadderStudios/MoonMind#3326). An unknown change set stays
           # conservative and runs the generated-contract check.
-          if [[ "${{ steps.changed-files.outputs.resolution }}" != "known" ]]; then
+          if [[ "${{ inputs.verification_phase }}" == "artifact" ]]; then
+            echo "generated_contracts=false" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ inputs.verification_phase }}" == "source" || "${{ steps.changed-files.outputs.resolution }}" != "known" ]]; then
             echo "generated_contracts=true" >> "$GITHUB_OUTPUT"
           elif bash tools/check_openapi_affecting_changes.sh < /tmp/changed-files.txt; then
             echo "generated_contracts=true" >> "$GITHUB_OUTPUT"
@@ -112,6 +132,16 @@ jobs:
             echo "generated_contracts=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Select installed lanes
+        id: installed
+        env:
+          MATRIX: ${{ steps.select.outputs.integration_matrix }}
+        run: |
+          python3 - <<'PY_LANES' >> "$GITHUB_OUTPUT"
+          import json, os
+          lanes = json.loads(os.environ['MATRIX'])['suite']
+          print('matrix=' + json.dumps({'suite': [lane for lane in lanes if lane != 'hermetic']}, separators=(',', ':')))
+          PY_LANES
   preflight-policy:
     # Static repository policy checks run in parallel with test selection so they
     # are off the serial tail of required CI (MoonLadderStudios/MoonMind#3326).
@@ -184,12 +214,16 @@ jobs:
       - name: Select ownership verification
         id: ownership
         run: python3 tools/select_test_suites.py < /tmp/changed-files.txt
+        env:
+          MOONMIND_CI_PHASE: ${{ inputs.verification_phase || 'full' }}
       - name: Verify exclusive backend shard ownership
         # Real collection and the installed split plugin remain the proof.
         # Production-only diffs cannot change test ownership; collection inputs
         # and unknown/full events always run the complete verifier.
         if: steps.ownership.outputs.ownership_full == 'true'
-        run: python tools/verify_test_shard_ownership.py
+        run: |
+          python tools/verify_test_shard_ownership.py --manifest artifacts/test-ownership.json --slow-paths artifacts/slow-test-paths.txt
+
       # The policy scans and ownership collection above walk the working
       # tree, so MoonSpec is initialized only after them.
       - name: Initialize MoonSpec submodule
@@ -226,14 +260,44 @@ jobs:
           path: /tmp/status-token-audit.csv
           if-no-files-found: ignore
 
+      - name: Use the verified slow inventory for unchanged collection inputs
+        run: |
+          mkdir -p artifacts
+          if [[ ! -f artifacts/slow-test-paths.txt ]]; then
+            cp tools/ci/slow-test-paths.txt artifacts/slow-test-paths.txt
+          fi
+      - name: Identify collection evidence
+        id: ownership-artifact
+        run: |
+          echo "artifact=test-ownership-attempt-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+          echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - name: Upload collection ownership
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ${{ steps.ownership-artifact.outputs.artifact }}
+          path: |-
+            artifacts/test-ownership.json
+            artifacts/slow-test-paths.txt
+          if-no-files-found: error
+          retention-days: 7
+    if: inputs.verification_phase != 'artifact'
+    outputs:
+      artifact: ${{ steps.ownership-artifact.outputs.artifact }}
+      attempt: ${{ steps.ownership-artifact.outputs.attempt }}
   omnigent-deterministic-conformance:
     # Republishes the deterministic Omnigent evidence bundle from layers that
     # the exclusive shards already execute, so it runs only for Omnigent-owned
     # changes and full-verification events instead of on every pull request.
-    needs: select-test-suites
-    if: needs.select-test-suites.outputs.omnigent_conformance == 'true'
+    needs:
+      - select-test-suites
+      - preflight-policy
+      - backend-matrix
+      - integration-hermetic
+      - frontend-static
+      - unit-slow
+    if: "!cancelled() && needs.select-test-suites.outputs.omnigent_conformance == 'true' && needs.preflight-policy.result == 'success' && needs.backend-matrix.result == 'success' && needs.integration-hermetic.result == 'success' && needs.frontend-static.result == 'success' && (needs.unit-slow.result == 'success' || (needs.select-test-suites.outputs.unit_slow == 'false' && needs.unit-slow.result == 'skipped'))"
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
       - name: Check out code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -241,29 +305,45 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
-      - name: Initialize pinned Omnigent verifier source
-        run: git submodule update --init --depth 1 -- omnigent
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip uv
-          uv pip install --system -e .[tests]
-      - name: Set up Node
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - name: Download backend owner receipts and logs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          node-version: "22"
-          cache: npm
-      - name: Install frontend dependencies
-        run: npm ci --no-fund --no-audit
+          pattern: pytest-*-attempt-*
+          path: artifacts/owner-receipts/backend
+          merge-multiple: false
+      - name: Download hermetic owner receipts and logs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: integration-ci-hermetic-attempt-${{ needs.integration-hermetic.outputs.attempt }}
+          path: artifacts/owner-receipts/hermetic/integration-ci-hermetic-attempt-${{ needs.integration-hermetic.outputs.attempt }}
+      - name: Download frontend owner receipt
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: ${{ needs.frontend-static.outputs.artifact }}
+          path: artifacts/owner-receipts/frontend
+      - name: Download actual ownership collection
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: ${{ needs.preflight-policy.outputs.artifact }}
+          path: artifacts/owner-receipts/ownership
       - name: Run deterministic Omnigent conformance
         run: |
-          python tools/run_omnigent_conformance.py \
+          extra=()
+          if [[ "$FULL_SOURCE" == "true" ]]; then extra=(--require-full-source); fi
+          python tools/run_omnigent_conformance.py "${extra[@]}" \
+            --owner-receipts artifacts/owner-receipts \
+            --ownership-manifest artifacts/owner-receipts/ownership/test-ownership.json \
+            --ownership-attempt "${{ needs.preflight-policy.outputs.attempt }}" \
+            --frontend-attempt "${{ needs.frontend-static.outputs.attempt }}" \
             --server-image fake-server@sha256:0000000000000000000000000000000000000000000000000000000000000000 \
             --host-image fake-host@sha256:0000000000000000000000000000000000000000000000000000000000000000 \
             --host-architecture linux/amd64
+        env:
+          FULL_SOURCE: ${{ inputs.verification_phase == 'source' || needs.select-test-suites.outputs.full_backend == 'true' }}
       - name: Upload conformance evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -433,7 +513,7 @@ jobs:
           fi
           test_start=$SECONDS
           set +e
-          python -m pytest tests/unit \
+          python tools/ci/write_backend_matrix_summary.py run --expected-python 3.12 -- -p tools.ci.write_backend_matrix_summary tests/unit \
             --ignore=tests/unit/workflows/temporal \
             --ignore=tests/unit/api \
             --ignore=tests/unit/api_service \
@@ -468,7 +548,7 @@ jobs:
           fi
           test_start=$SECONDS
           set +e
-          python -m pytest tests/unit/api tests/unit/api_service tests/component/api \
+          python tools/ci/write_backend_matrix_summary.py run --expected-python 3.12 -- -p tools.ci.write_backend_matrix_summary tests/unit/api tests/unit/api_service tests/component/api \
             -m "component and not temporal_boundary and not slow and not provider_verification and not requires_credentials" \
             -v --tb=short -n auto --dist load --durations=25 --timeout 120 \
             -o faulthandler_timeout=90 \
@@ -500,7 +580,7 @@ jobs:
           fi
           test_start=$SECONDS
           set +e
-          python -m pytest tests/unit/workflows/temporal \
+          python tools/ci/write_backend_matrix_summary.py run --expected-python 3.12 -- -p tools.ci.write_backend_matrix_summary tests/unit/workflows/temporal \
             -m "temporal_boundary and not slow and not provider_verification and not requires_credentials" \
             -v --tb=short -n auto --dist loadfile --durations=25 --timeout 120 \
             -o faulthandler_timeout=90 \
@@ -592,7 +672,7 @@ jobs:
           fi
           test_start=$SECONDS
           set +e
-          timeout --signal=INT --kill-after=30s "${step_budget}s" python -m pytest tests/integration/reliability \
+          timeout --signal=INT --kill-after=30s "${step_budget}s" python tools/ci/write_backend_matrix_summary.py run --expected-python 3.12 -- tests/integration/reliability \
             -m "reliability_journey and not provider_verification and not requires_credentials" \
             -p tools.ci.write_backend_matrix_summary \
             --splits 4 --group "${{ matrix.shard }}" \
@@ -606,6 +686,17 @@ jobs:
           echo $((SECONDS - test_start)) > "/tmp/backend-${{ matrix.suite }}-test-seconds.txt" || true
           echo "$status" > "/tmp/backend-${{ matrix.suite }}-test-status.txt" || true
           exit $status
+      - name: Validate complete owner receipt
+        env:
+          RECEIPTS: artifacts/${{ matrix.suite }}.receipt.json
+        run: |
+          python3 - <<'PY_VERIFY'
+          import os
+          from pathlib import Path
+          from tools.ci.write_backend_matrix_summary import validate_receipt
+          for path in os.environ['RECEIPTS'].splitlines():
+              validate_receipt(Path(path), revision=os.environ['MOONMIND_CI_REVISION'], run_id=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'])
+          PY_VERIFY
       - name: Write backend-matrix evidence summary
         if: always()
         timeout-minutes: 2
@@ -687,6 +778,8 @@ jobs:
             artifacts/pytest-backend-${{ matrix.suite }}.log
             artifacts/pytest-backend-${{ matrix.suite }}-slowest.txt
             artifacts/pytest-backend-${{ matrix.suite }}-durations.json
+            artifacts/${{ matrix.suite }}.receipt.json
+            artifacts/${{ matrix.suite }}.environment.json
           if-no-files-found: warn
           retention-days: 7
       - name: Upload generated fault-lab diagnostics
@@ -836,8 +929,13 @@ jobs:
           fi
           exit 0
 
+    env:
+      MOONMIND_CI_RECEIPT: artifacts/${{ matrix.suite }}.receipt.json
+      MOONMIND_CI_SUITE: ${{ matrix.suite }}
   unit-slow:
-    needs: select-test-suites
+    needs:
+      - select-test-suites
+      - preflight-policy
     if: needs.select-test-suites.outputs.unit_slow == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -861,15 +959,113 @@ jobs:
         run: |
           python -m pip install --upgrade pip uv
           uv pip install --system -e .[tests]
+      - name: Download verified slow-test inventory
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: ${{ needs.preflight-policy.outputs.artifact }}
+          path: artifacts/ownership
       - name: Run slow unit suite
         run: |
           set -euo pipefail
-          python -m pytest tests/unit \
+          mapfile -t slow_paths < artifacts/ownership/slow-test-paths.txt
+          (( ${#slow_paths[@]} > 0 ))
+          python tools/ci/write_backend_matrix_summary.py run --expected-python 3.12 -- -p tools.ci.write_backend_matrix_summary "${slow_paths[@]}" \
             -m "slow and not provider_verification and not requires_credentials and not integration" \
             -q --durations=50 \
             --junitxml=artifacts/pytest-unit-slow.xml
 
-  integration-ci:
+      - name: Validate complete owner receipt
+        env:
+          RECEIPTS: artifacts/unit-slow.receipt.json
+        run: |
+          python3 - <<'PY_VERIFY'
+          import os
+          from pathlib import Path
+          from tools.ci.write_backend_matrix_summary import validate_receipt
+          for path in os.environ['RECEIPTS'].splitlines():
+              validate_receipt(Path(path), revision=os.environ['MOONMIND_CI_REVISION'], run_id=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'])
+          PY_VERIFY
+      - name: Upload slow-suite evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: pytest-unit-slow-attempt-${{ github.run_attempt }}
+          path: |
+            artifacts/unit-slow.receipt.json
+            artifacts/pytest-unit-slow.xml
+            artifacts/unit-slow.environment.json
+          if-no-files-found: error
+    env:
+      MOONMIND_CI_RECEIPT: artifacts/unit-slow.receipt.json
+      MOONMIND_CI_SUITE: unit-slow
+  prepare-app-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      image_ref: ${{ steps.identity.outputs.image_ref }}
+      artifact_name: ${{ steps.identity.outputs.artifact_name }}
+    steps:
+      - name: Check out the candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Initialize pinned Omnigent source
+        run: git submodule update --init --depth 1 -- omnigent
+        if: inputs.candidate_image == ''
+      - name: Install the OCI fixture transport
+        timeout-minutes: 3
+        run: |
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends skopeo
+        if: inputs.candidate_image == ''
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        if: inputs.candidate_image == ''
+      - name: Build one disposable application archive
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: api_service/Dockerfile
+          target: api-runtime
+          platforms: linux/amd64
+          outputs: type=oci,dest=${{ runner.temp }}/candidate.tar
+          build-args: |
+            MOONMIND_BUILD_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            MOONMIND_BUILD_ID=qualification-${{ github.run_id }}-${{ github.run_attempt }}
+          # Release builds own the reusable platform cache. PR consumers share
+          # this archive instead of exporting source-heavy layers per branch.
+          cache-from: type=gha,scope=build-linux-amd64
+        if: inputs.candidate_image == ''
+      - name: Identify the archived manifest
+        id: identity
+        run: |
+          set -euo pipefail
+          if [[ -n "$SUPPLIED_IMAGE" ]]; then
+            [[ "$SUPPLIED_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]
+            echo "image_ref=$SUPPLIED_IMAGE" >> "$GITHUB_OUTPUT"
+            echo "artifact_name=$SUPPLIED_ARCHIVE" >> "$GITHUB_OUTPUT"
+          else
+            python3 tools/ci/release_image_fixture.py describe --archive "$RUNNER_TEMP/candidate.tar" > "$RUNNER_TEMP/candidate-description.json"
+            jq -er '"image_ref=" + .image' "$RUNNER_TEMP/candidate-description.json" >> "$GITHUB_OUTPUT"
+            echo "artifact_name=app-image-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          SUPPLIED_IMAGE: ${{ inputs.candidate_image }}
+          SUPPLIED_ARCHIVE: ${{ inputs.candidate_oci_artifact }}
+      - name: Upload the identical archive for every consumer
+        timeout-minutes: 5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.identity.outputs.artifact_name }}
+          path: ${{ runner.temp }}/candidate.tar
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
+        if: inputs.candidate_image == ''
+    needs: select-test-suites
+    if: needs.select-test-suites.outputs.exact_artifact == 'true' || needs.select-test-suites.outputs.integration_fresh_journey == 'true' || needs.select-test-suites.outputs.integration_upgrade_journey == 'true' || needs.select-test-suites.outputs.integration_controller_journey == 'true'
+  integration-hermetic:
     # Each integration boundary runs as its own row: the hermetic Compose
     # suite and the three disposable default-install journeys. Run serially
     # in one job they made integration-ci the last required job in most PR
@@ -878,20 +1074,22 @@ jobs:
     # instantiates only affected rows; shared/unknown inputs retain all four. Like backend-matrix, native fail-fast cancels siblings after a
     # definitive failure except on schedules, which keep collecting evidence.
     needs: select-test-suites
-    if: needs.select-test-suites.outputs.integration_ci == 'true'
+    if: needs.select-test-suites.outputs.integration_hermetic == 'true'
+    outputs:
+      attempt: ${{ github.run_attempt }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read
-    # Hermetic worst case: 12m setup + 5m proxy checks + 5m scoped-egress checks
-    # + 33m execution/cleanup + 4m reports + 1m runner/post-action overhead.
-    # Journey worst case: 23m bootstrap/image/Node + 25m npm/OS/browser +
-    # 2m disk diagnostics + 25m tests + 6m reporting + 4m post-action reserve.
-    # Setup gets its own budget; the journey test deadlines are unchanged.
-    timeout-minutes: ${{ matrix.suite == 'hermetic' && 60 || 85 }}
+    # Cold setup has a 20m native bound including cache/input/archive work;
+    # proxy/egress checks keep 5m each, execution/cleanup 33m, receipt/reporting
+    # 5m, with 2m runner/post-action reserve. Actual work is measured separately.
+    timeout-minutes: 70
     strategy:
       fail-fast: ${{ github.event_name != 'schedule' }}
-      matrix: ${{ fromJSON(needs.select-test-suites.outputs.integration_matrix) }}
+      matrix:
+        suite:
+          - hermetic
     steps:
       - name: Check out code
         timeout-minutes: 2
@@ -906,11 +1104,27 @@ jobs:
       - name: Set up Docker Buildx
         timeout-minutes: 2
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Resolve immutable test-runtime inputs
+        timeout-minutes: 2
+        id: test-runtime-inputs
+        run: |
+          python3 tools/ci/test_runtime_inputs.py >> "$GITHUB_OUTPUT"
+      - name: Restore dependency-input test runtime
+        timeout-minutes: 3
+        id: test-runtime-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/test-runtime.tar
+          key: test-runtime-amd64-v1-${{ steps.test-runtime-inputs.outputs.key }}
+      - name: Load the cached dependency-input runtime
+        timeout-minutes: 2
+        if: steps.test-runtime-cache.outputs.cache-hit == 'true'
+        run: |
+          docker load --input "$RUNNER_TEMP/test-runtime.tar"
       - name: Build the pytest image with a shared layer cache
-        # The compose ``pytest`` service otherwise rebuilds the dependency
-        # layers from scratch on every run. The GitHub Actions cache keeps
-        # them across runs; only the layers behind changed inputs rebuild.
-        if: matrix.suite == 'hermetic'
+        # The input-scoped archive is the runtime cache writer. On a miss,
+        # reuse common release layers without exporting the same image twice.
+        if: 'steps.test-runtime-cache.outputs.cache-hit != ''true'''
         timeout-minutes: 6
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -919,12 +1133,24 @@ jobs:
           target: test-runtime
           build-args: |
             INSTALL_TEST_DEPS=true
+            TEST_RUNTIME_INPUTS=${{ steps.test-runtime-inputs.outputs.key }}
+            PYTHON_BASE=${{ steps.test-runtime-inputs.outputs.PYTHON_BASE }}
+            NODE_BASE=${{ steps.test-runtime-inputs.outputs.NODE_BASE }}
+            SOCKET_PROXY_BASE=${{ steps.test-runtime-inputs.outputs.SOCKET_PROXY_BASE }}
           load: true
           tags: moonmind-python-tests:ci
-          cache-from: type=gha,scope=integration-ci-test-runtime
-          cache-to: type=gha,scope=integration-ci-test-runtime,mode=max
+          cache-from: type=gha,scope=build-linux-amd64
+      - name: Verify the runtime input identity
+        timeout-minutes: 1
+        run: |
+          test "$(docker image inspect moonmind-python-tests:ci --format '{{ index .Config.Labels "io.moonmind.test-runtime.inputs" }}')" = "${{ steps.test-runtime-inputs.outputs.key }}"
+          test "$(docker image inspect moonmind-python-tests:ci --format '{{ .Architecture }}')" = amd64
+      - name: Save the dependency-input runtime
+        timeout-minutes: 2
+        if: steps.test-runtime-cache.outputs.cache-hit != 'true'
+        run: |
+          docker save --output "$RUNNER_TEMP/test-runtime.tar" moonmind-python-tests:ci
       - name: Verify isolated Docker socket proxy
-        if: matrix.suite == 'hermetic'
         timeout-minutes: 5
         env:
           MOONMIND_PYTHON_TEST_IMAGE: moonmind-python-tests:ci
@@ -934,7 +1160,6 @@ jobs:
           timeout --signal=INT --kill-after=20s 260s python3 tools/test_docker_proxy.py \
             2>&1 | tee artifacts/integration-ci/docker-proxy.log
       - name: Verify real scoped egress connections and owned cleanup
-        if: matrix.suite == 'hermetic'
         timeout-minutes: 5
         env:
           MOONMIND_PYTHON_TEST_IMAGE: moonmind-python-tests:ci
@@ -947,34 +1172,111 @@ jobs:
         # to interrupt and 3 * (120s + 10s kill grace) for diagnostics and
         # teardown, leaving another minute before the native step deadline.
         # Ordinary runs stop at the first failure; schedules keep collecting.
-        if: matrix.suite == 'hermetic'
         timeout-minutes: 33
         env:
           MOONMIND_FORCE_LOCAL_TESTS: "1"
           MOONMIND_PYTHON_TEST_IMAGE: moonmind-python-tests:ci
           MOONMIND_INTEGRATION_FAIL_FAST: ${{ github.event_name != 'schedule' && '1' || '0' }}
           MOONMIND_INTEGRATION_TIMEOUT: "1500"
+          MOONMIND_CI_RECEIPT: artifacts/integration-ci/main.receipt.json
+          MOONMIND_CI_SUITE: integration-hermetic
+          MOONMIND_CI_ENVIRONMENT: test-runtime:${{ steps.test-runtime-inputs.outputs.key }}
+          MOONMIND_CI_EXPECTED_PYTHON: ${{ steps.test-runtime-inputs.outputs.python }}
         run: |
           set -euo pipefail
           ./tools/test_integration.sh
-      - name: Build the candidate deployable image for the first-run journey
-        # Ordinary CI builds the same default deployable target as the
-        # exact-artifact gate. Release qualification pulls its supplied
-        # assembled manifest instead. These parallel builds only read the
-        # cache; the exact-artifact build remains its sole writer.
-        if: matrix.suite != 'hermetic' && inputs.candidate_image == ''
-        timeout-minutes: 15
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      - name: Validate complete owner receipt
+        timeout-minutes: 1
+        env:
+          RECEIPTS: "artifacts/integration-ci/main.receipt.json\nartifacts/integration-ci/storage-seed.receipt.json\nartifacts/integration-ci/storage-verify.receipt.json"
+        run: |
+          python3 - <<'PY_VERIFY'
+          import os
+          from pathlib import Path
+          from tools.ci.write_backend_matrix_summary import validate_receipt
+          for path in os.environ['RECEIPTS'].splitlines():
+              validate_receipt(Path(path), revision=os.environ['MOONMIND_CI_REVISION'], run_id=os.environ['GITHUB_RUN_ID'], attempt=os.environ['GITHUB_RUN_ATTEMPT'])
+          PY_VERIFY
+      - name: Collect row-owned integration report and diagnostics
+        # Each row collects only what its own owners wrote before teardown:
+        # the hermetic wrapper's JUnit report, streamed log and project
+        # diagnostics on every run, or a failed journey's log tree plus, on
+        # controller-journey, the journal transition test's phase, ps and log
+        # evidence. Text is redacted before upload; if redaction errors, the
+        # unredacted files are removed. A hard job kill or runner loss can
+        # still prevent collection and upload.
+        if: always()
+        timeout-minutes: 2
+        run: |
+          set -uo pipefail
+          out=/tmp/pytest-integration-ci
+          mkdir -p "$out"
+          echo "suite=${{ matrix.suite }} event=${{ github.event_name }} run=${{ github.run_id }} attempt=${{ github.run_attempt }}" > "$out/collection-status.txt"
+          source_dirs=(artifacts/integration-ci)
+          if [[ ! -f artifacts/integration-ci/pytest-integration-ci.xml ]]; then
+            echo "missing artifacts/integration-ci/pytest-integration-ci.xml (interrupted before pytest wrote it; not zero tests)" >> "$out/collection-status.txt"
+          fi
+          for source_dir in "${source_dirs[@]}"; do
+            if [[ -d "$source_dir" ]]; then
+              timeout 40s cp -R "$source_dir" "$out/" \
+                || echo "copy $source_dir failed or timed out (exit=$?)" >> "$out/collection-status.txt"
+            else
+              echo "missing $source_dir (the row stopped before writing it)" >> "$out/collection-status.txt"
+            fi
+          done
+          if ! python3 tools/ci/redact_diagnostics.py --diagnostics-dir "$out" --status-file "$out/collection-status.txt"; then
+            find "$out" -type f ! -name collection-status.txt -delete 2>/dev/null || true
+            echo "redaction failed; unredacted diagnostics removed before upload" >> "$out/collection-status.txt"
+          fi
+      - name: Upload row-owned integration report and diagnostics
+        if: always()
+        timeout-minutes: 2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          context: .
-          file: api_service/Dockerfile
-          build-args: |
-            MOONMIND_BUILD_SHA=${{ github.event.pull_request.head.sha || github.sha }}
-          load: true
-          tags: moonmind-first-run-3938:ci
-          cache-from: type=gha,scope=exact-artifact-api-runtime
+          name: integration-ci-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
+          path: /tmp/pytest-integration-ci
+          if-no-files-found: error
+          retention-days: 7
+
+  integration-ci:
+    # Each integration boundary runs as its own row: the hermetic Compose
+    # suite and the three disposable default-install journeys. Run serially
+    # in one job they made integration-ci the last required job in most PR
+    # runs; every row owns an isolated Compose project, so parallel rows keep
+    # the same coverage and the slowest row bounds the job. Selection
+    # instantiates only affected rows; shared/unknown inputs retain all four. Like backend-matrix, native fail-fast cancels siblings after a
+    # definitive failure except on schedules, which keep collecting evidence.
+    needs:
+      - select-test-suites
+      - prepare-app-image
+    if: needs.select-test-suites.outputs.integration_fresh_journey == 'true' || needs.select-test-suites.outputs.integration_upgrade_journey == 'true' || needs.select-test-suites.outputs.integration_controller_journey == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    # Journey worst case: 23m bootstrap/image/Node + 25m npm/OS/browser +
+    # 2m disk diagnostics + 25m tests + 6m reporting + 4m post-action reserve.
+    # Setup gets its own budget; the journey test deadlines are unchanged.
+    timeout-minutes: 85
+    strategy:
+      fail-fast: ${{ github.event_name != 'schedule' }}
+      matrix: ${{ fromJSON(needs.select-test-suites.outputs.installed_matrix) }}
+    steps:
+      - name: Check out code
+        timeout-minutes: 2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: Initialize pinned Omnigent verifier source
+        timeout-minutes: 2
+        run: git submodule update --init --depth 1 -- omnigent
+      - name: Set up Docker Buildx
+        timeout-minutes: 2
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Login to the release artifact registry
-        if: matrix.suite != 'hermetic' && inputs.candidate_image != '' && inputs.candidate_oci_artifact == ''
+        if: needs.prepare-app-image.outputs.image_ref != '' && needs.prepare-app-image.outputs.artifact_name == ''
         timeout-minutes: 2
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
@@ -982,23 +1284,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Install the OCI fixture transport
-        if: matrix.suite != 'hermetic' && inputs.candidate_oci_artifact != ''
+        if: needs.prepare-app-image.outputs.artifact_name != ''
         timeout-minutes: 3
         run: |
           sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
           sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends skopeo
       - name: Download the assembled OCI fixture
-        if: matrix.suite != 'hermetic' && inputs.candidate_oci_artifact != ''
+        if: needs.prepare-app-image.outputs.artifact_name != ''
         timeout-minutes: 3
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: ${{ inputs.candidate_oci_artifact }}
+          name: ${{ needs.prepare-app-image.outputs.artifact_name }}
           path: ${{ runner.temp }}/release-image-fixture
       - name: Restore the identical manifest into the job-owned registry
-        if: matrix.suite != 'hermetic' && inputs.candidate_oci_artifact != ''
+        if: needs.prepare-app-image.outputs.artifact_name != ''
         timeout-minutes: 3
         env:
-          CANDIDATE_IMAGE: ${{ inputs.candidate_image }}
+          CANDIDATE_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref }}
           FIXTURE_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ matrix.suite }}
         run: |
           python3 tools/ci/release_image_fixture.py restore \
@@ -1007,14 +1309,15 @@ jobs:
             --state "$RUNNER_TEMP/release-image-fixture/state.json" \
             --owner "$FIXTURE_OWNER"
       - name: Pull the release artifact for installed journeys
-        if: matrix.suite != 'hermetic' && inputs.candidate_image != ''
+        if: needs.prepare-app-image.outputs.image_ref != ''
         timeout-minutes: 5
         env:
-          CANDIDATE_IMAGE: ${{ inputs.candidate_image }}
+          CANDIDATE_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref }}
         run: |
           set -euo pipefail
           [[ "$CANDIDATE_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]
           docker pull "$CANDIDATE_IMAGE"
+          test "$(docker image inspect "$CANDIDATE_IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$MOONMIND_CI_REVISION"
       - name: Set up Node for the dashboard journey
         if: endsWith(matrix.suite, '-journey')
         timeout-minutes: 2
@@ -1071,7 +1374,7 @@ jobs:
         if: matrix.suite == 'fresh-journey'
         timeout-minutes: 20
         env:
-          MOONMIND_IMAGE: ${{ inputs.candidate_image || 'moonmind-first-run-3938:ci' }}
+          MOONMIND_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref || 'moonmind-first-run-3938:ci' }}
         run: |
           set -euo pipefail
           ./tools/first_run_journey_3938.sh
@@ -1084,7 +1387,7 @@ jobs:
         if: matrix.suite == 'upgrade-journey'
         timeout-minutes: 25
         env:
-          MOONMIND_IMAGE: ${{ inputs.candidate_image || 'moonmind-first-run-3938:ci' }}
+          MOONMIND_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref || 'moonmind-first-run-3938:ci' }}
         run: |
           set -euo pipefail
           ./tools/first_run_journey_3938.sh --upgrade
@@ -1099,7 +1402,7 @@ jobs:
         if: matrix.suite == 'controller-journey'
         timeout-minutes: 10
         env:
-          MOONMIND_IMAGE: ${{ inputs.candidate_image || 'moonmind-first-run-3938:ci' }}
+          MOONMIND_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref || 'moonmind-first-run-3938:ci' }}
         run: |
           set -euo pipefail
           ./tools/first_run_journey_3938.sh --controller
@@ -1115,7 +1418,7 @@ jobs:
         timeout-minutes: 10
         env:
           MOONMIND_TEST_JOURNAL_TRANSITION: "1"
-          MOONMIND_TEST_JOURNAL_APP_IMAGE: ${{ inputs.candidate_image || 'moonmind-first-run-3938:ci' }}
+          MOONMIND_TEST_JOURNAL_APP_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref || 'moonmind-first-run-3938:ci' }}
         run: |
           set -euo pipefail
           journal_test_env="$(mktemp -d /tmp/moonmind-journal-tests.XXXXXX)"
@@ -1129,7 +1432,7 @@ jobs:
             tests/integration/host_update/test_controller_handoff.py \
             tests/integration/host_update/test_controller_compose_journeys.py -q
       - name: Stop the job-owned OCI fixture registry
-        if: always() && matrix.suite != 'hermetic' && inputs.candidate_oci_artifact != ''
+        if: always() && needs.prepare-app-image.outputs.artifact_name != ''
         timeout-minutes: 1
         env:
           FIXTURE_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ matrix.suite }}
@@ -1137,56 +1440,50 @@ jobs:
           python3 tools/ci/release_image_fixture.py cleanup \
             --state "$RUNNER_TEMP/release-image-fixture/state.json" \
             --owner "$FIXTURE_OWNER"
-      - name: Upload redacted journey startup timings and resource footprints
-        if: always() && endsWith(matrix.suite, '-journey')
-        timeout-minutes: 2
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: journey-startup-${{ matrix.suite }}
-          path: |
-            var/artifacts/first-run-3938/*/compose-startup-*.log
-            var/artifacts/first-run-3938/*/resource-footprint-*.log
-          if-no-files-found: warn
       - name: Collect row-owned integration report and diagnostics
-        # Each row collects only what its own owners wrote before teardown:
-        # the hermetic wrapper's JUnit report, streamed log and project
-        # diagnostics on every run, or a failed journey's log tree plus, on
-        # controller-journey, the journal transition test's phase, ps and log
-        # evidence. Text is redacted before upload; if redaction errors, the
-        # unredacted files are removed. A hard job kill or runner loss can
-        # still prevent collection and upload.
-        if: always() && (matrix.suite == 'hermetic' || failure() || cancelled())
-        timeout-minutes: 2
+        # One owner retains cheap startup observations on success and the
+        # complete failed/canceled journey and journal-transition evidence.
+        # Redaction failure removes raw files before upload.
+        if: always()
+        timeout-minutes: 3
+        env:
+          JOURNEY_RESULT: ${{ job.status }}
         run: |
           set -uo pipefail
           out=/tmp/pytest-integration-ci
           mkdir -p "$out"
           echo "suite=${{ matrix.suite }} event=${{ github.event_name }} run=${{ github.run_id }} attempt=${{ github.run_attempt }}" > "$out/collection-status.txt"
-          if [[ "${{ matrix.suite }}" == "hermetic" ]]; then
-            source_dirs=(artifacts/integration-ci)
-            if [[ ! -f artifacts/integration-ci/pytest-integration-ci.xml ]]; then
-              echo "missing artifacts/integration-ci/pytest-integration-ci.xml (interrupted before pytest wrote it; not zero tests)" >> "$out/collection-status.txt"
-            fi
-          elif [[ "${{ matrix.suite }}" == "controller-journey" ]]; then
-            source_dirs=(var/artifacts/first-run-3938 var/artifacts/journal-transition)
+          if [[ "$JOURNEY_RESULT" == "success" ]]; then
+            for path in var/artifacts/first-run-3938/*/compose-startup-*.log var/artifacts/first-run-3938/*/resource-footprint-*.log; do
+              if [[ -f "$path" ]]; then
+                mode="$(basename "$(dirname "$path")")"
+                mkdir -p "$out/first-run-3938/$mode"
+                timeout 40s cp "$path" "$out/first-run-3938/$mode/" \
+                  || echo "copy startup observation failed or timed out (exit=$?)" >> "$out/collection-status.txt"
+              fi
+            done
           else
-            source_dirs=(var/artifacts/first-run-3938)
-          fi
-          for source_dir in "${source_dirs[@]}"; do
-            if [[ -d "$source_dir" ]]; then
-              timeout 40s cp -R "$source_dir" "$out/" \
-                || echo "copy $source_dir failed or timed out (exit=$?)" >> "$out/collection-status.txt"
+            if [[ "${{ matrix.suite }}" == "controller-journey" ]]; then
+              source_dirs=(var/artifacts/first-run-3938 var/artifacts/journal-transition)
             else
-              echo "missing $source_dir (the row stopped before writing it)" >> "$out/collection-status.txt"
+              source_dirs=(var/artifacts/first-run-3938)
             fi
-          done
+            for source_dir in "${source_dirs[@]}"; do
+              if [[ -d "$source_dir" ]]; then
+                timeout 40s cp -R "$source_dir" "$out/" \
+                  || echo "copy $source_dir failed or timed out (exit=$?)" >> "$out/collection-status.txt"
+              else
+                echo "missing $source_dir (the row stopped before writing it)" >> "$out/collection-status.txt"
+              fi
+            done
+          fi
           if ! python3 tools/ci/redact_diagnostics.py --diagnostics-dir "$out" --status-file "$out/collection-status.txt"; then
             find "$out" -type f ! -name collection-status.txt -delete 2>/dev/null || true
             echo "redaction failed; unredacted diagnostics removed before upload" >> "$out/collection-status.txt"
           fi
       - name: Upload row-owned integration report and diagnostics
-        if: always() && (matrix.suite == 'hermetic' || failure() || cancelled())
-        timeout-minutes: 2
+        if: always()
+        timeout-minutes: 3
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: integration-ci-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
@@ -1194,6 +1491,202 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  prepare-recovery-images:
+    needs: select-test-suites
+    if: needs.select-test-suites.outputs.exact_artifact == 'true' && inputs.recovery_images_artifact == ''
+    uses: ./.github/workflows/prepare-recovery-images.yml
+  omnigent-host-recovery:
+    needs:
+      - select-test-suites
+      - prepare-app-image
+      - prepare-recovery-images
+    if: "!cancelled() && needs.select-test-suites.outputs.exact_artifact == 'true' && needs.prepare-app-image.result == 'success' && (inputs.recovery_images_artifact != '' || needs.prepare-recovery-images.result == 'success')"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    timeout-minutes: 65
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: Initialize pinned Omnigent verifier source
+        run: git submodule update --init --depth 1 -- omnigent
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install the isolated recovery driver
+        run: |
+          python -m pip install --upgrade uv
+          uv pip install --system PyYAML
+      - name: Login to the release artifact registry
+        if: needs.prepare-app-image.outputs.image_ref != '' && needs.prepare-app-image.outputs.artifact_name == ''
+        timeout-minutes: 2
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install the OCI fixture transport
+        if: needs.prepare-app-image.outputs.artifact_name != ''
+        timeout-minutes: 3
+        run: |
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends skopeo
+      - name: Download the assembled OCI fixture
+        if: needs.prepare-app-image.outputs.artifact_name != ''
+        timeout-minutes: 3
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.prepare-app-image.outputs.artifact_name }}
+          path: ${{ runner.temp }}/release-image-fixture
+      - name: Restore the identical manifest into the job-owned registry
+        if: needs.prepare-app-image.outputs.artifact_name != ''
+        timeout-minutes: 3
+        env:
+          CANDIDATE_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref }}
+          FIXTURE_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+        run: |
+          python3 tools/ci/release_image_fixture.py restore \
+            --archive "$RUNNER_TEMP/release-image-fixture/candidate.tar" \
+            --image "$CANDIDATE_IMAGE" \
+            --state "$RUNNER_TEMP/release-image-fixture/state.json" \
+            --owner "$FIXTURE_OWNER"
+          rm -f "$RUNNER_TEMP/release-image-fixture/candidate.tar"
+      - name: Pull the exact release artifact
+        if: needs.prepare-app-image.outputs.image_ref != ''
+        timeout-minutes: 5
+        env:
+          CANDIDATE_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]
+          docker pull "$CANDIDATE_IMAGE"
+          test "$(docker image inspect "$CANDIDATE_IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$MOONMIND_CI_REVISION"
+      - name: Resolve the immutable image identity
+        id: digest
+        shell: bash
+        env:
+          RELEASE_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref }}
+        run: |
+          set -euo pipefail
+          # The compiled UI is baked into the app image, and the worker runs
+          # from the same image with a different entrypoint, so all three
+          # deployable roles share one immutable digest.
+          #
+          # `ref` is the digest-pinned identity recorded in the evidence.
+          # For local builds, `runnable` is the content id Docker can resolve:
+          # a loaded image has no registry repo digest, so using its content
+          # id as `name@sha256:<id>` would request a nonexistent manifest.
+          if [[ -n "$RELEASE_IMAGE" ]]; then
+            # Registry manifests and local platform content IDs are different.
+            # Run and record the immutable manifest the release caller supplied.
+            echo "ref=$RELEASE_IMAGE" >> "$GITHUB_OUTPUT"
+            echo "digest=${RELEASE_IMAGE##*@}" >> "$GITHUB_OUTPUT"
+            echo "runnable=$RELEASE_IMAGE" >> "$GITHUB_OUTPUT"
+          else
+            IMAGE_ID="$(docker image inspect moonmind-exact-artifact:candidate --format '{{ .Id }}')"
+            DIGEST="${IMAGE_ID#sha256:}"
+            echo "ref=moonmind-exact-artifact@sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
+            echo "digest=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
+            echo "runnable=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Inspect recovery acquisition disk capacity
+        timeout-minutes: 1
+        run: |
+          df -h "$RUNNER_TEMP" /var/lib/docker || true
+          docker system df || true
+      - name: Download prepared recovery images
+        # A cold ~3 GB transfer can exceed three minutes. Keep acquisition
+        # bounded independently of the unchanged recovery execution deadline.
+        timeout-minutes: 8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: ${{ inputs.recovery_images_artifact || needs.prepare-recovery-images.outputs.artifact }}
+          path: ${{ runner.temp }}/recovery-images
+      - name: Verify and load the exact prepared runtimes
+        timeout-minutes: 5
+        run: |
+          python3 tools/ci/release_image_fixture.py restore-recovery \
+            --archive "$RUNNER_TEMP/recovery-images/images.tar.gz" --state "$RUNNER_TEMP/recovery-images/identity.json" \
+            --revision "$MOONMIND_CI_REVISION" --upstream "$(git rev-parse HEAD:omnigent)" \
+            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --artifact "$RECOVERY_ARTIFACT"
+          rm -f "$RUNNER_TEMP/recovery-images/images.tar.gz"
+          df -h "$RUNNER_TEMP" /var/lib/docker || true
+        env:
+          RECOVERY_ARTIFACT: ${{ inputs.recovery_images_artifact || needs.prepare-recovery-images.outputs.artifact }}
+      - name: Resolve job-local immutable recovery artifacts
+        id: recovery-images
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A local registry gives the canonical host launcher its real
+          # repository@sha256 identity. Nothing is published off this runner;
+          # 127.0.0.1 works without changing daemon trust/configuration.
+          docker run -d --name moonmind-test-recovery-registry \
+            -p 127.0.0.1:5000:5000 registry:3.0.0
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:5000/v2/ >/dev/null; then break; fi
+            if [[ "$attempt" = 30 ]]; then exit 1; fi
+            sleep 1
+          done
+          pin_local_image() {
+            local source="$1" repository="$2"
+            docker tag "$source" "$repository:candidate"
+            docker push "$repository:candidate" >&2
+            docker image inspect "$repository:candidate" \
+              --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+              | grep -E "^${repository}@sha256:[0-9a-f]{64}$"
+          }
+          server="$(pin_local_image moonmind-test-omnigent-server:candidate \
+            127.0.0.1:5000/moonmind-test-omnigent-server)"
+          host="$(pin_local_image moonmind-test-omnigent-host:candidate \
+            127.0.0.1:5000/moonmind-test-omnigent-host)"
+          echo "server=$server" >> "$GITHUB_OUTPUT"
+          echo "host=$host" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/moonmind-test-recovery-dependencies"
+          # Pure-Python test tooling is mounted separately into the unchanged
+          # candidate image; no production package/source is installed over it.
+          uv pip install --target "$RUNNER_TEMP/moonmind-test-recovery-dependencies" \
+            --only-binary=:all: 'pytest>=9.0.3,<9.2.0' 'pytest-asyncio>=1.3,<2' 'aiosqlite>=0.19,<0.23'
+      - name: Require credential-free exact-image host recovery
+        timeout-minutes: 40
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/ci/run_credential_free_host_recovery.py \
+            --moonmind-image "${{ steps.digest.outputs.runnable }}" \
+            --server-image "${{ steps.recovery-images.outputs.server }}" \
+            --host-image "${{ steps.recovery-images.outputs.host }}" \
+            --pr-head "${{ github.event.pull_request.head.sha || github.sha }}" \
+            --base-commit "${{ github.event.pull_request.base.sha || github.event.before || github.sha }}" \
+            --dependencies "$RUNNER_TEMP/moonmind-test-recovery-dependencies" \
+            --output-dir artifacts/omnigent-exact-artifact/credential-free-recovery
+      - name: Stop the job-local recovery registry
+        if: always()
+        run: docker rm -fv moonmind-test-recovery-registry || true
+      - name: Stop the job-owned OCI fixture registry
+        if: always() && needs.prepare-app-image.outputs.artifact_name != ''
+        timeout-minutes: 1
+        env:
+          FIXTURE_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+        run: |
+          python3 tools/ci/release_image_fixture.py cleanup \
+            --state "$RUNNER_TEMP/release-image-fixture/state.json" \
+            --owner "$FIXTURE_OWNER"
+      - name: Upload host and interrupted-step recovery evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: omnigent-host-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/omnigent-exact-artifact/credential-free-recovery
+          if-no-files-found: warn
+          retention-days: 14
   omnigent-exact-artifact:
     # Tier 1 (MoonLadderStudios/MoonMind#3710): the required, per-PR,
     # NONCREDENTIALED exact deployable-artifact conformance gate.  It builds the
@@ -1219,7 +1712,9 @@ jobs:
     # credentialed canary, Tier-3 post-deployment synthetic, or Tier-4
     # scheduled-soak outage never flips this gate closed.  Runs on the standard
     # Docker-enabled ubuntu-latest merge infrastructure.
-    needs: select-test-suites
+    needs:
+      - select-test-suites
+      - prepare-app-image
     if: needs.select-test-suites.outputs.exact_artifact == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -1286,24 +1781,8 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - name: Build the exact deployable image
-        id: build
-        if: inputs.candidate_image == ''
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          file: api_service/Dockerfile
-          load: true
-          tags: moonmind-exact-artifact:candidate
-          build-args: |
-            MOONMIND_BUILD_SHA=${{ github.event.pull_request.head.sha || github.sha }}
-          # A local single-arch image so its digest is the immutable artifact
-          # under test. The layer cache only skips rebuilding unchanged layers;
-          # the resulting image digest is still computed from this checkout.
-          cache-from: type=gha,scope=exact-artifact-api-runtime
-          cache-to: type=gha,scope=exact-artifact-api-runtime,mode=max
       - name: Login to the release artifact registry
-        if: inputs.candidate_image != '' && inputs.candidate_oci_artifact == ''
+        if: needs.prepare-app-image.outputs.image_ref != '' && needs.prepare-app-image.outputs.artifact_name == ''
         timeout-minutes: 2
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
@@ -1311,23 +1790,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Install the OCI fixture transport
-        if: inputs.candidate_oci_artifact != ''
+        if: needs.prepare-app-image.outputs.artifact_name != ''
         timeout-minutes: 3
         run: |
           sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
           sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends skopeo
       - name: Download the assembled OCI fixture
-        if: inputs.candidate_oci_artifact != ''
+        if: needs.prepare-app-image.outputs.artifact_name != ''
         timeout-minutes: 3
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: ${{ inputs.candidate_oci_artifact }}
+          name: ${{ needs.prepare-app-image.outputs.artifact_name }}
           path: ${{ runner.temp }}/release-image-fixture
       - name: Restore the identical manifest into the job-owned registry
-        if: inputs.candidate_oci_artifact != ''
+        if: needs.prepare-app-image.outputs.artifact_name != ''
         timeout-minutes: 3
         env:
-          CANDIDATE_IMAGE: ${{ inputs.candidate_image }}
+          CANDIDATE_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref }}
           FIXTURE_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
         run: |
           python3 tools/ci/release_image_fixture.py restore \
@@ -1336,19 +1815,20 @@ jobs:
             --state "$RUNNER_TEMP/release-image-fixture/state.json" \
             --owner "$FIXTURE_OWNER"
       - name: Pull the exact release artifact
-        if: inputs.candidate_image != ''
+        if: needs.prepare-app-image.outputs.image_ref != ''
         timeout-minutes: 5
         env:
-          CANDIDATE_IMAGE: ${{ inputs.candidate_image }}
+          CANDIDATE_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref }}
         run: |
           set -euo pipefail
           [[ "$CANDIDATE_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]
           docker pull "$CANDIDATE_IMAGE"
+          test "$(docker image inspect "$CANDIDATE_IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$MOONMIND_CI_REVISION"
       - name: Resolve the immutable image identity
         id: digest
         shell: bash
         env:
-          RELEASE_IMAGE: ${{ inputs.candidate_image }}
+          RELEASE_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref }}
         run: |
           set -euo pipefail
           # The compiled UI is baked into the app image, and the worker runs
@@ -1451,100 +1931,8 @@ jobs:
             --runtime-evidence runtime-evidence.json \
             --compatibility-manifest compatibility-manifest.json \
             --output-dir artifacts/omnigent-exact-artifact
-      - name: Verify the pinned recovery runtime source
-        id: recovery-source
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected="$(git rev-parse HEAD:omnigent)"
-          actual="$(git -C omnigent rev-parse HEAD)"
-          test "$actual" = "$expected"
-          echo "commit=$actual" >> "$GITHUB_OUTPUT"
-      - name: Build the pinned recovery server
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: omnigent
-          file: omnigent/deploy/docker/Dockerfile
-          load: true
-          tags: moonmind-test-omnigent-server:candidate
-          labels: org.opencontainers.image.revision=${{ steps.recovery-source.outputs.commit }}
-          cache-from: type=gha,scope=credential-free-recovery-server
-          cache-to: type=gha,scope=credential-free-recovery-server,mode=max
-      - name: Build the pinned recovery host base
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: omnigent
-          file: omnigent/deploy/docker/Dockerfile
-          target: host
-          load: true
-          tags: moonmind-test-omnigent-host-base:candidate
-          labels: org.opencontainers.image.revision=${{ steps.recovery-source.outputs.commit }}
-          cache-from: type=gha,scope=credential-free-recovery-host
-          cache-to: type=gha,scope=credential-free-recovery-host,mode=max
-      - name: Resolve job-local immutable recovery artifacts
-        id: recovery-images
-        shell: bash
-        run: |
-          set -euo pipefail
-          # A local registry gives the canonical host launcher its real
-          # repository@sha256 identity. Nothing is published off this runner;
-          # 127.0.0.1 works without changing daemon trust/configuration.
-          docker run -d --name moonmind-test-recovery-registry \
-            -p 127.0.0.1:5000:5000 registry:3.0.0
-          for attempt in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:5000/v2/ >/dev/null; then break; fi
-            if [[ "$attempt" = 30 ]]; then exit 1; fi
-            sleep 1
-          done
-          pin_local_image() {
-            local source="$1" repository="$2"
-            docker tag "$source" "$repository:candidate"
-            docker push "$repository:candidate" >&2
-            docker image inspect "$repository:candidate" \
-              --format '{{range .RepoDigests}}{{println .}}{{end}}' \
-              | grep -E "^${repository}@sha256:[0-9a-f]{64}$"
-          }
-          server="$(pin_local_image moonmind-test-omnigent-server:candidate \
-            127.0.0.1:5000/moonmind-test-omnigent-server)"
-          base="$(pin_local_image moonmind-test-omnigent-host-base:candidate \
-            127.0.0.1:5000/moonmind-test-omnigent-host-base)"
-          # Use the shared host image and warmed offline plugin
-          # cache over the exact upstream base just built from the gitlink.
-          # The daemon-backed default builder can resolve the loopback registry.
-          docker buildx build --builder default --load \
-            -f services/omnigent/moonmind-host/Dockerfile \
-            --build-arg "OMNIGENT_HOST_BASE_IMAGE=$base" \
-            --build-arg "OMNIGENT_BUILD_DIGEST=${base##*@}" \
-            --label "org.opencontainers.image.revision=${{ steps.recovery-source.outputs.commit }}" \
-            --label "moonmind.source.revision=$(git rev-parse HEAD)" \
-            -t moonmind-test-omnigent-host:candidate .
-          host="$(pin_local_image moonmind-test-omnigent-host:candidate \
-            127.0.0.1:5000/moonmind-test-omnigent-host)"
-          echo "server=$server" >> "$GITHUB_OUTPUT"
-          echo "host=$host" >> "$GITHUB_OUTPUT"
-          mkdir -p "$RUNNER_TEMP/moonmind-test-recovery-dependencies"
-          # Pure-Python test tooling is mounted separately into the unchanged
-          # candidate image; no production package/source is installed over it.
-          uv pip install --target "$RUNNER_TEMP/moonmind-test-recovery-dependencies" \
-            --only-binary=:all: 'pytest>=9.0.3,<9.2.0' 'pytest-asyncio>=1.3,<2' 'aiosqlite>=0.19,<0.23'
-      - name: Require credential-free exact-image host recovery
-        timeout-minutes: 40
-        shell: bash
-        run: |
-          set -euo pipefail
-          python tools/ci/run_credential_free_host_recovery.py \
-            --moonmind-image "${{ steps.digest.outputs.runnable }}" \
-            --server-image "${{ steps.recovery-images.outputs.server }}" \
-            --host-image "${{ steps.recovery-images.outputs.host }}" \
-            --pr-head "${{ github.event.pull_request.head.sha || github.sha }}" \
-            --base-commit "${{ github.event.pull_request.base.sha || github.event.before || github.sha }}" \
-            --dependencies "$RUNNER_TEMP/moonmind-test-recovery-dependencies" \
-            --output-dir artifacts/omnigent-exact-artifact/credential-free-recovery
-      - name: Stop the job-local recovery registry
-        if: always()
-        run: docker rm -fv moonmind-test-recovery-registry || true
       - name: Stop the job-owned OCI fixture registry
-        if: always() && inputs.candidate_oci_artifact != ''
+        if: always() && needs.prepare-app-image.outputs.artifact_name != ''
         timeout-minutes: 1
         env:
           FIXTURE_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
@@ -1678,6 +2066,9 @@ jobs:
       - omnigent-deterministic-conformance
       - test-frontend
       - check-generated-contracts
+      - integration-hermetic
+      - prepare-app-image
+      - omnigent-host-recovery
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1798,12 +2189,18 @@ jobs:
           }
 
           require_always "select-test-suites" "${{ needs.select-test-suites.result }}"
+          # Source policy is verified in the source phase. Release publication also
+          # requires the independent source receipt after both phases finish.
           # Always-run static invariants (MoonLadderStudios/MoonMind#3950):
           # preflight-policy owns repository policy, the MoonSpec projection,
           # and selected exclusive shard ownership. It has no job gate, so it is
           # aggregated unconditionally; gating shard ownership on full_backend
           # tripped a success-but-unselected failure on every targeted PR.
-          require_always "preflight-policy" "${{ needs.preflight-policy.result }}"
+          if [[ "${{ inputs.verification_phase }}" == "artifact" ]]; then
+            require_selected "preflight-policy" "false" "${{ needs.preflight-policy.result }}"
+          else
+            require_always "preflight-policy" "${{ needs.preflight-policy.result }}"
+          fi
 
           # Backend-matrix aggregate (MoonLadderStudios/MoonMind#4377): the
           # unit-fast, api-component, temporal-boundary and four reliability
@@ -1824,9 +2221,16 @@ jobs:
           require_selected "unit-slow" \
             "${{ needs.select-test-suites.outputs.unit_slow }}" \
             "${{ needs.unit-slow.result }}"
+          installed_selected="false"
+          if [[ "${{ needs.select-test-suites.outputs.integration_fresh_journey }}" == "true" || "${{ needs.select-test-suites.outputs.integration_upgrade_journey }}" == "true" || "${{ needs.select-test-suites.outputs.integration_controller_journey }}" == "true" ]]; then installed_selected="true"; fi
+          require_selected "integration-hermetic" "${{ needs.select-test-suites.outputs.integration_hermetic }}" "${{ needs.integration-hermetic.result }}"
+          image_selected="$installed_selected"
+          if [[ "${{ needs.select-test-suites.outputs.exact_artifact }}" == "true" ]]; then image_selected="true"; fi
+          require_selected "prepare-app-image" "$image_selected" "${{ needs.prepare-app-image.result }}"
           require_selected "integration-ci" \
-            "${{ needs.select-test-suites.outputs.integration_ci }}" \
+            "$installed_selected" \
             "${{ needs.integration-ci.result }}"
+          require_selected "omnigent-host-recovery" "${{ needs.select-test-suites.outputs.exact_artifact }}" "${{ needs.omnigent-host-recovery.result }}"
           require_selected "omnigent-exact-artifact" \
             "${{ needs.select-test-suites.outputs.exact_artifact }}" \
             "${{ needs.omnigent-exact-artifact.result }}"
@@ -1858,22 +2262,49 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-    - name: Check out code
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      with:
-        ref: ${{ github.event.pull_request.head.sha || github.sha }}
-        token: ${{ secrets.GITHUB_TOKEN }}
-        fetch-depth: 1
-    - name: Set up Node.js
-      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-      with:
-        node-version: '20'
-        cache: npm
-    - name: Install Node dependencies
-      run: npm ci
-    - name: Run frontend CI
-      run: npm run frontend:ci
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install Node dependencies
+        run: npm ci
+      - name: Run frontend CI
+        run: |
+          set -euo pipefail
+          npm run frontend:ci 2>&1 | tee frontend-tests.log
+          python3 - <<'PY_RECEIPT'
+          from pathlib import Path
+          from tools.ci.write_backend_matrix_summary import write_frontend_receipt
+          write_frontend_receipt(Path('artifacts/frontend-tests.json'), Path('artifacts/frontend.receipt.json'))
+          PY_RECEIPT
 
+
+        env:
+          MOONMIND_UI_TEST_REPORT: ${{ github.workspace }}/artifacts/frontend-tests.json
+      - name: Identify frontend evidence
+        id: frontend-artifact
+        run: |
+          echo "artifact=frontend-owner-receipts-attempt-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+          echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - name: Upload frontend owner evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: frontend-owner-receipts-attempt-${{ github.run_attempt }}
+          path: |-
+            artifacts/frontend.receipt.json
+            frontend-tests.log
+          if-no-files-found: error
+    outputs:
+      artifact: ${{ steps.frontend-artifact.outputs.artifact }}
+      attempt: ${{ steps.frontend-artifact.outputs.attempt }}
   frontend-browser:
     needs: select-test-suites
     if: needs.select-test-suites.outputs.frontend_browser_chromium == 'true'
@@ -1897,25 +2328,25 @@ jobs:
       matrix:
         engine: ${{ fromJSON(needs.select-test-suites.outputs.frontend_browser_firefox == 'true' && '["chromium","firefox","webkit"]' || '["chromium","webkit"]') }}
     steps:
-    - name: Check out code
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      with:
-        ref: ${{ github.event.pull_request.head.sha || github.sha }}
-        token: ${{ secrets.GITHUB_TOKEN }}
-        fetch-depth: 1
-    - name: Set up Node.js
-      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-      with:
-        node-version: '20'
-        cache: npm
-    - name: Install Node dependencies
-      run: npm ci --no-audit --no-fund
-    - name: Report Playwright environment
-      run: npx playwright --version
-    - name: Run real-browser style regression suite
-      env:
-        MOONMIND_BROWSER_ENGINES: ${{ matrix.engine }}
-      run: npm run ui:test:browser
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install Node dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Report Playwright environment
+        run: npx playwright --version
+      - name: Run real-browser style regression suite
+        env:
+          MOONMIND_BROWSER_ENGINES: ${{ matrix.engine }}
+        run: npm run ui:test:browser
 
   test-frontend:
     needs:
@@ -1926,44 +2357,44 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-    - name: Verify frontend validation status
-      shell: bash
-      run: |
-        set -euo pipefail
+      - name: Verify frontend validation status
+        shell: bash
+        run: |
+          set -euo pipefail
 
-        static_selected="${{ needs.select-test-suites.outputs.frontend_static }}"
-        browser_selected="${{ needs.select-test-suites.outputs.frontend_browser_chromium }}"
-        static_result="${{ needs.frontend-static.result }}"
-        browser_result="${{ needs.frontend-browser.result }}"
+          static_selected="${{ needs.select-test-suites.outputs.frontend_static }}"
+          browser_selected="${{ needs.select-test-suites.outputs.frontend_browser_chromium }}"
+          static_result="${{ needs.frontend-static.result }}"
+          browser_result="${{ needs.frontend-browser.result }}"
 
-        {
-          echo "## Frontend validation"
-          echo "| Check | Selected | Result |"
-          echo "|---|---:|---|"
-          echo "| Static | $static_selected | $static_result |"
-          echo "| Chromium | $browser_selected | $browser_result |"
-          echo "| Firefox | ${{ needs.select-test-suites.outputs.frontend_browser_firefox }} | $browser_result |"
-          echo "| WebKit | $browser_selected | $browser_result |"
-        } >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## Frontend validation"
+            echo "| Check | Selected | Result |"
+            echo "|---|---:|---|"
+            echo "| Static | $static_selected | $static_result |"
+            echo "| Chromium | $browser_selected | $browser_result |"
+            echo "| Firefox | ${{ needs.select-test-suites.outputs.frontend_browser_firefox }} | $browser_result |"
+            echo "| WebKit | $browser_selected | $browser_result |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-        if [[ "${{ needs.select-test-suites.result }}" != "success" ]]; then
-          echo "::error::select-test-suites ended with result=${{ needs.select-test-suites.result }}"
-          exit 1
-        fi
-        if [[ "$static_selected" == "true" && "$static_result" != "success" ]]; then
-          echo "::error::frontend-static was selected but ended with result=$static_result"
-          exit 1
-        fi
-        if [[ "$browser_selected" == "true" && "$browser_result" != "success" ]]; then
-          echo "::error::frontend-browser was selected but ended with result=$browser_result"
-          exit 1
-        fi
+          if [[ "${{ needs.select-test-suites.result }}" != "success" ]]; then
+            echo "::error::select-test-suites ended with result=${{ needs.select-test-suites.result }}"
+            exit 1
+          fi
+          if [[ "$static_selected" == "true" && "$static_result" != "success" ]]; then
+            echo "::error::frontend-static was selected but ended with result=$static_result"
+            exit 1
+          fi
+          if [[ "$browser_selected" == "true" && "$browser_result" != "success" ]]; then
+            echo "::error::frontend-browser was selected but ended with result=$browser_result"
+            exit 1
+          fi
 
-        if [[ "$static_selected" != "true" && "$browser_selected" != "true" ]]; then
-          echo "Known non-frontend change; frontend validation skipped intentionally."
-        else
-          echo "All selected frontend checks passed."
-        fi
+          if [[ "$static_selected" != "true" && "$browser_selected" != "true" ]]; then
+            echo "Known non-frontend change; frontend validation skipped intentionally."
+          else
+            echo "All selected frontend checks passed."
+          fi
 
   run-generated-contracts:
     needs: select-test-suites
@@ -1971,41 +2402,41 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-    - name: Check out code
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      with:
-        ref: ${{ github.event.pull_request.head.sha || github.sha }}
-        token: ${{ secrets.GITHUB_TOKEN }}
-        fetch-depth: 1
-    - name: Set up Node.js
-      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-      with:
-        node-version: '20'
-        cache: npm
-    - name: Install OpenAPI TypeScript generator
-      run: bash tools/install_openapi_typescript.sh
-    - name: Set up Python for OpenAPI generation
-      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-      with:
-        python-version: '3.12'
-    - name: Install system dependencies for backend API check
-      run: |
-        sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/microsoft-prod.list
-        sudo apt-get update
-        sudo apt-get install -y libcairo2-dev pkg-config
-    - name: Cache pip dependencies
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-    - name: Install backend dependencies via uv
-      run: |
-        python -m pip install --upgrade pip uv
-        uv pip install --system -e .
-    - name: Verify generated frontend API types are in sync
-      run: npm run contracts:check
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install OpenAPI TypeScript generator
+        run: bash tools/install_openapi_typescript.sh
+      - name: Set up Python for OpenAPI generation
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install system dependencies for backend API check
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev pkg-config
+      - name: Cache pip dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      - name: Install backend dependencies via uv
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .
+      - name: Verify generated frontend API types are in sync
+        run: npm run contracts:check
 
   check-generated-contracts:
     needs:
@@ -2015,22 +2446,88 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-    - name: Verify generated contract status
-      shell: bash
-      run: |
-        set -euo pipefail
+      - name: Verify generated contract status
+        shell: bash
+        run: |
+          set -euo pipefail
 
-        if [[ "${{ needs.select-test-suites.result }}" != "success" ]]; then
-          echo "::error::select-test-suites ended with result=${{ needs.select-test-suites.result }}"
-          exit 1
-        fi
-
-        if [[ "${{ needs.select-test-suites.outputs.generated_contracts }}" == "true" ]]; then
-          if [[ "${{ needs.run-generated-contracts.result }}" != "success" ]]; then
-            echo "::error::run-generated-contracts was selected but ended with result=${{ needs.run-generated-contracts.result }}"
+          if [[ "${{ needs.select-test-suites.result }}" != "success" ]]; then
+            echo "::error::select-test-suites ended with result=${{ needs.select-test-suites.result }}"
             exit 1
           fi
-          echo "Generated contract verification passed."
-        else
-          echo "No backend/OpenAPI-affecting files changed; generated contract verification skipped intentionally."
-        fi
+
+          if [[ "${{ needs.select-test-suites.outputs.generated_contracts }}" == "true" ]]; then
+            if [[ "${{ needs.run-generated-contracts.result }}" != "success" ]]; then
+              echo "::error::run-generated-contracts was selected but ended with result=${{ needs.run-generated-contracts.result }}"
+              exit 1
+            fi
+            echo "Generated contract verification passed."
+          else
+            echo "No backend/OpenAPI-affecting files changed; generated contract verification skipped intentionally."
+          fi
+  source-receipt:
+    needs:
+      - ci-required
+      - select-test-suites
+    if: >-
+      ${{ !cancelled() && inputs.verification_phase == 'source' &&
+          needs.ci-required.result == 'success' &&
+          needs.select-test-suites.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      artifact: ${{ steps.receipt.outputs.artifact }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Record complete source verification
+        id: receipt
+        env:
+          SELECTION: ${{ toJSON(needs.select-test-suites.outputs) }}
+          RESULT: ${{ needs.ci-required.result }}
+        run: |
+          python3 tools/ci/source_verification.py write artifacts/source-verification/receipt.json \
+            --revision "$MOONMIND_CI_REVISION" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --selection "$SELECTION" --result "$RESULT"
+          echo "artifact=source-verification-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+      - name: Upload complete source handoff
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ${{ steps.receipt.outputs.artifact }}
+          path: artifacts/source-verification/receipt.json
+          if-no-files-found: error
+          retention-days: 7
+  ci-timings:
+    needs:
+      - ci-required
+      - source-receipt
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check out timing helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Summarize job, queue and step timing
+        run: |
+          python3 - <<'PY_TIMING'
+          import os
+          from pathlib import Path
+          from tools.ci.write_backend_matrix_summary import fetch_public_job_timings
+          fetch_public_job_timings(os.environ['GITHUB_REPOSITORY'], os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT'], Path('artifacts/ci-timings.json'), Path(os.environ['GITHUB_STEP_SUMMARY']))
+          PY_TIMING
+      - name: Upload observed timing
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ci-timings-${{ inputs.verification_phase || 'full' }}-${{ github.run_attempt }}
+          path: artifacts/ci-timings.json
+          if-no-files-found: warn
+          retention-days: 14
+env:
+  MOONMIND_CI_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}

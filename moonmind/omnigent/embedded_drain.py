@@ -1,34 +1,9 @@
-"""Bounded drain disposition for the retired embedded host transport.
+"""Read-only history decoding and durable drain diagnostics for removed transport.
 
-Source issue: MoonLadderStudios/MoonMind#3955 (plan steps 2 and 6).
-
-New admission through the experimental embedded host/runner transport is
-disabled while in-flight sessions drain through their recorded mode/endpoint
-and cleanup owner. This module is the bounded, side-effect-free half of the
-remaining verifier work:
-
-* read-only decoding of retained rows (recorded mode, lifecycle state,
-  launch-record and cleanup-authority presence) without importing the
-  launch modules that are deleted once the drain completes — historical data
-  does not need a live transport;
-* a bounded drain summary over durable counts (active embedded sessions,
-  active embedded host leases) that names blockers instead of inferring
-  absence from a default flag.
-
-The durable counting itself stays with the adapters that own the I/O
-(:meth:`OmnigentBridgeSessionStore.active_host_protocol_modes` for sessions,
-:meth:`OmnigentBridgeSessionStore.list_embedded_host_readiness` plus
-:meth:`OmnigentBridgeSessionStore.count_active_embedded_host_leases` for
-leases, and
-:meth:`OmnigentBridgeSessionStore.cleanup_required_host_lease_refs` for
-outstanding janitor cleanup authority); this module owns only the
-aggregation rule so workflow code can carry it without embedding launch
-behavior.
-
-This module deliberately imports no launch, store, channel, evidence, or DB
-modules — only the declarative config constants. Anything that needs live
-embedded execution still resolves the code-owned retirement row
-(``omnigent.legacy.embedded_host_transport``) and its launch surfaces.
+The store owns session, lease and pending-cleanup counts. This pure module
+aggregates those observations without inferring absence from configuration or
+unknown state. Historical metadata remains decodable without importing any
+launch, channel, authentication, persistence or database implementation.
 """
 
 from __future__ import annotations
@@ -54,26 +29,9 @@ _RETAINED_MODE_KEY = "hostProtocolMode"
 _RETAINED_LAUNCH_KEY = "embedded_runner_launch"
 _RETAINED_LIFECYCLE_KEY = "embedded_runner_lifecycle"
 _RETAINED_CLEANUP_AUTHORITY_KEY = "egress_cleanup_authority"
-# Terminal bridge session statuses, owned canonically by
-# ``moonmind.omnigent.bridge_store._TERMINAL_STATUSES``; a unit test pins them
-# equal for the same import-isolation reason as the keys above.
-_TERMINAL_SESSION_STATUSES = frozenset({"completed", "failed", "canceled", "timed_out"})
-
-# Create retries that reuse an admitted idempotency key reconcile only a row
-# that the drain still counts as an active embedded session, so a drained
-# deployment cannot have its runner re-dispatched by a late retry.
-EMBEDDED_RETRY_DISPOSITION = "reconcile_only_counted_active_embedded_rows"
-
-# Launch modules that must stay importable until the drain disposition below
-# reports drained; they are then deleted together with the embedded transport
-# retirement row.
-# Proxy-only callers must not require them (see
-# ``api_service.api.routers.omnigent_bridge_composition``).
-EMBEDDED_LAUNCH_MODULES: tuple[str, ...] = (
-    "moonmind.omnigent.bridge_embedded",
-    "moonmind.omnigent.embedded_host_channel",
-    "moonmind.omnigent.embedded_evidence",
-)
+# Read-only diagnostics remain available after transport removal. No create
+# retry, including one with a retained key, may attach to that transport.
+EMBEDDED_RETRY_DISPOSITION = "retired_transport_read_only"
 
 
 class EmbeddedDrainError(ValueError):
@@ -113,25 +71,6 @@ def decode_embedded_retained_session(metadata: Mapping[str, Any]) -> dict[str, A
     }
 
 
-def embedded_retry_may_reconcile(
-    *, status: str | None, metadata: Mapping[str, Any] | None
-) -> bool:
-    """Return whether an admitted-key create retry may reattach its row.
-
-    Only a non-terminal row recorded in embedded mode qualifies. That is
-    exactly the set :meth:`OmnigentBridgeSessionStore.active_host_protocol_modes`
-    counts as ``active_embedded_sessions``, so every row a retry can reach
-    keeps the drain blocked, and a ``drained`` disposition proves no retry can
-    recreate a runner or host consumer. Terminal, unrecorded, or other-mode
-    rows are refused like new admission.
-    """
-
-    if str(status or "").strip().lower() in _TERMINAL_SESSION_STATUSES:
-        return False
-    if not isinstance(metadata, Mapping):
-        return False
-    mode = str(metadata.get(_RETAINED_MODE_KEY) or "").strip()
-    return mode == HOST_PROTOCOL_MODE_EMBEDDED
 
 
 def summarize_embedded_drain(
@@ -147,9 +86,8 @@ def summarize_embedded_drain(
     ``drained`` is true only when no active embedded session, no active
     embedded host lease, and no pending janitor cleanup authority remains
     *and* read-only historical decoding is available for the retained rows.
-    Admitted-key create retries reach only rows counted as active embedded
-    sessions (``retryDisposition``; see :func:`embedded_retry_may_reconcile`),
-    so a drained result also means no retry can recreate a consumer.
+    The removed transport refuses every create retry; recorded keys and rows
+    remain available for read-only reconciliation (``retryDisposition``).
     Every other shape names its blockers; missing evidence is a blocker,
     never an implicit drain. ``pending_cleanup_host_leases`` is ``None`` when
     the store could not observe cleanup authority, which blocks drain.
@@ -201,11 +139,9 @@ def summarize_embedded_drain(
 
 __all__ = [
     "EMBEDDED_DRAIN_CONTRACT_VERSION",
-    "EMBEDDED_LAUNCH_MODULES",
     "EMBEDDED_RETRY_DISPOSITION",
     "EmbeddedDrainError",
     "decode_embedded_retained_session",
-    "embedded_retry_may_reconcile",
     "probe_embedded_drain",
     "summarize_embedded_drain",
 ]

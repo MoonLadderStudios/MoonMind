@@ -15,7 +15,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from urllib.parse import unquote
 from uuid import UUID
 
@@ -1289,10 +1289,13 @@ async def test_recurring_managed_bootstrap_policy_cutover_refreshes_temporal_act
         "taskInputSnapshotDigest": "sha256:" + "c" * 64,
     }
     compile_plan = AsyncMock(
-        return_value=SimpleNamespace(
-            binding=SimpleNamespace(model_dump=lambda **_kwargs: dict(plan_binding)),
+        return_value=omnigent_execution_plan_service.PersistedOmnigentExecutionPlan(
+            artifact_access=access_for_test("operator"),
+            envelope=Mock(name="compiled_plan_envelope"),
+            binding=OmnigentExecutionPlanBinding.model_validate(plan_binding),
             artifact_refs=("art_profile", "art_skills", "art_plan"),
             resolved_skillset_ref="art_skills",
+            resolved_skillset_digest="sha256:" + "d" * 64,
         )
     )
     monkeypatch.setattr(

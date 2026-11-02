@@ -41,17 +41,25 @@ def result():
             },
             "dispatchPoolContext": {
                 "executionProfileRef": "selected-account",
-                "workspaceCheckpointRestoreRef": "artifact:verified-workspace",
+                "workspaceCheckpointRestoreRef": "artifact://verified-workspace",
             },
         }
     }
 
 
-def test_parent_carries_selected_pool_account_context_and_workspace(monkeypatch):
+@pytest.mark.parametrize("explicit_scratch", [False, True])
+def test_parent_carries_selected_pool_account_context_and_workspace(
+    monkeypatch, explicit_scratch
+):
+    from moonmind.omnigent.workspace_sources import compile_workspace_source
+
     monkeypatch.setattr(module.workflow, "patched", lambda marker: True)
     owner = module.MoonMindUserWorkflow()
     owner._record_shared_runtime_context(request(), result())
     next_request = request("second", "reuse_session_same_epoch")
+    if explicit_scratch:
+        next_request.workspace_spec = {"workspaceSource": {"kind": "scratch"}}
+    original_workspace = deepcopy(next_request.workspace_spec)
     bound = owner._bind_shared_runtime_context(next_request)
     assert bound.step_execution.runtime_session_context is not None
     assert bound.step_execution.runtime_session_context.epoch == "accepted-epoch"
@@ -59,11 +67,13 @@ def test_parent_carries_selected_pool_account_context_and_workspace(monkeypatch)
     assert bound.profile_selector == next_request.profile_selector
     assert (
         bound.workspace_spec["workspaceCheckpointRestoreRef"]
-        == "artifact:verified-workspace"
+        == "artifact://verified-workspace"
     )
     assert (
-        next_request.execution_profile_ref is None and next_request.workspace_spec == {}
+        next_request.execution_profile_ref is None
+        and next_request.workspace_spec == original_workspace
     )
+    assert compile_workspace_source(bound.workspace_spec).kind == "checkpoint"
     fresh = owner._bind_shared_runtime_context(request("third"))
     assert fresh.execution_profile_ref is None
     assert fresh.step_execution.runtime_session_context is None
@@ -106,7 +116,7 @@ def test_published_history_compaction_keeps_the_context_handoff():
 
     payload = result()
     payload["metadata"]["savedWorkspaceCheckpoint"] = {
-        "archiveRef": "artifact:verified-workspace"
+        "archiveRef": "artifact://verified-workspace"
     }
     payload["metadata"].update(
         {f"report{index}Ref": "artifact:" + "x" * 1000 for index in range(100)}
@@ -183,7 +193,7 @@ def test_sessionless_pool_result_keeps_the_last_verified_context(monkeypatch):
     assert following.step_execution.runtime_session_context.epoch == "accepted-epoch"
     assert (
         following.workspace_spec["workspaceCheckpointRestoreRef"]
-        == "artifact:verified-workspace"
+        == "artifact://verified-workspace"
     )
 
 
@@ -227,7 +237,7 @@ def test_pool_context_and_selected_workspace_survive_continue_as_new(monkeypatch
     assert successor.execution_profile_ref == "selected-account"
     assert (
         successor.workspace_spec["workspaceCheckpointRestoreRef"]
-        == "artifact:verified-workspace"
+        == "artifact://verified-workspace"
     )
     assert successor.step_execution.runtime_session_context.epoch == "accepted-epoch"
     assert successor.step_execution.runtime_session_context.run_id == "parent-run"

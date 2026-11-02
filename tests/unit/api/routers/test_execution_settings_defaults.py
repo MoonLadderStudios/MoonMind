@@ -91,7 +91,9 @@ async def test_saved_profile_default_rejects_unavailable_account_before_effects(
     from moonmind.config.settings import settings
     from moonmind.workflow_cli import build_execution_payload
     from moonmind.workflows.temporal.service import TemporalExecutionService
-    from tests.unit.api.routers.test_executions import _override_user_dependencies
+    from tests.helpers.execution_api import (
+        _override_user_dependencies,
+    )
 
     monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
     monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")

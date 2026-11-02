@@ -32,7 +32,6 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
 )
-from moonmind.omnigent.harness_platform.materializers import ProviderConfigurationSnapshotRef
 from moonmind.omnigent.harness_platform.support import (
     SupportKeyPayload,
     compute_support_combination_key,
@@ -118,6 +117,15 @@ def _validate_plan_data(obj: Any, *, path: str = "$", depth: int = 0) -> None:
         return
     if isinstance(obj, str) and len(obj.encode("utf-8")) > _MAX_PLAN_STRING_BYTES:
         raise ValueError(f"plan payload string is too large at {path}")
+
+
+class ProviderConfigurationSnapshotRef(BaseModel):
+    """Immutable nonsecret configuration artifact admitted with the plan."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    artifactRef: str = Field(pattern=r"^artifact:[^\s]+$")
+    contentDigest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
 
 
 class ModelConfig(BaseModel):

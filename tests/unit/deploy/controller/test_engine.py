@@ -576,6 +576,7 @@ def test_observe_services_rejects_destructive_or_empty_observation(controller_pa
         (b"out\n", b"token=secret-value helper stalled\n"),
         (None, None),
     ],
+    ids=["stderr-only", "stdout-only", "both-streams", "empty-streams"],
 )
 def test_subprocess_timeout_preserves_redacted_byte_output(
     controller_path, monkeypatch, stdout, stderr
