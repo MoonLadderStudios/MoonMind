@@ -59,6 +59,7 @@ from moonmind.workflows.temporal.artifacts import (
 _LAUNCH_PARAMETER_KEYS = frozenset({
     "requiredCapabilities", "githubOperations", "publishMode", "commitMessage",
     "publishBaseBranch", "repository",
+    "workBranch", "workBranchId", "workBranchOrigin",
 })
 _MODEL_SELECTION_KEYS = frozenset({"model", "effort", "modelTierResolution", "metadata"})
 
@@ -353,6 +354,19 @@ async def prepare_selected_pool_plan(
             return {
                 "disposition": "native",
                 "reason": "native_environment_overrides_require_their_current_adapter",
+            }
+        from moonmind.workflows.executions.repository_contract import (
+            repository_work_branch_arguments,
+        )
+
+        try:
+            work_branch = repository_work_branch_arguments(selected.parameters)
+            if work_branch["work_branch_origin"] == "generated" and not work_branch["work_branch"]:
+                raise ValueError("generated work-branch metadata requires its name")
+        except ValueError:
+            return {
+                "disposition": "native",
+                "reason": "native_repository_metadata_requires_its_current_adapter",
             }
         authored_runtime = request.parameters.get("runtime")
         if not isinstance(authored_runtime, Mapping):
