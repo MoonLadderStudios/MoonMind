@@ -22,6 +22,7 @@ from types import SimpleNamespace
 _CONFIG_PATH = "{{runtime_support_dir}}/codex-home/config.toml"
 _CODEX_HOME = "{{runtime_support_dir}}/codex-home"
 MINIMAX_MODEL = "codex-MiniMax-M2.7"
+OAUTH_CONFIGURATION_ENV = "MOONMIND_CODEX_PROFILE_CONFIGURATION"
 _SESSION_SETTINGS = {
     "developer_instructions", "hide_agent_reasoning", "show_raw_agent_reasoning",
     "project_doc_max_bytes", "project_doc_fallback_filenames", "history",
@@ -225,8 +226,8 @@ def _additional_file(template, home_path):
     }
 
 
-def configuration_for_profile(profile):
-    """Return one declared Codex config and its selected key role, or a reason."""
+def _configuration_document(profile):
+    """Read private-HOME templates once for both admitted auth models."""
     try:
         templates, repaired = repaired_managed_templates(profile)
         home = dict(getattr(profile, "home_path_overrides", None) or {})
@@ -282,6 +283,21 @@ def configuration_for_profile(profile):
             document = _merge(document, layer)
         document.pop("profile", None)
         document.pop("profiles", None)
+        return {"document": document, "additionalFiles": additional_files,
+                "managedRecipeRepaired": repaired}, ""
+    except (TypeError, ValueError, KeyError):
+        return None, "Codex file templates contain invalid configuration"
+
+
+def configuration_for_profile(profile):
+    """Return one declared Codex config and its selected key role, or a reason."""
+    try:
+        parsed, reason = _configuration_document(profile)
+        if parsed is None:
+            return None, reason
+        document = parsed["document"]
+        additional_files = parsed["additionalFiles"]
+        repaired = parsed["managedRecipeRepaired"]
         supported_settings = _SESSION_SETTINGS | {
             "model",
             "model_provider",
@@ -371,6 +387,46 @@ def configuration_for_profile(profile):
         return None, "Codex file templates contain invalid configuration"
 
 
+def validate_oauth_configuration(configuration):
+    """Validate preferences/files without replacing OAuth, tools or provider state."""
+    if (
+        not isinstance(configuration, dict)
+        or set(configuration) - {"document", "additionalFiles", "privateHomeOnly"}
+        or configuration.get("privateHomeOnly") is not True
+    ):
+        raise ValueError("OAuth Codex configuration requires private-HOME delivery")
+    document = configuration.get("document")
+    supported = _SESSION_SETTINGS
+    if not isinstance(document, dict) or set(document) - supported or _has_authority(document):
+        raise ValueError("OAuth Codex configuration contains unsupported model, provider, tool or credential settings")
+    _validate_session_settings(document)
+    render_toml(document)
+    files = configuration.get("additionalFiles") or []
+    if not isinstance(files, list):
+        raise ValueError("OAuth Codex file configuration must be an array")
+    files = [_additional_file(_template(item), "{{runtime_support_dir}}") for item in files]
+    result = {
+        "document": copy.deepcopy(document), "privateHomeOnly": True,
+        **({"additionalFiles": files} if files else {}),
+    }
+    if len(json.dumps(result).encode()) > 65536:
+        raise ValueError("OAuth Codex private configuration exceeds its delivery bound")
+    return result
+
+
+def oauth_configuration_for_profile(profile):
+    parsed, reason = _configuration_document(profile)
+    if parsed is None:
+        return None, reason
+    try:
+        return validate_oauth_configuration({
+            "document": parsed["document"], "privateHomeOnly": True,
+            "additionalFiles": parsed["additionalFiles"],
+        }), ""
+    except (TypeError, ValueError, KeyError) as error:
+        return None, str(error)
+
+
 def _key(value):
     value = str(value)
     return value if re.fullmatch(r"[A-Za-z0-9_-]+", value) else json.dumps(value)
@@ -430,6 +486,30 @@ def _write(path, document):
 
 def configure_home(configuration, home):
     _write(Path(home) / "config.toml", configuration["document"])
+
+
+def configure_private_oauth_home(configuration, home):
+    """Overlay preferences only after the native owner created its private HOME."""
+    home = Path(home).resolve()
+    enrolled = Path("/home/app/.codex").resolve()
+    if home == enrolled or enrolled in home.parents or not home.is_dir():
+        raise ValueError("OAuth preferences cannot modify the enrolled credential home")
+    path = home / "config.toml"
+    if path.is_symlink():
+        raise ValueError("private Codex configuration cannot be a symbolic link")
+    document = tomllib.loads(path.read_text()) if path.exists() else {}
+    preferences = copy.deepcopy(configuration["document"])
+    addition = preferences.get("developer_instructions")
+    active = document.get("developer_instructions")
+    if addition is not None and isinstance(active, str) and active:
+        # Native launch already added the agent's instructions. Preserve that
+        # authority alongside the Profile preference, including on relaunch.
+        preferences["developer_instructions"] = (
+            f"{active}\n\n{addition}"
+            if addition and active != addition and not active.endswith(f"\n\n{addition}")
+            else active
+        )
+    _write(path, _merge(document, preferences))
 
 
 def configure_profile_files(configuration, home, workspace):
@@ -562,8 +642,10 @@ if __name__ == "__main__":
     configuration = (
         json.loads(Path(config_path).read_text()) if config_path != "-" else None
     )
+    if configuration is not None and configuration.get("privateHomeOnly"):
+        configuration = validate_oauth_configuration(configuration)
     if action == "prepare":
-        if configuration is not None:
+        if configuration is not None and not configuration.get("privateHomeOnly"):
             configure_home(configuration, os.environ["CODEX_HOME"])
         binary, wrapper, context = arguments
         launch = [context, sys.executable, __file__, "launch", config_path, binary]
@@ -575,10 +657,13 @@ if __name__ == "__main__":
             require_reusable_context(os.environ["CODEX_HOME"], arguments)
         if configuration is not None:
             if "app-server" in arguments:
+                if configuration.get("privateHomeOnly"):
+                    configure_private_oauth_home(configuration, os.environ["CODEX_HOME"])
                 configure_profile_files(configuration, os.environ["CODEX_HOME"], Path.cwd())
-            preserve_provider_settings(
-                configuration, os.environ["CODEX_HOME"], arguments
-            )
+            if not configuration.get("privateHomeOnly"):
+                preserve_provider_settings(
+                    configuration, os.environ["CODEX_HOME"], arguments
+                )
         os.execv(binary, [binary, *arguments])
     else:
         raise SystemExit("unsupported Codex configuration operation")

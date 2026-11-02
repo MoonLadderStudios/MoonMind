@@ -344,6 +344,18 @@ class ProviderLaunchEnvironment(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     launchEnvironment: dict[str, str] = Field(default_factory=dict)
+    codexConfiguration: dict[str, Any] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+
+    @field_validator("codexConfiguration")
+    @classmethod
+    def _validate_codex_configuration(cls, value):
+        if value is not None:
+            from moonmind.provider_profiles.codex_configuration import validate_oauth_configuration
+
+            return validate_oauth_configuration(value)
+        return None
 
     @field_validator("launchEnvironment")
     @classmethod
@@ -369,14 +381,21 @@ class ProviderConfigurationSlot(BaseModel):
     launchEnvironment: dict[str, str] = Field(
         default_factory=dict, exclude_if=lambda value: not value,
     )
+    codexConfiguration: dict[str, Any] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
 
     @model_validator(mode="after")
     def _validate_delivery(self):
         if self.materializerRef in {"claude-oauth-home@1", "codex-oauth-home@1"}:
             if self.endpoint is not None:
                 raise ValueError("OAuth configuration cannot replace its credential owner")
-            ProviderLaunchEnvironment(launchEnvironment=self.launchEnvironment)
-        elif self.launchEnvironment:
+            if self.codexConfiguration is not None and self.materializerRef != "codex-oauth-home@1":
+                raise ValueError("Codex preferences require their enrolled Codex home")
+            ProviderLaunchEnvironment(
+                launchEnvironment=self.launchEnvironment, codexConfiguration=self.codexConfiguration,
+            )
+        elif self.launchEnvironment or self.codexConfiguration is not None:
             raise ValueError("provider-config tuning belongs to its endpoint")
         return self
 
@@ -390,6 +409,10 @@ def provider_configuration_snapshot_bytes(bindings, configurations) -> bytes:
             launchEnvironment=(
                 endpoint.launchEnvironment
                 if isinstance(endpoint, ProviderLaunchEnvironment) else {}
+            ),
+            codexConfiguration=(
+                endpoint.codexConfiguration
+                if isinstance(endpoint, ProviderLaunchEnvironment) else None
             ),
         ).model_dump(mode="json")
         for slot, endpoint in configurations.items()
@@ -427,7 +450,9 @@ def load_provider_configuration_snapshot(content, snapshot, bindings):
         ):
             raise ValueError("provider configuration snapshot account does not match")
         result[slot] = (
-            ProviderLaunchEnvironment(launchEnvironment=saved.launchEnvironment)
+            ProviderLaunchEnvironment(
+                launchEnvironment=saved.launchEnvironment, codexConfiguration=saved.codexConfiguration,
+            )
             if saved.materializerRef in {"claude-oauth-home@1", "codex-oauth-home@1"} else saved.endpoint
         )
     return result
@@ -448,7 +473,15 @@ def untranslated_oauth_launch_options(profile: Any) -> str | None:
         or _enum_value(getattr(profile, "credential_source", None)) != "oauth_volume"
     ):
         return None
-    fields = ["file_templates"] if getattr(profile, "file_templates", None) else []
+    fields = []
+    private_configuration = None
+    if getattr(profile, "file_templates", None):
+        if str(profile.runtime_id) == "codex_cli":
+            from moonmind.provider_profiles.codex_configuration import oauth_configuration_for_profile
+
+            private_configuration, _reason = oauth_configuration_for_profile(profile)
+        if private_configuration is None:
+            fields.append("file_templates")
     if getattr(profile, "env_template", None):
         try:
             ProviderLaunchEnvironment(launchEnvironment=profile.env_template)
@@ -467,7 +500,7 @@ def untranslated_oauth_launch_options(profile: Any) -> str | None:
         if (
             not target
             or getattr(profile, "volume_mount_path", None) != target
-            or any(
+            or private_configuration is None and any(
                 key not in oauth_home_path_keys(runtime) or value != target
                 for key, value in home_overrides.items()
             )
@@ -491,8 +524,14 @@ def snapshot_provider_configuration(
             raise HarnessPlatformError(
                 reason, code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
             )
+        configuration = None
+        if getattr(profile, "file_templates", None):
+            from moonmind.provider_profiles.codex_configuration import oauth_configuration_for_profile
+
+            configuration, _reason = oauth_configuration_for_profile(profile)
         return ProviderLaunchEnvironment(
             launchEnvironment=dict(getattr(profile, "env_template", None) or {}),
+            codexConfiguration=configuration,
         )
     if not is_api_key_launch_profile(profile):
         return None

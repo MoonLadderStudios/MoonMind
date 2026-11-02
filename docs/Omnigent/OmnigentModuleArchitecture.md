@@ -309,8 +309,13 @@ Replaced defaults never select ambient credentials.
 OAuth-home delivery attaches the enrollment-owned volume. Codex/Claude nonsecret
 shell settings use the existing project-value guard and admitted configuration
 artifact; native executable wrappers restore them after child environment filtering
-without overriding private HOME or editing the enrolled home. Protected environment,
-file or HOME choices retain their native adapter until an equivalent handoff exists.
+without overriding private HOME or editing the enrolled home. Codex OAuth session
+preferences and nonsecret files under a declared run-support HOME use the same
+configuration artifact and portable renderer. They apply in the native owner's
+private app-server HOME, preserving its model, provider, tools and agent
+instructions; preparation never edits the enrolled home. Protected environment,
+model/tool/auth configuration and other HOME choices retain their native adapter
+until an equivalent handoff exists.
 Recorded plans retain their original materializer identity.
 Profile-bound execution and its OAuth host launcher admit no new plans;
 they retain queued starts, retries and cleanup under their recorded authority. Supported

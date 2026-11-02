@@ -31,6 +31,7 @@ from moonmind.omnigent.harness_platform.materializers import (
 )
 from moonmind.omnigent.provider_leases import AcquiredProviderLease
 from moonmind.omnigent.secret_resolution import ScopedSecretBundle
+from moonmind.provider_profiles.codex_configuration import OAUTH_CONFIGURATION_ENV
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.runtime.command_runner import run_runtime_command
 
@@ -925,6 +926,16 @@ class DockerOauthHomeMaterializer(_DockerMaterializerBackendMixin):
                 "launch tuning does not belong to this OAuth materializer",
                 code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
             )
+        if (
+            launch_environment is not None
+            and launch_environment.codexConfiguration is not None
+            and self.ref != "codex-oauth-home@1"
+        ):
+            context.secrets.clear()
+            raise HarnessPlatformError(
+                "Codex preferences require their enrolled Codex credential home",
+                code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+            )
         if home is None or home.volume_ref == "" or home.target_path == "":
             context.secrets.clear()
             raise HarnessPlatformError(
@@ -1044,7 +1055,11 @@ class DockerOauthHomeMaterializer(_DockerMaterializerBackendMixin):
                 "materializerRef": self.ref,
                 "attachments": [attachment],
                 "runtimeEnvironment": (
-                    launch_environment.launchEnvironment
+                    {
+                        **launch_environment.launchEnvironment,
+                        **({OAUTH_CONFIGURATION_ENV: json.dumps(launch_environment.codexConfiguration)}
+                           if launch_environment.codexConfiguration is not None else {}),
+                    }
                     if launch_environment is not None else {}
                 ),
                 "cleanupRef": f"credential-cleanup:sha256:{digest}",

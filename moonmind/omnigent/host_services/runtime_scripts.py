@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import shlex
+import json
 from pathlib import Path
 from typing import Any
+
+OAUTH_CONFIGURATION_ENV = "MOONMIND_CODEX_PROFILE_CONFIGURATION"
 
 PROVIDER_LITERAL_LAUNCH_ENV = frozenset(
     {
@@ -224,9 +227,26 @@ class OmnigentRuntimeScriptService:
             "MOONMIND_CODEX_PROFILE_CONFIG_FILE",
         }
         codex_configuration = False
+        oauth_configuration = None
         provider_environment: dict[str, str] = {}
         for handle in credential_handles:
             selected_environment = dict(handle.get("runtimeEnvironment") or {})
+            serialized = selected_environment.pop(OAUTH_CONFIGURATION_ENV, None)
+            if serialized is not None:
+                if handle.get("materializerRef") != "codex-oauth-home@1" or not enable_codex_runtime:
+                    raise ValueError("private Codex preferences require their enrolled Codex materializer")
+                configuration = json.loads(serialized)
+                if not isinstance(configuration, dict) or configuration.get("privateHomeOnly") is not True:
+                    raise ValueError("OAuth Codex configuration requires private-HOME delivery")
+                # The materializer freezes this validated nonsecret value.
+                # The same portable helper validates it again before writes.
+                configuration = json.dumps(configuration)
+                if oauth_configuration is not None and oauth_configuration != configuration:
+                    raise ValueError("conflicting private Codex configurations")
+                oauth_configuration = configuration
+                provider_environment[OAUTH_CONFIGURATION_ENV] = configuration
+                environment[OAUTH_CONFIGURATION_ENV] = configuration
+                codex_configuration = True
             literals = {
                 key: value
                 for key, value in selected_environment.items()
@@ -284,6 +304,12 @@ class OmnigentRuntimeScriptService:
                         )
                     codex_configuration = True
                 environment[key] = str(value)
+        if oauth_configuration is not None:
+            if "MOONMIND_CODEX_PROFILE_CONFIG_FILE" in environment:
+                raise ValueError("private Codex configuration conflicts with a provider configuration")
+            environment["MOONMIND_CODEX_PROFILE_CONFIG_FILE"] = (
+                f"{_RUNTIME_CONTEXT_DIR}/provider-{OAUTH_CONFIGURATION_ENV}"
+            )
         profile_environment = dict(provider_environment)
         codex_wrapper = codex_configuration or require_codex_context or (
             enable_codex_runtime and bool(profile_environment)
