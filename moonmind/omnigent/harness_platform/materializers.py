@@ -344,6 +344,9 @@ class ProviderLaunchEnvironment(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     launchEnvironment: dict[str, str] = Field(default_factory=dict)
+    environmentTemplates: dict[str, str] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
     codexConfiguration: dict[str, Any] | None = Field(
         default=None, exclude_if=lambda value: value is None,
     )
@@ -366,6 +369,34 @@ class ProviderLaunchEnvironment(BaseModel):
 
         return validate_provider_literal_launch_environment(value)
 
+    @field_validator("environmentTemplates")
+    @classmethod
+    def _validate_environment_templates(cls, value):
+        if value is None:
+            return None
+        from moonmind.omnigent.host_services.runtime_scripts import validate_provider_literal_launch_environment
+        from moonmind.provider_profiles.template_renderer import validate_environment_template_context
+
+        return validate_environment_template_context(validate_provider_literal_launch_environment(value))
+
+    @model_validator(mode="after")
+    def _validate_environment_ownership(self):
+        if self.environmentTemplates and set(self.environmentTemplates) & set(self.launchEnvironment):
+            raise ValueError("Profile environment value has conflicting literal/template ownership")
+        return self
+
+
+def _oauth_launch_environment(profile, *, configuration=None):
+    from moonmind.provider_profiles.template_renderer import template_context_names
+
+    values = dict(getattr(profile, "env_template", None) or {})
+    templates = {key: value for key, value in values.items() if template_context_names(value)}
+    return ProviderLaunchEnvironment(
+        launchEnvironment={key: value for key, value in values.items() if key not in templates},
+        environmentTemplates=templates or None,
+        codexConfiguration=configuration,
+    )
+
 
 PROVIDER_CONFIGURATION_MATERIALIZERS = frozenset(
     {PROVIDER_CONFIG_MATERIALIZER_REF, "claude-oauth-home@1", "codex-oauth-home@1"}
@@ -381,6 +412,9 @@ class ProviderConfigurationSlot(BaseModel):
     launchEnvironment: dict[str, str] = Field(
         default_factory=dict, exclude_if=lambda value: not value,
     )
+    environmentTemplates: dict[str, str] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
     codexConfiguration: dict[str, Any] | None = Field(
         default=None, exclude_if=lambda value: value is None,
     )
@@ -394,8 +428,9 @@ class ProviderConfigurationSlot(BaseModel):
                 raise ValueError("Codex preferences require their enrolled Codex home")
             ProviderLaunchEnvironment(
                 launchEnvironment=self.launchEnvironment, codexConfiguration=self.codexConfiguration,
+                environmentTemplates=self.environmentTemplates,
             )
-        elif self.launchEnvironment or self.codexConfiguration is not None:
+        elif self.launchEnvironment or self.codexConfiguration is not None or self.environmentTemplates is not None:
             raise ValueError("provider-config tuning belongs to its endpoint")
         return self
 
@@ -412,6 +447,10 @@ def provider_configuration_snapshot_bytes(bindings, configurations) -> bytes:
             ),
             codexConfiguration=(
                 endpoint.codexConfiguration
+                if isinstance(endpoint, ProviderLaunchEnvironment) else None
+            ),
+            environmentTemplates=(
+                endpoint.environmentTemplates
                 if isinstance(endpoint, ProviderLaunchEnvironment) else None
             ),
         ).model_dump(mode="json")
@@ -452,6 +491,7 @@ def load_provider_configuration_snapshot(content, snapshot, bindings):
         result[slot] = (
             ProviderLaunchEnvironment(
                 launchEnvironment=saved.launchEnvironment, codexConfiguration=saved.codexConfiguration,
+                environmentTemplates=saved.environmentTemplates,
             )
             if saved.materializerRef in {"claude-oauth-home@1", "codex-oauth-home@1"} else saved.endpoint
         )
@@ -484,7 +524,7 @@ def untranslated_oauth_launch_options(profile: Any) -> str | None:
             fields.append("file_templates")
     if getattr(profile, "env_template", None):
         try:
-            ProviderLaunchEnvironment(launchEnvironment=profile.env_template)
+            _oauth_launch_environment(profile)
         except ValueError:
             fields.append("env_template")
     home_overrides = dict(getattr(profile, "home_path_overrides", None) or {})
@@ -529,10 +569,7 @@ def snapshot_provider_configuration(
             from moonmind.provider_profiles.codex_configuration import oauth_configuration_for_profile
 
             configuration, _reason = oauth_configuration_for_profile(profile)
-        return ProviderLaunchEnvironment(
-            launchEnvironment=dict(getattr(profile, "env_template", None) or {}),
-            codexConfiguration=configuration,
-        )
+        return _oauth_launch_environment(profile, configuration=configuration)
     if not is_api_key_launch_profile(profile):
         return None
     endpoint, reason = provider_config_endpoint(profile)

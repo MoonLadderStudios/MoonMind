@@ -39,6 +39,53 @@ def test_profile_owned_literal_environment_reaches_the_native_runner(materialize
     assert "ANTHROPIC_AUTH_TOKEN" not in environment
 
 
+def test_recorded_literal_environment_does_not_gain_template_interpretation():
+    _script, environment = OmnigentRuntimeScriptService().build_entrypoint(
+        credential_handles=[{
+            "credentialGeneration": 3, "materializerRef": "codex-oauth-home@1",
+            "attachments": [], "runtimeEnvironment": {"PROJECT_REPORT_ROOT": "{{workspace_path}}/reports"},
+        }],
+        skill_attachment={"targetPath": "/opt/skills"},
+        step_execution_id="workflow:run:work:execution:1", enable_codex_runtime=True,
+    )
+    assert environment["PROJECT_REPORT_ROOT"] == "{{workspace_path}}/reports"
+
+
+@pytest.mark.parametrize("templates,materializer,workspace", [
+    ({"PROJECT_REPORT_ROOT": "{{selected_secret}}"}, "codex-oauth-home@1", "/workspaces/run"),
+    ({"HOME": "{{workspace_path}}"}, "codex-oauth-home@1", "/workspaces/run"),
+    ({"GITHUB_TOKEN": "{{workspace_path}}"}, "codex-oauth-home@1", "/workspaces/run"),
+    ({"PROJECT_REPORT_ROOT": "{{workspace_path}}"}, "none@1", "/workspaces/run"),
+    ({"PROJECT_REPORT_ROOT": "{{workspace_path}}"}, "codex-oauth-home@1", None),
+])
+def test_profile_environment_template_cannot_acquire_foreign_context_or_authority(templates, materializer, workspace):
+    with pytest.raises(ValueError):
+        OmnigentRuntimeScriptService().build_entrypoint(
+            credential_handles=[{
+                "credentialGeneration": 3, "materializerRef": materializer,
+                "attachments": [], "runtimeEnvironmentTemplates": templates,
+            }],
+            skill_attachment={"targetPath": "/opt/skills"},
+            step_execution_id="workflow:run:work:execution:1", enable_codex_runtime=True,
+            workspace_path=workspace,
+        )
+
+
+def test_profile_environment_template_cannot_replace_an_existing_value():
+    with pytest.raises(ValueError, match="conflicting"):
+        OmnigentRuntimeScriptService().build_entrypoint(
+            credential_handles=[{
+                "credentialGeneration": 3, "materializerRef": "codex-oauth-home@1",
+                "attachments": [],
+                "runtimeEnvironment": {"PROJECT_REPORT_ROOT": "recorded literal"},
+                "runtimeEnvironmentTemplates": {"PROJECT_REPORT_ROOT": "{{workspace_path}}"},
+            }],
+            skill_attachment={"targetPath": "/opt/skills"},
+            step_execution_id="workflow:run:work:execution:1", enable_codex_runtime=True,
+            workspace_path="/workspaces/run",
+        )
+
+
 @pytest.mark.parametrize("harness", ["codex", "claude"])
 @pytest.mark.parametrize("deployment_setting", [False, True])
 def test_profile_shell_value_survives_the_native_executable_boundary(tmp_path, harness, deployment_setting, monkeypatch):

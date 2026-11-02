@@ -308,7 +308,10 @@ Raw deferred step-account matching and tool-only boundary validation remain inta
 Replaced defaults never select ambient credentials.
 OAuth-home delivery attaches the enrollment-owned volume. Codex/Claude nonsecret
 shell settings use the existing project-value guard and admitted configuration
-artifact; native executable wrappers restore them after child environment filtering
+artifact. Newly admitted environment templates carry only workspace and runtime
+support-directory context, rendered through the shared Profile template renderer
+after the attempt's native workspace path is known. Recorded literal values keep
+their original interpretation. Native executable wrappers restore values after child environment filtering
 without overriding private HOME or editing the enrolled home. Codex OAuth session
 preferences and nonsecret files under a declared run-support HOME use the same
 configuration artifact and portable renderer. They apply in the native owner's

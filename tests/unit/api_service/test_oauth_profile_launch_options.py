@@ -191,6 +191,15 @@ def test_nonsecret_profile_shell_values_have_equivalent_shared_delivery(runtime,
     assert not profile_has_native_inventory_route(profile, [configuration])
 
 
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code"])
+@pytest.mark.parametrize("value", ["{{selected_secret}}", "{{unavailable_context}}", "{{workspace_path.secret}}"])
+def test_unavailable_oauth_environment_context_keeps_its_existing_route(runtime, value):
+    profile, configuration = profile_and_configuration(runtime, "v2")
+    profile.env_template = {"PROJECT_REPORT_ROOT": value}
+    assert not configuration_accepts_profile(configuration[1].document, profile)
+    assert profile_has_native_inventory_route(profile, [configuration])
+
+
 def test_claude_oauth_tuning_is_frozen_with_its_bound_account():
     import hashlib
     import json
