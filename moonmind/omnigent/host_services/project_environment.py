@@ -2,6 +2,8 @@
 
 This is not a credential channel. The declaration and values must both exist in
 this trusted worker's environment; a workflow cannot supply or override them.
+An admitted Provider Profile can supply its own safe literal for a native child;
+that explicit value has the same precedence as direct Profile materialization.
 """
 
 from __future__ import annotations
@@ -32,6 +34,28 @@ _SECRET_KEY = re.compile(
 _LOG = logging.getLogger(__name__)
 
 
+def is_safe_project_environment_entry(key: str, raw_value: str) -> bool:
+    """Whether one literal can use the nonsecret runtime projection."""
+    if not isinstance(raw_value, str) or not isinstance(key, str):
+        return False
+    value = raw_value.strip()
+    safe = bool(_NAME.fullmatch(key)) and not (
+        _PROTECTED.search(key)
+        or SENSITIVE_ENVIRONMENT_KEY_PATTERN.search(key)
+        or _SECRET_KEY.search(key)
+    )
+    safe = safe and bool(value) and not any(
+        ord(c) < 32 or ord(c) == 127 for c in raw_value
+    )
+    if safe and "://" in value:
+        try:
+            parsed = urlsplit(value)
+            safe = not ("@" in parsed.netloc or parsed.query or parsed.fragment)
+        except ValueError:
+            return False
+    return bool(safe)
+
+
 def deployment_project_environment() -> dict[str, str]:
     """Resolve only explicitly declared safe settings, never logging values."""
     result: dict[str, str] = {}
@@ -41,25 +65,7 @@ def deployment_project_environment() -> dict[str, str]:
             continue
         raw_value = os.environ.get(key, "")
         value = raw_value.strip()
-        safe = bool(_NAME.fullmatch(key)) and not (
-            _PROTECTED.search(key)
-            or SENSITIVE_ENVIRONMENT_KEY_PATTERN.search(key)
-            or _SECRET_KEY.search(key)
-        )
-        safe = (
-            safe
-            and bool(value)
-            and not any(ord(c) < 32 or ord(c) == 127 for c in raw_value)
-        )
-        if safe and "://" in value:
-            try:
-                parsed = urlsplit(value)
-                # URL credentials, signed queries and fragments do not belong in
-                # the ordinary shell environment even under an innocuous name.
-                safe = not ("@" in parsed.netloc or parsed.query or parsed.fragment)
-            except ValueError:
-                safe = False
-        if not safe:
+        if not is_safe_project_environment_entry(key, raw_value):
             _LOG.warning("Ignoring unsafe or empty declared project environment entry")
             continue
         result[key] = value

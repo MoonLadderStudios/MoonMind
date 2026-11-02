@@ -917,7 +917,9 @@ class DockerOauthHomeMaterializer(_DockerMaterializerBackendMixin):
         acquired = context.acquired
         home = context.profile_credential_home
         launch_environment = context.provider_launch_environment
-        if launch_environment is not None and self.ref != "claude-oauth-home@1":
+        if launch_environment is not None and self.ref not in {
+            "claude-oauth-home@1", "codex-oauth-home@1",
+        }:
             context.secrets.clear()
             raise HarnessPlatformError(
                 "launch tuning does not belong to this OAuth materializer",

@@ -1111,7 +1111,7 @@ async def _compile_plan(
             command_behavior={"suppress_default_model_flag": True},
         )
     if oauth_tuning:
-        assert oauth and runtime_id == "claude_code"
+        assert oauth and runtime_id in {"codex_cli", "claude_code"}
         fields["env_template"] = dict(oauth_tuning)
     profile = ManagedAgentProviderProfile(
         profile_id=PROFILE,
@@ -1558,6 +1558,19 @@ async def test_admitted_claude_oauth_tuning_reaches_the_shared_runner(
     assert environment["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
     assert "API_TIMEOUT_MS" in environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(",")
     assert not any("api_key" in item.lower() for item in environment)
+
+
+@pytest.mark.parametrize("native_journey", [
+    {"harness": harness, "oauthTuning": {"PROJECT_RUNTIME_STYLE": "accepted literal"}}
+    for harness in ("codex-native", "claude-native")
+], indirect=True)
+async def test_admitted_profile_shell_values_keep_the_selected_snapshot(native_journey):
+    async with native_journey.session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, PROFILE)
+        profile.env_template = {"PROJECT_RUNTIME_STYLE": "later edit"}
+        await session.commit()
+    await assert_native_turn_saved_and_cleaned(native_journey)
+    assert native_journey.docker.launch_env["PROJECT_RUNTIME_STYLE"] == "accepted literal"
 
 
 @pytest.mark.parametrize("native_journey", [{

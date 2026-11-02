@@ -39,6 +39,59 @@ def test_profile_owned_literal_environment_reaches_the_native_runner(materialize
     assert "ANTHROPIC_AUTH_TOKEN" not in environment
 
 
+@pytest.mark.parametrize("harness", ["codex", "claude"])
+@pytest.mark.parametrize("deployment_setting", [False, True])
+def test_profile_shell_value_survives_the_native_executable_boundary(tmp_path, harness, deployment_setting, monkeypatch):
+    if deployment_setting:
+        monkeypatch.setenv("MOONMIND_MANAGED_SESSION_NON_SECRET_ENV_KEYS", "PROJECT_RUNTIME_STYLE")
+        monkeypatch.setenv("PROJECT_RUNTIME_STYLE", "deployment-default")
+    home, skills, binaries = (tmp_path / name for name in ("home", "skills", "bin"))
+    for directory in (home, skills, binaries):
+        directory.mkdir()
+    binaries.joinpath("python3").symlink_to(sys.executable)
+    native = binaries / harness
+    native.write_text(
+        f"#!{sys.executable}\nimport json,os\n"
+        "print(json.dumps({'value':os.environ.get('PROJECT_RUNTIME_STYLE'),"
+        "'home':os.environ['HOME'],'codex_home':os.environ.get('CODEX_HOME')}))\n"
+    )
+    native.chmod(0o700)
+    omnigent = binaries / "omnigent"
+    omnigent.write_text(
+        f"#!{sys.executable}\nimport os,subprocess\n"
+        "binary=os.environ.get('OMNIGENT_CODEX_PATH') or "
+        + repr(str(home / ".omnigent/moonmind/bin/claude")) + "\n"
+        "subprocess.run([binary,'app-server'],check=True,env={"
+        "'PATH':os.environ['PATH'],'HOME':'/private/native-home',"
+        "'CODEX_HOME':'/private/native-codex-home'})\n"
+    )
+    omnigent.chmod(0o700)
+    script, environment = OmnigentRuntimeScriptService().build_entrypoint(
+        credential_handles=[{
+            "credentialGeneration": 3, "materializerRef": f"{harness}-oauth-home@1",
+            "attachments": [], "runtimeEnvironment": {"PROJECT_RUNTIME_STYLE": "exact value; $(not-executed)"},
+        }],
+        skill_attachment={"targetPath": str(skills)},
+        step_execution_id="workflow:run:work:execution:1",
+        enable_codex_runtime=harness == "codex", enable_claude_runtime=harness == "claude",
+        control_credential_available=False,
+        runtime_environment={"PROJECT_RUNTIME_STYLE": "deployment-default"} if deployment_setting else None,
+    )
+    environment = {key:value.replace("/home/app",str(home)) for key,value in environment.items()}
+    result = subprocess.run(
+        ["/bin/sh", "-ceu", script.replace("/home/app",str(home)), "--", "http://omnigent.test"],
+        env={**environment,"PATH":f"{binaries}:/usr/bin:/bin"},
+        text=True,capture_output=True,check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "value":"exact value; $(not-executed)",
+        "home":"/private/native-home", "codex_home":"/private/native-codex-home",
+    }
+    assert "exact value" not in script
+    assert (home / ".omnigent/moonmind/runtime-context/provider-PROJECT_RUNTIME_STYLE").stat().st_mode & 0o777 == 0o600
+
+
 def test_custom_codex_projection_runs_through_the_native_executable_boundary(tmp_path):
     import os
 
@@ -177,6 +230,20 @@ def test_conflicting_provider_handles_do_not_silently_choose_a_launch_value():
             ],
             skill_attachment={"targetPath": "/opt/moonmind-skills"},
             step_execution_id="workflow:run:node:execution:1",
+        )
+
+
+def test_profile_values_still_conflict_with_sibling_handles_over_a_project_default(monkeypatch):
+    monkeypatch.setenv("MOONMIND_MANAGED_SESSION_NON_SECRET_ENV_KEYS", "PROJECT_RUNTIME_STYLE")
+    monkeypatch.setenv("PROJECT_RUNTIME_STYLE", "deployment-default")
+    with pytest.raises(ValueError, match="conflicting credential runtime environment"):
+        OmnigentRuntimeScriptService().build_entrypoint(
+            credential_handles=[{
+                "materializerRef": "claude-oauth-home@1", "attachments": [],
+                "runtimeEnvironment": {"PROJECT_RUNTIME_STYLE": value},
+            } for value in ("first-profile", "second-profile")],
+            skill_attachment={"targetPath": "/skills"}, step_execution_id="work:run:step:1",
+            enable_claude_runtime=True, runtime_environment={"PROJECT_RUNTIME_STYLE": "deployment-default"},
         )
 
 

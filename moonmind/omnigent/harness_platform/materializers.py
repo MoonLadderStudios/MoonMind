@@ -356,7 +356,7 @@ class ProviderLaunchEnvironment(BaseModel):
 
 
 PROVIDER_CONFIGURATION_MATERIALIZERS = frozenset(
-    {PROVIDER_CONFIG_MATERIALIZER_REF, "claude-oauth-home@1"}
+    {PROVIDER_CONFIG_MATERIALIZER_REF, "claude-oauth-home@1", "codex-oauth-home@1"}
 )
 
 
@@ -364,7 +364,7 @@ class ProviderConfigurationSlot(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     providerProfileRef: str
-    materializerRef: Literal["omnigent-provider-config@1", "claude-oauth-home@1"]
+    materializerRef: Literal["omnigent-provider-config@1", "claude-oauth-home@1", "codex-oauth-home@1"]
     endpoint: ProviderConfigEndpoint | None
     launchEnvironment: dict[str, str] = Field(
         default_factory=dict, exclude_if=lambda value: not value,
@@ -372,7 +372,7 @@ class ProviderConfigurationSlot(BaseModel):
 
     @model_validator(mode="after")
     def _validate_delivery(self):
-        if self.materializerRef == "claude-oauth-home@1":
+        if self.materializerRef in {"claude-oauth-home@1", "codex-oauth-home@1"}:
             if self.endpoint is not None:
                 raise ValueError("OAuth configuration cannot replace its credential owner")
             ProviderLaunchEnvironment(launchEnvironment=self.launchEnvironment)
@@ -428,7 +428,7 @@ def load_provider_configuration_snapshot(content, snapshot, bindings):
             raise ValueError("provider configuration snapshot account does not match")
         result[slot] = (
             ProviderLaunchEnvironment(launchEnvironment=saved.launchEnvironment)
-            if saved.materializerRef == "claude-oauth-home@1" else saved.endpoint
+            if saved.materializerRef in {"claude-oauth-home@1", "codex-oauth-home@1"} else saved.endpoint
         )
     return result
 
@@ -451,8 +451,6 @@ def untranslated_oauth_launch_options(profile: Any) -> str | None:
     fields = ["file_templates"] if getattr(profile, "file_templates", None) else []
     if getattr(profile, "env_template", None):
         try:
-            if str(profile.runtime_id) != "claude_code":
-                raise ValueError("no equivalent launch environment")
             ProviderLaunchEnvironment(launchEnvironment=profile.env_template)
         except ValueError:
             fields.append("env_template")
@@ -485,7 +483,7 @@ def snapshot_provider_configuration(
 ) -> ProviderConfigEndpoint | ProviderLaunchEnvironment | None:
     """Capture nonsecret provider settings while admission owns the Profile."""
     if (
-        str(getattr(profile, "runtime_id", "")) == "claude_code"
+        str(getattr(profile, "runtime_id", "")) in {"codex_cli", "claude_code"}
         and _enum_value(getattr(profile, "credential_source", None)) == "oauth_volume"
     ):
         reason = untranslated_oauth_launch_options(profile)

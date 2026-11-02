@@ -61,7 +61,7 @@ def profile_and_configuration(runtime, schema, **options):
 @pytest.mark.parametrize(
     "customization",
     [
-        {"env_template": {"RUNTIME_NONSECRET_TUNING": "preserve-this-value"}},
+        {"env_template": {"OMNIGENT_SERVER_URL": "http://unselected-control-owner"}},
         {
             "file_templates": [
                 {
@@ -111,6 +111,15 @@ def test_supported_claude_oauth_tuning_uses_its_shared_credential_owner(schema):
     assert vars(profile) == before
 
 
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code"])
+@pytest.mark.parametrize("schema", ["v1", "v2"])
+def test_nonsecret_profile_shell_values_have_equivalent_shared_delivery(runtime, schema):
+    profile, configuration = profile_and_configuration(runtime, schema)
+    profile.env_template = {"PROJECT_RUNTIME_STYLE": "preserve-this-value"}
+    assert configuration_accepts_profile(configuration[1].document, profile)
+    assert not profile_has_native_inventory_route(profile, [configuration])
+
+
 def test_claude_oauth_tuning_is_frozen_with_its_bound_account():
     import hashlib
     import json
@@ -149,9 +158,20 @@ def test_claude_oauth_tuning_is_frozen_with_its_bound_account():
     {"API_TIMEOUT_MS": {"from_secret_ref": "extra-secret"}},
     {"HTTPS_PROXY": "https://unselected-proxy.example"},
     {"ANTHROPIC_API_KEY": "unselected-key"},
+    {"CODEX_HOME": "/unselected/home"},
+    {"HOME": "/unselected/home"},
+    {"PATH": "/unselected/bin"},
+    {"MOONMIND_URL": "http://unselected/control"},
+    {"LD_PRELOAD": "/unselected/library"},
+    {"GH_CONFIG_DIR": "/unselected/repository-identity"},
+    {"PROJECT_API_KEY": "unselected-key"},
+    {"PROJECT_ENDPOINT": "https://synthetic-user:synthetic-value@example.test"},
+    {"PROJECT_ENDPOINT": "https://example.test?signature=synthetic"},
+    {"PROJECT_RUNTIME_STYLE": "value\x00extra"},
 ])
-def test_oauth_tuning_never_admits_credentials_or_another_launch_owner(environment):
-    profile, configuration = profile_and_configuration("claude_code", "v2")
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code"])
+def test_oauth_tuning_never_admits_credentials_or_another_launch_owner(environment, runtime):
+    profile, configuration = profile_and_configuration(runtime, "v2")
     profile.env_template = environment
     assert not configuration_accepts_profile(configuration[1].document, profile)
     assert profile_has_native_inventory_route(profile, [configuration])
