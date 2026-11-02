@@ -100,7 +100,7 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     MoonMindProviderProfileManagerWorkflow,
 )
 from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
-from tests.unit.api.routers.test_executions import (
+from tests.helpers.execution_api import (
     _build_execution_record,
     _override_user_dependencies,
 )

@@ -106,6 +106,7 @@ def _make_wrapper(tmp_path: Path, repo: Path) -> Wrapper:
     tools = repo / "tools"
     tools.mkdir(parents=True)
     (tools / SCRIPT.name).write_text(SCRIPT.read_text())
+    (tools / "test_worker_count.py").write_text("print(4)\n")
     (repo / "docker-compose.test.yaml").write_text("services: {}\n")
     (repo / ".env-template").write_text("TEMPLATE=1\n")
     binaries = tmp_path / "bin"
@@ -138,6 +139,21 @@ def _make_wrapper(tmp_path: Path, repo: Path) -> Wrapper:
 @pytest.fixture
 def wrapper(tmp_path: Path) -> Wrapper:
     return _make_wrapper(tmp_path, tmp_path / "checkout")
+
+
+def test_integration_uses_available_resources_without_a_fixed_two_worker_limit(wrapper):
+    status, _, _ = wrapper.run()
+    assert status == 0
+    assert "-n 4" in wrapper.pytest_command()
+
+
+@pytest.mark.parametrize("workers", ["0", "-1", "auto", "4 --maxfail=0"])
+def test_invalid_worker_override_fails_before_running_tests(wrapper, workers):
+    wrapper.env["MOONMIND_INTEGRATION_WORKERS"] = workers
+    status, output, _ = wrapper.run()
+    assert status == 2
+    assert "positive integer" in output
+    assert not any(command[0] == "run" for command in wrapper.compose_commands())
 
 
 def test_ordinary_ci_stops_early_and_keeps_report_log_and_failure(

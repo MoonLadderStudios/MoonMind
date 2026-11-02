@@ -19,10 +19,81 @@ from tools.ci.write_backend_matrix_summary import (
     parse_junit,
     write_durations_snapshot,
     write_slowest_report,
+    summarize_workflow_jobs,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "pytest-unit-tests.yml"
+
+
+def test_workflow_timing_separates_queue_and_additive_usage_from_wall_time(tmp_path):
+    job = {
+        "name": "source/unit",
+        "id": 1,
+        "html_url": "https://example.test/job/1",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-11-02T00:00:00Z",
+        "started_at": "2026-11-02T00:00:10Z",
+        "completed_at": "2026-11-02T00:01:10Z",
+        "steps": [
+            {
+                "name": "tests",
+                "started_at": "2026-11-02T00:00:20Z",
+                "completed_at": "2026-11-02T00:01:00Z",
+                "conclusion": "success",
+            }
+        ],
+    }
+    payload = summarize_workflow_jobs(
+        [{"jobs": [job, {**job, "id": 2}]}],
+        tmp_path / "timing.json",
+        tmp_path / "summary",
+    )
+    assert payload["runnerSeconds"] == 120
+    assert payload["queueSeconds"] == 20
+    assert payload["jobs"][0]["steps"][0]["seconds"] == 40
+    assert payload["incompleteJobs"] == []
+
+
+@pytest.mark.parametrize(
+    "status,conclusion,runner_id,runner_seconds,queue_seconds",
+    [
+        ("completed", "cancelled", 0, 0, 1800),
+        ("completed", "cancelled", None, 0, 1800),
+        ("completed", "skipped", None, 0, 0),
+        ("queued", None, None, None, None),
+        ("completed", "cancelled", 123, None, None),
+        ("completed", "failure", None, None, None),
+    ],
+)
+def test_unallocated_jobs_never_inflate_runner_usage(
+    tmp_path, status, conclusion, runner_id, runner_seconds, queue_seconds
+):
+    job = {
+        "name": "queued-owner",
+        "id": 1,
+        "html_url": "https://example.test/job/1",
+        "status": status,
+        "conclusion": conclusion,
+        "runner_id": runner_id,
+        "steps": [],
+        "created_at": "2026-11-02T00:00:00Z",
+        # GitHub supplies this placeholder even when a queued job never ran.
+        "started_at": "2026-11-02T00:00:00Z",
+        "completed_at": "2026-11-02T00:30:00Z" if status == "completed" else None,
+    }
+    payload = summarize_workflow_jobs(
+        [{"jobs": [job]}], tmp_path / "timing.json", tmp_path / "summary"
+    )
+    assert payload["jobs"][0]["runnerSeconds"] == runner_seconds
+    assert payload["jobs"][0]["queueSeconds"] == queue_seconds
+    assert payload["runnerSeconds"] == runner_seconds
+    assert payload["timingComplete"] is (
+        status == "completed"
+        and runner_seconds is not None
+        and queue_seconds is not None
+    )
 
 
 def _junit_file(tmp_path: Path) -> Path:
