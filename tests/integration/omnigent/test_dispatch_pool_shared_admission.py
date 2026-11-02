@@ -64,6 +64,7 @@ session_factory = native_fixture.session_factory
 @pytest.mark.parametrize("scenario", [
     "ordinary", "disabled", "publish", "model_alias", "tier_resolution", "native_tier_option",
     "tier_launch_defaults", "tier_launch_explicit", "tier_publish", "retained_handoff", "tier_environment", "tier_removed_default",
+    "explicit_work_branch", "explicit_native_option",
 ])
 async def test_pool_selected_account_compiles_once_and_preserves_its_original_inputs(
     native_journey, monkeypatch, scenario
@@ -118,7 +119,7 @@ async def execute_selected_pool_source(
     inventory = await OmnigentHttpClient(base_url=resolved_server_url()).list_agents()
     async with journey.session_factory() as session:
         repository = None
-        if publish_scenario:
+        if publish_scenario or scenario == "explicit_work_branch":
             from api_service.services.repository_connections import (
                 RepositoryConnectionService,
             )
@@ -195,6 +196,10 @@ async def execute_selected_pool_source(
                                 "profileSelector": {"tagsAll": ["selected-pool"]},
                                 **({"parameters": {"commitMessage": "Explicit runtime commit"}}
                                    if scenario == "tier_launch_explicit" else {}),
+                                **({"parameters": {"workBranch": "accepted-work-branch"}}
+                                   if scenario == "explicit_work_branch" else {}),
+                                **({"parameters": {"native_option": "accepted-explicit-native-option"}}
+                                   if scenario == "explicit_native_option" else {}),
                                 **(
                                     {"modelTier": 1}
                                     if scenario in {"tier_resolution", "native_tier_option", "tier_environment"} or tier_launch
@@ -250,6 +255,10 @@ async def execute_selected_pool_source(
         )["work"]
         assert request.execution_profile_ref == (native_fixture.PROFILE if fixed_serialized else None)
         assert request.profile_selector.tags_all == ([] if fixed_serialized else ["selected-pool"])
+        if scenario == "explicit_work_branch":
+            assert request.parameters["workBranch"] == "accepted-work-branch"
+        if scenario == "explicit_native_option":
+            assert request.parameters["native_option"] == "accepted-explicit-native-option"
         if scenario == "tier_removed_default":
             # A recorded request may carry defaults from a previous native
             # resolution. The selected Profile no longer supplies this value.
@@ -378,12 +387,14 @@ async def execute_selected_pool_source(
         result = await prepare_selected_pool_plan(
             session, runtime_id=runtime, payload=payload, client=transport
         )
-        if scenario in {"disabled", "native_tier_option", "tier_environment"}:
+        if scenario in {"disabled", "native_tier_option", "tier_environment", "explicit_work_branch", "explicit_native_option"}:
             assert result["disposition"] == "native", result
             if scenario == "native_tier_option":
                 assert result["reason"] == "native_parameter_defaults_require_an_equivalent_handoff"
             if scenario == "tier_environment":
                 assert result["reason"] == "native_environment_overrides_require_their_current_adapter"
+            if scenario in {"explicit_work_branch", "explicit_native_option"}:
+                assert result["reason"] == "native_runtime_parameters_require_an_equivalent_handoff"
             assert (
                 await session.scalar(
                     select(func.count(OmnigentExecutionPlanRecord.plan_ref))
