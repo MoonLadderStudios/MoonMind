@@ -37,7 +37,8 @@ async def test_private_configuration_keeps_the_enrolled_home_and_its_cleanup_own
 
 
 @pytest.mark.parametrize("use_enrolled_home", [False, True], ids=["two-private-homes", "refuse-enrolled-home"])
-def test_oauth_configuration_runs_only_in_the_private_native_home(tmp_path, use_enrolled_home):
+@pytest.mark.parametrize("delivery", ["oauth-home", "provider-config"])
+def test_private_configuration_runs_only_in_native_private_home(tmp_path, use_enrolled_home, delivery):
     selected, _ = private_codex_profile()
     tuning = snapshot_provider_configuration(selected)
     home, skills, binaries = (tmp_path / name for name in ("home", "skills", "bin"))
@@ -50,6 +51,25 @@ def test_oauth_configuration_runs_only_in_the_private_native_home(tmp_path, use_
     enrolled.joinpath("AGENTS.md").write_text("Enrollment instructions.\n")
     enrolled.joinpath(".moonmind-generation").write_text("4\n")
     before = {path.name: path.read_bytes() for path in enrolled.iterdir()}
+    if delivery == "provider-config":
+        directory = home / ".moonmind-provider-config"
+        directory.mkdir()
+        configuration_projection = directory / "codex-profile.json"
+        configuration_projection.write_text(json.dumps(tuning.codexConfiguration))
+        configuration_projection.chmod(0o600)
+        directory.joinpath(".moonmind-generation").write_text("4\n")
+        handle = {
+            "credentialGeneration": 4, "materializerRef": "omnigent-provider-config@1",
+            "attachments": [{"targetPath": "/home/app/.moonmind-provider-config"}],
+            "runtimeEnvironment": {"OMNIGENT_CONFIG_HOME": "/home/app/.moonmind-provider-config", "MOONMIND_CODEX_PROFILE_CONFIG_FILE": "/home/app/.moonmind-provider-config/codex-profile.json"},
+        }
+    else:
+        configuration_projection = home / ".omnigent/moonmind/runtime-context/provider-MOONMIND_CODEX_PROFILE_CONFIGURATION"
+        handle = {
+            "credentialGeneration": 4, "materializerRef": "codex-oauth-home@1",
+            "attachments": [{"targetPath": "/home/app/.codex"}],
+            "runtimeEnvironment": {"MOONMIND_CODEX_PROFILE_CONFIGURATION": json.dumps(tuning.codexConfiguration)},
+        }
     binaries.joinpath("python3").symlink_to(sys.executable)
     native = binaries / "codex"
     native.write_text(
@@ -77,11 +97,7 @@ def test_oauth_configuration_runs_only_in_the_private_native_home(tmp_path, use_
     )
     omnigent.chmod(0o700)
     script, environment = OmnigentRuntimeScriptService().build_entrypoint(
-        credential_handles=[{
-            "credentialGeneration": 4, "materializerRef": "codex-oauth-home@1",
-            "attachments": [{"targetPath": "/home/app/.codex"}],
-            "runtimeEnvironment": {"MOONMIND_CODEX_PROFILE_CONFIGURATION": json.dumps(tuning.codexConfiguration)},
-        }],
+        credential_handles=[handle],
         skill_attachment={"targetPath": str(skills)},
         step_execution_id="workflow:run:work:execution:1",
         enable_codex_runtime=True, control_credential_available=False,
@@ -104,8 +120,7 @@ def test_oauth_configuration_runs_only_in_the_private_native_home(tmp_path, use_
             "home": name, "model": "admitted-plan", "preferences": "Runtime-owned instructions.\n\nPreserve accepted work.",
             "instructions": "Enrollment instructions.\nSelected global instructions.\n",
         } for name in ("private-one", "private-two")]
-        projection = home / ".omnigent/moonmind/runtime-context/provider-MOONMIND_CODEX_PROFILE_CONFIGURATION"
-        assert projection.stat().st_mode & 0o777 == 0o600
+        assert configuration_projection.stat().st_mode & 0o777 == 0o600
         assert not any(path.is_symlink() for path in enrolled.iterdir())
 
 
