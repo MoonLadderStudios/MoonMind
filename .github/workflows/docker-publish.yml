@@ -308,5 +308,5 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 concurrency:
-  group: app-release-${{ github.event_name == 'push' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  group: app-release-${{ github.event_name == 'push' && github.run_attempt == 1 && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.run_attempt == 1 }}

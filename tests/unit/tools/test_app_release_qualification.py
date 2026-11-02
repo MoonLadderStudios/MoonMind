@@ -546,6 +546,11 @@ def _concurrency_value(expression, context):
 
     def field(token):
         token = token.strip()
+        if "==" in token:
+            left, right = token.split("==", 1)
+            return str(field(left)) == str(field(right))
+        if token.startswith("'") or token.isdecimal():
+            return ast.literal_eval(token)
         assert re.fullmatch(r"[\w.]+", token), f"Unsupported concurrency field: {token}"
         value = context
         for key in token.split("."):
@@ -669,3 +674,29 @@ def test_review_readiness_keeps_the_existing_same_head_verification():
             events["pull_request"]["types"]
         )
         assert "ready_for_review" not in events["pull_request"]["types"]
+
+
+def test_explicit_release_reruns_cannot_cancel_current_publication():
+    config = _workflow("docker-publish.yml")["concurrency"]
+
+    def values(run_id, *, event="push", attempt=1):
+        context = {
+            "github": {
+                "event_name": event,
+                "ref": "refs/heads/main",
+                "run_id": run_id,
+                "run_attempt": str(attempt),
+            }
+        }
+        return (
+            _concurrency_value(config["group"], context),
+            _concurrency_value(config["cancel-in-progress"], context) == "True",
+        )
+
+    current_group, current_cancels = values("current-run")
+    older_group, older_cancels = values("older-run")
+    assert current_group == older_group and current_cancels and older_cancels
+    for arguments in ({"attempt": 2}, {"event": "workflow_dispatch"}):
+        group, cancels = values("older-run", **arguments)
+        assert group != current_group
+        assert not cancels

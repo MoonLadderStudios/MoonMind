@@ -160,6 +160,73 @@ def test_owner_receipts_require_current_complete_collected_coverage(
             )
 
 
+def test_source_evidence_does_not_claim_the_installed_recovery_owner(
+    tmp_path, monkeypatch
+):
+    runner = _load_runner()
+    source_path = "tests/integration/omnigent/test_replay.py"
+    source_node = source_path + "::test_replay"
+    installed_path = "tests/integration/omnigent/test_exact_docker_n_way_concurrency.py"
+    installed_node = (
+        installed_path
+        + "::test_exact_host_replacement_resumes_same_session_without_provider_input"
+    )
+    identity = dict(revision="a" * 40, runId="123", attempt="1")
+    manifest = {
+        "schema": "moonmind.test-ownership/v1",
+        **identity,
+        "nodes": [
+            {
+                "nodeid": source_node,
+                "path": source_path,
+                "eligible": True,
+                "owners": ["integration-ci"],
+            },
+            {
+                "nodeid": installed_node,
+                "path": installed_path,
+                "eligible": True,
+                "owners": ["omnigent-exact-artifact"],
+            },
+        ],
+    }
+    manifest_path = tmp_path / "ownership.json"
+    manifest_path.write_text(json.dumps(manifest))
+    (tmp_path / "source.receipt.json").touch()
+    monkeypatch.setattr(
+        runner,
+        "validate_receipt",
+        lambda *_args, **_kwargs: {
+            "suite": "integration-hermetic",
+            "cases": [{"nodeid": source_node, "outcome": "passed"}],
+        },
+    )
+    # Exercise the real layer's exclusion list. The installed recovery gate
+    # independently executes its Docker node; source receipts cannot prove it.
+    monkeypatch.setattr(
+        runner,
+        "COMMANDS",
+        (
+            (
+                sys.executable,
+                "-m",
+                "pytest",
+                "tests/integration/omnigent",
+                *(arg for arg in runner.COMMANDS[0] if arg.startswith("--ignore=")),
+            ),
+        ),
+    )
+    results = runner.owner_receipt_commands(
+        tmp_path,
+        manifest_path,
+        revision=identity["revision"],
+        run_id="123",
+        attempt="1",
+        require_full_source=True,
+    )
+    assert results[0]["nodeIds"] == [source_node]
+
+
 def test_cumulative_remediation_stays_pending_until_production_shaped_proof() -> None:
     runner = _load_runner()
 
@@ -538,7 +605,9 @@ def test_recovery_evidence_retains_its_executed_command_and_failure(
 
 
 @pytest.mark.parametrize(
-    "secret", ["", "Authorization: Bearer fixture-token_123456789"]
+    "secret",
+    ["", "Authorization: Bearer fixture-token_123456789"],
+    ids=["ordinary-diagnostic", "credential-diagnostic"],
 )
 def test_failed_layer_diagnostics_are_readable_without_artifact_downloads(
     monkeypatch, tmp_path: Path, capsys, secret: str

@@ -1503,7 +1503,7 @@ jobs:
     permissions:
       contents: read
       packages: read
-    timeout-minutes: 55
+    timeout-minutes: 65
     steps:
       - name: Check out code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1599,7 +1599,9 @@ jobs:
           df -h "$RUNNER_TEMP" /var/lib/docker || true
           docker system df || true
       - name: Download prepared recovery images
-        timeout-minutes: 3
+        # A cold ~3 GB transfer can exceed three minutes. Keep acquisition
+        # bounded independently of the unchanged recovery execution deadline.
+        timeout-minutes: 8
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: ${{ inputs.recovery_images_artifact || needs.prepare-recovery-images.outputs.artifact }}
