@@ -174,13 +174,8 @@ def _has_authority(value):
     return isinstance(value, str) and ("{{" in value or "\0" in value)
 
 
-def _additional_file(template, home_path):
-    """Translate a declared private-home file without granting auth/history writes."""
-    prefix = home_path.rstrip("/") + "/"
-    path = str(template["path"] or "")
-    if not path.startswith(prefix):
-        raise ValueError("additional Codex files must remain within the declared HOME")
-    relative = Path(path[len(prefix):])
+def _validate_additional_file_path(relative):
+    """Protect runtime-owned paths before and after context resolution."""
     if (
         relative.is_absolute() or ".." in relative.parts or not relative.parts
         or relative.parts[0] in {
@@ -191,6 +186,16 @@ def _additional_file(template, home_path):
         or any(part.startswith((".moonmind-", ".omnigent-")) for part in relative.parts)
     ):
         raise ValueError("additional Codex files cannot replace authentication, history or runtime-owned files")
+
+
+def _additional_file(template, home_path):
+    """Translate a declared private-home file without granting auth/history writes."""
+    prefix = home_path.rstrip("/") + "/"
+    path = str(template["path"] or "")
+    if not path.startswith(prefix):
+        raise ValueError("additional Codex files must remain within the declared HOME")
+    relative = Path(path[len(prefix):])
+    _validate_additional_file_path(relative)
     # The private-home prefix was already translated above. Only workspace
     # context remains equivalent in the relative filename; SecretRef aliases
     # and other support-directory substitutions require their native owner.
@@ -542,8 +547,7 @@ def configure_private_oauth_home(configuration, home):
 def _privatize_native_file_path(home, rendered_path):
     """Detach the selected native HOME links without changing their source."""
     relative = Path(rendered_path).relative_to(home)
-    if ".." in relative.parts:
-        raise ValueError("Profile files must remain in the private HOME")
+    _validate_additional_file_path(relative)
     source_home = Path(_ENROLLED_CODEX_HOME).resolve()
     for length in range(1, len(relative.parts) + 1):
         path = home.joinpath(*relative.parts[:length])
