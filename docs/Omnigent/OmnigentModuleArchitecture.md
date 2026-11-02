@@ -329,7 +329,9 @@ declared Claude environment bundle and Codex Responses file configuration, run
 on the shared lifecycle with their endpoint, model pins and non-secret tuning.
 New plans reference a verified artifact containing those settings per credential
 slot, so queued starts and frozen successors keep their admitted configuration
-after a Profile edit. Fresh scheduled occurrences resolve current settings.
+after a Profile edit. Refused successor cleanup preserves the original artifact.
+Fresh scheduled occurrences resolve current settings without changing recorded
+step selections.
 Secret values still resolve
 after acquisition under the existing credential-generation fence. Older plans
 without this snapshot retain their recorded interpretation.

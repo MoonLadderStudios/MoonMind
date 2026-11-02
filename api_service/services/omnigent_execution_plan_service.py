@@ -2004,9 +2004,10 @@ async def compile_and_persist_execution_plan(
     configuration_ref = None
     if isinstance(_recorded_provider_configuration_snapshot, ProviderConfigurationSnapshotRef):
         recorded = _recorded_provider_configuration_snapshot
-        configuration_ref = recorded.artifactRef.removeprefix("artifact:")
+        # This artifact belongs to the admitted plan, not this candidate's
+        # cleanup set if re-admission is refused.
         _artifact, configuration_body = await artifact_service.read(
-            artifact_id=configuration_ref, access=access
+            artifact_id=recorded.artifactRef.removeprefix("artifact:"), access=access
         )
         load_provider_configuration_snapshot(
             configuration_body, recorded, binding_set.bindings
@@ -2411,6 +2412,7 @@ async def compile_frozen_execution_plan(
     parent_repository_plan: OmnigentExecutionPlanEnvelope | None = None,
     access: ArtifactAccessContext,
     refresh_step_selections: bool = False,
+    refresh_provider_configuration: bool = False,
 ) -> PersistedOmnigentExecutionPlan:
     """Compile an admitted workflow's frozen inputs again through this owner."""
 
@@ -2454,7 +2456,7 @@ async def compile_frozen_execution_plan(
         _recorded_step_parameters=None if refresh_step_selections else recorded_steps,
         _recorded_provider_configuration_snapshot=(
             recorded_plan.payload.providerConfigurationSnapshot
-            if not refresh_step_selections and any(
+            if not (refresh_step_selections or refresh_provider_configuration) and any(
                 getattr(bound, "providerProfileRef", None) == provider_profile.profile_id
                 for bound in recorded_plan.payload.credentialBindings.values()
             ) else "capture"
@@ -2676,7 +2678,9 @@ async def readmit_frozen_execution_plan(
     child recompiles from its own frozen task input and recorded plan, within
     its recorded repository authority. Plans that attempts already
     used are never rewritten. With ``preserve_recorded_intent`` the new plan
-    is refused when it would change the recorded request intent.
+    retains admitted provider settings and is refused when it would change the
+    recorded request intent. Fresh occurrences resolve current provider settings
+    while preserving recorded step selections.
 
     Returns ``disposition`` ``admitted`` with the new plan binding and Skill
     snapshot, or ``recorded`` with the reason when the frozen authority cannot
@@ -2760,6 +2764,7 @@ async def readmit_frozen_execution_plan(
             binding=binding,
             parent_repository_plan=parent_repository_plan,
             access=access,
+            refresh_provider_configuration=not preserve_recorded_intent,
         )
         changed = []
         if recorded_plan is not None:
