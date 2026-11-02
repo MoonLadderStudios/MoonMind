@@ -306,10 +306,11 @@ Fresh serialized canonical agent workflows use the same product admission compil
 their title, failure policy and accepted retry identity survive translation.
 Raw deferred step-account matching and tool-only boundary validation remain intact.
 Replaced defaults never select ambient credentials.
-OAuth-home delivery attaches the enrollment-owned volume. Supported Claude
-nonsecret tuning travels in the same admitted configuration artifact as API-key
-settings; it never edits the enrolled home. Additional environment, file or HOME
-choices retain their native adapter until an equivalent handoff exists.
+OAuth-home delivery attaches the enrollment-owned volume. Codex/Claude nonsecret
+shell settings use the existing project-value guard and admitted configuration
+artifact; native executable wrappers restore them after child environment filtering
+without overriding private HOME or editing the enrolled home. Protected environment,
+file or HOME choices retain their native adapter until an equivalent handoff exists.
 Recorded plans retain their original materializer identity.
 Profile-bound execution and its OAuth host launcher admit no new plans;
 they retain queued starts, retries and cleanup under their recorded authority. Supported

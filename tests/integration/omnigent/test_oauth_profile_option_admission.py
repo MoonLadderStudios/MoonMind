@@ -46,6 +46,7 @@ session_factory = native_fixture.session_factory
         "model_overrides",
         "step_model_overrides",
         "claude_oauth_tuning",
+        "shell_environment",
     ],
 )
 async def test_product_creation_preserves_the_exact_oauth_profile_options(
@@ -70,6 +71,7 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
         "model_overrides": {"selected-model-alias": journey.server.model},
         "step_model_overrides": {"selected-model-alias": journey.server.model},
         "claude_oauth_tuning": {"API_TIMEOUT_MS": "300000"},
+        "shell_environment": {"PROJECT_RUNTIME_STYLE": "accepted-style"},
     }
     inventory = await OmnigentHttpClient(base_url=resolved_server_url()).list_agents()
     async with journey.session_factory() as session:
@@ -79,7 +81,7 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
             == "oauth_volume"
         )
         field = (
-            "env_template" if option == "claude_oauth_tuning"
+            "env_template" if option in {"claude_oauth_tuning", "shell_environment"}
             else "model_overrides" if option == "step_model_overrides" else option
         )
         setattr(profile, field, values[option])
@@ -111,7 +113,7 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
                                     {"model": "selected-model-alias"}
                                     if option == "model_overrides"
                                     else {"model": journey.server.model}
-                                    if option == "claude_oauth_tuning" else {}
+                                    if option in {"claude_oauth_tuning", "shell_environment"} else {}
                                 ),
                             },
                             "steps": [
@@ -137,7 +139,7 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
             TemporalExecutionCanonicalRecord, response.json()["workflowId"]
         )
         request = agent_requests(record.parameters)["work"]
-        if field == "model_overrides" or option == "claude_oauth_tuning":
+        if field == "model_overrides" or option in {"claude_oauth_tuning", "shell_environment"}:
             assert record.parameters["targetRuntime"] == "omnigent"
             assert request.agent_kind == "external" and request.agent_id == "omnigent"
             plan = await DbExecutionPlanStore(journey.session_factory).load(
