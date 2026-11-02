@@ -98,13 +98,15 @@ jobs:
           echo "server=$server" >> "$GITHUB_OUTPUT"
           echo "host=$host" >> "$GITHUB_OUTPUT"
       - name: Archive the prepared recovery runtimes
+        timeout-minutes: 5
         run: |
           mkdir -p "$RUNNER_TEMP/recovery-images"
           python3 tools/ci/release_image_fixture.py save-recovery \
-            --archive "$RUNNER_TEMP/recovery-images/images.tar" --state "$RUNNER_TEMP/recovery-images/identity.json" \
+            --archive "$RUNNER_TEMP/recovery-images/images.tar.gz" --state "$RUNNER_TEMP/recovery-images/identity.json" \
             --revision "$MOONMIND_CI_REVISION" --upstream "$(git rev-parse HEAD:omnigent)" \
             --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
       - name: Upload prepared recovery images
+        timeout-minutes: 3
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: recovery-images-${{ github.run_id }}-${{ github.run_attempt }}

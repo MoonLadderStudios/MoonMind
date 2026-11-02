@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import json
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -36,6 +38,34 @@ class FixtureError(RuntimeError):
 def _file_digest(path: Path) -> str:
     with path.open("rb") as source:
         return "sha256:" + hashlib.file_digest(source, "sha256").hexdigest()
+
+
+def _save_recovery_archive(archive: Path) -> int:
+    """Compress Docker's stream without retaining a second multi-GB raw copy."""
+    command = ["docker", "save", *RECOVERY_IMAGES]
+    with tempfile.TemporaryFile() as errors:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=errors)
+        raw_bytes = 0
+        try:
+            with gzip.open(archive, "wb", compresslevel=1) as output:
+                while chunk := process.stdout.read(1024 * 1024):
+                    raw_bytes += len(chunk)
+                    output.write(chunk)
+            returncode = process.wait()
+            if returncode:
+                errors.seek(0)
+                raise subprocess.CalledProcessError(
+                    returncode, command, stderr=errors.read(1024 * 1024)
+                )
+        except BaseException:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            archive.unlink(missing_ok=True)
+            raise
+        finally:
+            process.stdout.close()
+    return raw_bytes
 
 
 def recovery_archive(
@@ -100,7 +130,9 @@ def recovery_archive(
             )
         payload["images"][image] = image_id
     if not restore_archive:
-        _run(["docker", "save", "--output", str(archive), *RECOVERY_IMAGES])
+        payload["uncompressedBytes"] = _save_recovery_archive(archive)
+        payload["archiveBytes"] = archive.stat().st_size
+        payload["compression"] = "gzip-level-1"
         payload["archiveDigest"] = _file_digest(archive)
         state.write_text(json.dumps(payload, indent=2) + "\n")
 
