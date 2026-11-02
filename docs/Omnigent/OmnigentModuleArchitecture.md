@@ -244,6 +244,7 @@ with the owner of the affected behavior:
   (`tests/unit/workflows/temporal/test_legacy_generation_replay.py` and the
   retained workflow histories);
 - historical reads — the read-model tests of the component that serves them;
+  terminal embedded snapshots use durable rows without constructing a transport;
 - active work and cleanup — the existing drain and cleanup owners
   (`codex_cutover_drain.py`, `embedded_drain.py`, the host janitors), used only
   for components that actually have active or cleanup consumers;
