@@ -68,6 +68,31 @@ def test_custom_codex_configuration_has_an_exact_shared_translation():
     assert configured["document"]["model_reasoning_effort"] == "high"
 
 
+def test_custom_provider_keeps_safe_project_values_without_another_key():
+    selected = profile()
+    selected.env_template["PROJECT_RUNTIME_STYLE"] = "  exact $(not-executed) literal  "
+    endpoint, reason = codex_provider_config_endpoint(selected)
+    assert endpoint is not None, reason
+    assert endpoint.secretRole == "provider_api_key"
+    assert endpoint.baseUrl == "https://api.minimax.io/v1"
+    assert endpoint.launchEnvironment == {"PROJECT_RUNTIME_STYLE": "  exact $(not-executed) literal  "}
+    assert endpoint.codexConfiguration["provider"]["env_key"] == "CUSTOM_MODEL_KEY"
+
+
+@pytest.mark.parametrize("extra", [
+    {"HOME": "/another-home"},
+    {"PROJECT_RUNTIME_STYLE": {"from_secret_ref": "another_key"}},
+    {"PROJECT_RUNTIME_STYLE": "{{workspace_path}}"},
+])
+def test_custom_provider_cannot_smuggle_other_authority_as_project_values(extra):
+    selected = profile()
+    selected.env_template.update(extra)
+    selected.secret_refs["another_key"] = "env://ANOTHER_KEY"
+    endpoint, reason = codex_provider_config_endpoint(selected)
+    assert endpoint is None
+    assert reason
+
+
 @pytest.mark.parametrize("suppress_model_default", [False, True])
 def test_plain_openai_key_preferences_do_not_require_another_provider_declaration(suppress_model_default):
     selected = profile(

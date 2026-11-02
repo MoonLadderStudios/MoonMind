@@ -353,9 +353,15 @@ def configuration_for_profile(profile):
         if (
             not isinstance(key_name, str)
             or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key_name)
-            or set(environment) != {key_name}
+            or key_name not in environment
         ):
             return None, "Codex config requires its exact declared key environment"
+        launch_environment = {key: value for key, value in environment.items() if key != key_name}
+        if any(not isinstance(value, str) or "{{" in value for value in launch_environment.values()):
+            return None, "Codex project environment requires literal nonsecret values"
+        from moonmind.omnigent.host_services.runtime_scripts import validate_provider_literal_launch_environment
+
+        launch_environment = validate_provider_literal_launch_environment(launch_environment)
         value = environment[key_name]
         if not isinstance(value, dict) or set(value) != {"from_secret_ref"}:
             return None, "Codex config key must come from a SecretRef"
@@ -382,6 +388,7 @@ def configuration_for_profile(profile):
             "secretRole": role,
             "managedRecipeRepaired": repaired,
             **({"additionalFiles": additional_files} if additional_files else {}),
+            **({"launchEnvironment": launch_environment} if launch_environment else {}),
         }, ""
     except (TypeError, ValueError, KeyError):
         return None, "Codex file templates contain invalid configuration"

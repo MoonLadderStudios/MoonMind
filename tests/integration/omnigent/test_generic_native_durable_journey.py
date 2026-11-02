@@ -1665,7 +1665,7 @@ async def test_admitted_oauth_environment_templates_use_the_attempt_context(nati
 
 @pytest.mark.parametrize("native_journey", [
     {"harness": harness, "apiKeyTuning": {"PROJECT_RUNTIME_STYLE": "  exact $(not-executed) literal  "}}
-    for harness in ("codex-native-api-key", "claude-native-api-key")
+    for harness in ("codex-native-api-key", "claude-native-api-key", "codex-native-file-config")
 ], indirect=True)
 async def test_admitted_api_key_shell_values_keep_the_selected_snapshot(native_journey):
     async with native_journey.session_factory() as session:
