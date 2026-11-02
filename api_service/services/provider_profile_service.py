@@ -18,6 +18,7 @@ from api_service.services.provider_profile_readiness import (
     provider_profile_launch_ready,
 )
 from moonmind.provider_profiles.model_tiers import coerce_model_effort_tier_policy
+from moonmind.provider_profiles.oauth_policy import oauth_home_path_keys
 from moonmind.utils.logging import redact_profile_file_templates, redact_sensitive_payload
 from moonmind.workflows.provider_failures import (
     ProviderFailureEvent,
@@ -379,14 +380,14 @@ FIRST_PARTY_OAUTH_PROFILES: dict[tuple[str, str], FirstPartyOAuthProfile] = {
         # The pinned Claude Code CLI ignores CLAUDE_HOME; CLAUDE_CONFIG_DIR
         # is the supported steering variable, so finalized profiles persist
         # both (and disconnect clears both).
-        home_path_keys=("CLAUDE_HOME", "CLAUDE_CONFIG_DIR"),
+        home_path_keys=oauth_home_path_keys("claude_code"),
     ),
     ("codex_cli", "openai"): FirstPartyOAuthProfile(
         runtime_id="codex_cli",
         provider_id="openai",
         label_prefix="Codex",
         auth_strategy="codex_credential_methods",
-        home_path_keys=("CODEX_HOME",),
+        home_path_keys=oauth_home_path_keys("codex_cli"),
     ),
 }
 

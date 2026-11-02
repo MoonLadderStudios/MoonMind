@@ -345,8 +345,27 @@ def untranslated_oauth_launch_options(profile: Any) -> str | None:
         or _enum_value(getattr(profile, "credential_source", None)) != "oauth_volume"
     ):
         return None
-    fields = [name for name in ("env_template", "file_templates", "home_path_overrides")
+    fields = [name for name in ("env_template", "file_templates")
               if getattr(profile, name, None)]
+    home_overrides = dict(getattr(profile, "home_path_overrides", None) or {})
+    if home_overrides:
+        # OAuth enrollment records these selectors even for an uncustomized
+        # Profile. The shared materializer attaches that same home at the
+        # canonical location; these values are equivalent, not extra settings.
+        from moonmind.provider_profiles.oauth_policy import oauth_home_path_keys
+
+        runtime = str(profile.runtime_id)
+        ref = _PROVIDER_MATERIALIZER_REFS.get((runtime, str(profile.provider_id)))
+        target = get_materializer(ref).target.get("path") if ref else None
+        if (
+            not target
+            or getattr(profile, "volume_mount_path", None) != target
+            or any(
+                key not in oauth_home_path_keys(runtime) or value != target
+                for key, value in home_overrides.items()
+            )
+        ):
+            fields.append("home_path_overrides")
     if fields:
         return "OAuth-home delivery does not apply per-run Profile settings: " + ", ".join(fields)
     return None

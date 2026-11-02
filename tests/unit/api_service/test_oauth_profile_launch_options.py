@@ -107,3 +107,50 @@ def test_recorded_oauth_materializer_identity_keeps_historical_delivery(
     profile, _ = profile_and_configuration(runtime, "v2")
     profile.env_template = {"RECORDED_NATIVE_OPTION": "retained"}
     assert materializer_ref_for_profile(profile) == expected
+
+
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code"])
+@pytest.mark.parametrize("schema", ["v1", "v2"])
+def test_connected_oauth_home_metadata_uses_the_shared_credential_home(runtime, schema):
+    from api_service.services.provider_profile_service import (
+        get_first_party_oauth_profile,
+        oauth_home_path_overrides,
+    )
+    from moonmind.omnigent.harness_platform.materializers import get_materializer
+
+    selected, configuration = profile_and_configuration(runtime, schema)
+    mapping = get_first_party_oauth_profile(runtime, selected.provider_id)
+    target = get_materializer(materializer_ref_for_profile(selected)).target["path"]
+    selected.volume_mount_path = target
+    selected.home_path_overrides = oauth_home_path_overrides(mapping, target)
+    before = deepcopy(vars(selected))
+
+    assert configuration_accepts_profile(configuration[1].document, selected)
+    assert not profile_has_native_inventory_route(selected, [configuration])
+    if schema == "v2":
+        assert _provider_materializer_error(configuration[1].document, selected) is None
+    assert vars(selected) == before
+
+
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code"])
+@pytest.mark.parametrize("schema", ["v1", "v2"])
+@pytest.mark.parametrize("customization", ["other-mount", "other-selector", "other-value", "unknown-provider"])
+def test_only_equivalent_connected_home_metadata_can_use_shared_delivery(runtime, schema, customization):
+    from moonmind.omnigent.harness_platform.materializers import get_materializer
+    from moonmind.provider_profiles.oauth_policy import oauth_home_path_keys
+
+    selected, configuration = profile_and_configuration(runtime, schema)
+    target = get_materializer(materializer_ref_for_profile(selected)).target["path"]
+    selected.volume_mount_path = target
+    key = oauth_home_path_keys(runtime)[0]
+    selected.home_path_overrides = {key: target}
+    if customization == "other-mount":
+        selected.volume_mount_path = "/custom/credential-home"
+    elif customization == "other-selector":
+        selected.home_path_overrides = {"HOME": target}
+    elif customization == "other-value":
+        selected.home_path_overrides[key] = "/custom/credential-home"
+    else:
+        selected.provider_id = "unregistered-provider"
+    assert not configuration_accepts_profile(configuration[1].document, selected)
+    assert profile_has_native_inventory_route(selected, [configuration])
