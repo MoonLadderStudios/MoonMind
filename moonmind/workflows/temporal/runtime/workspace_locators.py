@@ -633,6 +633,9 @@ def daemon_visible_workspace_path(
     inferred from whether a daemon root is configured, preserving the prior
     behavior. Translation only ever runs at this trusted worker/runtime boundary,
     after authorization and materialization.
+
+    Resolve worker paths for containment, but do not follow worker filesystem
+    symlinks when interpreting the separately owned daemon root.
     """
     worker_root_text = os.getenv("WORKFLOW_WORKSPACE_ROOT", "").strip()
     daemon_root_text = str(
@@ -675,7 +678,7 @@ def daemon_visible_workspace_path(
         raise WorkspaceLocatorResolutionError(
             WORKSPACE_AUTHORITY_MISMATCH, "workspace is outside the daemon mapping authority"
         )
-    return Path(daemon_root_text).resolve() / resolved.relative_to(worker_root)
+    return Path(daemon_root_text).absolute() / resolved.relative_to(worker_root)
 
 
 class ManagedRunRecord(Protocol):
