@@ -33,7 +33,9 @@ from temporalio.testing import ActivityEnvironment, WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from tests.artifact_access import access_for_test
-from api_service.services.omnigent_execution_plan_service import PersistedOmnigentExecutionPlan
+from api_service.services.omnigent_execution_plan_service import (
+    PersistedOmnigentExecutionPlan,
+)
 from api_service.api.routers.executions import _get_service, get_temporal_client, router
 from api_service.db import base as db_base
 from api_service.db.models import (
@@ -994,9 +996,9 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event(
         taskInputSnapshotDigest=input_digest,
     )
     compiled_plan = PersistedOmnigentExecutionPlan(
-                        artifact_access=access_for_test("operator"),
-                        resolved_skillset_digest="sha256:" + "d" * 64,
-                        envelope=SimpleNamespace(),
+        artifact_access=access_for_test("operator"),
+        resolved_skillset_digest="sha256:" + "d" * 64,
+        envelope=SimpleNamespace(),
         binding=plan_binding,
         artifact_refs=(
             profile_ref,
