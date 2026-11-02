@@ -54,6 +54,27 @@ from moonmind.workflows.temporal.artifacts import (
 )
 
 
+# These settings already have consumers on both launch paths. Unknown native
+# options remain with their current adapter until their behavior is translated.
+_LAUNCH_PARAMETER_KEYS = frozenset({
+    "requiredCapabilities", "githubOperations", "publishMode", "commitMessage",
+    "publishBaseBranch", "repository",
+})
+_MODEL_SELECTION_KEYS = frozenset({"model", "effort", "modelTierResolution", "metadata"})
+
+
+def _with_frozen_launch_parameters(parameters, saved):
+    result = deepcopy(dict(parameters or {}))
+    if saved is None:
+        return result
+    if not isinstance(saved, Mapping) or not set(saved) <= _LAUNCH_PARAMETER_KEYS:
+        raise ValueError("recorded pool launch parameters are invalid")
+    for key in _LAUNCH_PARAMETER_KEYS:
+        result.pop(key, None)
+    result.update(deepcopy(dict(saved)))
+    return result
+
+
 def _request_digest(request, original_profile):
     body = {
         "request": request.model_dump(
@@ -69,22 +90,7 @@ def _request_digest(request, original_profile):
     )
 
 
-def _shared_request(request, *, snapshot, binding, plan, skill_ref, model_resolution=None):
-    parameters = compile_agent_profile_snapshot_parameters(
-        request.parameters, snapshot=snapshot
-    )
-    # Runtime requests carry the verified artifact binding, as the ordinary
-    # UserWorkflow compiler does; the complete credential-policy document
-    # stays in its persisted snapshot rather than a generic parameters map.
-    parameters.pop("agentProfileSnapshot", None)
-    parameters.update(
-        targetRuntime="omnigent",
-        profileId=request.execution_profile_ref,
-        model=plan.payload.modelConfig.qualifiedId,
-        effort=plan.payload.modelConfig.effort,
-        omnigentExecutionPlan=binding.model_dump(mode="json", by_alias=True),
-        resolvedSkillsetRef=skill_ref,
-    )
+def _apply_model_resolution(parameters, model_resolution, profile_id):
     if isinstance(model_resolution, Mapping):
         metadata = deepcopy(parameters.get("metadata") or {})
         if not isinstance(metadata, dict):
@@ -98,10 +104,32 @@ def _shared_request(request, *, snapshot, binding, plan, skill_ref, model_resolu
         if model_resolution.get("effectiveModelTier") is not None:
             parameters["modelTierResolution"] = {
                 **deepcopy(dict(model_resolution)),
-                "providerProfileId": request.execution_profile_ref,
+                "providerProfileId": profile_id,
             }
         else:
             parameters.pop("modelTierResolution", None)
+
+
+def _shared_request(
+    request, *, snapshot, binding, plan, skill_ref, model_resolution=None,
+    launch_parameters=None,
+):
+    parameters = compile_agent_profile_snapshot_parameters(
+        _with_frozen_launch_parameters(request.parameters, launch_parameters), snapshot=snapshot,
+    )
+    # Runtime requests carry the verified artifact binding, as the ordinary
+    # UserWorkflow compiler does; the complete credential-policy document
+    # stays in its persisted snapshot rather than a generic parameters map.
+    parameters.pop("agentProfileSnapshot", None)
+    parameters.update(
+        targetRuntime="omnigent",
+        profileId=request.execution_profile_ref,
+        model=plan.payload.modelConfig.qualifiedId,
+        effort=plan.payload.modelConfig.effort,
+        omnigentExecutionPlan=binding.model_dump(mode="json", by_alias=True),
+        resolvedSkillsetRef=skill_ref,
+    )
+    _apply_model_resolution(parameters, model_resolution, request.execution_profile_ref)
     parameters["omnigent"] = deepcopy(parameters.get("omnigent") or {})
     parameters["omnigent"]["prompt"] = {
         **parameters["omnigent"].get("prompt", {}),
@@ -321,18 +349,30 @@ async def prepare_selected_pool_plan(
         resolution = (
             (selected.parameters.get("metadata") or {}).get("moonmind") or {}
         ).get("modelEffortResolution") or {}
-        if resolution.get("tierParameterDefaults") or (
-            selected.parameters.get("runtime") or {}
-        ).get("parameters"):
-            return {
-                "disposition": "native",
-                "reason": "native_parameter_defaults_require_an_equivalent_handoff",
-            }
         if selected.parameters.get("envOverrides"):
             return {
                 "disposition": "native",
                 "reason": "native_environment_overrides_require_their_current_adapter",
             }
+        changed_parameters = {
+            key for key in set(selected.parameters) | set(request.parameters)
+            if (key in selected.parameters) != (key in request.parameters)
+            or selected.parameters.get(key) != request.parameters.get(key)
+        }
+        expected_model_parameters = deepcopy(request.parameters)
+        _apply_model_resolution(expected_model_parameters, resolution, profile_id)
+        if (
+            changed_parameters - _LAUNCH_PARAMETER_KEYS - _MODEL_SELECTION_KEYS
+            or selected.parameters.get("metadata") != expected_model_parameters.get("metadata")
+        ):
+            return {
+                "disposition": "native",
+                "reason": "native_parameter_defaults_require_an_equivalent_handoff",
+            }
+        launch_parameters = {
+            key: deepcopy(selected.parameters[key])
+            for key in _LAUNCH_PARAMETER_KEYS if key in selected.parameters
+        }
         snapshot = await resolve_default_agent_profile_snapshot(
             session,
             provider_profile_ref=profile_id,
@@ -342,18 +382,8 @@ async def prepare_selected_pool_plan(
             user=None,
         )
         parameters = compile_agent_profile_snapshot_parameters(
-            canonical.parameters or {}, snapshot=snapshot
+            _with_frozen_launch_parameters(canonical.parameters, launch_parameters), snapshot=snapshot,
         )
-        for key in (
-            "requiredCapabilities",
-            "githubOperations",
-            "publishMode",
-            "commitMessage",
-            "publishBaseBranch",
-            "repository",
-        ):
-            if key in selected.parameters:
-                parameters[key] = deepcopy(selected.parameters[key])
         parameters.update(
             model=selected.parameters.get("model"),
             effort=selected.parameters.get("effort"),
@@ -402,6 +432,7 @@ async def prepare_selected_pool_plan(
             "binding": binding.model_dump(mode="json", by_alias=True),
             "resolvedSkillsetRef": skill_ref,
             "modelResolution": deepcopy(resolution),
+            "launchParameters": launch_parameters,
         }
     result = bind_selected_pool_plan(
         lease,
@@ -422,6 +453,7 @@ async def prepare_selected_pool_plan(
     shared = _shared_request(
         request, snapshot=snapshot, binding=binding, plan=plan, skill_ref=skill_ref,
         model_resolution=saved.get("modelResolution"),
+        launch_parameters=saved.get("launchParameters"),
     )
     await session.commit()
     return {
