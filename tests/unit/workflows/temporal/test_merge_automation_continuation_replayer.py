@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -32,17 +32,27 @@ async def _ready(_payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@activity.defn(name="merge_automation.request_automated_review")
+async def _posted_review(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": "requested",
+        "provider": "codex",
+        "headSha": payload["expectedHeadSha"],
+        "requestCommentId": 98765,
+        "requestedAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 @workflow.defn(name="MoonMind.UserWorkflow")
 class _RecordedResolverChild:
     @workflow.run
     async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
         initial = payload.get("initial_parameters", {})
-        scenario = str(
-            initial.get("task", {}).get("runtime", {}).get("model") or ""
-        )
+        scenario = str(initial.get("task", {}).get("runtime", {}).get("model") or "")
         info = workflow.info()
         cycle = int(info.workflow_id.rsplit(":", 1)[-1])
-        if cycle > 1 and scenario != "repeated_wait":
+        first_review_scenario = scenario in {"old_ci_then_review", "new_ci_then_review"}
+        if cycle > (3 if first_review_scenario else 1) and scenario != "repeated_wait":
             return {
                 "status": "success",
                 "mergeAutomationDisposition": "merged",
@@ -69,6 +79,20 @@ class _RecordedResolverChild:
         }
         if scenario in {"new_timed", "repeated_wait"}:
             continuation["retryAfterSeconds"] = 2
+        if first_review_scenario:
+            continuation.update(
+                reason="ci_signal_degraded",
+                retryAfterSeconds=2,
+                progressSignature="abcdef1||",
+            )
+            if cycle == 3:
+                continuation.pop("retryAfterSeconds")
+                continuation.update(
+                    schemaVersion="gated-continuation/v2",
+                    action="request_review",
+                    provider="codex",
+                    reason="fresh_review_required_after_remediation",
+                )
         if scenario == "rejected":
             top_level_child_run_id = "forged-run"
         else:
@@ -76,7 +100,7 @@ class _RecordedResolverChild:
         return {
             "status": "success",
             "completionDisposition": "gated_continuation",
-            "mergeAutomationDisposition": "reenter_gate",
+            "mergeAutomationDisposition": continuation["action"],
             "headSha": "abcdef1",
             "executionRef": "step:resolver:1",
             "childRunId": top_level_child_run_id,
@@ -130,6 +154,17 @@ class _PreConflictRepairWithoutCIGate(MoonMindMergeAutomationWorkflow):
         return await super().run(payload)
 
 
+@workflow.defn(name="MoonMind.MergeAutomation")
+class _PreFirstReviewProgressGate(MoonMindMergeAutomationWorkflow):
+    @staticmethod
+    def _first_review_progress_enabled() -> bool:
+        return False
+
+    @workflow.run
+    async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return await super().run(payload)
+
+
 @workflow.defn(name="MoonMind.UserWorkflow")
 class _ReadinessFixtureResolver:
     @workflow.run
@@ -157,7 +192,10 @@ def _payload(scenario: str) -> dict[str, Any]:
         },
         "mergeAutomationConfig": {
             "timeouts": {"fallbackPollSeconds": 2},
-            "reviewLoop": {"enabled": scenario == "repeated_wait", "maxConsecutiveNoProgressCycles": 2},
+            "reviewLoop": {
+                "enabled": scenario == "repeated_wait",
+                "maxConsecutiveNoProgressCycles": 2,
+            },
         },
         "resolverTemplate": {"model": scenario},
     }
@@ -172,6 +210,8 @@ def _payload(scenario: str) -> dict[str, Any]:
         ("legacy_untimed", "merged"),
         ("rejected", "failed"),
         ("repeated_wait", "blocked"),
+        ("old_ci_then_review", "blocked"),
+        ("new_ci_then_review", "merged"),
     ],
 )
 @pytest.mark.parametrize("publication_memo_enabled", [False, True])
@@ -218,9 +258,23 @@ async def test_continuation_histories_replay_deterministically(
     # Record the pre-admission producer, then replay with current child admission.
     # Existing parent histories must survive the added child-input metadata.
     current_admit_input = module.admit_user_workflow_input
-    monkeypatch.setattr(module, "admit_user_workflow_input", lambda _type, payload: payload)
+    monkeypatch.setattr(
+        module, "admit_user_workflow_input", lambda _type, payload: payload
+    )
     child_queue = module.settings.temporal.user_workflow_v2_task_queue
     parent_queue = "mm1209-merge-replay"
+    parent_workflow = (
+        _PreFirstReviewProgressGate
+        if scenario == "old_ci_then_review"
+        else MoonMindMergeAutomationWorkflow
+    )
+    payload = _payload(scenario)
+    if scenario in {"old_ci_then_review", "new_ci_then_review"}:
+        payload["mergeAutomationConfig"]["reviewLoop"].update(
+            enabled=True,
+            provider="codex",
+            maxCycles=5,
+        )
     async with await WorkflowEnvironment.start_time_skipping() as env:
         await env.client.operator_service.add_search_attributes(
             AddSearchAttributesRequest(
@@ -238,7 +292,7 @@ async def test_continuation_histories_replay_deterministically(
             Worker(
                 env.client,
                 task_queue=INTEGRATIONS_TASK_QUEUE,
-                activities=[_ready],
+                activities=[_ready, _posted_review],
             ),
             Worker(
                 env.client,
@@ -249,13 +303,13 @@ async def test_continuation_histories_replay_deterministically(
             Worker(
                 env.client,
                 task_queue=parent_queue,
-                workflows=[MoonMindMergeAutomationWorkflow],
+                workflows=[parent_workflow],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ),
         ):
             handle = await env.client.start_workflow(
-                MoonMindMergeAutomationWorkflow.run,
-                _payload(scenario),
+                parent_workflow.run,
+                payload,
                 id=f"mm1209-{scenario}",
                 task_queue=parent_queue,
                 execution_timeout=timedelta(minutes=2),
