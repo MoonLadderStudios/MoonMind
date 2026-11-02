@@ -19,8 +19,9 @@ from tests.unit.workflows.temporal.workflows.test_agent_run_omnigent_capacity_ad
 @pytest.mark.asyncio
 @pytest.mark.parametrize("runtime", ["codex_cli", "claude_code"])
 @pytest.mark.parametrize("cooldown", [False, True])
+@pytest.mark.parametrize("account_selection", ["pool", "fixed", "implicit"])
 async def test_pool_step_uses_shared_loop_and_preserves_retry_authority(
-    monkeypatch, runtime, cooldown
+    monkeypatch, runtime, cooldown, account_selection
 ):
     _configure_workflow_runtime(monkeypatch)
     run = MoonMindAgentRun()
@@ -28,7 +29,8 @@ async def test_pool_step_uses_shared_loop_and_preserves_retry_authority(
     request = AgentExecutionRequest(
         agentKind="managed",
         agentId=runtime,
-        profileSelector={"tagsAll": ["selected-pool"]},
+        profileSelector={"tagsAll": ["selected-pool"]} if account_selection == "pool" else {},
+        executionProfileRef="selected-account" if account_selection == "fixed" else None,
         correlationId="parent",
         idempotencyKey="accepted-step",
         instructionRef="Preserve the accepted task.",
@@ -172,7 +174,8 @@ async def test_pool_step_uses_shared_loop_and_preserves_retry_authority(
         for item in executions
     )
     assert all(
-        item.profile_selector.tags_all == ["selected-pool"] for item in executions
+        item.profile_selector.tags_all == (["selected-pool"] if account_selection == "pool" else [])
+        for item in executions
     )
     assert all(
         item.instruction_ref == request.instruction_ref
@@ -185,3 +188,52 @@ async def test_pool_step_uses_shared_loop_and_preserves_retry_authority(
     assert len([name for name, _ in signals if name == "report_cooldown"]) == int(
         cooldown
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("has_shared_context", [False, True])
+async def test_untranslated_settings_cannot_drop_an_admitted_shared_context(
+    monkeypatch, has_shared_context,
+):
+    from temporalio.exceptions import ApplicationError
+
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    run._assigned_slot_fencing_generation = 7
+    context = {
+        "workflowId": "parent", "runId": "parent-run",
+        "stepExecutionId": "parent:parent-run:previous:execution:1",
+        "epoch": "previous", "runtimeBindingRef": "omnigent-runtime-binding:sha256:" + "a" * 64,
+    }
+    request = AgentExecutionRequest(
+        agentKind="managed", agentId="codex_cli", executionProfileRef="selected-account",
+        correlationId="parent", idempotencyKey="next-step",
+        stepExecution={
+            "workflowId": "parent", "runId": "parent-run", "logicalStepId": "next",
+            "executionOrdinal": 1, "stepExecutionId": "parent:parent-run:next:execution:1",
+            "runtimeContextPolicy": "reuse_session_same_epoch" if has_shared_context else "fresh_agent_run",
+            **({"runtimeSessionContext": context} if has_shared_context else {}),
+        },
+    )
+
+    async def signal(_name, payload):
+        run.pool_plan_prepared({
+            "requestId": payload["request"]["idempotencyKey"],
+            "fencingGeneration": payload["fencing_generation"],
+            "disposition": "native", "reason": "untranslated_profile_options",
+        })
+
+    async def wait_condition(predicate, **kwargs):
+        assert predicate()
+
+    monkeypatch.setattr(module.workflow, "wait_condition", wait_condition)
+    call = run._prepare_selected_pool_shared_request(
+        request=request, runtime_id="codex_cli", manager_handle=SimpleNamespace(signal=signal),
+        original_profile_ref="selected-account",
+    )
+    if has_shared_context:
+        with pytest.raises(ApplicationError, match="shared context"):
+            await call
+        assert request.step_execution.runtime_session_context.runtime_binding_ref == context["runtimeBindingRef"]
+    else:
+        assert await call is request

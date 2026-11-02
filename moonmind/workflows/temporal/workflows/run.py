@@ -799,6 +799,7 @@ RUN_WORKFLOW_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH = (
 )
 RUN_SHARED_RUNTIME_CONTEXT_PATCH = "run-shared-native-context-continuation-v1"
 RUN_DISPATCH_POOL_CONTEXT_PATCH = "run-dispatch-pool-shared-context-v1"
+RUN_DISPATCH_FIXED_CONTEXT_PATCH = "run-dispatch-fixed-shared-context-v1"
 RUN_WORKFLOW_SCOPED_SESSION_CLEAR_PER_EXECUTION_PATCH = (
     "run-task-scoped-session-clear-per-execution-v2"
 )
@@ -17698,21 +17699,26 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 refs["agentRunId"] = agent_run_id
         return refs
 
+    def _uses_dispatch_shared_plan(self, request: AgentExecutionRequest) -> bool:
+        if not (
+            request.agent_kind == "managed"
+            and str(request.agent_id).strip().lower().replace("-", "_")
+            in {"codex", "codex_cli", "claude", "claude_code"}
+        ):
+            return False
+        if has_profile_selector(
+            {"profileSelector": request.profile_selector.model_dump(by_alias=True)}
+        ):
+            return workflow.patched(RUN_DISPATCH_POOL_CONTEXT_PATCH)
+        return workflow.patched(RUN_DISPATCH_FIXED_CONTEXT_PATCH)
+
     def _bind_shared_runtime_context(
         self, request: AgentExecutionRequest
     ) -> AgentExecutionRequest:
         if not workflow.patched(RUN_SHARED_RUNTIME_CONTEXT_PATCH):
             return request
         step = request.step_execution
-        pool_request = (
-            request.agent_kind == "managed"
-            and str(request.agent_id).strip().lower().replace("-", "_")
-            in {"codex", "codex_cli", "claude", "claude_code"}
-            and has_profile_selector(
-                {"profileSelector": request.profile_selector.model_dump(by_alias=True)}
-            )
-        )
-        pool_handoff = pool_request and workflow.patched(RUN_DISPATCH_POOL_CONTEXT_PATCH)
+        pool_handoff = self._uses_dispatch_shared_plan(request)
         pool_context_handoff = (
             pool_handoff and self._managed_session_runtime_id(request) == "codex_cli"
         )
@@ -17792,11 +17798,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         pool_request = (
             request.agent_kind == "managed"
             and self._managed_session_runtime_id(request) == "codex_cli"
-            and has_profile_selector(
-                {"profileSelector": request.profile_selector.model_dump(by_alias=True)}
-            )
             and (pool_receipt is not None or older_shared_receipt)
-            and workflow.patched(RUN_DISPATCH_POOL_CONTEXT_PATCH)
+            and self._uses_dispatch_shared_plan(request)
         )
         if request.step_execution is None or not (
             pool_request

@@ -2,12 +2,15 @@
 
 import pytest
 from temporalio import workflow
+from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.workflows.agent_run import (
     AGENT_RUN_POOL_PARENT_HANDOFF_PATCH_ID,
+    AGENT_RUN_SELECTED_FIXED_SHARED_PLAN_PATCH_ID,
+    AGENT_RUN_UNTRANSLATED_SHARED_CONTEXT_PATCH_ID,
     AGENT_RUN_SELECTED_POOL_SHARED_PLAN_PATCH_ID,
     MoonMindAgentRun,
 )
@@ -33,6 +36,22 @@ class _BeforeParentHandoff(MoonMindAgentRun):
         return MoonMindAgentRun._workflow_patch_enabled(marker)
 
 
+class _BeforeFixedHandoff(MoonMindAgentRun):
+    @staticmethod
+    def _workflow_patch_enabled(marker):
+        if marker == AGENT_RUN_SELECTED_FIXED_SHARED_PLAN_PATCH_ID:
+            return False
+        return MoonMindAgentRun._workflow_patch_enabled(marker)
+
+
+class _BeforeContextFallback(MoonMindAgentRun):
+    @staticmethod
+    def _workflow_patch_enabled(marker):
+        if marker == AGENT_RUN_UNTRANSLATED_SHARED_CONTEXT_PATCH_ID:
+            return False
+        return MoonMindAgentRun._workflow_patch_enabled(marker)
+
+
 @workflow.defn
 class _PreparationTransport:
     def __init__(self):
@@ -41,6 +60,7 @@ class _PreparationTransport:
     @workflow.signal
     async def prepare_shared_execution_plan(self, payload):
         request = dict(payload["request"])
+        native_fallback = request["parameters"].get("native_fallback_fixture", False)
         request.update(
             agentKind="external",
             agentId="omnigent",
@@ -52,7 +72,7 @@ class _PreparationTransport:
         ).signal(
             "pool_plan_prepared",
             {
-                "disposition": "shared",
+                "disposition": "native" if native_fallback else "shared",
                 "request": request,
                 "requestId": request["idempotencyKey"],
                 "fencingGeneration": payload["fencing_generation"],
@@ -70,6 +90,8 @@ class _PreparationTransport:
 
 class _PoolFixture:
     implementation = MoonMindAgentRun
+    fixed_account = False
+    native_fallback = False
 
     def __init__(self):
         self.agent = self.implementation()
@@ -83,10 +105,11 @@ class _PoolFixture:
             agentKind="managed",
             agentId="codex_cli",
             executionProfileRef="selected-account",
-            profileSelector={"tagsAll": ["pool"]},
+            profileSelector={} if self.fixed_account else {"tagsAll": ["pool"]},
             correlationId="parent",
             idempotencyKey="request-1",
             instructionRef="Preserve the accepted task.",
+            parameters={"native_fallback_fixture": self.native_fallback},
             stepExecution={
                 "workflowId": "parent",
                 "runId": "parent-run",
@@ -101,21 +124,35 @@ class _PoolFixture:
             RUN_SHARED_RUNTIME_CONTEXT_PATCH,
         )
 
-        if self.implementation is not MoonMindAgentRun:
+        if self.implementation is not MoonMindAgentRun and not self.native_fallback:
             workflow.patched(RUN_SHARED_RUNTIME_CONTEXT_PATCH)
         else:
             request = MoonMindUserWorkflow()._bind_shared_runtime_context(request)
         self.agent._assigned_profile_id = request.execution_profile_ref
         self.agent._assigned_slot_fencing_generation = 7
-        if self.agent._uses_selected_pool_shared_admission(request, "codex_cli"):
-            request = await self.agent._prepare_selected_pool_shared_request(
-                request=request,
-                runtime_id="codex_cli",
-                original_profile_ref=None,
-                manager_handle=workflow.get_external_workflow_handle(
-                    "pool-preparation-transport"
-                ),
+        if self.native_fallback:
+            request.step_execution.runtime_context_policy = "reuse_session_same_epoch"
+            from moonmind.schemas.agent_runtime_models import RuntimeSessionContextReference
+
+            request.step_execution.runtime_session_context = RuntimeSessionContextReference(
+                workflowId="parent", runId="parent-run",
+                stepExecutionId="parent:parent-run:previous:execution:1", epoch="previous",
+                runtimeBindingRef="omnigent-runtime-binding:sha256:" + "a" * 64,
             )
+        if self.agent._uses_selected_pool_shared_admission(request, "codex_cli"):
+            try:
+                request = await self.agent._prepare_selected_pool_shared_request(
+                    request=request,
+                    runtime_id="codex_cli",
+                    original_profile_ref=None,
+                    manager_handle=workflow.get_external_workflow_handle(
+                        "pool-preparation-transport"
+                    ),
+                )
+            except ApplicationError as error:
+                assert self.native_fallback
+                assert error.type == "SelectedProfileSharedContextUnavailable"
+                return "blocked-shared-context"
         await workflow.sleep(1)
         return request.agent_id
 
@@ -145,6 +182,44 @@ class _ConvertedLegacyFixture(_PoolFixture):
         return await self.execute()
 
 
+@workflow.defn(name="SelectedFixedPlanReplayFixture")
+class _LegacyFixedFixture(_PoolFixture):
+    implementation = _BeforeFixedHandoff
+    fixed_account = True
+
+    @workflow.run
+    async def run(self):
+        return await self.execute()
+
+
+@workflow.defn(name="SelectedFixedPlanReplayFixture")
+class _CurrentFixedFixture(_PoolFixture):
+    fixed_account = True
+
+    @workflow.run
+    async def run(self):
+        return await self.execute()
+
+
+@workflow.defn(name="SharedContextFallbackReplayFixture")
+class _LegacyContextFallbackFixture(_PoolFixture):
+    implementation = _BeforeContextFallback
+    native_fallback = True
+
+    @workflow.run
+    async def run(self):
+        return await self.execute()
+
+
+@workflow.defn(name="SharedContextFallbackReplayFixture")
+class _CurrentContextFallbackFixture(_PoolFixture):
+    native_fallback = True
+
+    @workflow.run
+    async def run(self):
+        return await self.execute()
+
+
 @pytest.mark.asyncio
 async def test_retained_native_and_shared_pool_handoffs_replay():
     histories = []
@@ -168,6 +243,10 @@ async def test_retained_native_and_shared_pool_handoffs_replay():
                     "omnigent",
                 ),
                 ("current", _CurrentFixture, "omnigent"),
+                ("retained-fixed", _LegacyFixedFixture, "codex_cli"),
+                ("current-fixed", _CurrentFixedFixture, "omnigent"),
+                ("retained-context-fallback", _LegacyContextFallbackFixture, "codex_cli"),
+                ("current-context-fallback", _CurrentContextFallbackFixture, "blocked-shared-context"),
             ):
                 queue = f"pool-replay-{label}"
                 async with Worker(
@@ -188,7 +267,8 @@ async def test_retained_native_and_shared_pool_handoffs_replay():
             await manager.signal("finish")
             await manager.result()
     replayer = Replayer(
-        workflows=[_CurrentFixture], workflow_runner=UnsandboxedWorkflowRunner()
+        workflows=[_CurrentFixture, _CurrentFixedFixture, _CurrentContextFallbackFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
     )
     for history in histories:
         await replayer.replay_workflow(history)

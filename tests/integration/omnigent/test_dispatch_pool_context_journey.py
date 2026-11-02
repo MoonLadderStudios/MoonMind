@@ -33,12 +33,13 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integrat
 
 
 @pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
+@pytest.mark.parametrize("fixed_serialized", [False, True], ids=["pool", "fixed-serialized"])
 async def test_pool_context_survives_source_host_and_worker_cleanup(
-    native_journey, monkeypatch
+    native_journey, monkeypatch, fixed_serialized
 ):
     journey = native_journey
     first = await pool.execute_selected_pool_source(
-        journey, monkeypatch, include_successor=True
+        journey, monkeypatch, include_successor=True, fixed_serialized=fixed_serialized,
     )
     child = MoonMindAgentRun()
     child._pool_native_request = first.selected

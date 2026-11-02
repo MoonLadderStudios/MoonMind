@@ -282,7 +282,12 @@ Preparation retries reuse the plan and recorded Skill manifest without another
 account choice or capacity unit. Codex same-epoch successors carry the selected
 account, durable context and verified saved workspace through the parent,
 including Continue-As-New. Old parents without this handoff keep native dispatch.
+Fresh native steps with equivalent configuration use this same fenced handoff
+after fixed, implicit or pool account selection, without rewriting their stored
+submission. Older parents without the handoff retain their recorded commands.
 Untranslated native context/workspaces and tier parameters retain their adapter.
+An admitted shared context cannot fall back to a fresh direct session when a
+later Profile edit introduces unsupported settings; the step reports that gap.
 Fixed step accounts, harnesses and distinct model/effort pairs have
 their own immutable plans compiled by the same admission owner, linked
 through the existing artifact owner and carried across successor attempts.
