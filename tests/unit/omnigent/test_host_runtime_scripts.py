@@ -88,7 +88,9 @@ def test_profile_environment_template_cannot_replace_an_existing_value():
 
 @pytest.mark.parametrize("harness", ["codex", "claude"])
 @pytest.mark.parametrize("deployment_setting", [False, True])
-def test_profile_shell_value_survives_the_native_executable_boundary(tmp_path, harness, deployment_setting, monkeypatch):
+@pytest.mark.parametrize("delivery", ["oauth-home", "provider-config"])
+@pytest.mark.parametrize("literal", ["exact value; $(not-executed)", "  exact value; $(not-executed)  "])
+def test_profile_shell_value_survives_the_native_executable_boundary(tmp_path, harness, deployment_setting, delivery, literal, monkeypatch):
     if deployment_setting:
         monkeypatch.setenv("MOONMIND_MANAGED_SESSION_NON_SECRET_ENV_KEYS", "PROJECT_RUNTIME_STYLE")
         monkeypatch.setenv("PROJECT_RUNTIME_STYLE", "deployment-default")
@@ -115,8 +117,8 @@ def test_profile_shell_value_survives_the_native_executable_boundary(tmp_path, h
     omnigent.chmod(0o700)
     script, environment = OmnigentRuntimeScriptService().build_entrypoint(
         credential_handles=[{
-            "credentialGeneration": 3, "materializerRef": f"{harness}-oauth-home@1",
-            "attachments": [], "runtimeEnvironment": {"PROJECT_RUNTIME_STYLE": "exact value; $(not-executed)"},
+            "credentialGeneration": 3, "materializerRef": f"{harness}-oauth-home@1" if delivery == "oauth-home" else "omnigent-provider-config@1",
+            "attachments": [], "runtimeEnvironment": {"PROJECT_RUNTIME_STYLE": literal},
         }],
         skill_attachment={"targetPath": str(skills)},
         step_execution_id="workflow:run:work:execution:1",
@@ -132,7 +134,7 @@ def test_profile_shell_value_survives_the_native_executable_boundary(tmp_path, h
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
-        "value":"exact value; $(not-executed)",
+        "value":literal,
         "home":"/private/native-home", "codex_home":"/private/native-codex-home",
     }
     assert "exact value" not in script
