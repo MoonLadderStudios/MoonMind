@@ -802,6 +802,7 @@ RUN_WORKFLOW_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH = (
 RUN_SHARED_RUNTIME_CONTEXT_PATCH = "run-shared-native-context-continuation-v1"
 RUN_DISPATCH_POOL_CONTEXT_PATCH = "run-dispatch-pool-shared-context-v1"
 RUN_DISPATCH_FIXED_CONTEXT_PATCH = "run-dispatch-fixed-shared-context-v1"
+RUN_DISPATCH_CHECKPOINT_SOURCE_PATCH = "run-dispatch-checkpoint-source-v1"
 RUN_WORKFLOW_SCOPED_SESSION_CLEAR_PER_EXECUTION_PATCH = (
     "run-task-scoped-session-clear-per-execution-v2"
 )
@@ -17772,6 +17773,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 workspace["workspaceCheckpointRestoreRef"] = (
                     receipt.workspace_checkpoint_restore_ref
                 )
+                if (
+                    (workspace.get("workspaceSource") or {}).get("kind") == "scratch"
+                    and workflow.patched(RUN_DISPATCH_CHECKPOINT_SOURCE_PATCH)
+                ):
+                    # A continuation restores saved work instead of creating
+                    # the scratch source inherited from its first step.
+                    workspace.pop("workspaceSource")
             updates.update(
                 workspace_spec=workspace,
                 execution_profile_ref=receipt.execution_profile_ref,

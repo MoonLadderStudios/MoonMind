@@ -283,7 +283,8 @@ model-resolution evidence without another account choice or capacity unit. Later
 Profile edits cannot change that evidence; ordinary explicit metadata keeps its
 existing precedence over tier defaults. Codex same-epoch successors carry the selected
 account, durable context and verified saved workspace through the parent,
-including Continue-As-New. Old parents without this handoff keep native dispatch.
+including Continue-As-New. Restoring that workspace replaces its inherited
+scratch source. Old parents without this handoff keep native dispatch.
 Fresh native steps with equivalent configuration use this same fenced handoff
 after fixed, implicit or pool account selection, without rewriting their stored
 submission. Older parents without the handoff retain their recorded commands.
@@ -319,8 +320,9 @@ Replaced defaults never select ambient credentials.
 OAuth-home delivery attaches the enrollment-owned volume. Codex/Claude nonsecret
 shell settings use the existing project-value guard and admitted configuration
 artifact; native executable wrappers restore them after child environment filtering
-without overriding private HOME or editing the enrolled home. Protected environment,
-file or HOME choices retain their native adapter until an equivalent handoff exists.
+without overriding private HOME or editing the enrolled home. Templated or protected
+environment, file or HOME choices retain their native adapter until an equivalent
+handoff exists.
 Recorded plans retain their original materializer identity.
 Profile-bound execution and its OAuth host launcher admit no new plans;
 they retain queued starts, retries and cleanup under their recorded authority. Supported

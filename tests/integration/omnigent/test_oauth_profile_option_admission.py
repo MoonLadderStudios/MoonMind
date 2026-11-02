@@ -49,6 +49,7 @@ session_factory = native_fixture.session_factory
         "requested_model_tier",
         "claude_oauth_tuning",
         "shell_environment",
+        "templated_environment",
     ],
 )
 async def test_product_creation_preserves_the_exact_oauth_profile_options(
@@ -76,6 +77,7 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
         "requested_model_tier": {journey.server.model: "unwanted-alias-target"},
         "claude_oauth_tuning": {"API_TIMEOUT_MS": "300000"},
         "shell_environment": {"PROJECT_RUNTIME_STYLE": "accepted-style"},
+        "templated_environment": {"REPORT_DIR": "{{workspace_path}}/reports"},
     }
     inventory = await OmnigentHttpClient(base_url=resolved_server_url()).list_agents()
     async with journey.session_factory() as session:
@@ -86,7 +88,9 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
         )
         field = (
             "env_template"
-            if option in {"claude_oauth_tuning", "shell_environment"}
+            if option in {
+                "claude_oauth_tuning", "shell_environment", "templated_environment"
+            }
             else option
             if option in {"env_template", "file_templates", "home_path_overrides"}
             else "model_overrides"

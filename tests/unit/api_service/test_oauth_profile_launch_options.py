@@ -62,6 +62,8 @@ def profile_and_configuration(runtime, schema, **options):
     "customization",
     [
         {"env_template": {"OMNIGENT_SERVER_URL": "http://unselected-control-owner"}},
+        {"env_template": {"REPORT_DIR": "{{workspace_path}}/reports"}},
+        {"env_template": {"REPORT_DIR": "{{ runtime_support_dir }}/reports"}},
         {
             "file_templates": [
                 {
