@@ -8,6 +8,7 @@ from api_service.services.profile_execution_selection import (
     profile_has_native_inventory_route,
     select_execution_configuration,
 )
+from tests.helpers.provider_egress import minimax_egress  # noqa: F401
 
 
 def provider(**changes):
@@ -576,6 +577,7 @@ def test_api_key_claude_profile_moves_to_managed_api_key_configuration():
     )
 
 
+@pytest.mark.usefixtures("minimax_egress")
 @pytest.mark.parametrize(
     "env",
     [
@@ -600,6 +602,7 @@ def test_translatable_api_key_claude_profile_uses_shared_route(env):
     "env",
     [
         {"CLAUDE_UNCARRIED_SETTING": "1"},
+        {"ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic"},
         {"ANTHROPIC_BASE_URL": "https://api.unadmitted.example/anthropic"},
         {"ANTHROPIC_MODEL": "{{model}}"},
     ],
@@ -684,6 +687,7 @@ def test_api_key_codex_profile_moves_to_managed_api_key_configuration():
     )
 
 
+@pytest.mark.usefixtures("minimax_egress")
 def test_admitted_endpoint_only_codex_profile_uses_shared_route():
     stock_api_key = _codex_configuration(
         "omnigent-codex-api-key",
@@ -702,6 +706,7 @@ def test_admitted_endpoint_only_codex_profile_uses_shared_route():
 @pytest.mark.parametrize(
     "env",
     [
+        {"OPENAI_BASE_URL": "https://api.minimax.io/v1"},
         {"OPENAI_BASE_URL": "https://api.unadmitted.example/v1"},
         {"OPENAI_ORG_ID": "org-example"},
     ],
