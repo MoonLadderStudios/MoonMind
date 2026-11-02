@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from tests.artifact_access import access_for_test
+from api_service.services.omnigent_execution_plan_service import PersistedOmnigentExecutionPlan
 from api_service.db.models import (
     ManagedAgentProviderProfile,
     OmnigentAgentProfile,
@@ -614,7 +616,9 @@ async def test_plan_schedule_follows_managed_bootstrap_policy_cutover(
         compiled.append(deepcopy(kwargs))
         # Usage is published with the schedule revision, never by compilation.
         assert session.usage.version == 18
-        return SimpleNamespace(
+        return PersistedOmnigentExecutionPlan(
+                   artifact_access=access_for_test("operator"),
+                   resolved_skillset_digest="sha256:" + "d" * 64,
             envelope=SimpleNamespace(payload=SimpleNamespace()),
             binding=OmnigentExecutionPlanBinding.model_validate(_schedule_plan_binding("2")),
             artifact_refs=("artifact:plan",),
@@ -724,7 +728,9 @@ async def test_plan_schedule_refresh_converges_until_authority_moves(
         plan = _persisted_schedule_plan(str(len(compiled) + 1))
         session.plans[plan.plan_ref] = plan
         session.artifacts["art_plan"].sha256 = _root_digest(plan)
-        return SimpleNamespace(
+        return PersistedOmnigentExecutionPlan(
+                   artifact_access=access_for_test("operator"),
+                   resolved_skillset_digest="sha256:" + "d" * 64,
             envelope=SimpleNamespace(
                 payload=SimpleNamespace(
                     admissionAuthority=SimpleNamespace(
