@@ -315,9 +315,10 @@ after the attempt's native workspace path is known. Recorded literal values keep
 their original interpretation. Native executable wrappers restore values after child environment filtering
 without overriding private HOME or editing the enrolled home. Codex OAuth
 preferences and nonsecret files authored for a run-support or enrolled HOME use
-the same configuration artifact and portable renderer. They apply only in the
-native owner's private app-server HOME, preserving its model, provider, tools and
-agent instructions; preparation never edits enrollment. Protected settings,
+the same artifact and renderer in the native owner's private app-server HOME.
+Selected inherited instruction links become private files; untouched entries stay
+visible. Credential, hook, cache and history paths cannot be replaced. Native
+model/provider/tool authority and enrollment remain intact. Protected settings,
 native model-default suppression, uncarried tool/auth configuration and other
 HOME choices retain their adapter until an equivalent handoff exists.
 Recorded plans retain their original materializer identity.

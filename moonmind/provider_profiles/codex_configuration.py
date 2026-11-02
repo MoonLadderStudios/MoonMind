@@ -13,6 +13,7 @@ import math
 import os
 import re
 import shlex
+import shutil
 import sys
 import tempfile
 import tomllib
@@ -182,10 +183,14 @@ def _additional_file(template, home_path):
     relative = Path(path[len(prefix):])
     if (
         relative.is_absolute() or ".." in relative.parts or not relative.parts
-        or relative.parts[0] in {"auth.json", "config.toml", "sessions", "archived_sessions"}
-        or any(part.startswith(".moonmind-") for part in relative.parts)
+        or relative.parts[0] in {
+            "auth.json", ".credentials.json", "config.toml", "hooks.json",
+            "sessions", "archived_sessions", "plugins", "mcp-oauth-locks",
+        }
+        or relative.parts[0].endswith((".sqlite", ".sqlite-wal", ".sqlite-shm"))
+        or any(part.startswith((".moonmind-", ".omnigent-")) for part in relative.parts)
     ):
-        raise ValueError("additional Codex files cannot replace authentication or history")
+        raise ValueError("additional Codex files cannot replace authentication, history or runtime-owned files")
     # The private-home prefix was already translated above. Only workspace
     # context remains equivalent in the relative filename; SecretRef aliases
     # and other support-directory substitutions require their native owner.
@@ -534,6 +539,45 @@ def configure_private_oauth_home(configuration, home):
     _write(path, _merge(document, preferences))
 
 
+def _privatize_native_file_path(home, rendered_path):
+    """Detach the selected native HOME links without changing their source."""
+    relative = Path(rendered_path).relative_to(home)
+    if ".." in relative.parts:
+        raise ValueError("Profile files must remain in the private HOME")
+    source_home = Path(_ENROLLED_CODEX_HOME).resolve()
+    for length in range(1, len(relative.parts) + 1):
+        path = home.joinpath(*relative.parts[:length])
+        if not path.is_symlink():
+            if path.is_file() and path.stat().st_nlink != 1:
+                raise ValueError("Profile files cannot modify an unowned hard link")
+            continue
+        source = path.resolve(strict=True)
+        if source != source_home.joinpath(*relative.parts[:length]):
+            raise ValueError("Profile files must stay within runtime_support_dir and cannot follow an unowned symbolic link")
+        if source.is_dir():
+            staged = Path(tempfile.mkdtemp(prefix=".moonmind-profile-dir-", dir=path.parent))
+            try:
+                # Keep untouched global entries visible without copying a
+                # potentially large cache; only the selected path is detached.
+                for child in source.iterdir():
+                    (staged / child.name).symlink_to(child)
+                path.unlink()
+                os.replace(staged, path)
+            finally:
+                if staged.exists():
+                    shutil.rmtree(staged)
+        elif source.is_file():
+            descriptor, staged = tempfile.mkstemp(prefix=".moonmind-profile-file-", dir=path.parent)
+            os.close(descriptor)
+            try:
+                shutil.copyfile(source, staged)
+                os.replace(staged, path)
+            finally:
+                Path(staged).unlink(missing_ok=True)
+        else:
+            raise ValueError("Profile files require a regular native source")
+
+
 def configure_profile_files(configuration, home, workspace):
     """Render per-run files only in the native process's private Codex home.
 
@@ -553,6 +597,9 @@ def configure_profile_files(configuration, home, workspace):
         from template_renderer import ProfileTemplateRenderer
 
     home = Path(home).resolve()
+    enrolled = Path(_ENROLLED_CODEX_HOME).resolve()
+    if home == enrolled or enrolled in home.parents or not home.is_dir():
+        raise ValueError("Profile files cannot modify the enrolled credential home")
     workspace = Path(workspace).resolve()
     digest = hashlib.sha256(json.dumps(
         {"templates": templates, "workspace": str(workspace)},
@@ -569,10 +616,12 @@ def configure_profile_files(configuration, home, workspace):
         marker.chmod(0o600)
         stream.write("preparing")
     renderer = ProfileTemplateRenderer(toml_serializer=render_toml)
+    context = {"runtime_support_dir": str(home), "workspace_path": str(workspace)}
     for template in templates:
+        _privatize_native_file_path(home, renderer._render_string(template["path"], context))
         renderer._materialize_file_template(
             SimpleNamespace(**template),
-            {"runtime_support_dir": str(home), "workspace_path": str(workspace)},
+            context,
         )
     marker.write_text(digest)
 
