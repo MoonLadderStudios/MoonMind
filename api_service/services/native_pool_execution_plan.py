@@ -354,6 +354,19 @@ async def prepare_selected_pool_plan(
                 "disposition": "native",
                 "reason": "native_environment_overrides_require_their_current_adapter",
             }
+        authored_runtime = request.parameters.get("runtime")
+        if not isinstance(authored_runtime, Mapping):
+            authored_workflow = request.parameters.get("workflow") or request.parameters.get("task")
+            authored_runtime = authored_workflow.get("runtime") if isinstance(authored_workflow, Mapping) else None
+        explicit_parameters = authored_runtime.get("parameters") if isinstance(authored_runtime, Mapping) else None
+        # Run already flattens explicit runtime parameters. Re-resolution can
+        # leave their values unchanged even when the shared path lacks a
+        # consumer, so a changed-value comparison cannot admit those choices.
+        if isinstance(explicit_parameters, Mapping) and set(explicit_parameters) - _LAUNCH_PARAMETER_KEYS:
+            return {
+                "disposition": "native",
+                "reason": "native_runtime_parameters_require_an_equivalent_handoff",
+            }
         changed_parameters = {
             key for key in set(selected.parameters) | set(request.parameters)
             if (key in selected.parameters) != (key in request.parameters)
