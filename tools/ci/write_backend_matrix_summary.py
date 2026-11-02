@@ -33,6 +33,7 @@ null; malformed case times stay null instead of becoming a measured zero.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from importlib import metadata
 import math
@@ -58,11 +59,112 @@ DURATION_REPORT_PROPERTY = "junit_duration_report"
 DURATION_SEMANTICS = "pytest-junit-total:setup+call+teardown"
 SNAPSHOT_SCHEMA = "moonmind.reliability-durations-snapshot/v1"
 RECEIPT_SCHEMA = "moonmind.pytest-verification/v1"
+ENVIRONMENT_SCHEMA = "moonmind.pytest-environment/v1"
+ENVIRONMENT_FIELDS = (
+    "python",
+    "dependencies",
+    "platform",
+    "environmentInputs",
+    "dependencyInputs",
+    "pytestEnvironment",
+)
+
+
+def environment_path(receipt: Path) -> Path:
+    name = receipt.name.removesuffix(".receipt.json").removesuffix(".json")
+    return receipt.with_name(name + ".environment.json")
+
+
+def observed_environment(env=None) -> dict:
+    env = os.environ if env is None else env
+    root = Path(__file__).resolve().parents[2]
+    return {
+        "python": platform.python_version(),
+        "dependencies": sorted(
+            {(dist.metadata["Name"], dist.version) for dist in metadata.distributions()}
+        ),
+        "platform": platform.platform(),
+        "environmentInputs": env.get(
+            "MOONMIND_CI_ENVIRONMENT", "host-python:" + platform.python_version()
+        ),
+        "dependencyInputs": {
+            name: hashlib.sha256((root / name).read_bytes()).hexdigest()
+            for name in ("pyproject.toml", "poetry.lock")
+        },
+        "pytestEnvironment": {
+            name: env.get(name, "")
+            for name in (
+                "PYTEST_ADDOPTS",
+                "PYTEST_PLUGINS",
+                "PYTEST_DISABLE_PLUGIN_AUTOLOAD",
+            )
+        },
+    }
+
+
+def environment_fingerprint(environment: dict) -> str:
+    return (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(environment, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
+
+
+def record_environment(
+    receipt: Path, *, expected_python: str, arguments: list[str], env=None
+) -> None:
+    env = os.environ if env is None else env
+    if ".".join(platform.python_version_tuple()[:2]) != expected_python:
+        raise ValueError(f"Verification environment requires Python {expected_python}")
+    environment = observed_environment(env)
+    payload = {
+        "schema": ENVIRONMENT_SCHEMA,
+        "suite": env.get("MOONMIND_CI_SUITE", ""),
+        "revision": env.get("MOONMIND_CI_REVISION", ""),
+        "runId": env.get("GITHUB_RUN_ID", ""),
+        "attempt": env.get("GITHUB_RUN_ATTEMPT", ""),
+        "expectedPython": expected_python,
+        "environment": environment,
+        "fingerprint": environment_fingerprint(environment),
+        "pytestArguments": arguments,
+    }
+    path = environment_path(receipt)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+
+
+def run_verified_pytest(arguments: list[str]) -> int:
+    """Capture the installed environment before pytest, then preserve its PID/signals."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--expected-python", default=os.environ.get("MOONMIND_CI_EXPECTED_PYTHON")
+    )
+    options, pytest_args = parser.parse_known_args(arguments)
+    if pytest_args[:1] == ["--"]:
+        pytest_args = pytest_args[1:]
+    if os.environ.get("MOONMIND_CI_RECEIPT"):
+        if not options.expected_python:
+            raise ValueError(
+                "A verification environment must declare its Python version"
+            )
+        record_environment(
+            Path(os.environ["MOONMIND_CI_RECEIPT"]),
+            expected_python=options.expected_python,
+            arguments=pytest_args,
+        )
+        os.environ["MOONMIND_CI_OWNER_PID"] = str(os.getpid())
+    os.execv(sys.executable, [sys.executable, "-m", "pytest", *pytest_args])
+    return 1  # pragma: no cover -- exec replaces this process
 
 
 def pytest_configure(config) -> None:
     path = os.environ.get("MOONMIND_CI_RECEIPT")
-    if path and not hasattr(config, "workerinput"):
+    if (
+        path
+        and os.environ.get("MOONMIND_CI_OWNER_PID") == str(os.getpid())
+        and not hasattr(config, "workerinput")
+    ):
         config.pluginmanager.register(_VerificationReceipt(config, Path(path)))
 
 
@@ -100,6 +202,25 @@ class _VerificationReceipt:
         case = self.cases.setdefault(
             report.nodeid, {"nodeid": report.nodeid, "phases": {}}
         )
+        context = getattr(report, "context", None)
+        if context is not None:
+            # A subtest reports within the parent's call phase, including over
+            # xdist. Retain its result without counting that phase or time twice.
+            case.setdefault("subtests", []).append(
+                {
+                    "outcome": (
+                        "xfailed"
+                        if report.skipped and hasattr(report, "wasxfail")
+                        else report.outcome
+                    ),
+                    "seconds": report.duration,
+                    "message": context.msg,
+                    "parameters": dict(context.kwargs),
+                }
+            )
+            if report.failed:
+                case["outcome"] = "failed"
+            return
         if report.when in case["phases"]:
             self.errors.append(f"duplicate phase: {report.nodeid} {report.when}")
         case["phases"][report.when] = {
@@ -114,6 +235,7 @@ class _VerificationReceipt:
             case.setdefault("outcome", "passed")
 
     def pytest_sessionfinish(self, session, exitstatus):
+        environment = observed_environment()
         expected = self.expected or set()
         complete = (
             bool(expected)
@@ -143,21 +265,14 @@ class _VerificationReceipt:
             "cases": [self.cases[key] for key in sorted(self.cases)],
             "errors": self.errors,
             "workers": len(self.workers) or 1,
-            "python": platform.python_version(),
-            "dependencies": sorted(
-                (dist.metadata["Name"], dist.version)
-                for dist in metadata.distributions()
-            ),
-            "environmentInputs": os.environ.get(
-                "MOONMIND_CI_ENVIRONMENT", "host-python:" + platform.python_version()
-            ),
-            "platform": platform.platform(),
+            **environment,
             "arguments": list(self.config.invocation_params.args),
             "collectionSeconds": (
                 (self.collected_at - self.started) if self.collected_at else None
             ),
             "elapsedSeconds": time.monotonic() - self.started,
         }
+        payload["environmentFingerprint"] = environment_fingerprint(environment)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(payload, indent=2) + "\n")
 
@@ -182,6 +297,40 @@ def validate_receipt(path: Path, *, revision: str, run_id: str, attempt: str) ->
         }.items():
             if receipt[key] != value:
                 raise ValueError(f"{key} mismatch")
+        manifest = json.loads(environment_path(path).read_text())
+        if manifest.get("schema") != ENVIRONMENT_SCHEMA or any(
+            manifest.get(key) != receipt.get(key)
+            for key in ("suite", "revision", "runId", "attempt")
+        ):
+            raise ValueError("environment manifest identity mismatch")
+        if set(manifest["environment"]) != set(ENVIRONMENT_FIELDS):
+            raise ValueError("incomplete expected verification environment")
+        observed = {key: receipt[key] for key in ENVIRONMENT_FIELDS}
+        fingerprint = environment_fingerprint(observed)
+        if (
+            fingerprint != manifest["fingerprint"]
+            or fingerprint != receipt.get("environmentFingerprint")
+            or environment_fingerprint(manifest["environment"])
+            != manifest["fingerprint"]
+            or ".".join(receipt["python"].split(".")[:2]) != manifest["expectedPython"]
+            or manifest["pytestArguments"] != receipt["arguments"]
+        ):
+            raise ValueError(
+                "verification environment differs from its pre-test manifest"
+            )
+        root = Path(__file__).resolve().parents[2]
+        declared = {
+            name: hashlib.sha256((root / name).read_bytes()).hexdigest()
+            for name in ("pyproject.toml", "poetry.lock")
+        }
+        if (
+            observed["dependencyInputs"] != declared
+            or not observed["dependencies"]
+            or not observed["environmentInputs"]
+        ):
+            raise ValueError(
+                "verification environment dependency inputs differ from this source"
+            )
         expected = receipt["expectedNodeIds"]
         cases = receipt["cases"]
         actual = [case["nodeid"] for case in cases]
@@ -209,6 +358,13 @@ def validate_receipt(path: Path, *, revision: str, run_id: str, attempt: str) ->
                     or phase["seconds"] < 0
                 ):
                     raise ValueError("invalid phase")
+            for subtest in case.get("subtests", []):
+                if (
+                    subtest["outcome"] not in {"passed", "skipped", "xfailed"}
+                    or not math.isfinite(subtest["seconds"])
+                    or subtest["seconds"] < 0
+                ):
+                    raise ValueError("unsuccessful or invalid subtest")
         return receipt
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise ValueError(f"Invalid verification receipt {path}: {error}") from error
@@ -980,4 +1136,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(
+        run_verified_pytest(sys.argv[2:]) if sys.argv[1:2] == ["run"] else main()
+    )

@@ -9,6 +9,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from tools.ci.write_backend_matrix_summary import (
+    environment_fingerprint,
+    environment_path,
+    observed_environment,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "tools/run_omnigent_conformance.py"
 
@@ -59,6 +65,23 @@ def test_owner_receipts_require_current_complete_collected_coverage(
             }
         ],
     }
+    environment = observed_environment()
+    receipt.update(environment)
+    receipt["arguments"] = [path]
+    receipt["environmentFingerprint"] = environment_fingerprint(environment)
+    environment_path(tmp_path / "owner.receipt.json").write_text(
+        json.dumps(
+            {
+                "schema": "moonmind.pytest-environment/v1",
+                **identity,
+                "suite": "unit-fast",
+                "environment": environment,
+                "fingerprint": environment_fingerprint(environment),
+                "expectedPython": f"{sys.version_info.major}.{sys.version_info.minor}",
+                "pytestArguments": [path],
+            }
+        )
+    )
     if damage == "coverage":
         manifest["nodes"].append(
             {
@@ -108,6 +131,9 @@ def test_owner_receipts_require_current_complete_collected_coverage(
         retained = tmp_path / "pytest-unit-fast-attempt-2"
         retained.mkdir()
         (tmp_path / "owner.receipt.json").rename(retained / "owner.receipt.json")
+        environment_path(tmp_path / "owner.receipt.json").rename(
+            environment_path(retained / "owner.receipt.json")
+        )
         # Actions retains successful jobs during a failed-job rerun. Their
         # immutable artifact attempt is explicit; another head/run is denied.
         assert runner.owner_receipt_commands(

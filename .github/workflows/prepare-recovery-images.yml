@@ -1,0 +1,120 @@
+name: CI / Prepare Recovery Images
+on:
+  workflow_call:
+    outputs:
+      artifact:
+        description: Prepared recovery runtime archive
+        value: ${{ jobs.prepare.outputs.artifact }}
+permissions:
+  contents: read
+env:
+  MOONMIND_CI_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    outputs:
+      artifact: ${{ steps.identity.outputs.artifact }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: Initialize pinned Omnigent verifier source
+        run: git submodule update --init --depth 1 -- omnigent
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Verify the pinned recovery runtime source
+        id: recovery-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="$(git rev-parse HEAD:omnigent)"
+          actual="$(git -C omnigent rev-parse HEAD)"
+          test "$actual" = "$expected"
+          echo "commit=$actual" >> "$GITHUB_OUTPUT"
+      - name: Build the pinned recovery server
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: omnigent
+          file: omnigent/deploy/docker/Dockerfile
+          load: true
+          tags: moonmind-test-omnigent-server:candidate
+          labels: org.opencontainers.image.revision=${{ steps.recovery-source.outputs.commit }}
+          cache-from: type=gha,scope=credential-free-recovery-server
+          cache-to: type=gha,scope=credential-free-recovery-server,mode=max
+      - name: Build the pinned recovery host base
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: omnigent
+          file: omnigent/deploy/docker/Dockerfile
+          target: host
+          load: true
+          tags: moonmind-test-omnigent-host-base:candidate
+          labels: org.opencontainers.image.revision=${{ steps.recovery-source.outputs.commit }}
+          cache-from: type=gha,scope=credential-free-recovery-host
+          cache-to: type=gha,scope=credential-free-recovery-host,mode=max
+      - name: Resolve job-local immutable recovery artifacts
+        id: recovery-images
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A local registry gives the canonical host launcher its real
+          # repository@sha256 identity. Nothing is published off this runner;
+          # 127.0.0.1 works without changing daemon trust/configuration.
+          docker run -d --name moonmind-test-recovery-registry \
+            -p 127.0.0.1:5000:5000 registry:3.0.0
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:5000/v2/ >/dev/null; then break; fi
+            if [[ "$attempt" = 30 ]]; then exit 1; fi
+            sleep 1
+          done
+          pin_local_image() {
+            local source="$1" repository="$2"
+            docker tag "$source" "$repository:candidate"
+            docker push "$repository:candidate" >&2
+            docker image inspect "$repository:candidate" \
+              --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+              | grep -E "^${repository}@sha256:[0-9a-f]{64}$"
+          }
+          server="$(pin_local_image moonmind-test-omnigent-server:candidate \
+            127.0.0.1:5000/moonmind-test-omnigent-server)"
+          base="$(pin_local_image moonmind-test-omnigent-host-base:candidate \
+            127.0.0.1:5000/moonmind-test-omnigent-host-base)"
+          # Use the shared host image and warmed offline plugin
+          # cache over the exact upstream base just built from the gitlink.
+          # The daemon-backed default builder can resolve the loopback registry.
+          docker buildx build --builder default --load \
+            -f services/omnigent/moonmind-host/Dockerfile \
+            --build-arg "OMNIGENT_HOST_BASE_IMAGE=$base" \
+            --build-arg "OMNIGENT_BUILD_DIGEST=${base##*@}" \
+            --label "org.opencontainers.image.revision=${{ steps.recovery-source.outputs.commit }}" \
+            --label "moonmind.source.revision=$(git rev-parse HEAD)" \
+            -t moonmind-test-omnigent-host:candidate .
+          host="$(pin_local_image moonmind-test-omnigent-host:candidate \
+            127.0.0.1:5000/moonmind-test-omnigent-host)"
+          echo "server=$server" >> "$GITHUB_OUTPUT"
+          echo "host=$host" >> "$GITHUB_OUTPUT"
+      - name: Archive the prepared recovery runtimes
+        run: |
+          mkdir -p "$RUNNER_TEMP/recovery-images"
+          python3 tools/ci/release_image_fixture.py save-recovery \
+            --archive "$RUNNER_TEMP/recovery-images/images.tar" --state "$RUNNER_TEMP/recovery-images/identity.json" \
+            --revision "$MOONMIND_CI_REVISION" --upstream "$(git rev-parse HEAD:omnigent)" \
+            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Upload prepared recovery images
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: recovery-images-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/recovery-images
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+      - name: Expose immutable recovery artifact
+        id: identity
+        run: echo "artifact=recovery-images-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+      - name: Stop the job-local recovery registry
+        if: always()
+        run: docker rm -fv moonmind-test-recovery-registry || true

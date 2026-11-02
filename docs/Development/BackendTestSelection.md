@@ -316,7 +316,7 @@ During an authorized architecture removal, update obsolete test ownership, fixtu
 
 ### Source, Image And Evidence Ownership
 
-The release workflow starts reusable `source` verification alongside amd64/arm64 builds. Its `artifact` phase follows assembly and complete source verification. Pull requests, scheduled checks and manual full runs use the same reusable workflow with both phases. Main pushes have one source-suite owner, including frontend and generated-contract checks; the image build compiles assets without rerunning those host checks. Compatible dependency updates are grouped to reduce simultaneous full-suite PRs; major updates retain independent review.
+The release workflow starts reusable `source` verification alongside amd64/arm64 builds. Its `artifact` phase follows assembly and recovery preparation; final publication verifies the complete source receipt after both phases. Pull requests, scheduled checks and manual full runs use the same reusable workflow with both phases. Main pushes have one source-suite owner, including frontend and generated-contract checks; the image build compiles assets without rerunning those host checks. Compatible dependency updates are grouped to reduce simultaneous full-suite PRs; major updates retain independent review.
 
 Every PR application-image consumer restores one shared OCI archive through `release_image_fixture.py`, verifies its immutable manifest and checks the image's source label. Forks need no registry publication permission. Release consumers pull the supplied assembled manifest. Recovery server/host preparation overlaps source tests and app construction; archive checks bind its bytes, image IDs, source/gitlink and run/attempt. Same-session host replacement and interrupted-step recovery run separately from app/API/worker/browser probes, against that same application candidate.
 
@@ -328,7 +328,7 @@ SQLite optimization shares only a closed, empty schema file; each test copies it
 
 ### Timing And Cache Evidence
 
-Pytest receipts record exact nodes, outcomes, setup/call/teardown costs, collection time, worker count and environment. Vitest records its actual assertion inventory. Job timing artifacts separate queue time, additive runner usage and step duration; an unfinished job or unavailable public API observation remains explicit. These are observations, not projected savings.
+Before pytest, the owning job records its interpreter, resolved packages, runtime inputs, declaration hashes and arguments. Reuse requires exact agreement with that manifest and current dependency declarations. It trusts the same-run producer; installed-image qualification still executes against its candidate. PID ownership protects nested probes. Receipts retain exact nodes, subtest outcomes, phases, collection time and workers; Vitest retains assertions. Hosted timing artifacts distinguish queue, runner usage and step costs, with unfinished or unavailable observations explicit.
 
 The test-runtime archive is keyed by dependency/tool inputs, platform and resolved base-image digests; the build uses those same immutable base references and verifies the restored image's input label. Ordinary source/README edits do not invalidate dependency installation. A cache hit never replaces tests. Release builds retain layer caching without exporting large package-manager cache mounts after each run.
 

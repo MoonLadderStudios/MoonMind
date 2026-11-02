@@ -97,7 +97,9 @@ def hermetic_phase_nodes(script_path: Path) -> frozenset[str]:
     """Include exact pytest phases run on either side of a storage restart."""
     nodes: set[str] = set()
     for line in script_path.read_text().splitlines():
-        if line.lstrip().startswith('"pytest '):
+        if line.lstrip().startswith(
+            ('"pytest ', '"python tools/ci/write_backend_matrix_summary.py run -- ')
+        ):
             nodes.update(re.findall(r"tests/integration/[^\s\"']+\.py::[^\s\"']+", line))
     return frozenset(nodes)
 
