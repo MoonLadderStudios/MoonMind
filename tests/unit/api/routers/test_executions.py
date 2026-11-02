@@ -82,6 +82,9 @@ from api_service.db.models import (
     TemporalExecutionRecord,
     TemporalWorkflowType,
 )
+from api_service.services.omnigent_execution_plan_service import (
+    PersistedOmnigentExecutionPlan,
+)
 from api_service.services.recurring_workflows_service import (
     RecurringWorkflowValidationError,
 )
@@ -140,6 +143,27 @@ from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
 from tests.artifact_access import access_for_test
 
 _TARGET_SEARCH_ATTRIBUTE_TYPE = int(IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST)
+
+
+
+def _compiled_plan_result(
+    *,
+    binding: OmnigentExecutionPlanBinding,
+    artifact_refs: tuple[str, ...],
+    resolved_skillset_ref: str,
+    runtime_provider_rollout: dict[str, Any] | None = None,
+) -> PersistedOmnigentExecutionPlan:
+    # These router tests mock compilation, not its returned transport contract.
+    # The envelope and in-process proof are not read by the create route.
+    return PersistedOmnigentExecutionPlan(
+        artifact_access=access_for_test("operator"),
+        envelope=Mock(name="compiled_plan_envelope"),
+        binding=binding,
+        artifact_refs=artifact_refs,
+        resolved_skillset_ref=resolved_skillset_ref,
+        resolved_skillset_digest="sha256:" + "d" * 64,
+        runtime_provider_rollout=runtime_provider_rollout,
+    )
 
 
 def _caller_owned_artifact_factory(service):
@@ -520,11 +544,14 @@ def _artifact_session(rows: list[SimpleNamespace]) -> SimpleNamespace:
     from api_service.db.models import OmnigentAgentProfile, SettingsOverride
 
     profiles = {
-        f"test-{runtime}": SimpleNamespace(
+        f"test-{runtime}": ManagedAgentProviderProfile(
             profile_id=f"test-{runtime}",
             runtime_id=runtime,
+            enabled=True,
+            auth_state=ProviderProfileAuthState.CONNECTED,
             default_model=None,
             default_effort=None,
+            default_model_tier=1,
         )
         for runtime in ("codex_cli", "claude_code")
     }
@@ -5097,7 +5124,7 @@ def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
             "reasonCode": "rollout_new_work_default",
         }
     )
-    compiled_plan = SimpleNamespace(
+    compiled_plan = _compiled_plan_result(
         binding=plan_binding,
         artifact_refs=("art_profile_1", "art_skills_1", "art_plan_1"),
         resolved_skillset_ref="art_skills_1",
@@ -5261,7 +5288,7 @@ def test_api_execution_compiles_opencode_plan_before_temporal_schedule(
         assert _kwargs["db_session"] is db_session
         assert isinstance(_kwargs["execution_plan_store"], SessionExecutionPlanStore)
         assert _kwargs["execution_plan_store"]._session is db_session
-        return SimpleNamespace(
+        return _compiled_plan_result(
             binding=plan_binding,
             artifact_refs=("art_profile", "art_skills", "art_opencode_plan"),
             resolved_skillset_ref="art_skills",
@@ -5430,7 +5457,7 @@ def test_api_execution_keeps_authoritative_model_in_opencode_plan(
 
     async def compile_plan(**kwargs):
         compiled_parameters.update(kwargs["initial_parameters"])
-        return SimpleNamespace(
+        return _compiled_plan_result(
             binding=plan_binding,
             artifact_refs=("art_profile", "art_skills", "art_zen_plan"),
             resolved_skillset_ref="art_skills",
@@ -5712,7 +5739,7 @@ def test_create_execution_accepts_generic_v2_profile_identity_as_target_ref(
         patch(
             "api_service.services.omnigent_execution_plan_service.compile_and_persist_execution_plan",
             new=AsyncMock(
-                return_value=SimpleNamespace(
+                return_value=_compiled_plan_result(
                     binding=plan_binding,
                     artifact_refs=("art_profile", "art_skills", "art_plan"),
                     resolved_skillset_ref="art_skills",
@@ -7363,7 +7390,7 @@ def test_create_workflow_omnigent_browser_payload_persists_canonical_intent(
         taskInputSnapshotRef="art_codex_task",
         taskInputSnapshotDigest="sha256:" + "c" * 64,
     )
-    compiled_plan = SimpleNamespace(
+    compiled_plan = _compiled_plan_result(
         binding=plan_binding,
         artifact_refs=("art_profile", "art_skills", "art_codex_plan"),
         resolved_skillset_ref="art_skills",
@@ -10092,7 +10119,7 @@ def test_execution_fanout_inherits_exact_omnigent_agent_profile(
     )
     profile_resolver = AsyncMock(return_value=snapshot)
     compile_plan = AsyncMock(
-        return_value=SimpleNamespace(
+        return_value=_compiled_plan_result(
             binding=plan_binding,
             artifact_refs=("art_profile", "art_skills", "art_inherited_plan"),
             resolved_skillset_ref="art_skills",
@@ -12737,6 +12764,7 @@ def test_create_execution_persists_task_input_snapshot_for_direct_run_submission
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=False)
     session = AsyncMock()
+    session.execute.return_value = _ExecuteResult([])
     app.dependency_overrides[get_async_session] = lambda: session
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
     monkeypatch.setattr(
@@ -21448,10 +21476,10 @@ async def test_mm3788_raw_create_branch_accepts_profile_owned_by_the_runtime(
 
 
 @pytest.mark.asyncio
-async def test_mm3788_raw_create_branch_keeps_the_omnigent_product_boundary(
+async def test_mm3788_raw_create_branch_rejects_unready_shared_profile(
     tmp_path,
 ) -> None:
-    """Omnigent is a facade: the raw branch still owns its own 422, not a 409."""
+    """Canonical raw requests reach the compiler without bypassing readiness."""
 
     async with _mm3788_raw_branch_context(
         tmp_path, db_name="mm3788_raw_omnigent"
@@ -21467,7 +21495,10 @@ async def test_mm3788_raw_create_branch_keeps_the_omnigent_product_boundary(
             )
 
         assert exc_info.value.status_code == 422
-        assert exc_info.value.detail["code"] == "omnigent_product_boundary_required"
+        assert exc_info.value.detail == {
+            "code": "invalid_execution_request",
+            "message": "selected provider profile is not launch-ready",
+        }
         service._client_adapter.start_workflow.assert_not_awaited()
 
 
@@ -21539,9 +21570,9 @@ async def test_mm3788_raw_create_branch_rejects_a_nested_omnigent_runtime_confli
 ) -> None:
     """A nested ``omnigent`` mode does not waive the other authored runtime.
 
-    Neither runtime launches: the nested mode wins the worker's precedence, and
-    MoonLadderStudios/MoonMind#3935 admits Omnigent only through the plan
-    owner, so the raw branch rejects any payload that names it.
+    Neither runtime launches: the nested mode wins the worker's precedence.
+    This conflicting alias shape retains the serialized adapter, which rejects
+    Omnigent without a compiler-owned plan.
     """
 
     async with _mm3788_raw_branch_context(
@@ -21605,14 +21636,13 @@ async def test_mm3788_raw_create_branch_rejects_a_profile_with_no_runtime_owner(
 # ---------------------------------------------------------------------------
 # MoonLadderStudios/MoonMind#3935 — an Omnigent execution has one lifecycle
 # owner: the task/workflow envelope that compiles and persists the immutable
-# execution plan. The raw branch never compiles a plan, so a request that
-# leaves the runtime to the Omnigent default must not reach the legacy no-plan
-# session supervisor through it.
+# execution plan. Canonical raw inputs use that compiler; retained native shapes
+# still reject Omnigent before reaching the legacy no-plan session supervisor.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_mm3935_raw_branch_rejects_a_default_omnigent_runtime(
+async def test_mm3935_raw_branch_requires_the_default_omnigent_profile(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -21640,26 +21670,36 @@ async def test_mm3935_raw_branch_rejects_a_default_omnigent_runtime(
                 },
             )
 
-        assert exc_info.value.status_code == 422
-        assert exc_info.value.detail["code"] == "omnigent_product_boundary_required"
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.detail == "default Omnigent Agent Profile is unavailable"
         service._client_adapter.start_workflow.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "initial_parameters",
+    "initial_parameters,expected_code",
     [
-        {"task": {"instructions": "Nested mode.", "runtime": {"mode": "omnigent"}}},
-        {"task": {"instructions": "Nested target.", "targetRuntime": "omnigent"}},
-        {"instructions": "Runtime block.", "runtime": {"mode": "omnigent"}},
+        (
+            {"task": {"instructions": "Nested mode.", "runtime": {"mode": "omnigent"}}},
+            "invalid_execution_request",
+        ),
+        (
+            {"task": {"instructions": "Nested target.", "targetRuntime": "omnigent"}},
+            "omnigent_product_boundary_required",
+        ),
+        (
+            {"instructions": "Runtime block.", "runtime": {"mode": "omnigent"}},
+            "omnigent_product_boundary_required",
+        ),
     ],
     ids=["nested-runtime-mode", "nested-target-runtime", "runtime-mode"],
 )
-async def test_mm3935_raw_branch_rejects_a_nested_omnigent_runtime(
+async def test_mm3935_raw_branch_never_launches_an_uncompiled_omnigent_runtime(
     tmp_path,
     initial_parameters: dict[str, Any],
+    expected_code: str,
 ) -> None:
-    """Every canonical runtime field is the same Omnigent selection."""
+    """Compiler and retained raw shapes both preserve their launch safeguards."""
 
     async with _mm3788_raw_branch_context(
         tmp_path, db_name="mm3935_raw_nested_omnigent"
@@ -21677,7 +21717,13 @@ async def test_mm3935_raw_branch_rejects_a_nested_omnigent_runtime(
             )
 
         assert exc_info.value.status_code == 422
-        assert exc_info.value.detail["code"] == "omnigent_product_boundary_required"
+        assert exc_info.value.detail["code"] == expected_code
+        if expected_code == "invalid_execution_request":
+            assert exc_info.value.detail["message"] == (
+                "A Provider Profile for 'codex_cli' is required to preserve the "
+                "configured harness and account. Select or configure that Profile "
+                "before starting new work."
+            )
         service._client_adapter.start_workflow.assert_not_awaited()
 
 
@@ -21753,7 +21799,7 @@ def _mm3935_post_through_plan_owner(
         taskInputSnapshotDigest="sha256:" + "c" * 64,
     )
     compile_plan = AsyncMock(
-        return_value=SimpleNamespace(
+        return_value=_compiled_plan_result(
             binding=plan_binding,
             artifact_refs=("art_profile", "art_skills", "art_cli_plan"),
             resolved_skillset_ref="art_skills",

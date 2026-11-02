@@ -5259,6 +5259,22 @@ async def load_github_issue_preset_brief(
             else:
                 context["verified_issue_claim"] = False
             result = await _load_github_issue_preset_brief(inputs, context, github_service_factory=github_service_factory)
+            if result.status == "COMPLETED" and (
+                authored_inputs.get("projectSource") or getattr(receipt, "project_binding_json", None)
+            ):
+                receipt = await IssueClaimStore().for_execution(owner)
+                if receipt is not None and getattr(receipt, "project_binding_json", None):
+                    from moonmind.workflows.temporal.github_project import sync_claim_project
+
+                    result.outputs["projectSync"] = await sync_claim_project(
+                        IssueClaimStore(), receipt, github_service_factory(),
+                    )
+                    binding = receipt.project_binding_json
+                    result.outputs["projectSelection"] = {
+                        "url": binding["projectUrl"], "column": binding["sourceColumn"],
+                        "itemId": binding["itemId"],
+                    }
+                    result.outputs["summary"] += f" Selected from project column {binding['sourceColumn']}."
         except ActiveIssueClaimConflict as exc:
             result = ToolResult(status="FAILED", outputs={"candidateDisposition": "ineligible",
                 "reasonCode": str(exc).split(":")[0], "error": str(exc)})
@@ -5393,6 +5409,9 @@ async def _load_github_issue_preset_brief(
     """Load a compact GitHub issue preset brief through trusted GitHub data."""
 
     search_evidence: dict[str, Any] = {}
+    project_source = inputs.get("projectSource") or {}
+    if not isinstance(project_source, Mapping):
+        return ToolResult(status="FAILED", outputs={"reasonCode": "invalid_project_source", "error": "Project source must be an object."})
     prerequisite_lookup = PrerequisiteLookup()
     recovery_handoff: dict[str, Any] = _github_brief_recovery_handoff(inputs, _context)
     include_all_authors = _parse_include_all_authors(inputs)
@@ -5474,6 +5493,7 @@ async def _load_github_issue_preset_brief(
                 if _recandidate.get("present")
                 else None,
                 include_all_authors=bool(include_all_authors),
+                project_source=project_source or None,
             )
         except ValueError as exc:
             return ToolResult(status="FAILED", outputs={"error": str(exc)})
@@ -5485,6 +5505,30 @@ async def _load_github_issue_preset_brief(
             )
     else:
         repository, issue_number = _github_issue_inputs(inputs)
+    selected_project = search_evidence.pop("selectedProjectItem", None)
+    if project_source:
+        from moonmind.workflows.temporal.github_project import ProjectError, discover_project_queue
+
+        store = IssueClaimStore()
+        project_receipt = await store.for_execution(claim_owner(_context))
+        if project_receipt is None:
+            return ToolResult(status="FAILED", outputs={"reasonCode": "project_claim_missing", "error": "Project selection requires a durable issue reservation."})
+        if not project_receipt.project_binding_json:
+            if selected_project is None:
+                # A retry after reservation but before binding may revalidate
+                # only this pinned issue; it cannot select a different card.
+                try:
+                    queue = await discover_project_queue(github_service_factory(), repository, project_source)
+                except ProjectError as exc:
+                    return ToolResult(status="FAILED", outputs={"reasonCode": exc.code, "error": str(exc)})
+                selected_project = queue.bindings.get(issue_number)
+            if selected_project is None:
+                return ToolResult(status="FAILED", outputs={"reasonCode": "project_item_changed", "error": "Reserved issue is no longer in the admitted project source."})
+            await store.bind_project(project_receipt.owner, {
+                **selected_project, "completionTargetRef": _string(inputs.get("completionTargetRef")),
+            })
+            project_receipt = await store.get(project_receipt.owner)
+        _context = {**dict(_context or {}), "issue_claim_receipt": project_receipt}
     issue_data = search_evidence.pop("selectedIssue", None)
     error = None
     if issue_data is None:
@@ -8741,10 +8785,17 @@ async def update_github_issue_status(
             context["verified_issue_claim"] = receipt.confirmed and await verify_claim(receipt, github_service_factory())
             context["issue_claim_receipt"] = receipt
             inputs = {**inputs, **receipt.handoff()}
-        return await _update_github_issue_status(
+        result = await _update_github_issue_status(
             inputs, context, github_service_factory=github_service_factory,
             merged_pull_request=merged_pull_request,
         )
+        if receipt and getattr(receipt, "project_binding_json", None) and result.status == "COMPLETED":
+            from moonmind.workflows.temporal.github_project import sync_claim_project
+
+            result.outputs["projectSync"] = await sync_claim_project(
+                IssueClaimStore(), receipt, github_service_factory(), lifecycle_result=result.outputs,
+            )
+        return result
     except ValueError as exc:
         return ToolResult(status="FAILED", outputs={"reasonCode": str(exc).split(":")[0], "summary": str(exc)})
 
