@@ -305,16 +305,10 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
-      - name: Initialize pinned Omnigent verifier source
-        run: git submodule update --init --depth 1 -- omnigent
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip uv
-          uv pip install --system -e .[tests]
       - name: Download backend owner receipts and logs
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
@@ -1085,12 +1079,10 @@ jobs:
     permissions:
       contents: read
       packages: read
-    # Hermetic worst case: 12m setup + 5m proxy checks + 5m scoped-egress checks
-    # + 33m execution/cleanup + 4m reports + 1m runner/post-action overhead.
-    # Journey worst case: 23m bootstrap/image/Node + 25m npm/OS/browser +
-    # 2m disk diagnostics + 25m tests + 6m reporting + 4m post-action reserve.
-    # Setup gets its own budget; the journey test deadlines are unchanged.
-    timeout-minutes: 60
+    # Cold setup has a 20m native bound including cache/input/archive work;
+    # proxy/egress checks keep 5m each, execution/cleanup 33m, receipt/reporting
+    # 5m, with 2m runner/post-action reserve. Actual work is measured separately.
+    timeout-minutes: 70
     strategy:
       fail-fast: ${{ github.event_name != 'schedule' }}
       matrix:
@@ -1111,23 +1103,25 @@ jobs:
         timeout-minutes: 2
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Resolve immutable test-runtime inputs
+        timeout-minutes: 2
         id: test-runtime-inputs
         run: |
           python3 tools/ci/test_runtime_inputs.py >> "$GITHUB_OUTPUT"
       - name: Restore dependency-input test runtime
+        timeout-minutes: 3
         id: test-runtime-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ${{ runner.temp }}/test-runtime.tar
           key: test-runtime-amd64-v1-${{ steps.test-runtime-inputs.outputs.key }}
       - name: Load the cached dependency-input runtime
+        timeout-minutes: 2
         if: steps.test-runtime-cache.outputs.cache-hit == 'true'
         run: |
           docker load --input "$RUNNER_TEMP/test-runtime.tar"
       - name: Build the pytest image with a shared layer cache
-        # The compose ``pytest`` service otherwise rebuilds the dependency
-        # layers from scratch on every run. The GitHub Actions cache keeps
-        # them across runs; only the layers behind changed inputs rebuild.
+        # The input-scoped archive is the runtime cache writer. On a miss,
+        # reuse common release layers without exporting the same image twice.
         if: 'steps.test-runtime-cache.outputs.cache-hit != ''true'''
         timeout-minutes: 6
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -1143,13 +1137,14 @@ jobs:
             SOCKET_PROXY_BASE=${{ steps.test-runtime-inputs.outputs.SOCKET_PROXY_BASE }}
           load: true
           tags: moonmind-python-tests:ci
-          cache-from: type=gha,scope=integration-ci-test-runtime
-          cache-to: type=gha,scope=integration-ci-test-runtime,mode=max
+          cache-from: type=gha,scope=build-linux-amd64
       - name: Verify the runtime input identity
+        timeout-minutes: 1
         run: |
           test "$(docker image inspect moonmind-python-tests:ci --format '{{ index .Config.Labels "io.moonmind.test-runtime.inputs" }}')" = "${{ steps.test-runtime-inputs.outputs.key }}"
           test "$(docker image inspect moonmind-python-tests:ci --format '{{ .Architecture }}')" = amd64
       - name: Save the dependency-input runtime
+        timeout-minutes: 2
         if: steps.test-runtime-cache.outputs.cache-hit != 'true'
         run: |
           docker save --output "$RUNNER_TEMP/test-runtime.tar" moonmind-python-tests:ci
@@ -1189,6 +1184,7 @@ jobs:
           set -euo pipefail
           ./tools/test_integration.sh
       - name: Validate complete owner receipt
+        timeout-minutes: 1
         env:
           RECEIPTS: "artifacts/integration-ci/main.receipt.json\nartifacts/integration-ci/storage-seed.receipt.json\nartifacts/integration-ci/storage-verify.receipt.json"
         run: |
@@ -1214,15 +1210,9 @@ jobs:
           out=/tmp/pytest-integration-ci
           mkdir -p "$out"
           echo "suite=${{ matrix.suite }} event=${{ github.event_name }} run=${{ github.run_id }} attempt=${{ github.run_attempt }}" > "$out/collection-status.txt"
-          if [[ "${{ matrix.suite }}" == "hermetic" ]]; then
-            source_dirs=(artifacts/integration-ci)
-            if [[ ! -f artifacts/integration-ci/pytest-integration-ci.xml ]]; then
-              echo "missing artifacts/integration-ci/pytest-integration-ci.xml (interrupted before pytest wrote it; not zero tests)" >> "$out/collection-status.txt"
-            fi
-          elif [[ "${{ matrix.suite }}" == "controller-journey" ]]; then
-            source_dirs=(var/artifacts/first-run-3938 var/artifacts/journal-transition)
-          else
-            source_dirs=(var/artifacts/first-run-3938)
+          source_dirs=(artifacts/integration-ci)
+          if [[ ! -f artifacts/integration-ci/pytest-integration-ci.xml ]]; then
+            echo "missing artifacts/integration-ci/pytest-integration-ci.xml (interrupted before pytest wrote it; not zero tests)" >> "$out/collection-status.txt"
           fi
           for source_dir in "${source_dirs[@]}"; do
             if [[ -d "$source_dir" ]]; then
@@ -1262,8 +1252,6 @@ jobs:
     permissions:
       contents: read
       packages: read
-    # Hermetic worst case: 12m setup + 5m proxy checks + 5m scoped-egress checks
-    # + 33m execution/cleanup + 4m reports + 1m runner/post-action overhead.
     # Journey worst case: 23m bootstrap/image/Node + 25m npm/OS/browser +
     # 2m disk diagnostics + 25m tests + 6m reporting + 4m post-action reserve.
     # Setup gets its own budget; the journey test deadlines are unchanged.
@@ -1286,7 +1274,7 @@ jobs:
         timeout-minutes: 2
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Login to the release artifact registry
-        if: matrix.suite != 'hermetic' && needs.prepare-app-image.outputs.image_ref != '' && needs.prepare-app-image.outputs.artifact_name == ''
+        if: needs.prepare-app-image.outputs.image_ref != '' && needs.prepare-app-image.outputs.artifact_name == ''
         timeout-minutes: 2
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
@@ -1294,20 +1282,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Install the OCI fixture transport
-        if: matrix.suite != 'hermetic' && needs.prepare-app-image.outputs.artifact_name != ''
+        if: needs.prepare-app-image.outputs.artifact_name != ''
         timeout-minutes: 3
         run: |
           sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
           sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends skopeo
       - name: Download the assembled OCI fixture
-        if: matrix.suite != 'hermetic' && needs.prepare-app-image.outputs.artifact_name != ''
+        if: needs.prepare-app-image.outputs.artifact_name != ''
         timeout-minutes: 3
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ needs.prepare-app-image.outputs.artifact_name }}
           path: ${{ runner.temp }}/release-image-fixture
       - name: Restore the identical manifest into the job-owned registry
-        if: matrix.suite != 'hermetic' && needs.prepare-app-image.outputs.artifact_name != ''
+        if: needs.prepare-app-image.outputs.artifact_name != ''
         timeout-minutes: 3
         env:
           CANDIDATE_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref }}
@@ -1319,7 +1307,7 @@ jobs:
             --state "$RUNNER_TEMP/release-image-fixture/state.json" \
             --owner "$FIXTURE_OWNER"
       - name: Pull the release artifact for installed journeys
-        if: matrix.suite != 'hermetic' && needs.prepare-app-image.outputs.image_ref != ''
+        if: needs.prepare-app-image.outputs.image_ref != ''
         timeout-minutes: 5
         env:
           CANDIDATE_IMAGE: ${{ needs.prepare-app-image.outputs.image_ref }}
@@ -1442,7 +1430,7 @@ jobs:
             tests/integration/host_update/test_controller_handoff.py \
             tests/integration/host_update/test_controller_compose_journeys.py -q
       - name: Stop the job-owned OCI fixture registry
-        if: always() && matrix.suite != 'hermetic' && needs.prepare-app-image.outputs.artifact_name != ''
+        if: always() && needs.prepare-app-image.outputs.artifact_name != ''
         timeout-minutes: 1
         env:
           FIXTURE_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ matrix.suite }}
@@ -1450,17 +1438,57 @@ jobs:
           python3 tools/ci/release_image_fixture.py cleanup \
             --state "$RUNNER_TEMP/release-image-fixture/state.json" \
             --owner "$FIXTURE_OWNER"
-      - name: Upload redacted journey startup timings and resource footprints
-        if: always() && endsWith(matrix.suite, '-journey')
-        timeout-minutes: 2
+      - name: Collect row-owned integration report and diagnostics
+        # One owner retains cheap startup observations on success and the
+        # complete failed/canceled journey and journal-transition evidence.
+        # Redaction failure removes raw files before upload.
+        if: always()
+        timeout-minutes: 3
+        env:
+          JOURNEY_RESULT: ${{ job.status }}
+        run: |
+          set -uo pipefail
+          out=/tmp/pytest-integration-ci
+          mkdir -p "$out"
+          echo "suite=${{ matrix.suite }} event=${{ github.event_name }} run=${{ github.run_id }} attempt=${{ github.run_attempt }}" > "$out/collection-status.txt"
+          if [[ "$JOURNEY_RESULT" == "success" ]]; then
+            for path in var/artifacts/first-run-3938/*/compose-startup-*.log var/artifacts/first-run-3938/*/resource-footprint-*.log; do
+              if [[ -f "$path" ]]; then
+                mode="$(basename "$(dirname "$path")")"
+                mkdir -p "$out/first-run-3938/$mode"
+                timeout 40s cp "$path" "$out/first-run-3938/$mode/" \
+                  || echo "copy startup observation failed or timed out (exit=$?)" >> "$out/collection-status.txt"
+              fi
+            done
+          else
+            if [[ "${{ matrix.suite }}" == "controller-journey" ]]; then
+              source_dirs=(var/artifacts/first-run-3938 var/artifacts/journal-transition)
+            else
+              source_dirs=(var/artifacts/first-run-3938)
+            fi
+            for source_dir in "${source_dirs[@]}"; do
+              if [[ -d "$source_dir" ]]; then
+                timeout 40s cp -R "$source_dir" "$out/" \
+                  || echo "copy $source_dir failed or timed out (exit=$?)" >> "$out/collection-status.txt"
+              else
+                echo "missing $source_dir (the row stopped before writing it)" >> "$out/collection-status.txt"
+              fi
+            done
+          fi
+          if ! python3 tools/ci/redact_diagnostics.py --diagnostics-dir "$out" --status-file "$out/collection-status.txt"; then
+            find "$out" -type f ! -name collection-status.txt -delete 2>/dev/null || true
+            echo "redaction failed; unredacted diagnostics removed before upload" >> "$out/collection-status.txt"
+          fi
+      - name: Upload row-owned integration report and diagnostics
+        if: always()
+        timeout-minutes: 3
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: journey-startup-${{ matrix.suite }}
-          path: |
-            var/artifacts/first-run-3938/*/compose-startup-*.log
-            var/artifacts/first-run-3938/*/resource-footprint-*.log
-            var/artifacts/first-run-3938/*/compose-logs-tail.log
-          if-no-files-found: warn
+          name: integration-ci-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
+          path: /tmp/pytest-integration-ci
+          if-no-files-found: error
+          retention-days: 7
+
   prepare-recovery-images:
     needs: select-test-suites
     if: needs.select-test-suites.outputs.exact_artifact == 'true' && inputs.recovery_images_artifact == ''
@@ -1526,6 +1554,7 @@ jobs:
             --image "$CANDIDATE_IMAGE" \
             --state "$RUNNER_TEMP/release-image-fixture/state.json" \
             --owner "$FIXTURE_OWNER"
+          rm -f "$RUNNER_TEMP/release-image-fixture/candidate.tar"
       - name: Pull the exact release artifact
         if: needs.prepare-app-image.outputs.image_ref != ''
         timeout-minutes: 5
@@ -1564,18 +1593,27 @@ jobs:
             echo "digest=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
             echo "runnable=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
           fi
+      - name: Inspect recovery acquisition disk capacity
+        timeout-minutes: 1
+        run: |
+          df -h "$RUNNER_TEMP" /var/lib/docker || true
+          docker system df || true
       - name: Download prepared recovery images
+        timeout-minutes: 3
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: ${{ inputs.recovery_images_artifact || needs.prepare-recovery-images.outputs.artifact }}
           path: ${{ runner.temp }}/recovery-images
       - name: Verify and load the exact prepared runtimes
+        timeout-minutes: 5
         run: |
           python3 tools/ci/release_image_fixture.py restore-recovery \
-            --archive "$RUNNER_TEMP/recovery-images/images.tar" --state "$RUNNER_TEMP/recovery-images/identity.json" \
+            --archive "$RUNNER_TEMP/recovery-images/images.tar.gz" --state "$RUNNER_TEMP/recovery-images/identity.json" \
             --revision "$MOONMIND_CI_REVISION" --upstream "$(git rev-parse HEAD:omnigent)" \
             --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
             --artifact "$RECOVERY_ARTIFACT"
+          rm -f "$RUNNER_TEMP/recovery-images/images.tar.gz"
+          df -h "$RUNNER_TEMP" /var/lib/docker || true
         env:
           RECOVERY_ARTIFACT: ${{ inputs.recovery_images_artifact || needs.prepare-recovery-images.outputs.artifact }}
       - name: Resolve job-local immutable recovery artifacts

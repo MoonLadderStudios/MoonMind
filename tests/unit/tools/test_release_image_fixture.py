@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import gzip
+import io
 import json
 import subprocess
-from pathlib import Path
 
 import pytest
 
@@ -17,19 +18,19 @@ IMAGE = fixture.REPOSITORY + "@" + DIGEST
 OWNER = "run-123/attempt-1/exact-artifact"
 
 
-@pytest.mark.parametrize("damage", [None, "archive", "source", "attempt", "content"])
+@pytest.mark.parametrize(
+    "damage", [None, "archive", "source", "attempt", "content", "export"]
+)
 def test_recovery_archive_is_bound_to_source_content_and_run(
     tmp_path, monkeypatch, damage
 ):
-    archive, state = tmp_path / "images.tar", tmp_path / "identity.json"
+    archive, state = tmp_path / "images.tar.gz", tmp_path / "identity.json"
     identity = dict(revision="a" * 40, upstream="b" * 40, run_id="123", attempt="2")
     image_id = ["sha256:" + "c" * 64]
     calls = []
 
     def command(args):
         calls.append(args)
-        if args[1] == "save":
-            Path(args[3]).write_bytes(b"real archive bytes")
         if args[1:3] == ["image", "inspect"]:
             payload = [
                 {
@@ -46,7 +47,33 @@ def test_recovery_archive_is_bound_to_source_content_and_run(
         return subprocess.CompletedProcess(args, 0, b"")
 
     monkeypatch.setattr(fixture, "_run", command)
+    class SaveProcess:
+        stdout = io.BytesIO(b"real archive bytes")
+
+        def wait(self):
+            return 7 if damage == "export" else 0
+
+        def poll(self):
+            return self.wait()
+
+    def save(args, **kwargs):
+        assert args == ["docker", "save", *fixture.RECOVERY_IMAGES]
+        assert kwargs["stdout"] == subprocess.PIPE
+        kwargs["stderr"].write(b"export failed before completion")
+        return SaveProcess()
+
+    monkeypatch.setattr(fixture.subprocess, "Popen", save)
+    if damage == "export":
+        with pytest.raises(subprocess.CalledProcessError) as error:
+            fixture.recovery_archive(archive, state, **identity)
+        assert b"export failed before completion" in error.value.stderr
+        assert not archive.exists() and not state.exists()
+        return
     fixture.recovery_archive(archive, state, **identity)
+    assert gzip.decompress(archive.read_bytes()) == b"real archive bytes"
+    saved = json.loads(state.read_text())
+    assert saved["uncompressedBytes"] == len(b"real archive bytes")
+    assert saved["archiveBytes"] == archive.stat().st_size
     calls.clear()
     if damage == "archive":
         archive.write_bytes(b"different archive")
