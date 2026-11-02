@@ -20,7 +20,11 @@ saved_profile_submission = _saved_profile_submission
 @pytest.mark.asyncio
 @pytest.mark.parametrize("explicit_profile", [None, "explicit-missing"])
 @pytest.mark.parametrize("saved_exists", [True, False], ids=["saved", "missing-saved"])
-@pytest.mark.parametrize("runtime", [None, "codex_cli"], ids=["omitted", "explicit"])
+@pytest.mark.parametrize(
+    "runtime",
+    [None, "codex_cli", "claude_code"],
+    ids=["omitted", "explicit", "other-harness"],
+)
 async def test_tool_only_preset_ignores_saved_account(
     saved_profile_submission, saved_exists, runtime, explicit_profile
 ):

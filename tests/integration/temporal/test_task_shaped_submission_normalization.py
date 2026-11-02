@@ -13,7 +13,11 @@ from api_service.api.routers.executions import (
     router,
 )
 from api_service.db.base import get_async_session
-from api_service.db.models import SettingsOverride, TemporalArtifactStatus
+from api_service.db.models import (
+    ManagedAgentProviderProfile,
+    SettingsOverride,
+    TemporalArtifactStatus,
+)
 from moonmind.config.settings import settings
 from tests.helpers.step_type_payloads import preset_step, skill_step, tool_step
 from tests.unit.api.routers.test_executions import (
@@ -41,7 +45,10 @@ def _client() -> tuple[TestClient, AsyncMock]:
 class _SkillContractSession:
     def __init__(self) -> None:
         async def execute(statement):
-            if statement.column_descriptions[0].get("entity") is SettingsOverride:
+            if statement.column_descriptions[0].get("entity") in {
+                SettingsOverride,
+                ManagedAgentProviderProfile,
+            }:
                 return _ExecuteResult([])
             return _ExecuteResult(
                 [
@@ -140,7 +147,11 @@ def test_mm641_task_shaped_submission_boundary_exposes_canonical_task_parameters
     task = service.create_execution.await_args.kwargs["initial_parameters"]["workflow"]
     assert task["instructions"] == "Preserve MM-641 task shape."
     assert task["dependsOn"] == ["mm:parent"]
-    assert task["runtime"] == {"mode": "codex_cli", "model": "gpt-5-codex"}
+    assert task["runtime"] == {
+        "mode": "codex_cli",
+        "model": "gpt-5-codex",
+        "providerProfileRef": "test-codex_cli",
+    }
     assert task["publish"] == {"mode": "pr"}
     assert task["git"] == {"branch": "feature/mm-641"}
     assert "targetBranch" not in task

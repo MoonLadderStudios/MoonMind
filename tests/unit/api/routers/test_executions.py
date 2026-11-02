@@ -177,10 +177,16 @@ class _ScalarRows:
     def all(self) -> list[object]:
         return self._rows
 
+    def first(self) -> object | None:
+        return self._rows[0] if self._rows else None
+
 
 class _ExecuteResult:
     def __init__(self, rows: list[object]) -> None:
         self._rows = rows
+
+    def all(self) -> list[object]:
+        return self._rows
 
     def scalars(self) -> _ScalarRows:
         return _ScalarRows(self._rows)
@@ -510,14 +516,38 @@ def _phase_11_manifest(**overrides: Any) -> StepExecutionManifestModel:
 
 
 def _artifact_session(rows: list[SimpleNamespace]) -> SimpleNamespace:
-    from api_service.db.models import SettingsOverride
+    """Shape-test storage with artifacts, native accounts and no shared configurations."""
+    from api_service.db.models import OmnigentAgentProfile, SettingsOverride
+
+    profiles = {
+        f"test-{runtime}": SimpleNamespace(
+            profile_id=f"test-{runtime}",
+            runtime_id=runtime,
+            default_model=None,
+            default_effort=None,
+        )
+        for runtime in ("codex_cli", "claude_code")
+    }
 
     async def execute(statement):
-        if statement.column_descriptions[0].get("entity") is SettingsOverride:
+        entity = statement.column_descriptions[0].get("entity")
+        if entity in {SettingsOverride, OmnigentAgentProfile}:
             return _ExecuteResult([])
+        if entity is ManagedAgentProviderProfile:
+            runtime = statement.compile().params.get("runtime_id_1")
+            return _ExecuteResult(
+                [profile for profile in profiles.values() if profile.runtime_id == runtime]
+            )
         return _ExecuteResult(rows)
 
-    return SimpleNamespace(execute=AsyncMock(side_effect=execute))
+    async def get(model, key):
+        return profiles.get(key) if model is ManagedAgentProviderProfile else None
+
+    return SimpleNamespace(
+        execute=AsyncMock(side_effect=execute),
+        get=AsyncMock(side_effect=get),
+        rollback=AsyncMock(),
+    )
 
 
 class _SnapshotReuseSession:
@@ -1847,6 +1877,7 @@ def client() -> Iterator[tuple[TestClient, AsyncMock, SimpleNamespace]]:
     app.include_router(router)
     service = AsyncMock()
     app.dependency_overrides[_get_service] = lambda: service
+    app.dependency_overrides[get_async_session] = lambda: _artifact_session([])
     _override_temporal_client(app)
     user = _override_user_dependencies(app, is_superuser=False)
 
@@ -1915,6 +1946,7 @@ def test_create_task_shaped_execution_keeps_integration_as_metadata(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, user = client
+    test_client.app.dependency_overrides[get_async_session] = lambda: _artifact_session([])
     service.create_execution.return_value = _build_execution_record()
 
     response = test_client.post(
@@ -4220,6 +4252,7 @@ def test_create_task_shaped_execution_rejects_invalid_required_capabilities(
     app.include_router(router)
     mock_service = AsyncMock()
     app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[get_async_session] = lambda: _artifact_session([])
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=False)
     workflow_payload = {"instructions": "Ship the Temporal integration."}
@@ -5764,27 +5797,23 @@ def test_create_task_shaped_execution_fetches_unique_attachments_in_one_query(
     test_client, service, _user = client
     monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
     service.create_execution.return_value = _build_execution_record()
-    execute = AsyncMock(
-        return_value=_ExecuteResult(
-            [
-                SimpleNamespace(
-                    artifact_id="art_01IMAGEINPUT0000000000001",
-                    status=TemporalArtifactStatus.COMPLETE,
-                    content_type="image/png",
-                    size_bytes=128,
-                ),
-                SimpleNamespace(
-                    artifact_id="art_01IMAGEINPUT0000000000002",
-                    status=TemporalArtifactStatus.COMPLETE,
-                    content_type="image/webp",
-                    size_bytes=256,
-                ),
-            ]
-        )
+    db_session = _artifact_session(
+        [
+            SimpleNamespace(
+                artifact_id="art_01IMAGEINPUT0000000000001",
+                status=TemporalArtifactStatus.COMPLETE,
+                content_type="image/png",
+                size_bytes=128,
+            ),
+            SimpleNamespace(
+                artifact_id="art_01IMAGEINPUT0000000000002",
+                status=TemporalArtifactStatus.COMPLETE,
+                content_type="image/webp",
+                size_bytes=256,
+            ),
+        ]
     )
-    test_client.app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
-        execute=execute
-    )
+    test_client.app.dependency_overrides[get_async_session] = lambda: db_session
 
     response = test_client.post(
         "/api/executions",
@@ -5813,7 +5842,12 @@ def test_create_task_shaped_execution_fetches_unique_attachments_in_one_query(
     )
 
     assert response.status_code == 201, response.json()
-    execute.assert_awaited_once()
+    attachment_queries = [
+        call
+        for call in db_session.execute.await_args_list
+        if call.args[0].column_descriptions[0].get("entity") is TemporalArtifact
+    ]
+    assert len(attachment_queries) == 1
     service.create_execution.assert_awaited_once()
 
 def test_create_task_shaped_execution_rejects_svg_attachment_type(
@@ -6596,7 +6630,10 @@ def test_create_remediation_convenience_route_expands_to_task_create_contract(
     assert kwargs["initial_parameters"]["workflow"]["instructions"] == (
         "Investigate the target execution."
     )
-    assert kwargs["initial_parameters"]["workflow"]["runtime"] == {"mode": "codex_cli"}
+    assert kwargs["initial_parameters"]["workflow"]["runtime"] == {
+        "mode": "codex_cli",
+        "providerProfileRef": "test-codex_cli",
+    }
     assert kwargs["initial_parameters"]["workflow"]["remediation"] == {
         "target": {"workflowId": "mm:target-workflow"},
         "mode": "snapshot",
@@ -6665,6 +6702,7 @@ def test_create_remediation_convenience_route_uses_top_level_overrides(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, _user = client
+    test_client.app.dependency_overrides[get_async_session] = lambda: _artifact_session([])
     scheduled_for = datetime.now(UTC) + timedelta(minutes=5)
     record = _build_execution_record(state=MoonMindWorkflowState.SCHEDULED)
     record.scheduled_for = scheduled_for
@@ -6706,7 +6744,10 @@ def test_create_remediation_convenience_route_uses_top_level_overrides(
     assert initial_parameters["priority"] == 7
     assert initial_parameters["maxAttempts"] == 5
     assert initial_parameters["workflow"]["instructions"] == "Top-level instructions"
-    assert initial_parameters["workflow"]["runtime"] == {"mode": "codex_cli"}
+    assert initial_parameters["workflow"]["runtime"] == {
+        "mode": "codex_cli",
+        "providerProfileRef": "test-codex_cli",
+    }
     assert initial_parameters["workflow"]["remediation"] == {
         "target": {"workflowId": "mm:target-workflow"},
         "mode": "snapshot",
@@ -7296,11 +7337,7 @@ def test_create_workflow_omnigent_browser_payload_persists_canonical_intent(
         default_model="vendor/" + "future-model-" * 16,
         default_effort="future-provider-effort",
     )
-    db_session = SimpleNamespace(
-        get=AsyncMock(side_effect=[provider_profile, None]),
-        commit=AsyncMock(),
-        refresh=AsyncMock(),
-    )
+    db_session = _ProfileRouteSession(provider_profile)
     test_client.app.dependency_overrides[get_async_session] = lambda: db_session
     snapshot = {
         "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
@@ -7374,7 +7411,7 @@ def test_create_workflow_omnigent_browser_payload_persists_canonical_intent(
             },
         )
 
-    assert response.status_code == 201
+    assert response.status_code == 201, response.text
     initial_parameters = service.create_execution.await_args.kwargs[
         "initial_parameters"
     ]
@@ -7386,7 +7423,10 @@ def test_create_workflow_omnigent_browser_payload_persists_canonical_intent(
         "executionTargetRef": "omnigent-codex@1",
         "launchPolicyRef": "codex-on-demand@1",
     }
-    assert initial_parameters["workflow"]["runtime"] == {"mode": "omnigent"}
+    assert initial_parameters["workflow"]["runtime"] == {
+        "mode": "omnigent",
+        "providerProfileRef": provider_profile.profile_id,
+    }
     assert initial_parameters["workflow"]["git"] == {"branch": "main"}
     assert initial_parameters["agentProfileSnapshot"] == snapshot
     assert initial_parameters["omnigentExecutionPlan"]["planRef"] == (
@@ -7507,14 +7547,12 @@ def test_create_task_shaped_execution_accepts_provider_profile_alias() -> None:
     mock_service = AsyncMock()
     mock_service.create_execution.return_value = _build_execution_record()
     app.dependency_overrides[_get_service] = lambda: mock_service
-    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
-        get=AsyncMock(
-            return_value=SimpleNamespace(
-                runtime_id="codex_cli",
-                default_model="gpt-5-codex",
-            )
-        )
+    profile = SimpleNamespace(
+        profile_id="codex-provider-profile",
+        runtime_id="codex_cli",
+        default_model="gpt-5-codex",
     )
+    app.dependency_overrides[get_async_session] = lambda: _ProfileRouteSession(profile)
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=False)
 
@@ -7551,21 +7589,18 @@ def test_create_task_shaped_execution_resolves_model_tier_against_profile() -> N
     mock_service = AsyncMock()
     mock_service.create_execution.return_value = _build_execution_record()
     app.dependency_overrides[_get_service] = lambda: mock_service
-    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
-        get=AsyncMock(
-            return_value=SimpleNamespace(
-                profile_id="codex-provider-profile",
-                runtime_id="codex_cli",
-                default_model=None,
-                default_effort=None,
-                model_tiers=[
-                    {"label": "Review", "model": "gpt-5-mini", "effort": "low"},
-                    {"label": "Implement", "model": "gpt-5.5", "effort": "high"},
-                ],
-                default_model_tier=1,
-            )
-        )
+    profile = SimpleNamespace(
+        profile_id="codex-provider-profile",
+        runtime_id="codex_cli",
+        default_model=None,
+        default_effort=None,
+        model_tiers=[
+            {"label": "Review", "model": "gpt-5-mini", "effort": "low"},
+            {"label": "Implement", "model": "gpt-5.5", "effort": "high"},
+        ],
+        default_model_tier=1,
     )
+    app.dependency_overrides[get_async_session] = lambda: _ProfileRouteSession(profile)
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=False)
 
@@ -7618,29 +7653,26 @@ def test_create_task_shaped_execution_records_tier_preview_mismatch() -> None:
     mock_service = AsyncMock()
     mock_service.create_execution.return_value = _build_execution_record()
     app.dependency_overrides[_get_service] = lambda: mock_service
-    app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
-        get=AsyncMock(
-            return_value=SimpleNamespace(
-                profile_id="codex-provider-profile",
-                profile_version=42,
-                runtime_id="codex_cli",
-                default_model="legacy-default",
-                default_model_tier=1,
-                model_tiers=[
-                    {
-                        "label": "Plan",
-                        "model": "codex-plan-current",
-                        "effort": "low",
-                    },
-                    {
-                        "label": "Implement",
-                        "model": "codex-implement-current",
-                        "effort": "high",
-                    },
-                ],
-            )
-        )
+    profile = SimpleNamespace(
+        profile_id="codex-provider-profile",
+        profile_version=42,
+        runtime_id="codex_cli",
+        default_model="legacy-default",
+        default_model_tier=1,
+        model_tiers=[
+            {
+                "label": "Plan",
+                "model": "codex-plan-current",
+                "effort": "low",
+            },
+            {
+                "label": "Implement",
+                "model": "codex-implement-current",
+                "effort": "high",
+            },
+        ],
     )
+    app.dependency_overrides[get_async_session] = lambda: _ProfileRouteSession(profile)
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=False)
 
@@ -9063,7 +9095,10 @@ def test_create_task_shaped_execution_preserves_recursive_preset_metadata(
     assert task["appliedStepTemplates"][0]["composition"]["includes"][0]["alias"] == (
         "checks"
     )
-    assert task["runtime"] == {"mode": "codex_cli"}
+    assert task["runtime"] == {
+        "mode": "codex_cli",
+        "providerProfileRef": "test-codex_cli",
+    }
     assert task["publish"] == {"mode": "pr"}
 
 
@@ -9569,7 +9604,14 @@ def caller_runtime_profile_session() -> SimpleNamespace:
             return provider_profile
         return None
 
-    return SimpleNamespace(get=AsyncMock(side_effect=get_row))
+    async def execute(statement):
+        if statement.column_descriptions[0].get("entity") is ManagedAgentProviderProfile:
+            return _ExecuteResult([provider_profile])
+        return _ExecuteResult([])
+
+    return SimpleNamespace(
+        get=AsyncMock(side_effect=get_row), execute=AsyncMock(side_effect=execute)
+    )
 
 
 @pytest.mark.parametrize("inheritance", ["caller", "parent"])
@@ -10197,27 +10239,23 @@ def test_create_task_shaped_execution_forwards_input_attachments(
     test_client, service, _user = client
     monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
     service.create_execution.return_value = _build_execution_record()
-    execute = AsyncMock(
-        return_value=_ExecuteResult(
-            [
-                SimpleNamespace(
-                    artifact_id="art_01OBJECTIVEINPUT00000000",
-                    status=TemporalArtifactStatus.COMPLETE,
-                    content_type="image/png",
-                    size_bytes=10,
-                ),
-                SimpleNamespace(
-                    artifact_id="art_01STEPINPUT000000000000",
-                    status=TemporalArtifactStatus.COMPLETE,
-                    content_type="image/png",
-                    size_bytes=20,
-                ),
-            ]
-        )
+    db_session = _artifact_session(
+        [
+            SimpleNamespace(
+                artifact_id="art_01OBJECTIVEINPUT00000000",
+                status=TemporalArtifactStatus.COMPLETE,
+                content_type="image/png",
+                size_bytes=10,
+            ),
+            SimpleNamespace(
+                artifact_id="art_01STEPINPUT000000000000",
+                status=TemporalArtifactStatus.COMPLETE,
+                content_type="image/png",
+                size_bytes=20,
+            ),
+        ]
     )
-    test_client.app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
-        execute=execute
-    )
+    test_client.app.dependency_overrides[get_async_session] = lambda: db_session
 
     response = test_client.post(
         "/api/executions",
@@ -10285,27 +10323,23 @@ def test_create_task_shaped_execution_normalizes_snake_case_input_attachments(
     test_client, service, _user = client
     monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
     service.create_execution.return_value = _build_execution_record()
-    execute = AsyncMock(
-        return_value=_ExecuteResult(
-            [
-                SimpleNamespace(
-                    artifact_id="art_01OBJECTIVEINPUT00000000",
-                    status=TemporalArtifactStatus.COMPLETE,
-                    content_type="image/png",
-                    size_bytes=10,
-                ),
-                SimpleNamespace(
-                    artifact_id="art_01STEPINPUT000000000000",
-                    status=TemporalArtifactStatus.COMPLETE,
-                    content_type="image/png",
-                    size_bytes=20,
-                ),
-            ]
-        )
+    db_session = _artifact_session(
+        [
+            SimpleNamespace(
+                artifact_id="art_01OBJECTIVEINPUT00000000",
+                status=TemporalArtifactStatus.COMPLETE,
+                content_type="image/png",
+                size_bytes=10,
+            ),
+            SimpleNamespace(
+                artifact_id="art_01STEPINPUT000000000000",
+                status=TemporalArtifactStatus.COMPLETE,
+                content_type="image/png",
+                size_bytes=20,
+            ),
+        ]
     )
-    test_client.app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
-        execute=execute
-    )
+    test_client.app.dependency_overrides[get_async_session] = lambda: db_session
 
     response = test_client.post(
         "/api/executions",
@@ -10373,21 +10407,17 @@ def test_create_task_shaped_execution_uses_nonblank_step_id_fallback(
     test_client, service, _user = client
     monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
     service.create_execution.return_value = _build_execution_record()
-    execute = AsyncMock(
-        return_value=_ExecuteResult(
-            [
-                SimpleNamespace(
-                    artifact_id="art_01STEPINPUT000000000000",
-                    status=TemporalArtifactStatus.COMPLETE,
-                    content_type="image/png",
-                    size_bytes=20,
-                ),
-            ]
-        )
+    db_session = _artifact_session(
+        [
+            SimpleNamespace(
+                artifact_id="art_01STEPINPUT000000000000",
+                status=TemporalArtifactStatus.COMPLETE,
+                content_type="image/png",
+                size_bytes=20,
+            ),
+        ]
     )
-    test_client.app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
-        execute=execute
-    )
+    test_client.app.dependency_overrides[get_async_session] = lambda: db_session
 
     response = test_client.post(
         "/api/executions",
@@ -10523,6 +10553,7 @@ def test_create_task_shaped_execution_preserves_canonical_mm627_task_shape(
         "mode": "codex_cli",
         "model": "gpt-5-codex",
         "effort": "high",
+        "providerProfileRef": "test-codex_cli",
     }
     assert task["publish"]["mode"] == "pr"
     assert task["dependsOn"] == ["mm:dep-1"]
@@ -12226,9 +12257,12 @@ def test_create_task_shaped_recurring_schedule_rejects_invalid_step_runtime_tier
 
 def test_create_task_shaped_recurring_schedule_passes_metadata_and_response(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    caller_runtime_profile_session: SimpleNamespace,
 ) -> None:
     test_client, _service, _user = client
-    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    test_client.app.dependency_overrides[get_async_session] = (
+        lambda: caller_runtime_profile_session
+    )
     definition_id = uuid4()
     next_run_at = datetime.now(UTC) + timedelta(hours=1)
     policy = {"overlap": {"mode": "skip"}}
@@ -12428,10 +12462,13 @@ async def test_recurring_target_persists_normalized_tier_previews() -> None:
 
 def test_create_task_shaped_recurring_schedule_lifts_snake_case_artifact_aliases(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    caller_runtime_profile_session: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     test_client, _service, _user = client
-    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    test_client.app.dependency_overrides[get_async_session] = (
+        lambda: caller_runtime_profile_session
+    )
     next_run_at = datetime.now(UTC) + timedelta(hours=1)
     artifact_service = SimpleNamespace(
         read=AsyncMock(
@@ -12491,9 +12528,12 @@ def test_create_task_shaped_recurring_schedule_lifts_snake_case_artifact_aliases
 
 def test_create_task_shaped_recurring_schedule_preserves_missing_policy(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    caller_runtime_profile_session: SimpleNamespace,
 ) -> None:
     test_client, _service, _user = client
-    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    test_client.app.dependency_overrides[get_async_session] = (
+        lambda: caller_runtime_profile_session
+    )
     next_run_at = datetime.now(UTC) + timedelta(hours=1)
 
     with patch(
@@ -12532,11 +12572,14 @@ def test_create_task_shaped_recurring_schedule_preserves_missing_policy(
 
 def test_create_task_shaped_recurring_schedule_allows_global_scope_for_operator(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    caller_runtime_profile_session: SimpleNamespace,
 ) -> None:
     # Single-user (#4351): the admitted operator authors every scope; scope
     # persists as history-compatible provenance, never an owner gate.
     test_client, _service, _user = client
-    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    test_client.app.dependency_overrides[get_async_session] = (
+        lambda: caller_runtime_profile_session
+    )
     next_run_at = datetime.now(UTC) + timedelta(hours=1)
 
     with patch(
@@ -12577,9 +12620,12 @@ def test_create_task_shaped_recurring_schedule_allows_global_scope_for_operator(
 
 def test_create_task_shaped_recurring_schedule_validation_maps_to_422(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    caller_runtime_profile_session: SimpleNamespace,
 ) -> None:
     test_client, _service, _user = client
-    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    test_client.app.dependency_overrides[get_async_session] = (
+        lambda: caller_runtime_profile_session
+    )
 
     with patch(
         "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
@@ -12762,6 +12808,7 @@ def test_task_submission_snapshot_uses_input_artifact_for_stripped_step_instruct
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=False)
     session = AsyncMock()
+    session.execute.return_value = _ExecuteResult([])
     app.dependency_overrides[get_async_session] = lambda: session
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
     monkeypatch.setattr(
@@ -20545,7 +20592,7 @@ async def test_mm3788_recurring_runtime_metadata_accepts_owned_profile() -> None
     profile = _mm3788_provider_profile(
         profile_id="claude_minimax_team", runtime_id="claude_code"
     )
-    session = SimpleNamespace(get=AsyncMock(return_value=profile))
+    session = _ProfileRouteSession(profile)
 
     metadata = await _resolve_recurring_runtime_metadata(
         {
@@ -20572,12 +20619,18 @@ class _ProfileRouteSession:
 
     def __init__(self, profile: SimpleNamespace) -> None:
         self._profile = profile
+        self.commit = AsyncMock()
+        self.refresh = AsyncMock()
 
     async def get(self, _model: object, profile_id: str) -> object | None:
         return self._profile if self._profile.profile_id == profile_id else None
 
-    async def execute(self, _stmt: object) -> SimpleNamespace:
-        return SimpleNamespace(all=lambda: [])
+    async def execute(self, statement: Any) -> _ExecuteResult:
+        if statement.column_descriptions[0].get("entity") is ManagedAgentProviderProfile:
+            runtime = statement.compile().params.get("runtime_id_1")
+            if runtime == self._profile.runtime_id:
+                return _ExecuteResult([self._profile])
+        return _ExecuteResult([])
 
 
 def _mm3833_recurring_request(runtime: dict[str, Any]) -> dict[str, Any]:

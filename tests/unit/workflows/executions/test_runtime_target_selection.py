@@ -258,6 +258,28 @@ def test_profile_route_is_selected_as_non_authored_provenance():
         control_plane_metrics.reset()
 
 
+@pytest.mark.parametrize("route", ["codex_cli", "omnigent"])
+@pytest.mark.parametrize("authored", [False, True])
+def test_inferred_account_preserves_runtime_selection_source(route, authored):
+    selection = resolve_runtime_target_selection(
+        surface=AuthoringSurface.workflow_create,
+        requested_runtime="codex_cli" if authored else None,
+        profile_runtime=route,
+        profile_harness_id="codex-native",
+        workflow_settings=SimpleNamespace(
+            default_runtime="codex_cli",
+            provider_profile_ref="same-account",
+            provider_profile_inferred=True,
+        ),
+        policy=_policy(),
+    )
+    assert selection.runtime_id == route
+    assert selection.source is (
+        SelectionSource.authored if authored else SelectionSource.configured_default
+    )
+    assert selection.available
+
+
 def test_authored_runtime_wins_over_the_profile_route():
     selection = resolve_runtime_target_selection(
         surface=AuthoringSurface.workflow_create,
@@ -843,3 +865,75 @@ def test_cloud_removal_preserves_retained_external_policy_targets(runtime_id):
     )
     assert selection.runtime_id == runtime_id
     assert selection.available
+
+
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code"])
+def test_exact_profile_translation_keeps_authored_provenance(runtime):
+    selection = resolve_runtime_target_selection(
+        surface=AuthoringSurface.workflow_create,
+        requested_runtime=runtime,
+        profile_runtime="omnigent",
+        policy=_policy(),
+    )
+    assert selection.runtime_id == "omnigent"
+    assert selection.source is SelectionSource.authored
+    assert selection.path_class is RuntimeProviderPathClass.generic_omnigent
+    assert selection.available is True
+
+
+def test_profile_harness_narrows_shared_selection_and_explicit_targets():
+    selected = resolve_runtime_target_selection(
+        surface=AuthoringSurface.workflow_create,
+        requested_runtime="claude_code",
+        profile_runtime="omnigent",
+        profile_harness_id="claude-native",
+        policy=_policy(),
+    )
+    assert selected.target_id == "claude.generic-omnigent"
+    assert selected.runtime_id == "omnigent"
+    foreign = resolve_runtime_target_selection(
+        surface=AuthoringSurface.workflow_create,
+        requested_target_id="codex.generic-omnigent",
+        profile_runtime="omnigent",
+        profile_harness_id="claude-native",
+        policy=_policy(),
+    )
+    assert not foreign.available
+    recorded = resolve_runtime_target_selection(
+        surface=AuthoringSurface.rerun,
+        recorded_target_id="codex.direct",
+        recorded_runtime_id="codex_cli",
+        profile_harness_id="claude-native",
+        policy=_policy(),
+    )
+    assert recorded.runtime_id == "codex_cli"
+    assert recorded.source is SelectionSource.recorded
+
+
+@pytest.mark.parametrize("stopped", [False, True])
+def test_profile_harness_keeps_the_direct_targets_policy(stopped):
+    policy = _policy()
+    if stopped:
+        policy = policy.model_copy(
+            update={
+                "rules": tuple(
+                    (
+                        rule.model_copy(
+                            update={"state": RolloutState.retired_for_new_work}
+                        )
+                        if rule.target_id == "codex.direct"
+                        else rule
+                    )
+                    for rule in policy.rules
+                )
+            }
+        )
+    selection = resolve_runtime_target_selection(
+        surface=AuthoringSurface.workflow_create,
+        requested_runtime="codex_cli",
+        profile_runtime="codex_cli",
+        profile_harness_id="codex-native",
+        policy=policy,
+    )
+    assert selection.target_id == "codex.direct"
+    assert selection.available is (not stopped)

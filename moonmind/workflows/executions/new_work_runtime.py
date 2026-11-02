@@ -42,6 +42,7 @@ def resolve_new_work_selection(
     authored_runtime: object = None,
     requested_target_id: str | None = None,
     profile_runtime: str | None = None,
+    profile_harness_id: str | None = None,
     policy: Any | None = None,
     env: Mapping[str, Any] | None = None,
 ):
@@ -67,6 +68,7 @@ def resolve_new_work_selection(
         requested_runtime=authored_runtime,
         requested_target_id=requested_target_id,
         profile_runtime=profile_runtime,
+        profile_harness_id=profile_harness_id,
         workflow_settings=workflow_settings,
         policy=policy,
         env=env,
