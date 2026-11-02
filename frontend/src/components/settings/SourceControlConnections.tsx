@@ -15,6 +15,7 @@ type UpdateBody = Omit<components['schemas']['ConnectionUpdateRequest'], 'token'
 interface PendingUpdate {
   name: string;
   publish: boolean;
+  projects: boolean;
   tokenFingerprint: string | null;
   body: UpdateBody;
 }
@@ -418,6 +419,7 @@ function PatCreateForm({
   const [name, setName] = useState('');
   const [token, setToken] = useState('');
   const [publish, setPublish] = useState(false);
+  const [projects, setProjects] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -426,10 +428,11 @@ function PatCreateForm({
     setName('');
     setToken('');
     setPublish(false);
+    setProjects(false);
     setError(null);
   }
 
-  useSettingsDraftRegistration(DRAFT_IDS.pat, Boolean(name || token || publish || saving), discard);
+  useSettingsDraftRegistration(DRAFT_IDS.pat, Boolean(name || token || publish || projects || saving), discard);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -446,7 +449,7 @@ function PatCreateForm({
         connectionId,
         displayName: name.trim(),
         token: transient,
-        allowedOperations: publish ? PUBLISH_OPERATIONS : READ_OPERATIONS,
+        allowedOperations: [...(publish ? PUBLISH_OPERATIONS : READ_OPERATIONS), ...(projects ? ['projects'] : [])],
       });
       settle(operation);
       onCommitted(saved);
@@ -503,6 +506,10 @@ function PatCreateForm({
       <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
         <input type="checkbox" checked={publish} onChange={(e) => setPublish(e.target.checked)} />
         Allow publishing (push branches, open pull requests and update issues)
+      </label>
+      <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+        <input type="checkbox" checked={projects} onChange={(e) => setProjects(e.target.checked)} />
+        Allow project board updates
       </label>
       <ErrorText>{error}</ErrorText>
       <div className="flex flex-wrap gap-2">
@@ -670,6 +677,7 @@ function ConnectionDetail({
 }) {
   const [name, setName] = useState(connection.displayName);
   const [publish, setPublish] = useState(canPublish(connection.allowedOperations));
+  const [projects, setProjects] = useState(connection.allowedOperations.includes('projects'));
   const [token, setToken] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -687,6 +695,7 @@ function ConnectionDetail({
   const changed =
     name.trim() !== connection.displayName ||
     publish !== canPublish(connection.allowedOperations) ||
+    projects !== connection.allowedOperations.includes('projects') ||
     token.length > 0 || rotationPending || pendingUpdate.current !== null;
   const assignmentChanged = Boolean(repository || assignPublish);
 
@@ -694,6 +703,7 @@ function ConnectionDetail({
     pendingUpdate.current = null;
     setName(connection.displayName);
     setPublish(canPublish(connection.allowedOperations));
+    setProjects(connection.allowedOperations.includes('projects'));
     setToken('');
     setRotationPending(false);
     setSaveError(null);
@@ -719,6 +729,7 @@ function ConnectionDetail({
     if (currentConnection.current.policyRevision > saved.policyRevision) return false;
     setName(saved.displayName);
     setPublish(canPublish(saved.allowedOperations));
+    setProjects(saved.allowedOperations.includes('projects'));
     onCommitted(saved);
     return true;
   }
@@ -735,7 +746,7 @@ function ConnectionDetail({
     try {
       const fingerprint = await tokenFingerprint(transient);
       const previous = pendingUpdate.current;
-      const sameIntent = previous && previous.name === name.trim() && previous.publish === publish &&
+      const sameIntent = previous && previous.name === name.trim() && previous.publish === publish && previous.projects === projects &&
         fingerprint !== null && previous.tokenFingerprint === fingerprint;
       body = sameIntent ? previous.body : {
         requestId: newRequestId(),
@@ -744,16 +755,18 @@ function ConnectionDetail({
       };
       if (!sameIntent) {
         if (name.trim() !== connection.displayName) body.displayName = name.trim();
-        if (publish !== canPublish(connection.allowedOperations)) {
-          const operations = publish
+        if (publish !== canPublish(connection.allowedOperations) || projects !== connection.allowedOperations.includes('projects')) {
+          let operations = publish
             ? Array.from(new Set([...connection.allowedOperations, ...PUBLISH_OPERATIONS]))
             : connection.allowedOperations.filter(
               (operation) => operation === 'read' || !PUBLISH_OPERATIONS.includes(operation),
             );
+          operations = operations.filter((operation) => operation !== 'projects');
+          if (projects) operations.push('projects');
           body.allowedOperations = operations as NonNullable<UpdateBody['allowedOperations']>;
         }
       }
-      pendingUpdate.current = { name: name.trim(), publish, tokenFingerprint: fingerprint, body };
+      pendingUpdate.current = { name: name.trim(), publish, projects, tokenFingerprint: fingerprint, body };
       const saved = await sendJson<Connection>(`${API}/${encodeURIComponent(connection.id)}`, 'PATCH', {
         ...body,
         ...(transient ? { token: transient } : {}),
@@ -971,6 +984,10 @@ function ConnectionDetail({
         <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
           <input type="checkbox" checked={publish} disabled={saving} onChange={(e) => setPublish(e.target.checked)} />
           Allow publishing (push branches, open pull requests and update issues)
+        </label>
+        <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+          <input type="checkbox" checked={projects} disabled={saving} onChange={(e) => setProjects(e.target.checked)} />
+          Allow project board updates
         </label>
         {isPat ? (
           <label className="flex flex-col gap-1 text-sm">

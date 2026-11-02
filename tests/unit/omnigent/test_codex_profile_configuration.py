@@ -7,6 +7,9 @@ import pytest
 from moonmind.omnigent.harness_platform.materializers import (
     codex_provider_config_endpoint,
 )
+from tests.helpers.provider_egress import minimax_egress  # noqa: F401
+
+pytestmark = pytest.mark.usefixtures("minimax_egress")
 
 
 def profile(**changes):

@@ -293,13 +293,20 @@ later Profile edit introduces unsupported settings; the step reports that gap.
 Fixed step accounts, harnesses and distinct model/effort pairs have
 their own immutable plans compiled by the same admission owner, linked
 through the existing artifact owner and carried across successor attempts.
-The immutable root plan binds each complete step handoff by digest; admission,
-planning and continuation reject a replaced or missing handoff. Retained plans
+An explicit root rollout target constrains the root plan; independent steps
+validate their own targets against their selected Profiles.
+The immutable root plan binds each complete step handoff by digest and retains
+its verified artifact inputs for saved schedules. Admission, planning and
+continuation reject a replaced or missing handoff. Retained plans
 without this field preserve their original bytes and plan identities.
 Frozen successors retain each step's saved Profile snapshot. Exact reruns
 inherit their admitted artifact grants before Temporal can start.
+Generated remediation, verification and evidence retries inherit their controller's
+admitted step plan; a replay patch preserves older histories' recorded requests.
+Schedule admission shares ordinary submission's step ID defaults and aliases.
 Fresh scheduled occurrences resolve current step configuration; their cache
-tracks selected Profile tiers/configuration, excluding generated plan refs.
+tracks Profile tiers, resolved configuration versions and selected policy authority,
+excluding generated plan refs.
 Replacing a root without specialized steps explicitly clears prior handoffs.
 Equivalent product submissions,
 native defaults and same-account step aliases use the shared route, including
@@ -327,8 +334,9 @@ Secret values still resolve
 after acquisition under the existing credential-generation fence. Older plans
 without this snapshot retain their recorded interpretation.
 Codex developer instructions, project-instruction discovery and history preferences
-also reach its private session config. Native Profile aliases translate a requested
-model once during shared compilation, using the same lookup as direct launch.
+also reach its private session config. Native Profile aliases translate explicit
+model overrides once during shared compilation, using the same lookup as direct
+launch. Resolved defaults and tiers keep their selected model.
 Tool/authentication and launch settings
 without an equivalent projection retain their native route.
 Explicit same-epoch Codex context reuse forks durable native history through

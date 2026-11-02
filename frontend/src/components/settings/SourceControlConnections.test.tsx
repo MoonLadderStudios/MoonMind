@@ -196,6 +196,25 @@ describe('SourceControlConnections', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
+  it('adds project updates explicitly without changing other connection grants', async () => {
+    const state = { items: [connection({ allowedOperations: PUBLISH_OPERATIONS })] };
+    const fetchMock = stubApi(state, {
+      'PATCH /api/v1/repository-connections/personal-github': (_url, init) => {
+        const body = JSON.parse(String(init.body));
+        const saved = connection({ allowedOperations: body.allowedOperations, policyRevision: 2 });
+        state.items = [saved];
+        return json(saved);
+      },
+    });
+    renderSection();
+    const form = await screen.findByRole('form', { name: 'Edit connection' });
+    fireEvent.click(within(form).getByLabelText(/Allow project board updates/));
+    fireEvent.click(within(form).getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(calls(fetchMock, 'PATCH', '/api/v1/repository-connections/personal-github')).toHaveLength(1));
+    expect(bodyOf(calls(fetchMock, 'PATCH', '/api/v1/repository-connections/personal-github')[0]).allowedOperations)
+      .toEqual([...PUBLISH_OPERATIONS, 'projects']);
+  });
+
   it('lists two connections and tests only the selected one', async () => {
     const state = {
       items: [

@@ -1,6 +1,8 @@
 """Product admission seals the exact immutable Skill inputs it publishes."""
 
 import hashlib
+from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -117,8 +119,9 @@ async def test_saved_plan_admission_reuses_sealed_inputs_without_rediscovering_s
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("specialized", [False, True])
 async def test_full_plan_compiler_seals_frozen_snapshot_and_nested_skill_bytes(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, specialized
 ):
     from types import SimpleNamespace
 
@@ -187,7 +190,23 @@ async def test_full_plan_compiler_seals_frozen_snapshot_and_nested_skill_bytes(
                     "targetRuntime": "omnigent",
                     "publishMode": "none",
                     "model": "example/model",
-                    "task": {"skill": {"id": "moonspec-verify"}},
+                    "task": {
+                        "skill": {"id": "moonspec-verify"},
+                        "steps": (
+                            [
+                                {
+                                    "id": "review",
+                                    "runtime": {"model": "example/review-model"},
+                                },
+                                {
+                                    "id": "verify",
+                                    "runtime": {"model": "example/verify-model"},
+                                },
+                            ]
+                            if specialized
+                            else []
+                        ),
+                    },
                 },
                 authored_request_ref=snapshot_id,
                 authored_request_digest=snapshot_digest,
@@ -205,6 +224,70 @@ async def test_full_plan_compiler_seals_frozen_snapshot_and_nested_skill_bytes(
             assert snapshot_id in ids
             assert compiled.resolved_skillset_ref in ids
             assert {entry.artifact_id for entry in manifest} <= ids
+            if specialized:
+                from api_service.db import models
+                from moonmind.omnigent.bridge_artifacts import (
+                    OmnigentArtifactError,
+                    ensure_verified_execution_plan_dependencies,
+                )
+                from tests.unit.workflows.temporal.test_schedule_input_retention import (
+                    save_schedule,
+                )
+
+                assert len(compiled.step_plans) == 2
+                required_step_ids = set()
+                for step in compiled.step_plans:
+                    step_root = step.binding.plan_artifact_ref
+                    step_dependencies = await repository.get_verified_dependencies(
+                        step_root
+                    )
+                    assert step_dependencies is not None
+                    required_step_ids.add(step_root)
+                    required_step_ids.update(
+                        entry.artifact_id
+                        for entry in step_dependencies
+                        if entry.required
+                    )
+                assert required_step_ids <= {
+                    entry.artifact_id for entry in dependencies if entry.required
+                }
+                replaced = deepcopy(compiled.step_parameters)
+                replaced["review"]["omnigentExecutionPlan"][
+                    "planArtifactRef"
+                ] = snapshot_id
+                for invalid in ({}, replaced):
+                    with pytest.raises(
+                        OmnigentArtifactError, match="logical step plan authority"
+                    ):
+                        await ensure_verified_execution_plan_dependencies(
+                            artifacts=service,
+                            plan=compiled.envelope,
+                            binding=compiled.binding,
+                            access=access_for_test("operator"),
+                            admitted_step_plans=invalid,
+                        )
+                definition = await save_schedule(
+                    session, {"initialParameters": compiled.execution_parameters}
+                )
+                definition.input_artifact_root_id = root
+                for artifact_id in ids | {root}:
+                    artifact = await repository.get_artifact(artifact_id)
+                    artifact.expires_at = datetime.now(UTC) - timedelta(days=1)
+                await session.commit()
+                sweeper = TemporalArtifactService(repository, store=store)
+                await sweeper.sweep_lifecycle(principal="service:sweeper")
+                for artifact_id in required_step_ids:
+                    assert (
+                        await service.read(
+                            artifact_id=artifact_id, access=access_for_test("operator")
+                        )
+                    )[1]
+                await session.delete(definition)
+                await session.commit()
+                await sweeper.sweep_lifecycle(principal="service:sweeper")
+                for artifact_id in required_step_ids:
+                    artifact = await repository.get_artifact(artifact_id)
+                    assert artifact.status is models.TemporalArtifactStatus.DELETED
             await session.commit()
         async with sessions() as observer:
             assert (

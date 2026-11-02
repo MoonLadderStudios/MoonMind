@@ -8,16 +8,23 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from api_service.api.routers.executions import _get_service, router
+from api_service.api.routers.executions import (
+    _build_recurring_target,
+    _get_service,
+    _resolve_recurring_runtime_metadata,
+    router,
+)
 from api_service.db.base import get_async_session
 from api_service.db.models import ManagedAgentProviderProfile, TemporalExecutionCanonicalRecord
 from api_service.services.omnigent_agent_bootstrap_service import reconcile_bootstrap_agent_profile
 from api_service.services.omnigent_agent_profile_service import synchronize_omnigent_harness_catalog
 from api_service.services.omnigent_execution_plan_service import readmit_frozen_execution_plan
+from api_service.services.recurring_workflows_service import RecurringWorkflowsService
 from moonmind.config.settings import settings
 from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
 from moonmind.omnigent.harness_platform.execution_plan import bind_omnigent_model_selection
 from moonmind.omnigent.settings import resolved_server_url
+from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from moonmind.workflows.temporal.service import TemporalExecutionService
 from moonmind.workflows.temporal.artifacts import (
@@ -32,6 +39,82 @@ from tests.unit.api.routers.test_executions import _override_user_dependencies
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 native_journey = native_fixture.native_journey
 session_factory = native_fixture.session_factory
+
+
+@pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
+@pytest.mark.parametrize("identity", [{}, {"stepId": "selected"}, {"id": "selected"}])
+async def test_scheduled_specialized_step_uses_canonical_identity(
+    native_journey, monkeypatch, identity
+):
+    journey = native_journey
+    monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
+    monkeypatch.setattr(settings.workflow, "github_repository", "")
+    inventory = await OmnigentHttpClient(base_url=resolved_server_url()).list_agents()
+    async with journey.session_factory() as session:
+        await reconcile_bootstrap_agent_profile(session, inventory=inventory)
+        await synchronize_omnigent_harness_catalog(session)
+        request = {
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {
+                "workflow": {
+                    "instructions": "Review a report on schedule.",
+                    "runtime": {
+                        "mode": "codex_cli",
+                        "providerProfileRef": PROFILE,
+                        "model": journey.server.model,
+                    },
+                    "steps": [
+                        {
+                            **identity,
+                            "instructions": "Review the report.",
+                            "type": "skill",
+                            "skill": {"id": _DURABLE_SKILL_NAME},
+                            "runtime": {"model": "example/independent-model"},
+                        },
+                    ],
+                },
+                "publishMode": "none",
+                "workspace": {"workspaceSource": {"kind": "scratch"}},
+            },
+        }
+        metadata = await _resolve_recurring_runtime_metadata(request, session=session)
+        target = _build_recurring_target(request, runtime_metadata=metadata)
+        adapter = SimpleNamespace(create_schedule=AsyncMock())
+        service = RecurringWorkflowsService(session, temporal_client_adapter=adapter)
+        definition = await service.create_definition(
+            name="Scheduled step identity",
+            description=None,
+            enabled=True,
+            schedule_type="cron",
+            cron="0 * * * *",
+            timezone="UTC",
+            scope_type="personal",
+            scope_ref=None,
+            owner_user_id=None,
+            target=target,
+            policy={},
+            actor=OperatorAdmission(via="schedule-step-fixture"),
+        )
+        parameters = definition.target["initialParameters"]
+        step_id = "selected" if identity else "step-1"
+        assert parameters["workflow"]["steps"][0]["id"] == step_id
+        assert set(parameters["omnigentStepExecutionPlans"]) == {step_id}
+        requests = agent_requests(parameters)
+        binding = requests[step_id].omnigent_execution_plan
+        assert binding is not None
+        assert binding.plan_ref != parameters["omnigentExecutionPlan"]["planRef"]
+        plan = await DbExecutionPlanStore(journey.session_factory).load(binding.plan_ref)
+        assert plan.payload.modelConfig.qualifiedId == "example/independent-model"
+        assert plan.payload.harnessId == "codex-native"
+        adapter.create_schedule.assert_awaited_once()
+        dispatched = adapter.create_schedule.await_args.kwargs["workflow_input"][
+            "initial_parameters"
+        ]
+        assert (
+            dispatched["omnigentStepExecutionPlans"]
+            == parameters["omnigentStepExecutionPlans"]
+        )
+        assert dispatched["workflow"]["steps"][0]["id"] == step_id
 
 
 @pytest.mark.parametrize("native_journey", ["codex-native", "claude-native", "opencode-native"], indirect=True)
