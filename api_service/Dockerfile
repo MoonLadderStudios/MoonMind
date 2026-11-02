@@ -63,7 +63,7 @@ RUN rm -rf /build/api_service/static/workflow_console/dist \
 
 # Stock native chat UI, built from the same submodule source used by the API.
 # Browser assets are architecture-independent; build once on the builder host.
-FROM --platform=$BUILDPLATFORM node:22-bookworm AS native-ui-builder
+FROM --platform=$BUILDPLATFORM node:26-bookworm AS native-ui-builder
 WORKDIR /build
 COPY omnigent/package.json omnigent/pnpm-workspace.yaml omnigent/pnpm-lock.yaml ./
 COPY omnigent/patches/ ./patches/

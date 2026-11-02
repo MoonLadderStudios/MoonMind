@@ -2139,6 +2139,8 @@ def test_plan_version_round_trip_preserves_historical_canonical_bytes():
     plan = _compile_opencode_plan()
     assert plan.payload.omnigentVersion is None
     assert "omnigentVersion" not in plan.model_dump(mode="json")["payload"]
+    assert plan.payload.logicalStepPlans is None
+    assert "logicalStepPlans" not in plan.model_dump(mode="json")["payload"]
     restored = OmnigentExecutionPlanEnvelope.model_validate_json(plan.model_dump_json(by_alias=True))
     assert restored.planRef == plan.planRef
     historical = plan.model_dump(mode="json", by_alias=True)
@@ -2147,6 +2149,21 @@ def test_plan_version_round_trip_preserves_historical_canonical_bytes():
     restored = OmnigentExecutionPlanEnvelope.model_validate(historical)
     assert restored.payload.omnigentVersion == "1.0.0"
     assert compute_plan_ref(restored.payload) == historical["planRef"]
+
+
+def test_logical_step_handoffs_are_bound_by_the_root_plan_digest():
+    from moonmind.omnigent.harness_platform.execution_plan import logical_step_plan_digests
+
+    original = _compile_opencode_plan()
+    parameters = {"verify": {"model": "example/selected", "omnigentExecutionPlan": {"planRef": "own-plan"}}}
+    bound = create_execution_plan_envelope(original.payload.model_copy(update={
+        "logicalStepPlans": logical_step_plan_digests(parameters),
+    }))
+    assert bound.planRef != original.planRef
+    altered = {"verify": {**parameters["verify"], "model": "example/substituted"}}
+    assert logical_step_plan_digests(altered) != bound.payload.logicalStepPlans
+    assert logical_step_plan_digests(None) != bound.payload.logicalStepPlans
+    assert verify_execution_plan_envelope(bound).planRef == bound.planRef
 
 
 @pytest.mark.parametrize("harness_id", ["opencode-native", "codex-native", "claude-native", "pi-native"])
