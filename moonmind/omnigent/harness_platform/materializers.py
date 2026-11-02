@@ -352,6 +352,19 @@ def untranslated_oauth_launch_options(profile: Any) -> str | None:
     return None
 
 
+def snapshot_provider_configuration(profile: Any) -> ProviderConfigEndpoint | None:
+    """Capture nonsecret provider settings while admission owns the Profile."""
+    if not is_api_key_launch_profile(profile):
+        return None
+    endpoint, reason = provider_config_endpoint(profile)
+    if endpoint is None:
+        raise HarnessPlatformError(
+            f"API-key Provider Profile cannot run on Omnigent: {reason}",
+            code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+        )
+    return endpoint
+
+
 def _omnigent_egress_admits(url: str) -> bool:
     from urllib.parse import urlsplit
 

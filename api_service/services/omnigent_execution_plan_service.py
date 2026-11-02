@@ -66,6 +66,7 @@ from moonmind.omnigent.harness_platform.materializers import (
     is_api_key_launch_profile,
     materializer_ref_for_profile,
     materializer_ref_for_provider,
+    snapshot_provider_configuration,
 )
 from moonmind.omnigent.harness_platform.planner import (
     compile_execution_plan,
@@ -1997,6 +1998,10 @@ async def compile_and_persist_execution_plan(
         trust_record=trust,
         resolved_skills=resolved_skills,
         credential_binding_set=binding_set,
+        provider_configurations=(
+            {"primary-model": snapshot_provider_configuration(provider_profile)}
+            if config["materializerRef"] == "omnigent-provider-config@1" else {}
+        ),
         repository_slot_requirements=repository_slot_requirements,
         workspace_source_kind=workspace_source_kind,
         workspace_access_snapshot_ref=workspace_access_snapshot_ref,

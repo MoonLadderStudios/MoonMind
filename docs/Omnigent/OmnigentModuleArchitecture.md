@@ -311,6 +311,10 @@ static-connected Codex/Claude hosts use the shared lifecycle.
 API-key Codex and Claude Profiles that translate exactly, including MiniMax's
 declared Claude environment bundle and Codex Responses file configuration, run
 on the shared lifecycle with their endpoint, model pins and non-secret tuning.
+New plans freeze those settings per credential slot, so a queued start keeps
+its admitted configuration after a Profile edit. Secret values still resolve
+after acquisition under the existing credential-generation fence. Older plans
+without this snapshot retain their recorded interpretation.
 Codex developer instructions, project-instruction discovery and history preferences
 also reach its private session config. Native Profile aliases translate a requested
 model once during shared compilation, using the same lookup as direct launch.
