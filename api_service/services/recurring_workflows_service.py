@@ -563,6 +563,9 @@ class RecurringWorkflowsService:
                     plan=plan,
                     binding=binding,
                     access=access,
+                    admitted_step_plans=(target.get("initialParameters") or {}).get(
+                        "omnigentStepExecutionPlans"
+                    ),
                     planning_parameters=(
                         {
                             "system": {
