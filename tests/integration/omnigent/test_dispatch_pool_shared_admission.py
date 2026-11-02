@@ -61,7 +61,7 @@ session_factory = native_fixture.session_factory
 @pytest.mark.parametrize(
     "native_journey", ["codex-native", "claude-native"], indirect=True
 )
-@pytest.mark.parametrize("scenario", ["ordinary", "disabled", "publish"])
+@pytest.mark.parametrize("scenario", ["ordinary", "disabled", "publish", "model_alias"])
 async def test_pool_selected_account_compiles_once_and_preserves_its_original_inputs(
     native_journey, monkeypatch, scenario
 ):
@@ -114,6 +114,8 @@ async def execute_selected_pool_source(
             ManagedAgentProviderProfile, native_fixture.PROFILE
         )
         provider.tags = ["selected-pool"]
+        if scenario == "model_alias":
+            provider.model_overrides = {"selected-pool-alias": journey.server.model}
         await session.commit()
         await reconcile_bootstrap_agent_profile(session, inventory=inventory)
         app = FastAPI()
@@ -138,7 +140,11 @@ async def execute_selected_pool_source(
                             "runtime": {
                                 "mode": runtime,
                                 "profileSelector": {"tagsAll": ["selected-pool"]},
-                                "model": journey.server.model,
+                                "model": (
+                                    "selected-pool-alias"
+                                    if scenario == "model_alias"
+                                    else journey.server.model
+                                ),
                             },
                             "steps": [
                                 {
@@ -355,6 +361,10 @@ async def execute_selected_pool_source(
             assert shared.parameters["commitMessage"] == "Publish selected pool work"
             return
         assert plan.payload.harnessId == journey.harness
+        if scenario == "model_alias":
+            assert request.parameters["model"] == "selected-pool-alias"
+            assert shared.parameters["model"] == journey.server.model
+            assert plan.payload.modelConfig.qualifiedId == journey.server.model
         assert (
             plan.payload.credentialBindings["primary-model"].providerProfileRef
             == native_fixture.PROFILE
