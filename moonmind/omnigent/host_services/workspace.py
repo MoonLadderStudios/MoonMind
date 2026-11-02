@@ -137,7 +137,11 @@ async def resolve_daemon_workspace_root(
     runner: DaemonCommandRunner,
     workspace_volume: str,
 ) -> Path | None:
-    """Resolve the authoritative workspace volume in local or remote mode."""
+    """Read the selected daemon's workspace mountpoint without worker lookup.
+
+    The daemon owns this path; resolving it through worker symlinks can name
+    a different directory, including macOS's local /var to /private/var link.
+    """
 
     mode = os.getenv("WORKFLOW_DOCKER_DAEMON_MODE", "").strip().lower()
     if not mode:
@@ -159,7 +163,7 @@ async def resolve_daemon_workspace_root(
             "agent workspace volume mountpoint is unavailable from the Docker daemon",
             code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
         )
-    return Path(mountpoint).resolve()
+    return Path(mountpoint)
 
 
 def resolve_daemon_attachment_source(

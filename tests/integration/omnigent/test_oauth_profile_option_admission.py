@@ -1,4 +1,4 @@
-"""Native OAuth choices retain settings the shared home mount cannot apply."""
+"""Profile options retain their selected meaning across shared admission."""
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -18,6 +18,7 @@ from api_service.services.omnigent_agent_bootstrap_service import (
 )
 from moonmind.config.settings import settings
 from moonmind.omnigent.settings import resolved_server_url
+from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from moonmind.workflows.temporal.service import TemporalExecutionService
 from tests.integration.omnigent import (
@@ -37,7 +38,14 @@ session_factory = native_fixture.session_factory
     "native_journey", ["codex-native", "claude-native"], indirect=True
 )
 @pytest.mark.parametrize(
-    "option", ["env_template", "file_templates", "home_path_overrides"]
+    "option",
+    [
+        "env_template",
+        "file_templates",
+        "home_path_overrides",
+        "model_overrides",
+        "step_model_overrides",
+    ],
 )
 async def test_product_creation_preserves_the_exact_oauth_profile_options(
     native_journey, monkeypatch, option
@@ -56,6 +64,8 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
             }
         ],
         "home_path_overrides": {"HOME": "{{runtime_support_dir}}/accepted-home"},
+        "model_overrides": {"selected-model-alias": journey.server.model},
+        "step_model_overrides": {"selected-model-alias": journey.server.model},
     }
     inventory = await OmnigentHttpClient(base_url=resolved_server_url()).list_agents()
     async with journey.session_factory() as session:
@@ -64,7 +74,8 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
             str(getattr(profile.credential_source, "value", profile.credential_source))
             == "oauth_volume"
         )
-        setattr(profile, option, values[option])
+        field = "model_overrides" if option == "step_model_overrides" else option
+        setattr(profile, field, values[option])
         await session.commit()
         await reconcile_bootstrap_agent_profile(session, inventory=inventory)
         service = TemporalExecutionService(session)
@@ -89,6 +100,11 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
                             "runtime": {
                                 "mode": runtime,
                                 "providerProfileRef": native_fixture.PROFILE,
+                                **(
+                                    {"model": "selected-model-alias"}
+                                    if option == "model_overrides"
+                                    else {}
+                                ),
                             },
                             "steps": [
                                 {
@@ -96,6 +112,11 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
                                     "instructions": "Perform the accepted task.",
                                     "type": "skill",
                                     "skill": {"id": native_fixture._DURABLE_SKILL_NAME},
+                                    **(
+                                        {"runtime": {"model": "selected-model-alias"}}
+                                        if option == "step_model_overrides"
+                                        else {}
+                                    ),
                                 }
                             ],
                         },
@@ -107,10 +128,18 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
         record = await session.get(
             TemporalExecutionCanonicalRecord, response.json()["workflowId"]
         )
-        assert record.parameters["targetRuntime"] == runtime
-        assert not record.parameters.get("omnigentExecutionPlan")
         request = agent_requests(record.parameters)["work"]
-        assert request.agent_kind == "managed" and request.agent_id == runtime
+        if field == "model_overrides":
+            assert record.parameters["targetRuntime"] == "omnigent"
+            assert request.agent_kind == "external" and request.agent_id == "omnigent"
+            plan = await DbExecutionPlanStore(journey.session_factory).load(
+                request.omnigent_execution_plan.plan_ref
+            )
+            assert plan.payload.modelConfig.qualifiedId == journey.server.model
+        else:
+            assert record.parameters["targetRuntime"] == runtime
+            assert not record.parameters.get("omnigentExecutionPlan")
+            assert request.agent_kind == "managed" and request.agent_id == runtime
         assert request.execution_profile_ref == native_fixture.PROFILE
         await session.refresh(profile)
-        assert getattr(profile, option) == values[option]
+        assert getattr(profile, field) == values[option]
