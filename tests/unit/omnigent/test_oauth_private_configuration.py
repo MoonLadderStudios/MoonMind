@@ -38,8 +38,12 @@ async def test_private_configuration_keeps_the_enrolled_home_and_its_cleanup_own
 
 @pytest.mark.parametrize("use_enrolled_home", [False, True], ids=["two-private-homes", "refuse-enrolled-home"])
 @pytest.mark.parametrize("delivery", ["oauth-home", "provider-config"])
-def test_private_configuration_runs_only_in_native_private_home(tmp_path, use_enrolled_home, delivery):
-    selected, _ = private_codex_profile()
+@pytest.mark.parametrize("source_home", ["per-run", "enrolled", "implicit-enrolled"])
+def test_private_configuration_runs_only_in_native_private_home(tmp_path, use_enrolled_home, delivery, source_home):
+    selected, _ = private_codex_profile(
+        home_path=("{{runtime_support_dir}}/codex-home" if source_home == "per-run" else "/home/app/.codex"),
+        declare_home=source_home != "implicit-enrolled",
+    )
     tuning = snapshot_provider_configuration(selected)
     home, skills, binaries = (tmp_path / name for name in ("home", "skills", "bin"))
     for directory in (home, skills, binaries):

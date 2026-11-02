@@ -21,6 +21,7 @@ from types import SimpleNamespace
 
 _CONFIG_PATH = "{{runtime_support_dir}}/codex-home/config.toml"
 _CODEX_HOME = "{{runtime_support_dir}}/codex-home"
+_ENROLLED_CODEX_HOME = "/home/app/.codex"
 MINIMAX_MODEL = "codex-MiniMax-M2.7"
 OAUTH_CONFIGURATION_ENV = "MOONMIND_CODEX_PROFILE_CONFIGURATION"
 _SESSION_SETTINGS = {
@@ -231,11 +232,25 @@ def _configuration_document(profile):
     try:
         templates, repaired = repaired_managed_templates(profile)
         home = dict(getattr(profile, "home_path_overrides", None) or {})
-        if set(home) != {"CODEX_HOME"}:
+        credential_source = getattr(profile, "credential_source", None)
+        materialization_mode = getattr(profile, "runtime_materialization_mode", None)
+        enrolled_home = (
+            getattr(profile, "runtime_id", None) == "codex_cli"
+            and getattr(credential_source, "value", credential_source) == "oauth_volume"
+            and getattr(materialization_mode, "value", materialization_mode) == "oauth_home"
+            and getattr(profile, "volume_mount_path", None) == _ENROLLED_CODEX_HOME
+        )
+        if not home and enrolled_home:
+            home_path = _ENROLLED_CODEX_HOME
+        elif set(home) == {"CODEX_HOME"}:
+            home_path = str(home["CODEX_HOME"])
+        else:
             return None, "Codex file templates require one declared CODEX_HOME"
-        home_path = str(home["CODEX_HOME"])
         if (
-            not home_path.startswith("{{runtime_support_dir}}/")
+            not (
+                home_path.startswith("{{runtime_support_dir}}/")
+                or enrolled_home and home_path == _ENROLLED_CODEX_HOME
+            )
             or ".." in Path(home_path).parts
         ):
             return None, "Codex HOME must be within its run support directory"
@@ -498,7 +513,7 @@ def configure_home(configuration, home):
 def configure_private_oauth_home(configuration, home):
     """Overlay preferences only after the native owner created its private HOME."""
     home = Path(home).resolve()
-    enrolled = Path("/home/app/.codex").resolve()
+    enrolled = Path(_ENROLLED_CODEX_HOME).resolve()
     if home == enrolled or enrolled in home.parents or not home.is_dir():
         raise ValueError("OAuth preferences cannot modify the enrolled credential home")
     path = home / "config.toml"
