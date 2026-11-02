@@ -67,6 +67,9 @@ from moonmind.omnigent.harness_platform.materializers import (
     materializer_ref_for_profile,
     materializer_ref_for_provider,
     snapshot_provider_configuration,
+    provider_configuration_snapshot_bytes,
+    ProviderConfigurationSnapshotRef,
+    load_provider_configuration_snapshot,
 )
 from moonmind.omnigent.harness_platform.planner import (
     compile_execution_plan,
@@ -1461,6 +1464,7 @@ async def compile_and_persist_execution_plan(
     access: ArtifactAccessContext,
     _compile_step_plans: bool = True,
     _recorded_step_parameters: Mapping[str, Mapping[str, Any]] | None = None,
+    _recorded_provider_configuration_snapshot: ProviderConfigurationSnapshotRef | None = None,
     recorded_skillset_ref: str | None = None,
 ) -> PersistedOmnigentExecutionPlan:
     """Compile and persist one plan before Temporal or provider side effects."""
@@ -1991,6 +1995,33 @@ async def compile_and_persist_execution_plan(
         profile_document=dict(document),
         trusted_repository_declarations=trusted_repository_declarations,
     )
+    provider_configuration_snapshot = None
+    configuration_ref = None
+    if _recorded_provider_configuration_snapshot is not None:
+        recorded = _recorded_provider_configuration_snapshot
+        configuration_ref = recorded.artifactRef.removeprefix("artifact:")
+        _artifact, configuration_body = await artifact_service.read(
+            artifact_id=configuration_ref, access=access
+        )
+        load_provider_configuration_snapshot(
+            configuration_body, recorded, binding_set.bindings
+        )
+        provider_configuration_snapshot = recorded.model_dump(mode="json")
+    elif config["materializerRef"] == "omnigent-provider-config@1":
+        configuration_body = provider_configuration_snapshot_bytes(
+            binding_set.bindings,
+            {"primary-model": snapshot_provider_configuration(provider_profile)},
+        )
+        configuration_ref, configuration_digest = await persist_json_artifact(
+            artifact_service=artifact_service,
+            principal=principal,
+            artifact_class="omnigent.provider_configuration_snapshot",
+            payload=json.loads(configuration_body),
+        )
+        provider_configuration_snapshot = {
+            "artifactRef": f"artifact:{configuration_ref}",
+            "contentDigest": configuration_digest,
+        }
     plan = compile_execution_plan(
         agent_profile=resolved_profile,
         harness_catalog=catalog,
@@ -1998,10 +2029,7 @@ async def compile_and_persist_execution_plan(
         trust_record=trust,
         resolved_skills=resolved_skills,
         credential_binding_set=binding_set,
-        provider_configurations=(
-            {"primary-model": snapshot_provider_configuration(provider_profile)}
-            if config["materializerRef"] == "omnigent-provider-config@1" else {}
-        ),
+        provider_configuration_snapshot=provider_configuration_snapshot,
         repository_slot_requirements=repository_slot_requirements,
         workspace_source_kind=workspace_source_kind,
         workspace_access_snapshot_ref=workspace_access_snapshot_ref,
@@ -2268,6 +2296,7 @@ async def compile_and_persist_execution_plan(
             policy_artifact_ref,
             effective_launch_ref,
             profile_snapshot_ref,
+            *((configuration_ref,) if configuration_ref is not None else ()),
             *_evidence_refs,
             *skill_content_refs,
             *(access["artifactRef"] for access in repository_access.values()),
@@ -2417,6 +2446,13 @@ async def compile_frozen_execution_plan(
         access=access,
         _compile_step_plans=refresh_step_selections or bool(recorded_steps),
         _recorded_step_parameters=None if refresh_step_selections else recorded_steps,
+        _recorded_provider_configuration_snapshot=(
+            recorded_plan.payload.providerConfigurationSnapshot
+            if not refresh_step_selections and any(
+                getattr(bound, "providerProfileRef", None) == provider_profile.profile_id
+                for bound in recorded_plan.payload.credentialBindings.values()
+            ) else None
+        ),
     )
 
 
@@ -2520,6 +2556,12 @@ def changed_admitted_intent(
                 }
                 for slot, binding in payload.credentialBindings.items()
             },
+            "providerConfiguration": (
+                payload.providerConfigurationSnapshot.contentDigest
+                if recorded.providerConfigurationSnapshot is not None
+                and payload.providerConfigurationSnapshot is not None
+                else None
+            ),
             "authority": payload.authority,
             "workspace": (payload.workspaceIntentRef, payload.workspaceMutation),
             "runtimeProviderTarget": rollout.targetId if rollout else None,

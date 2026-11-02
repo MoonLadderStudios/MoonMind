@@ -1307,6 +1307,9 @@ class OmnigentCredentialProvisioningService:
         acquired_leases: tuple[AcquiredProviderLease, ...],
         writer_image_ref: str,
     ) -> tuple[CredentialRuntimeHandle, ...]:
+        from moonmind.omnigent.harness_platform.materializers import (
+            load_provider_configuration_snapshot,
+        )
         from moonmind.omnigent.harness_platform.credential_bindings import (
             model_bindings_of,
         )
@@ -1315,6 +1318,14 @@ class OmnigentCredentialProvisioningService:
         # Repository delivery is owned by host workspace preparation. Those
         # bindings have no model-capacity lease or Provider Profile secret.
         model_bindings = model_bindings_of(plan.payload.credentialBindings)
+        snapshot = getattr(plan.payload, "providerConfigurationSnapshot", None)
+        configurations = None
+        if snapshot is not None:
+            configurations = load_provider_configuration_snapshot(
+                await self._artifacts.read_admitted_input(snapshot.artifactRef, request=request),
+                snapshot,
+                model_bindings,
+            )
         by_slot = {item.slot: item for item in acquired_leases}
         handles: list[CredentialRuntimeHandle] = []
         materialized: dict[tuple[str, str], CredentialRuntimeHandle] = {}
@@ -1348,7 +1359,6 @@ class OmnigentCredentialProvisioningService:
                     handles.append(anticipated)
                     provider_endpoint = None
                     if binding.materializerRef == PROVIDER_CONFIG_MATERIALIZER_REF:
-                        configurations = getattr(plan.payload, "providerConfigurations", None)
                         admitted = (
                             {"admitted_endpoint": configurations[slot]}
                             if configurations is not None else {}
