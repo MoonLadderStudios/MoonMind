@@ -82,6 +82,9 @@ from api_service.db.models import (
     TemporalExecutionRecord,
     TemporalWorkflowType,
 )
+from api_service.services.omnigent_execution_plan_service import (
+    PersistedOmnigentExecutionPlan,
+)
 from api_service.services.recurring_workflows_service import (
     RecurringWorkflowValidationError,
 )
@@ -140,6 +143,27 @@ from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
 from tests.artifact_access import access_for_test
 
 _TARGET_SEARCH_ATTRIBUTE_TYPE = int(IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST)
+
+
+
+def _compiled_plan_result(
+    *,
+    binding: OmnigentExecutionPlanBinding,
+    artifact_refs: tuple[str, ...],
+    resolved_skillset_ref: str,
+    runtime_provider_rollout: dict[str, Any] | None = None,
+) -> PersistedOmnigentExecutionPlan:
+    # These router tests mock compilation, not its returned transport contract.
+    # The envelope and in-process proof are not read by the create route.
+    return PersistedOmnigentExecutionPlan(
+        artifact_access=access_for_test("operator"),
+        envelope=Mock(name="compiled_plan_envelope"),
+        binding=binding,
+        artifact_refs=artifact_refs,
+        resolved_skillset_ref=resolved_skillset_ref,
+        resolved_skillset_digest="sha256:" + "d" * 64,
+        runtime_provider_rollout=runtime_provider_rollout,
+    )
 
 
 def _caller_owned_artifact_factory(service):
@@ -5100,7 +5124,7 @@ def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
             "reasonCode": "rollout_new_work_default",
         }
     )
-    compiled_plan = SimpleNamespace(
+    compiled_plan = _compiled_plan_result(
         binding=plan_binding,
         artifact_refs=("art_profile_1", "art_skills_1", "art_plan_1"),
         resolved_skillset_ref="art_skills_1",
@@ -5264,7 +5288,7 @@ def test_api_execution_compiles_opencode_plan_before_temporal_schedule(
         assert _kwargs["db_session"] is db_session
         assert isinstance(_kwargs["execution_plan_store"], SessionExecutionPlanStore)
         assert _kwargs["execution_plan_store"]._session is db_session
-        return SimpleNamespace(
+        return _compiled_plan_result(
             binding=plan_binding,
             artifact_refs=("art_profile", "art_skills", "art_opencode_plan"),
             resolved_skillset_ref="art_skills",
@@ -5433,7 +5457,7 @@ def test_api_execution_keeps_authoritative_model_in_opencode_plan(
 
     async def compile_plan(**kwargs):
         compiled_parameters.update(kwargs["initial_parameters"])
-        return SimpleNamespace(
+        return _compiled_plan_result(
             binding=plan_binding,
             artifact_refs=("art_profile", "art_skills", "art_zen_plan"),
             resolved_skillset_ref="art_skills",
@@ -5715,7 +5739,7 @@ def test_create_execution_accepts_generic_v2_profile_identity_as_target_ref(
         patch(
             "api_service.services.omnigent_execution_plan_service.compile_and_persist_execution_plan",
             new=AsyncMock(
-                return_value=SimpleNamespace(
+                return_value=_compiled_plan_result(
                     binding=plan_binding,
                     artifact_refs=("art_profile", "art_skills", "art_plan"),
                     resolved_skillset_ref="art_skills",
@@ -7366,7 +7390,7 @@ def test_create_workflow_omnigent_browser_payload_persists_canonical_intent(
         taskInputSnapshotRef="art_codex_task",
         taskInputSnapshotDigest="sha256:" + "c" * 64,
     )
-    compiled_plan = SimpleNamespace(
+    compiled_plan = _compiled_plan_result(
         binding=plan_binding,
         artifact_refs=("art_profile", "art_skills", "art_codex_plan"),
         resolved_skillset_ref="art_skills",
@@ -10095,7 +10119,7 @@ def test_execution_fanout_inherits_exact_omnigent_agent_profile(
     )
     profile_resolver = AsyncMock(return_value=snapshot)
     compile_plan = AsyncMock(
-        return_value=SimpleNamespace(
+        return_value=_compiled_plan_result(
             binding=plan_binding,
             artifact_refs=("art_profile", "art_skills", "art_inherited_plan"),
             resolved_skillset_ref="art_skills",
@@ -21775,7 +21799,7 @@ def _mm3935_post_through_plan_owner(
         taskInputSnapshotDigest="sha256:" + "c" * 64,
     )
     compile_plan = AsyncMock(
-        return_value=SimpleNamespace(
+        return_value=_compiled_plan_result(
             binding=plan_binding,
             artifact_refs=("art_profile", "art_skills", "art_cli_plan"),
             resolved_skillset_ref="art_skills",
