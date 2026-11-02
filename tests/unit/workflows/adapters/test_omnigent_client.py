@@ -794,6 +794,69 @@ async def test_connect_outage_grace_never_retries_after_the_server_answered(
     assert attempts["value"] == 1
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resource", [False, True])
+async def test_read_only_observation_recovers_a_broken_read(monkeypatch, resource):
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.omnigent_client._CONNECT_OUTAGE_RETRY_INTERVAL_SECONDS",
+        0.0,
+    )
+    attempts = []
+
+    def handler(request):
+        attempts.append((request.method, request.url.path))
+        if len(attempts) == 1:
+            raise httpx.ReadError("controlled observation disconnect", request=request)
+        return httpx.Response(
+            200,
+            json={"id": "sess_1", "status": "idle"},
+            headers={"Content-Disposition": 'attachment; filename="result.json"'}
+            if resource
+            else {},
+        )
+
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        transport=httpx.MockTransport(handler),
+        connect_outage_grace_seconds=30.0,
+    )
+    if resource:
+        assert json.loads(await client.get_workspace_file("sess_1", "result.json"))[
+            "status"
+        ] == "idle"
+    else:
+        assert (await client.get_session("sess_1"))["status"] == "idle"
+    assert len(attempts) == 2
+    assert attempts[0] == attempts[1]
+    assert attempts[0][0] == "GET"
+
+
+@pytest.mark.asyncio
+async def test_read_only_observation_does_not_extend_the_outage_budget(monkeypatch):
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.omnigent_client._CONNECT_OUTAGE_RETRY_INTERVAL_SECONDS",
+        0.01,
+    )
+    attempts = []
+
+    def handler(request):
+        attempts.append(request.url.path)
+        raise httpx.ReadError("persistent disconnect", request=request)
+
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        transport=httpx.MockTransport(handler),
+        connect_outage_grace_seconds=0.025,
+    )
+    with pytest.raises(OmnigentClientError, match="persistent disconnect"):
+        await client.get_session("sess_1")
+    assert len(attempts) > 1
+    count = len(attempts)
+    with pytest.raises(OmnigentClientError, match="persistent disconnect"):
+        await client.get_session("sess_1")
+    assert len(attempts) == count + 1
+
+
 class _SseWireStream(httpx.AsyncByteStream):
     def __init__(self, body: bytes, *, fragment_bytes: int | None) -> None:
         self.body = body
