@@ -94,7 +94,7 @@ async def _create(service, sessions, saved, *, key="same-request"):
         failure_policy=None,
         initial_parameters={
             **saved.action["initial_parameters"],
-            "resolvedSkillsetRef": saved.skills.manifest_id,
+            **compiled.execution_parameters,
         },
         idempotency_key=key,
         _workflow_id="mm:deterministic-api-create",
