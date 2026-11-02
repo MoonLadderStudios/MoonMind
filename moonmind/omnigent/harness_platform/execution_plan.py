@@ -1,6 +1,7 @@
 """Execution plan payload + envelope (sections 16, 4.5, 4.6, 16.2).
 
-Plan records pre-host decisions only. No credential generations, host ids, lease refs, volumes, env.
+Plan records admitted settings only. Credential values and generations, host ids,
+lease refs, volumes and the realized environment belong in runtime bindings.
 Plan digest is non-self-referential: payload bytes hashed, ref stored outside payload.
 """
 
@@ -116,6 +117,15 @@ def _validate_plan_data(obj: Any, *, path: str = "$", depth: int = 0) -> None:
         return
     if isinstance(obj, str) and len(obj.encode("utf-8")) > _MAX_PLAN_STRING_BYTES:
         raise ValueError(f"plan payload string is too large at {path}")
+
+
+class ProviderConfigurationSnapshotRef(BaseModel):
+    """Immutable nonsecret configuration artifact admitted with the plan."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    artifactRef: str = Field(pattern=r"^artifact:[^\s]+$")
+    contentDigest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
 
 
 class ModelConfig(BaseModel):
@@ -304,6 +314,7 @@ class OmnigentExecutionPlanPayload(BaseModel):
     credentialBindings: dict[
         str, CredentialBinding | ModelAuthorityBinding | RepositoryAuthorityBinding
     ] = Field(alias="credentialBindings")
+    providerConfigurationSnapshot: ProviderConfigurationSnapshotRef | None = None
     # Compact validated repository snapshot refs (slot -> access snapshot).
     # Pre-host decisions only: acquired secret revision/issuance, use
     # ownership, generations, materialized paths, and cleanup handles live
@@ -369,6 +380,8 @@ class OmnigentExecutionPlanPayload(BaseModel):
             payload.pop("repositoryAuthorityRefs", None)
         if self.logicalStepPlans is None:
             payload.pop("logicalStepPlans", None)
+        if self.providerConfigurationSnapshot is None:
+            payload.pop("providerConfigurationSnapshot", None)
         return payload
 
     @model_validator(mode="after")

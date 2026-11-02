@@ -457,6 +457,9 @@ _ESSENTIAL_PUBLISHED_METADATA_KEYS = frozenset(
         "queuedChildren",
         # A step-retry request decides recovery, like the verdict it rides on.
         "retryRecommendation",
+        "runtimeSessionContext",
+        "dispatchPoolContext",
+        "savedWorkspaceCheckpoint",
         "status",
         "terminalContractAuthority",
         "terminalContractEvidencePath",

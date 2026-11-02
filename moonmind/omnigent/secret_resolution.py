@@ -17,6 +17,12 @@ from moonmind.omnigent.harness_platform.materializers import (
 )
 from moonmind.omnigent.provider_leases import AcquiredProviderLease
 
+class _UnrecordedEndpoint:
+    pass
+
+
+_UNRECORDED_ENDPOINT = _UnrecordedEndpoint()
+
 
 class SecretResolver(Protocol):
     async def resolve(self, ref: Any) -> str:
@@ -92,6 +98,7 @@ class OmnigentSecretResolutionService:
         *,
         acquired: AcquiredProviderLease,
         allowed_secret_roles: tuple[str, ...] | list[str],
+        admitted_endpoint: ProviderConfigEndpoint | None | _UnrecordedEndpoint = _UNRECORDED_ENDPOINT,
     ) -> tuple[ScopedSecretBundle, ProviderConfigEndpoint | None]:
         """Resolve a provider-config credential and the endpoint it targets.
 
@@ -99,21 +106,35 @@ class OmnigentSecretResolutionService:
         pins in its launch environment; that one key is resolved under the
         materializer's ``api_key`` role. Other Profiles keep the
         materializer's own roles and the default endpoint.
+
+        New plans supply their admitted settings. Older plans omit that
+        authority and retain their recorded live-Profile interpretation.
         """
 
         profile = await self._load_profile(acquired)
         refs = dict(profile.secret_refs or {})
-        if not is_api_key_launch_profile(profile):
+        if isinstance(admitted_endpoint, _UnrecordedEndpoint):
+            if is_api_key_launch_profile(profile):
+                endpoint, reason = provider_config_endpoint(profile)
+                if endpoint is None:
+                    raise HarnessPlatformError(
+                        f"API-key Provider Profile cannot run on Omnigent: {reason}",
+                        code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+                    )
+            else:
+                endpoint = None
+        else:
+            endpoint = admitted_endpoint
+            if (endpoint is not None) != is_api_key_launch_profile(profile):
+                raise HarnessPlatformError(
+                    "Provider Profile no longer matches the admitted authentication contract",
+                    code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+                )
+        if endpoint is None:
             bundle = await self._resolve_roles(
                 acquired=acquired, refs=refs, allowed_secret_roles=allowed_secret_roles
             )
             return bundle, None
-        endpoint, reason = provider_config_endpoint(profile)
-        if endpoint is None:
-            raise HarnessPlatformError(
-                f"API-key Provider Profile cannot run on Omnigent: {reason}",
-                code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
-            )
         bundle = await self._resolve_roles(
             acquired=acquired, refs=refs, allowed_secret_roles=(endpoint.secretRole,)
         )
