@@ -551,8 +551,16 @@ async def test_raw_preview_cannot_bypass_effective_omnigent_boundary(
             },
         },
     )
-    assert response.status_code == 422, response.text
-    assert response.json()["detail"]["code"] == "omnigent_product_boundary_required"
+    if selection == "agent-profile":
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"]["code"] == "omnigent_product_boundary_required"
+    elif selection == "saved-runtime":
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"] == "default Omnigent Agent Profile is unavailable"
+    else:
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"]["code"] == "profile_execution_configuration_required"
+        assert response.json()["detail"]["profileId"] == "saved-codex_cli"
     context.service._client_adapter.start_workflow.assert_not_awaited()
 
 

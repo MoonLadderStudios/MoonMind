@@ -520,11 +520,14 @@ def _artifact_session(rows: list[SimpleNamespace]) -> SimpleNamespace:
     from api_service.db.models import OmnigentAgentProfile, SettingsOverride
 
     profiles = {
-        f"test-{runtime}": SimpleNamespace(
+        f"test-{runtime}": ManagedAgentProviderProfile(
             profile_id=f"test-{runtime}",
             runtime_id=runtime,
+            enabled=True,
+            auth_state=ProviderProfileAuthState.CONNECTED,
             default_model=None,
             default_effort=None,
+            default_model_tier=1,
         )
         for runtime in ("codex_cli", "claude_code")
     }
@@ -12737,6 +12740,7 @@ def test_create_execution_persists_task_input_snapshot_for_direct_run_submission
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=False)
     session = AsyncMock()
+    session.execute.return_value = _ExecuteResult([])
     app.dependency_overrides[get_async_session] = lambda: session
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
     monkeypatch.setattr(
@@ -21448,10 +21452,10 @@ async def test_mm3788_raw_create_branch_accepts_profile_owned_by_the_runtime(
 
 
 @pytest.mark.asyncio
-async def test_mm3788_raw_create_branch_keeps_the_omnigent_product_boundary(
+async def test_mm3788_raw_create_branch_rejects_unready_shared_profile(
     tmp_path,
 ) -> None:
-    """Omnigent is a facade: the raw branch still owns its own 422, not a 409."""
+    """Canonical raw requests reach the compiler without bypassing readiness."""
 
     async with _mm3788_raw_branch_context(
         tmp_path, db_name="mm3788_raw_omnigent"
@@ -21467,7 +21471,10 @@ async def test_mm3788_raw_create_branch_keeps_the_omnigent_product_boundary(
             )
 
         assert exc_info.value.status_code == 422
-        assert exc_info.value.detail["code"] == "omnigent_product_boundary_required"
+        assert exc_info.value.detail == {
+            "code": "invalid_execution_request",
+            "message": "selected provider profile is not launch-ready",
+        }
         service._client_adapter.start_workflow.assert_not_awaited()
 
 
@@ -21539,9 +21546,9 @@ async def test_mm3788_raw_create_branch_rejects_a_nested_omnigent_runtime_confli
 ) -> None:
     """A nested ``omnigent`` mode does not waive the other authored runtime.
 
-    Neither runtime launches: the nested mode wins the worker's precedence, and
-    MoonLadderStudios/MoonMind#3935 admits Omnigent only through the plan
-    owner, so the raw branch rejects any payload that names it.
+    Neither runtime launches: the nested mode wins the worker's precedence.
+    This conflicting alias shape retains the serialized adapter, which rejects
+    Omnigent without a compiler-owned plan.
     """
 
     async with _mm3788_raw_branch_context(
@@ -21605,14 +21612,13 @@ async def test_mm3788_raw_create_branch_rejects_a_profile_with_no_runtime_owner(
 # ---------------------------------------------------------------------------
 # MoonLadderStudios/MoonMind#3935 — an Omnigent execution has one lifecycle
 # owner: the task/workflow envelope that compiles and persists the immutable
-# execution plan. The raw branch never compiles a plan, so a request that
-# leaves the runtime to the Omnigent default must not reach the legacy no-plan
-# session supervisor through it.
+# execution plan. Canonical raw inputs use that compiler; retained native shapes
+# still reject Omnigent before reaching the legacy no-plan session supervisor.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_mm3935_raw_branch_rejects_a_default_omnigent_runtime(
+async def test_mm3935_raw_branch_requires_the_default_omnigent_profile(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -21640,26 +21646,36 @@ async def test_mm3935_raw_branch_rejects_a_default_omnigent_runtime(
                 },
             )
 
-        assert exc_info.value.status_code == 422
-        assert exc_info.value.detail["code"] == "omnigent_product_boundary_required"
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.detail == "default Omnigent Agent Profile is unavailable"
         service._client_adapter.start_workflow.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "initial_parameters",
+    "initial_parameters,expected_code",
     [
-        {"task": {"instructions": "Nested mode.", "runtime": {"mode": "omnigent"}}},
-        {"task": {"instructions": "Nested target.", "targetRuntime": "omnigent"}},
-        {"instructions": "Runtime block.", "runtime": {"mode": "omnigent"}},
+        (
+            {"task": {"instructions": "Nested mode.", "runtime": {"mode": "omnigent"}}},
+            "invalid_execution_request",
+        ),
+        (
+            {"task": {"instructions": "Nested target.", "targetRuntime": "omnigent"}},
+            "omnigent_product_boundary_required",
+        ),
+        (
+            {"instructions": "Runtime block.", "runtime": {"mode": "omnigent"}},
+            "omnigent_product_boundary_required",
+        ),
     ],
     ids=["nested-runtime-mode", "nested-target-runtime", "runtime-mode"],
 )
-async def test_mm3935_raw_branch_rejects_a_nested_omnigent_runtime(
+async def test_mm3935_raw_branch_never_launches_an_uncompiled_omnigent_runtime(
     tmp_path,
     initial_parameters: dict[str, Any],
+    expected_code: str,
 ) -> None:
-    """Every canonical runtime field is the same Omnigent selection."""
+    """Compiler and retained raw shapes both preserve their launch safeguards."""
 
     async with _mm3788_raw_branch_context(
         tmp_path, db_name="mm3935_raw_nested_omnigent"
@@ -21677,7 +21693,13 @@ async def test_mm3935_raw_branch_rejects_a_nested_omnigent_runtime(
             )
 
         assert exc_info.value.status_code == 422
-        assert exc_info.value.detail["code"] == "omnigent_product_boundary_required"
+        assert exc_info.value.detail["code"] == expected_code
+        if expected_code == "invalid_execution_request":
+            assert exc_info.value.detail["message"] == (
+                "A Provider Profile for 'codex_cli' is required to preserve the "
+                "configured harness and account. Select or configure that Profile "
+                "before starting new work."
+            )
         service._client_adapter.start_workflow.assert_not_awaited()
 
 

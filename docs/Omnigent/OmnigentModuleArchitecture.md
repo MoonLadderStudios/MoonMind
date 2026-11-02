@@ -273,12 +273,15 @@ deletion removes its row in the same change rather than leaving a stale entry.
 | `native_ui_compat.py` chat projection | `omnigent.legacy.native_ui_compat` | `active_product_path` |
 | Embedded host/runner transport admission | `omnigent.legacy.embedded_host_transport` | `new_admission_disabled` |
 
-Direct Codex/Claude and AgentSession adapters retain recorded work, explicit
-serialized starts/direct target identities, Profiles without exact shared
+Direct Codex/Claude and AgentSession adapters retain recorded work, opaque
+serialized plans, native extension inputs/direct targets, Profiles without exact shared
 translation, and independent per-step account, harness, pool or model/effort
 choices that cannot share one frozen plan. Equivalent product submissions,
 native defaults and same-account step aliases use the shared route, including
 persisted schedule steps; selected harness policy is checked before translation.
+Fresh serialized canonical agent workflows use the same product admission compiler;
+their title, failure policy and accepted retry identity survive translation.
+Raw deferred step-account matching and tool-only boundary validation remain intact.
 Replaced defaults never select ambient credentials.
 Profile-bound execution and its OAuth host launcher admit no new plans;
 they retain queued starts, retries and cleanup under their recorded authority. Supported
