@@ -218,6 +218,11 @@ async def link_verified_execution_plan_inputs_in_session(
             binding=binding,
             access=input_access,
             planning_parameters=planning_parameters,
+            admitted_step_plans=(
+                (planning_parameters or {}).get("omnigentStepExecutionPlans")
+                if plan.payload.logicalStepPlans
+                else None
+            ),
         )
         linked_ids = {entry.artifact_id for entry in closure.dependencies}
         linked_ids.add(
@@ -328,6 +333,7 @@ async def ensure_verified_execution_plan_dependencies(
     access: ArtifactAccessContext,
     repository=None,
     planning_parameters: Mapping[str, Any] | None = None,
+    admitted_step_plans: Mapping[str, Any] | None = None,
 ):
     """Seal original plan inputs once; completed closures never use legacy decoding.
 
@@ -336,8 +342,10 @@ async def ensure_verified_execution_plan_dependencies(
     historical decoder used by schedule migration and original-start recovery.
     """
     from moonmind.omnigent.harness_platform.execution_plan import (
+        logical_step_plan_digests,
         verify_execution_plan_envelope,
     )
+    from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
     from moonmind.workflows.temporal.artifacts import (
         ArtifactDependency,
         TemporalArtifactNotFoundError,
@@ -394,6 +402,13 @@ async def ensure_verified_execution_plan_dependencies(
     existing = await artifacts.verified_dependencies(
         root_artifact_id=root_id, access=proof_access
     )
+    if admitted_step_plans is not None or existing is None:
+        if logical_step_plan_digests(admitted_step_plans) != (
+            plan.payload.logicalStepPlans or {}
+        ):
+            raise OmnigentArtifactError(
+                "logical step plan authority conflicts with the root dependency closure"
+            )
     if existing is not None:
         return existing
     frozen_refs, attachments, input_access = await _frozen_planning_input_refs(
@@ -418,6 +433,32 @@ async def ensure_verified_execution_plan_dependencies(
             expected_digest=manifest_digest,
         )
         refs.update(content_digests)
+    for parameters in (admitted_step_plans or {}).values():
+        step_binding = OmnigentExecutionPlanBinding.model_validate(
+            parameters["omnigentExecutionPlan"]
+        )
+        step_artifact_id = TemporalOmnigentArtifactGateway._artifact_id(
+            step_binding.plan_artifact_ref
+        )
+        step_access = input_access._with_verified_inputs({step_artifact_id})
+        _artifact, step_body = await artifacts.read(
+            artifact_id=step_artifact_id, access=step_access
+        )
+        step_closure = await ensure_verified_execution_plan_dependencies(
+            artifacts=artifacts,
+            repository=repository,
+            plan=json.loads(step_body),
+            binding=step_binding,
+            access=step_access,
+            admitted_step_plans=parameters.get("omnigentStepExecutionPlans"),
+        )
+        # The artifact owner flattens each verified child closure and preserves
+        # optional evidence. A saved root must retain these exact step inputs.
+        refs.add(step_artifact_id)
+        content_digests[step_artifact_id] = hashlib.sha256(step_body).hexdigest()
+        input_access = step_access._with_verified_inputs(
+            entry.artifact_id for entry in step_closure.dependencies
+        )
     for ref, digest in (
         (binding.task_input_snapshot_ref, binding.task_input_snapshot_digest),
         (plan.payload.policySnapshotRef, plan.payload.policySnapshotDigest),
@@ -3219,6 +3260,7 @@ async def _build_capture_bundle_impl(
             "firstMessage": first_message_state,
             "retry": external_state.get("retry", {}),
             "terminalReconciliation": external_state.get("terminalReconciliation"),
+            "observationDiagnostics": external_state.get("observationDiagnostics"),
             "reattachState": {
                 "idempotencyKey": request.idempotency_key,
                 "initialSnapshotRef": refs.get("initialSnapshotRef"),
