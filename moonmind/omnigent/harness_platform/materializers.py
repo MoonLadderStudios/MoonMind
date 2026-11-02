@@ -334,6 +334,24 @@ def _enum_value(raw: Any) -> str:
     return str(getattr(raw, "value", raw) or "").strip()
 
 
+def untranslated_oauth_launch_options(profile: Any) -> str | None:
+    """Identify per-run settings an enrolled-home attachment cannot carry.
+
+    Admission uses this before translating a native choice. Recorded plans
+    retain their materializer identity and delivery behavior.
+    """
+    if (
+        str(getattr(profile, "runtime_id", "")) not in {"codex_cli", "claude_code"}
+        or _enum_value(getattr(profile, "credential_source", None)) != "oauth_volume"
+    ):
+        return None
+    fields = [name for name in ("env_template", "file_templates", "home_path_overrides")
+              if getattr(profile, name, None)]
+    if fields:
+        return "OAuth-home delivery does not apply per-run Profile settings: " + ", ".join(fields)
+    return None
+
+
 def _omnigent_egress_admits(url: str) -> bool:
     from urllib.parse import urlsplit
 

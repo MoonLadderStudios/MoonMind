@@ -69,6 +69,10 @@ def configuration_accepts_profile(document: Mapping[str, Any], provider: Any) ->
     # #4644: unsupported saved Profiles remain readable, never executable.
     if not profile_runtime_supported(getattr(provider, "runtime_id", None)):
         return False
+    from moonmind.omnigent.harness_platform.materializers import untranslated_oauth_launch_options
+
+    if untranslated_oauth_launch_options(provider):
+        return False
 
     from api_service.services.omnigent_agent_profile_selection import (
         _accepted_provider_ids,
