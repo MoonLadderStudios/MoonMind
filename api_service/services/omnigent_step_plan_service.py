@@ -13,7 +13,10 @@ from moonmind.workflows.executions.model_resolver import resolve_model_effort
 
 if TYPE_CHECKING:
     from api_service.services.omnigent_execution_plan_service import PersistedOmnigentExecutionPlan
-    from moonmind.omnigent.harness_platform.execution_plan import OmnigentExecutionPlanEnvelope
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        OmnigentExecutionPlanEnvelope,
+        ProviderConfigurationSnapshotRef,
+    )
 
 
 @dataclass(frozen=True)
@@ -26,6 +29,9 @@ async def compile_step_execution_plans(
     *,
     root_plan: OmnigentExecutionPlanEnvelope,
     recorded_step_parameters: Mapping[str, Mapping[str, Any]] | None = None,
+    recorded_provider_configurations: Mapping[
+        str, ProviderConfigurationSnapshotRef | None
+    ] | None = None,
     provider_profile: Any,
     initial_parameters: Mapping[str, Any],
     **compilation_arguments: Any,
@@ -127,6 +133,9 @@ async def compile_step_execution_plans(
             provider_profile=selected_provider,
             initial_parameters=parameters,
             _compile_step_plans=False,
+            _recorded_provider_configuration_snapshot=(
+                (recorded_provider_configurations or {}).get(step_id, "capture")
+            ),
             **{**compilation_arguments, "agent_profile_snapshot": selected_snapshot},
         )
         step_plans.append(specialized)

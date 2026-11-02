@@ -177,7 +177,9 @@ def compiler(monkeypatch, plan_input_delegation):
     return SimpleNamespace(policy_versions=policy_versions)
 
 
-async def _schedule_parameters(artifacts, *, provider=None) -> dict:
+async def _schedule_parameters(
+    artifacts, *, provider=None, steps=None, session=None
+) -> dict:
     """Plan a schedule the way the API did before the release."""
 
     snapshot = _snapshot(
@@ -190,6 +192,8 @@ async def _schedule_parameters(artifacts, *, provider=None) -> dict:
         "agentProfileSnapshot": snapshot,
         "system": {"recurrence": {"definitionId": "schedule-1"}},
     }
+    if steps is not None:
+        parameters["workflow"]["steps"] = steps
     stored = await plan_service.compile_and_persist_execution_plan(
         session_factory=None,
         artifact_service=artifacts,
@@ -203,12 +207,15 @@ async def _schedule_parameters(artifacts, *, provider=None) -> dict:
         task_input_snapshot_ref=_TASK_REF,
         task_input_snapshot_digest=_TASK_DIGEST,
         execution_plan_store=_PlanStore(object()),
+        db_session=session,
         access=access_for_test("original-task-principal"),
     )
     parameters["omnigentExecutionPlan"] = stored.binding.model_dump(
         mode="json", by_alias=True, exclude_none=True
     )
     parameters["resolvedSkillsetRef"] = stored.resolved_skillset_ref
+    if stored.step_parameters:
+        parameters["omnigentStepExecutionPlans"] = stored.step_parameters
     return parameters, stored.envelope.payload
 
 
@@ -304,6 +311,103 @@ async def test_profile_edit_refreshes_occurrences_but_preserves_successor_settin
     assert plan.modelConfig == recorded_plan.modelConfig
     assert parameters == original_parameters
     assert session.commits == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("successor", [False, True], ids=["occurrence", "successor"])
+@pytest.mark.parametrize("distinct_profile", [False, True], ids=["same-account", "step-account"])
+@pytest.mark.parametrize("legacy_configuration", [False, True], ids=["snapshot", "legacy"])
+async def test_specialized_step_configuration_survives_successor_profile_edits(
+    monkeypatch, compiler, successor, distinct_profile, legacy_configuration
+) -> None:
+    from unittest.mock import AsyncMock
+
+    _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
+    artifacts = _ArtifactService()
+    provider = _provider()
+    provider.credential_source = "oauth_volume"
+    provider.env_template = {"PROJECT_RUNTIME_STYLE": "root-admitted"}
+    step_provider = deepcopy(provider) if distinct_profile else provider
+    if distinct_profile:
+        step_provider.profile_id = "step-codex"
+        step_provider.env_template = {"PROJECT_RUNTIME_STYLE": "step-admitted"}
+
+    class StepSession(_OccurrenceSession):
+        async def get(self, model, key):
+            if model is ManagedAgentProviderProfile and key == step_provider.profile_id:
+                return step_provider
+            return await super().get(model, key)
+
+    session = StepSession(provider, artifacts=artifacts)
+    monkeypatch.setattr(
+        "api_service.services.omnigent_agent_profile_selection.resolve_default_agent_profile_snapshot",
+        AsyncMock(return_value=_snapshot(
+            harness="codex-native", policy="codex-on-demand@1",
+            provider_id=step_provider.profile_id,
+        )),
+    )
+    with monkeypatch.context() as old_admission:
+        if legacy_configuration:
+            # Plans admitted before configuration snapshots omitted this
+            # optional field on both root and specialized plans.
+            old_admission.setattr(plan_service, "PROVIDER_CONFIGURATION_MATERIALIZERS", frozenset())
+        parameters, recorded_root = await _schedule_parameters(
+            artifacts, provider=provider, session=session,
+            steps=[{
+                "id": "specialized",
+                "runtime": {
+                    "mode": "omnigent", "model": "example/specialized-model",
+                    "providerProfileRef": step_provider.profile_id,
+                },
+            }],
+        )
+    recorded_step = _PlanStore.plans[
+        parameters["omnigentStepExecutionPlans"]["specialized"]["omnigentExecutionPlan"]["planRef"]
+    ].payload
+    original_parameters = deepcopy(parameters)
+    original_artifacts = deepcopy(artifacts.payloads)
+    provider.env_template = {"PROJECT_RUNTIME_STYLE": "root-edited"}
+    if distinct_profile:
+        step_provider.env_template = {"PROJECT_RUNTIME_STYLE": "step-edited"}
+    _install(monkeypatch, host=_REPO + "8" * 64, server=_SERVER + "9" * 64)
+
+    if successor:
+        admitted = await _successor_admission(monkeypatch, artifacts, parameters, session)
+    else:
+        admitted = await RecurringWorkflowsService(
+            session, artifact_service=artifacts
+        ).admit_occurrence_execution_plan(
+            workflow_id="mm:schedule-1:occurrence-2", initial_parameters=parameters,
+        )
+
+    assert admitted["disposition"] == "admitted"
+    root = _PlanStore.plans[admitted["omnigentExecutionPlan"]["planRef"]].payload
+    step = _PlanStore.plans[
+        admitted["omnigentStepExecutionPlans"]["specialized"]["omnigentExecutionPlan"]["planRef"]
+    ].payload
+    for plan, recorded, account, label in (
+        (root, recorded_root, provider, "root"),
+        (step, recorded_step, step_provider, "step" if distinct_profile else "root"),
+    ):
+        configuration = plan.providerConfigurationSnapshot
+        if legacy_configuration and successor:
+            assert configuration is None
+            assert "providerConfigurationSnapshot" not in plan.model_dump(mode="json")
+        else:
+            saved = json.loads(artifacts.payloads[configuration.artifactRef.removeprefix("artifact:")])
+            assert saved["primary-model"]["providerProfileRef"] == account.profile_id
+            assert saved["primary-model"]["launchEnvironment"] == {
+                "PROJECT_RUNTIME_STYLE": f"{label}-{'admitted' if successor else 'edited'}"
+            }
+        assert (configuration == recorded.providerConfigurationSnapshot) is successor
+        assert plan.hostImageRef == _REPO + "8" * 64
+        assert plan.authority == recorded.authority
+        assert plan.credentialBindings == recorded.credentialBindings
+        assert plan.modelConfig == recorded.modelConfig
+    assert parameters == original_parameters
+    assert all(artifacts.payloads[ref] == body for ref, body in original_artifacts.items())
+    assert session.commits == 1
+    assert session.rollbacks == 0
 
 
 @pytest.mark.asyncio
