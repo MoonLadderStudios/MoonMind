@@ -313,11 +313,11 @@ Newly admitted environment templates carry only workspace and runtime
 support-directory context, rendered through the shared Profile template renderer
 after the attempt's native workspace path is known. Recorded literal values keep
 their original interpretation. Native executable wrappers restore values after child environment filtering
-without overriding private HOME or editing the enrolled home. Codex OAuth session
-preferences and nonsecret files under a declared run-support HOME use the same
-configuration artifact and portable renderer. They apply in the native owner's
-private app-server HOME, preserving its model, provider, tools and agent
-instructions; preparation never edits the enrolled home. Protected environment,
+without overriding private HOME or editing the enrolled home. Codex OAuth
+preferences and nonsecret files authored for a run-support or enrolled HOME use
+the same configuration artifact and portable renderer. They apply only in the
+native owner's private app-server HOME, preserving its model, provider, tools and
+agent instructions; preparation never edits enrollment. Protected environment,
 model/tool/auth configuration and other HOME choices retain their native adapter
 until an equivalent handoff exists.
 Recorded plans retain their original materializer identity.

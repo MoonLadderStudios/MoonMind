@@ -97,15 +97,17 @@ def test_plain_oauth_profiles_keep_the_equivalent_shared_route(runtime, schema):
     assert not profile_has_native_inventory_route(profile, [configuration])
 
 
-def private_codex_profile(schema="v2"):
+def private_codex_profile(
+    schema="v2", *, home_path="{{runtime_support_dir}}/codex-home", declare_home=True,
+):
     selected, configuration = profile_and_configuration("codex_cli", schema)
     selected.volume_mount_path = "/home/app/.codex"
-    selected.home_path_overrides = {"CODEX_HOME": "{{runtime_support_dir}}/codex-home"}
+    selected.home_path_overrides = {"CODEX_HOME": home_path} if declare_home else {}
     selected.file_templates = [
-        {"path": "{{runtime_support_dir}}/codex-home/config.toml", "format": "toml",
+        {"path": home_path + "/config.toml", "format": "toml",
          "merge_strategy": "deep_merge", "permissions": "0600",
          "content_template": {"developer_instructions": "Preserve accepted work.", "hide_agent_reasoning": True}},
-        {"path": "{{runtime_support_dir}}/codex-home/AGENTS.md", "format": "text",
+        {"path": home_path + "/AGENTS.md", "format": "text",
          "merge_strategy": "append", "permissions": "0600",
          "content_template": "Selected global instructions.\n"},
     ]
@@ -125,6 +127,43 @@ def test_private_codex_oauth_preferences_have_shared_delivery(schema):
     assert admitted.codexConfiguration["document"] == {"developer_instructions": "Preserve accepted work.", "hide_agent_reasoning": True}
     assert admitted.codexConfiguration["additionalFiles"][0]["path"] == "{{runtime_support_dir}}/AGENTS.md"
     assert vars(selected) == before
+
+
+@pytest.mark.parametrize("schema", ["v1", "v2"])
+@pytest.mark.parametrize("declare_home", [False, True])
+def test_enrolled_codex_home_templates_use_a_private_shared_projection(
+    schema, declare_home,
+):
+    from moonmind.omnigent.harness_platform.materializers import snapshot_provider_configuration
+
+    selected, configuration = private_codex_profile(
+        schema, home_path="/home/app/.codex", declare_home=declare_home,
+    )
+    before = deepcopy(vars(selected))
+    assert configuration_accepts_profile(configuration[1].document, selected)
+    assert not profile_has_native_inventory_route(selected, [configuration])
+    admitted = snapshot_provider_configuration(selected).codexConfiguration
+    assert admitted["privateHomeOnly"] is True
+    assert admitted["document"]["developer_instructions"] == "Preserve accepted work."
+    assert admitted["additionalFiles"][0]["path"] == "{{runtime_support_dir}}/AGENTS.md"
+    assert vars(selected) == before
+
+
+@pytest.mark.parametrize("changed", [
+    {"credential_source": "secret_ref"},
+    {"runtime_id": "claude_code"},
+    {"volume_mount_path": "/home/app/another-account"},
+    {"home_path_overrides": {"HOME": "/home/app/.codex"}},
+])
+def test_enrolled_home_template_translation_requires_its_codex_oauth_owner(changed):
+    from moonmind.provider_profiles.codex_configuration import oauth_configuration_for_profile
+
+    selected, _ = private_codex_profile(home_path="/home/app/.codex")
+    for key, value in changed.items():
+        setattr(selected, key, value)
+    configuration, reason = oauth_configuration_for_profile(selected)
+    assert configuration is None
+    assert "HOME" in reason
 
 
 def test_private_codex_oauth_configuration_is_frozen_with_its_account():
