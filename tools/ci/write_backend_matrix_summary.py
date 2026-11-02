@@ -414,35 +414,90 @@ def summarize_workflow_jobs(pages: list[dict], output: Path, summary: Path) -> d
             ).total_seconds(),
         )
 
-    jobs = [
-        {
-            "name": job["name"],
-            "id": job["id"],
-            "url": job["html_url"],
-            "status": job["status"],
-            "conclusion": job.get("conclusion"),
-            "queueSeconds": seconds(job.get("created_at"), job.get("started_at")),
-            "runnerSeconds": seconds(job.get("started_at"), job.get("completed_at")),
-            "steps": [
+    def job_times(job):
+        # GitHub can set started_at while a job is still queued. An executed
+        # step witnesses that the interval began; a placeholder is not usage.
+        allocated = any(
+            step.get("started_at") and step.get("conclusion") != "skipped"
+            for step in job.get("steps", [])
+        )
+        if allocated:
+            return (
+                seconds(job.get("created_at"), job.get("started_at")),
+                seconds(job.get("started_at"), job.get("completed_at")),
+            )
+        if job["status"] != "completed":
+            return None, None
+        if job.get("conclusion") == "skipped":
+            return 0, 0
+        if (
+            job.get("conclusion") == "cancelled"
+            and "runner_id" in job
+            and job["runner_id"] in (None, 0)
+        ):
+            return seconds(job.get("created_at"), job.get("completed_at")), 0
+        return None, None
+
+    jobs = []
+    for page in pages:
+        for job in page["jobs"]:
+            queue_seconds, runner_seconds = job_times(job)
+            jobs.append(
                 {
-                    "name": step["name"],
-                    "conclusion": step.get("conclusion"),
-                    "seconds": seconds(
-                        step.get("started_at"), step.get("completed_at")
-                    ),
+                    "name": job["name"],
+                    "id": job["id"],
+                    "url": job["html_url"],
+                    "status": job["status"],
+                    "conclusion": job.get("conclusion"),
+                    "queueSeconds": queue_seconds,
+                    "runnerSeconds": runner_seconds,
+                    "steps": [
+                        {
+                            "name": step["name"],
+                            "conclusion": step.get("conclusion"),
+                            "seconds": seconds(
+                                step.get("started_at"), step.get("completed_at")
+                            ),
+                        }
+                        for step in job.get("steps", [])
+                    ],
                 }
-                for step in job.get("steps", [])
-            ],
-        }
-        for page in pages
-        for job in page["jobs"]
-    ]
+            )
+    observed_runner = sum(
+        job["runnerSeconds"] for job in jobs if job["runnerSeconds"] is not None
+    )
+    observed_queue = sum(
+        job["queueSeconds"] for job in jobs if job["queueSeconds"] is not None
+    )
     payload = {
         "schema": "moonmind.ci-job-timings/v1",
         "jobs": jobs,
-        "runnerSeconds": sum(job["runnerSeconds"] or 0 for job in jobs),
-        "queueSeconds": sum(job["queueSeconds"] or 0 for job in jobs),
+        "runnerSeconds": (
+            observed_runner
+            if jobs and all(job["runnerSeconds"] is not None for job in jobs)
+            else None
+        ),
+        "queueSeconds": (
+            observed_queue
+            if jobs and all(job["queueSeconds"] is not None for job in jobs)
+            else None
+        ),
+        "observedRunnerSeconds": observed_runner,
+        "observedQueueSeconds": observed_queue,
+        "timingComplete": bool(jobs)
+        and all(
+            job["status"] == "completed"
+            and job["runnerSeconds"] is not None
+            and job["queueSeconds"] is not None
+            for job in jobs
+        ),
         "incompleteJobs": [job["name"] for job in jobs if job["status"] != "completed"],
+        "unavailableTimingJobs": [
+            job["name"]
+            for job in jobs
+            if job["status"] == "completed"
+            and (job["runnerSeconds"] is None or job["queueSeconds"] is None)
+        ],
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, indent=2) + "\n")
@@ -455,7 +510,9 @@ def summarize_workflow_jobs(pages: list[dict], output: Path, summary: Path) -> d
                 f"| [{job['name']}]({job['url']}) | {job['queueSeconds']} | {job['runnerSeconds']} | {job['conclusion']} |\n"
             )
         destination.write(
-            "\nActive jobs remain incomplete; runner seconds are additive usage, not wall-clock duration.\n"
+            f"\nObserved allocated runner seconds: {observed_runner:.1f}; complete timing: {payload['timingComplete']}. "
+            "Queued cancellations use no runner time. Unfinished or unavailable intervals leave totals incomplete. "
+            "Queue waits and allocated runner intervals are additive, not wall-clock duration.\n"
         )
     return payload
 

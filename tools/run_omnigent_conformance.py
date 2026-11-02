@@ -121,6 +121,9 @@ COMMANDS = (
         # compose-backed integration-ci job; the deterministic runner does not
         # provision a database service.
         "--ignore=tests/integration/omnigent/test_host_auth_lifecycle.py",
+        # Actual Docker recovery belongs to the separate required installed-
+        # image owner. Source receipts cannot qualify that runtime boundary.
+        "--ignore=tests/integration/omnigent/test_exact_docker_n_way_concurrency.py",
         # The second layer runs this module explicitly and owns its recovery
         # evidence. Exclude it here to avoid executing the same nodes twice
         # with the same interpreter, environment, and pytest options.
