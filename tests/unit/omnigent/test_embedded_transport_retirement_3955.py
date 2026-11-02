@@ -316,7 +316,8 @@ def test_tunnel_retirement_close_carries_reason() -> None:
 
 
 @pytest.mark.asyncio
-async def test_retained_embedded_sessions_drain_under_proxy_mode() -> None:
+@pytest.mark.parametrize("recorded_status", ["active", "completed"])
+async def test_retained_embedded_sessions_drain_under_proxy_mode(recorded_status) -> None:
     """Persisted-mode dispatch keeps retained drain paths on their owner (#3955)."""
 
     from types import SimpleNamespace
@@ -337,7 +338,8 @@ async def test_retained_embedded_sessions_drain_under_proxy_mode() -> None:
             return self._row
 
     embedded_row = SimpleNamespace(
-        metadata_={"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED}
+        metadata_={"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+        status=recorded_status,
     )
     facade, selected = await bridge_router._resolve_session_control_facade(
         session_id="sess-1",

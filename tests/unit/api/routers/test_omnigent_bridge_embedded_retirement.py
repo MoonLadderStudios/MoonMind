@@ -14,6 +14,7 @@ import importlib
 from typing import Any
 from unittest.mock import AsyncMock, Mock
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -304,16 +305,17 @@ def test_new_embedded_admission_rejected_before_proxy_or_facade_errors() -> None
     )
 
 
-def test_retained_embedded_row_reads_without_live_transport(monkeypatch) -> None:
+@pytest.mark.parametrize("known_binding", [True, False])
+def test_retained_embedded_row_reads_without_live_transport(monkeypatch, known_binding) -> None:
     """P1: historical reads decode the retained row when no facade exists."""
     from types import SimpleNamespace
 
     module = importlib.import_module("api_service.api.routers.omnigent_bridge")
 
-    async def _no_facade(**_kwargs):
-        return (None, True)
+    def _no_live_transport(*_args, **_kwargs):
+        raise AssertionError("historical reads must not instantiate a retired transport")
 
-    monkeypatch.setattr(module, "_resolve_session_control_facade", _no_facade)
+    monkeypatch.setattr(module, "build_embedded_host_facade", _no_live_transport)
 
     retained_metadata = {
         "hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED,
@@ -341,7 +343,7 @@ def test_retained_embedded_row_reads_without_live_transport(monkeypatch) -> None
             return row if session_id == "sess-77" else None
 
         async def get_session_owner(self, session_id: str):
-            if session_id == "sess-77":
+            if session_id == "sess-77" and known_binding:
                 return SimpleNamespace(workflow_id="mm:w1", agent_run_id="ar-1")
             return None
 
@@ -363,6 +365,10 @@ def test_retained_embedded_row_reads_without_live_transport(monkeypatch) -> None
 
     response = TestClient(app).get(f"{_CREATE_PATH}/sess-77")
 
+    if not known_binding:
+        assert response.status_code == 404
+        assert "runner_tunnel_ready" not in response.text
+        return
     assert response.status_code == 200
     body = response.json()
     assert body["id"] == "sess-77"

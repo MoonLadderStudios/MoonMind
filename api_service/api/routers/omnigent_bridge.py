@@ -1009,23 +1009,23 @@ async def _get_create_embedded_facade(
         return None
 
 
-async def _persisted_host_protocol_mode(
+async def _persisted_host_protocol_state(
     *, store: OmnigentBridgeSessionStore, session_id: str
-) -> str | None:
-    """Return the recorded host protocol mode for one provider session."""
+) -> tuple[str | None, str | None]:
+    """Read the recorded transport and lifecycle without instantiating either."""
 
     if not session_id:
-        return None
+        return None, None
     try:
         row = await store.get_session_by_provider_session_id(session_id)
     except Exception:
         logger.debug("Unable to resolve persisted bridge mode", exc_info=True)
-        return None
+        return None, None
     metadata = getattr(row, "metadata_", None) if row is not None else None
     if not isinstance(metadata, dict):
-        return None
+        return None, None
     mode = metadata.get("hostProtocolMode")
-    return str(mode) if mode else None
+    return str(mode) if mode else None, getattr(row, "status", None)
 
 
 async def _retained_embedded_session_snapshot(
@@ -1082,6 +1082,7 @@ async def _resolve_session_control_facade(
     proxy: OmnigentBridgeSessionProxy | None,
     embedded_facade: OmnigentEmbeddedHostProtocolFacade | None,
     store: OmnigentBridgeSessionStore,
+    terminal_read_only: bool = False,
 ) -> tuple[Any, bool]:
     """Dispatch one session-scoped control to its recorded owner (#3955).
 
@@ -1089,15 +1090,19 @@ async def _resolve_session_control_facade(
     keep their recorded mode/endpoint and cleanup owner until drained: when the
     deployment runs proxy mode, a retained embedded row resolves a drain-only
     embedded facade instead of being silently misrouted to the proxy owner.
+    Terminal reads use the durable snapshot; cleanup keeps its recorded owner
+    because terminal status alone does not prove cleanup has finished.
     Returns ``(facade, embedded_selected)``.
     """
 
     if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
         return embedded_facade, True
-    if (
-        await _persisted_host_protocol_mode(store=store, session_id=session_id)
-        == HOST_PROTOCOL_MODE_EMBEDDED
-    ):
+    recorded_mode, recorded_status = await _persisted_host_protocol_state(
+        store=store, session_id=session_id
+    )
+    if recorded_mode == HOST_PROTOCOL_MODE_EMBEDDED:
+        if terminal_read_only and recorded_status in _BRIDGE_TERMINAL_STATUSES:
+            return None, True
         try:
             return (
                 build_embedded_host_facade(config, drain_retained_sessions=True),
@@ -1348,15 +1353,9 @@ async def get_omnigent_session(
 ) -> dict[str, Any]:
     """Return an Omnigent-shaped session snapshot (OB-§4.1, §8.2).
 
-    Enforces the §16 rule-1 authorization boundary on direct reads: unlike the
-    create path, the raw provider ``session_id`` is caller-supplied, so the
-    facade must confirm the caller owns the workflow that owns the session
-    before proxying the read with the service credential. This closes the IDOR
-    where any authenticated user could read any session snapshot by id.
-
-    Ownership is resolved against the durable bridge binding (not caller-
-    supplied task-identity headers), so the read requires no header parameters:
-    the authenticated user must own the workflow that owns the session.
+    The admitted operator can read only sessions with a durable workflow
+    binding. Caller-supplied task-identity headers cannot create that authority;
+    unbound provider ids are never proxied using the service credential.
     """
 
     # Retained sessions resolve to their recorded owner (#3955): a retained
@@ -1370,6 +1369,7 @@ async def get_omnigent_session(
         proxy=proxy,
         embedded_facade=embedded_facade,
         store=store,
+        terminal_read_only=True,
     )
     if facade is None:
         retained = await _retained_embedded_session_snapshot(
