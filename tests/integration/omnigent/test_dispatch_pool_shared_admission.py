@@ -61,7 +61,7 @@ session_factory = native_fixture.session_factory
 @pytest.mark.parametrize(
     "native_journey", ["codex-native", "claude-native"], indirect=True
 )
-@pytest.mark.parametrize("scenario", ["ordinary", "disabled", "publish", "model_alias"])
+@pytest.mark.parametrize("scenario", ["ordinary", "disabled", "publish", "model_alias", "tier_resolution", "native_tier_option"])
 async def test_pool_selected_account_compiles_once_and_preserves_its_original_inputs(
     native_journey, monkeypatch, scenario
 ):
@@ -91,6 +91,8 @@ def _submission(payload, *, fixed_serialized, runtime):
     selected = parameters["workflow"]["runtime"]
     selected.pop("profileSelector")
     selected["providerProfileRef"] = native_fixture.PROFILE
+    if "workspace" in parameters:
+        parameters["workspaceSpec"] = parameters.pop("workspace")
     return {
         "workflowType": "MoonMind.UserWorkflow",
         "initialParameters": {
@@ -103,7 +105,7 @@ def _submission(payload, *, fixed_serialized, runtime):
 
 async def execute_selected_pool_source(
     native_journey, monkeypatch, *, scenario="ordinary", include_successor=False,
-    fixed_serialized=False,
+    fixed_serialized=False, explicit_scratch=False,
 ):
     """Exercise the first admitted pool turn, optionally retaining a second step."""
     journey = native_journey
@@ -150,6 +152,14 @@ async def execute_selected_pool_source(
         provider.tags = ["selected-pool"]
         if scenario == "model_alias":
             provider.model_overrides = {"selected-pool-alias": journey.server.model}
+        if scenario in {"tier_resolution", "native_tier_option"}:
+            provider.model_tiers = [{
+                "model": journey.server.model,
+                "parameters": (
+                    {"metadata": {"operatorTrace": "accepted-tier-default"}}
+                    if scenario == "tier_resolution" else {"native_option": "preserve-direct-setting"}
+                ),
+            }]
         await session.commit()
         await reconcile_bootstrap_agent_profile(session, inventory=inventory)
         app = FastAPI()
@@ -174,10 +184,10 @@ async def execute_selected_pool_source(
                             "runtime": {
                                 "mode": runtime,
                                 "profileSelector": {"tagsAll": ["selected-pool"]},
-                                "model": (
-                                    "selected-pool-alias"
-                                    if scenario == "model_alias"
-                                    else journey.server.model
+                                **(
+                                    {"modelTier": 1}
+                                    if scenario in {"tier_resolution", "native_tier_option"}
+                                    else {"model": "selected-pool-alias" if scenario == "model_alias" else journey.server.model}
                                 ),
                             },
                             "steps": [
@@ -214,6 +224,10 @@ async def execute_selected_pool_source(
                         },
                         "publishMode": "none",
                         **({"repository": repository} if repository else {}),
+                        **(
+                            {"workspace": {"workspaceSource": {"kind": "scratch"}}}
+                            if explicit_scratch else {}
+                        ),
                     },
                 }, fixed_serialized=fixed_serialized, runtime=runtime),
             )
@@ -338,11 +352,20 @@ async def execute_selected_pool_source(
         previous_plan_count = await session.scalar(
             select(func.count(OmnigentExecutionPlanRecord.plan_ref))
         )
+        expected_selection = selected.model_copy(deep=True)
+        if scenario == "tier_resolution":
+            from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
+            current_provider = await session.get(ManagedAgentProviderProfile, native_fixture.PROFILE)
+            ManagedRuntimeLauncher._apply_resolved_tier_policy(
+                request=expected_selection, profile=current_provider, strategy=None,
+            )
         result = await prepare_selected_pool_plan(
             session, runtime_id=runtime, payload=payload, client=transport
         )
-        if scenario == "disabled":
+        if scenario in {"disabled", "native_tier_option"}:
             assert result["disposition"] == "native", result
+            if scenario == "native_tier_option":
+                assert result["reason"] == "native_parameter_defaults_require_an_equivalent_handoff"
             assert (
                 await session.scalar(
                     select(func.count(OmnigentExecutionPlanRecord.plan_ref))
@@ -357,7 +380,7 @@ async def execute_selected_pool_source(
                 )
             ).one()
             assert row.lease_state == "held" and row.execution_plan_ref is None
-            return
+            return None
         assert result["disposition"] == "shared", result
         shared = AgentExecutionRequest.model_validate(result["request"])
         assert shared.agent_kind == "external" and shared.agent_id == "omnigent"
@@ -368,6 +391,10 @@ async def execute_selected_pool_source(
         assert shared.execution_budget == request.execution_budget
         assert shared.terminal_contract == request.terminal_contract
         assert shared.profile_selector == request.profile_selector
+        if scenario == "tier_resolution":
+            assert "operatorTrace" not in expected_selection.parameters["metadata"]
+            assert shared.parameters["metadata"] == expected_selection.parameters["metadata"]
+            assert shared.parameters["modelTierResolution"] == expected_selection.parameters["modelTierResolution"]
         if fixed_serialized:
             assert record.parameters["operatorExtension"] == {"accepted": "preserve-original-input"}
             assert shared.parameters.get("operatorExtension") == request.parameters.get("operatorExtension")
@@ -396,7 +423,7 @@ async def execute_selected_pool_source(
             assert shared.parameters["publishMode"] == "pr"
             assert shared.parameters["publishBaseBranch"] == "selected-target"
             assert shared.parameters["commitMessage"] == "Publish selected pool work"
-            return
+            return None
         assert plan.payload.harnessId == journey.harness
         if scenario == "model_alias":
             assert request.parameters["model"] == "selected-pool-alias"
@@ -430,6 +457,11 @@ async def execute_selected_pool_source(
             ManagedAgentProviderProfile, native_fixture.PROFILE
         )
         provider.enabled = False
+        if scenario == "tier_resolution":
+            provider.model_tiers = [{
+                "model": journey.server.model,
+                "parameters": {"metadata": {"operatorTrace": "later-profile-edit"}},
+            }]
         await session.commit()
         repeated = await prepare_selected_pool_plan(
             session, runtime_id=runtime, payload=payload, client=transport
@@ -438,6 +470,9 @@ async def execute_selected_pool_source(
             repeated["request"]["omnigentExecutionPlan"]
             == result["request"]["omnigentExecutionPlan"]
         )
+        if scenario == "tier_resolution":
+            assert repeated["request"]["parameters"]["metadata"] == result["request"]["parameters"]["metadata"]
+            assert repeated["request"]["parameters"]["modelTierResolution"] == result["request"]["parameters"]["modelTierResolution"]
         assert (
             await session.scalar(
                 select(func.count(OmnigentExecutionPlanRecord.plan_ref))

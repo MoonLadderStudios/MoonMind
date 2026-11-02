@@ -14,13 +14,14 @@ import socket
 import subprocess
 import tempfile
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
 
-@pytest.fixture
-def control_plane_postgres_url():
-    """Provide isolated PostgreSQL without a manually managed test service.
+@pytest.fixture(scope="session")
+def control_plane_postgres_server_url():
+    """Provide one PostgreSQL server per worker, never shared test data.
 
     Honors ``MOONMIND_TEST_POSTGRES_URL`` when set; otherwise runs a throwaway
     local cluster on a random port via ``initdb``/``pg_ctl``. Fails closed with an
@@ -95,7 +96,9 @@ def control_plane_postgres_url():
         if started.returncode == 0:
             break
     else:
-        server_log = log_path.read_text(errors="replace")[-4000:] if log_path.exists() else ""
+        server_log = (
+            log_path.read_text(errors="replace")[-4000:] if log_path.exists() else ""
+        )
         shutil.rmtree(data_root, ignore_errors=True)
         pytest.fail(
             f"PostgreSQL did not start: {started.stdout}{started.stderr}\n{server_log}"
@@ -119,3 +122,36 @@ def control_plane_postgres_url():
             text=True,
         )
         shutil.rmtree(data_root, ignore_errors=True)
+
+
+@pytest.fixture
+def control_plane_postgres_url(control_plane_postgres_server_url):
+    """A fresh database also isolates subprocess Alembic DDL and enum types."""
+    import psycopg2
+    from psycopg2 import sql
+    from sqlalchemy.engine import make_url
+
+    url = make_url(control_plane_postgres_server_url)
+    database = "moonmind_test_" + uuid4().hex
+    admin = psycopg2.connect(
+        url.set(drivername="postgresql").render_as_string(hide_password=False)
+    )
+    admin.autocommit = True
+    try:
+        with admin.cursor() as cursor:
+            cursor.execute(
+                sql.SQL("CREATE DATABASE {} TEMPLATE template0").format(
+                    sql.Identifier(database)
+                )
+            )
+        try:
+            yield url.set(database=database).render_as_string(hide_password=False)
+        finally:
+            with admin.cursor() as cursor:
+                cursor.execute(
+                    sql.SQL("DROP DATABASE {} WITH (FORCE)").format(
+                        sql.Identifier(database)
+                    )
+                )
+    finally:
+        admin.close()

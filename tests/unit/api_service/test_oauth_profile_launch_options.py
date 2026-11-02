@@ -62,6 +62,8 @@ def profile_and_configuration(runtime, schema, **options):
     "customization",
     [
         {"env_template": {"OMNIGENT_SERVER_URL": "http://unselected-control-owner"}},
+        {"env_template": {"REPORT_DIR": "{{selected_secret}}/reports"}},
+        {"env_template": {"REPORT_DIR": "{{unknown_runtime_dir}}/reports"}},
         {
             "file_templates": [
                 {
@@ -95,6 +97,23 @@ def test_plain_oauth_profiles_keep_the_equivalent_shared_route(runtime, schema):
     profile, configuration = profile_and_configuration(runtime, schema)
     assert configuration_accepts_profile(configuration[1].document, profile)
     assert not profile_has_native_inventory_route(profile, [configuration])
+
+
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code"])
+@pytest.mark.parametrize("schema", ["v1", "v2"])
+@pytest.mark.parametrize("template", [
+    "{{workspace_path}}/reports", "{{ runtime_support_dir }}/reports",
+])
+def test_available_oauth_context_uses_the_shared_template_owner(runtime, schema, template):
+    from moonmind.omnigent.harness_platform.materializers import snapshot_provider_configuration
+
+    profile, configuration = profile_and_configuration(runtime, schema)
+    profile.env_template = {"REPORT_DIR": template}
+    assert configuration_accepts_profile(configuration[1].document, profile)
+    assert not profile_has_native_inventory_route(profile, [configuration])
+    frozen = snapshot_provider_configuration(profile)
+    assert frozen.environmentTemplates == {"REPORT_DIR": template}
+    assert frozen.launchEnvironment == {}
 
 
 @pytest.mark.parametrize("schema", ["v1", "v2"])
@@ -179,8 +198,9 @@ def test_enrolled_home_template_translation_requires_its_codex_oauth_owner(chang
 
 def test_private_codex_oauth_configuration_is_frozen_with_its_account():
     import hashlib
+    from moonmind.omnigent.harness_platform.execution_plan import ProviderConfigurationSnapshotRef
     from moonmind.omnigent.harness_platform.materializers import (
-        ProviderConfigurationSnapshotRef, load_provider_configuration_snapshot,
+        load_provider_configuration_snapshot,
         provider_configuration_snapshot_bytes, snapshot_provider_configuration,
     )
 
@@ -254,8 +274,10 @@ def test_claude_oauth_tuning_is_frozen_with_its_bound_account():
     import hashlib
     import json
 
-    from moonmind.omnigent.harness_platform.materializers import (
+    from moonmind.omnigent.harness_platform.execution_plan import (
         ProviderConfigurationSnapshotRef,
+    )
+    from moonmind.omnigent.harness_platform.materializers import (
         load_provider_configuration_snapshot,
         provider_configuration_snapshot_bytes,
         snapshot_provider_configuration,
@@ -310,9 +332,11 @@ def test_oauth_tuning_never_admits_credentials_or_another_launch_owner(environme
 def test_old_provider_snapshot_does_not_invent_oauth_launch_settings():
     import hashlib
 
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        ProviderConfigurationSnapshotRef,
+    )
     from moonmind.omnigent.harness_platform.materializers import (
         ProviderConfigEndpoint,
-        ProviderConfigurationSnapshotRef,
         load_provider_configuration_snapshot,
         provider_configuration_snapshot_bytes,
     )

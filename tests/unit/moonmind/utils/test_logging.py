@@ -46,6 +46,7 @@ def test_is_sensitive_key(key, expected):
 def test_is_non_secret_sentinel(value, expected):
     assert _is_non_secret_sentinel(value) is expected
 
+
 @pytest.mark.parametrize(
     ("input_text", "expected_text"),
     [
@@ -64,6 +65,7 @@ def test_is_non_secret_sentinel(value, expected):
         ("", ""),
         (None, ""),
     ],
+    ids=["single-token", "multiple-tokens", "unrecognized-prefix", "empty", "none"],
 )
 def test_scrub_github_tokens(input_text, expected_text):
     assert scrub_github_tokens(input_text) == expected_text
@@ -202,7 +204,7 @@ def test_redact_sensitive_text_scrubs_relative_auth_basenames(basename):
     ("text", "expected"),
     [
         (
-            'api_key="raw-secret" password: \'other-secret\'',
+            "api_key=\"raw-secret\" password: 'other-secret'",
             "api_key=[REDACTED] password: [REDACTED]",
         ),
         ("Authorization: [REDACTED]", "Authorization: [REDACTED]"),
@@ -211,6 +213,12 @@ def test_redact_sensitive_text_scrubs_relative_auth_basenames(basename):
             "Set-Cookie: session=private-value; Secure; HttpOnly",
             "Set-Cookie: [REDACTED]",
         ),
+    ],
+    ids=[
+        "assignment-separators",
+        "already-redacted",
+        "cookie-header",
+        "set-cookie-header",
     ],
 )
 def test_redact_sensitive_text_preserves_secret_assignment_separators(text, expected):
@@ -229,6 +237,17 @@ def test_redact_sensitive_text_preserves_secret_assignment_separators(text, expe
         "Set-Cookie: identity=private-value; Secure; HttpOnly",
         "xoxb-1234567890-1234567890-private-value",
         "xoxp-1234567890-1234567890-private-value",
+    ],
+    ids=[
+        "passwd",
+        "authorization",
+        "cookie-assignment",
+        "session-assignment",
+        "quoted-session",
+        "cookie-header",
+        "set-cookie-header",
+        "slack-bot",
+        "slack-user",
     ],
 )
 def test_redact_sensitive_text_scrubs_review_credentials(text):

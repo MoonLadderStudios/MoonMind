@@ -320,6 +320,7 @@ def test_bearer_authorization_header_is_redacted_in_full() -> None:
             "bW9vbjptaW5kMTIzNA==",
         ),
     ],
+    ids=["set-cookie", "cookie", "jwt", "api-key", "proxy-authorization"],
 )
 def test_session_bearing_material_is_redacted(line: str, secret: str) -> None:
     diagnostics = build_safe_failure_diagnostics(
