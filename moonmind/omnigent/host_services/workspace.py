@@ -769,12 +769,39 @@ class OmnigentWorkspaceMaterializer:
                 "sandbox workspace ownership handoff failed",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             ) from exc
+        target_branch = str(spec.get("targetBranch") or "").strip()
+        if source.kind == "repository" and target_branch:
+            await self._prepare_target_branch(
+                candidate, target_branch=target_branch,
+                runtime_uid=runtime_uid, runtime_gid=runtime_gid,
+                allow_initialization=not existed,
+            )
         if existed:
             # Reclaim leftover import-owned staging from a crashed attempt.
             # This touches only `.moonmind-import-*` generations, never the
             # live authorized workspace or another owner's content.
             cleanup_import_staging(candidate.parent)
         return candidate, record_store, sandbox_locator.workspace_id
+
+    async def _prepare_target_branch(
+        self, candidate: Path, *, target_branch: str,
+        runtime_uid: int, runtime_gid: int, allow_initialization: bool,
+    ) -> None:
+        argv = build_daemon_workspace_branch_argv(
+            volume=self._workspace_volume,
+            target_in_volume=candidate.relative_to(self._root).as_posix(),
+            target_branch=target_branch, runtime_uid=runtime_uid, runtime_gid=runtime_gid,
+            image=os.getenv("MOONMIND_WORKSPACE_GIT_IMAGE", "alpine/git:v2.43.0"),
+            allow_initialization=allow_initialization,
+        )
+        code, _stdout, stderr = await self._runner(argv)
+        if code != 0:
+            detail = (stderr or "").strip()[-300:]
+            raise HarnessPlatformError(
+                "sandbox target-branch preparation is unconfirmed"
+                + (f": {detail}" if detail else ""),
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
 
     async def _resolve_granted_workspace(
         self,
@@ -1180,6 +1207,43 @@ def build_daemon_git_clone_argv(
     ]
 
 
+def build_daemon_workspace_branch_argv(
+    *, volume: str, target_in_volume: str, target_branch: str,
+    runtime_uid: int, runtime_gid: int, image: str, allow_initialization: bool,
+) -> list[str]:
+    """Prepare a fresh local branch, then preserve candidate changes on redelivery."""
+    if not _SAFE_VOLUME.fullmatch(volume) or len(target_branch) > 400:
+        raise HarnessPlatformError(
+            "workspace branch preparation authority is unavailable or unsafe",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+        )
+    script = (
+        "set -eu; umask 077; "
+        'git() { env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 '
+        'GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 git "$@"; }; '
+        'git check-ref-format --branch "$2" >/dev/null; '
+        'recorded=$(git -C "$1" config --local --get moonmind.initialTargetBranch || true); '
+        'if [ -n "$recorded" ]; then '
+        'test "$recorded" = "$2" || { echo "workspace branch intent conflicts" >&2; exit 75; }; '
+        'exit 0; fi; '
+        'current=$(git -C "$1" symbolic-ref --quiet --short HEAD || true); '
+        'if [ "$current" != "$2" ]; then '
+        'test "$3" = initialize || { '
+        'echo "existing workspace branch preparation is uncertain; candidate preserved" >&2; exit 75; }; '
+        'if git -C "$1" show-ref --verify --quiet "refs/heads/$2"; then '
+        'git -C "$1" switch --no-guess "$2"; '
+        'else git -C "$1" switch --no-guess -c "$2"; fi; fi; '
+        'git -C "$1" config --local moonmind.initialTargetBranch "$2"'
+    )
+    return [
+        "docker", "run", "--rm", "--network", "none", "--read-only",
+        "--user", f"{runtime_uid}:{runtime_gid}", "-v", f"{volume}:/work",
+        "--entrypoint", "/bin/sh", image, "-ceu", script, "--",
+        "/work/" + target_in_volume.lstrip("/"), target_branch,
+        "initialize" if allow_initialization else "retain",
+    ]
+
+
 def build_daemon_workspace_chown_argv(
     *,
     volume: str,
@@ -1237,6 +1301,7 @@ def _rmdir_if_empty(path: Path) -> None:
 __all__ = [
     "OmnigentWorkspaceMaterializer",
     "build_daemon_git_clone_argv",
+    "build_daemon_workspace_branch_argv",
     "build_daemon_workspace_chown_argv",
     "normalize_github_clone_source",
     "resolve_daemon_attachment_source",
