@@ -294,6 +294,10 @@ Fresh serialized canonical agent workflows use the same product admission compil
 their title, failure policy and accepted retry identity survive translation.
 Raw deferred step-account matching and tool-only boundary validation remain intact.
 Replaced defaults never select ambient credentials.
+OAuth-home delivery attaches the enrollment-owned volume; it does not apply
+additional per-run Profile environment, file or HOME settings. Such explicit
+native choices keep their adapter until a shared configuration handoff carries
+those settings. Recorded plans retain their original materializer identity.
 Profile-bound execution and its OAuth host launcher admit no new plans;
 they retain queued starts, retries and cleanup under their recorded authority. Supported
 static-connected Codex/Claude hosts use the shared lifecycle.
