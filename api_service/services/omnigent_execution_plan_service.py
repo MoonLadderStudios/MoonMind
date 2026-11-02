@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from api_service.db.models import TemporalArtifactRetentionClass
 from api_service.services.provider_profile_runtime import OMNIGENT_RUNTIME_ID
@@ -1464,7 +1464,7 @@ async def compile_and_persist_execution_plan(
     access: ArtifactAccessContext,
     _compile_step_plans: bool = True,
     _recorded_step_parameters: Mapping[str, Mapping[str, Any]] | None = None,
-    _recorded_provider_configuration_snapshot: ProviderConfigurationSnapshotRef | None = None,
+    _recorded_provider_configuration_snapshot: ProviderConfigurationSnapshotRef | None | Literal["capture"] = "capture",
     recorded_skillset_ref: str | None = None,
 ) -> PersistedOmnigentExecutionPlan:
     """Compile and persist one plan before Temporal or provider side effects."""
@@ -1997,7 +1997,7 @@ async def compile_and_persist_execution_plan(
     )
     provider_configuration_snapshot = None
     configuration_ref = None
-    if _recorded_provider_configuration_snapshot is not None:
+    if isinstance(_recorded_provider_configuration_snapshot, ProviderConfigurationSnapshotRef):
         recorded = _recorded_provider_configuration_snapshot
         configuration_ref = recorded.artifactRef.removeprefix("artifact:")
         _artifact, configuration_body = await artifact_service.read(
@@ -2007,7 +2007,7 @@ async def compile_and_persist_execution_plan(
             configuration_body, recorded, binding_set.bindings
         )
         provider_configuration_snapshot = recorded.model_dump(mode="json")
-    elif config["materializerRef"] == "omnigent-provider-config@1":
+    elif _recorded_provider_configuration_snapshot == "capture" and config["materializerRef"] == "omnigent-provider-config@1":
         configuration_body = provider_configuration_snapshot_bytes(
             binding_set.bindings,
             {"primary-model": snapshot_provider_configuration(provider_profile)},
@@ -2451,7 +2451,7 @@ async def compile_frozen_execution_plan(
             if not refresh_step_selections and any(
                 getattr(bound, "providerProfileRef", None) == provider_profile.profile_id
                 for bound in recorded_plan.payload.credentialBindings.values()
-            ) else None
+            ) else "capture"
         ),
     )
 
@@ -2527,7 +2527,7 @@ def changed_admitted_intent(
     snapshot artifact refs, and time-bounded repository access snapshot refs
     move with the installed runtime; ``changed_repository_selection`` compares
     what those snapshots select. Harness, Provider Profile account, model and
-    effort, launch (cost/egress) and capture (privacy) policy, source, and
+    effort, recorded provider configuration, launch (cost/egress) and capture (privacy) policy, source, and
     publication intent belong to the request and must not.
     """
 

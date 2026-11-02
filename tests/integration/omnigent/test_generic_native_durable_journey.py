@@ -1279,17 +1279,27 @@ async def native_journey(
         catalog = await DbHarnessCatalogRepository(session_factory).load(
             synchronized["catalogRef"]
         )
-        compiled = await _compile_plan(
-            session_factory,
-            harness,
-            workflow_id,
-            api_key=api_key,
-            static_mode=static_mode,
-            env_bundle=env_bundle,
-            codex_config=codex_config,
-            session_settings=selection.get("sessionSettings"),
-            instructions=instructions,
-        )
+        with monkeypatch.context() as writer_mode:
+            if selection.get("legacyProviderConfiguration"):
+                current_writer = plan_writer.compile_execution_plan
+
+                def legacy_writer(**kwargs):
+                    # The pre-upgrade writer had no provider snapshot field.
+                    kwargs.pop("provider_configuration_snapshot", None)
+                    return current_writer(**kwargs)
+
+                writer_mode.setattr(plan_writer, "compile_execution_plan", legacy_writer)
+            compiled = await _compile_plan(
+                session_factory,
+                harness,
+                workflow_id,
+                api_key=api_key,
+                static_mode=static_mode,
+                env_bundle=env_bundle,
+                codex_config=codex_config,
+                session_settings=selection.get("sessionSettings"),
+                instructions=instructions,
+            )
         # Verify the public HTTP enums survive discovery, alongside the real
         # deployment overlay's native OAuth/API-key admission contracts.
         observed = {row.id: row for row in catalog.snapshot.harnesses}
@@ -1459,6 +1469,7 @@ async def native_journey(
             static_mode=static_mode,
             env_bundle=env_bundle,
             codex_config=codex_config,
+            legacy_configuration=bool(selection.get("legacyProviderConfiguration")),
         )
     finally:
         await running.runner.cleanup()
@@ -1536,10 +1547,11 @@ async def test_large_provider_settings_remain_artifact_owned(native_journey):
     assert instructions not in native_journey.plan.payload.model_dump_json()
 
 
-@pytest.mark.parametrize("native_journey", [{
-    "harness": "codex-native-file-config",
-    "sessionSettings": {"developer_instructions": "Use the admitted instructions."},
-}], indirect=True)
+@pytest.mark.parametrize("native_journey", [
+    {"harness": "codex-native-file-config", "legacyProviderConfiguration": legacy,
+     "sessionSettings": {"developer_instructions": "Use the admitted instructions."}}
+    for legacy in (False, True)
+], indirect=True)
 @pytest.mark.parametrize("refresh", [False, True], ids=["frozen", "fresh-scheduled"])
 async def test_frozen_recompilation_preserves_the_provider_settings(native_journey, refresh):
     from copy import deepcopy
@@ -1573,15 +1585,24 @@ async def test_frozen_recompilation_preserves_the_provider_settings(native_journ
             refresh_step_selections=refresh,
         )
         saved = frozen.envelope.payload.providerConfigurationSnapshot
-        _row, content = await artifacts.read(
-            artifact_id=saved.artifactRef.removeprefix("artifact:"),
-            access=access_for_test("system"),
-        )
+        if journey.legacy_configuration and not refresh:
+            assert saved is None
+        else:
+            _row, content = await artifacts.read(
+                artifact_id=saved.artifactRef.removeprefix("artifact:"),
+                access=access_for_test("system"),
+            )
         await session.commit()
+    if saved is None:
+        await assert_native_turn_saved_and_cleaned(journey)
+        assert journey.docker.codex_configuration["document"]["developer_instructions"] == "A later edit."
+        assert "providerConfigurationSnapshot" not in frozen.envelope.payload.model_dump(mode="json")
+        return
     expected = "A later edit." if refresh else "Use the admitted instructions."
     assert json.loads(content)["primary-model"]["endpoint"]["codexConfiguration"]["document"]["developer_instructions"] == expected
     changed = plan_writer.changed_admitted_intent(journey.plan.payload, frozen.envelope.payload)
-    assert ("providerConfiguration" in changed) is refresh
+    if not journey.legacy_configuration:
+        assert ("providerConfiguration" in changed) is refresh
 
 
 @pytest.mark.parametrize("native_journey", ["claude-native-env-bundle"], indirect=True)
