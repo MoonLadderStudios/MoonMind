@@ -45,7 +45,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH,
     MoonMindRunWorkflow,
 )
-from tests.unit.api.routers.test_executions import (
+from tests.helpers.execution_api import (
     _build_execution_record,
     _override_user_dependencies,
 )

@@ -319,7 +319,16 @@ def test_batch_terminal_accepts_preflight_failure_without_target_list(
 
 
 @pytest.mark.parametrize("failure_message", [None, "no child workflows were queued"])
-@pytest.mark.parametrize("secret", ["", " token=test-private-token", " Authorization: Bearer private-bearer-token", " ghp_" + "a" * 36])
+@pytest.mark.parametrize(
+    "secret",
+    [
+        "",
+        " token=test-private-token",
+        " Authorization: Bearer private-bearer-token",
+        " ghp_" + "a" * 36,
+    ],
+    ids=["ordinary-diagnostic", "token-assignment", "bearer-header", "github-token"],
+)
 def test_batch_terminal_falls_back_to_first_error_message(tmp_path: Path, failure_message: str | None, secret: str) -> None:
     """A failed fan-out without a failure message must keep its error cause."""
 

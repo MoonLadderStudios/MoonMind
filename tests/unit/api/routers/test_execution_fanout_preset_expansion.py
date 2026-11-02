@@ -30,8 +30,10 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
-from tests.unit.api.routers.test_executions import (
+from tests.helpers.execution_api import (
     _build_execution_record,
+)
+from tests.unit.api.routers.test_executions import (
     _override_temporal_client,
 )
 

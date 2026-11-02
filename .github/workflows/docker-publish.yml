@@ -2,7 +2,7 @@ name: Release / Build App Image
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 env:
@@ -25,6 +25,17 @@ jobs:
           IMAGE_NAME="$(printf '%s' "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')"
           echo "image_name=${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
 
+  source-checks:
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/pytest-unit-tests.yml
+    with:
+      verification_phase: source
+  prepare-recovery-images:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/prepare-recovery-images.yml
   build:
     needs: metadata
     runs-on: ${{ matrix.runner }}
@@ -46,48 +57,6 @@ jobs:
       - name: Initialize pinned Omnigent verifier source
         run: git submodule update --init --depth 1 -- omnigent
 
-      - name: Set up Python
-        if: matrix.platform == 'linux/amd64'
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.12'
-
-      - name: Install system dependencies
-        if: matrix.platform == 'linux/amd64'
-        run: |
-          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
-          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends libcairo2-dev pkg-config
-
-      - name: Cache pip dependencies
-        if: matrix.platform == 'linux/amd64'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Install Python dependencies
-        if: matrix.platform == 'linux/amd64'
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e .
-
-      - name: Setup Node.js
-        if: matrix.platform == 'linux/amd64'
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '20'
-
-      - name: Check frontend and generated contracts
-        if: matrix.platform == 'linux/amd64'
-        run: |
-          npm ci
-          npm run ui:typecheck
-          npm run ui:lint
-          npm run ui:test
-          npm run contracts:check
-
       - name: Login to GitHub Container Registry
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
@@ -105,23 +74,6 @@ jobs:
       - name: Set up Docker Buildx
         id: setup-buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
-      - name: Cache BuildKit mount directories
-        id: buildkit-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/buildkit-cache-mounts
-          key: ${{ runner.os }}-${{ steps.meta.outputs.pair }}-buildkit-cache-mounts-${{ hashFiles('api_service/Dockerfile', 'package-lock.json', 'poetry.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ steps.meta.outputs.pair }}-buildkit-cache-mounts-
-
-      - name: Restore BuildKit cache mounts
-        uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3.4.0
-        with:
-          builder: ${{ steps.setup-buildx.outputs.name }}
-          cache-dir: ${{ runner.temp }}/buildkit-cache-mounts
-          dockerfile: api_service/Dockerfile
-          skip-extraction: ${{ steps.buildkit-cache.outputs.cache-hit }}
 
       - name: Build and push by digest
         id: build
@@ -221,7 +173,9 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
 
   qualify:
-    needs: assemble
+    needs:
+      - assemble
+      - prepare-recovery-images
     permissions:
       contents: read
       packages: read
@@ -229,20 +183,49 @@ jobs:
     with:
       candidate_image: ${{ needs.assemble.outputs.image_ref }}
 
+      verification_phase: artifact
+      recovery_images_artifact: ${{ needs.prepare-recovery-images.outputs.artifact }}
   qualify-migrations:
-    needs: assemble
     permissions:
       contents: read
     uses: ./.github/workflows/alembic-migration-gate.yml
     with:
       qualification_run_id: ${{ github.run_id }}
 
+  verify-source-receipt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Download current source receipt
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: ${{ needs.source-checks.outputs.source_receipt_artifact }}
+          path: artifacts/source-verification
+      - name: Verify the immutable source/run/attempt handoff
+        run: |
+          python3 tools/ci/source_verification.py verify artifacts/source-verification/receipt.json \
+            --revision "$MOONMIND_CI_REVISION" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --artifact "$SOURCE_ARTIFACT"
+        env:
+          SOURCE_ARTIFACT: ${{ needs.source-checks.outputs.source_receipt_artifact }}
+          MOONMIND_CI_REVISION: ${{ github.sha }}
+    needs:
+      - source-checks
+      - qualify
+      - assemble
+      - qualify-migrations
   publish-latest:
     needs:
       - metadata
       - assemble
       - qualify
       - qualify-migrations
+      - source-checks
+      - verify-source-receipt
     runs-on: ubuntu-latest
     # Preserve ordering when multiple qualified builds finish out of order.
     concurrency:
@@ -268,10 +251,12 @@ jobs:
           ASSEMBLY_RESULT: ${{ needs.assemble.result }}
           QUALIFICATION_RESULT: ${{ needs.qualify.result }}
           MIGRATION_RESULT: ${{ needs.qualify-migrations.result }}
+          SOURCE_RESULT: ${{ needs.source-checks.result }}
+          SOURCE_RECEIPT_RESULT: ${{ needs.verify-source-receipt.result }}
         run: |
           set -euo pipefail
           # Job dependencies and the actual mutation boundary both fail closed.
-          for gate in ASSEMBLY_RESULT QUALIFICATION_RESULT MIGRATION_RESULT; do
+          for gate in ASSEMBLY_RESULT SOURCE_RESULT SOURCE_RECEIPT_RESULT QUALIFICATION_RESULT MIGRATION_RESULT; do
             if [[ "${!gate:-}" != "success" ]]; then
               echo "::error::Required release result $gate did not succeed"
               exit 1
@@ -290,3 +275,38 @@ jobs:
           docker buildx imagetools create -t "${IMAGE_NAME}:latest" "$CANDIDATE_IMAGE"
           echo "Runtime qualification: amd64; arm64 is build-only." >> "$GITHUB_STEP_SUMMARY"
           echo "Qualified default image: \`${CANDIDATE_IMAGE}\`" >> "$GITHUB_STEP_SUMMARY"
+  ci-timings:
+    needs:
+      - publish-latest
+      - source-checks
+      - qualify
+      - qualify-migrations
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check out timing helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Summarize job, queue and step timing
+        run: |
+          python3 - <<'PY_TIMING'
+          import os
+          from pathlib import Path
+          from tools.ci.write_backend_matrix_summary import fetch_public_job_timings
+          fetch_public_job_timings(os.environ['GITHUB_REPOSITORY'], os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT'], Path('artifacts/ci-timings.json'), Path(os.environ['GITHUB_STEP_SUMMARY']))
+          PY_TIMING
+      - name: Upload observed timing
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: release-ci-timings-${{ github.run_attempt }}
+          path: artifacts/ci-timings.json
+          if-no-files-found: warn
+          retention-days: 14
+concurrency:
+  group: app-release-${{ github.event_name == 'push' && github.run_attempt == 1 && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.run_attempt == 1 }}

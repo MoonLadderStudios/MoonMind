@@ -54,7 +54,7 @@ async def test_create_review_only_freezes_compiled_workspace_before_native_admis
         github_repository_assignment,
         record_repository_connections,
     )
-    from tests.unit.api.routers.test_executions import (
+    from tests.helpers.execution_api import (
         _build_execution_record,
         _override_user_dependencies,
     )
