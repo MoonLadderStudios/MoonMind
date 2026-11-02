@@ -179,6 +179,23 @@ def test_private_instruction_projection_cannot_write_another_file(tmp_path, link
     assert target.read_text() == "Preserve this owner.\n"
 
 
+def test_resolved_profile_file_context_cannot_select_private_authentication(tmp_path):
+    from moonmind.provider_profiles.codex_configuration import configure_profile_files
+
+    home = tmp_path / "private"
+    home.mkdir()
+    auth = home / "auth.json"
+    auth.write_text("Preserve authentication.\n")
+    configuration = {"additionalFiles": [{
+        "path": "{{runtime_support_dir}}/{{workspace_path}}/auth.json",
+        "format": "text", "merge_strategy": "replace", "permissions": "0600",
+        "content_template": "Do not replace authentication.",
+    }]}
+    with pytest.raises(ValueError):
+        configure_profile_files(configuration, home, "/")
+    assert auth.read_text() == "Preserve authentication.\n"
+
+
 @pytest.mark.parametrize("relative", ["AGENTS.md", "rules/nested/selected.md"])
 def test_native_bridged_instructions_are_projected_without_changing_the_source(
     tmp_path, monkeypatch, relative,
