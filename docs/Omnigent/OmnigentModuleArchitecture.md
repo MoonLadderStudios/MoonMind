@@ -300,8 +300,10 @@ After a drained shared turn reports provider cooldown, new parents restart the
 logical step through its existing retry owner and remaining budget. The parent
 verifies and adopts the child's scoped canonical save after worker cleanup;
 it does not recapture the deleted tree or rebind the delivered runtime journal.
-Cancellation starts no successor. A selected Profile that cannot restore this
-save reports the missing capability instead of starting from different inputs.
+Cancellation starts no successor. Failed save adoption stops automatic restart
+and retains its checkpoint reference in recovery diagnostics. A selected Profile
+that cannot restore this save reports the missing capability instead of starting
+from different inputs.
 Fresh native steps with equivalent configuration use this same fenced handoff
 after fixed, implicit or pool account selection, without rewriting their stored
 submission. Older parents without the handoff retain their recorded commands.

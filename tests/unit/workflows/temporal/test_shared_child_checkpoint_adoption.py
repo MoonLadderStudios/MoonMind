@@ -81,9 +81,10 @@ async def test_remote_child_save_finalizes_without_recapturing_the_deleted_worke
     )
     row = owner._step_ledger_row_for("work")
     primary = deepcopy(row["executionOutcome"])
-    await owner._finalize_after_execution_checkpoint(
+    retry_safe = await owner._finalize_after_execution_checkpoint(
         "work", updated_at=module.workflow.now(), child_saved_checkpoint=(request, result),
     )
+    assert retry_safe is True
     assert reads == ["artifact://accepted/root"]
     assert row["executionOutcome"] == primary
     assert row["finalizationOutcome"]["checkpointRef"] == "artifact://accepted/root"
@@ -138,13 +139,15 @@ async def test_artifact_failure_preserves_the_confirmed_primary_outcome(saved_ch
         raise PermissionError("checkpoint is outside this workflow's artifact scope")
 
     monkeypatch.setattr(module, "execute_typed_activity", unavailable)
-    await owner._finalize_after_execution_checkpoint(
+    retry_safe = await owner._finalize_after_execution_checkpoint(
         "work", updated_at=module.workflow.now(), child_saved_checkpoint=(request, result),
     )
     assert row["executionOutcome"] == primary
     assert row["executionOutcome"]["status"] == "succeeded"
     assert row["finalizationOutcome"]["status"] == "degraded"
     assert row["finalizationOutcome"]["failureCode"] == "FINALIZATION_CHECKPOINT_FAILED"
+    assert retry_safe is False
+    assert "artifact://accepted/root" in row["finalizationOutcome"]["message"]
     assert not owner._step_checkpoint_refs
 
 
