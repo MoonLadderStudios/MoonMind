@@ -524,9 +524,10 @@ def _artifact_session(rows: list[SimpleNamespace]) -> SimpleNamespace:
             profile_id=f"test-{runtime}",
             runtime_id=runtime,
             enabled=True,
-            auth_state=ProviderProfileAuthState.NOT_CONFIGURED,
+            auth_state=ProviderProfileAuthState.CONNECTED,
             default_model=None,
             default_effort=None,
+            default_model_tier=1,
         )
         for runtime in ("codex_cli", "claude_code")
     }
