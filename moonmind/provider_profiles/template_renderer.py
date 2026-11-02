@@ -219,4 +219,3 @@ class ProfileTemplateRenderer:
 
     def _to_toml(self, value: Any) -> str:
         return self._toml_serializer(value)
-
