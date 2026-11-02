@@ -1983,7 +1983,11 @@ async def compile_and_persist_execution_plan(
         else model_mapping.get("model")
     )
     selected_model = str(raw_selected_model or "").strip() or None
-    if str(getattr(provider_profile, "runtime_id", "")) in {"codex_cli", "claude_code"}:
+    # Admission also records resolved defaults and tiers in "model".
+    if (
+        str(getattr(provider_profile, "runtime_id", "")) in {"codex_cli", "claude_code"}
+        and initial_parameters.get("modelSource") == "task_override"
+    ):
         from moonmind.workflows.executions.model_resolver import apply_profile_model_alias
 
         selected_model = apply_profile_model_alias(provider_profile, selected_model)
@@ -2279,6 +2283,7 @@ async def compile_and_persist_execution_plan(
         plan=persisted,
         binding=binding,
         access=access,
+        admitted_step_plans=step_parameters,
     )
     frozen_rollout = persisted.payload.runtimeProviderRollout
     _evidence_refs: tuple[str, ...] = ()

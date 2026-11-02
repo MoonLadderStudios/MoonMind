@@ -5291,8 +5291,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('opens a Workflow actions menu with labels for every currently available workflow operation', async () => {
-    // Remediate is only available on the Artifacts surface where its create-preview
-    // controls render, so exercise the full menu from the Artifacts subroute.
+    // Exercise the menu alongside the optional preview controls on Artifacts.
     window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
     const actionPayload: BootPayload = {
       ...mockPayload,
@@ -5404,10 +5403,10 @@ describe('Workflow Detail Entrypoint', () => {
     }
   });
 
-  it('hides the Remediate action off the Artifacts surface where its controls are unavailable', async () => {
-    // The remediation mode/authority/action-policy controls only render on the Artifacts
-    // tab; surfacing Remediate elsewhere would submit default settings without operator choice.
-    window.history.pushState({}, 'Steps Test', '/workflows/test-123/steps?source=temporal');
+  it.each(['overview', 'steps', 'artifacts'])('opens an editable remediation draft from %s without submitting', async (tab) => {
+    window.sessionStorage.clear();
+    const suffix = tab === 'overview' ? '' : `/${tab}`;
+    window.history.pushState({}, 'Failed workflow', `/workflows/test-123${suffix}?source=temporal`);
     const actionPayload: BootPayload = {
       ...mockPayload,
       initialData: {
@@ -5435,6 +5434,8 @@ describe('Workflow Detail Entrypoint', () => {
       state: 'failed',
       rawState: 'failed',
       temporalStatus: 'failed',
+      attentionRequired: false,
+      repository: 'example/project',
       createdAt: '2026-03-28T00:00:00Z',
       updatedAt: '2026-03-28T00:00:02Z',
       actions: {
@@ -5463,7 +5464,26 @@ describe('Workflow Detail Entrypoint', () => {
 
     const menu = await openWorkflowActionsMenu('Cancel');
     expect(within(menu).getByRole('menuitem', { name: 'Cancel' })).toBeTruthy();
-    expect(within(menu).queryByRole('menuitem', { name: 'Remediate' })).toBeNull();
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Remediate' }));
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/workflows/new');
+      expect(window.location.search).toContain('intent=remediate');
+    });
+    const draftKey = Object.keys(window.sessionStorage)
+      .find((key) => key.startsWith('moonmind.remediation-create-draft.'));
+    expect(draftKey).toBeTruthy();
+    expect(JSON.parse(window.sessionStorage.getItem(draftKey!)!)).toMatchObject({
+      repository: 'example/project',
+      skill: 'remediate-workflow',
+      target: { workflowId: 'test-123', runId: '01-run' },
+      remediation: {
+        mode: 'snapshot_then_follow',
+        authorityMode: 'approval_gated',
+        actionPolicyRef: 'admin_healer_default',
+        target: { workflowId: 'test-123', runId: '01-run' },
+      },
+    });
+    expect(fetchSpy.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
   });
 
   it('routes menu selections through direct lifecycle handlers', async () => {
@@ -7298,8 +7318,9 @@ describe('Workflow Detail Entrypoint', () => {
     ).toBe(false);
   });
 
-  it('hides remediation creation for ineligible completed targets', async () => {
-    window.history.pushState({}, 'Artifacts Test', '/workflows/test-complete/artifacts?source=temporal');
+  it.each(['overview', 'steps', 'artifacts'])('hides remediation creation for ineligible completed targets on %s', async (tab) => {
+    const suffix = tab === 'overview' ? '' : `/${tab}`;
+    window.history.pushState({}, 'Completed target', `/workflows/test-complete${suffix}?source=temporal`);
     const mockExecution = {
       taskId: 'test-complete',
       workflowId: 'test-complete',
@@ -7338,8 +7359,10 @@ describe('Workflow Detail Entrypoint', () => {
     });
 
     expect(screen.queryByRole('button', { name: 'Remediate' })).toBeNull();
-    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/remediations?direction=inbound'))).toBe(true);
-    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/remediations?direction=outbound'))).toBe(true);
+    const menu = await openWorkflowActionsMenu('Rename');
+    expect(within(menu).queryByRole('menuitem', { name: 'Remediate' })).toBeNull();
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/remediations?direction=inbound'))).toBe(tab === 'artifacts');
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/remediations?direction=outbound'))).toBe(tab === 'artifacts');
   });
 
   it('renders approval-gated remediation as read-only when the operator cannot decide', async () => {
