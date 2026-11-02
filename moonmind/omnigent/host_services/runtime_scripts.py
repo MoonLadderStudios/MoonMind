@@ -158,6 +158,7 @@ class OmnigentRuntimeScriptService:
         enable_claude_runtime: bool = False,
         enable_codex_runtime: bool = False,
         runtime_environment: dict[str, str] | None = None,
+        workspace_path: str | None = None,
     ) -> tuple[str, dict[str, str]]:
         generation_checks: list[str] = []
         for handle in credential_handles:
@@ -231,6 +232,26 @@ class OmnigentRuntimeScriptService:
         provider_environment: dict[str, str] = {}
         for handle in credential_handles:
             selected_environment = dict(handle.get("runtimeEnvironment") or {})
+            templates = handle.get("runtimeEnvironmentTemplates")
+            if templates:
+                if not (
+                    handle.get("materializerRef") == "codex-oauth-home@1" and enable_codex_runtime
+                    or handle.get("materializerRef") == "claude-oauth-home@1" and enable_claude_runtime
+                ):
+                    raise ValueError("Profile environment templates require their enrolled materializer")
+                if not workspace_path or not workspace_path.startswith("/"):
+                    raise ValueError("Profile environment templates require the admitted workspace path")
+                from moonmind.provider_profiles.template_renderer import (
+                    ProfileTemplateRenderer, validate_environment_template_context,
+                )
+                from moonmind.provider_profiles.codex_configuration import render_toml
+
+                templates = validate_environment_template_context(validate_provider_literal_launch_environment(templates))
+                if set(templates) & set(selected_environment):
+                    raise ValueError("conflicting credential environment template")
+                selected_environment.update(ProfileTemplateRenderer(toml_serializer=render_toml).render_environment(
+                    templates, {"workspace_path": workspace_path, "runtime_support_dir": _RUNTIME_CONTEXT_DIR},
+                ))
             serialized = selected_environment.pop(OAUTH_CONFIGURATION_ENV, None)
             if serialized is not None:
                 if handle.get("materializerRef") != "codex-oauth-home@1" or not enable_codex_runtime:

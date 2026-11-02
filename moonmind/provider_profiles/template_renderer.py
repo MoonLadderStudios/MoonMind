@@ -18,6 +18,31 @@ from typing import Any
 _TEMPLATE_PATTERN = re.compile(r"{{\s*([A-Za-z0-9_.-]+)\s*}}")
 
 
+def template_context_names(value: Any) -> set[str]:
+    names: set[str] = set()
+    if isinstance(value, str):
+        names.update(match.group(1).strip() for match in _TEMPLATE_PATTERN.finditer(value))
+    elif isinstance(value, dict):
+        if set(value) == {"from_secret_ref"}:
+            names.add(str(value["from_secret_ref"]).strip())
+        else:
+            for child in value.values():
+                names.update(template_context_names(child))
+    elif isinstance(value, list):
+        for child in value:
+            names.update(template_context_names(child))
+    return names
+
+
+def validate_environment_template_context(values: dict[str, str]) -> dict[str, str]:
+    """Only attempt-owned, nonsecret paths can cross the shared handoff."""
+    for value in values.values():
+        names = template_context_names(value)
+        if not names or names - {"workspace_path", "runtime_support_dir"}:
+            raise ValueError("Profile environment template requires unavailable context")
+    return dict(values)
+
+
 class ProfileTemplateRenderer:
     def __init__(self, *, toml_serializer: Callable[[Any], str]):
         self._toml_serializer = toml_serializer
@@ -52,20 +77,10 @@ class ProfileTemplateRenderer:
         return value
 
     def _collect_from_secret_ref_aliases(self, value: Any) -> set[str]:
-        aliases: set[str] = set()
-        if isinstance(value, str):
-            for match in _TEMPLATE_PATTERN.finditer(value):
-                aliases.add(match.group(1).strip())
-        elif isinstance(value, dict):
-            if set(value.keys()) == {"from_secret_ref"}:
-                aliases.add(str(value["from_secret_ref"]).strip())
-                return aliases
-            for child in value.values():
-                aliases.update(self._collect_from_secret_ref_aliases(child))
-        elif isinstance(value, list):
-            for child in value:
-                aliases.update(self._collect_from_secret_ref_aliases(child))
-        return aliases
+        return template_context_names(value)
+
+    def render_environment(self, values: dict[str, Any], context: dict[str, Any]) -> dict[str, str]:
+        return {key: self._render_env_value(value, context) for key, value in values.items()}
 
     def _render_env_value(self, value: Any, context: dict[str, Any]) -> str:
         rendered = self._render_value(value, context)

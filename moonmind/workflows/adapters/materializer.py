@@ -163,8 +163,7 @@ class ProviderProfileMaterializer(ProfileTemplateRenderer):
             self._materialize_file_template(file_template, context)
 
         # Step 5: Expand templates
-        for k, v in profile.env_template.items():
-            env[k] = self._render_env_value(v, context)
+        env.update(self.render_environment(profile.env_template, context))
 
         # Step 6: Apply home_path_overrides
         for k, v in profile.home_path_overrides.items():

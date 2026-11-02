@@ -57,6 +57,9 @@ class CredentialRuntimeHandle(BaseModel):
     runtimeEnvironment: dict[str, str] = Field(
         default_factory=dict, alias="runtimeEnvironment"
     )
+    runtimeEnvironmentTemplates: dict[str, str] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
     cleanupRef: str = Field(alias="cleanupRef")
     attestationRef: str | None = Field(None, alias="attestationRef")
     hostOwned: bool = Field(False, alias="hostOwned")
@@ -1061,6 +1064,9 @@ class DockerOauthHomeMaterializer(_DockerMaterializerBackendMixin):
                            if launch_environment.codexConfiguration is not None else {}),
                     }
                     if launch_environment is not None else {}
+                ),
+                "runtimeEnvironmentTemplates": (
+                    launch_environment.environmentTemplates if launch_environment is not None else None
                 ),
                 "cleanupRef": f"credential-cleanup:sha256:{digest}",
                 "attestationRef": attestation_ref,

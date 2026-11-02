@@ -1606,6 +1606,34 @@ async def test_admitted_claude_oauth_tuning_reaches_the_shared_runner(
 
 
 @pytest.mark.parametrize("native_journey", [
+    {"harness": harness, "static": static, "oauthTuning": {
+        "PROJECT_REPORT_ROOT": "{{workspace_path}}/reports",
+        "PROJECT_SUPPORT_ROOT": "{{runtime_support_dir}}",
+        "PROJECT_RUNTIME_STYLE": "literal $(not-executed)",
+    }}
+    for harness in ("codex-native", "claude-native")
+    for static in (False, True)
+], indirect=True)
+async def test_admitted_oauth_environment_templates_use_the_attempt_context(native_journey):
+    journey = native_journey
+    async with journey.session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, PROFILE)
+        profile.env_template = {"PROJECT_REPORT_ROOT": "later Profile edit"}
+        await session.commit()
+    if journey.static_mode:
+        from tests.integration.omnigent.test_generic_static_host_journey import (
+            assert_static_native_turn_saved_and_retained,
+        )
+
+        await assert_static_native_turn_saved_and_retained(journey)
+    else:
+        await assert_native_turn_saved_and_cleaned(journey)
+    assert journey.docker.launch_env["PROJECT_REPORT_ROOT"] == "/workspaces/run/reports"
+    assert journey.docker.launch_env["PROJECT_SUPPORT_ROOT"] == "/home/app/.omnigent/moonmind/runtime-context"
+    assert journey.docker.launch_env["PROJECT_RUNTIME_STYLE"] == "literal $(not-executed)"
+
+
+@pytest.mark.parametrize("native_journey", [
     {"harness": harness, "oauthTuning": {"PROJECT_RUNTIME_STYLE": "accepted literal"}}
     for harness in ("codex-native", "claude-native")
 ], indirect=True)
