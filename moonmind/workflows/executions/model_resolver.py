@@ -35,12 +35,24 @@ from moonmind.workflows.executions.runtime_defaults import (
 __all__ = [
     "RequestedModelTierUnavailableError",
     "ResolvedModelEffort",
+    "apply_profile_model_alias",
     "coerce_effort_for_model",
     "provider_profile_version",
     "resolve_effective_model",
     "resolve_model_effort",
     "resolve_opencode_effort",
 ]
+
+
+def apply_profile_model_alias(profile: Any | None, model: str | None) -> str | None:
+    """Apply the selected Profile's existing model alias exactly once.
+
+    Launch strategies and shared compilation use this single lookup;
+    alias chains are not recursively expanded.
+    """
+    overrides = getattr(profile, "model_overrides", None) or {}
+    return overrides.get(model, model) if model else model
+
 
 # legacy_run contract — the model_source value "task_override" is persisted in
 # execution parameters/diagnostics; the value renames at the
