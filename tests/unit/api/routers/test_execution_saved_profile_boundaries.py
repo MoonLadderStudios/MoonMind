@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from api_service.api.routers.executions import _get_service, router
 from api_service.db.base import get_async_session
 from api_service.db.models import (
-    Base,
     ManagedAgentProviderProfile,
     TemporalExecutionCanonicalRecord,
 )
@@ -24,21 +23,21 @@ from api_service.services.settings_catalog import SettingsCatalogService
 from moonmind.config.settings import settings
 from moonmind.security.operator_admission import OperatorAdmission
 from moonmind.workflows.temporal.service import TemporalExecutionService
-from tests.unit.api.routers.test_executions import _override_user_dependencies
+from tests.helpers.execution_api import (
+    _override_user_dependencies,
+)
 
 
 @pytest_asyncio.fixture
-async def saved_profile_submission(tmp_path, monkeypatch):
+async def saved_profile_submission(tmp_path, monkeypatch, empty_sqlite_database):
     monkeypatch.setattr(settings.workflow, "default_runtime", "codex_cli")
     monkeypatch.setattr(settings.workflow, "github_repository", "")
     monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
     monkeypatch.setattr(
         settings.workflow, "temporal_artifact_root", str(tmp_path / "artifacts")
     )
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/settings.db")
+    engine = create_async_engine(f"sqlite+aiosqlite:///{empty_sqlite_database}")
     sessions = async_sessionmaker(engine, expire_on_commit=False)
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
     try:
         async with sessions() as session:
             for runtime in ("codex_cli", "claude_code"):

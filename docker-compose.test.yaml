@@ -55,6 +55,12 @@ services:
       - PYTHONPATH=/app
       - TEST_TYPE=unit
       - MOONMIND_FORCE_LOCAL_TESTS=1
+      - MOONMIND_CI_ENVIRONMENT=${MOONMIND_CI_ENVIRONMENT:-}
+      - MOONMIND_CI_RECEIPT=${MOONMIND_CI_RECEIPT:-}
+      - MOONMIND_CI_SUITE=${MOONMIND_CI_SUITE:-}
+      - MOONMIND_CI_REVISION=${MOONMIND_CI_REVISION:-}
+      - GITHUB_RUN_ID=${GITHUB_RUN_ID:-}
+      - GITHUB_RUN_ATTEMPT=${GITHUB_RUN_ATTEMPT:-}
       # Test processes use isolated temp roots; never let an inherited host
       # setting turn the generic pytest service into a destructive janitor.
       - MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED=false

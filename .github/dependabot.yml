@@ -7,7 +7,10 @@ updates:
       day: "monday"
       time: "06:00"
       timezone: "UTC"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 3
+    groups:
+      compatible-python:
+        update-types: ["minor", "patch"]
     labels:
       - "dependencies"
       - "python"
@@ -24,7 +27,10 @@ updates:
       day: "monday"
       time: "06:30"
       timezone: "UTC"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 2
+    groups:
+      compatible-images:
+        update-types: ["minor", "patch"]
     labels:
       - "dependencies"
       - "docker"
@@ -36,7 +42,10 @@ updates:
       day: "monday"
       time: "06:45"
       timezone: "UTC"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 2
+    groups:
+      compatible-actions:
+        update-types: ["minor", "patch"]
     labels:
       - "dependencies"
       - "github-actions"

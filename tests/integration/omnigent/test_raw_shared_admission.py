@@ -35,7 +35,9 @@ from tests.integration.omnigent.test_native_default_admission import (
     _execute_admitted_generic_plan,
 )
 from tests.unit.api.routers.test_execution_saved_profile_boundaries import agent_requests
-from tests.unit.api.routers.test_executions import _override_user_dependencies
+from tests.helpers.execution_api import (
+    _override_user_dependencies,
+)
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 native_journey = native_fixture.native_journey

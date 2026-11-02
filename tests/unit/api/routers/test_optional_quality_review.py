@@ -20,7 +20,9 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactNotFoundError,
 )
 from tests.artifact_access import access_for_test
-from tests.unit.api.routers.test_executions import _build_execution_record
+from tests.helpers.execution_api import (
+    _build_execution_record,
+)
 
 _REAL_CREATE_EXECUTION = executions.create_execution
 
