@@ -157,6 +157,11 @@ async def prepare_selected_pool_plan(
     if original_profile and original_profile != profile_id:
         raise ValueError("pool grant conflicts with the authored exact account")
     workflow_id = request.step_execution.workflow_id
+    if (
+        request.step_execution.runtime_session_context is not None
+        and request.step_execution.runtime_session_context.workflow_id != workflow_id
+    ):
+        raise ValueError("pool context belongs to another workflow")
     if request.correlation_id != workflow_id:
         raise ValueError("pool request has conflicting workflow authority")
     from moonmind.workflows.temporal.client import TemporalClientAdapter
@@ -241,7 +246,15 @@ async def prepare_selected_pool_plan(
         if (
             request.checkpoint_recovery
             or request.remediation_workspace
-            or request.step_execution.runtime_context_policy != "fresh_agent_run"
+            or (
+                request.step_execution.runtime_context_policy != "fresh_agent_run"
+                and not (
+                    runtime_id == "codex_cli"
+                    and request.step_execution.runtime_context_policy
+                    == "reuse_session_same_epoch"
+                    and request.step_execution.runtime_session_context is not None
+                )
+            )
         ):
             return {
                 "disposition": "native",

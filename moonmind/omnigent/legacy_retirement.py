@@ -201,9 +201,11 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "configuration, including the rendered managed MiniMax recipe, "
             "uses ``omnigent-provider-config@1`` and its private Codex config, "
             "including developer instructions, project-document discovery and history preferences. "
-            "Opaque serialized inputs, native contexts/workspaces and tier parameters "
-            "still need equivalent shared-plan handoffs. Fresh pool accounts bind "
-            "their selected plan to the existing fenced grant. Fixed step accounts "
+            "Opaque serialized inputs, untranslated native contexts/workspaces and tier "
+            "parameters still need equivalent shared-plan handoffs. Pool accounts bind "
+            "their selected plan to the existing fenced grant; Codex same-epoch successors "
+            "carry selected account, context and verified workspace through the parent. "
+            "Queued older parents without that handoff retain native dispatch. Fixed step accounts "
             "already have their own plans; the root cannot authorize another account. "
         ),
     ),

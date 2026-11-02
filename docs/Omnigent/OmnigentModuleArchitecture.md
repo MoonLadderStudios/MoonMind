@@ -276,12 +276,14 @@ deletion removes its row in the same change rather than leaving a stale entry.
 Direct Codex/Claude and AgentSession adapters retain recorded work, opaque
 serialized plans, native extension inputs/direct targets, Profiles without exact shared
 translation, and native context or options without an equivalent plan handoff.
-Fresh Codex/Claude pool steps resolve their account at dispatch through the
-existing Profile Manager, then compile that account's immutable plan and bind
-it to the same fenced slot. Preparation retries reuse the committed plan and
-recorded Skill manifest; they neither select another account nor reserve a
-second slot. Retained inputs, native workspace/context and unsupported tier
-parameters keep their recorded adapter. Fixed step accounts, harnesses and distinct model/effort pairs have
+Codex/Claude pool steps resolve their account at dispatch through the existing
+Profile Manager, then bind that account's immutable plan to the same fenced slot.
+Preparation retries reuse the plan and recorded Skill manifest without another
+account choice or capacity unit. Codex same-epoch successors carry the selected
+account, durable context and verified saved workspace through the parent,
+including Continue-As-New. Old parents without this handoff keep native dispatch.
+Untranslated native context/workspaces and tier parameters retain their adapter.
+Fixed step accounts, harnesses and distinct model/effort pairs have
 their own immutable plans compiled by the same admission owner, linked
 through the existing artifact owner and carried across successor attempts.
 The immutable root plan binds each complete step handoff by digest; admission,

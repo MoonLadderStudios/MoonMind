@@ -65,6 +65,13 @@ session_factory = native_fixture.session_factory
 async def test_pool_selected_account_compiles_once_and_preserves_its_original_inputs(
     native_journey, monkeypatch, scenario
 ):
+    await execute_selected_pool_source(native_journey, monkeypatch, scenario=scenario)
+
+
+async def execute_selected_pool_source(
+    native_journey, monkeypatch, *, scenario="ordinary", include_successor=False
+):
+    """Exercise the first admitted pool turn, optionally retaining a second step."""
     journey = native_journey
     runtime = "codex_cli" if journey.harness == "codex-native" else "claude_code"
     monkeypatch.setattr(settings.workflow, "default_runtime", runtime)
@@ -148,7 +155,21 @@ async def test_pool_selected_account_compiles_once_and_preserves_its_original_in
                                         if scenario == "publish"
                                         else {}
                                     ),
-                                }
+                                },
+                                *(
+                                    [
+                                        {
+                                            "id": "second",
+                                            "instructions": "Continue from the accepted report.",
+                                            "type": "skill",
+                                            "skill": {
+                                                "id": native_fixture._DURABLE_SKILL_NAME
+                                            },
+                                        }
+                                    ]
+                                    if include_successor
+                                    else []
+                                ),
                             ],
                         },
                         "publishMode": "none",
@@ -463,4 +484,15 @@ async def test_pool_selected_account_compiles_once_and_preserves_its_original_in
     journey.docker.host_class, _ = await journey.services.planned_host_resolver(
         plan, request=admitted
     )
-    await native_fixture.assert_native_turn_saved_and_cleaned(journey)
+    terminal = await native_fixture.assert_native_turn_saved_and_cleaned(journey)
+    return SimpleNamespace(
+        result=terminal,
+        original=request,
+        selected=selected,
+        parameters=original_parameters,
+        parent_id=parent_id,
+        parent_run=parent_run,
+        owner=owner,
+        owner_run=owner_run,
+        lease_payload=payload,
+    )
