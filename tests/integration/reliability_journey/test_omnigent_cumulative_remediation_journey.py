@@ -19,6 +19,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from tests.artifact_access import access_for_test
+from api_service.services.omnigent_execution_plan_service import (
+    PersistedOmnigentExecutionPlan,
+)
 from api_service.api.routers.executions import _get_service, get_temporal_client, router
 from api_service.db.base import get_async_session
 from api_service.db.models import SettingsOverride
@@ -41,7 +45,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH,
     MoonMindRunWorkflow,
 )
-from tests.unit.api.routers.test_executions import (
+from tests.helpers.execution_api import (
     _build_execution_record,
     _override_user_dependencies,
 )
@@ -190,7 +194,10 @@ async def test_normal_create_c0_c1_c2_survives_destroyed_attempts_and_restarts(
         taskInputSnapshotRef="art_task_3480",
         taskInputSnapshotDigest="sha256:" + "c" * 64,
     )
-    compiled_plan = SimpleNamespace(
+    compiled_plan = PersistedOmnigentExecutionPlan(
+        artifact_access=access_for_test("operator"),
+        resolved_skillset_digest="sha256:" + "d" * 64,
+        envelope=SimpleNamespace(),
         binding=plan_binding,
         artifact_refs=("art_profile_3480", "art_skills_3480", "art_plan_3480"),
         resolved_skillset_ref="art_skills_3480",

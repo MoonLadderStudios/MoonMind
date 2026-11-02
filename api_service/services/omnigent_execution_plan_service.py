@@ -45,6 +45,7 @@ from moonmind.omnigent.harness_platform.execution_plan import (
     AdmissionAuthority,
     OmnigentExecutionPlanEnvelope,
     OmnigentExecutionPlanPayload,
+    ProviderConfigurationSnapshotRef,
     create_execution_plan_envelope,
     logical_step_plan_digests,
     verify_execution_plan_envelope,
@@ -69,7 +70,6 @@ from moonmind.omnigent.harness_platform.materializers import (
     materializer_ref_for_provider,
     snapshot_provider_configuration,
     provider_configuration_snapshot_bytes,
-    ProviderConfigurationSnapshotRef,
     load_provider_configuration_snapshot,
 )
 from moonmind.omnigent.harness_platform.planner import (
@@ -1465,6 +1465,9 @@ async def compile_and_persist_execution_plan(
     access: ArtifactAccessContext,
     _compile_step_plans: bool = True,
     _recorded_step_parameters: Mapping[str, Mapping[str, Any]] | None = None,
+    _recorded_step_provider_configurations: Mapping[
+        str, ProviderConfigurationSnapshotRef | None
+    ] | None = None,
     _recorded_provider_configuration_snapshot: ProviderConfigurationSnapshotRef | None | Literal["capture"] = "capture",
     recorded_skillset_ref: str | None = None,
 ) -> PersistedOmnigentExecutionPlan:
@@ -1983,7 +1986,11 @@ async def compile_and_persist_execution_plan(
         else model_mapping.get("model")
     )
     selected_model = str(raw_selected_model or "").strip() or None
-    if str(getattr(provider_profile, "runtime_id", "")) in {"codex_cli", "claude_code"}:
+    # Admission also records resolved defaults and tiers in "model".
+    if (
+        str(getattr(provider_profile, "runtime_id", "")) in {"codex_cli", "claude_code"}
+        and initial_parameters.get("modelSource") == "task_override"
+    ):
         from moonmind.workflows.executions.model_resolver import apply_profile_model_alias
 
         selected_model = apply_profile_model_alias(provider_profile, selected_model)
@@ -2000,9 +2007,10 @@ async def compile_and_persist_execution_plan(
     configuration_ref = None
     if isinstance(_recorded_provider_configuration_snapshot, ProviderConfigurationSnapshotRef):
         recorded = _recorded_provider_configuration_snapshot
-        configuration_ref = recorded.artifactRef.removeprefix("artifact:")
+        # This artifact belongs to the admitted plan, not this candidate's
+        # cleanup set if re-admission is refused.
         _artifact, configuration_body = await artifact_service.read(
-            artifact_id=configuration_ref, access=access
+            artifact_id=recorded.artifactRef.removeprefix("artifact:"), access=access
         )
         load_provider_configuration_snapshot(
             configuration_body, recorded, binding_set.bindings
@@ -2222,6 +2230,7 @@ async def compile_and_persist_execution_plan(
         compiled_steps = await compile_step_execution_plans(
             root_plan=plan,
             recorded_step_parameters=_recorded_step_parameters,
+            recorded_provider_configurations=_recorded_step_provider_configurations,
             session_factory=session_factory,
             artifact_service=artifact_service,
             principal=principal,
@@ -2279,6 +2288,7 @@ async def compile_and_persist_execution_plan(
         plan=persisted,
         binding=binding,
         access=access,
+        admitted_step_plans=step_parameters,
     )
     frozen_rollout = persisted.payload.runtimeProviderRollout
     _evidence_refs: tuple[str, ...] = ()
@@ -2406,6 +2416,7 @@ async def compile_frozen_execution_plan(
     parent_repository_plan: OmnigentExecutionPlanEnvelope | None = None,
     access: ArtifactAccessContext,
     refresh_step_selections: bool = False,
+    refresh_provider_configuration: bool = False,
 ) -> PersistedOmnigentExecutionPlan:
     """Compile an admitted workflow's frozen inputs again through this owner."""
 
@@ -2422,16 +2433,33 @@ async def compile_frozen_execution_plan(
     compilation_parameters = dict(initial_parameters)
     compilation_parameters.pop("omnigentExecutionPlan", None)
     compilation_parameters.pop("resolvedSkillsetRef", None)
-    recorded_plan = await SessionExecutionPlanStore(db_session).load(binding.plan_ref)
+    plan_store = SessionExecutionPlanStore(db_session)
+    recorded_plan = await plan_store.load(binding.plan_ref)
     if recorded_plan is None:
         raise ValueError("the recorded execution plan is unavailable")
     recorded_plan = verify_execution_plan_envelope(recorded_plan)
     recorded_steps = initial_parameters.get("omnigentStepExecutionPlans")
     if logical_step_plan_digests(recorded_steps) != (recorded_plan.payload.logicalStepPlans or {}):
         raise ValueError("logical step plan authority conflicts with its recorded root plan")
+    recorded_step_configurations = None
+    if not (refresh_step_selections or refresh_provider_configuration):
+        recorded_step_configurations = {}
+        for step_id, step in (recorded_steps or {}).items():
+            step_binding = OmnigentExecutionPlanBinding.model_validate(
+                step.get("omnigentExecutionPlan")
+            )
+            saved_step = await plan_store.load(step_binding.plan_ref)
+            if saved_step is None:
+                raise ValueError(f"the recorded execution plan for step {step_id} is unavailable")
+            saved_step = verify_execution_plan_envelope(saved_step)
+            if saved_step.planRef != step_binding.plan_ref:
+                raise ValueError(f"the recorded execution plan for step {step_id} conflicts with its binding")
+            # Each step owns its settings, including a legacy plan's absent
+            # snapshot; the root account's configuration cannot replace them.
+            recorded_step_configurations[step_id] = saved_step.payload.providerConfigurationSnapshot
     return await compile_and_persist_execution_plan(
         session_factory=None,
-        execution_plan_store=SessionExecutionPlanStore(db_session),
+        execution_plan_store=plan_store,
         artifact_service=artifact_service,
         principal=principal,
         workflow_id=workflow_id,
@@ -2447,9 +2475,10 @@ async def compile_frozen_execution_plan(
         access=access,
         _compile_step_plans=refresh_step_selections or bool(recorded_steps),
         _recorded_step_parameters=None if refresh_step_selections else recorded_steps,
+        _recorded_step_provider_configurations=recorded_step_configurations,
         _recorded_provider_configuration_snapshot=(
             recorded_plan.payload.providerConfigurationSnapshot
-            if not refresh_step_selections and any(
+            if not (refresh_step_selections or refresh_provider_configuration) and any(
                 getattr(bound, "providerProfileRef", None) == provider_profile.profile_id
                 for bound in recorded_plan.payload.credentialBindings.values()
             ) else "capture"
@@ -2671,7 +2700,9 @@ async def readmit_frozen_execution_plan(
     child recompiles from its own frozen task input and recorded plan, within
     its recorded repository authority. Plans that attempts already
     used are never rewritten. With ``preserve_recorded_intent`` the new plan
-    is refused when it would change the recorded request intent.
+    retains admitted provider settings and is refused when it would change the
+    recorded request intent. Fresh occurrences resolve current provider settings
+    while preserving recorded step selections.
 
     Returns ``disposition`` ``admitted`` with the new plan binding and Skill
     snapshot, or ``recorded`` with the reason when the frozen authority cannot
@@ -2755,6 +2786,7 @@ async def readmit_frozen_execution_plan(
             binding=binding,
             parent_repository_plan=parent_repository_plan,
             access=access,
+            refresh_provider_configuration=not preserve_recorded_intent,
         )
         changed = []
         if recorded_plan is not None:

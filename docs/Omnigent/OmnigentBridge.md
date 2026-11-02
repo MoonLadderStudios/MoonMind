@@ -46,7 +46,15 @@ MoonMind treats the bundled Omnigent UI as trusted first-party code, so same-ori
 
 **Proxy mode** is the only selectable `hostProtocolMode` (`upstream_omnigent_server_proxy`), because stock Omnigent Server already owns the host/runner tunnel. The bridge persists bindings, idempotency state, and event and artifact refs, and calls stock session/event/resource/control APIs; the host speaks its native protocol, which the bridge treats as a versioned compatibility profile.
 
-**Embedded mode** (`embedded_omnigent_compatible_server`) is retired and admits no new work. Selecting it fails fast naming the proxy alternative, and embedded host routes answer `410 Gone` with `omnigent_embedded_transport_retired` (WebSocket denials use the same code as the close reason). The value remains decodable so retained sessions keep their recorded mode: session-scoped controls dispatch by each row's recorded mode, so retained embedded sessions keep their cleanup owner. See [`EmbeddedHostAuthCompatibility.md`](EmbeddedHostAuthCompatibility.md). The Workflow Chat `embedded=1` presentation option is unrelated.
+**Embedded mode** (`embedded_omnigent_compatible_server`) has been removed.
+Enabling it fails configuration validation. Old host and host-auth URLs answer
+`410 Gone` with `omnigent_embedded_transport_retired`; host and runner tunnels
+close with `4404` and the proxy alternative. Retained session metadata, event
+journals and captured terminal transcripts remain readable through the existing
+binding and artifact owners. Old identities never attach to the current proxy,
+and late retries or controls cannot recreate the removed transport. See
+[`EmbeddedHostAuthCompatibility.md`](EmbeddedHostAuthCompatibility.md). The
+Workflow Chat `embedded=1` presentation option is unrelated.
 
 **Direct Codex compatibility** routes the bridge event model through the direct Codex managed-session adapter. It is a compatibility and historical-read path that emits bridge-shaped diagnostic evidence, not a second primary Chat renderer; see [`CodexSupportAndCutover.md`](./CodexSupportAndCutover.md).
 
@@ -165,6 +173,8 @@ Heartbeats expose turn progress, activity, wait and quiet durations, budgets, an
 ## 10. Stream and event normalization
 
 The normalized journal records `postDispatchRawEventIndex` provenance for events after dispatch, committed before terminal reads, so on reattachment a journaled native failure is evaluated before reopening the stream and keeps its original code. Journals without this provenance use snapshot-based reconciliation.
+
+A broken observation read after dispatch uses the same marked-turn snapshot reconciliation. A still-active turn retains its session and resources; a completed turn must satisfy the existing ordered-evidence and quiescence checks. The original read failure is logged, and harvested attempts retain `observationDiagnostics` even if reconciliation fails. Read-only GET responses can be reread within the existing bounded outage allowance. Delivered POST failures keep their uncertain-outcome handling and are never blindly replayed.
 
 **Retention.** Raw and normalized journals default to seven-day retention and are written in bounded chunks (at most 256 events or about 4 MiB), so per-event work does not grow with turn length. Each chunk version commits before the index rows that locate it, so a crash can leave an unindexed tail but never an index row without evidence. Every event commits before the loop waits on the provider or acts on a turn-ending or approval status; up to 32 queued events may share a commit. Longer chunk versions commit before shorter ones are reclaimed, and Activity retry restores chunk history and continues in a new chunk. The terminal capture bundle publishes complete journals, and terminal index rows are repointed in the same transaction. Deployment transitions compact sealed chunk history into the full JSONL prefix older readers understand without terminalizing the turn ([Docker Compose updates](../Steps/DockerComposeUpdateSystem.md#106-recreate-services)). Canonical refs, non-terminal chunk history, pins, and live use claims are protected from reclamation, and failed deletions are reconciled by the hourly lifecycle sweep.
 

@@ -134,7 +134,7 @@ except ImportError:
 else:
     raise AssertionError("launch modules must be unavailable in this probe")
 
-assert router.OmnigentEmbeddedHostProtocolFacade is typing.Any
+assert not hasattr(router, "build_embedded_host_facade")
 
 # The drain route must be registered on the production router.
 paths = {

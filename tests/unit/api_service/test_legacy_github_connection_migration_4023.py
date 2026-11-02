@@ -212,6 +212,12 @@ def test_absent_configuration_records_nothing_and_does_not_block(engine, migrati
 @pytest.mark.parametrize(
     "configured",
     ["https://example.com/token", "db://bad key", TOKEN_VALUE, "env://" + TOKEN_VALUE],
+    ids=[
+        "unsupported-scheme",
+        "invalid-database-key",
+        "inline-token",
+        "invalid-environment-key",
+    ],
 )
 def test_unknowable_reference_is_reported_without_a_mapping(
     engine, migration, configured, caplog

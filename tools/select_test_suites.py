@@ -27,7 +27,7 @@ import json
 import os
 import sys
 from dataclasses import dataclass, replace
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Iterable
 
 OUTPUT_KEYS = (
@@ -84,6 +84,20 @@ OWNERSHIP_FULL_EXACT = {
     "tools/ci/write_backend_matrix_summary.py",
 }
 
+# Both modules and their imported helpers are exercised by integration_ci.
+# In particular native_default_admission imports bound-native-chat helpers;
+# selecting the complete hermetic owner preserves that reverse edge. New,
+# missing and shared fixture inputs never inherit this test-only exception.
+AUDITED_HERMETIC_TEST_PATHS = {
+    "tests/integration/omnigent/test_generic_bound_native_chat.py",
+    "tests/integration/omnigent/test_native_default_admission.py",
+}
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _audited_hermetic_test(path: str) -> bool:
+    return path in AUDITED_HERMETIC_TEST_PATHS and (REPO_ROOT / path).is_file()
+
 
 FRONTEND_STATIC_EXACT = {
     "package.json",
@@ -117,6 +131,9 @@ FORCE_FULL_EXACT = {
     ".agents/skills/update-moonmind/scripts/run-update-moonmind.sh",
     ".agents/skills/update-moonmind/scripts/update_release.py",
     "tools/select_test_suites.py",
+    "tools/ci/slow-test-paths.txt",
+    "tools/ci/source_verification.py",
+    "tools/ci/test_runtime_inputs.py",
     "tests/conftest.py",
     "tests/unit/conftest.py",
 }
@@ -774,7 +791,9 @@ def _integration_lanes(paths: list[str], selection: SuiteSelection) -> set[str]:
     """
     lanes: set[str] = set()
     for path in paths:
-        if path in INTEGRATION_LANE_EXACT:
+        if _audited_hermetic_test(path):
+            lanes.add("hermetic")
+        elif path in INTEGRATION_LANE_EXACT:
             lanes.update(INTEGRATION_LANE_EXACT[path])
         elif path.startswith("tests/integration/host_update/"):
             # Standalone lanes invoke only their exact modules. New marked
@@ -837,6 +856,17 @@ def select_suites(
     ):
         return _full_selection()
 
+    if any(
+        path.startswith(("tests/helpers/", "tests/support/"))
+        or PurePosixPath(path).name == "conftest.py"
+        or (
+            path.startswith(("tests/integration/omnigent/", "tests/unit/omnigent/"))
+            and not (REPO_ROOT / path).is_file()
+        )
+        for path in paths
+    ):
+        return _full_selection()
+
     unknown_paths = [
         path
         for path in paths
@@ -873,9 +903,10 @@ def select_suites(
         unit_fast=bool(backend_paths)
         or profile_authoring_changed
         or any(path.endswith(".md") and path not in PROSE_ONLY_EXACT for path in paths),
-        unit_slow=any(
-            _matches(path, prefixes=UNIT_SLOW_PREFIXES) for path in backend_paths
-        ),
+        # A unit test can add a slow marker without changing conftest. The
+        # real collection inventory, not the previous file list, owns it.
+        unit_slow=any(path.startswith("tests/unit/") for path in backend_paths)
+        or any(_matches(path, prefixes=UNIT_SLOW_PREFIXES) for path in backend_paths),
         api_component=profile_authoring_changed
         or any(
             _matches(
@@ -916,28 +947,74 @@ def select_suites(
         # Computed over every path (not just backend paths): dependency locks
         # and frontend Dockerfiles are non-backend but still change the
         # deployable image runtime surface.
-        exact_artifact=any(is_exact_artifact_owned(path) for path in paths),
-        omnigent_conformance=any(is_omnigent_conformance_input(path) for path in paths),
+        exact_artifact=any(
+            is_exact_artifact_owned(path)
+            for path in paths
+            if not _audited_hermetic_test(path)
+        ),
+        omnigent_conformance=any(
+            is_omnigent_conformance_input(path)
+            for path in paths
+            if not _audited_hermetic_test(path)
+        ),
         frontend_static=static or chromium or profile_authoring_changed,
         frontend_browser_chromium=chromium,
         frontend_browser_firefox=firefox,
         full_frontend=full_frontend,
     )
 
-    omnigent_paths = [path for path in paths if is_omnigent_contract_owned(path)]
+    omnigent_paths = [
+        path
+        for path in paths
+        if is_omnigent_contract_owned(path) and not _audited_hermetic_test(path)
+    ]
     if omnigent_paths:
         selection = _elevate_omnigent_contract_gate(selection, omnigent_paths)
+
+    if selection.omnigent_conformance:
+        # The reporter consumes these owners' exact receipts. It cannot
+        # silently stand in for an unselected source or frontend owner.
+        selection = replace(
+            selection,
+            unit_fast=True,
+            temporal_boundary=True,
+            reliability_journey=True,
+            integration_ci=True,
+            frontend_static=True,
+        )
 
     lanes = _integration_lanes(paths, selection)
     return replace(
         selection,
         integration_ci=bool(lanes),
-        ownership_full=any(_needs_full_ownership(path) for path in paths),
+        ownership_full=selection.omnigent_conformance
+        or any(_needs_full_ownership(path) for path in paths),
         **{
             "integration_" + lane.replace("-", "_"): lane in lanes
             for lane in INTEGRATION_LANES
         },
     )
+
+
+def for_phase(selection: SuiteSelection, phase: str) -> SuiteSelection:
+    """Partition owners, never treat a skipped owner as a successful receipt."""
+    if phase == "full":
+        return selection
+    if phase not in {"source", "artifact"}:
+        raise ValueError(f"Unknown verification phase: {phase}")
+    artifact_keys = {
+        "exact_artifact",
+        *("integration_" + lane.replace("-", "_") for lane in JOURNEY_LANES),
+    }
+    values = {
+        key: value and ((key in artifact_keys) == (phase == "artifact"))
+        for key, value in selection.__dict__.items()
+    }
+    values["integration_ci"] = any(
+        values["integration_" + lane.replace("-", "_")] for lane in INTEGRATION_LANES
+    )
+    values["full_backend"] = False
+    return SuiteSelection(**values)
 
 
 def emit_outputs(selection: SuiteSelection) -> None:
@@ -966,6 +1043,11 @@ def main() -> int:
         event_name=os.environ.get("GITHUB_EVENT_NAME"),
         ref_name=os.environ.get("GITHUB_REF_NAME") or os.environ.get("GITHUB_REF"),
     )
+    try:
+        selection = for_phase(selection, os.environ.get("MOONMIND_CI_PHASE", "full"))
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 2
     emit_outputs(selection)
     return 0
 

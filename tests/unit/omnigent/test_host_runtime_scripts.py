@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from moonmind.omnigent.host_services.runtime_scripts import OmnigentRuntimeScriptService
+from tests.helpers.provider_egress import minimax_egress  # noqa: F401
 
 
 @pytest.mark.parametrize("materializer", ["omnigent-provider-config@1", "claude-oauth-home@1"])
@@ -142,6 +143,7 @@ def test_profile_shell_value_survives_the_native_executable_boundary(tmp_path, h
 
 
 @pytest.mark.parametrize("additional_file", [False, True])
+@pytest.mark.usefixtures("minimax_egress")
 def test_custom_codex_projection_runs_through_the_native_executable_boundary(tmp_path, additional_file):
     import os
 

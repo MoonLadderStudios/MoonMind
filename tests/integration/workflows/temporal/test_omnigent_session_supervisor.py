@@ -32,6 +32,10 @@ from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment, WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
+from tests.artifact_access import access_for_test
+from api_service.services.omnigent_execution_plan_service import (
+    PersistedOmnigentExecutionPlan,
+)
 from api_service.api.routers.executions import _get_service, get_temporal_client, router
 from api_service.db import base as db_base
 from api_service.db.models import (
@@ -96,7 +100,7 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     MoonMindProviderProfileManagerWorkflow,
 )
 from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
-from tests.unit.api.routers.test_executions import (
+from tests.helpers.execution_api import (
     _build_execution_record,
     _override_user_dependencies,
 )
@@ -991,7 +995,10 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event(
         taskInputSnapshotRef=input_ref,
         taskInputSnapshotDigest=input_digest,
     )
-    compiled_plan = SimpleNamespace(
+    compiled_plan = PersistedOmnigentExecutionPlan(
+        artifact_access=access_for_test("operator"),
+        resolved_skillset_digest="sha256:" + "d" * 64,
+        envelope=SimpleNamespace(),
         binding=plan_binding,
         artifact_refs=(
             profile_ref,

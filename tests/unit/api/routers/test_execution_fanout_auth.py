@@ -17,8 +17,10 @@ from moonmind.config.settings import settings
 from moonmind.security.execution_fanout_capabilities import (
     mint_execution_fanout_capability,
 )
-from tests.unit.api.routers.test_executions import (
+from tests.helpers.execution_api import (
     _build_execution_record,
+)
+from tests.unit.api.routers.test_executions import (
     _ExecuteResult,
 )
 

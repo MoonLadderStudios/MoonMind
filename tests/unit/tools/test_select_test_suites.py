@@ -17,6 +17,49 @@ from tools.select_test_suites import (
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
+def test_source_and_artifact_phases_partition_full_verification():
+    full = select_suites([], event_name="workflow_dispatch")
+    source = select_test_suites.for_phase(full, "source")
+    artifact = select_test_suites.for_phase(full, "artifact")
+    assert (
+        source.unit_fast and source.integration_hermetic and source.omnigent_conformance
+    )
+    assert not source.exact_artifact and not source.integration_fresh_journey
+    assert artifact.exact_artifact and artifact.integration_fresh_journey
+    assert not artifact.unit_fast and not artifact.integration_hermetic
+    assert not artifact.omnigent_conformance
+    for key in select_test_suites.OUTPUT_KEYS:
+        if key not in {"full_backend", "full_frontend", "ownership_full"}:
+            assert getattr(full, key) == (
+                getattr(source, key) or getattr(artifact, key)
+            )
+
+
+def test_unknown_verification_phase_is_rejected():
+    with pytest.raises(ValueError, match="phase"):
+        select_test_suites.for_phase(select_suites([]), "partial")
+
+
+def test_audited_native_chat_test_only_edit_runs_its_hermetic_consumers():
+    result = select_suites(
+        ["tests/integration/omnigent/test_generic_bound_native_chat.py"],
+        event_name="pull_request",
+    )
+    assert result.integration_hermetic and result.unit_fast and result.ownership_full
+    assert not result.exact_artifact and not result.integration_fresh_journey
+    assert not result.omnigent_conformance
+
+
+def test_unknown_new_or_shared_omnigent_test_inputs_keep_full_verification():
+    for path in (
+        "tests/integration/omnigent/test_new_unknown.py",
+        "tests/helpers/execution_api.py",
+        "tests/integration/omnigent/conftest.py",
+    ):
+        result = select_suites([path], event_name="pull_request")
+        assert result.full_backend and result.full_frontend
+
+
 def _outputs(paths: list[str], **kwargs) -> dict[str, str]:
     return select_suites(paths, event_name="pull_request", **kwargs).as_outputs()
 
@@ -473,7 +516,9 @@ def test_main_rejects_interactive_stdin(monkeypatch, capsys) -> None:
         "api_service/services/workspace_checkpoints.py",
         "moonmind/omnigent/bridge_store.py",
         "moonmind/workflows/temporal/workflows/run_bounded_story_loop.py",
+        # A deleted legacy recovery path must still select the replacement gate.
         "tests/integration/omnigent/test_embedded_recovery.py",
+        "tests/integration/omnigent/test_generic_native_durable_journey.py",
     ],
 )
 def test_cumulative_remediation_boundaries_select_reliability_journey(
@@ -507,7 +552,9 @@ def test_cumulative_remediation_boundaries_select_reliability_journey(
         # Omnigent compatibility, conformance, and fault fixtures/tooling.
         "tools/run_omnigent_live_conformance.py",
         "tools/build_omnigent_conformance_report.py",
+        # A deleted legacy recovery path must still select the replacement gate.
         "tests/integration/omnigent/test_embedded_recovery.py",
+        "tests/integration/omnigent/test_generic_native_durable_journey.py",
         "tests/unit/omnigent/test_conformance.py",
     ],
 )
@@ -1142,7 +1189,7 @@ def test_single_user_integration_never_selects_reliability_journey() -> None:
         ),
         (
             "tests/integration/host_update/conftest.py",
-            {"hermetic", "controller-journey"},
+            set(select_test_suites.INTEGRATION_LANES),
         ),
         (
             "tools/first_run_journey_3938.sh",
@@ -1154,7 +1201,10 @@ def test_single_user_integration_never_selects_reliability_journey() -> None:
         ),
         ("tools/single_user_journey_provider.py", {"fresh-journey", "upgrade-journey"}),
         ("tools/single_user_journey_cutover.py", {"upgrade-journey"}),
-        ("tests/integration/reliability/test_checkpoint_cold_resume.py", set()),
+        (
+            "tests/integration/reliability/test_checkpoint_cold_resume.py",
+            set(select_test_suites.INTEGRATION_LANES),
+        ),
         ("tests/integration/reliability/test_omnigent_gh_projection_refresh.py", set()),
     ],
 )
@@ -1234,7 +1284,10 @@ def test_backend_matrix_retains_only_selected_rows_and_reliability_shards():
             "backend_matrix"
         ]
     )["include"]
-    assert rows == [{"suite": "unit-fast", "job_minutes": 21}] + [
+    assert rows == [
+        {"suite": "unit-fast", "job_minutes": 21},
+        {"suite": "temporal-boundary", "job_minutes": 20},
+    ] + [
         {"suite": f"reliability-shard-{n}", "shard": str(n), "job_minutes": 20}
         for n in range(1, 5)
     ]

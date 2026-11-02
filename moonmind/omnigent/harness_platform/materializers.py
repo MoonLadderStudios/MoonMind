@@ -331,13 +331,6 @@ class ProviderConfigEndpoint(BaseModel):
         return validate_provider_literal_launch_environment(value)
 
 
-class ProviderConfigurationSnapshotRef(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    artifactRef: str = Field(pattern=r"^artifact:[^\s]+$")
-    contentDigest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
-
-
 class ProviderLaunchEnvironment(BaseModel):
     """Admitted nonsecret tuning, independent of an enrolled OAuth home."""
 
