@@ -94,6 +94,8 @@ def test_private_configuration_runs_only_in_native_private_home(tmp_path, use_en
         + "for home in homes:\n"
         + (" pass\n" if use_enrolled_home else " shutil.copytree(source,home)\n")
         + ("" if use_enrolled_home else
+           " (home/'AGENTS.md').unlink()\n (home/'AGENTS.md').symlink_to(source/'AGENTS.md')\n")
+        + ("" if use_enrolled_home else
            " (home/'config.toml').write_text(" + repr('model = "admitted-plan"\ndeveloper_instructions = "Runtime-owned instructions."\n') + ")\n")
         + " subprocess.run([os.environ['OMNIGENT_CODEX_PATH'],'app-server'],check=True,"
         "env={'PATH':os.environ['PATH'],'CODEX_HOME':str(home)})\n"
@@ -143,9 +145,68 @@ def test_private_configuration_cannot_change_credential_owner(materializer):
         )
 
 
-@pytest.mark.parametrize("escape", ["auth.json", "config.toml/../auth.json", "sessions/other.jsonl"])
+@pytest.mark.parametrize("escape", [
+    "auth.json", "config.toml/../auth.json", "sessions/other.jsonl",
+    ".credentials.json", "hooks.json", "mcp-oauth-locks/selected.lock",
+    "plugins/cache/selected/plugin.json", "state_9.sqlite",
+    ".omnigent-developer-instructions-state.toml",
+])
 def test_oauth_extra_files_cannot_replace_authentication_or_history(escape):
     selected, _ = private_codex_profile()
     selected.file_templates[1]["path"] = "{{runtime_support_dir}}/codex-home/" + escape
     with pytest.raises(HarnessPlatformError):
         snapshot_provider_configuration(selected)
+
+
+@pytest.mark.parametrize("link_kind", ["private-auth", "foreign-sibling", "hardlink"])
+def test_private_instruction_projection_cannot_write_another_file(tmp_path, link_kind):
+    from moonmind.provider_profiles.codex_configuration import configure_profile_files
+
+    home = tmp_path / "private"
+    home.mkdir()
+    sibling = tmp_path / "sibling"
+    sibling.mkdir()
+    target = home / "auth.json" if link_kind != "foreign-sibling" else sibling / "AGENTS.md"
+    target.write_text("Preserve this owner.\n")
+    if link_kind == "hardlink":
+        os.link(target, home / "AGENTS.md")
+    else:
+        (home / "AGENTS.md").symlink_to(target)
+    selected, _ = private_codex_profile()
+    configuration = snapshot_provider_configuration(selected).codexConfiguration
+    with pytest.raises(ValueError):
+        configure_profile_files(configuration, home, tmp_path)
+    assert target.read_text() == "Preserve this owner.\n"
+
+
+@pytest.mark.parametrize("relative", ["AGENTS.md", "rules/nested/selected.md"])
+def test_native_bridged_instructions_are_projected_without_changing_the_source(
+    tmp_path, monkeypatch, relative,
+):
+    from moonmind.provider_profiles import codex_configuration as module
+
+    enrolled, private = tmp_path / "enrolled", tmp_path / "private"
+    enrolled.mkdir()
+    private.mkdir()
+    source = enrolled / relative
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("Enrolled instructions.\n")
+    untouched = source.parent / ("AGENTS.override.md" if relative == "AGENTS.md" else "untouched.md")
+    untouched.write_text("Other instructions.\n")
+    root = relative.split("/", 1)[0]
+    (private / root).symlink_to(enrolled / root)
+    if relative == "AGENTS.md":
+        (private / untouched.name).symlink_to(untouched)
+    monkeypatch.setattr(module, "_ENROLLED_CODEX_HOME", str(enrolled))
+    configuration = {"additionalFiles": [{
+        "path": "{{runtime_support_dir}}/" + relative,
+        "format": "text", "merge_strategy": "append", "permissions": "0600",
+        "content_template": "Selected instructions.\n",
+    }]}
+    module.configure_profile_files(configuration, private, tmp_path)
+    assert source.read_text() == "Enrolled instructions.\n"
+    assert (private / relative).read_text() == "Enrolled instructions.\nSelected instructions.\n"
+    assert (private / relative).resolve().is_relative_to(private)
+    assert (private / relative).stat().st_mode & 0o777 == 0o600
+    untouched.write_text("Updated other instructions.\n")
+    assert (private / relative).parent.joinpath(untouched.name).read_text() == "Updated other instructions.\n"
