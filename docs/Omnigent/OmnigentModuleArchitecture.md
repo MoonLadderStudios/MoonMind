@@ -325,7 +325,12 @@ Secret values still resolve
 after acquisition under the existing credential-generation fence. Older plans
 without this snapshot retain their recorded interpretation.
 Codex developer instructions, project-instruction discovery and history preferences
-also reach its private session config. Native Profile aliases translate a requested
+also reach its private session config. API-key Codex Profiles can declare additional
+nonsecret files within their selected HOME, including global instructions. The same
+renderer serves direct and packaged launches; the native wrapper writes only into
+its private home, retains frozen settings and reuses a completed projection on
+process restart. An interrupted append stops visibly until step recovery provisions
+a fresh home, preserving the original credential and history owners. Native Profile aliases translate a requested
 model once during shared compilation, using the same lookup as direct launch.
 Tool/authentication and launch settings
 without an equivalent projection retain their native route.

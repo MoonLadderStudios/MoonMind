@@ -408,7 +408,7 @@ class OmnigentRuntimeScriptService:
                 "'exec /opt/moonmind-tools/bin/moonmind \"$@\"' "
                 f"> {_RUNTIME_BIN_DIR}/moonmind; chmod 0700 {_RUNTIME_BIN_DIR}/moonmind; "
             )
-        codex_setup = f"rm -f {_RUNTIME_BIN_DIR}/codex {runtime_context_dir}/codex-configuration.py; "
+        codex_setup = f"rm -f {_RUNTIME_BIN_DIR}/codex {runtime_context_dir}/codex-configuration.py {runtime_context_dir}/template_renderer.py; "
         if codex_wrapper:
             source_path = (
                 Path(__file__).resolve().parents[2]
@@ -417,9 +417,12 @@ class OmnigentRuntimeScriptService:
             )
             source = source_path.read_text()
             helper = f"{runtime_context_dir}/codex-configuration.py"
+            renderer_source = source_path.with_name("template_renderer.py").read_text()
+            renderer = f"{runtime_context_dir}/template_renderer.py"
             codex_setup += (
                 f'codex_binary=$(command -v codex); test -n "$codex_binary"; '
                 f"printf '%s\\n' {shlex.quote(source)} > {helper}; chmod 0700 {helper}; "
+                f"printf '%s\\n' {shlex.quote(renderer_source)} > {renderer}; chmod 0600 {renderer}; "
                 f'python3 {helper} prepare "${{MOONMIND_CODEX_PROFILE_CONFIG_FILE:--}}" "$codex_binary" {_RUNTIME_BIN_DIR}/codex {context_wrapper}; '
             )
         claude_wrapper = f"{_RUNTIME_BIN_DIR}/claude"

@@ -1,6 +1,8 @@
 """Custom Codex model settings reach the shared lifecycle without losing tuning."""
 
 from types import SimpleNamespace
+import copy
+import json
 
 import pytest
 
@@ -401,3 +403,128 @@ async def test_queued_direct_materialization_repairs_only_the_unchanged_managed_
     assert "profile" not in actual
     assert environment["MINIMAX_API_KEY"] == "synthetic-managed-key"
     assert recorded.model_dump(mode="json") == before
+
+
+@pytest.mark.parametrize("format_,content,filename,expected", [
+    ("text", "Keep project instructions from the selected Profile.\n", "AGENTS.md", "Keep project instructions"),
+    ("json", {"project": "{{workspace_path}}", "style": "concise"}, "preferences/settings.json", '"style": "concise"'),
+])
+def test_additional_profile_files_reach_the_private_native_home(tmp_path, format_, content, filename, expected):
+    from moonmind.provider_profiles.codex_configuration import (
+        configuration_for_profile,
+    )
+    selected = profile()
+    selected.file_templates.append({
+        "path": "{{runtime_support_dir}}/codex-home/" + filename,
+        "format": format_, "merge_strategy": "replace",
+        "content_template": content, "permissions": "0600",
+    })
+    before = copy.deepcopy(vars(selected))
+    configuration, reason = configuration_for_profile(selected)
+    assert configuration is not None, reason
+    private_home = tmp_path / "private-native-home"
+    private_home.mkdir()
+    auth = private_home / "auth.json"
+    auth.write_text("keep-owned-auth")
+    source_home = tmp_path / "enrolled-home"
+    source_home.mkdir()
+    (source_home / "auth.json").write_text("keep-enrollment")
+    workspace = tmp_path / "repository"
+    workspace.mkdir()
+    from moonmind.provider_profiles.codex_configuration import configure_profile_files
+
+    configure_profile_files(configuration, private_home, workspace)
+    actual = private_home / filename
+    assert expected in actual.read_text()
+    assert actual.stat().st_mode & 0o777 == 0o600
+    if format_ == "json":
+        assert json.loads(actual.read_text())["project"] == str(workspace)
+    assert auth.read_text() == "keep-owned-auth"
+    assert list(source_home.iterdir()) == [source_home / "auth.json"]
+    assert vars(selected) == before
+    configure_profile_files(configuration, private_home, workspace)
+    assert expected in actual.read_text()
+
+
+@pytest.mark.parametrize("path", ["auth.json", "config.toml", "sessions/history.jsonl", "archived_sessions/history.jsonl", "../outside", ".moonmind-profile-file-digest"])
+def test_recorded_additional_files_cannot_replace_native_authority(tmp_path, path):
+    from moonmind.provider_profiles.codex_configuration import configure_profile_files
+    home = tmp_path / "native-home"
+    home.mkdir()
+    original = home / "auth.json"
+    original.write_text("preserve-native-auth")
+    configuration = {"additionalFiles": [{
+        "path": "{{runtime_support_dir}}/" + path, "format": "text",
+        "merge_strategy": "replace", "content_template": "unselected-data",
+        "permissions": "0600",
+    }]}
+    with pytest.raises(ValueError):
+        configure_profile_files(configuration, home, tmp_path)
+    assert original.read_text() == "preserve-native-auth"
+    assert not (tmp_path / "outside").exists()
+
+
+@pytest.mark.parametrize("reference", ["{{runtime_support_dir}}/elsewhere.json", "{{runtime_support_dir}}/codex-home-other/settings.json"])
+def test_additional_file_references_outside_declared_home_keep_native_delivery(reference):
+    from moonmind.provider_profiles.codex_configuration import configuration_for_profile
+    selected = profile()
+    selected.file_templates.append({
+        "path": "{{runtime_support_dir}}/codex-home/settings.json",
+        "format": "json", "merge_strategy": "replace", "permissions": "0600",
+        "content_template": {"otherFile": reference},
+    })
+    configuration, reason = configuration_for_profile(selected)
+    assert configuration is None
+    assert reason
+
+
+def test_interrupted_profile_file_projection_preserves_confirmed_append(tmp_path, monkeypatch):
+    from moonmind.provider_profiles.codex_configuration import configure_profile_files
+    from moonmind.provider_profiles.template_renderer import ProfileTemplateRenderer
+    home = tmp_path / "native-home"
+    home.mkdir()
+    configuration = {"additionalFiles": [{
+        "path": "{{runtime_support_dir}}/" + filename, "format": "text",
+        "merge_strategy": "append", "content_template": "once\n", "permissions": "0600",
+    } for filename in ("AGENTS.md", "preferences.txt")]}
+    render = ProfileTemplateRenderer._materialize_file_template
+    count = 0
+    def interrupted(self, template, context):
+        nonlocal count
+        count += 1
+        if count == 2:
+            raise OSError("simulated interruption before launch")
+        return render(self, template, context)
+    monkeypatch.setattr(ProfileTemplateRenderer, "_materialize_file_template", interrupted)
+    with pytest.raises(OSError, match="simulated interruption"):
+        configure_profile_files(configuration, home, tmp_path)
+    assert (home / "AGENTS.md").read_text() == "once\n"
+    monkeypatch.setattr(ProfileTemplateRenderer, "_materialize_file_template", render)
+    with pytest.raises(ValueError, match="interrupted"):
+        configure_profile_files(configuration, home, tmp_path)
+    assert (home / "AGENTS.md").read_text() == "once\n"
+    fresh = tmp_path / "recovered-private-home"
+    fresh.mkdir()
+    configure_profile_files(configuration, fresh, tmp_path)
+    configure_profile_files(configuration, fresh, tmp_path)
+    assert (fresh / "AGENTS.md").read_text() == "once\n"
+    assert (fresh / "preferences.txt").read_text() == "once\n"
+    assert (fresh / ".moonmind-profile-file-digest").stat().st_mode & 0o777 == 0o600
+
+
+def test_profile_file_projection_cannot_follow_a_sibling_home_symlink(tmp_path):
+    from moonmind.provider_profiles.codex_configuration import configure_profile_files
+    home = tmp_path / "native-home"
+    home.mkdir()
+    sibling = tmp_path / "sibling-home"
+    sibling.mkdir()
+    original = sibling / "AGENTS.md"
+    original.write_text("Keep sibling instructions.")
+    (home / "AGENTS.md").symlink_to(original)
+    configuration = {"additionalFiles": [{
+        "path": "{{runtime_support_dir}}/AGENTS.md", "format": "text",
+        "merge_strategy": "replace", "content_template": "Do not write through.", "permissions": "0600",
+    }]}
+    with pytest.raises(ValueError, match="within runtime_support_dir"):
+        configure_profile_files(configuration, home, tmp_path)
+    assert original.read_text() == "Keep sibling instructions."

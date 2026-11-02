@@ -195,7 +195,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         missingOutcome=(
             "OAuth Profiles with protected or untranslated per-run environment, file or HOME settings; "
             "Codex key Profiles the Omnigent provider config cannot carry "
-            "exactly: additional files, uncarried tool/launch settings, authentication "
+            "exactly: files outside the declared private Codex HOME, uncarried tool/launch settings, authentication "
             "outside the selected key SecretRef, or endpoints the existing "
             "egress policy does not admit. Declared single-provider Responses "
             "configuration, including the rendered managed MiniMax recipe, "

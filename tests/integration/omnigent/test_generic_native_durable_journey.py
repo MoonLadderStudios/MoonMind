@@ -1035,6 +1035,7 @@ async def _compile_plan(
     env_bundle=False,
     codex_config=False,
     session_settings=None,
+    additional_files=None,
     oauth_tuning=None,
     instructions="Generate a report.",
 ):
@@ -1101,6 +1102,7 @@ async def _compile_plan(
 
         templates = minimax_file_templates()
         templates[0]["content_template"].update(session_settings or {})
+        templates.extend(additional_files or [])
         templates[0]["content_template"]["model"] = "model"
         templates[0]["content_template"]["profiles"]["m27"]["model"] = "model"
         fields.update(
@@ -1315,6 +1317,7 @@ async def native_journey(
                 env_bundle=env_bundle,
                 codex_config=codex_config,
                 session_settings=selection.get("sessionSettings"),
+                additional_files=selection.get("additionalFiles"),
                 oauth_tuning=selection.get("oauthTuning"),
                 instructions=instructions,
             )
@@ -2302,3 +2305,60 @@ async def test_credential_maintenance_drains_generic_host_mounting_oauth_home(
     assert "journey_oauth" in docker.volumes
     # A repeated maintenance attempt finds nothing left to drain.
     assert await janitor.drain_profile(PROFILE) == {"drained": 0}
+
+
+@pytest.mark.parametrize("native_journey", [{
+    "harness": "codex-native-file-config",
+    "additionalFiles": [{
+        "path": "{{runtime_support_dir}}/codex-home/AGENTS.md",
+        "format": "text", "merge_strategy": "append", "permissions": "0600",
+        "content_template": "Use the admitted global instructions.\n",
+    }],
+}], indirect=True)
+@pytest.mark.parametrize("refresh", [None, False, True], ids=["queued", "frozen", "fresh-scheduled"])
+async def test_profile_files_keep_queued_and_fresh_configuration_authority(native_journey, refresh):
+    from copy import deepcopy
+    from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
+
+    journey = native_journey
+    snapshot = json.loads(await journey.gateway.read_admitted_input(
+        journey.plan.payload.agentProfileSnapshotRef, request=journey.request,
+    ))
+    parameters = json.loads(await journey.gateway.read_admitted_input(
+        journey.plan.payload.authority.taskInputSnapshotRef, request=journey.request,
+    ))
+    async with journey.session_factory() as session:
+        provider = await session.get(ManagedAgentProviderProfile, PROFILE)
+        templates = deepcopy(provider.file_templates)
+        templates[-1]["content_template"] = "Later edited instructions.\n"
+        provider.file_templates = templates
+        await session.flush()
+        if refresh is not None:
+            artifacts = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                transaction_ownership=ArtifactTransactionOwnership.CALLER,
+            )
+            compiled = await plan_writer.compile_frozen_execution_plan(
+                db_session=session, artifact_service=artifacts,
+                workflow_id=journey.request.correlation_id, principal="system",
+                snapshot=snapshot, provider_profile=provider, initial_parameters=parameters,
+                binding=journey.request.omnigent_execution_plan,
+                access=access_for_test("system", admitted_principal=f"workflow:{journey.request.correlation_id}"),
+                refresh_step_selections=refresh,
+            )
+            saved = compiled.envelope.payload.providerConfigurationSnapshot
+            _row, body = await artifacts.read(
+                artifact_id=saved.artifactRef.removeprefix("artifact:"),
+                access=access_for_test("system"),
+            )
+            configuration = json.loads(body)["primary-model"]["endpoint"]["codexConfiguration"]
+            changed = plan_writer.changed_admitted_intent(journey.plan.payload, compiled.envelope.payload)
+            assert ("providerConfiguration" in changed) is refresh
+        await session.commit()
+    if refresh is None:
+        await assert_native_turn_saved_and_cleaned(journey)
+        configuration = journey.docker.codex_configuration
+    expected = "Later edited instructions.\n" if refresh else "Use the admitted global instructions.\n"
+    assert configuration["additionalFiles"][0]["content_template"] == expected
+    assert configuration["additionalFiles"][0]["path"] == "{{runtime_support_dir}}/AGENTS.md"
+    assert expected not in journey.plan.payload.model_dump_json()
