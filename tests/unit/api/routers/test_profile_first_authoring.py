@@ -233,11 +233,22 @@ def test_rendered_profile_request_reaches_matching_immutable_plan(
                 == "profile_execution_configuration_required"
             )
         elif change == "target":
-            assert "Requested runtime target does not match" in response.text
+            # The Profile's harness excludes foreign targets at selection,
+            # before an immutable plan can be compiled or persisted.
+            assert response.status_code == 422
+            detail = response.json()["detail"]
+            assert detail["code"] == "invalid_execution_request"
+            assert "Requested runtime target is not selectable" in detail["message"]
+            assert "combination_not_registered" in detail["message"]
         elif change == "profile":
             assert "must use the selected Profile" in response.text
         elif change == "backend":
-            assert "requires targetRuntime='omnigent'" in response.text
+            assert response.status_code == 409
+            detail = response.json()["detail"]
+            assert detail["code"] == "provider_profile_runtime_mismatch"
+            assert detail["profileId"] == fixture["provider"]["profile_id"]
+            assert detail["profileRuntime"] == "opencode"
+            assert detail["selectedRuntime"] == "claude_code"
         temporal.create_execution.assert_not_awaited()
         assert compiled == []
         store.persist.assert_not_awaited()

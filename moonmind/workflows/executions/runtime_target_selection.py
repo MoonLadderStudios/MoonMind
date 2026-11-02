@@ -297,6 +297,7 @@ def resolve_runtime_target_selection(
     requested_runtime: object = None,
     requested_target_id: str | None = None,
     profile_runtime: str | None = None,
+    profile_harness_id: str | None = None,
     recorded_target_id: str | None = None,
     recorded_runtime_id: str | None = None,
     upgrade_to_qualified_target: bool = False,
@@ -313,9 +314,12 @@ def resolve_runtime_target_selection(
     silently replaces its harness, profile, policy, Host Class, runtime pack,
     materializer, or realizer.
 
-    ``profile_runtime`` is the route the selected Provider Profile implies when
-    no runtime is authored. It resolves like an authored runtime but is
-    recorded as Profile-derived provenance.
+    ``profile_runtime`` is the selected Profile's proven route. Compatible
+    native aliases use its shared route with authored provenance; an omitted
+    runtime records Profile-derived provenance. ``profile_harness_id`` narrows
+    new target choices to that Profile's harness without changing recorded
+    authority. An account inferred from a runtime default retains that
+    configured-default provenance.
     """
 
     active_surface = AuthoringSurface(str(surface))
@@ -410,6 +414,19 @@ def resolve_runtime_target_selection(
             ),
         )
 
+    # Current Profile authority narrows new selections, never recorded history.
+    if profile_harness_id:
+        views = tuple(
+            view
+            for view in views
+            if view.harness_id == profile_harness_id
+            or (
+                view.harness_id is None
+                and view.path_class is RuntimeProviderPathClass.direct_compatibility
+            )
+        )
+        by_target = {view.target_id: view for view in views}
+
     # 2. An explicitly authored target identity.
     if requested_target_id:
         requested_view = by_target.get(requested_target_id)
@@ -442,9 +459,22 @@ def resolve_runtime_target_selection(
     #    A Profile-implied route resolves the same way with its own provenance.
     authored_runtime = str(requested_runtime or "").strip()
     intended_source = SelectionSource.authored
+    if (
+        authored_runtime
+        and normalize_runtime_id(authored_runtime) in {"codex_cli", "claude_code"}
+        and str(profile_runtime or "").strip() == "omnigent"
+    ):
+        # The API's Profile owner established exact shared translation and
+        # checked harness ownership. Keep authored provenance while selecting
+        # the shared backend; recorded authority was handled above.
+        authored_runtime = "omnigent"
     if not authored_runtime and str(profile_runtime or "").strip():
         authored_runtime = str(profile_runtime).strip()
-        intended_source = SelectionSource.profile
+        intended_source = (
+            SelectionSource.configured_default
+            if getattr(workflow_settings, "provider_profile_inferred", False)
+            else SelectionSource.profile
+        )
     if authored_runtime:
         runtime_id = normalize_runtime_id(authored_runtime)
         candidates = _views_for_runtime(views, runtime_id)

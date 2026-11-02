@@ -46,6 +46,11 @@ def _expected_harness_for_runtime(runtime_id: Any) -> str | None:
     return mapping.get(str(runtime_id or ""))
 
 
+def profile_harness_id(provider: Any) -> str | None:
+    """Return the harness owned by an exact selected Provider Profile."""
+    return _expected_harness_for_runtime(getattr(provider, "runtime_id", None))
+
+
 def profile_runtime_supported(runtime_id: Any) -> bool:
     """Use existing native harness and external capability owners for admission."""
     from moonmind.workflows.executions.runtime_capabilities import (

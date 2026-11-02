@@ -809,6 +809,72 @@ function defaultBranchOptionsResponse(): Response {
   } as Response;
 }
 
+const readyOmnigentCatalog = {
+  schemaVersion: "moonmind.omnigent-codex-readiness.v2",
+  runtimeId: "omnigent",
+  displayName: "Omnigent",
+  agentKind: "external",
+  agentId: "omnigent",
+  harness: "codex-native",
+  available: true,
+  defaultExecutionProfileRef: "omnigent-codex-default",
+  executionProfiles: [{
+    ref: "omnigent-codex-default",
+    displayName: "Codex default",
+    available: true,
+    launchPolicies: [{ ref: "on-demand-v1", displayName: "On-demand Docker", hostMode: "on_demand_docker", isDefault: true }],
+    gateReasons: [],
+  }],
+  eligibleProviderProfiles: [{ profileId: "oauth-1", label: "Codex OAuth", providerId: "openai", runtimeId: "codex_cli", busy: false }],
+  ineligibleProviderProfiles: [],
+  hostModes: ["on_demand_docker"],
+  gateReasons: [],
+  supportGateReasons: [],
+  compatibilityDiagnostics: {},
+  cutover: {},
+  remediationRelease: {
+    policyVersion: "moonmind.operator-remediation-release/v1",
+    matrixVersion: "operator-remediation-support-matrix/v1",
+    manualDiagnosisSupported: true,
+    manualMutationSupported: true,
+    autonomousRolloutAuthorized: false,
+    advisory: true,
+    promotionAllowed: false,
+    manualPromotionAllowed: false,
+    rollbackRequired: false,
+    generatedAt: "2026-08-13T00:00:00Z",
+    expiresAt: "2026-08-20T00:00:00Z",
+    telemetry: {
+      schemaVersion: "moonmind.operator-remediation-telemetry/v1",
+      groups: {},
+    },
+    alerts: [{
+      code: "autonomous_rollout_gate_closed",
+      severity: "warning",
+      operatorAction: "keep_autonomous_mutation_disabled",
+    }],
+    blockers: ["autonomous_rollout_gate_closed"],
+  },
+  admissionReadiness: {},
+} satisfies components["schemas"]["OmnigentCodexCatalogReadiness"];
+const readyAgentProfiles = [{
+  profileId: "team-codex",
+  displayName: "Team Codex",
+  state: "active",
+  activeVersion: 1,
+  defaultForRuntime: true,
+  versions: [{
+    version: 1,
+    digest: `sha256:${"a".repeat(64)}`,
+    document: {
+      execution: {
+        defaultExecutionProfileRef: "omnigent-codex-default",
+      },
+    },
+    validationResult: { ready: true },
+  }],
+}];
+
 describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
   let fetchSpy: MockInstance;
   let readinessRequests: number;
@@ -868,71 +934,6 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     } as BootPayload;
   }
 
-  const readyOmnigentCatalog = {
-    schemaVersion: "moonmind.omnigent-codex-readiness.v2",
-    runtimeId: "omnigent",
-    displayName: "Omnigent",
-    agentKind: "external",
-    agentId: "omnigent",
-    harness: "codex-native",
-    available: true,
-    defaultExecutionProfileRef: "omnigent-codex-default",
-    executionProfiles: [{
-      ref: "omnigent-codex-default",
-      displayName: "Codex default",
-      available: true,
-      launchPolicies: [{ ref: "on-demand-v1", displayName: "On-demand Docker", hostMode: "on_demand_docker", isDefault: true }],
-      gateReasons: [],
-    }],
-    eligibleProviderProfiles: [{ profileId: "oauth-1", label: "Codex OAuth", providerId: "openai", runtimeId: "codex_cli", busy: false }],
-    ineligibleProviderProfiles: [],
-    hostModes: ["on_demand_docker"],
-    gateReasons: [],
-    supportGateReasons: [],
-    compatibilityDiagnostics: {},
-    cutover: {},
-    remediationRelease: {
-      policyVersion: "moonmind.operator-remediation-release/v1",
-      matrixVersion: "operator-remediation-support-matrix/v1",
-      manualDiagnosisSupported: true,
-      manualMutationSupported: true,
-      autonomousRolloutAuthorized: false,
-      advisory: true,
-      promotionAllowed: false,
-      manualPromotionAllowed: false,
-      rollbackRequired: false,
-      generatedAt: "2026-08-13T00:00:00Z",
-      expiresAt: "2026-08-20T00:00:00Z",
-      telemetry: {
-        schemaVersion: "moonmind.operator-remediation-telemetry/v1",
-        groups: {},
-      },
-      alerts: [{
-        code: "autonomous_rollout_gate_closed",
-        severity: "warning",
-        operatorAction: "keep_autonomous_mutation_disabled",
-      }],
-      blockers: ["autonomous_rollout_gate_closed"],
-    },
-    admissionReadiness: {},
-  } satisfies components["schemas"]["OmnigentCodexCatalogReadiness"];
-  const readyAgentProfiles = [{
-    profileId: "team-codex",
-    displayName: "Team Codex",
-    state: "active",
-    activeVersion: 1,
-    defaultForRuntime: true,
-    versions: [{
-      version: 1,
-      digest: `sha256:${"a".repeat(64)}`,
-      document: {
-        execution: {
-          defaultExecutionProfileRef: "omnigent-codex-default",
-        },
-      },
-      validationResult: { ready: true },
-    }],
-  }];
 
   it.each([false, true])("replays OpenCode Profile authoring with competing defaults (explicit: %s)", async (explicit) => {
     const payload = structuredClone(omnigentPayload());
@@ -1353,11 +1354,9 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     }
     expect(screen.queryByLabelText("Execution target")).toBeNull();
     expect(screen.getByLabelText("Host policy")).toBeTruthy();
-    // The catalog publishes a genuine direct alternative for this Harness, so
-    // Advanced offers Backend; opening Advanced does not change it.
-    const backend = screen.getByLabelText("Backend") as HTMLSelectElement;
-    expect(backend.value).toBe("omnigent");
-    expect(Array.from(backend.options).map((option) => option.textContent)).toEqual(["Omnigent", "Direct Codex compatibility"]);
+    // This exact Profile has a usable shared route; the retained direct row
+    // serves other configurations, so it adds no choice for this account.
+    expect(screen.queryByLabelText("Backend")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => expect(navigateTo).toHaveBeenCalledWith("/workflows/mm%3Aomnigent-created?source=temporal"));
@@ -21142,19 +21141,24 @@ describe("Task Create runtime switch layout stability", () => {
         ] } as Response);
       }
       if (url === "/api/omnigent/agent-profiles") {
-        return Promise.resolve({ ok: true, json: async () => [] } as Response);
+        return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
+      }
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        return Promise.resolve({ ok: true, json: async () => ({
+          ...readyOmnigentCatalog,
+          eligibleProviderProfiles: [{ profileId: "codex-configured", runtimeId: "codex_cli", providerId: "openai", label: "Codex Configured", busy: false }],
+        }) } as Response);
       }
       return fallback(input, init);
     };
   }
 
-  it("keeps an explicitly chosen Backend across a Harness round trip", async () => {
+  it("keeps a direct-only Profile across a Harness round trip", async () => {
     const fallback = configuredCodexInventory(fetchSpy.getMockImplementation()!);
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       if (String(input).split("?")[0] === "/api/v1/provider-profiles") {
         return Promise.resolve({ ok: true, json: async () => [
-          { profile_id: "codex-configured", account_label: "Codex Configured", runtime_id: "codex_cli", is_default: true,
-            execution_selection: { profileId: "team-codex", version: 1, digest: `sha256:${"a".repeat(64)}`, providerProfileRef: "codex-configured", launchPolicyRef: null, defaultForRuntime: true, harnessId: "codex-native" } },
+          { profile_id: "codex-configured", account_label: "Codex Configured", runtime_id: "codex_cli", is_default: true },
           { profile_id: "native-claude", account_label: "Native Claude", runtime_id: "claude_code" },
         ] } as Response);
       }
@@ -21165,13 +21169,12 @@ describe("Task Create runtime switch layout stability", () => {
     await waitFor(() => expect(profile.value).toBe("codex-configured"));
     fireEvent.change(profile, { target: { value: "codex-configured" } });
     fireEvent.click(screen.getByLabelText("Advanced mode"));
-    fireEvent.change(screen.getByLabelText("Backend"), { target: { value: "codex_cli" } });
 
     const harness = screen.getByLabelText("Harness") as HTMLSelectElement;
     fireEvent.change(harness, { target: { value: "claude_code" } });
     fireEvent.change(harness, { target: { value: "codex_cli" } });
     expect(profile.value).toBe("codex-configured");
-    await waitFor(() => expect((screen.getByLabelText("Backend") as HTMLSelectElement).value).toBe("codex_cli"));
+    await waitFor(() => expect(document.querySelector("[data-backend-summary]")?.textContent).toContain("Direct Codex"));
 
     fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Keep the chosen Direct Backend." } });
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
@@ -21232,7 +21235,7 @@ describe("Task Create runtime switch layout stability", () => {
     expect(request.payload.task.runtime).toMatchObject({ mode: "claude_code", profileId: "claude-configured" });
   });
 
-  it("shows Backend only under Advanced for a genuine alternative and keeps it through Advanced toggles", async () => {
+  it("keeps an exact shared Profile on Omnigent through Advanced toggles", async () => {
     fetchSpy.mockImplementation(configuredCodexInventory(fetchSpy.getMockImplementation()!));
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     const harness = await screen.findByLabelText("Harness") as HTMLSelectElement;
@@ -21241,23 +21244,18 @@ describe("Task Create runtime switch layout stability", () => {
     await waitFor(() => expect(document.querySelector("[data-backend-summary]")).toBeNull());
     expect(screen.queryByLabelText("Backend")).toBeNull();
 
-    fireEvent.click(screen.getByLabelText("Advanced mode"));
-    const backend = screen.getByLabelText("Backend") as HTMLSelectElement;
-    expect(backend.value).toBe("omnigent");
-    fireEvent.change(backend, { target: { value: "codex_cli" } });
-    fireEvent.click(screen.getByLabelText("Advanced mode"));
-    expect(screen.queryByLabelText("Backend")).toBeNull();
-    expect(document.querySelector("[data-backend-summary]")?.textContent).toBe("Backend: Direct Codex compatibility");
-    fireEvent.click(screen.getByLabelText("Advanced mode"));
-    expect((screen.getByLabelText("Backend") as HTMLSelectElement).value).toBe("codex_cli");
-    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    for (let toggle = 0; toggle < 4; toggle += 1) {
+      fireEvent.click(screen.getByLabelText("Advanced mode"));
+      expect(screen.queryByLabelText("Backend")).toBeNull();
+      expect(document.querySelector("[data-backend-summary]")).toBeNull();
+    }
 
     fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Keep the nondefault Backend." } });
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
     const request = JSON.parse(String(fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions")?.[1]?.body));
-    expect(request.payload.targetRuntime).toBe("codex_cli");
-    expect(request.payload.task.runtime).toMatchObject({ mode: "codex_cli", profileId: "codex-configured" });
+    expect(request.payload.targetRuntime).toBe("omnigent");
+    expect(request.payload.task.runtime).toMatchObject({ mode: "omnigent", profileId: "codex-configured" });
   });
 
   it("omits the Backend selector when the Harness has one supported Backend", async () => {
@@ -21305,17 +21303,23 @@ describe("Task Create runtime switch layout stability", () => {
   });
 
   it.each(["omnigent", "codex_cli"])("submits a %s step Backend without deriving host capability claims", async (runtimeId) => {
-    fetchSpy.mockImplementation(configuredCodexInventory(fetchSpy.getMockImplementation()!));
+    fetchSpy.mockImplementation(mixedRouteInventory(fetchSpy.getMockImplementation()!));
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     fireEvent.click(screen.getByLabelText("Advanced mode"));
     fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Validate the step runtime at API admission." } });
-    await waitFor(() => expect((screen.getByLabelText("Backend") as HTMLSelectElement).value).toBe("omnigent"));
-    fireEvent.change(screen.getByLabelText("Backend"), { target: { value: "codex_cli" } });
-    fireEvent.change(await screen.findByLabelText("Step 1 Backend"), { target: { value: runtimeId } });
+    fireEvent.change(await screen.findByLabelText("Provider Profile"), { target: { value: "codex-native-only" } });
+    const stepProfile = runtimeId === "omnigent" ? "codex-configured" : "codex-native-only";
+    fireEvent.change(await screen.findByLabelText("Step 1 Provider Profile"), { target: { value: stepProfile } });
+    if (runtimeId === "omnigent") {
+      fireEvent.change(await screen.findByLabelText("Step 1 Backend"), { target: { value: runtimeId } });
+    }
+
     fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
     const request = JSON.parse(String(fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions")?.[1]?.body));
-    expect(request.payload.task.steps[0].runtime.mode).toBe(runtimeId);
+    expect(request.payload.task.runtime.mode).toBe("codex_cli");
+    expect(request.payload.task.steps[0].runtime.profileId).toBe(stepProfile);
+    expect(request.payload.task.steps[0].runtime.mode).toBe(runtimeId === "omnigent" ? runtimeId : undefined);
     expect(request.payload.requiredCapabilities).toEqual(["git", "gh"]);
   });
 
@@ -21330,17 +21334,130 @@ describe("Task Create runtime switch layout stability", () => {
         ] } as Response);
       }
       if (String(input) === "/api/omnigent/agent-profiles") {
-        return Promise.resolve({ ok: true, json: async () => [] } as Response);
+        return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
       }
-      return fallback(input, init);
+      return configuredCodexInventory(fallback)(input, init);
     };
   }
+
+  it("retains Direct when independent step accounts still need its adapter", async () => {
+    fetchSpy.mockImplementation(mixedRouteInventory(fetchSpy.getMockImplementation()!));
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    await waitFor(() => expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe("codex-configured"));
+    fireEvent.change(await screen.findByLabelText("Step 1 Provider Profile"), { target: { value: "codex-native-only" } });
+    const backend = await screen.findByLabelText("Backend") as HTMLSelectElement;
+    expect(Array.from(backend.options).map((option) => option.value)).toEqual(["omnigent", "codex_cli"]);
+    fireEvent.change(backend, { target: { value: "codex_cli" } });
+    expect((screen.getByLabelText("Step 1 Provider Profile") as HTMLSelectElement).value).toBe("codex-native-only");
+  });
+
+  function configuredModelInventory(fallback: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
+    const configured = configuredCodexInventory(fallback);
+    return async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/v1/provider-profiles/codex-configured/model-tiers:preview") {
+        const request = JSON.parse(String(init?.body || "{}")) as {
+          steps: Array<{ id: string; modelTier?: number; model?: string | null; effort?: string | null }>;
+        };
+        return { ok: true, json: async () => ({ items: request.steps.map((step) => ({
+          stepId: step.id,
+          model: "model" in step ? step.model || "runtime-model" : step.modelTier === 1 ? "root-model" : "default-model",
+          effort: "effort" in step ? step.effort || "runtime-effort" : step.modelTier === 1 ? "medium" : "high",
+          modelSource: "task_override",
+          effortSource: "task_override",
+        })) }) } as Response;
+      }
+      if (String(input).split("?")[0] === "/api/v1/provider-profiles") {
+        const response = await configured(input, init);
+        const profiles = await response.json();
+        return { ok: true, json: async () => profiles.map((profile: object) => ({
+          ...profile,
+          model_tiers: [
+            { model: "root-model", effort: "medium" },
+            { model: "default-model", effort: "high" },
+          ],
+          default_model_tier: 2,
+        })) } as Response;
+      }
+      return configured(input, init);
+    };
+  }
+
+  it.each([
+    ["Model", "step-model", { model: "step-model", effort: "medium" }],
+    ["Effort", "high", { model: "root-model", effort: "high" }],
+    ["Effort", "", { model: "root-model", effort: null }],
+    ["Tier", "2", { modelTier: 2 }],
+  ])("retains Direct for an independent step %s value %s", async (field, value, authored) => {
+    fetchSpy.mockImplementation(configuredModelInventory(fetchSpy.getMockImplementation()!));
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    await waitFor(() => expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe("codex-configured"));
+    await waitFor(() => expect((screen.getByLabelText("Workflow Tier") as HTMLSelectElement).value).toBe("2"));
+    fireEvent.change(screen.getByLabelText("Workflow Tier"), { target: { value: "1" } });
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    fireEvent.change(await screen.findByLabelText(`Step 1 ${field}`), { target: { value } });
+    const backend = await screen.findByLabelText("Backend") as HTMLSelectElement;
+    expect(Array.from(backend.options).map((option) => option.value)).toEqual(["omnigent", "codex_cli"]);
+    expect(Array.from((screen.getByLabelText("Step 1 Backend") as HTMLSelectElement).options).map((option) => option.value)).toContain("codex_cli");
+    expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe("codex-configured");
+    fireEvent.change(backend, { target: { value: "codex_cli" } });
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Keep distinct step model authority." } });
+    await waitFor(() => expect((screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const call = fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions");
+    const task = JSON.parse(String(call?.[1]?.body)).payload.task;
+    expect(task.runtime).toMatchObject({ mode: "codex_cli", profileId: "codex-configured", modelTier: 1 });
+    expect(task.steps[0].runtime).toMatchObject(authored);
+    expect(task.runtime).not.toHaveProperty("executionConfiguration");
+    expect(task.runtime).not.toHaveProperty("agentProfile");
+  });
+
+  it.each(["Tier", "Model", "Effort"])("keeps a Profile-default equivalent step %s on the shared route", async (field) => {
+    fetchSpy.mockImplementation(configuredModelInventory(fetchSpy.getMockImplementation()!));
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    await waitFor(() => expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe("codex-configured"));
+    await waitFor(() => expect((screen.getByLabelText("Workflow Tier") as HTMLSelectElement).value).toBe("2"));
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    const value = { Tier: "2", Model: "default-model", Effort: "high" }[field];
+    const other = { Tier: "1", Model: "another-model", Effort: "low" }[field];
+    fireEvent.change(screen.getByLabelText(`Step 1 ${field}`), { target: { value: other } });
+    fireEvent.change(screen.getByLabelText(`Step 1 ${field}`), { target: { value } });
+    expect(screen.queryByLabelText("Backend")).toBeNull();
+    expect(screen.queryByLabelText("Step 1 Backend")).toBeNull();
+    expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe("codex-configured");
+    fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Keep equivalent Profile defaults shared." } });
+    await waitFor(() => expect((screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
+    const call = fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions");
+    const task = JSON.parse(String(call?.[1]?.body)).payload.task;
+    expect(task.runtime).toMatchObject({ mode: "omnigent", profileId: "codex-configured" });
+    expect(task.steps[0].runtime).toMatchObject(field === "Tier" ? { modelTier: 2 } : { model: "default-model", effort: "high" });
+  });
+
+  it("keeps an explicitly equal step model pair on the shared route", async () => {
+    fetchSpy.mockImplementation(configuredModelInventory(fetchSpy.getMockImplementation()!));
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    await waitFor(() => expect((screen.getByLabelText("Workflow Tier") as HTMLSelectElement).value).toBe("2"));
+    fireEvent.change(screen.getByLabelText("Workflow Model"), { target: { value: "root-model" } });
+    fireEvent.change(screen.getByLabelText("Workflow Effort"), { target: { value: "medium" } });
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    fireEvent.change(screen.getByLabelText("Step 1 Effort"), { target: { value: "high" } });
+    fireEvent.change(screen.getByLabelText("Step 1 Effort"), { target: { value: "medium" } });
+    await waitFor(() => expect(screen.queryByLabelText("Backend")).toBeNull());
+    expect(screen.queryByLabelText("Step 1 Backend")).toBeNull();
+    expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe("codex-configured");
+    expect((screen.getByLabelText("Workflow Model") as HTMLInputElement).value).toBe("root-model");
+    expect((screen.getByLabelText("Step 1 Effort") as HTMLInputElement).value).toBe("medium");
+  });
 
   it("offers step Backends from the selected step Profile, not other accounts of its Harness", async () => {
     fetchSpy.mockImplementation(mixedRouteInventory(fetchSpy.getMockImplementation()!));
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     fireEvent.click(screen.getByLabelText("Advanced mode"));
-    await waitFor(() => expect((screen.getByLabelText("Backend") as HTMLSelectElement).value).toBe("omnigent"));
+    await waitFor(() => expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe("codex-configured"));
+    await waitFor(() => expect(screen.queryByLabelText("Backend")).toBeNull());
     fireEvent.change(await screen.findByLabelText("Step 1 Provider Profile"), { target: { value: "codex-native-only" } });
     const stepBackend = await screen.findByLabelText("Step 1 Backend") as HTMLSelectElement;
     expect(Array.from(stepBackend.options).map((option) => option.textContent)).toEqual([
@@ -21354,8 +21471,8 @@ describe("Task Create runtime switch layout stability", () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     fireEvent.click(screen.getByLabelText("Advanced mode"));
     fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Run this step on Claude." } });
-    await waitFor(() => expect((screen.getByLabelText("Backend") as HTMLSelectElement).value).toBe("omnigent"));
-    fireEvent.change(screen.getByLabelText("Backend"), { target: { value: "codex_cli" } });
+    await waitFor(() => expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe("codex-configured"));
+    await waitFor(() => expect(screen.queryByLabelText("Backend")).toBeNull());
     fireEvent.change(await screen.findByLabelText("Step 1 Provider Profile"), { target: { value: "claude-native-only" } });
     const stepBackend = await screen.findByLabelText("Step 1 Backend") as HTMLSelectElement;
     expect(Array.from(stepBackend.options).map((option) => option.value)).toEqual(["", "claude_code"]);
@@ -21402,8 +21519,8 @@ describe("Task Create runtime switch layout stability", () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     fireEvent.click(screen.getByLabelText("Advanced mode"));
     fireEvent.change(await screen.findByLabelText("Instructions"), { target: { value: "Inherit the workflow selection." } });
-    await waitFor(() => expect((screen.getByLabelText("Backend") as HTMLSelectElement).value).toBe("omnigent"));
-    fireEvent.change(screen.getByLabelText("Backend"), { target: { value: "codex_cli" } });
+    await waitFor(() => expect((screen.getByLabelText("Provider Profile") as HTMLSelectElement).value).toBe("codex-configured"));
+    await waitFor(() => expect(screen.queryByLabelText("Backend")).toBeNull());
     const stepProfile = await screen.findByLabelText("Step 1 Provider Profile") as HTMLSelectElement;
     expect(stepProfile.value).toBe("");
     expect(within(stepProfile).getByRole("group", { name: "Codex CLI" })).toBeTruthy();
@@ -21411,7 +21528,7 @@ describe("Task Create runtime switch layout stability", () => {
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith("/api/executions", expect.objectContaining({ method: "POST" })));
     const request = JSON.parse(String(fetchSpy.mock.calls.find(([url]) => String(url) === "/api/executions")?.[1]?.body));
     expect(request.payload.task.steps?.[0]?.runtime).toBeUndefined();
-    expect(request.payload.task.runtime).toMatchObject({ mode: "codex_cli", profileId: "codex-configured" });
+    expect(request.payload.task.runtime).toMatchObject({ mode: "omnigent", profileId: "codex-configured" });
   });
 
   it("surfaces authoritative capability admission errors from the API", async () => {
@@ -21431,7 +21548,7 @@ describe("Task Create runtime switch layout stability", () => {
     expect(navigateTo).not.toHaveBeenCalled();
   });
 
-  it("preserves an explicit Backend override after Profile inventory refetch", async () => {
+  it("preserves a direct-only Profile route after inventory refetch", async () => {
     const fallback = fetchSpy.getMockImplementation()!;
     let inventoryVersion = 0;
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -21439,7 +21556,6 @@ describe("Task Create runtime switch layout stability", () => {
         inventoryVersion += 1;
         return Promise.resolve({ ok: true, json: async () => [
           { profile_id: "runtime-profile", account_label: `Profile ${inventoryVersion}`, runtime_id: "codex_cli", is_default: true,
-            execution_selection: { profileId: "team-codex" },
           },
         ] } as Response);
       }
@@ -21449,13 +21565,13 @@ describe("Task Create runtime switch layout stability", () => {
     const profile = await screen.findByLabelText("Provider Profile") as HTMLSelectElement;
     await waitFor(() => expect(profile.value).toBe("runtime-profile"));
     fireEvent.click(screen.getByLabelText("Advanced mode"));
-    fireEvent.change(screen.getByLabelText("Backend"), { target: { value: "codex_cli" } });
     await act(async () => {
       await queryClient.invalidateQueries({ queryKey: ["workflow-start", "provider-profiles"] });
     });
     expect(inventoryVersion).toBe(2);
     expect(profile.value).toBe("runtime-profile");
-    expect((screen.getByLabelText("Backend") as HTMLSelectElement).value).toBe("codex_cli");
+    expect(screen.queryByLabelText("Backend")).toBeNull();
+    expect(document.querySelector("[data-backend-summary]")?.textContent).toContain("Direct Codex");
   });
 
   it("keeps a Profile configuration error blocking instead of silently selecting its native runtime", async () => {

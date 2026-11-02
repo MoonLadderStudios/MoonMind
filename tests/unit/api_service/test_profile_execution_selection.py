@@ -763,3 +763,221 @@ def test_v2_configuration_uses_profile_credential_materializer(
     api_profile.credential_source = "oauth_volume"
     api_profile.runtime_materialization_mode = "oauth_home"
     assert not configuration_accepts_profile(document, api_profile)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code"])
+async def test_authored_compatible_runtime_uses_selected_profile_shared_route(
+    monkeypatch, runtime
+):
+    from unittest.mock import AsyncMock
+
+    from api_service.api.routers.executions import _profile_route_runtime
+
+    selected = provider(runtime_id=runtime)
+    candidate = configuration()
+    candidate[1].document["providerRequirements"]["runtimeId"] = runtime
+    monkeypatch.setattr(
+        "api_service.services.profile_execution_selection.load_execution_configurations",
+        AsyncMock(return_value=[candidate]),
+    )
+    route = await _profile_route_runtime(
+        session=object(),
+        user=None,
+        provider_profile=selected,
+        authored_runtime=runtime,
+    )
+    assert route == "omnigent"
+
+
+@pytest.mark.asyncio
+async def test_authored_harness_cannot_translate_through_a_foreign_profile(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from api_service.api.routers.executions import _profile_route_runtime
+
+    monkeypatch.setattr(
+        "api_service.services.profile_execution_selection.load_execution_configurations",
+        AsyncMock(return_value=[]),
+    )
+    with pytest.raises(HTTPException) as error:
+        await _profile_route_runtime(
+            session=object(),
+            user=None,
+            provider_profile=provider(runtime_id="claude_code"),
+            authored_runtime="codex_cli",
+        )
+    assert error.value.status_code == 409
+    assert error.value.detail["code"] == "provider_profile_runtime_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_explicit_native_choice_survives_a_stopped_shared_harness(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from api_service.api.routers.executions import _profile_route_runtime
+
+    selected = provider(runtime_id="codex_cli")
+    candidate = configuration()
+    candidate[1].document["providerRequirements"]["runtimeId"] = selected.runtime_id
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "false")
+    monkeypatch.setattr(
+        "api_service.services.profile_execution_selection.load_execution_configurations",
+        AsyncMock(return_value=[candidate]),
+    )
+    assert (
+        await _profile_route_runtime(
+            session=object(),
+            user=None,
+            provider_profile=selected,
+            authored_runtime="codex_cli",
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "step_runtime",
+    [
+        {"mode": "claude_code"},
+        {"providerProfileRef": "another-account"},
+        {"profileSelector": {"tagsAll": ["pool"]}},
+    ],
+)
+async def test_native_translation_preserves_independent_step_authority(
+    monkeypatch, step_runtime
+):
+    from unittest.mock import AsyncMock
+
+    from api_service.api.routers.executions import _profile_route_runtime
+
+    selected = provider(runtime_id="codex_cli")
+    candidate = configuration()
+    candidate[1].document["providerRequirements"]["runtimeId"] = selected.runtime_id
+    monkeypatch.setattr(
+        "api_service.services.profile_execution_selection.load_execution_configurations",
+        AsyncMock(return_value=[candidate]),
+    )
+    assert (
+        await _profile_route_runtime(
+            session=object(),
+            user=None,
+            provider_profile=selected,
+            authored_runtime="codex_cli",
+            task_payload={
+                "steps": [
+                    {
+                        "instructions": "Preserve this selection.",
+                        "runtime": step_runtime,
+                    }
+                ]
+            },
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_step_translation_cannot_reuse_another_accounts_workflow_plan(
+    monkeypatch,
+):
+    from unittest.mock import AsyncMock
+
+    from api_service.api.routers import executions
+
+    child = provider(profile_id="child-account", runtime_id="codex_cli")
+    session = Row(get=AsyncMock(return_value=child))
+    monkeypatch.setattr(
+        executions, "_profile_route_runtime", AsyncMock(return_value="omnigent")
+    )
+    monkeypatch.setattr(
+        executions,
+        "_resolve_runtime_model_effort",
+        lambda **_kwargs: ("same-model", "task_override", None, None),
+    )
+    steps = [{"runtime": {"mode": "codex_cli", "providerProfileRef": child.profile_id}}]
+    await executions._resolve_step_runtime_selections(
+        steps=steps,
+        task_runtime={},
+        task_target_runtime="omnigent",
+        task_profile_id="parent-account",
+        session=session,
+    )
+    assert steps[0]["runtime"]["mode"] == "codex_cli"
+    assert steps[0]["runtime"]["providerProfileRef"] == child.profile_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("authored", [True, False])
+@pytest.mark.parametrize(
+    "step_selection,equivalent",
+    [
+        ({}, True),
+        ({"model": "root-model", "effort": "high"}, True),
+        ({"model": "other-model"}, False),
+        ({"effort": "low"}, False),
+        ({"model": None, "effort": None}, False),
+        ({"modelTier": 1}, True),
+        ({"modelTier": 2}, False),
+    ],
+)
+async def test_native_translation_preserves_step_model_selection(
+    monkeypatch, authored, step_selection, equivalent
+):
+    from unittest.mock import AsyncMock
+
+    from api_service.api.routers.executions import _profile_route_runtime
+
+    selected = provider(
+        runtime_id="codex_cli",
+        default_model="root-model",
+        default_effort="high",
+        default_model_tier=1,
+        model_tiers=[
+            {"model": "root-model", "effort": "high"},
+            {"model": "other-model", "effort": "low"},
+        ],
+    )
+    candidate = configuration()
+    candidate[1].document["providerRequirements"]["runtimeId"] = selected.runtime_id
+    monkeypatch.setattr(
+        "api_service.services.profile_execution_selection.load_execution_configurations",
+        AsyncMock(return_value=[candidate]),
+    )
+    task = {
+        "runtime": {"model": "root-model", "effort": "high"},
+        "steps": [{"instructions": "Keep this selection.", "runtime": step_selection}],
+    }
+    route = await _profile_route_runtime(
+        session=object(),
+        user=None,
+        provider_profile=selected,
+        authored_runtime="codex_cli" if authored else None,
+        task_payload=task,
+    )
+    assert route == ("omnigent" if equivalent else (None if authored else "codex_cli"))
+    assert task["steps"][0]["runtime"] == step_selection
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "preset", [{"goal": "Expand this goal."}, {"taskTemplate": {"slug": "preset"}}]
+)
+async def test_unauthored_preset_keeps_its_profile_route_preview(monkeypatch, preset):
+    from unittest.mock import AsyncMock
+
+    from api_service.api.routers.executions import _profile_route_runtime
+
+    selected = provider(runtime_id="codex_cli")
+    monkeypatch.setattr(
+        "api_service.services.profile_execution_selection.profile_route_runtime",
+        AsyncMock(return_value="omnigent"),
+    )
+    assert await _profile_route_runtime(
+        session=object(),
+        user=None,
+        provider_profile=selected,
+        authored_runtime=None,
+        task_payload=preset,
+    ) == "omnigent"
