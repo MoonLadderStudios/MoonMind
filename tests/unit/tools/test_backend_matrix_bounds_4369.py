@@ -402,7 +402,8 @@ def test_stack_dump_precedes_timeout_under_xdist(tmp_path: Path) -> None:
 def _reliability_deadline_options() -> tuple[str, str]:
     run = _workflow_steps()["Run hermetic reliability shard"]["run"]
     invocation = re.search(
-        r'timeout ([^\n]*?)"\$\{step_budget\}s" python -m pytest', run
+        r'timeout ([^\n]*?)"\$\{step_budget\}s" python tools/ci/write_backend_matrix_summary.py run --expected-python 3.12 --',
+        run,
     )
     assert (
         invocation is not None

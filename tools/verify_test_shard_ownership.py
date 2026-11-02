@@ -21,6 +21,10 @@ Reliability coverage has two layers (MoonLadderStudios/MoonMind#4366):
 from __future__ import annotations
 
 import re
+import argparse
+import ast
+import json
+import os
 import shlex
 import subprocess
 import sys
@@ -42,6 +46,7 @@ from tools.ci.refresh_reliability_durations import (
     durations_pytest_args,
 )
 from tools.ci.run_credential_free_host_recovery import TEST_FILE, TEST_NAME
+from tools.select_test_suites import AUDITED_HERMETIC_TEST_PATHS
 
 PROVIDER_MARKERS = {"provider_verification", "requires_credentials"}
 EXTERNAL_RESOURCE_MARKERS = PROVIDER_MARKERS | {"requires_gpu", "requires_deployment"}
@@ -92,7 +97,9 @@ def hermetic_phase_nodes(script_path: Path) -> frozenset[str]:
     """Include exact pytest phases run on either side of a storage restart."""
     nodes: set[str] = set()
     for line in script_path.read_text().splitlines():
-        if line.lstrip().startswith('"pytest '):
+        if line.lstrip().startswith(
+            ('"pytest ', '"python tools/ci/write_backend_matrix_summary.py run -- ')
+        ):
             nodes.update(re.findall(r"tests/integration/[^\s\"']+\.py::[^\s\"']+", line))
     return frozenset(nodes)
 
@@ -244,6 +251,42 @@ def verify(nodes: list[CollectedNode]) -> list[str]:
     return errors
 
 
+def verify_audited_test_domains(
+    nodes: list[CollectedNode], *, repo_root: Path = REPO_ROOT
+) -> list[str]:
+    """Shadow the narrow test-only map against real collection and consumers."""
+    domain_modules = {
+        path.removesuffix(".py").replace("/", ".")
+        for path in AUDITED_HERMETIC_TEST_PATHS
+    }
+    affected = set(AUDITED_HERMETIC_TEST_PATHS)
+    for path in {node.path for node in nodes}:
+        tree = ast.parse((repo_root / path).read_text())
+        references = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                references.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                references.add(node.module)
+                references.update(
+                    node.module + "." + alias.name for alias in node.names
+                )
+        if any(
+            ref == module or ref.startswith(module + ".")
+            for ref in references
+            for module in domain_modules
+        ):
+            affected.add(path)
+    errors = []
+    for path in sorted(affected):
+        eligible = [node for node in nodes if node.path == path and _eligible(node)]
+        if not eligible or any(owners(node) != {"integration-ci"} for node in eligible):
+            errors.append(
+                f"{path}: audited test-only domain has a missing or different consumer owner; broaden selection before reuse"
+            )
+    return errors
+
+
 def collect_group_node_ids(group: int, *, durations_args: list[str]) -> set[str]:
     """Collect one pytest-split group through the actual plugin CLI.
 
@@ -345,6 +388,10 @@ def verify_physical_reliability_partitions(
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--slow-paths", type=Path)
+    args = parser.parse_args()
     collector = _Collector()
     result = pytest.main(
         [
@@ -361,6 +408,7 @@ def main() -> int:
         return 2
 
     errors = verify(collector.nodes)
+    errors.extend(verify_audited_test_domains(collector.nodes))
     if errors:
         print("Backend test shard ownership verification failed:")
         for error in errors:
@@ -375,6 +423,44 @@ def main() -> int:
         return 1
 
     eligible_count = sum(_eligible(node) for node in collector.nodes)
+    if args.manifest:
+        args.manifest.parent.mkdir(parents=True, exist_ok=True)
+        args.manifest.write_text(
+            json.dumps(
+                {
+                    "schema": "moonmind.test-ownership/v1",
+                    "revision": os.environ.get("MOONMIND_CI_REVISION", ""),
+                    "runId": os.environ.get("GITHUB_RUN_ID", ""),
+                    "attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+                    "nodes": [
+                        {
+                            "nodeid": node.nodeid,
+                            "path": node.path,
+                            "owners": sorted(owners(node)),
+                            "eligible": _eligible(node),
+                            "markers": sorted(node.markers),
+                        }
+                        for node in collector.nodes
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+    if args.slow_paths:
+        args.slow_paths.parent.mkdir(parents=True, exist_ok=True)
+        args.slow_paths.write_text(
+            "\n".join(
+                sorted(
+                    {
+                        node.path
+                        for node in collector.nodes
+                        if "unit-slow" in owners(node)
+                    }
+                )
+            )
+            + "\n"
+        )
     print(f"Verified exactly one CI owner for {eligible_count} provider-free nodes.")
     if skipped:
         print("Physical reliability partition check skipped (pytest-split unavailable).")

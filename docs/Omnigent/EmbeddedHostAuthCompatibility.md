@@ -1,186 +1,47 @@
-# Embedded host authentication compatibility (retired transport)
+# Retained embedded transport history
 
 **Document Class:** Canonical declarative
 
-> **Retirement notice:** the experimental
-> embedded host/runner transport does not admit new work. Session creation
-> and host registration through it are rejected with
-> `omnigent_embedded_transport_retired` and an actionable proxy alternative
-> (`upstream_omnigent_server_proxy`); the rejection never substitutes proxy
-> mode silently. Existing sessions retain their recorded bridge mode,
-> endpoint, and cleanup owner until drained, and retained rows keep decoding
-> their recorded `hostProtocolMode` for historical reads and evidence. Proxy
-> mode is the supported topology. The live drain disposition (active embedded
-> sessions and host leases with blocker names, no identities or credentials)
-> is reported by `GET /embedded-transport-drain`; transport removal stays
-> gated on that probe reporting drained. A create retry that reuses an
-> admitted idempotency key reattaches only a non-terminal embedded row, which
-> the probe counts, so a drained report also rules out a retry re-dispatching
-> a runner. The remainder of this document is the
-> historical reference for those retained sessions and their evidence — it is
-> not an offer of new embedded capacity. The native Workflow Chat `embedded=1`
-> presentation option is unrelated and stays supported.
+The experimental `embedded_omnigent_compatible_server` host transport has been
+removed. New work uses `upstream_omnigent_server_proxy`, whose stock Omnigent
+Server owns host and runner authentication and tunnels. The unrelated Workflow
+Chat `embedded=1` presentation option remains supported.
 
-**Compatibility declaration:** `omnigent.server.v1` with embedded runner
-authentication profile `omnigent.runner_tunnel.983c93c6`. The source revision is
-recorded by `PINNED_OMNIGENT_COMMIT` and the native UI network contract fixture.
+## Recorded URLs and configuration
 
-This is an Omnigent-compatible adapter boundary, not a MoonMind host protocol.
-Only an unchanged stock host speaking the declared profiles may connect.
-Unknown protocol or authentication profiles fail closed.
+Enabling the removed transport fails configuration validation and names the
+proxy alternative. Disabled historical configuration and recorded
+`hostProtocolMode` values remain decodable; they cannot select a launcher or
+create a host, credential consumer or session.
 
-MoonMind embedded compatibility mode delegates runner authentication to the
-checked-in Omnigent submodule. The source boundary tests verify that the
-declared profile's verifier entrypoints remain available.
+The old host registration, heartbeat, event-ingest and host-auth management URLs
+return `410 Gone` with `omnigent_embedded_transport_retired` and the supported
+proxy alternative. Old host and runner tunnel handshakes close with `4404` and
+the same diagnostic. A retained create key cannot reattach or redispatch a runner.
+No request is redirected to the current proxy using an old session identity.
 
-The authoritative transport is the upstream websocket runner tunnel at
-`/v1/runners/{runner_id}/tunnel`. A stock runner supplies exactly one
-`X-Omnigent-Runner-Tunnel-Token` handshake header and the non-browser origin
-`omnigent://internal`. The server verifier is
-`omnigent.server.routes.runner_tunnel._expected_runner_id_from_headers`; the
-verified identity is produced by `omnigent.runner.identity.token_bound_runner_id`.
-MoonMind invokes these pinned entrypoints through `OmnigentHostAuthAdapter` and
-fails preflight when they cannot be imported.
+## Historical reads
 
-## Implemented surface and lifecycle
+Shared session, first-message, event, idempotency and artifact records are
+retained. The admitted operator can read bound session metadata without a live
+transport. Event streams read the committed journal with durable sequence
+cursors, retention-gap reporting and a final drain confirmation before terminal
+closure. Workflow Chat serves captured terminal transcripts, metadata and its
+scoped catalog through the existing binding authorization and identity
+virtualization. Authorized diagnostic-only captures keep metadata and catalog
+reads available; transcript reads report unavailable evidence. Missing, denied
+or corrupt captures remain errors, without falling back to the current proxy.
 
-The embedded adapter implements stock-host registration and heartbeat at
-`POST /v1/hosts/register` and `POST /v1/hosts/{host_id}/heartbeat`, the host
-tunnel at `WS /v1/hosts/{host_id}/tunnel`, and the runner tunnel at
-`WS /v1/runners/{runner_id}/tunnel`. Its session boundary implements
-`POST /v1/sessions`, `GET /v1/sessions/{session_id}`,
-`POST /v1/sessions/{session_id}/attach`,
-`DELETE /v1/sessions/{session_id}`,
-`POST /v1/sessions/{session_id}/events`,
-`GET /v1/sessions/{session_id}/stream`, and the configured resource routes for
-changes, files, diffs, session files, and child sessions. Supported controls
-are stop, interrupt, elicitation resolution, and terminal harvest through
-those declared session routes.
+Live runner resources and mutations are unavailable after transport removal.
+Previously captured resource projections and artifacts remain with the existing
+artifact authorization and download owners. Profile credentials, stored
+host-auth metadata, host-lease records and migrations are not deleted by removal
+of the executable authentication adapter.
 
-Registration does not create authority. The profile/host coordinator must
-first assign an active host lease. Registration binds the verified token
-identity, host ID, Provider Profile and OAuth generation, host-auth profile and
-generation, endpoint mode, capability inventory, and lease expiry. Heartbeats
-refresh that exact lease. Disconnect marks it unavailable; rotation expiry or
-revocation drains it; cleanup and reconciliation release the durable binding.
-A host cannot claim another profile, lease, runner, or session.
+## Drain diagnostics
 
-The adapter preserves raw upstream event evidence for diagnosis and publishes
-normalized MoonMind projections separately. First-message state is durable and
-idempotent. Stream reconnect uses the recorded event cursor and epoch. Unknown
-execution-critical events, authority-bearing fields, protocol versions, or
-control semantics fail closed. Optional unknown resource events may be retained
-as diagnostic evidence without granting authority.
-
-Unsupported upstream capabilities include arbitrary host-defined authority,
-unlisted control verbs, alternate authentication mechanisms, browser/user
-credential forwarding, and implicit proxy/embedded substitution. Requests
-receive an explicit unsupported, authentication, stale-generation, or
-conformance-gated error; they are never silently accepted.
-
-## Managed credential lifecycle
-
-Embedded deployments configure a stable host-auth profile ID, a current
-generation, and an `env://` or `db://` SecretRef. Secret bodies are resolved
-only immediately before the HTTP or WebSocket handshake verifier runs. The
-legacy `OMNIGENT_HOST_RUNNER_TOKEN` is retained solely as an explicit
-local/bootstrap fallback and readiness reports that fallback state; it is not
-the managed production contract.
-
-Rotation is an atomic settings change. A new SecretRef and strictly increasing
-generation become current together. One immediately preceding generation may
-remain valid for reconnects until its explicit expiry, with a maximum overlap
-of 15 minutes from `rotatedAt`. New and reconnecting tunnels authenticate
-against the current bounded set, and connected tunnels revalidate that set
-before every accepted frame. Expiry drains a tunnel authenticated with the old
-generation; revocation drains every connected tunnel and rejects every new or
-reconnecting tunnel immediately. Operators reconnect with a newly validated
-generation after rotation or revocation. Invalid
-profile, verifier, SecretRef, or overlap configuration fails readiness without
-replacing the last valid settings, which supplies rollback through the settings
-transaction rather than silent credential fallback.
-
-The verified token-bound identity and selected host-auth generation must match
-an active durable host lease. That lease is revalidated against its exact host
-binding, Provider Profile credential generation, and assigned bridge session
-on each accepted operation. Readiness and errors expose only safe profile,
-generation, pinned-commit, and failure-code metadata.
-
-The binding token is a runner control-plane credential, distinct from Omnigent
-user authentication and MoonMind user/operator authentication. Authorization
-Bearer values, cookies, query/path values, execution-principal headers, and
-workflow payload values are not runner credentials. A successful verification
-returns only a token-derived runner identifier and the profile version; raw
-headers and credential values are not retained in the auth context.
-
-Issuance and storage are owned by MoonMind's host-auth profile settings and
-SecretRef services. Validation is owned by the pinned upstream verifier
-adapter. Rotation, revocation, expiry, denial, and stale-generation use emit
-bounded audit metadata containing profile, generation, outcome code, and pinned
-version only. Secret bodies must never enter Temporal payloads, bridge rows,
-artifacts, checkpoints, workspaces, or logs.
-
-The pinned upstream allow-list rejects missing, empty, duplicate, and unauthorized tokens.
-The token-derived runner identifier prevents one credential from claiming a
-runner bound to another credential. Reconnect with the same generation produces
-the same identity. MoonMind's lifecycle layer additionally revalidates profile
-and generation metadata for connected tunnels so rotation expiry and revocation
-have deterministic drain semantics. Upstream HTTP rejection is 403 before
-websocket acceptance for an invalid binding; MoonMind maps handshake rejection
-to close code 4401, disabled/revoked or stale connected authority to 4403,
-transient verifier/configuration failure to 1013, and accepted-frame protocol
-failure to 4400.
-
-Embedded mode is retired for new work (see the notice above) and must not be
-presented as production ready. It remains observable only so in-flight
-sessions can drain: until all three configured evidence claims (proxy
-conformance, live stock-host smoke, and host-auth conformance) resolve
-independently, pass schema and secret-scan validation, match the active
-MoonMind build/configuration and immutable image identities, and remain
-unexpired, even drain-time continuity stays gated. Proxy mode is the
-production default and supported topology.
-Retired-transport denials are explicit: HTTP routes answer `410 Gone` with code
-`omnigent_embedded_transport_retired`, and WebSocket handshakes close with
-`4404` carrying `omnigent_embedded_transport_retired` plus the
-`upstream_omnigent_server_proxy` alternative as the close reason.
-
-## Launch modes, rollout, and rollback
-
-Static Compose and on-demand Docker are separate support rows. Each must prove
-the same registration, authentication, session, reconnect, resource, terminal,
-and cleanup contract before it can be advertised for embedded mode. An
-unproven row is unavailable with an actionable readiness reason; success in one
-mode does not imply support for the other. No embedded support row is
-advertised anymore: readiness and the support matrix report the proxy-only
-topology.
-
-Selecting embedded mode was explicit and versioned; it is retired for new
-sessions and only retained sessions drain. Missing, stale, revoked, or
-incompatible evidence gates readiness before retained-session continuity work
-starts. Rollback selects `upstream_omnigent_server_proxy` for new sessions only. An in-flight
-session stays with its recorded endpoint and bridge mode, and historical
-records retain their actual compatibility profile and evidence references.
-MoonMind never redirects an in-flight session between modes.
-
-## Evidence, upgrade, and support diagnostics
-
-The credentialed conformance run must use digest-pinned stock server and host
-images, record architecture, upstream commit, protocol/auth profiles, MoonMind
-build and configuration digest, host mode, capability inventory, auth
-generation, per-case outcome, timestamps, and independently resolvable
-secret-scanned artifact references. Semantic fakes and caller-supplied expected
-event lists are test aids, not support evidence.
-
-Every upstream upgrade requires a new conformance pass for every advertised
-host mode and architecture. Promotion pins the new verified identities and
-retains the preceding verified image/profile as the rollback target. Fixture
-coverage for older supported event and auth shapes remains until that support
-row is removed. Unverified upgrades fail readiness with the mismatched identity
-and a proxy/previous-version rollback recommendation.
-
-Readiness, the Workflow Detail projection, host lifecycle diagnostics, the
-support matrix, and release metadata expose the actual bridge mode,
-compatibility and auth profiles, immutable image digests and architecture,
-host-auth generation, evidence freshness/reference status, lifecycle state,
-capability summary, bounded failure reason, and rollback recommendation. These
-surfaces contain no credential bodies.
+`GET /embedded-transport-drain` remains a read-only diagnostic over durable
+active-session, active-lease and pending-cleanup counts. It reports unknown,
+failed or truncated observations explicitly. A zero count does not authorize
+deleting credentials or saved data. Historical transport identifiers remain
+stable for decoding even though the executable retirement-inventory row is gone.

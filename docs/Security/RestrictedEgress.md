@@ -65,8 +65,9 @@ agent can read retrieved CI logs and artifacts inside its sandbox.
 
 The Omnigent-only extra provider destinations come from one deployment-owned
 data file, `docker/sandbox-egress-proxy/omnigent-provider-domains.txt`, shared
-by the backend and the proxy. It lists one exact lowercase public DNS name per
-line; IP literals, wildcards, single-label or reserved-suffix names, ports,
+by the backend and the proxy. The default extra set is empty; optional provider
+destinations require a deployment-owned policy edit. Each line holds one exact
+lowercase public DNS name; IP literals, wildcards, single-label or reserved-suffix names, ports,
 URLs, and whitespace variants are rejected, and each entry is approved only as
 `dnsName` on TCP/443. Adding a future public provider host is an edit to that
 file alone: no Python change and no digest recalculation, because the backend

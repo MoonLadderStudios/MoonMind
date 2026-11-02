@@ -123,6 +123,9 @@ MERGE_AUTOMATION_BOUND_REENTER_WITHOUT_REVIEW_LOOP_PATCH = (
 # Guarded so histories recorded before the loop existed keep replaying their
 # original gate decisions.
 MERGE_AUTOMATION_REVIEW_LOOP_PATCH = "merge-automation-review-loop-v1"
+MERGE_AUTOMATION_FIRST_REVIEW_PROGRESS_PATCH = (
+    "merge-automation-first-review-progress-v1"
+)
 MERGE_AUTOMATION_SELECTED_REVIEW_REQUEST_PATCH_PREFIX = (
     "merge-automation-selected-review-request-v1:"
 )
@@ -1562,6 +1565,10 @@ class MoonMindMergeAutomationWorkflow:
         self._no_progress_cycles = 0
         return True
 
+    @staticmethod
+    def _first_review_progress_enabled() -> bool:
+        return workflow.patched(MERGE_AUTOMATION_FIRST_REVIEW_PROGRESS_PATCH)
+
     async def _write_review_cycle_artifact(self, cycle: Mapping[str, Any]) -> None:
         await self._write_json_artifact(
             name=(
@@ -1657,6 +1664,15 @@ class MoonMindMergeAutomationWorkflow:
 
         config = self._review_loop_config()
         self._input.pull_request.head_sha = head_sha
+        if self._first_review_progress_enabled() and not any(
+            cycle.get("headSha") == head_sha for cycle in self._review_cycles
+        ):
+            # CI handoffs can carry the same head/findings signature as the
+            # first review request. Reaching that request is a new boundary,
+            # not a repeated review of unchanged work. Subsequent requests for
+            # this head still consume the existing no-progress/cycle budgets.
+            self._last_progress_signature = None
+            self._no_progress_cycles = 0
         made_progress = self._register_progress_signature(progress_signature)
         if (
             not made_progress

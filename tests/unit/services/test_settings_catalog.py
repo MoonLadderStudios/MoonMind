@@ -2409,6 +2409,7 @@ async def test_audit_redactor_blocks_embedded_secret_prefixes(settings_session_m
         {"generated_config": {"token": "provider-returned-diagnostic"}},
         {"diagnostics": [{"credential": "provider-sensitive-detail"}]},
     ],
+    ids=["oauth-state", "private-key", "nested-config", "nested-diagnostics"],
 )
 @pytest.mark.asyncio
 async def test_audit_redactor_blocks_documented_sensitive_classes(

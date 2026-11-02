@@ -996,6 +996,12 @@ async def reconcile_local_github_issue_claims(*, state_dir=None):
         except Exception as exc:  # noqa: BLE001 -- one repository cannot starve the sweep
             github_results.append({"repository": repository, "reasonCode": type(exc).__name__})
     state["repositoryCursor"] = (offset + 3) % len(repositories) if repositories else 0
+    from moonmind.workflows.temporal.github_project import reconcile_project_claims
+
+    try:
+        project_results = await reconcile_project_claims(state=state)
+    except Exception as exc:
+        project_results = [{"status": "pending", "reasonCode": "project_sync_unavailable", "summary": f"Project synchronization deferred ({type(exc).__name__})."}]
     _save_json(path, state)
     routine = {
         "owner_or_child_running",
@@ -1009,6 +1015,11 @@ async def reconcile_local_github_issue_claims(*, state_dir=None):
         if not item["released"] and item.get("reasonCode") not in routine
     ]
     failures.extend(
+        {"repository": item.get("repository"), "reasonCode": item.get("reasonCode")}
+        for item in project_results
+        if item.get("status") in {"pending", "suspended"}
+    )
+    failures.extend(
         {"repository": item.get("repository"), "reasonCode": item.get("reasonCode", "github_scan_incomplete")}
         for item in github_results
         if not item.get("ok") or item.get("scan", {}).get("status") == recon.SCAN_UNKNOWN
@@ -1017,6 +1028,7 @@ async def reconcile_local_github_issue_claims(*, state_dir=None):
         "status": "succeeded",
         "localClaims": result,
         "githubRepositories": github_results,
+        "projectItems": project_results,
         "diagnostics": {"actionableFailures": failures},
     }
 

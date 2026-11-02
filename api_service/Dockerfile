@@ -1,8 +1,11 @@
 # syntax=docker/dockerfile:1.4
-FROM ghcr.io/wollomatic/socket-proxy:1.13.2 AS docker-proxy-upstream
+ARG PYTHON_BASE=python:3.15-slim-bookworm
+ARG NODE_BASE=node:26-bookworm
+ARG SOCKET_PROXY_BASE=ghcr.io/wollomatic/socket-proxy:1.13.2
+FROM ${SOCKET_PROXY_BASE} AS docker-proxy-upstream
 
 # A small host-test target shares the exact proxy payload with release images.
-FROM python:3.15-slim-bookworm AS docker-proxy-runtime
+FROM ${PYTHON_BASE} AS docker-proxy-runtime
 WORKDIR /app
 COPY --from=docker-proxy-upstream /socket-proxy /usr/local/bin/moonmind-socket-proxy
 COPY docker/docker-proxy/start.py /app/docker/docker-proxy/start.py
@@ -13,7 +16,7 @@ ENTRYPOINT ["python", "/app/docker/docker-proxy/start.py"]
 # Frontend builder – compiles Tailwind CSS and Vite assets in a Node environment
 # so the slim Python runtime image does not need npm.
 # ---------------------------------------------------------------------------
-FROM node:26-bookworm AS node-runtime
+FROM ${NODE_BASE} AS node-runtime
 
 # Retained Temporal managed launches and their retries still execute these
 # CLIs in the shared API/worker image. Remove this stage only after those
@@ -60,7 +63,7 @@ RUN rm -rf /build/api_service/static/workflow_console/dist \
 
 # Stock native chat UI, built from the same submodule source used by the API.
 # Browser assets are architecture-independent; build once on the builder host.
-FROM --platform=$BUILDPLATFORM node:22-bookworm AS native-ui-builder
+FROM --platform=$BUILDPLATFORM node:26-bookworm AS native-ui-builder
 WORKDIR /build
 COPY omnigent/package.json omnigent/pnpm-workspace.yaml omnigent/pnpm-lock.yaml ./
 COPY omnigent/patches/ ./patches/
@@ -74,7 +77,7 @@ COPY omnigent/web/ ./web/
 RUN pnpm --filter web run build
 
 # ---------------------------------------------------------------------------
-FROM python:3.15-slim-bookworm AS python-requirements
+FROM ${PYTHON_BASE} AS python-requirements
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 WORKDIR /deps
 
@@ -83,13 +86,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         poetry==2.4.1 \
         poetry-plugin-export==1.10.0
 
-COPY pyproject.toml poetry.lock README.md /deps/
+COPY pyproject.toml poetry.lock /deps/
 
-RUN poetry export --only main --format requirements.txt --without-hashes --output /deps/requirements-main.txt \
+RUN touch README.md \
+    && poetry export --only main --format requirements.txt --without-hashes --output /deps/requirements-main.txt \
     && poetry export --only main --extras tests --format requirements.txt --without-hashes --output /deps/requirements-tests.txt
 
 # ---------------------------------------------------------------------------
-FROM python:3.15-slim-bookworm AS runtime-dependencies
+FROM ${PYTHON_BASE} AS runtime-dependencies
 
 # Use bash with pipefail and strict mode in the runtime image as well so
 # future RUN commands that rely on bash-specific behavior do not regress to
@@ -146,12 +150,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --disable-pip-version-check -r /tmp/requirements-main.txt \
     && rm -f /tmp/requirements-main.txt
 
-COPY pyproject.toml /app/pyproject.toml
-COPY poetry.lock /app/poetry.lock
-COPY package.json package-lock.json /app/
-COPY README.md /app/README.md
-COPY LICENSE /app/LICENSE
-COPY NOTICE /app/NOTICE
 COPY --from=docker-proxy-runtime /usr/local/bin/moonmind-socket-proxy /usr/local/bin/moonmind-socket-proxy
 COPY --from=docker-proxy-runtime /app/docker/docker-proxy/start.py /app/docker/docker-proxy/start.py
 COPY --from=docker-proxy-runtime /usr/share/licenses/moonmind-socket-proxy /usr/share/licenses/moonmind-socket-proxy
@@ -189,6 +187,9 @@ RUN if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
     fi && \
     rm -f /tmp/cache_temporal_test_server.py
 
+ARG TEST_RUNTIME_INPUTS
+LABEL io.moonmind.test-runtime.inputs=${TEST_RUNTIME_INPUTS}
+
 FROM runtime-dependencies AS runtime-base
 
 # Install the egress proxy and the retained CLIs' Node runtime before source
@@ -203,6 +204,13 @@ RUN ln -s /opt/moonmind-managed-cli/bin/codex /usr/local/bin/codex \
     && runuser -u app -- env HOME=/home/app \
         PATH="/usr/local/bin:/usr/local/sbin:/usr/bin:/bin" \
         sh -c 'codex --version && claude --version'
+
+COPY pyproject.toml /app/pyproject.toml
+COPY poetry.lock /app/poetry.lock
+COPY package.json package-lock.json /app/
+COPY README.md /app/README.md
+COPY LICENSE /app/LICENSE
+COPY NOTICE /app/NOTICE
 
 # Copy source code AFTER installing locked dependencies so code changes only
 # invalidate the lightweight project install.

@@ -371,7 +371,7 @@ CONCURRENCY_SCENARIO_CATALOG: tuple[ScenarioOwner, ...] = (
     _owner(
         _F.recovery_and_release,
         _L.exact_docker,
-        "tests/integration/omnigent/test_embedded_recovery.py",
+        "tests/integration/omnigent/test_exact_docker_n_way_concurrency.py",
     ),
     # 7. Product and readability.
     _owner(

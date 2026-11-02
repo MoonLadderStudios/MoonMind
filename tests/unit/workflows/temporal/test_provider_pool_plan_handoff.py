@@ -174,7 +174,7 @@ async def test_manager_hands_off_the_existing_grant_only_after_durable_preparati
 
     manager = _manager()
     manager._await_restored_ledger = AsyncMock()
-    manager._get_logger = lambda: Mock()
+    manager._get_logger = Mock
     profile = next(iter(manager._profiles.values()))
     profile.reserve(
         "agent-pool",

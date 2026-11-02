@@ -413,6 +413,22 @@ afterEach(async () => {
 });
 
 describe('routed remediation operator journey', () => {
+  it.each(['', '/steps', '/artifacts'])('opens editable Create from source detail %s without starting a run', async (tab) => {
+    window.history.replaceState({}, '', `/workflows/source-workflow${tab}?source=temporal`);
+    cleanupRender = renderWithClient(<DashboardApp payload={payload} />).unmount;
+    expect(await screen.findByText('Failed source workflow')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Workflow actions' }));
+    const menu = screen.getByRole('menu', { name: 'Workflow actions' });
+    await userEvent.click(await within(menu).findByRole('menuitem', { name: 'Remediate' }));
+
+    expect(await screen.findByText('Remediation Draft')).toBeTruthy();
+    expect(window.location.pathname).toBe('/workflows/new');
+    expect((screen.getByLabelText('Target workflow') as HTMLInputElement).value).toBe('source-workflow');
+    expect((screen.getByLabelText('Pinned run') as HTMLInputElement).value).toBe('source-run');
+    expect(screen.getByLabelText('Editable repair intent')).toBeTruthy();
+    expect(createRequests).toHaveLength(0);
+  });
+
   for (const viewport of [DESKTOP, MOBILE]) {
     it(`recovers authored Create after acknowledgment loss and inspects its lifecycle at ${viewport.width}px`, async () => {
       // Even a positive optional report cannot grant autonomous authority.
