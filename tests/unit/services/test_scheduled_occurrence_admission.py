@@ -25,7 +25,7 @@ from moonmind.workflows.temporal.artifacts import (
 )
 from tests.artifact_access import access_for_test
 from tests.unit.services.test_omnigent_execution_plan_service import (
-    _ArtifactService,
+    _ReadableRepositoryPlanArtifacts as _ArtifactService,
     _compiler_dependency_owner,  # noqa: F401 - pytest fixture import
     _configure_ready_host_image_pair,
     _PlanStore,
@@ -177,7 +177,7 @@ def compiler(monkeypatch, plan_input_delegation):
     return SimpleNamespace(policy_versions=policy_versions)
 
 
-async def _schedule_parameters(artifacts) -> dict:
+async def _schedule_parameters(artifacts, *, provider=None) -> dict:
     """Plan a schedule the way the API did before the release."""
 
     snapshot = _snapshot(
@@ -196,7 +196,7 @@ async def _schedule_parameters(artifacts) -> dict:
         principal="original-task-principal",
         workflow_id="mm-schedule:schedule-1",
         agent_profile_snapshot=snapshot,
-        provider_profile=_provider(),
+        provider_profile=provider or _provider(),
         initial_parameters=parameters,
         authored_request_ref=_TASK_REF,
         authored_request_digest=_TASK_DIGEST,
@@ -261,6 +261,48 @@ async def test_occurrence_binds_the_newly_installed_host_without_schedule_rewrit
     # earlier attempt recorded keeps its images.
     assert parameters == action_input
     assert stored_plan.hostImageRef == _REPO + "7" * 64
+    assert session.commits == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("successor", [False, True], ids=["occurrence", "successor"])
+async def test_profile_edit_refreshes_occurrences_but_preserves_successor_settings(
+    monkeypatch, compiler, successor
+) -> None:
+    _install(monkeypatch, host=_REPO + "7" * 64, server=_SERVER + "6" * 64)
+    artifacts = _ArtifactService()
+    provider = _provider()
+    provider.credential_source = "oauth_volume"
+    provider.env_template = {"PROJECT_RUNTIME_STYLE": "admitted"}
+    parameters, recorded_plan = await _schedule_parameters(artifacts, provider=provider)
+    original_parameters = deepcopy(parameters)
+    provider.env_template = {"PROJECT_RUNTIME_STYLE": "edited"}
+    session = _OccurrenceSession(provider, artifacts=artifacts)
+
+    if successor:
+        admitted = await _successor_admission(monkeypatch, artifacts, parameters, session)
+    else:
+        admitted = await RecurringWorkflowsService(
+            session, artifact_service=artifacts
+        ).admit_occurrence_execution_plan(
+            workflow_id="mm:schedule-1:occurrence-2",
+            initial_parameters=parameters,
+        )
+
+    assert admitted["disposition"] == "admitted"
+    plan = _PlanStore.persisted.payload
+    configuration = plan.providerConfigurationSnapshot
+    saved = json.loads(
+        artifacts.payloads[configuration.artifactRef.removeprefix("artifact:")]
+    )
+    assert saved["primary-model"]["launchEnvironment"] == {
+        "PROJECT_RUNTIME_STYLE": "admitted" if successor else "edited"
+    }
+    assert (configuration == recorded_plan.providerConfigurationSnapshot) is successor
+    assert plan.authority == recorded_plan.authority
+    assert plan.credentialBindings == recorded_plan.credentialBindings
+    assert plan.modelConfig == recorded_plan.modelConfig
+    assert parameters == original_parameters
     assert session.commits == 1
 
 
