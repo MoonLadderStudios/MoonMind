@@ -1505,6 +1505,94 @@ async def test_declared_codex_session_preferences_survive_shared_lifecycle(nativ
     assert document["project_doc_fallback_filenames"] == ["PROJECT.md"]
 
 
+@pytest.mark.parametrize("native_journey", [{
+    "harness": "codex-native-file-config",
+    "sessionSettings": {"developer_instructions": "Use the admitted instructions."},
+}], indirect=True)
+async def test_queued_plan_keeps_its_admitted_provider_configuration(native_journey):
+    from copy import deepcopy
+    from api_service.db.models import ManagedAgentProviderProfile
+
+    async with native_journey.session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, PROFILE)
+        templates = deepcopy(profile.file_templates)
+        templates[0]["content_template"]["developer_instructions"] = "A later edit."
+        profile.file_templates = templates
+        await session.commit()
+
+    await assert_native_turn_saved_and_cleaned(native_journey)
+    document = native_journey.docker.codex_configuration["document"]
+    assert document["developer_instructions"] == "Use the admitted instructions."
+
+
+@pytest.mark.parametrize("native_journey", ["claude-native-env-bundle"], indirect=True)
+async def test_queued_claude_plan_keeps_its_endpoint_and_launch_tuning(native_journey):
+    from api_service.db.models import ManagedAgentProviderProfile
+
+    async with native_journey.session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, PROFILE)
+        profile.env_template = {
+            **profile.env_template,
+            "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
+            "API_TIMEOUT_MS": "1000",
+        }
+        await session.commit()
+
+    await assert_native_turn_saved_and_cleaned(native_journey)
+    assert native_journey.docker.launch_env["API_TIMEOUT_MS"] == "3000000"
+
+
+@pytest.mark.parametrize(
+    "native_journey", ["codex-native-api-key", "claude-native-api-key"], indirect=True
+)
+async def test_implicit_binding_uses_the_selected_profiles_authentication(native_journey):
+    import hashlib
+    from types import SimpleNamespace
+    from api_service.db.models import (
+        ManagedAgentProviderProfile,
+        OmnigentCredentialBindingSetRecord,
+    )
+    from moonmind.omnigent.harness_platform.planning_service import (
+        OmnigentExecutionPlanningService,
+    )
+    from moonmind.omnigent.harness_platform.credential_bindings import create_binding_set
+
+    profile_contract = SimpleNamespace(
+        credentialSlots=[SimpleNamespace(id="primary-model", optional=False)],
+        snapshot_ref=lambda: native_journey.plan.payload.agentProfileSnapshotRef,
+    )
+    planner = OmnigentExecutionPlanningService.__new__(OmnigentExecutionPlanningService)
+    async with native_journey.session_factory() as session:
+        provider = await session.get(ManagedAgentProviderProfile, PROFILE)
+        old_id = "implicit-" + hashlib.sha256(
+            f"{profile_contract.snapshot_ref()}\0{PROFILE}".encode()
+        ).hexdigest()[:24]
+        old = create_binding_set(
+            bindingSetId=old_id, version=1,
+            bindings={"primary-model": {
+                "providerProfileRef": PROFILE,
+                "materializerRef": native_journey.harness.removesuffix("-native") + "-oauth-home@1",
+            }},
+        )
+        old_row = OmnigentCredentialBindingSetRecord(
+            binding_set_id=old.bindingSetId, version=old.version,
+            digest=old.digest, ref=old.ref,
+            canonical_json=old.model_dump(mode="json", by_alias=True),
+        )
+        session.add(old_row)
+        await session.flush()
+        binding = await planner._resolve_binding_set(
+            session,
+            request=native_journey.request,
+            profile=profile_contract,
+            provider_profile=provider,
+            record_type=OmnigentCredentialBindingSetRecord,
+        )
+        assert binding.ref != old.ref
+        assert old_row.canonical_json == old.model_dump(mode="json", by_alias=True)
+    assert binding.bindings["primary-model"].materializerRef == "omnigent-provider-config@1"
+
+
 @pytest.mark.parametrize(
     "native_journey",
     [

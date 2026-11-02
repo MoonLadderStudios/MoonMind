@@ -1348,12 +1348,18 @@ class OmnigentCredentialProvisioningService:
                     handles.append(anticipated)
                     provider_endpoint = None
                     if binding.materializerRef == PROVIDER_CONFIG_MATERIALIZER_REF:
+                        configurations = getattr(plan.payload, "providerConfigurations", None)
+                        admitted = (
+                            {"admitted_endpoint": configurations[slot]}
+                            if configurations is not None else {}
+                        )
                         (
                             secrets,
                             provider_endpoint,
                         ) = await self._secrets.resolve_provider_config(
                             acquired=acquired,
                             allowed_secret_roles=descriptor.requiredSecretRoles,
+                            **admitted,
                         )
                     else:
                         secrets = await self._secrets.resolve(
