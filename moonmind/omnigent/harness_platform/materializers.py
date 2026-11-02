@@ -629,10 +629,6 @@ def _declared_key_launch(
         return "", {}, f"not a {harness_label} Provider Profile"
     if _enum_value(getattr(profile, "credential_source", None)) != "secret_ref":
         return "", {}, "not a SecretRef Provider Profile"
-    if getattr(profile, "file_templates", None) or getattr(
-        profile, "home_path_overrides", None
-    ):
-        return "", {}, "file templates and home path overrides are direct-launch only"
     secret_refs = dict(getattr(profile, "secret_refs", None) or {})
     key_role = ""
     literals: dict[str, str] = {}
@@ -666,6 +662,9 @@ def claude_provider_config_endpoint(
     translation moves a Profile off its direct launch; anything else keeps it
     there with that reason.
     """
+
+    if getattr(profile, "file_templates", None) or getattr(profile, "home_path_overrides", None):
+        return None, "file templates and home path overrides are direct-launch only"
 
     from moonmind.omnigent.host_services.runtime_scripts import (
         PROVIDER_LITERAL_LAUNCH_ENV,
@@ -730,29 +729,37 @@ def codex_provider_config_endpoint(
         or _enum_value(getattr(profile, "credential_source", None)) != "secret_ref"
     ):
         return None, "not a SecretRef Codex Provider Profile"
+    private_preferences = None
     if getattr(profile, "file_templates", None) or getattr(
         profile, "home_path_overrides", None
     ):
         from moonmind.provider_profiles.codex_configuration import (
-            configuration_for_profile,
+            configuration_for_profile, oauth_configuration_for_profile,
         )
 
         configuration, reason = configuration_for_profile(profile)
         if configuration is None:
-            return None, reason
-        base_url = str(configuration["provider"].get("base_url") or "").rstrip("/")
-        if not _omnigent_egress_admits(base_url):
-            return None, "the Omnigent egress profile does not admit the endpoint"
-        return (
-            ProviderConfigEndpoint(
-                family="openai",
-                secretRole=configuration["secretRole"],
-                baseUrl=base_url,
-                defaultModel=configuration["document"].get("model"),
-                codexConfiguration=configuration,
-            ),
-            "",
-        )
+            # Preferences need no second provider declaration. Keep native
+            # model-default suppression until its selected model is explicit.
+            if (getattr(profile, "command_behavior", None) or {}).get("suppress_default_model_flag"):
+                return None, reason
+            private_preferences, _ = oauth_configuration_for_profile(profile)
+            if private_preferences is None:
+                return None, reason
+        else:
+            base_url = str(configuration["provider"].get("base_url") or "").rstrip("/")
+            if not _omnigent_egress_admits(base_url):
+                return None, "the Omnigent egress profile does not admit the endpoint"
+            return (
+                ProviderConfigEndpoint(
+                    family="openai",
+                    secretRole=configuration["secretRole"],
+                    baseUrl=base_url,
+                    defaultModel=configuration["document"].get("model"),
+                    codexConfiguration=configuration,
+                ),
+                "",
+            )
     key_role, literals, reason = _declared_key_launch(
         profile,
         runtime_id="codex_cli",
@@ -766,7 +773,10 @@ def codex_provider_config_endpoint(
     if not _omnigent_egress_admits(base_url):
         return None, "the Omnigent egress profile does not admit the endpoint"
     return (
-        ProviderConfigEndpoint(family="openai", secretRole=key_role, baseUrl=base_url),
+        ProviderConfigEndpoint(
+            family="openai", secretRole=key_role, baseUrl=base_url,
+            codexConfiguration=private_preferences,
+        ),
         "",
     )
 

@@ -1038,6 +1038,7 @@ async def _compile_plan(
     additional_files=None,
     oauth_tuning=None,
     oauth_private_config=False,
+    private_profile_config=False,
     instructions="Generate a report.",
 ):
     # Reuse the durable Skill producer, then expose its immutable body through
@@ -1145,8 +1146,9 @@ async def _compile_plan(
             mapping=get_first_party_oauth_profile(runtime_id, provider_id),
             validated_at=datetime.now(UTC),
         )
-    if oauth_private_config:
-        assert oauth and runtime_id == "codex_cli"
+    if oauth_private_config or private_profile_config:
+        assert runtime_id == "codex_cli"
+        assert oauth or private_profile_config
         profile.home_path_overrides = {"CODEX_HOME": "{{runtime_support_dir}}/codex-home"}
         profile.file_templates = [{
             "path": "{{runtime_support_dir}}/codex-home/config.toml", "format": "toml",
@@ -1329,6 +1331,7 @@ async def native_journey(
                 additional_files=selection.get("additionalFiles"),
                 oauth_tuning=selection.get("oauthTuning"),
                 oauth_private_config=bool(selection.get("oauthPrivateConfiguration")),
+                private_profile_config=bool(selection.get("privateProfileConfiguration")),
                 instructions=instructions,
             )
         # Verify the public HTTP enums survive discovery, alongside the real
@@ -1545,6 +1548,28 @@ async def test_declared_codex_session_preferences_survive_shared_lifecycle(nativ
     assert document["developer_instructions"] == "Preserve completed work and the requested account."
     assert document["history"] == {"persistence": "none", "max_bytes": 1048576}
     assert document["project_doc_fallback_filenames"] == ["PROJECT.md"]
+
+
+@pytest.mark.parametrize("native_journey", [{
+    "harness": "codex-native-api-key", "privateProfileConfiguration": True,
+    "sessionSettings": {"developer_instructions": "Keep the admitted key Profile preferences."},
+    "additionalFiles": [{
+        "path": "{{runtime_support_dir}}/codex-home/AGENTS.md", "format": "text",
+        "merge_strategy": "append", "permissions": "0600", "content_template": "Admitted key Profile file.\n",
+    }],
+}], indirect=True)
+async def test_plain_api_key_private_preferences_use_the_existing_shared_provider(native_journey):
+    journey = native_journey
+    async with journey.session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, PROFILE)
+        profile.file_templates = []
+        profile.home_path_overrides = {}
+        await session.commit()
+    await assert_native_turn_saved_and_cleaned(journey)
+    configuration = journey.docker.codex_configuration
+    assert configuration["privateHomeOnly"] is True
+    assert configuration["document"] == {"developer_instructions": "Keep the admitted key Profile preferences."}
+    assert configuration["additionalFiles"][0]["content_template"] == "Admitted key Profile file.\n"
 
 
 @pytest.mark.parametrize("native_journey", [{

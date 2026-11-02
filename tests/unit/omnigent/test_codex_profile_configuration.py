@@ -68,6 +68,29 @@ def test_custom_codex_configuration_has_an_exact_shared_translation():
     assert configured["document"]["model_reasoning_effort"] == "high"
 
 
+@pytest.mark.parametrize("suppress_model_default", [False, True])
+def test_plain_openai_key_preferences_do_not_require_another_provider_declaration(suppress_model_default):
+    selected = profile(
+        provider_id="openai", runtime_materialization_mode="api_key_env", command_behavior={"suppress_default_model_flag": suppress_model_default},
+        secret_refs={"provider_api_key": "env://OPENAI_API_KEY"},
+        env_template={"OPENAI_API_KEY": {"from_secret_ref": "provider_api_key"}},
+        file_templates=[{
+            "path": "{{runtime_support_dir}}/codex-home/config.toml", "format": "toml",
+            "merge_strategy": "deep_merge", "permissions": "0600",
+            "content_template": {"developer_instructions": "Preserve native authority."},
+        }],
+    )
+    endpoint, reason = codex_provider_config_endpoint(selected)
+    if suppress_model_default:
+        assert endpoint is None
+        return
+    assert endpoint is not None, reason
+    assert endpoint.family == "openai" and endpoint.secretRole == "provider_api_key"
+    assert endpoint.codexConfiguration == {
+        "document": {"developer_instructions": "Preserve native authority."}, "privateHomeOnly": True,
+    }
+
+
 def test_unchanged_managed_minimax_recipe_is_repaired_without_rewriting_the_profile():
     import copy
     from moonmind.provider_profiles.codex_configuration import (
