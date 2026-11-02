@@ -913,6 +913,13 @@ async def finalize_failed_attempt(**kwargs: Any) -> dict[str, Any]:
             claim_receipt.owner, claim_receipt.attempt_id, reason=reason
         )
     result["ownershipEnded"] = ended
+    if getattr(claim_receipt, "project_binding_json", None):
+        from moonmind.workflows.temporal.github_project import sync_claim_project
+        from moonmind.workflows.adapters.github_service import GitHubService
+
+        result["projectSync"] = await sync_claim_project(
+            claim_store, claim_receipt, kwargs.get("service") or GitHubService(),
+        )
     if ended and not result.get("released"):
         result["summary"] = (
             str(result.get("summary") or "").rstrip()

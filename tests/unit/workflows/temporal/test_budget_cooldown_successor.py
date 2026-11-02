@@ -148,6 +148,10 @@ async def test_cooldown_parent_retry_and_worker_replacement_share_budget_and_int
     QUOTA_SEEN = asyncio.Event()
     COOLDOWN_SECONDS = cooldown_seconds
     LAUNCHES.clear()
+    # Successful recovery polls three managed launches at the normal ten-second
+    # interval. Leave room for worker replacement under CI load; the deadline
+    # case keeps its short budget so the 120-second cooldown must still exhaust it.
+    execution_budget_seconds = 80 if expected_attempts > 1 else 40
     enabled = {
         parent_module.RUN_CONDITIONAL_REGISTRY_READ_PATCH,
         parent_module.RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH,
@@ -181,8 +185,8 @@ async def test_cooldown_parent_retry_and_worker_replacement_share_budget_and_int
                             "startingBranch": "main",
                         },
                         "timeoutPolicy": {
-                            "timeout_seconds": 40,
-                            "max_timeout_seconds": 40,
+                            "timeout_seconds": execution_budget_seconds,
+                            "max_timeout_seconds": execution_budget_seconds,
                             "execution_budget_mode": "flat",
                         },
                     },

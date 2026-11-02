@@ -9948,10 +9948,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     );
   };
   const canCreateRemediation = Boolean(execution && isRemediationEligibleTarget(execution));
-  // The remediation mode/authority/action-policy controls only render on the Artifacts
-  // tab, so only expose the Remediate action there. Surfacing it on other tabs would let
-  // the operator submit with default remediation settings without seeing those controls.
-  const remediationActionAvailable = canCreateRemediation && artifactsTabActive;
   const canShowEditWorkflow = Boolean(actions?.canUpdateInputs || actions?.canEditForRerun);
   const editTaskUnavailableReason = canShowEditWorkflow
     ? null
@@ -9993,7 +9989,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
     canShowEditWorkflow,
     editTaskDisabledReason: describeWorkflowActionDisabledReason(editTaskUnavailableReason),
     rerunDisabledReason: describeWorkflowActionDisabledReason(rerunUnavailableReason),
-    canCreateRemediation: remediationActionAvailable,
+    canCreateRemediation,
     handlers: {
       onRename,
       onEditTask: () => {
@@ -11164,7 +11160,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
             />
           ) : null}
 
-          {actionsOn && actions && remediationActionAvailable ? (
+          {actionsOn && actions && canCreateRemediation && artifactsTabActive ? (
             <section className="stack td-actions-region">
               <div className="stack td-remediation-create-preview">
                 <h4>Remediation create preview</h4>

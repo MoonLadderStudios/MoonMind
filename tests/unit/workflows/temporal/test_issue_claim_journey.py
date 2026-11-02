@@ -235,6 +235,73 @@ async def journey(tmp_path, monkeypatch, request):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("automatic", [False, True])
+async def test_project_claim_pins_item_and_phase_across_loader_retry(journey, monkeypatch, automatic):
+    from moonmind.workflows.temporal.github_project import ProjectClient
+
+    state, service, sessions = journey
+    project = {"option": "ready", "discoveries": 0, "mutations": 0, "lookups": 0}
+    options = [{"id": key, "name": name} for key, name in (
+        ("ready", "Ready"), ("progress", "In Progress"), ("review", "In Review"), ("done", "Done"),
+    )]
+
+    async def graphql(_client, query, variables):
+        if "RepositoryProjects" in query:
+            project["lookups"] += 1
+            return {"repository": {
+                "nameWithOwner": "example/repo", "owner": {"id": "owner"},
+                "projectsV2": {"nodes": [{"id": "project", "title": "repo", "url": "https://github.com/orgs/example/projects/3", "closed": False}], "pageInfo": {"hasNextPage": False}},
+            }}
+        if "ProjectQueueMetadata" in query:
+            project["discoveries"] += 1
+            return {"owner": {"projectV2": {
+                "id": "project", "viewerCanUpdate": True,
+                "fields": {"nodes": [{"__typename": "ProjectV2SingleSelectField", "id": "status", "name": "Status", "options": options}], "pageInfo": {"hasNextPage": False}},
+            }}}
+        content = {"__typename": "Issue", "number": 3970, "state": "OPEN", "createdAt": "2026-01-01T00:00:00Z", "repository": {"nameWithOwner": "example/repo"}}
+        node = {"id": "item", "content": content, "isArchived": False, "project": {"id": "project"},
+                "column": {"optionId": project["option"]}, "fieldValues": {
+                    "nodes": [{"optionId": project["option"], "field": {"id": "status"}}], "pageInfo": {"hasNextPage": False},
+                }}
+        if "ProjectQueueItems" in query:
+            return {"node": {"items": {"nodes": [node], "pageInfo": {"hasNextPage": False}}}}
+        if "ProjectItemPhase" in query:
+            return {"node": node}
+        if "UpdateProjectPhase" in query:
+            project.update(option=variables["option"], mutations=project["mutations"] + 1)
+            return {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "item"}}}
+        raise AssertionError(query)
+
+    monkeypatch.setattr(ProjectClient, "graphql", graphql)
+    monkeypatch.setattr(tools, "_local_capacity_deferral", lambda _context: asyncio.sleep(0, result=None))
+    inputs = {"repository": "example/repo", "issueSearch": "", "includeAllAuthors": True,
+              "projectSource": {"url": "" if automatic else "https://github.com/orgs/example/projects/3"}}
+    context = {"execution_owner": "default/project-journey"}
+    first = await tools.load_github_issue_preset_brief(inputs, context, github_service_factory=lambda: service)
+    assert first.status == "COMPLETED", first.outputs
+    assert first.outputs["projectSync"]["status"] == "confirmed"
+    assert project["option"] == "progress"
+    repeated = await tools.load_github_issue_preset_brief(inputs, context, github_service_factory=lambda: service)
+    assert repeated.status == "COMPLETED", repeated.outputs
+    assert project["discoveries"] == 1
+    assert project["lookups"] == int(automatic)
+    assert project["mutations"] == 1
+    assert state["posts"] == 1
+    receipt = await IssueClaimStore(sessions).get(context["execution_owner"])
+    assert receipt.project_binding_json["itemId"] == "item"
+    review = await tools.update_github_issue_status(
+        {"repository": "example/repo", "issueNumber": 3970, "mode": "code_review", "requireVerification": False},
+        {**context, "previousOutputs": {"pullRequestUrl": "https://github.com/example/repo/pull/7", "headSha": "a" * 40, "baseBranch": "main"}},
+        github_service_factory=lambda: service,
+    )
+    assert review.status == "COMPLETED", review.outputs
+    assert review.outputs["projectSync"]["status"] == "confirmed"
+    assert project["option"] == "review"
+    receipt = await IssueClaimStore(sessions).get(context["execution_owner"])
+    assert receipt.project_binding_json["reviewCandidate"]["headSha"] == "a" * 40
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("lost_ack", [False, True])
 async def test_default_claim_restart_then_start_preserves_owner(journey, lost_ack):
     state, service, sessions = journey

@@ -10,6 +10,7 @@ INSTANCE_PRESET_CAPABILITY_READINESS_PATCH = "run-instance-preset-readiness-v1"
 SAVED_PRESET_CAPABILITY_READINESS_PATCH = "run-saved-preset-capability-readiness-v1"
 
 GITHUB_ISSUE_SEARCH_SCOPE_REFRESH_PATCH = "run-github-issue-search-scope-refresh-v1"
+GITHUB_ISSUE_SEARCH_MAPPED_SCOPE_PATCH = "run-github-issue-search-mapped-scope-v1"
 
 GITHUB_ISSUE_SEARCH_PRESET_SLUG = "github-issue-search-and-implement"
 GITHUB_ISSUE_SEARCH_SCOPE_INPUT = "include_all_authors"
@@ -109,39 +110,55 @@ def legacy_saved_preset_capability_check(
 
 
 def _applied_search_templates_missing_scope(
-    node: Mapping[str, Any],
+    node: Mapping[str, Any], *, include_mapped_scope: bool
 ) -> list[dict[str, str]]:
     """Collect search-preset applications without an explicit scope choice.
 
     Inspects one ``appliedStepTemplates`` entry (or nested composition child)
-    for the GitHub issue-search preset. Entries whose ``inputs`` predate the
-    ``include_all_authors`` setting carry no scope choice: launching a new
-    execution from them would silently reinterpret the saved all-author
+    for the GitHub issue-search preset. Wrapper ``inputs`` and child
+    ``inputMapping`` retain the scope choice. Without it, launching a new
+    execution would silently reinterpret the saved all-author
     behavior as the new self-only default, so they require a refresh.
     """
     missing: list[dict[str, str]] = []
     slug = str(node.get("slug") or "").strip()
     scope = str(node.get("scope") or "global").strip() or "global"
     if slug == GITHUB_ISSUE_SEARCH_PRESET_SLUG:
-        inputs = node.get("inputs")
-        if not isinstance(inputs, Mapping) or (
-            GITHUB_ISSUE_SEARCH_SCOPE_INPUT not in inputs
-            and "includeAllAuthors" not in inputs
+        input_bags = [node.get("inputs")]
+        if include_mapped_scope:
+            input_bags.append(node.get("inputMapping"))
+        if not any(
+            isinstance(inputs, Mapping)
+            and (
+                GITHUB_ISSUE_SEARCH_SCOPE_INPUT in inputs
+                or "includeAllAuthors" in inputs
+            )
+            for inputs in input_bags
         ):
             missing.append({"slug": slug, "scope": scope})
     composition = node.get("composition")
     if isinstance(composition, Mapping):
         for child in composition.get("includes") or []:
             if isinstance(child, Mapping):
-                missing.extend(_applied_search_templates_missing_scope(child))
+                missing.extend(
+                    _applied_search_templates_missing_scope(
+                        child, include_mapped_scope=include_mapped_scope
+                    )
+                )
     for child in node.get("includes") or []:
         if isinstance(child, Mapping):
-            missing.extend(_applied_search_templates_missing_scope(child))
+            missing.extend(
+                _applied_search_templates_missing_scope(
+                    child, include_mapped_scope=include_mapped_scope
+                )
+            )
     return missing
 
 
 def github_issue_search_scope_refresh_needed(
     parameters: Mapping[str, Any],
+    *,
+    include_mapped_scope: bool = True,
 ) -> dict[str, Any] | None:
     """Return a refresh-required payload for pre-change frozen search schedules.
 
@@ -151,6 +168,9 @@ def github_issue_search_scope_refresh_needed(
     refreshed schedules, other presets, and continued/historical runs are
     unaffected — historical versioning is enforced by the caller's patch and
     continuation guards, not here).
+
+    ``include_mapped_scope=False`` retains the original decision for workflow
+    histories recorded before mapped choices were recognized.
     """
     task = parameters.get("workflow")
     if not isinstance(task, Mapping):
@@ -172,7 +192,11 @@ def github_issue_search_scope_refresh_needed(
         # composition discards the explicit choice, so inspect the wrapper
         # itself: the helper checks the wrapper slug/inputs and recurses
         # into composition/includes children.
-        missing.extend(_applied_search_templates_missing_scope(template))
+        missing.extend(
+            _applied_search_templates_missing_scope(
+                template, include_mapped_scope=include_mapped_scope
+            )
+        )
     if not missing:
         return None
     system = parameters.get("system")

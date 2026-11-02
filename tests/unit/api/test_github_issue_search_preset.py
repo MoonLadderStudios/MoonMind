@@ -27,11 +27,13 @@ from moonmind.workflows.temporal.activity_runtime import (
 from moonmind.workflows.temporal.story_output_tools import (
     register_story_output_tool_handlers,
 )
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from moonmind.workflows.temporal.github_issue_search import (
+    PrerequisiteLookup,
+    check_prerequisites,
     declared_completion_dependencies,
     declared_prerequisites,
 )
+from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from tests.support.issue_claims import issue_claim_store  # noqa: F401
 
 REPOSITORY = "MoonLadderStudios/MoonMind"
@@ -1678,6 +1680,108 @@ def _pull_request_reference(number, *, state="closed", **overrides):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("declaration", ["Depends on", "Completion depends on"])
+async def test_merged_pr_dependency_is_not_a_child_issue(activity_boundary, declaration):
+    candidate = issue(body=f"Parent epic: #20. {declaration} #10.")
+    activity_boundary.pages[:] = [[candidate]]
+    activity_boundary.detail.update(candidate)
+    dependency = _pull_request_reference(10)
+    dependency["pull_request"]["merged_at"] = "2026-10-01T12:00:00Z"
+    activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/10"] = dependency
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief",
+        {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False},
+    )
+    assert result.status == "COMPLETED", result.outputs
+    assert result.outputs["issue"]["number"] == candidate["number"]
+    preflight = await activity_boundary.execute(
+        "github.check_issue_blockers",
+        {"repository": REPOSITORY, "issueNumber": candidate["number"]},
+    )
+    assert preflight.outputs["decision"] == "continue"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["open", "closed"])
+async def test_unmerged_pr_dependency_keeps_candidate_blocked(activity_boundary, state):
+    blocked = issue(body="Depends on #10.")
+    available = issue(4026)
+    activity_boundary.pages[:] = [[blocked, available]]
+    activity_boundary.detail.update(available)
+    dependency = _pull_request_reference(10, state=state)
+    dependency["pull_request"]["merged_at"] = None
+    activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/10"] = dependency
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief",
+        {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False},
+    )
+    assert result.status == "COMPLETED", result.outputs
+    assert result.outputs["issue"]["number"] == available["number"]
+    assert (
+        result.outputs["searchEvidence"]["rejectionCounts"]["blocked_prerequisite"] == 1
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "merged_at", [None, "", True, "not-a-date", "2026-10-01T12:00:00"]
+)
+async def test_completion_pr_dependency_needs_authenticated_merge_evidence(
+    activity_boundary, merged_at
+):
+    candidate = issue(body="Completion depends on #10.")
+    dependency = _pull_request_reference(10)
+    dependency["pull_request"]["merged_at"] = merged_at
+    activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/10"] = dependency
+    lookup = PrerequisiteLookup()
+    assert (
+        await check_prerequisites(
+            issue=candidate,
+            repository=REPOSITORY,
+            github_service=GitHubService(),
+            lookup=lookup,
+            include_completion=True,
+        )
+        == []
+    )
+    assert lookup.completion_dependencies == [
+        {
+            "source": "prerequisite",
+            "repository": REPOSITORY,
+            "number": 10,
+            "scope": "completion",
+            "statusKnown": True,
+            "done": False,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_merged_pr_dependency_cannot_become_a_tracked_child(activity_boundary):
+    dependency = _pull_request_reference(10)
+    dependency["pull_request"]["merged_at"] = "2026-10-01T12:00:00Z"
+    activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/10"] = dependency
+    lookup = PrerequisiteLookup()
+    assert (
+        await check_prerequisites(
+            issue=issue(body="Depends on #10."),
+            repository=REPOSITORY,
+            github_service=GitHubService(),
+            lookup=lookup,
+        )
+        == []
+    )
+    with pytest.raises(ValueError, match="pull request, not a child issue"):
+        await check_prerequisites(
+            issue=issue(body="Depends on #10.\n## Child issues\n- [x] #10\n"),
+            repository=REPOSITORY,
+            github_service=GitHubService(),
+            lookup=lookup,
+        )
+    assert lookup.requests == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("state", ["open", "closed"])
 async def test_epic_baseline_pull_requests_are_contextual(activity_boundary, state):
     """Epic baseline prose must not turn landed PR evidence into child issues."""
@@ -1706,12 +1810,10 @@ async def test_epic_baseline_pull_requests_are_contextual(activity_boundary, sta
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("state", ["open", "closed"])
-@pytest.mark.parametrize(
-    "body", ["Depends on #4795.", "## Child issues\n- [x] #4795\n"]
-)
-async def test_explicit_prerequisites_cannot_be_pull_requests(
-    activity_boundary, body, state
+async def test_tracked_children_cannot_be_pull_requests(
+    activity_boundary, state
 ):
+    body = "## Child issues\n- [x] #4795\n"
     activity_boundary.pages[:] = [[issue(body=body, labels=[{"name": "epic"}])]]
     activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/4795"] = (
         _pull_request_reference(4795, state=state)
