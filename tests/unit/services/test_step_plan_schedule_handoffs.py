@@ -12,6 +12,53 @@ from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "identity",
+    [{}, {"id": "selected"}, {"stepId": "selected"}, {"stepRef": "selected"}, {"ref": "selected"}],
+)
+@pytest.mark.parametrize("task_key", ["workflow", "task"])
+async def test_schedule_preserves_canonical_step_identity_and_selection(
+    identity, task_key
+):
+    from api_service.api.routers.executions import (
+        _build_recurring_target,
+        _resolve_recurring_runtime_metadata,
+    )
+
+    request = {
+        "workflowType": "MoonMind.UserWorkflow",
+        "initialParameters": {
+            task_key: {
+                "runtime": {"mode": "codex_cli", "model": "root-model"},
+                "steps": [
+                    {"instructions": "Generate a report."},
+                    {
+                        **identity,
+                        "instructions": "Review it.",
+                        "runtime": {
+                            "model": "step-model",
+                            "effort": None,
+                            "parameters": {"native_option": "retain"},
+                        },
+                    },
+                ],
+            },
+        },
+    }
+    original = deepcopy(request)
+    metadata = await _resolve_recurring_runtime_metadata(request, session=None)
+    target = _build_recurring_target(request, runtime_metadata=metadata)
+    steps = target["initialParameters"][task_key]["steps"]
+    assert [step["id"] for step in steps] == [
+        "step-1", "selected" if identity else "step-2"
+    ]
+    assert steps[1]["runtime"]["model"] == "step-model"
+    assert steps[1]["runtime"]["effort"] is None
+    assert steps[1]["runtime"]["parameters"] == {"native_option": "retain"}
+    assert request == original
+
+
 def test_replacement_without_specializations_clears_old_workflow_handoffs(monkeypatch):
     binding = OmnigentExecutionPlanBinding(
         planRef="omnigent-execution-plan:sha256:" + "a" * 64,

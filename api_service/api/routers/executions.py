@@ -13195,14 +13195,17 @@ async def _resolve_recurring_runtime_selection(
             )
         canonical_target_runtime = normalized_rt
 
-    # Normalize aliases through the same owner as ordinary submission before
-    # checking the direct cutoff, and retain those exact steps in the target.
+    # Use ordinary submission's identity owner before compiling step plans,
+    # retaining every authored runtime option for its supported route.
     normalized_steps = None
     if isinstance(steps_payload, Sequence) and not isinstance(
         steps_payload, (str, bytes)
     ):
         normalized_steps = [
-            dict(step) if isinstance(step, Mapping) else step for step in steps_payload
+            {**step, "id": _task_step_id_from_payload(step, index)}
+            if isinstance(step, Mapping)
+            else step
+            for index, step in enumerate(steps_payload)
         ]
         await _resolve_step_runtime_selections(
             steps=normalized_steps,
