@@ -1,14 +1,18 @@
 """Shared workspace preparation preserves the authored local branch and retry edits."""
 
 import os
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from moonmind.omnigent.host_services import workspace as module
 from tests.unit.omnigent.test_workspace_materializer import (
-    _CONTROLLED_GID, _CONTROLLED_UID, _SelectedRepositoryCredentials, _request, _workspace_id,
+    _CONTROLLED_GID,
+    _CONTROLLED_UID,
+    _request,
+    _SelectedRepositoryCredentials,
+    _workspace_id,
 )
 
 
@@ -42,19 +46,29 @@ def test_new_workspace_selects_or_creates_the_authored_branch(tmp_path, target):
     original = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"])
     result = _prepare(repo, target, initialize=True)
     assert result.returncode == 0, result.stderr
-    assert subprocess.check_output(["git", "-C", str(repo), "symbolic-ref", "--short", "HEAD"], text=True).strip() == target
-    assert subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"]) == original
+    current_branch = subprocess.check_output(
+        ["git", "-C", str(repo), "symbolic-ref", "--short", "HEAD"], text=True
+    ).strip()
+    prepared_head = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"]
+    )
+    assert current_branch == target
+    assert prepared_head == original
     assert (repo / "README.md").read_text() == "admitted input\n"
 
 
 def test_redelivery_preserves_a_later_agent_branch_and_uncommitted_work(tmp_path):
     repo = _repository(tmp_path)
-    assert _prepare(repo, "feature/selected", initialize=True).returncode == 0
+    initial = _prepare(repo, "feature/selected", initialize=True)
+    assert initial.returncode == 0, initial.stderr
     subprocess.run(["git", "-C", str(repo), "switch", "-qc", "agent/candidate"], check=True)
     (repo / "README.md").write_text("preserve candidate edits\n")
     result = _prepare(repo, "feature/selected", initialize=False)
     assert result.returncode == 0, result.stderr
-    assert subprocess.check_output(["git", "-C", str(repo), "symbolic-ref", "--short", "HEAD"], text=True).strip() == "agent/candidate"
+    current_branch = subprocess.check_output(
+        ["git", "-C", str(repo), "symbolic-ref", "--short", "HEAD"], text=True
+    ).strip()
+    assert current_branch == "agent/candidate"
     assert (repo / "README.md").read_text() == "preserve candidate edits\n"
 
 
@@ -64,7 +78,10 @@ def test_unproven_existing_workspace_is_preserved_instead_of_switching(tmp_path,
     (repo / "README.md").write_text("preserve uncertain edits\n")
     result = _prepare(repo, target, initialize=False)
     assert result.returncode != 0
-    assert subprocess.check_output(["git", "-C", str(repo), "symbolic-ref", "--short", "HEAD"], text=True).strip() == "main"
+    current_branch = subprocess.check_output(
+        ["git", "-C", str(repo), "symbolic-ref", "--short", "HEAD"], text=True
+    ).strip()
+    assert current_branch == "main"
     assert (repo / "README.md").read_text() == "preserve uncertain edits\n"
 
 
