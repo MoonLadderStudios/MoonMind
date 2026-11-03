@@ -359,6 +359,9 @@ async def prepare_selected_pool_plan(
             effort=selected.parameters.get("effort"),
             targetRuntime="omnigent",
         )
+        # A selected step can override the root's authored model choice.
+        if resolution.get("modelSource"):
+            parameters["modelSource"] = resolution["modelSource"]
         if request.workspace_spec:
             parameters["workspaceSpec"] = deepcopy(request.workspace_spec)
         admitted = await compile_and_persist_execution_plan(

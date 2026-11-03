@@ -37,6 +37,7 @@ __all__ = [
     "ResolvedModelEffort",
     "apply_profile_model_alias",
     "coerce_effort_for_model",
+    "codex_uses_native_default",
     "provider_profile_version",
     "resolve_effective_model",
     "resolve_model_effort",
@@ -52,6 +53,20 @@ def apply_profile_model_alias(profile: Any | None, model: str | None) -> str | N
     """
     overrides = getattr(profile, "model_overrides", None) or {}
     return overrides.get(model, model) if model else model
+
+
+def codex_uses_native_default(
+    *, suppress_default_model_flag: bool, requested_model: str | None,
+    resolved_model: str | None, profile_default_model: str | None,
+    model_source: str | None = None,
+) -> bool:
+    """Use the same default omission rule for direct and shared Codex launches."""
+    if not suppress_default_model_flag or model_source == "requested_tier":
+        return False
+    if not str(requested_model or "").strip():
+        return True
+    default = str(profile_default_model or "").strip()
+    return bool(default and resolved_model == default)
 
 
 # legacy_run contract — the model_source value "task_override" is persisted in

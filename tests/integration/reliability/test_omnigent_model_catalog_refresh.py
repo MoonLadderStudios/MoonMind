@@ -467,7 +467,7 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
             endpointRef="endpoint@1",
             harnessId=harness_id,
             harnessImplementationRef="harness@1",
-            modelConfig=SimpleNamespace(qualifiedId=selected_model),
+            modelConfig=SimpleNamespace(qualifiedId=selected_model, normalizedOptions={}),
         ),
     )
     unused = SimpleNamespace()

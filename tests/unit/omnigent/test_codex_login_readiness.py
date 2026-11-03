@@ -1,5 +1,6 @@
 """Persist proven Codex login expiry without invalidating a new enrollment."""
 
+import json
 import os
 import subprocess
 import sys
@@ -140,6 +141,64 @@ def test_account_read_probe_reports_unavailable_when_cli_cannot_start(tmp_path):
     )
     assert completed.stdout == "unavailable\n"
     assert completed.stderr == ""
+
+
+@pytest.mark.parametrize("legacy,launch_default,large_config", [
+    (False, None, False), (True, None, False),
+    (False, "hidden-provider-default", False), (True, "hidden-provider-default", False),
+    (False, None, True),
+], ids=["config", "legacy-config", "provider-default", "provider-default-legacy", "large-config"])
+def test_configuration_probe_reads_only_the_native_default_and_closes_its_process(
+    tmp_path, legacy, launch_default, large_config
+):
+    package = tmp_path / "packages"
+    for name in ("omnigent", "omnigent/harnesses", "omnigent/harnesses/codex_native"):
+        directory = package / name
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "__init__.py").write_text("")
+    (package / "omnigent/harnesses/codex_native/app_server.py").write_text(
+        "from types import SimpleNamespace\n"
+        "def resolve_native_codex_launch(*, model):\n"
+        "    assert model is None\n"
+        f"    return SimpleNamespace(model={launch_default!r}, profile=None, config_overrides=['model_provider=\"selected\"'])\n"
+    )
+    cli = tmp_path / "codex"
+    pid = tmp_path / "probe.pid"
+    requests = tmp_path / "requests.jsonl"
+    cli.write_text(
+        f"#!{sys.executable}\nimport json, os, pathlib, sys\n"
+        f"assert {launch_default!r} is None, 'resolved provider default needs no CLI'\n"
+        "assert sys.argv[1:] == ['-c', 'model_provider=\"selected\"', 'app-server']\n"
+        f"assert os.environ['CODEX_HOME'] == {str(tmp_path)!r}\n"
+        f"pathlib.Path({str(pid)!r}).write_text(str(os.getpid()))\n"
+        "for line in sys.stdin:\n"
+        "    request = json.loads(line)\n"
+        "    if request['method'] == 'initialized': continue\n"
+        f"    with open({str(requests)!r}, 'a') as log: log.write(json.dumps(request) + '\\n')\n"
+        "    if request['method'] == 'initialize': result = {'result': {}}\n"
+        f"    elif {legacy!r} and request['params']:\n"
+        "        result = {'error': {'code': -32602, 'message': 'unknown field includeLayers'}}\n"
+        "    else:\n"
+        "        assert request['method'] == 'config/read'\n"
+        f"        result = {{'result': {{'config': {{'model': 'hidden-configured-default', 'secret': {'private-sentinel' * (10000 if large_config else 1)!r}}}}}}}\n"
+        "    print(json.dumps({'id': request['id'], **result}), flush=True)\n"
+        "    sys.stderr.write('private-sentinel\\n')\n"
+    )
+    cli.chmod(0o755)
+    completed = subprocess.run(
+        [sys.executable, "-c", codex_login.CODEX_CONFIGURATION_READ_PROBE, str(tmp_path)],
+        env={**os.environ, "PATH": f"{tmp_path}:{os.environ.get('PATH', '')}", "PYTHONPATH": str(package)},
+        capture_output=True, text=True, timeout=10, check=True,
+    )
+    assert json.loads(completed.stdout) == {"status": "ready", "model": launch_default or "hidden-configured-default"}
+    assert "private-sentinel" not in completed.stdout and completed.stderr == ""
+    if launch_default is None:
+        methods = [json.loads(line)["method"] for line in requests.read_text().splitlines()]
+        assert methods == ["initialize", "config/read", *(["config/read"] if legacy else [])]
+        with pytest.raises(ProcessLookupError):
+            os.kill(int(pid.read_text()), 0)
+    else:
+        assert not pid.exists() and not requests.exists()
 
 
 @pytest_asyncio.fixture
