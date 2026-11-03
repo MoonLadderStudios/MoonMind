@@ -64,7 +64,9 @@ def _bind_generic(
             hostClassRef="host-class-1",
             launchPolicyRef="launch-1",
             capturePolicy={},
-            modelConfig=SimpleNamespace(qualifiedId="model-1", effort="high"),
+            modelConfig=SimpleNamespace(
+                qualifiedId="model-1", effort="high", normalizedOptions={}
+            ),
         ),
     )
     binding = SimpleNamespace(

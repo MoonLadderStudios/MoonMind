@@ -11,6 +11,7 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformFailure,
 )
 from moonmind.omnigent.host_services.attestation import confirm_exact_host_model
+from moonmind.omnigent.host_services.upstream_probes import read_codex_native_default
 
 # Shape reported by a live claude-native host's model-options tunnel for a
 # subscription (OAuth) login: picker aliases and bare Anthropic ids, no
@@ -36,6 +37,46 @@ class ServedProbeBackend:
     async def run(self, argv, **_kwargs):
         self.calls.append(list(argv))
         return self.code, f"{self.answer}\n", self.stderr
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("defaults,expected", [
+    ([{"id": "enrolled-default", "isDefault": True}], True),
+    ([{"id": "enrolled-default"}], False),
+    ([{"id": "enrolled-default", "isDefault": True}, {"id": "second-default", "isDefault": True}], False),
+    ([{"id": "", "isDefault": True}], False),
+])
+async def test_native_codex_default_must_be_advertised_unambiguously(defaults, expected):
+    backend = ServedProbeBackend()
+    available, confirmed = await confirm_exact_host_model(
+        backend=backend, container_name="selected-credential-host", harness_id="codex-native",
+        model_options={"models": defaults}, selected_model="suppressed-profile-default",
+        codex_native_default=True,
+    )
+    assert confirmed is expected
+    if expected:
+        assert available == ["enrolled-default"]
+    assert backend.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response,expected_code,transient", [
+    ({"status": "unsupported"}, HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH, False),
+    ({"status": "unavailable", "private": "private-sentinel"}, HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE, True),
+    ("private-sentinel", HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE, True),
+    ({"status": "ready", "model": "hidden\nprivate-sentinel"}, HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE, True),
+])
+async def test_native_default_read_failure_keeps_its_typed_cause_without_private_output(
+    response, expected_code, transient
+):
+    backend = ServedProbeBackend(json.dumps(response) if isinstance(response, dict) else response)
+    with pytest.raises(HarnessPlatformError) as rejected:
+        await read_codex_native_default(backend=backend, container_name="selected-credential-host")
+    assert rejected.value.code == expected_code
+    assert rejected.value.transient is transient
+    assert "private-sentinel" not in str(rejected.value)
+    assert len(backend.calls) == 1
+    assert backend.calls[0][:3] == ["docker", "exec", "selected-credential-host"]
 
 
 @pytest.mark.asyncio

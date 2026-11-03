@@ -118,13 +118,13 @@ def test_available_oauth_context_uses_the_shared_template_owner(runtime, schema,
 
 @pytest.mark.parametrize("schema", ["v1", "v2"])
 @pytest.mark.parametrize("suppress_model", [False, True])
-def test_oauth_native_model_default_suppression_is_not_silently_dropped(
+def test_oauth_native_model_default_suppression_has_shared_delivery(
     schema, suppress_model,
 ):
     profile, configuration = profile_and_configuration("codex_cli", schema)
     profile.command_behavior = {"suppress_default_model_flag": suppress_model}
-    assert configuration_accepts_profile(configuration[1].document, profile) is not suppress_model
-    assert profile_has_native_inventory_route(profile, [configuration]) is suppress_model
+    assert configuration_accepts_profile(configuration[1].document, profile)
+    assert not profile_has_native_inventory_route(profile, [configuration])
 
 
 def private_codex_profile(

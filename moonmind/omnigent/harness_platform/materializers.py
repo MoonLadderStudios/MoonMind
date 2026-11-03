@@ -292,6 +292,23 @@ _CODEX_KEY_ENV = frozenset({"OPENAI_API_KEY"})
 _CODEX_CARRIED_LITERAL_ENV = frozenset({"OPENAI_BASE_URL"})
 
 
+class CodexNativeDefaultSelection(BaseModel):
+    """The Profile default whose explicit CLI flag the operator suppresses."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    profileDefaultModel: str | None = None
+
+
+def _codex_native_default_selection(profile):
+    if str(getattr(profile, "runtime_id", "")) == "codex_cli" and (
+        getattr(profile, "command_behavior", None) or {}
+    ).get("suppress_default_model_flag"):
+        return CodexNativeDefaultSelection(
+            profileDefaultModel=str(getattr(profile, "default_model", None) or "").strip() or None,
+        )
+    return None
+
+
 class ProviderConfigEndpoint(BaseModel):
     """Secret-free endpoint an API-key Provider Profile declares.
 
@@ -309,6 +326,9 @@ class ProviderConfigEndpoint(BaseModel):
     secretRole: str = Field(alias="secretRole")
     baseUrl: str = Field(alias="baseUrl")
     defaultModel: str | None = Field(None, alias="defaultModel")
+    codexNativeDefault: CodexNativeDefaultSelection | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
     modelPins: dict[str, str] = Field(default_factory=dict, alias="modelPins")
     codexConfiguration: dict[str, Any] | None = Field(
         None,
@@ -337,6 +357,9 @@ class ProviderLaunchEnvironment(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     launchEnvironment: dict[str, str] = Field(default_factory=dict)
+    codexNativeDefault: CodexNativeDefaultSelection | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
     environmentTemplates: dict[str, str] | None = Field(
         default=None, exclude_if=lambda value: value is None,
     )
@@ -396,6 +419,7 @@ def _oauth_launch_environment(profile, *, configuration=None):
         launchEnvironment={key: value for key, value in values.items() if key not in templates},
         environmentTemplates=templates or None,
         codexConfiguration=configuration,
+        codexNativeDefault=_codex_native_default_selection(profile),
     )
 
 
@@ -410,6 +434,9 @@ class ProviderConfigurationSlot(BaseModel):
     providerProfileRef: str
     materializerRef: Literal["omnigent-provider-config@1", "claude-oauth-home@1", "codex-oauth-home@1"]
     endpoint: ProviderConfigEndpoint | None
+    codexNativeDefault: CodexNativeDefaultSelection | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
     launchEnvironment: dict[str, str] = Field(
         default_factory=dict, exclude_if=lambda value: not value,
     )
@@ -427,11 +454,13 @@ class ProviderConfigurationSlot(BaseModel):
                 raise ValueError("OAuth configuration cannot replace its credential owner")
             if self.codexConfiguration is not None and self.materializerRef != "codex-oauth-home@1":
                 raise ValueError("Codex preferences require their enrolled Codex home")
+            if self.codexNativeDefault is not None and self.materializerRef != "codex-oauth-home@1":
+                raise ValueError("Codex model-default selection requires its Codex materializer")
             ProviderLaunchEnvironment(
                 launchEnvironment=self.launchEnvironment, codexConfiguration=self.codexConfiguration,
                 environmentTemplates=self.environmentTemplates,
             )
-        elif self.launchEnvironment or self.codexConfiguration is not None or self.environmentTemplates is not None:
+        elif self.launchEnvironment or self.codexConfiguration is not None or self.environmentTemplates is not None or self.codexNativeDefault is not None:
             raise ValueError("provider-config tuning belongs to its endpoint")
         return self
 
@@ -442,6 +471,9 @@ def provider_configuration_snapshot_bytes(bindings, configurations) -> bytes:
             providerProfileRef=bindings[slot].providerProfileRef,
             materializerRef=bindings[slot].materializerRef,
             endpoint=endpoint if not isinstance(endpoint, ProviderLaunchEnvironment) else None,
+            codexNativeDefault=(
+                endpoint.codexNativeDefault if isinstance(endpoint, ProviderLaunchEnvironment) else None
+            ),
             launchEnvironment=(
                 endpoint.launchEnvironment
                 if isinstance(endpoint, ProviderLaunchEnvironment) else {}
@@ -493,6 +525,7 @@ def load_provider_configuration_snapshot(content, snapshot, bindings):
             ProviderLaunchEnvironment(
                 launchEnvironment=saved.launchEnvironment, codexConfiguration=saved.codexConfiguration,
                 environmentTemplates=saved.environmentTemplates,
+                codexNativeDefault=saved.codexNativeDefault,
             )
             if saved.materializerRef in {"claude-oauth-home@1", "codex-oauth-home@1"} else saved.endpoint
         )
@@ -515,12 +548,6 @@ def untranslated_oauth_launch_options(profile: Any) -> str | None:
     ):
         return None
     fields = []
-    if str(profile.runtime_id) == "codex_cli" and (
-        getattr(profile, "command_behavior", None) or {}
-    ).get("suppress_default_model_flag"):
-        # The native command deliberately delegates model selection to the
-        # enrolled home. A compiled shared plan must not substitute its default.
-        fields.append("command_behavior.suppress_default_model_flag")
     private_configuration = None
     if getattr(profile, "file_templates", None):
         if str(profile.runtime_id) == "codex_cli":
@@ -585,7 +612,7 @@ def snapshot_provider_configuration(
             f"API-key Provider Profile cannot run on Omnigent: {reason}",
             code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
         )
-    return endpoint
+    return endpoint.model_copy(update={"codexNativeDefault": _codex_native_default_selection(profile)})
 
 
 def _omnigent_egress_admits(url: str) -> bool:
@@ -751,10 +778,8 @@ def codex_provider_config_endpoint(
 
         configuration, reason = configuration_for_profile(profile)
         if configuration is None:
-            # Preferences need no second provider declaration. Keep native
-            # model-default suppression until its selected model is explicit.
-            if (getattr(profile, "command_behavior", None) or {}).get("suppress_default_model_flag"):
-                return None, reason
+            # Preferences need no second provider declaration. Model-default
+            # policy is captured separately with this account's configuration.
             private_preferences, _ = oauth_configuration_for_profile(profile)
             if private_preferences is None:
                 return None, reason
