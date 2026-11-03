@@ -181,7 +181,7 @@ async def test_recurring_gate_refs_reach_readable_first_message_paths(
                     launchPolicyRef="launch-1",
                     capturePolicy={},
                     modelConfig=SimpleNamespace(
-                        qualifiedId="same-model", effort="xhigh"
+                        qualifiedId="same-model", effort="xhigh", normalizedOptions={}
                     ),
                 ),
             )
@@ -723,7 +723,9 @@ async def _materialize_receipts(journey, request):
                 hostClassRef="host",
                 launchPolicyRef="launch",
                 capturePolicy={},
-                modelConfig=SimpleNamespace(qualifiedId="controlled", effort="high"),
+                modelConfig=SimpleNamespace(
+                    qualifiedId="controlled", effort="high", normalizedOptions={}
+                ),
             ),
         ),
         {

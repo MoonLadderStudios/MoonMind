@@ -8,6 +8,7 @@ import pytest
 
 from moonmind.omnigent.harness_platform.materializers import (
     codex_provider_config_endpoint,
+    snapshot_provider_configuration,
 )
 from tests.helpers.provider_egress import minimax_egress  # noqa: F401
 
@@ -109,14 +110,19 @@ def test_plain_openai_key_preferences_do_not_require_another_provider_declaratio
         }],
     )
     endpoint, reason = codex_provider_config_endpoint(selected)
-    if suppress_model_default:
-        assert endpoint is None
-        return
     assert endpoint is not None, reason
     assert endpoint.family == "openai" and endpoint.secretRole == "provider_api_key"
     assert endpoint.codexConfiguration == {
         "document": {"developer_instructions": "Preserve native authority."}, "privateHomeOnly": True,
     }
+    expected = endpoint.model_dump(mode="json")
+    if suppress_model_default:
+        expected["codexNativeDefault"] = {"profileDefaultModel": selected.default_model}
+    frozen = snapshot_provider_configuration(selected)
+    assert frozen.model_dump(mode="json") == expected
+    selected.command_behavior = {"suppress_default_model_flag": False}
+    selected.default_model = "later-profile-default"
+    assert frozen.model_dump(mode="json") == expected
 
 
 def test_unchanged_managed_minimax_recipe_is_repaired_without_rewriting_the_profile():

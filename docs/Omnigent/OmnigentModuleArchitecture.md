@@ -300,11 +300,12 @@ model-resolution evidence without another account choice or capacity unit. Later
 Profile edits cannot change that evidence; ordinary explicit metadata keeps its
 existing precedence over tier defaults. Codex same-epoch successors carry the selected
 account, durable context and verified saved workspace through the parent,
-including Continue-As-New. Restoring a verified saved workspace replaces its
-inherited scratch source; replay preserves older recorded requests. Old parents
-without this handoff keep native dispatch. After a drained shared turn reports
-provider cooldown, new parents restart the logical step through its existing retry
-owner and remaining budget. The parent verifies and adopts the child's scoped
+including Continue-As-New. Restoring a verified saved workspace on a continuation
+or parent-owned retry replaces its inherited scratch source; replay preserves
+older recorded requests. Old parents without this handoff keep native dispatch.
+After a drained shared turn reports provider cooldown, new parents restart the
+logical step through its existing retry owner and remaining budget. The parent
+verifies and adopts the child's scoped
 canonical save after worker cleanup; it does not recapture the deleted tree or
 rebind the delivered runtime journal. Cancellation starts no successor. Failed save
 adoption stops automatic restart and retains its checkpoint reference in recovery
@@ -360,8 +361,8 @@ visible. Environment templates referencing those files bind to that private HOME
 at native launch; generic support paths and recorded literals retain their meaning.
 Credential, hook, cache and history paths cannot be replaced. Native
 model/provider/tool authority and enrollment remain intact. Protected settings,
-native model-default suppression, uncarried tool/auth configuration and other
-HOME choices retain their adapter until an equivalent handoff exists.
+uncarried tool/auth configuration and other HOME choices retain their adapter
+until an equivalent handoff exists.
 Recorded plans retain their original materializer identity.
 Profile-bound execution and its OAuth host launcher admit no new plans;
 they retain queued starts, retries and cleanup under their recorded authority. Supported
@@ -382,8 +383,15 @@ developer instructions, project-instruction discovery and history preferences re
 its private session config for OAuth and API-key Profiles; native Codex validates
 and normalizes these values. API-key Codex Profiles can carry preferences
 without declaring another provider and add nonsecret files within their private
-HOME, including global instructions. Their declared key and endpoint stay selected;
-unresolved native model-default suppression retains its route. The same
+HOME, including global instructions. Their declared key and endpoint stay selected.
+Codex model-default suppression is frozen with the selected Profile: omitted
+models and an explicitly repeated Profile default delegate to the native harness,
+while different explicit models and selected tiers keep their pins. The exact
+credential-bound host must advertise one native default or report a configured default
+through its public native launch/CLI read. Hidden configured models keep their
+meaning; missing or ambiguous defaults remain failures.
+The admitted comparison model and the observed native default remain distinct
+in launch evidence. The same
 renderer serves direct and packaged launches; the native wrapper writes only into
 its private home, retains frozen settings and reuses a completed projection on
 process restart. An interrupted append stops visibly until step recovery provisions

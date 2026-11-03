@@ -798,6 +798,7 @@ RUN_WORKFLOW_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH = (
 )
 RUN_SHARED_RUNTIME_CONTEXT_PATCH = "run-shared-native-context-continuation-v1"
 RUN_SHARED_STEP_RECOVERY_PATCH = "run-shared-step-recovery-v1"
+RUN_SHARED_STEP_CHECKPOINT_SOURCE_PATCH = "run-shared-step-checkpoint-source-v1"
 RUN_SHARED_STEP_CONFIGURATION_PATCH = "run-shared-step-recorded-configuration-v1"
 RUN_DISPATCH_POOL_CONTEXT_PATCH = "run-dispatch-pool-shared-context-v1"
 RUN_DISPATCH_FIXED_CONTEXT_PATCH = "run-dispatch-fixed-shared-context-v1"
@@ -23187,6 +23188,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     "authored workspace checkpoint conflicts with remediation authority"
                 )
             workspace_spec["workspaceCheckpointRestoreRef"] = restore_ref
+            if (
+                shared_checkpoint_required
+                and (workspace_spec.get("workspaceSource") or {}).get("kind")
+                == "scratch"
+                and self._workflow_patch_enabled(RUN_SHARED_STEP_CHECKPOINT_SOURCE_PATCH)
+            ):
+                # The trusted save replaces the first attempt's scratch source;
+                # retained histories keep their recorded successor inputs.
+                workspace_spec.pop("workspaceSource")
 
         repository_operation = (
             str(node_inputs.get("repositoryOperation") or "").strip().lower()
