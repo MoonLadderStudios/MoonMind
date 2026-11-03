@@ -580,6 +580,15 @@ async function openAgents(): Promise<void> {
   await waitFor(() => expect(visible(screen.queryAllByText('Team codex')).length).toBe(1));
 }
 
+/** Choose a Provider Profile row action from that row's ellipsis menu. */
+async function chooseProfileAction(profileId: string, action: string): Promise<HTMLElement> {
+  const trigger = visible(screen.getAllByRole('button', { name: `Actions for ${profileId}` }))[0]!;
+  await userEvent.click(trigger);
+  const menu = screen.getByRole('menu', { name: `${profileId} actions` });
+  await userEvent.click(within(menu).getByRole('menuitem', { name: action }));
+  return trigger;
+}
+
 async function openProviders(): Promise<void> {
   window.history.replaceState({}, '', '/settings/providers-secrets');
   renderDashboard();
@@ -667,6 +676,16 @@ describe('Providers & Secrets in the dashboard shell (MoonMind#4559)', () => {
       // Tier names stay in the legend; tier actions have their own area.
       expect(document.querySelectorAll('.provider-tier-fieldset > legend button')).toHaveLength(0);
     }
+    // Stored secrets keep the full width; adding one opens a focused dialog.
+    await userEvent.click(screen.getByRole('button', { name: 'Add secret' }));
+    const secretDialog = await screen.findByRole('dialog', { name: 'Add secret' });
+    const secretProblems = layoutProblems(secretDialog);
+    expect(secretProblems, `Add secret dialog at ${width}x${height}:\n${secretProblems.join('\n')}`).toEqual([]);
+    const box = secretDialog.getBoundingClientRect();
+    expect(box.right, `Add secret dialog inside ${width}px`).toBeLessThanOrEqual(window.innerWidth + TOLERANCE_PX);
+    expect(box.width, 'Add secret dialog keeps a focused form width').toBeLessThanOrEqual(32 * 16 + TOLERANCE_PX);
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add secret' })).toBeNull());
   });
 
   it('stays usable with 200% text in the dark theme', async () => {
@@ -680,9 +699,8 @@ describe('Providers & Secrets in the dashboard shell (MoonMind#4559)', () => {
   it('keeps the tier draft through resize, confirmation, validation and save', async () => {
     await openProviders();
     await useLayout(390, 844);
-    const edit = visible(screen.getAllByRole('button')).filter((button) => button.textContent?.trim() === 'Edit');
-    expect(edit).toHaveLength(1);
-    await userEvent.click(edit[0]!);
+    expect(visible(screen.getAllByRole('button', { name: `Actions for ${LONG_ID}` }))).toHaveLength(1);
+    await chooseProfileAction(LONG_ID, 'Edit');
     await screen.findByRole('heading', { name: `Edit Profile: ${LONG_ID}` });
 
     const firstLabel = screen.getByLabelText('Tier 1 label') as HTMLInputElement;
@@ -846,15 +864,14 @@ describe('Provider enrollment drawers in the dashboard shell (MoonMind#4559)', (
       const label = `${drawerCase.name} drawer at ${width}x${height}`;
 
       // An unsaved edit in the profile form survives the enrollment detour.
-      const edit = visible(screen.getAllByRole('button')).filter((button) => button.textContent?.trim() === 'Edit');
-      await userEvent.click(edit[0]!);
+      await chooseProfileAction(LONG_ID, 'Edit');
       await screen.findByRole('heading', { name: `Edit Profile: ${LONG_ID}` });
       await userEvent.click(screen.getByLabelText('Tier 1 label'));
       await userEvent.keyboard('{End} (draft)');
       const editedLabel = `${INITIAL_TIERS[0]!.label} (draft)`;
 
-      const opener = screen.getByRole('button', { name: `${drawerCase.opener} ${drawerCase.profileId}` });
-      await userEvent.click(opener);
+      // Choosing the menu action returns focus to the row's actions trigger.
+      const opener = await chooseProfileAction(drawerCase.profileId, drawerCase.opener);
       const drawer = await screen.findByRole('dialog', { name: `${drawerCase.credential} enrollment for ${drawerCase.profileId}` });
       await waitFor(() => expect(drawer.contains(document.activeElement)).toBe(true));
       await settle();

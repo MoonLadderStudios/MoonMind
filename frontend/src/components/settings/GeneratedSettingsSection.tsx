@@ -1,5 +1,5 @@
 import { Button } from '../Button';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { responseError } from '../../lib/api/client';
@@ -374,7 +374,7 @@ async function fetchSettingAudit(key: string): Promise<SettingsAuditResponse> {
 }
 
 function flattenedDescriptors(catalog?: SettingsCatalogResponse): SettingDescriptor[] {
-  if (!catalog) {
+  if (!catalog?.categories) {
     return [];
   }
   return Object.values(catalog.categories)
@@ -411,7 +411,19 @@ function displayAuditValue(
   return displayValue(value);
 }
 
-export function GeneratedSettingsSection() {
+interface GeneratedSettingsSectionProps {
+  /** Show only these settings, in this order, as one card without search or filters. */
+  keys?: readonly string[];
+  /** Heading for a keyed card. */
+  title?: string;
+  description?: ReactNode;
+}
+
+export function GeneratedSettingsSection({
+  keys,
+  title = 'Generated settings',
+  description,
+}: GeneratedSettingsSectionProps = {}) {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('all');
@@ -426,7 +438,10 @@ export function GeneratedSettingsSection() {
     queryFn: fetchCatalog,
   });
 
-  const descriptors = useMemo(() => flattenedDescriptors(catalogQuery.data), [catalogQuery.data]);
+  const descriptors = useMemo(() => {
+    const all = flattenedDescriptors(catalogQuery.data);
+    return keys ? keys.flatMap((key) => all.filter((descriptor) => descriptor.key === key)) : all;
+  }, [catalogQuery.data, keys]);
   const selectedAuditDescriptor = descriptors.find(
     (descriptor) => descriptor.key === selectedAuditKey,
   );
@@ -458,9 +473,10 @@ export function GeneratedSettingsSection() {
   });
 
   const visibleByCategory = visibleDescriptors.reduce<Record<string, SettingDescriptor[]>>((grouped, descriptor) => {
-    const categoryDescriptors = grouped[descriptor.category] ?? [];
+    const group = keys ? title : descriptor.category;
+    const categoryDescriptors = grouped[group] ?? [];
     categoryDescriptors.push(descriptor);
-    grouped[descriptor.category] = categoryDescriptors;
+    grouped[group] = categoryDescriptors;
     return grouped;
   }, {});
 
@@ -484,7 +500,11 @@ export function GeneratedSettingsSection() {
     setPending({});
   }, []);
 
-  useSettingsDraftRegistration('generated-settings', pendingChanges.length > 0, discardPending);
+  useSettingsDraftRegistration(
+    keys ? `generated-settings:${keys.join(',')}` : 'generated-settings',
+    pendingChanges.length > 0,
+    discardPending,
+  );
 
   const saveChanges = async () => {
     if (!pendingChanges.length || hasInvalidChange) {
@@ -556,7 +576,8 @@ export function GeneratedSettingsSection() {
   }
 
   return (
-    <section className="space-y-5" aria-label="Generated settings">
+    <section className="space-y-5" aria-label={title}>
+      {keys ? null : (
       <div className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="space-y-2">
@@ -567,6 +588,7 @@ export function GeneratedSettingsSection() {
           </div>
         </div>
       </div>
+      )}
 
       {notice ? (
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 shadow-sm dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-300">
@@ -656,6 +678,7 @@ export function GeneratedSettingsSection() {
         </section>
       ) : null}
 
+      {keys ? null : (
       <div className="rounded-3xl border border-mm-border/80 bg-transparent p-5 shadow-sm">
         <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px_auto_auto] md:items-end">
           <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
@@ -691,6 +714,7 @@ export function GeneratedSettingsSection() {
           </label>
         </div>
       </div>
+      )}
 
       {pendingChanges.length ? (
         <div
@@ -751,7 +775,7 @@ export function GeneratedSettingsSection() {
         </div>
       ) : null}
 
-      {visibleDescriptors.length === 0 ? (
+      {visibleDescriptors.length === 0 && !keys ? (
         <div className="rounded-3xl border border-mm-border/80 bg-transparent p-6 text-sm text-slate-500 shadow-sm dark:text-slate-400">
           No settings match the current filters.
         </div>
@@ -759,7 +783,16 @@ export function GeneratedSettingsSection() {
 
       {Object.entries(visibleByCategory).map(([categoryName, categoryDescriptors]) => (
         <div key={categoryName} className="rounded-3xl border border-mm-border/80 bg-transparent p-5 shadow-sm">
-          <h4 className="text-base font-semibold text-slate-900 dark:text-white">{categoryName}</h4>
+          {keys ? (
+            <div className="space-y-1">
+              <h3 className="text-lg font-semibold text-slate-900 dark:text-white">{categoryName}</h3>
+              {description ? (
+                <div className="text-sm text-slate-600 dark:text-slate-400">{description}</div>
+              ) : null}
+            </div>
+          ) : (
+            <h4 className="text-base font-semibold text-slate-900 dark:text-white">{categoryName}</h4>
+          )}
           <div className="mt-4 divide-y divide-slate-200 dark:divide-slate-800">
             {categoryDescriptors.map((descriptor) => {
               const pendingChange = pending[descriptor.key];

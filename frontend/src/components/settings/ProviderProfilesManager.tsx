@@ -7,6 +7,8 @@ import { responseError } from '../../lib/api/client';
 import { formatHarnessLabel } from '../../runtime/runtimeTargets';
 import { trapTabWithin } from '../../lib/focusTrap';
 import { formatStatusLabel } from '../../utils/formatters';
+import type { WorkflowActionMenuItem } from '../../lib/workflowActions';
+import { WorkflowActionsMenu } from '../WorkflowActionsMenu';
 import {
   buildProviderProfileTierPayload,
   FALLBACK_TIER_EFFORT_OPTIONS,
@@ -1553,6 +1555,14 @@ function claudeCredentialActions(profile: ProviderProfile): ClaudeAuthAction[] {
     })
     .filter((action): action is ClaudeAuthAction => action !== null);
 }
+
+const MORE_ACTIONS_ICON = (
+  <svg aria-hidden="true" className="td-workflow-actions-trigger-icon" viewBox="0 0 16 16" focusable="false">
+    <circle cx="3" cy="8" r="1.5" />
+    <circle cx="8" cy="8" r="1.5" />
+    <circle cx="13" cy="8" r="1.5" />
+  </svg>
+);
 
 function hasGuidedApiKeySetup(profile: ProviderProfile): boolean {
   const capabilities = profile.creation_capabilities;
@@ -4237,6 +4247,104 @@ export function ProviderProfilesManager({
     return () => window.clearInterval(intervalId);
   }, [oauthSessions, queryClient]);
 
+  // Each record's applicable actions, in the shared compact actions menu. A
+  // pending or readiness-blocked action stays listed with its reason.
+  const profileActionItems = (profile: ProviderProfile): WorkflowActionMenuItem[] => {
+    const oauthSession = oauthSessions[profile.profile_id];
+    const authModel = providerAuthModel(profile);
+    const canUseGenericApiKey = Boolean(
+      ((profile.runtime_id === 'codex_cli' && profile.provider_id === 'openai') ||
+        hasGuidedApiKeySetup(profile)) &&
+        !isClaudeCredentialMethodProfile(profile) &&
+        !isOpencodeCredentialMethodProfile(profile),
+    );
+    const item = (
+      id: string,
+      label: string,
+      onSelect: () => void,
+      options: Partial<WorkflowActionMenuItem> = {},
+    ): WorkflowActionMenuItem => {
+      const disabledReason = options.disabledReason ?? null;
+      return {
+        id, label, onSelect, ...options, disabledReason,
+        section: disabledReason ? 'unavailable' : options.section ?? 'primary',
+      };
+    };
+    const pending = (busy: boolean) => (busy ? 'Another request for this action is still running.' : null);
+    const items: WorkflowActionMenuItem[] = [];
+    if (authModel.kind === 'codex_oauth') {
+      items.push(item('oauth', 'OAuth', () => startOAuthMutation.mutate(profile), {
+        disabledReason: pending(startOAuthMutation.isPending),
+      }));
+    }
+    if (authModel.kind === 'claude_credentials') {
+      for (const action of authModel.actions) {
+        items.push(item(`claude-${action.id}`, action.label, () => {
+          if (action.id === 'connect_oauth') {
+            startOAuthMutation.mutate(profile);
+          } else if (action.id === 'use_api_key') {
+            openClaudeEnrollment(profile);
+          } else if (action.id === 'validate_oauth' || action.id === 'disconnect_oauth') {
+            claudeOAuthLifecycleMutation.mutate({ profileId: profile.profile_id, actionId: action.id });
+          }
+        }, { disabledReason: pending(claudeOAuthLifecycleMutation.isPending) }));
+      }
+    }
+    if (authModel.kind === 'opencode_credentials') {
+      for (const action of authModel.actions) {
+        items.push(item(`opencode-${action.id}`, action.label, () => {
+          if (action.id === 'use_api_key') openOpencodeEnrollment(profile);
+        }, { disabledReason: pending(opencodeEnrollmentMutation.isPending) }));
+      }
+    }
+    if (canUseGenericApiKey) {
+      items.push(item('api-key', `Use ${apiKeyEnrollmentCopy(profile).credentialLabel}`, () => openOpencodeEnrollment(profile), {
+        disabledReason: pending(opencodeEnrollmentMutation.isPending),
+      }));
+    }
+    if (oauthSession && isActiveOAuthStatus(oauthSession.status)) {
+      items.push(item('cancel-oauth', 'Cancel OAuth', () => cancelOAuthMutation.mutate({
+        profileId: profile.profile_id,
+        sessionId: oauthSession.sessionId,
+      }), { disabledReason: pending(cancelOAuthMutation.isPending) }));
+    }
+    if (oauthSession && canFinalizeOAuthStatus(oauthSession.status)) {
+      items.push(item('finalize-oauth', 'Finalize', () => finalizeOAuthMutation.mutate({
+        profileId: profile.profile_id,
+        sessionId: oauthSession.sessionId,
+      }), { disabledReason: pending(finalizeOAuthMutation.isPending) }));
+    }
+    if (oauthSession && canRetryOAuthStatus(oauthSession.status)) {
+      items.push(item('retry-oauth', 'Retry', () => retryOAuthMutation.mutate({
+        profileId: profile.profile_id,
+        sessionId: oauthSession.sessionId,
+      }), { disabledReason: pending(retryOAuthMutation.isPending) }));
+    }
+    items.push(item('edit', 'Edit', () => handleEditProfile(profile)));
+    items.push(item(
+      profile.enabled ? 'disable' : 'enable',
+      profile.enabled ? 'Disable' : 'Enable',
+      () => toggleMutation.mutate({ profileId: profile.profile_id, enabled: !profile.enabled }),
+      {
+        disabledReason:
+          !profile.enabled && !mayEnableFromSettings(profile)
+            ? 'Complete credential setup before enabling this profile.'
+            : pending(toggleMutation.isPending),
+      },
+    ));
+    items.push(item('delete', 'Delete', () => deleteMutation.mutate(profile.profile_id), {
+      section: 'destructive',
+      danger: true,
+      disabledReason: pending(deleteMutation.isPending),
+      confirmation: {
+        title: 'Delete provider profile',
+        consequence: `Provider profile "${profile.profile_id}" will be deleted.`,
+        confirmLabel: 'Delete profile',
+      },
+    }));
+    return items;
+  };
+
   const formSecretRefs = useMemo(() => {
     try {
       return parseSecretRefs(form.secretRefsText);
@@ -4409,16 +4517,8 @@ export function ProviderProfilesManager({
               profiles.map((profile) => {
                 const oauthSession = oauthSessions[profile.profile_id];
                 const authModel = providerAuthModel(profile);
-                const canStartOAuth = authModel.kind === 'codex_oauth';
-                const canUseGenericApiKey = Boolean(
-                  ((profile.runtime_id === 'codex_cli' && profile.provider_id === 'openai') ||
-                    hasGuidedApiKeySetup(profile)) &&
-                    !isClaudeCredentialMethodProfile(profile) &&
-                    !isOpencodeCredentialMethodProfile(profile),
-                );
                 const activationLabel = activationStatusLabel(profile);
                 const modelTiers = providerProfileModelTiers(profile);
-                const enableAllowed = mayEnableFromSettings(profile);
                 void defaultTaskModelByRuntime;
                 const claudeReadiness =
                   authModel.kind === 'claude_credentials' ? authModel.readiness : undefined;
@@ -4451,7 +4551,7 @@ export function ProviderProfilesManager({
                     <div className="font-medium text-slate-900 dark:text-white">{profile.profile_id}</div>
                     {profile.is_default ? (
                       <div className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
-                        Harness default
+                        Default {formatHarnessLabel(profile.runtime_id)} profile
                       </div>
                     ) : null}
                     {profile.model_overrides && Object.keys(profile.model_overrides).length > 0 ? (
@@ -4738,171 +4838,19 @@ export function ProviderProfilesManager({
                     headers="provider-profile-header-actions"
                     role="cell"
                   >
-                    <div className="provider-profile-actions flex flex-wrap gap-2">
-                      {canWriteProviderProfiles && canStartOAuth ? (
-                        <Button variant="secondary" size="sm"
-                          type="button"
-                          className="text-xs"
-                          onClick={() => startOAuthMutation.mutate(profile)}
-                          disabled={startOAuthMutation.isPending}
-                          aria-label={`OAuth ${profile.profile_id}`}
-                        >
-                          OAuth
-                        </Button>
-                      ) : null}
-                      {canWriteProviderProfiles && authModel.kind === 'claude_credentials'
-                        ? authModel.actions.map((action) => (
-                            <Button variant="secondary" size="sm"
-                              key={action.id}
-                              type="button"
-                              className="text-xs"
-                              onClick={() => {
-                                if (action.id === 'connect_oauth') {
-                                  startOAuthMutation.mutate(profile);
-                                  return;
-                                }
-                                if (action.id === 'use_api_key') {
-                                  openClaudeEnrollment(profile);
-                                  return;
-                                }
-                                if (action.id === 'validate_oauth' || action.id === 'disconnect_oauth') {
-                                  claudeOAuthLifecycleMutation.mutate({
-                                    profileId: profile.profile_id,
-                                    actionId: action.id,
-                                  });
-                                }
-                              }}
-                              disabled={claudeOAuthLifecycleMutation.isPending}
-                              aria-label={`${action.label} ${profile.profile_id}`}
-                            >
-                              {action.label}
-                            </Button>
-                          ))
-                        : null}
-                      {canWriteProviderProfiles && authModel.kind === 'opencode_credentials'
-                        ? authModel.actions.map((action) => (
-                            <Button variant="secondary" size="sm"
-                              key={action.id}
-                              type="button"
-                              className="text-xs"
-                              onClick={() => {
-                                if (action.id === 'use_api_key') {
-                                  openOpencodeEnrollment(profile);
-                                  return;
-                                }
-                              }}
-                              disabled={opencodeEnrollmentMutation.isPending}
-                              aria-label={`${action.label} ${profile.profile_id}`}
-                            >
-                              {action.label}
-                            </Button>
-                          ))
-                        : null}
-                      {canWriteProviderProfiles && canUseGenericApiKey ? (
-                        <Button variant="secondary" size="sm"
-                          type="button"
-                          className="text-xs"
-                          onClick={() => openOpencodeEnrollment(profile)}
-                          disabled={opencodeEnrollmentMutation.isPending}
-                          aria-label={`Use ${apiKeyEnrollmentCopy(profile).credentialLabel} ${profile.profile_id}`}
-                        >
-                          Use {apiKeyEnrollmentCopy(profile).credentialLabel}
-                        </Button>
-                      ) : null}
-                      {canWriteProviderProfiles && oauthSession && isActiveOAuthStatus(oauthSession.status) ? (
-                        <Button variant="ghost" size="sm"
-                          type="button"
-                          className="text-xs"
-                          onClick={() =>
-                            cancelOAuthMutation.mutate({
-                              profileId: profile.profile_id,
-                              sessionId: oauthSession.sessionId,
-                            })
-                          }
-                          disabled={cancelOAuthMutation.isPending}
-                          aria-label={`Cancel OAuth ${profile.profile_id}`}
-                        >
-                          Cancel OAuth
-                        </Button>
-                      ) : null}
-                      {canWriteProviderProfiles && oauthSession && canFinalizeOAuthStatus(oauthSession.status) ? (
-                        <Button variant="secondary" size="sm"
-                          type="button"
-                          className="text-xs"
-                          onClick={() =>
-                            finalizeOAuthMutation.mutate({
-                              profileId: profile.profile_id,
-                              sessionId: oauthSession.sessionId,
-                            })
-                          }
-                          disabled={finalizeOAuthMutation.isPending}
-                          aria-label={`Finalize ${profile.profile_id}`}
-                        >
-                          Finalize
-                        </Button>
-                      ) : null}
-                      {canWriteProviderProfiles && oauthSession && canRetryOAuthStatus(oauthSession.status) ? (
-                        <Button variant="secondary" size="sm"
-                          type="button"
-                          className="text-xs"
-                          onClick={() =>
-                            retryOAuthMutation.mutate({
-                              profileId: profile.profile_id,
-                              sessionId: oauthSession.sessionId,
-                            })
-                          }
-                          disabled={retryOAuthMutation.isPending}
-                          aria-label={`Retry ${profile.profile_id}`}
-                        >
-                          Retry
-                        </Button>
-                      ) : null}
-                      {canWriteProviderProfiles ? (
-                        <>
-                          <Button variant="ghost" size="sm"
-                            type="button"
-                            className="text-xs"
-                            onClick={() => handleEditProfile(profile)}
-                          >
-                            Edit
-                          </Button>
-                          <Button variant="secondary" size="sm"
-                            type="button"
-                            className="text-xs"
-                            onClick={() =>
-                              toggleMutation.mutate({
-                                profileId: profile.profile_id,
-                                enabled: !profile.enabled,
-                              })
-                            }
-                            disabled={!profile.enabled && !enableAllowed}
-                            disabledReason="Complete credential setup before enabling this profile."
-                            title={
-                              !profile.enabled && !enableAllowed
-                                ? 'Complete credential setup before enabling this profile.'
-                                : undefined
-                            }
-                          >
-                            {profile.enabled ? 'Disable' : 'Enable'}
-                          </Button>
-                          <Button variant="danger" size="sm"
-                            type="button"
-                            className="px-3 py-1.5 text-xs font-medium transition"
-                            onClick={() => {
-                              if (
-                                window.confirm(
-                                  `Delete provider profile "${profile.profile_id}"?`,
-                                )
-                              ) {
-                                deleteMutation.mutate(profile.profile_id);
-                              }
-                            }}
-                          >
-                            Delete
-                          </Button>
-                        </>
-                      ) : null}
-                    </div>
+                    {canWriteProviderProfiles ? (
+                      <div className="provider-profile-actions">
+                        <WorkflowActionsMenu
+                          items={profileActionItems(profile)}
+                          triggerContent={MORE_ACTIONS_ICON}
+                          triggerClassName="td-workflow-actions-trigger-compact"
+                          triggerAriaLabel={`Actions for ${profile.profile_id}`}
+                          menuAriaLabel={`${profile.profile_id} actions`}
+                          emptyMessage="No actions are available."
+                          subject={profile.profile_id}
+                        />
+                      </div>
+                    ) : null}
                   </td>
                 </tr>
                 );
@@ -5833,7 +5781,7 @@ export function ProviderProfilesManager({
                     </p>
                   ) : (
                     <p className="text-xs text-slate-500 dark:text-slate-400">
-                      When enabled, this profile becomes the preferred launch target for its Harness after readiness succeeds.
+                      When enabled, this profile becomes the preferred Provider Profile for its Harness after readiness succeeds. Default Harness, under Defaults for new work, chooses which Harness new work uses.
                     </p>
                   )}
                 </>
