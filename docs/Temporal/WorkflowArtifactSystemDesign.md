@@ -825,7 +825,9 @@ Each journal flush durably adds a raw/normalized pair and links, superseding the
 previous pair. Even idle streams flush every event; bounded purge reclaims the
 resulting tombstones.
 
-Deletion must be idempotent.
+Deletion must be idempotent. Cleanup owners refresh intent presence before
+recording retries, count attempts atomically, and tolerate an intent already
+cleared by another owner without aborting the sweep.
 
 ## 14.4 Soft-delete, hard-delete and purge
 
