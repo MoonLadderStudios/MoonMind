@@ -190,6 +190,29 @@ def _validate_additional_file_path(relative):
         raise ValueError("additional Codex files cannot replace authentication, history or runtime-owned files")
 
 
+def _translate_private_home_context(value, home_path):
+    if isinstance(value, str):
+        if home_path != "{{runtime_support_dir}}":
+            parts = value.split(home_path)
+            if (
+                any("{{runtime_support_dir}}" in part for part in parts)
+                or any(part and not part.startswith("/") for part in parts[1:])
+            ):
+                raise ValueError("additional Codex files reference an untranslated support path")
+            value = "{{runtime_support_dir}}".join(parts)
+        checked = value.replace("{{runtime_support_dir}}", "").replace("{{workspace_path}}", "")
+        if _has_authority(checked):
+            raise ValueError("additional Codex files must not contain credential templates")
+        return value
+    if isinstance(value, dict):
+        if _has_authority({key: None for key in value}):
+            raise ValueError("additional Codex files cannot introduce authentication")
+        return {key: _translate_private_home_context(item, home_path) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_translate_private_home_context(item, home_path) for item in value]
+    return value
+
+
 def _additional_file(template, home_path):
     """Translate a declared private-home file without granting auth/history writes."""
     prefix = home_path.rstrip("/") + "/"
@@ -209,33 +232,10 @@ def _additional_file(template, home_path):
     if template["format"] not in {"text", "json", "toml"} or template["merge_strategy"] not in {"replace", "deep_merge", "append"}:
         raise ValueError("additional Codex file rendering is unsupported")
 
-    def translate(value):
-        if isinstance(value, str):
-            if home_path != "{{runtime_support_dir}}":
-                parts = value.split(home_path)
-                if (
-                    any("{{runtime_support_dir}}" in part for part in parts)
-                    or any(part and not part.startswith("/") for part in parts[1:])
-                ):
-                    raise ValueError("additional Codex files reference an untranslated support path")
-                value = "{{runtime_support_dir}}".join(parts)
-            # The shared host supplies these two paths for this exact attempt.
-            checked = value.replace("{{runtime_support_dir}}", "").replace("{{workspace_path}}", "")
-            if _has_authority(checked):
-                raise ValueError("additional Codex files must not contain credential templates")
-            return value
-        if isinstance(value, dict):
-            if _has_authority({key: None for key in value}):
-                raise ValueError("additional Codex files cannot introduce authentication")
-            return {key: translate(item) for key, item in value.items()}
-        if isinstance(value, list):
-            return [translate(item) for item in value]
-        return value
-
     return {
         **template,
         "path": "{{runtime_support_dir}}/" + relative.as_posix(),
-        "content_template": translate(template["content_template"]),
+        "content_template": _translate_private_home_context(template["content_template"], home_path),
     }
 
 
@@ -310,7 +310,7 @@ def _configuration_document(profile):
             document = _merge(document, layer)
         document.pop("profile", None)
         document.pop("profiles", None)
-        return {"document": document, "additionalFiles": additional_files,
+        return {"document": document, "additionalFiles": additional_files, "homePath": home_path,
                 "managedRecipeRepaired": repaired}, ""
     except (TypeError, ValueError, KeyError):
         return None, "Codex file templates contain invalid configuration"
@@ -420,7 +420,7 @@ def validate_oauth_configuration(configuration):
     """Validate preferences/files without replacing OAuth, tools or provider state."""
     if (
         not isinstance(configuration, dict)
-        or set(configuration) - {"document", "additionalFiles", "privateHomeOnly"}
+        or set(configuration) - {"document", "additionalFiles", "privateHomeOnly", "environmentTemplates"}
         or configuration.get("privateHomeOnly") is not True
     ):
         raise ValueError("OAuth Codex configuration requires private-HOME delivery")
@@ -434,9 +434,18 @@ def validate_oauth_configuration(configuration):
     if not isinstance(files, list):
         raise ValueError("OAuth Codex file configuration must be an array")
     files = [_additional_file(_template(item), "{{runtime_support_dir}}") for item in files]
+    environment = configuration.get("environmentTemplates") or {}
+    if not isinstance(environment, dict):
+        raise ValueError("private Codex environment templates must be an object")
+    if __package__:
+        from .template_renderer import validate_environment_template_context
+    else:
+        from template_renderer import validate_environment_template_context
+    environment = validate_environment_template_context(environment)
     result = {
         "document": copy.deepcopy(document), "privateHomeOnly": True,
         **({"additionalFiles": files} if files else {}),
+        **({"environmentTemplates": environment} if environment else {}),
     }
     if len(json.dumps(result).encode()) > 65536:
         raise ValueError("OAuth Codex private configuration exceeds its delivery bound")
@@ -448,9 +457,25 @@ def oauth_configuration_for_profile(profile):
     if parsed is None:
         return None, reason
     try:
+        # Only template-derived references to the relocated HOME bind late.
+        # Absolute literals and generic support/workspace paths retain their owner.
+        environment = {}
+        home_path = parsed["homePath"]
+        if home_path.startswith("{{runtime_support_dir}}/"):
+            for key, value in (getattr(profile, "env_template", None) or {}).items():
+                if not isinstance(value, str):
+                    continue
+                normalized = re.sub(r"{{\s*runtime_support_dir\s*}}", "{{runtime_support_dir}}", value)
+                if re.search(re.escape(home_path) + r"(?=/|$)", normalized):
+                    environment[key] = _translate_private_home_context(normalized, home_path)
+        if environment:
+            from moonmind.omnigent.host_services.runtime_scripts import validate_provider_literal_launch_environment
+
+            environment = validate_provider_literal_launch_environment(environment)
         return validate_oauth_configuration({
             "document": parsed["document"], "privateHomeOnly": True,
             "additionalFiles": parsed["additionalFiles"],
+            **({"environmentTemplates": environment} if environment else {}),
         }), ""
     except (TypeError, ValueError, KeyError) as error:
         return None, str(error)
@@ -732,6 +757,14 @@ if __name__ == "__main__":
                 if configuration.get("privateHomeOnly"):
                     configure_private_oauth_home(configuration, os.environ["CODEX_HOME"])
                 configure_profile_files(configuration, os.environ["CODEX_HOME"], Path.cwd())
+                if configuration.get("environmentTemplates"):
+                    from template_renderer import ProfileTemplateRenderer
+
+                    os.environ.update(ProfileTemplateRenderer(toml_serializer=render_toml).render_environment(
+                        configuration["environmentTemplates"],
+                        {"runtime_support_dir": str(Path(os.environ["CODEX_HOME"]).resolve()),
+                         "workspace_path": str(Path.cwd().resolve())},
+                    ))
             if not configuration.get("privateHomeOnly"):
                 preserve_provider_settings(
                     configuration, os.environ["CODEX_HOME"], arguments

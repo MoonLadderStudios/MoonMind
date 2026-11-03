@@ -229,6 +229,7 @@ class OmnigentRuntimeScriptService:
         }
         codex_configuration = False
         oauth_configuration = None
+        private_environment_keys: set[str] = set()
         provider_environment: dict[str, str] = {}
         for handle in credential_handles:
             selected_environment = dict(handle.get("runtimeEnvironment") or {})
@@ -259,6 +260,14 @@ class OmnigentRuntimeScriptService:
                 configuration = json.loads(serialized)
                 if not isinstance(configuration, dict) or configuration.get("privateHomeOnly") is not True:
                     raise ValueError("OAuth Codex configuration requires private-HOME delivery")
+                private_templates = configuration.get("environmentTemplates") or {}
+                if private_templates:
+                    from moonmind.provider_profiles.template_renderer import validate_environment_template_context
+
+                    validate_environment_template_context(validate_provider_literal_launch_environment(private_templates))
+                    if set(private_templates) & (set(selected_environment) | set(templates or {})):
+                        raise ValueError("conflicting private Codex environment template")
+                    private_environment_keys.update(private_templates)
                 # The materializer freezes this validated nonsecret value.
                 # The same portable helper validates it again before writes.
                 configuration = json.dumps(configuration)
@@ -326,6 +335,8 @@ class OmnigentRuntimeScriptService:
                     codex_configuration = True
                 environment[key] = str(value)
         if oauth_configuration is not None:
+            if private_environment_keys & set(provider_environment):
+                raise ValueError("conflicting private Codex runtime environment")
             if "MOONMIND_CODEX_PROFILE_CONFIG_FILE" in environment:
                 raise ValueError("private Codex configuration conflicts with a provider configuration")
             environment["MOONMIND_CODEX_PROFILE_CONFIG_FILE"] = (
