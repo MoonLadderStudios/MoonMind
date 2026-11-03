@@ -295,7 +295,7 @@ class OmnigentWorkspacePublicationService:
         self.resolve_request_workspace(request, must_exist=False)
         source = {"workflowId": identity.workflow_id, "runId": identity.run_id,
                   "logicalStepId": identity.logical_step_id, "executionOrdinal": identity.execution_ordinal}
-        plan = identity.omnigent_execution_plan
+        plan = request.omnigent_execution_plan or identity.omnigent_execution_plan
         if plan is None:
             raise HarnessPlatformError("Finalization restore requires its original execution plan", code="WORKSPACE_RESTORE_UNAVAILABLE")
         access = await step_execution_artifact_access(request)
@@ -425,7 +425,7 @@ class OmnigentWorkspacePublicationService:
         workspace_evidence = capture["workspace"]
         # The generic plan already owns immutable task inputs. Retain a complete
         # canonical checkpoint instead of leaving an archive with no resume input.
-        plan = identity.omnigent_execution_plan
+        plan = request.omnigent_execution_plan or identity.omnigent_execution_plan
         if plan is not None:
             from moonmind.schemas.temporal_models import (
                 STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,

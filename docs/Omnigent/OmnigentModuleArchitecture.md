@@ -166,6 +166,25 @@ cannot drift apart, without a second implementation to pair against.
 | Workspace checkpoint/restore | `remediation_workspace.py::RemediationWorkspaceOwner` | `SandboxRemediationWorkspaceOwner` | Conformance |
 | Secret resolution | `secret_resolution.py::SecretResolver` | root resolver chain | Conformance |
 
+The generic workspace port and retained coordinator use the same remediation
+owner and canonical checkpoint restore service. The port validates the controller
+head, execution identity and admitted Profile/launch snapshot before transferring
+or restoring its attempt-owned workspace. Preparation retries preserve candidate
+edits; interrupted transfers reconcile their recorded intent. New Git save
+handoffs use the canonical checkpoint to restore HEAD, index and worktree,
+including deletions, after local workspace loss. They carry the admitted
+repository identity so self-contained saves retain Enterprise remotes without
+acquiring source credentials. Recorded archive handoffs retain their additive
+interpretation. Restored directories and contents transfer to the
+selected runtime UID. An existing candidate without admission
+proof is preserved with an explicit uncertainty error. Both paths use the scoped
+Temporal artifact adapter; model and repository credentials remain separate.
+Fresh repository preparation selects the authored local target branch through
+the same volume owner and records completion in repository-local metadata.
+Redelivery preserves later candidate branches and edits; an unproven existing
+candidate is retained with an uncertainty error instead of being reset.
+Checkpoint restores retain their saved branch and history.
+
 The stable runtime binding store and legacy harness binding store currently
 share a table and binding-ID prefix, but not a serialized authority schema.
 Generic recovery inventory selects only stable rows, identified by their

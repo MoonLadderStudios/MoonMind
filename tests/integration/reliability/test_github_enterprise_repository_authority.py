@@ -20,17 +20,16 @@ from moonmind.omnigent.host_services.github_credentials import (
     OmnigentGithubCredentialService,
 )
 from moonmind.omnigent.host_services.workspace import OmnigentWorkspaceMaterializer
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.executions.repository_contract import (
     RepositoryIdentity,
     normalize_endpoint,
-)
-from moonmind.workflows.temporal.activities.omnigent_activities import (
-    _OnDemandTemporalArtifactService,
 )
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     TemporalArtifactService,
 )
+from moonmind.workflows.temporal.scoped_artifacts import ScopedTemporalArtifactService
 from tests.artifact_access import access_for_test
 from tests.helpers.repository_connections import (
     github_pat_connection,
@@ -71,7 +70,7 @@ async def authority_context(tmp_path, monkeypatch):
     )
     async with temporal_db(tmp_path) as sessions:
         monkeypatch.setattr(base, "async_session_maker", sessions)
-        artifacts = _OnDemandTemporalArtifactService(sessions)
+        artifacts = ScopedTemporalArtifactService(sessions)
 
         async def read_repository_access_snapshot(ref, *, request):
             _metadata, payload = await artifacts.read(
@@ -247,6 +246,167 @@ async def test_enterprise_clone_uses_snapshot_canonical_remote(
     assert _REMOTE in clone_argv
     assert token == b"selected-secret-canary"
     assert "selected-secret-canary" not in json.dumps(clone_argv)
+
+
+async def test_enterprise_checkpoint_restore_preserves_admitted_origin_without_credentials(
+    authority_context, monkeypatch, tmp_path
+):
+    import shutil
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from moonmind.schemas.temporal_models import (
+        STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+        StepExecutionIdentityModel,
+    )
+    from moonmind.workflows.temporal import activity_runtime
+    from moonmind.workflows.temporal.artifacts import (
+        ExecutionRef,
+        TemporalArtifactRepository,
+    )
+    from moonmind.workflows.temporal.runtime import checkpoint_restore
+    from moonmind.workflows.temporal.step_checkpoints import (
+        build_step_checkpoint_payload,
+    )
+    from tests.unit.workflows.temporal.test_checkpoint_restore import _repo
+
+    plan, request, sessions, gateway = await _enterprise_plan(
+        authority_context, monkeypatch
+    )
+    artifacts = authority_context[1]
+    workflow_id = request.correlation_id
+    source_identity = StepExecutionIdentityModel(
+        workflowId=workflow_id,
+        runId="source-run",
+        logicalStepId="implement",
+        executionOrdinal=1,
+    )
+    link = ExecutionRef(
+        namespace="moonmind",
+        workflow_id=workflow_id,
+        run_id="source-run",
+        link_type="output.checkpoint",
+    )
+    monkeypatch.setattr(
+        activity_runtime, "_checkpoint_activity_execution_link", lambda: link
+    )
+    async with sessions() as session:
+        await TemporalArtifactService(
+            TemporalArtifactRepository(session)
+        ).link_artifact(
+            artifact_id=plan.payload.authority.taskInputSnapshotRef,
+            principal="user-1",
+            execution_ref=link,
+        )
+        await session.commit()
+    source, _ = _repo(tmp_path / "temporal_sandbox" / "source" / "repo")
+    subprocess.run(["git", "remote", "add", "origin", _REMOTE], cwd=source, check=True)
+    (source / "tracked.txt").write_text("staged work\n")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=source, check=True)
+    (source / "tracked.txt").write_text("unstaged work\n")
+    async with sessions() as session:
+        capture = await activity_runtime.TemporalSandboxActivities(
+            workspace_root=tmp_path,
+            artifact_service=TemporalArtifactService(
+                TemporalArtifactRepository(session)
+            ),
+        ).workspace_capture_checkpoint(
+            {
+                "identity": source_identity.model_dump(by_alias=True),
+                "boundary": "after_execution",
+                "kind": "worktree_archive",
+                "workspacePath": str(source),
+                "artifactNamespace": "checkpoint",
+                "idempotencyKey": "enterprise-save",
+                "includeUntracked": True,
+            }
+        )
+        await session.commit()
+    assert capture["workspace"] is not None, capture
+    checkpoint = build_step_checkpoint_payload(
+        identity=source_identity,
+        boundary="after_execution",
+        task_input_snapshot_ref=plan.payload.authority.taskInputSnapshotRef,
+        workspace=capture["workspace"],
+        created_at=datetime.now(timezone.utc),
+        plan_digest="sha256:" + plan.planRef.rsplit(":", 1)[-1],
+    )
+    artifact, _ = await artifacts.create(
+        principal=f"workflow:{workflow_id}",
+        content_type=STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+        link=link,
+    )
+    await artifacts.write_complete(
+        artifact_id=artifact.artifact_id,
+        principal=f"workflow:{workflow_id}",
+        content_type=STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+        payload=json.dumps(checkpoint).encode(),
+    )
+    step_id = f"{workflow_id}:source-run:implement:execution:2"
+    payload = request.model_dump(mode="json", by_alias=True)
+    payload["stepExecution"] = {
+        **source_identity.model_dump(by_alias=True),
+        "executionOrdinal": 2,
+        "stepExecutionId": step_id,
+        "runtimeContextPolicy": "fresh_agent_run",
+    }
+    payload["workspaceSpec"].update(
+        workspaceCheckpointRestoreRef=f"artifact://{artifact.artifact_id}",
+        workspaceLocator={
+            "kind": "sandbox",
+            "relativePath": "repo",
+            "workspaceId": hashlib.sha256(
+                f"{workflow_id}:{step_id}".encode()
+            ).hexdigest()[:24],
+        },
+    )
+    request = AgentExecutionRequest.model_validate(payload)
+    credentials = OmnigentGithubCredentialService(
+        SimpleNamespace(), session_factory=sessions, artifact_gateway=gateway
+    )
+    credentials.acquire_repository_use = AsyncMock(
+        side_effect=AssertionError("self-contained restore cannot acquire credentials")
+    )
+    monkeypatch.setattr(
+        checkpoint_restore,
+        "resolve_admitted_git_read",
+        AsyncMock(side_effect=AssertionError("self-contained restore cannot clone")),
+    )
+    shutil.rmtree(source)
+    workspace = OmnigentWorkspaceMaterializer(
+        command_runner=AsyncMock(side_effect=AssertionError("restore cannot clone")),
+        workspace_root=tmp_path,
+        artifact_service=artifacts,
+        repository_credential_service=credentials,
+    )
+    attachment = await workspace.materialize(
+        request,
+        plan=plan,
+        runtime_uid=os.getuid() or 1000,
+        runtime_gid=os.getgid() or 1000,
+    )
+    restored = Path(attachment["sourceRef"])
+    remote = subprocess.check_output(
+        [
+            "git",
+            "-c",
+            f"safe.directory={restored}",
+            "config",
+            "--get",
+            "remote.origin.url",
+        ],
+        cwd=restored,
+        text=True,
+    ).strip()
+    index = subprocess.check_output(
+        ["git", "-c", f"safe.directory={restored}", "show", ":tracked.txt"],
+        cwd=restored,
+        text=True,
+    )
+    assert remote == _REMOTE
+    assert index == "staged work\n"
+    assert (restored / "tracked.txt").read_text() == "unstaged work\n"
+    credentials.acquire_repository_use.assert_not_awaited()
 
 
 async def test_enterprise_cli_projection_uses_admitted_host(

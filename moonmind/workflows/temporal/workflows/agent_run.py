@@ -482,6 +482,7 @@ AGENT_RUN_SELECTED_FIXED_SHARED_PLAN_PATCH_ID = "agent-run-selected-fixed-shared
 AGENT_RUN_UNTRANSLATED_SHARED_CONTEXT_PATCH_ID = "agent-run-untranslated-shared-context-v1"
 AGENT_RUN_POOL_PARENT_HANDOFF_PATCH_ID = "agent-run-pool-parent-handoff-v1"
 AGENT_RUN_POOL_CONTEXT_RECEIPT_PATCH_ID = "agent-run-pool-context-receipt-v1"
+AGENT_RUN_POOL_CANONICAL_WORKSPACE_HANDOFF_PATCH_ID = "agent-run-pool-canonical-workspace-handoff-v1"
 AGENT_RUN_POOL_CHECKPOINT_SOURCE_PATCH_ID = "agent-run-pool-checkpoint-source-v1"
 AGENT_RUN_MANAGED_NO_PROGRESS_RECONCILIATION_PATCH_ID = (
     "agent-run-managed-no-progress-reconciliation-v1"
@@ -6783,13 +6784,15 @@ class MoonMindAgentRun:
             self._pool_plan_fence = None
 
     @staticmethod
-    def _saved_pool_workspace_ref(result: AgentRunResult | None) -> str | None:
+    def _saved_pool_workspace_ref(result: AgentRunResult | None, *, canonical: bool = False) -> str | None:
         saved = (
             result.metadata.get("savedWorkspaceCheckpoint")
             if result is not None
             else None
         )
         reference = saved.get("archiveRef") if isinstance(saved, Mapping) else None
+        if canonical and isinstance(saved, Mapping) and saved.get("baseCommit") and saved.get("checkpointRef"):
+            reference = saved["checkpointRef"]
         if (
             isinstance(reference, str)
             and reference.startswith("artifact:")
@@ -6831,7 +6834,9 @@ class MoonMindAgentRun:
             return result
         receipt = DispatchPoolContextReceipt(
             executionProfileRef=original.execution_profile_ref,
-            workspaceCheckpointRestoreRef=self._saved_pool_workspace_ref(result),
+            workspaceCheckpointRestoreRef=self._saved_pool_workspace_ref(
+                result, canonical=self._workflow_patch_enabled(AGENT_RUN_POOL_CANONICAL_WORKSPACE_HANDOFF_PATCH_ID),
+            ),
         )
         return result.model_copy(
             update={

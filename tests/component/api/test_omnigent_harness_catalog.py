@@ -97,9 +97,7 @@ async def test_stock_harness_http_auth_survives_catalog_and_plan_compilation(
         OmnigentHarnessCatalogService,
     )
     from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
-    from moonmind.workflows.temporal.activities.omnigent_activities import (
-        _OnDemandTemporalArtifactService,
-    )
+    from moonmind.workflows.temporal.scoped_artifacts import ScopedTemporalArtifactService
 
     inventory = stock_harness_http_inventory
     # These are synthetic credential values, not public capability metadata.
@@ -160,7 +158,7 @@ async def test_stock_harness_http_auth_survives_catalog_and_plan_compilation(
         monkeypatch.setattr(
             settings.workflow, "temporal_artifact_root", str(tmp_path / "blobs")
         )
-        artifacts = _OnDemandTemporalArtifactService(sessions)
+        artifacts = ScopedTemporalArtifactService(sessions)
         input_ref, input_digest = await service.persist_json_artifact(
             artifact_service=artifacts,
             principal="user-1",

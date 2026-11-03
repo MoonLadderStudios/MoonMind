@@ -20,7 +20,6 @@ with workflow.unsafe.imports_passed_through():
         has_profile_selector,
         merge_runtime_selection,
         model_selection_fields,
-        provider_profile_ref_from_mapping,
         step_profile_intent,
     )
     from moonmind.workflows.temporal.run_failure_diagnostics import RunFailureDiagnostics
@@ -123,7 +122,6 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.config.settings import settings
     from moonmind.utils.logging import (
         redact_sensitive_payload,
-        redact_sensitive_text,
         scrub_github_tokens,
     )
     from moonmind.publish.sanitization import (
@@ -269,7 +267,6 @@ from moonmind.workflows.temporal.bounded_story_loop import (
     LoopAttempt,
     LoopBudget,
     LoopStopState,
-    PublicationAction,
     RemainingWorkArtifact,
 )
 from moonmind.workflows.temporal.bounded_story_loop import (
@@ -283,7 +280,6 @@ from moonmind.workflows.temporal.bounded_story_loop import (
     build_remediation_progress_vector,
     compile_bounded_story_loop,
     evaluate_attempt_continuation,
-    evaluate_publication_decision,
 )
 from moonmind.workflows.temporal.completion_summary import is_generic_completion_summary
 from moonmind.workflows.temporal.incident_reconstruction import (
@@ -1191,6 +1187,9 @@ RUN_OMNIGENT_PUBLISHED_CANDIDATE_RESTORE_PATCH = (
 # histories keep their recorded fresh-sandbox retry.
 RUN_OMNIGENT_INTERRUPTED_STEP_WORKSPACE_PATCH = (
     "run-omnigent-interrupted-step-workspace-v1"
+)
+RUN_OMNIGENT_CANONICAL_GIT_WORKSPACE_HANDOFF_PATCH = (
+    "run-omnigent-canonical-git-workspace-handoff-v1"
 )
 # MoonMind#4627: an agent Step retried after an interruption keeps the hard
 # execution ceiling it was admitted with. Each successor receives only the
@@ -3062,9 +3061,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         """Hand the interrupted attempt's latest durable save to its successor.
 
         A replaced host leaves no live sandbox to continue. Only the
-        after-execution worktree archive, captured with verified digests into
-        artifact storage, is real saved work. When the interrupted attempt
-        produced none, the save it was itself restored from is carried
+        after-execution checkpoint, captured with verified digests into
+        artifact storage, is real saved work. Git saves need the canonical
+        checkpoint's history/index as well as its worktree archive. When the
+        interrupted attempt produced none, the save it was itself restored from is carried
         forward. Without either the successor restarts from the Step's
         admitted inputs and says so.
         """
@@ -3074,7 +3074,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._step_checkpoint_workspace_evidence_by_boundary.get(logical_step_id)
             or {}
         ).get("after_execution")
-        archive_ref = ""
+        restore_ref = ""
         if (
             isinstance(evidence, Mapping)
             and evidence.get("workspaceKind") == "worktree_archive"
@@ -3085,23 +3085,26 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             and str(evidence.get("checkpointManifestRef") or "").strip()
         ):
             # Capture records compact ``art_`` ids; restore takes a durable ref.
-            archive_ref = (
+            restore_ref = (
                 self._bounded_story_loop_artifact_ref(
-                    evidence.get("workspaceArchiveRef")
+                    evidence.get("checkpointRef")
+                    if evidence.get("baseCommit")
+                    and self._patched_or_false_outside_workflow(RUN_OMNIGENT_CANONICAL_GIT_WORKSPACE_HANDOFF_PATCH)
+                    else evidence.get("workspaceArchiveRef")
                 )
                 or ""
             )
-        if not archive_ref:
+        if not restore_ref:
             # A host lost before its own capture still restored the save it
             # inherited from an earlier interruption; keep carrying that save.
-            archive_ref = self._interrupted_step_restore_refs.get(
+            restore_ref = self._interrupted_step_restore_refs.get(
                 self._step_execution_launch_block_key(
                     logical_step_id, next_attempt - 1
                 ),
                 "",
             )
-        if archive_ref:
-            self._interrupted_step_restore_refs[key] = archive_ref
+        if restore_ref:
+            self._interrupted_step_restore_refs[key] = restore_ref
             return
         self._fresh_source_step_execution_attempts.add(key)
         self._interrupted_step_restart_limitations.add(key)
@@ -7386,6 +7389,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 "workspaceIdentityDigest": workspace_identity_digest,
                 "checkpointManifestRef": checkpoint_manifest_ref,
                 "workspaceArchiveRef": workspace_archive_ref,
+                **({"baseCommit": workspace["baseCommit"]} if workspace.get("baseCommit")
+                   and self._patched_or_false_outside_workflow(RUN_OMNIGENT_CANONICAL_GIT_WORKSPACE_HANDOFF_PATCH) else {}),
             }
         return checkpoint_ref or None
 
@@ -8011,6 +8016,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH
                 )
                 and self._remediation_loop_uses_omnigent()
+                and not (
+                    checkpoint_ref and evidence.get("baseCommit")
+                    and self._patched_or_false_outside_workflow(RUN_OMNIGENT_CANONICAL_GIT_WORKSPACE_HANDOFF_PATCH)
+                )
             ):
                 checkpoint_ref = self._bounded_story_loop_artifact_ref(
                     evidence.get("workspaceArchiveRef")
