@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from moonmind.schemas.checkpoint_restore_models import (
     CheckpointRestoreError,
     ManagedWorkspaceRestoreRequest,
+    SandboxRestoreDestination,
 )
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
@@ -675,6 +676,36 @@ async def test_cold_restore_needing_origin_objects_uses_source_run_admitted_acce
     else:
         assert reads == ["env://SYNTHETIC_PAT"]
         assert clone_tokens == [(expected_token, "github.com")]
+
+
+def test_historical_sandbox_restore_keeps_its_receipt_identity():
+    destination = {
+        "kind": "sandbox",
+        "workspaceId": "saved-work",
+        "relativePath": "repo",
+        "repository": "acme/repo",
+        "stepExecutionId": "restore-step",
+    }
+    decoded = SandboxRestoreDestination.model_validate(destination)
+    assert decoded.model_dump(mode="json", by_alias=True) == destination
+
+
+@pytest.mark.parametrize("repository", [None, "acme/other"])
+def test_restore_repository_identity_cannot_change_the_selected_repository(repository):
+    with pytest.raises(ValidationError, match="repository identity"):
+        SandboxRestoreDestination.model_validate(
+            {
+                "kind": "sandbox",
+                "workspaceId": "saved-work",
+                "stepExecutionId": "restore-step",
+                "repository": repository,
+                "repositoryIdentity": {
+                    "endpoint": "https://github.enterprise.test",
+                    "canonicalRemote": "https://github.enterprise.test/acme/repo.git",
+                    "displayName": "acme/repo",
+                },
+            }
+        )
 
 
 def test_restore_contract_rejects_reused_identity_and_arbitrary_destination_path() -> (

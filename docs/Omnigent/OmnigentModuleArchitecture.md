@@ -172,8 +172,10 @@ head, execution identity and admitted Profile/launch snapshot before transferrin
 or restoring its attempt-owned workspace. Preparation retries preserve candidate
 edits; interrupted transfers reconcile their recorded intent. New Git save
 handoffs use the canonical checkpoint to restore HEAD, index and worktree,
-including deletions, after local workspace loss; recorded archive handoffs retain
-their additive interpretation. Restored directories and contents transfer to the
+including deletions, after local workspace loss. They carry the admitted
+repository identity so self-contained saves retain Enterprise remotes without
+acquiring source credentials. Recorded archive handoffs retain their additive
+interpretation. Restored directories and contents transfer to the
 selected runtime UID. An existing candidate without admission
 proof is preserved with an explicit uncertainty error. Both paths use the scoped
 Temporal artifact adapter; model and repository credentials remain separate.
