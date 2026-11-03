@@ -14,9 +14,7 @@ from moonmind.schemas.omnigent_session_models import OmnigentSessionActivityRequ
 from moonmind.workflows.temporal.activities import (
     omnigent_session_activities as activities,
 )
-from moonmind.workflows.temporal.activities.omnigent_activities import (
-    _OnDemandTemporalArtifactService,
-)
+from moonmind.workflows.temporal.scoped_artifacts import ScopedTemporalArtifactService
 from tests.artifact_access import access_for_test
 from tests.unit.omnigent.test_admitted_input_authority import (  # noqa: F401
     artifacts,
@@ -60,7 +58,7 @@ async def supervisor(artifacts, monkeypatch, request):  # noqa: F811
             require=lambda _ref: SimpleNamespace(authority_kinds=("model",))
         ),
     )
-    artifact_service = _OnDemandTemporalArtifactService(artifacts)
+    artifact_service = ScopedTemporalArtifactService(artifacts)
     input_ref, input_digest = await writer.persist_json_artifact(
         artifact_service=artifact_service,
         principal="user-1",
@@ -273,7 +271,7 @@ async def _replace_support(context, *, ref, digest):
     )
     await DbExecutionPlanStore(context.sessions).persist(plan)
     plan_ref, _ = await writer.persist_json_artifact(
-        artifact_service=_OnDemandTemporalArtifactService(context.sessions),
+        artifact_service=ScopedTemporalArtifactService(context.sessions),
         principal="user-1",
         artifact_class="omnigent.execution_plan",
         payload=plan.model_dump(mode="json", by_alias=True),
@@ -294,7 +292,7 @@ async def test_wrong_strict_certificate_pointer_grants_nothing(supervisor, wrong
     from moonmind.omnigent.bridge_artifacts import OmnigentArtifactError
 
     ref, digest = await writer.persist_json_artifact(
-        artifact_service=_OnDemandTemporalArtifactService(supervisor.sessions),
+        artifact_service=ScopedTemporalArtifactService(supervisor.sessions),
         principal="user-1",
         artifact_class="unrelated.private"
         if wrong == "class"
@@ -577,7 +575,7 @@ async def test_optional_certificate_cannot_hide_malformed_required_profile(super
     )
     with pytest.raises(OmnigentArtifactError, match="Unsupported durable artifact ref"):
         await ensure_verified_execution_plan_dependencies(
-            artifacts=_OnDemandTemporalArtifactService(supervisor.sessions),
+            artifacts=ScopedTemporalArtifactService(supervisor.sessions),
             plan=plan,
             binding=binding,
             access=access_for_test("workflow:new-wf"),
