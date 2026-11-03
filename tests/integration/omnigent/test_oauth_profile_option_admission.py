@@ -17,10 +17,18 @@ from api_service.services.omnigent_agent_bootstrap_service import (
     reconcile_bootstrap_agent_profile,
 )
 from moonmind.config.settings import settings
-from moonmind.omnigent.settings import resolved_server_url
+from moonmind.omnigent.harness_platform.materializers import (
+    load_provider_configuration_snapshot,
+)
 from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
+from moonmind.omnigent.settings import resolved_server_url
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+from moonmind.workflows.temporal.artifacts import (
+    TemporalArtifactRepository,
+    TemporalArtifactService,
+)
 from moonmind.workflows.temporal.service import TemporalExecutionService
+from tests.artifact_access import access_for_test
 from tests.integration.omnigent import (
     test_generic_native_durable_journey as native_fixture,
 )
@@ -50,6 +58,9 @@ session_factory = native_fixture.session_factory
         "claude_oauth_tuning",
         "shell_environment",
         "templated_environment",
+        "support_environment",
+        "unavailable_environment",
+        "secret_environment",
     ],
 )
 async def test_product_creation_preserves_the_exact_oauth_profile_options(
@@ -78,6 +89,9 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
         "claude_oauth_tuning": {"API_TIMEOUT_MS": "300000"},
         "shell_environment": {"PROJECT_RUNTIME_STYLE": "accepted-style"},
         "templated_environment": {"REPORT_DIR": "{{workspace_path}}/reports"},
+        "support_environment": {"REPORT_DIR": "{{runtime_support_dir}}/reports"},
+        "unavailable_environment": {"REPORT_DIR": "{{unknown_runtime_dir}}/reports"},
+        "secret_environment": {"REPORT_DIR": "{{selected_secret}}/reports"},
     }
     inventory = await OmnigentHttpClient(base_url=resolved_server_url()).list_agents()
     async with journey.session_factory() as session:
@@ -89,7 +103,8 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
         field = (
             "env_template"
             if option in {
-                "claude_oauth_tuning", "shell_environment", "templated_environment"
+                "claude_oauth_tuning", "shell_environment", "templated_environment",
+                "support_environment", "unavailable_environment", "secret_environment",
             }
             else option
             if option in {"env_template", "file_templates", "home_path_overrides"}
@@ -127,7 +142,10 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
                                     {"model": "selected-model-alias"}
                                     if option == "model_overrides"
                                     else {"model": journey.server.model}
-                                    if option in {"claude_oauth_tuning", "shell_environment"} else {}
+                                    if option in {
+                                        "claude_oauth_tuning", "shell_environment",
+                                        "templated_environment", "support_environment",
+                                    } else {}
                                 ),
                                 **(
                                     {"modelTier": 1}
@@ -158,7 +176,10 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
             TemporalExecutionCanonicalRecord, response.json()["workflowId"]
         )
         request = agent_requests(record.parameters)["work"]
-        if field == "model_overrides" or option in {"claude_oauth_tuning", "shell_environment"}:
+        if field == "model_overrides" or option in {
+            "claude_oauth_tuning", "shell_environment", "templated_environment",
+            "support_environment",
+        }:
             assert record.parameters["targetRuntime"] == "omnigent"
             assert request.agent_kind == "external" and request.agent_id == "omnigent"
             plan = await DbExecutionPlanStore(journey.session_factory).load(
@@ -176,6 +197,21 @@ async def test_product_creation_preserves_the_exact_oauth_profile_options(
             }.get(option)
             if expected_source:
                 assert record.parameters["modelSource"] == expected_source
+            if option in {"templated_environment", "support_environment"}:
+                saved = plan.payload.providerConfigurationSnapshot
+                assert saved is not None
+                _artifact, content = await TemporalArtifactService(
+                    TemporalArtifactRepository(session)
+                ).read(
+                    artifact_id=saved.artifactRef.removeprefix("artifact:"),
+                    access=access_for_test("operator"),
+                )
+                configurations = load_provider_configuration_snapshot(
+                    content, saved, plan.payload.credentialBindings
+                )
+                configuration = configurations["primary-model"]
+                assert configuration.environmentTemplates == values[option]
+                assert configuration.launchEnvironment == {}
         else:
             assert record.parameters["targetRuntime"] == runtime
             assert not record.parameters.get("omnigentExecutionPlan")

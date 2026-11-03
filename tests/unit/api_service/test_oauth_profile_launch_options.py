@@ -62,8 +62,8 @@ def profile_and_configuration(runtime, schema, **options):
     "customization",
     [
         {"env_template": {"OMNIGENT_SERVER_URL": "http://unselected-control-owner"}},
-        {"env_template": {"REPORT_DIR": "{{workspace_path}}/reports"}},
-        {"env_template": {"REPORT_DIR": "{{ runtime_support_dir }}/reports"}},
+        {"env_template": {"REPORT_DIR": "{{selected_secret}}/reports"}},
+        {"env_template": {"REPORT_DIR": "{{unknown_runtime_dir}}/reports"}},
         {
             "file_templates": [
                 {
@@ -99,6 +99,145 @@ def test_plain_oauth_profiles_keep_the_equivalent_shared_route(runtime, schema):
     assert not profile_has_native_inventory_route(profile, [configuration])
 
 
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code"])
+@pytest.mark.parametrize("schema", ["v1", "v2"])
+@pytest.mark.parametrize("template", [
+    "{{workspace_path}}/reports", "{{ runtime_support_dir }}/reports",
+])
+def test_available_oauth_context_uses_the_shared_template_owner(runtime, schema, template):
+    from moonmind.omnigent.harness_platform.materializers import snapshot_provider_configuration
+
+    profile, configuration = profile_and_configuration(runtime, schema)
+    profile.env_template = {"REPORT_DIR": template}
+    assert configuration_accepts_profile(configuration[1].document, profile)
+    assert not profile_has_native_inventory_route(profile, [configuration])
+    frozen = snapshot_provider_configuration(profile)
+    assert frozen.environmentTemplates == {"REPORT_DIR": template}
+    assert frozen.launchEnvironment == {}
+
+
+@pytest.mark.parametrize("schema", ["v1", "v2"])
+@pytest.mark.parametrize("suppress_model", [False, True])
+def test_oauth_native_model_default_suppression_is_not_silently_dropped(
+    schema, suppress_model,
+):
+    profile, configuration = profile_and_configuration("codex_cli", schema)
+    profile.command_behavior = {"suppress_default_model_flag": suppress_model}
+    assert configuration_accepts_profile(configuration[1].document, profile) is not suppress_model
+    assert profile_has_native_inventory_route(profile, [configuration]) is suppress_model
+
+
+def private_codex_profile(
+    schema="v2", *, home_path="{{runtime_support_dir}}/codex-home", declare_home=True,
+):
+    selected, configuration = profile_and_configuration("codex_cli", schema)
+    selected.volume_mount_path = "/home/app/.codex"
+    selected.home_path_overrides = {"CODEX_HOME": home_path} if declare_home else {}
+    selected.file_templates = [
+        {"path": home_path + "/config.toml", "format": "toml",
+         "merge_strategy": "deep_merge", "permissions": "0600",
+         "content_template": {"developer_instructions": "Preserve accepted work.", "hide_agent_reasoning": True}},
+        {"path": home_path + "/AGENTS.md", "format": "text",
+         "merge_strategy": "append", "permissions": "0600",
+         "content_template": "Selected global instructions.\n"},
+    ]
+    return selected, configuration
+
+
+@pytest.mark.parametrize("schema", ["v1", "v2"])
+def test_private_codex_oauth_preferences_have_shared_delivery(schema):
+    from moonmind.omnigent.harness_platform.materializers import snapshot_provider_configuration
+
+    selected, configuration = private_codex_profile(schema)
+    before = deepcopy(vars(selected))
+    assert configuration_accepts_profile(configuration[1].document, selected)
+    assert not profile_has_native_inventory_route(selected, [configuration])
+    admitted = snapshot_provider_configuration(selected)
+    assert admitted.codexConfiguration["privateHomeOnly"] is True
+    assert admitted.codexConfiguration["document"] == {"developer_instructions": "Preserve accepted work.", "hide_agent_reasoning": True}
+    assert admitted.codexConfiguration["additionalFiles"][0]["path"] == "{{runtime_support_dir}}/AGENTS.md"
+    assert vars(selected) == before
+
+
+@pytest.mark.parametrize("schema", ["v1", "v2"])
+@pytest.mark.parametrize("declare_home", [False, True])
+def test_enrolled_codex_home_templates_use_a_private_shared_projection(
+    schema, declare_home,
+):
+    from moonmind.omnigent.harness_platform.materializers import snapshot_provider_configuration
+
+    selected, configuration = private_codex_profile(
+        schema, home_path="/home/app/.codex", declare_home=declare_home,
+    )
+    before = deepcopy(vars(selected))
+    assert configuration_accepts_profile(configuration[1].document, selected)
+    assert not profile_has_native_inventory_route(selected, [configuration])
+    admitted = snapshot_provider_configuration(selected).codexConfiguration
+    assert admitted["privateHomeOnly"] is True
+    assert admitted["document"]["developer_instructions"] == "Preserve accepted work."
+    assert admitted["additionalFiles"][0]["path"] == "{{runtime_support_dir}}/AGENTS.md"
+    assert vars(selected) == before
+
+
+@pytest.mark.parametrize("changed", [
+    {"credential_source": "secret_ref"},
+    {"runtime_id": "claude_code"},
+    {"volume_mount_path": "/home/app/another-account"},
+    {"home_path_overrides": {"HOME": "/home/app/.codex"}},
+])
+def test_enrolled_home_template_translation_requires_its_codex_oauth_owner(changed):
+    from moonmind.provider_profiles.codex_configuration import oauth_configuration_for_profile
+
+    selected, _ = private_codex_profile(home_path="/home/app/.codex")
+    for key, value in changed.items():
+        setattr(selected, key, value)
+    configuration, reason = oauth_configuration_for_profile(selected)
+    assert configuration is None
+    assert "HOME" in reason
+
+
+def test_private_codex_oauth_configuration_is_frozen_with_its_account():
+    import hashlib
+    from moonmind.omnigent.harness_platform.execution_plan import ProviderConfigurationSnapshotRef
+    from moonmind.omnigent.harness_platform.materializers import (
+        load_provider_configuration_snapshot,
+        provider_configuration_snapshot_bytes, snapshot_provider_configuration,
+    )
+
+    selected, _ = private_codex_profile()
+    bindings = {"model": SimpleNamespace(providerProfileRef=selected.profile_id, materializerRef="codex-oauth-home@1")}
+    content = provider_configuration_snapshot_bytes(bindings, {"model": snapshot_provider_configuration(selected)})
+    snapshot = ProviderConfigurationSnapshotRef(artifactRef="artifact:admitted-private-config", contentDigest="sha256:" + hashlib.sha256(content).hexdigest())
+    selected.file_templates[0]["content_template"]["developer_instructions"] = "Later edit"
+    restored = load_provider_configuration_snapshot(content, snapshot, bindings)
+    assert restored["model"].codexConfiguration["document"]["developer_instructions"] == "Preserve accepted work."
+
+
+def test_absent_private_configuration_preserves_recorded_snapshot_bytes():
+    import json
+    from moonmind.omnigent.harness_platform.materializers import (
+        ProviderLaunchEnvironment, provider_configuration_snapshot_bytes,
+    )
+
+    bindings = {"model": SimpleNamespace(providerProfileRef="accepted-account", materializerRef="codex-oauth-home@1")}
+    recorded = json.dumps({"model": {
+        "providerProfileRef": "accepted-account", "materializerRef": "codex-oauth-home@1", "endpoint": None,
+    }}, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    assert provider_configuration_snapshot_bytes(bindings, {"model": ProviderLaunchEnvironment()}) == recorded
+
+
+@pytest.mark.parametrize("extra", [
+    {"model": "unselected-model"}, {"model_reasoning_effort": "unselected-effort"},
+    {"model_provider": "unselected"}, {"mcp_servers": {"unselected": {"command": "other"}}},
+    {"api_key": "unselected"}, {"history": {"persistence": "unsupported"}},
+])
+def test_private_oauth_preferences_cannot_replace_provider_or_tool_authority(extra):
+    selected, configuration = private_codex_profile()
+    selected.file_templates[0]["content_template"].update(extra)
+    assert not configuration_accepts_profile(configuration[1].document, selected)
+    assert profile_has_native_inventory_route(selected, [configuration])
+
+
 @pytest.mark.parametrize("schema", ["v1", "v2"])
 def test_supported_claude_oauth_tuning_uses_its_shared_credential_owner(schema):
     profile, configuration = profile_and_configuration("claude_code", schema)
@@ -120,6 +259,15 @@ def test_nonsecret_profile_shell_values_have_equivalent_shared_delivery(runtime,
     profile.env_template = {"PROJECT_RUNTIME_STYLE": "preserve-this-value"}
     assert configuration_accepts_profile(configuration[1].document, profile)
     assert not profile_has_native_inventory_route(profile, [configuration])
+
+
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code"])
+@pytest.mark.parametrize("value", ["{{selected_secret}}", "{{unavailable_context}}", "{{workspace_path.secret}}"])
+def test_unavailable_oauth_environment_context_keeps_its_existing_route(runtime, value):
+    profile, configuration = profile_and_configuration(runtime, "v2")
+    profile.env_template = {"PROJECT_REPORT_ROOT": value}
+    assert not configuration_accepts_profile(configuration[1].document, profile)
+    assert profile_has_native_inventory_route(profile, [configuration])
 
 
 def test_claude_oauth_tuning_is_frozen_with_its_bound_account():
