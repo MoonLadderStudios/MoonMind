@@ -121,10 +121,8 @@ def _image(ref):
     return rows[0]
 
 
-def observe_harness_identity(image_id, build_digest):
+def observe_harness_identity(image_id, build_digest, *, moonmind_image):
     """Read expected receipt identity from the selected immutable artifact."""
-    from moonmind.omnigent.harness_platform.catalog_service import _normalize_harness
-
     _require(
         isinstance(build_digest, str)
         and re.fullmatch(r"sha256:[0-9a-f]{64}", build_digest) is not None,
@@ -158,16 +156,46 @@ def observe_harness_identity(image_id, build_digest):
         isinstance(raw, dict) and raw.get("id") == "opencode-native",
         "expected native recovery harness is unavailable",
     )
-    harness = _normalize_harness(
-        raw,
-        omnigent_version=observed["version"],
-        omnigent_build_digest=build_digest,
+    # Normalize with the application that will validate the receipt. The host
+    # driver needs only PyYAML; never install source over the candidate image.
+    identity = json.loads(
+        _command(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                "--entrypoint",
+                "python",
+                moonmind_image,
+                "-c",
+                (
+                    "import json, sys; "
+                    "from moonmind.omnigent.harness_platform.catalog_service import _normalize_harness; "
+                    "h = _normalize_harness(json.loads(sys.argv[1]), "
+                    "omnigent_version=sys.argv[2], omnigent_build_digest=sys.argv[3]); "
+                    "print(json.dumps({'omnigentVersion': h.implementation.version, "
+                    "'omnigentBuildDigest': sys.argv[3], "
+                    "'harnessImplementationRef': h.implementation.implementation_ref()}))"
+                ),
+                json.dumps(raw),
+                observed["version"],
+                build_digest,
+            ]
+        ).stdout
     )
-    return {
-        "omnigentVersion": harness.implementation.version,
-        "omnigentBuildDigest": build_digest,
-        "harnessImplementationRef": harness.implementation.implementation_ref(),
-    }
+    _require(
+        isinstance(identity, dict)
+        and set(identity)
+        == {"omnigentVersion", "omnigentBuildDigest", "harnessImplementationRef"}
+        and identity["omnigentVersion"] == observed["version"]
+        and identity["omnigentBuildDigest"] == build_digest
+        and isinstance(identity["harnessImplementationRef"], str)
+        and bool(identity["harnessImplementationRef"]),
+        "candidate application did not normalize the observed harness identity",
+    )
+    return identity
 
 
 def validate_evidence(
@@ -783,7 +811,10 @@ def main(argv=None):
                 )
                 expected_harness_identity = observe_harness_identity(
                     image["Id"],
-                    image["Config"].get("Labels", {}).get("moonmind.omnigent.build_digest"),
+                    image["Config"]
+                    .get("Labels", {})
+                    .get("moonmind.omnigent.build_digest"),
+                    moonmind_image=app["Id"],
                 )
             images[role] = {"ref": ref, "id": image["Id"]}
         identity = {

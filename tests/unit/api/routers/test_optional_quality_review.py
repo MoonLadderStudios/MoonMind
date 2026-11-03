@@ -20,7 +20,9 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactNotFoundError,
 )
 from tests.artifact_access import access_for_test
-from tests.unit.api.routers.test_executions import _build_execution_record
+from tests.helpers.execution_api import (
+    _build_execution_record,
+)
 
 _REAL_CREATE_EXECUTION = executions.create_execution
 
@@ -244,6 +246,16 @@ async def test_invalid_candidate_fails_before_inference(review_api, mismatch):
         "Cookie: session=private-value; identity=private-value",
         "Set-Cookie: identity=private-value; Secure; HttpOnly",
         "xoxb-1234567890-1234567890-private-value",
+    ],
+    ids=[
+        "password",
+        "passwd",
+        "authorization",
+        "cookie-assignment",
+        "session-assignment",
+        "cookie-header",
+        "set-cookie-header",
+        "slack",
     ],
 )
 async def test_evidence_is_redacted_and_cannot_request_authority(

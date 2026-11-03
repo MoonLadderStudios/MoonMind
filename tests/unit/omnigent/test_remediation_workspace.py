@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -245,7 +246,10 @@ async def test_same_attempt_retry_keeps_candidate_edits_without_another_restore(
     owner.record_loop_head(_head())
     if live:
         from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
-        from moonmind.workflows.temporal.runtime.workspace_locators import resolve_sandbox_workspace_locator
+        from moonmind.workflows.temporal.runtime.workspace_locators import (
+            resolve_sandbox_workspace_locator,
+        )
+
         record = SandboxWorkspaceRecord(
             workspace_id="previous-attempt", workflow_id="workflow-1",
             step_execution_id="step-1", relative_path="repo",
@@ -284,8 +288,9 @@ async def test_same_attempt_retry_keeps_candidate_edits_without_another_restore(
 @pytest.mark.parametrize("rename_completed", [False, True])
 async def test_live_transfer_reconciles_an_interrupted_rename(tmp_path, monkeypatch, rename_completed):
     from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
-    from moonmind.workflows.temporal.runtime.workspace_locators import resolve_sandbox_workspace_locator
-    import moonmind.omnigent.remediation_workspace as module
+    from moonmind.workflows.temporal.runtime.workspace_locators import (
+        resolve_sandbox_workspace_locator,
+    )
 
     restorer = _Restorer({"artifact://workspace/C1": {"accepted.txt": "base"}})
     owner = SandboxRemediationWorkspaceOwner(tmp_path, restorer=restorer)
@@ -309,17 +314,17 @@ async def test_live_transfer_reconciles_an_interrupted_rename(tmp_path, monkeypa
         head_version=2, workspace_id=record.workspace_id, workflow_id=record.workflow_id,
         step_execution_id=record.step_execution_id,
     ))
-    original_replace = module.os.replace
+    original_replace = os.replace
     def interrupted_replace(old, new):
         if Path(old) == source:
             if rename_completed:
                 original_replace(old, new)
             raise OSError("transfer acknowledgement interrupted")
         return original_replace(old, new)
-    monkeypatch.setattr(module.os, "replace", interrupted_replace)
+    monkeypatch.setattr(os, "replace", interrupted_replace)
     with pytest.raises(OSError, match="acknowledgement interrupted"):
         await owner.admit_and_resolve(binding=_binding(), workflow_id="workflow-1", step_execution_id="step-2")
-    monkeypatch.setattr(module.os, "replace", original_replace)
+    monkeypatch.setattr(os, "replace", original_replace)
     owner = SandboxRemediationWorkspaceOwner(tmp_path, restorer=restorer)
     result = await owner.admit_and_resolve(binding=_binding(), workflow_id="workflow-1", step_execution_id="step-2")
     assert result["workspaceState"] == "live_reused"

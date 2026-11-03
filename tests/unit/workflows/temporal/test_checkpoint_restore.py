@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from moonmind.schemas.checkpoint_restore_models import (
     CheckpointRestoreError,
     ManagedWorkspaceRestoreRequest,
+    SandboxRestoreDestination,
 )
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
@@ -502,7 +503,11 @@ async def test_self_contained_cold_restore_needs_no_source_credential_or_host(
         authority_root=tmp_path / "authority", artifact_store=store
     )
     if sandbox_without_origin:
-        from moonmind.workflows.temporal.runtime.workspace_locators import SandboxWorkspaceRecord, SandboxWorkspaceRecordStore
+        from moonmind.workflows.temporal.runtime.workspace_locators import (
+            SandboxWorkspaceRecord,
+            SandboxWorkspaceRecordStore,
+        )
+
         workspace_id = hashlib.sha256(b"recovery:implement-2").hexdigest()[:24]
         SandboxWorkspaceRecordStore(service.root).ensure(SandboxWorkspaceRecord(workspace_id, "recovery", "implement-2", "repo"))
         request["destination"] = {"kind": "sandbox", "workspaceId": workspace_id, "stepExecutionId": "implement-2"}
@@ -512,7 +517,8 @@ async def test_self_contained_cold_restore_needs_no_source_credential_or_host(
     restored = tmp_path / "authority" / "new-run" / "repo"
     if sandbox_without_origin:
         restored = service.root / "temporal_sandbox" / workspace_id / "repo"
-        assert not subprocess.check_output(["git", "remote"], cwd=restored)
+        remotes = subprocess.check_output(["git", "remote"], cwd=restored)
+        assert not remotes
     restored_head = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=restored, text=True
     ).strip()
@@ -640,7 +646,11 @@ async def test_cold_restore_needing_origin_objects_uses_source_run_admitted_acce
     )
 
     if authority == "missing_repository":
-        from moonmind.workflows.temporal.runtime.workspace_locators import SandboxWorkspaceRecord, SandboxWorkspaceRecordStore
+        from moonmind.workflows.temporal.runtime.workspace_locators import (
+            SandboxWorkspaceRecord,
+            SandboxWorkspaceRecordStore,
+        )
+
         workspace_id = hashlib.sha256(b"recovery:implement-2").hexdigest()[:24]
         SandboxWorkspaceRecordStore(service.root).ensure(SandboxWorkspaceRecord(workspace_id, "recovery", "implement-2", "repo"))
         request["destination"] = {"kind": "sandbox", "workspaceId": workspace_id, "stepExecutionId": "implement-2"}
@@ -666,6 +676,36 @@ async def test_cold_restore_needing_origin_objects_uses_source_run_admitted_acce
     else:
         assert reads == ["env://SYNTHETIC_PAT"]
         assert clone_tokens == [(expected_token, "github.com")]
+
+
+def test_historical_sandbox_restore_keeps_its_receipt_identity():
+    destination = {
+        "kind": "sandbox",
+        "workspaceId": "saved-work",
+        "relativePath": "repo",
+        "repository": "acme/repo",
+        "stepExecutionId": "restore-step",
+    }
+    decoded = SandboxRestoreDestination.model_validate(destination)
+    assert decoded.model_dump(mode="json", by_alias=True) == destination
+
+
+@pytest.mark.parametrize("repository", [None, "acme/other"])
+def test_restore_repository_identity_cannot_change_the_selected_repository(repository):
+    with pytest.raises(ValidationError, match="repository identity"):
+        SandboxRestoreDestination.model_validate(
+            {
+                "kind": "sandbox",
+                "workspaceId": "saved-work",
+                "stepExecutionId": "restore-step",
+                "repository": repository,
+                "repositoryIdentity": {
+                    "endpoint": "https://github.enterprise.test",
+                    "canonicalRemote": "https://github.enterprise.test/acme/repo.git",
+                    "displayName": "acme/repo",
+                },
+            }
+        )
 
 
 def test_restore_contract_rejects_reused_identity_and_arbitrary_destination_path() -> (

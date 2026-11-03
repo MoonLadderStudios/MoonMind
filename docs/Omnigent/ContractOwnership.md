@@ -33,7 +33,7 @@ its one surviving owner. Owners hold the contract; all other docs point.
 | 20 | Fault-injection suite and invariants | `OmnigentFaultInjectionSuite.md` |
 | 21 | Mounted runtime tools and `gh` capability | `OmnigentHostMountedTools.md` |
 | 22 | Policy authority, persistence, approvals | `PolicyAuthority.md` |
-| 23 | Embedded host-auth compatibility surface | `EmbeddedHostAuthCompatibility.md` |
+| 23 | Retained embedded history and diagnostic URLs | `EmbeddedHostAuthCompatibility.md` |
 | 24 | Combined-stack validation and rollback runbook | `CombinedStackValidationAndRollback.md` |
 | 25 | Upstream-duplication audit (caller-backed ownership vs pinned upstream) | `UpstreamDuplicationAudit.md` |
 
@@ -99,6 +99,6 @@ Deliberately *not* merged (distinct responsibilities):
 | `OmnigentFaultInjectionSuite.md` | Owner: fault-injection suite | Desired-state design |
 | `OmnigentHostMountedTools.md` | Owner: mounted tools | Desired-state design |
 | `PolicyAuthority.md` | Owner: policy authority | Canonical desired state |
-| `EmbeddedHostAuthCompatibility.md` | Owner: embedded compat surface | Experimental, not default |
+| `EmbeddedHostAuthCompatibility.md` | Owner: retained embedded history | Read-only; transport removed |
 | `CombinedStackValidationAndRollback.md` | Owner: validation/rollback runbook | Current |
 | `UpstreamDuplicationAudit.md` | Owner: caller-backed upstream-duplication audit | Current |

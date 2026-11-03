@@ -34,12 +34,16 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integrat
 
 @pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
 @pytest.mark.parametrize("fixed_serialized", [False, True], ids=["pool", "fixed-serialized"])
+@pytest.mark.parametrize(
+    "explicit_scratch", [False, True], ids=["implicit-scratch", "explicit-scratch"]
+)
 async def test_pool_context_survives_source_host_and_worker_cleanup(
-    native_journey, monkeypatch, fixed_serialized
+    native_journey, monkeypatch, fixed_serialized, explicit_scratch
 ):
     journey = native_journey
     first = await pool.execute_selected_pool_source(
         journey, monkeypatch, include_successor=True, fixed_serialized=fixed_serialized,
+        explicit_scratch=explicit_scratch,
     )
     child = MoonMindAgentRun()
     child._pool_native_request = first.selected
@@ -56,6 +60,8 @@ async def test_pool_context_survives_source_host_and_worker_cleanup(
     successor.step_execution.resolved_skillset_ref = (
         first.selected.resolved_skillset_ref
     )
+    if explicit_scratch:
+        assert successor.workspace_spec["workspaceSource"] == {"kind": "scratch"}
     successor = parent._bind_shared_runtime_context(successor)
     assert successor.execution_profile_ref == native.PROFILE
     assert successor.step_execution.runtime_session_context is not None

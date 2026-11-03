@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from moonmind.omnigent.host_services.runtime_scripts import OmnigentRuntimeScriptService
+from tests.helpers.provider_egress import minimax_egress  # noqa: F401
 
 
 @pytest.mark.parametrize("materializer", ["omnigent-provider-config@1", "claude-oauth-home@1"])
@@ -39,9 +40,58 @@ def test_profile_owned_literal_environment_reaches_the_native_runner(materialize
     assert "ANTHROPIC_AUTH_TOKEN" not in environment
 
 
+def test_recorded_literal_environment_does_not_gain_template_interpretation():
+    _script, environment = OmnigentRuntimeScriptService().build_entrypoint(
+        credential_handles=[{
+            "credentialGeneration": 3, "materializerRef": "codex-oauth-home@1",
+            "attachments": [], "runtimeEnvironment": {"PROJECT_REPORT_ROOT": "{{workspace_path}}/reports"},
+        }],
+        skill_attachment={"targetPath": "/opt/skills"},
+        step_execution_id="workflow:run:work:execution:1", enable_codex_runtime=True,
+    )
+    assert environment["PROJECT_REPORT_ROOT"] == "{{workspace_path}}/reports"
+
+
+@pytest.mark.parametrize("templates,materializer,workspace", [
+    ({"PROJECT_REPORT_ROOT": "{{selected_secret}}"}, "codex-oauth-home@1", "/workspaces/run"),
+    ({"HOME": "{{workspace_path}}"}, "codex-oauth-home@1", "/workspaces/run"),
+    ({"GITHUB_TOKEN": "{{workspace_path}}"}, "codex-oauth-home@1", "/workspaces/run"),
+    ({"PROJECT_REPORT_ROOT": "{{workspace_path}}"}, "none@1", "/workspaces/run"),
+    ({"PROJECT_REPORT_ROOT": "{{workspace_path}}"}, "codex-oauth-home@1", None),
+])
+def test_profile_environment_template_cannot_acquire_foreign_context_or_authority(templates, materializer, workspace):
+    with pytest.raises(ValueError):
+        OmnigentRuntimeScriptService().build_entrypoint(
+            credential_handles=[{
+                "credentialGeneration": 3, "materializerRef": materializer,
+                "attachments": [], "runtimeEnvironmentTemplates": templates,
+            }],
+            skill_attachment={"targetPath": "/opt/skills"},
+            step_execution_id="workflow:run:work:execution:1", enable_codex_runtime=True,
+            workspace_path=workspace,
+        )
+
+
+def test_profile_environment_template_cannot_replace_an_existing_value():
+    with pytest.raises(ValueError, match="conflicting"):
+        OmnigentRuntimeScriptService().build_entrypoint(
+            credential_handles=[{
+                "credentialGeneration": 3, "materializerRef": "codex-oauth-home@1",
+                "attachments": [],
+                "runtimeEnvironment": {"PROJECT_REPORT_ROOT": "recorded literal"},
+                "runtimeEnvironmentTemplates": {"PROJECT_REPORT_ROOT": "{{workspace_path}}"},
+            }],
+            skill_attachment={"targetPath": "/opt/skills"},
+            step_execution_id="workflow:run:work:execution:1", enable_codex_runtime=True,
+            workspace_path="/workspaces/run",
+        )
+
+
 @pytest.mark.parametrize("harness", ["codex", "claude"])
 @pytest.mark.parametrize("deployment_setting", [False, True])
-def test_profile_shell_value_survives_the_native_executable_boundary(tmp_path, harness, deployment_setting, monkeypatch):
+@pytest.mark.parametrize("delivery", ["oauth-home", "provider-config"])
+@pytest.mark.parametrize("literal", ["exact value; $(not-executed)", "  exact value; $(not-executed)  "])
+def test_profile_shell_value_survives_the_native_executable_boundary(tmp_path, harness, deployment_setting, delivery, literal, monkeypatch):
     if deployment_setting:
         monkeypatch.setenv("MOONMIND_MANAGED_SESSION_NON_SECRET_ENV_KEYS", "PROJECT_RUNTIME_STYLE")
         monkeypatch.setenv("PROJECT_RUNTIME_STYLE", "deployment-default")
@@ -68,8 +118,8 @@ def test_profile_shell_value_survives_the_native_executable_boundary(tmp_path, h
     omnigent.chmod(0o700)
     script, environment = OmnigentRuntimeScriptService().build_entrypoint(
         credential_handles=[{
-            "credentialGeneration": 3, "materializerRef": f"{harness}-oauth-home@1",
-            "attachments": [], "runtimeEnvironment": {"PROJECT_RUNTIME_STYLE": "exact value; $(not-executed)"},
+            "credentialGeneration": 3, "materializerRef": f"{harness}-oauth-home@1" if delivery == "oauth-home" else "omnigent-provider-config@1",
+            "attachments": [], "runtimeEnvironment": {"PROJECT_RUNTIME_STYLE": literal},
         }],
         skill_attachment={"targetPath": str(skills)},
         step_execution_id="workflow:run:work:execution:1",
@@ -85,14 +135,16 @@ def test_profile_shell_value_survives_the_native_executable_boundary(tmp_path, h
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
-        "value":"exact value; $(not-executed)",
+        "value":literal,
         "home":"/private/native-home", "codex_home":"/private/native-codex-home",
     }
     assert "exact value" not in script
     assert (home / ".omnigent/moonmind/runtime-context/provider-PROJECT_RUNTIME_STYLE").stat().st_mode & 0o777 == 0o600
 
 
-def test_custom_codex_projection_runs_through_the_native_executable_boundary(tmp_path):
+@pytest.mark.parametrize("additional_file", [False, True])
+@pytest.mark.usefixtures("minimax_egress")
+def test_custom_codex_projection_runs_through_the_native_executable_boundary(tmp_path, additional_file):
     import os
 
     from moonmind.omnigent.harness_platform.materializers import (
@@ -105,7 +157,14 @@ def test_custom_codex_projection_runs_through_the_native_executable_boundary(tmp
         directory.mkdir()
     projection = home / ".moonmind-provider-config"
     projection.mkdir()
-    endpoint, reason = codex_provider_config_endpoint(profile())
+    selected = profile()
+    if additional_file:
+        selected.file_templates.append({
+            "path": "{{runtime_support_dir}}/codex-home/AGENTS.md",
+            "format": "text", "merge_strategy": "append",
+            "content_template": "Selected global instructions.\n", "permissions": "0600",
+        })
+    endpoint, reason = codex_provider_config_endpoint(selected)
     assert endpoint is not None, reason
     (projection / "codex-profile.json").write_text(
         json.dumps(endpoint.codexConfiguration)
@@ -119,7 +178,9 @@ def test_custom_codex_projection_runs_through_the_native_executable_boundary(tmp
         "config=tomllib.loads((pathlib.Path(os.environ['CODEX_HOME'])/'config.toml').read_text())\n"
         "print(json.dumps({'home':os.environ['CODEX_HOME'],'step':os.environ['MOONMIND_STEP_EXECUTION_ID'],"
         "'skills':os.environ['MOONMIND_ACTIVE_SKILLS_DIR'],'model':config['model'],"
-        "'retries':config['model_providers']['custom']['request_max_retries']}))\n"
+        "'retries':config['model_providers']['custom']['request_max_retries'],"
+        "'globalInstructions':(pathlib.Path(os.environ['CODEX_HOME'])/'AGENTS.md').read_text() "
+        "if (pathlib.Path(os.environ['CODEX_HOME'])/'AGENTS.md').exists() else None}))\n"
     )
     native.chmod(0o700)
     omnigent = binaries / "omnigent"
@@ -169,7 +230,9 @@ def test_custom_codex_projection_runs_through_the_native_executable_boundary(tmp
         "skills": str(skills),
         "model": "example-model",
         "retries": 4,
+        "globalInstructions": "Selected global instructions.\n" if additional_file else None,
     }
+    assert not (home / ".codex/AGENTS.md").exists()
     passthrough = set(environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(","))
     assert {"CODEX_HOME", "OMNIGENT_CODEX_PATH"} <= passthrough
 
@@ -617,7 +680,8 @@ def test_control_file_authenticates_http_and_host_tunnel_on_each_start(
 
 
 @pytest.mark.parametrize("github_host", [None, "github.enterprise.test"])
-def test_runtime_script_builder_remains_portable_with_admitted_attachment(github_host):
+@pytest.mark.parametrize("oauth_configuration", [False, True])
+def test_runtime_script_builder_remains_portable_with_admitted_attachment(github_host, oauth_configuration):
     """The native verifier imports only the builder, without the application."""
 
     builder = (
@@ -643,15 +707,22 @@ attachment = (
     if sys.argv[2] else None
 )
 script, environment = module.OmnigentRuntimeScriptService().build_entrypoint(
-    credential_handles=[],
+    credential_handles=[{
+        "materializerRef": "codex-oauth-home@1", "attachments": [],
+        "runtimeEnvironment": {"MOONMIND_CODEX_PROFILE_CONFIGURATION": json.dumps({
+            "document": {"developer_instructions": "Keep accepted work."}, "privateHomeOnly": True,
+        })},
+    }] if sys.argv[3] == "yes" else [],
     skill_attachment={"targetPath": "/opt/moonmind-skills"},
     step_execution_id="workflow:run:node-1:execution:1",
     github_credential_attachment=attachment,
+    enable_codex_runtime=sys.argv[3] == "yes",
 )
 print(json.dumps({"script": script, "environment": environment}))
 """,
             str(builder),
             github_host or "",
+            "yes" if oauth_configuration else "no",
         ],
         text=True,
         capture_output=True,

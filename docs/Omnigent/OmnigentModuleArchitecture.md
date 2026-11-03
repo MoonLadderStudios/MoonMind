@@ -39,7 +39,6 @@ dependency direction.
 | `moonmind/omnigent/harness_platform/` value modules (`agent_profile`, `attestation`, `capabilities`, `catalog`, `credential_bindings`, `execution_plan`, `failures`, `harness_registry`, `runtime_binding`, `skills`, `support`) | Immutable schemas, capability/support decisions, approved-harness registration data | Pure |
 | `moonmind/omnigent/codex_execution_decisions.py` | Launch classification, budget authority, request identity, and authored-request binding for the legacy Codex realizer | Pure |
 | `moonmind/omnigent/host_failures.py` | Host failure vocabulary | Pure |
-| `moonmind/omnigent/host_auth_contracts.py` | Embedded host-auth profile, failure, and rotation vocabulary | Pure |
 | `moonmind/omnigent/host_ports.py`, `execution_ports.py` | Narrow ports for host realization and profile-bound execution | Pure |
 | `moonmind/omnigent/control_plane/turn_commands.py` | Canonical turn command use case | Application |
 | `moonmind/omnigent/host_runtime.py` | Harness-neutral host realization and cleanup use case | Application |
@@ -49,7 +48,6 @@ dependency direction.
 | `moonmind/omnigent/execution_adapters.py` | Provider Profile authority, execution policy snapshot, and Temporal attempt adapters | Persistence |
 | `moonmind/omnigent/host_services/` | Docker/Compose launcher, workspace, skills, mounted tools, GitHub credentials, egress, registration, attestation, cleanup, legacy host container inventory | Adapter |
 | `moonmind/omnigent/mounted_tool_preflight.py` | Shared GitHub credential visibility and repository-access checks for generic and retained profile-bound hosts | Adapter |
-| `moonmind/omnigent/host_auth_profile.py`, `host_auth_store.py` | Embedded host-auth SecretRef resolution, readiness projection, durable profile row | Adapter |
 | `moonmind/omnigent/harness_platform/materializers.py`, `credential_materializers.py` | Credential materializer descriptors and provisioning | Adapter |
 | `moonmind/omnigent/bridge_*.py`, `execute.py`, `oauth_host_runtime.py`, `profile_bound_execution.py` | Replay-visible legacy Codex transport, session driver, host lifecycle, and coordinator | Adapter (legacy) |
 | `moonmind/omnigent/workspace_publication.py`, `bridge_artifacts.py`, `remediation_workspace.py` | Workspace publication, artifact/evidence, checkpoint adapters | Adapter |
@@ -174,11 +172,18 @@ head, execution identity and admitted Profile/launch snapshot before transferrin
 or restoring its attempt-owned workspace. Preparation retries preserve candidate
 edits; interrupted transfers reconcile their recorded intent. New Git save
 handoffs use the canonical checkpoint to restore HEAD, index and worktree,
-including deletions, after local workspace loss; recorded archive handoffs retain
-their additive interpretation. Restored directories and contents transfer to the
+including deletions, after local workspace loss. They carry the admitted
+repository identity so self-contained saves retain Enterprise remotes without
+acquiring source credentials. Recorded archive handoffs retain their additive
+interpretation. Restored directories and contents transfer to the
 selected runtime UID. An existing candidate without admission
 proof is preserved with an explicit uncertainty error. Both paths use the scoped
 Temporal artifact adapter; model and repository credentials remain separate.
+Fresh repository preparation selects the authored local target branch through
+the same volume owner and records completion in repository-local metadata.
+Redelivery preserves later candidate branches and edits; an unproven existing
+candidate is retained with an uncertainty error instead of being reset.
+Checkpoint restores retain their saved branch and history.
 
 The stable runtime binding store and legacy harness binding store currently
 share a table and binding-ID prefix, but not a serialized authority schema.
@@ -236,9 +241,8 @@ legacy surface that no row classifies.
 | `active_product_path` | Still the supported path for new work. |
 | `new_admission_disabled` | No new plan may select it; recorded work continues. |
 
-Plan compilation (`harness_platform/planner.py:compile_execution_plan`), runtime
-selection (`cutover.py:select_runtime` via `new_work_runtime.py`), and the
-embedded-transport bridge boundary (`omnigent_bridge.py`) consult the class
+Plan compilation (`harness_platform/planner.py:compile_execution_plan`) and runtime
+selection (`cutover.py:select_runtime` via `new_work_runtime.py`) consult the class
 before admitting, so a trusted planner default, an alternate API client's
 explicit selection, a schedule, and a preset are all held to the same
 code-owned state. Disabling new admission never affects execution,
@@ -256,6 +260,8 @@ with the owner of the affected behavior:
   (`tests/unit/workflows/temporal/test_legacy_generation_replay.py` and the
   retained workflow histories);
 - historical reads — the read-model tests of the component that serves them;
+  retained embedded metadata, event cursors and captured terminal transcripts
+  use the durable read owners without constructing a transport;
 - active work and cleanup — the existing drain and cleanup owners
   (`codex_cutover_drain.py`, `embedded_drain.py`, the host janitors), used only
   for components that actually have active or cleanup consumers;
@@ -283,7 +289,6 @@ deletion removes its row in the same change rather than leaving a stale entry.
 | OpenCode image variable for existing deployments / legacy Host Classes | `omnigent.legacy.opencode_host_image_alias` | `active_product_path` |
 | Pi host image variable | `omnigent.legacy.pi_host_image_alias` | `active_product_path` |
 | `native_ui_compat.py` chat projection | `omnigent.legacy.native_ui_compat` | `active_product_path` |
-| Embedded host/runner transport admission | `omnigent.legacy.embedded_host_transport` | `new_admission_disabled` |
 
 Direct Codex/Claude and AgentSession adapters retain recorded work, opaque
 serialized plans, native extension inputs/direct targets, Profiles without exact shared
@@ -295,15 +300,16 @@ model-resolution evidence without another account choice or capacity unit. Later
 Profile edits cannot change that evidence; ordinary explicit metadata keeps its
 existing precedence over tier defaults. Codex same-epoch successors carry the selected
 account, durable context and verified saved workspace through the parent,
-including Continue-As-New. Old parents without this handoff keep native dispatch.
-After a drained shared turn reports provider cooldown, new parents restart the
-logical step through its existing retry owner and remaining budget. The parent
-verifies and adopts the child's scoped canonical save after worker cleanup;
-it does not recapture the deleted tree or rebind the delivered runtime journal.
-Cancellation starts no successor. Failed save adoption stops automatic restart
-and retains its checkpoint reference in recovery diagnostics. A selected Profile
-that cannot restore this save reports the missing capability instead of starting
-from different inputs.
+including Continue-As-New. Restoring a verified saved workspace replaces its
+inherited scratch source; replay preserves older recorded requests. Old parents
+without this handoff keep native dispatch. After a drained shared turn reports
+provider cooldown, new parents restart the logical step through its existing retry
+owner and remaining budget. The parent verifies and adopts the child's scoped
+canonical save after worker cleanup; it does not recapture the deleted tree or
+rebind the delivered runtime journal. Cancellation starts no successor. Failed save
+adoption stops automatic restart and retains its checkpoint reference in recovery
+diagnostics. A selected Profile that cannot restore this save reports the missing
+capability instead of starting from different inputs.
 Fresh native steps with equivalent configuration use this same fenced handoff
 after fixed, implicit or pool account selection, without rewriting their stored
 submission. Older parents without the handoff retain their recorded commands.
@@ -313,13 +319,21 @@ later Profile edit introduces unsupported settings; the step reports that gap.
 Fixed step accounts, harnesses and distinct model/effort pairs have
 their own immutable plans compiled by the same admission owner, linked
 through the existing artifact owner and carried across successor attempts.
-The immutable root plan binds each complete step handoff by digest; admission,
-planning and continuation reject a replaced or missing handoff. Retained plans
+An explicit root rollout target constrains the root plan; independent steps
+validate their own targets against their selected Profiles.
+The immutable root plan binds each complete step handoff by digest and retains
+its verified artifact inputs for saved schedules. Admission, planning and
+continuation reject a replaced or missing handoff. Retained plans
 without this field preserve their original bytes and plan identities.
-Frozen successors retain each step's saved Profile snapshot. Exact reruns
-inherit their admitted artifact grants before Temporal can start.
+Frozen successors retain each step's saved Profile and provider configuration
+snapshots. Exact reruns inherit their admitted artifact grants before Temporal
+can start.
+Generated remediation, verification and evidence retries inherit their controller's
+admitted step plan; a replay patch preserves older histories' recorded requests.
+Schedule admission shares ordinary submission's step ID defaults and aliases.
 Fresh scheduled occurrences resolve current step configuration; their cache
-tracks selected Profile tiers/configuration, excluding generated plan refs.
+tracks Profile tiers, resolved configuration versions and selected policy authority,
+excluding generated plan refs.
 Replacing a root without specialized steps explicitly clears prior handoffs.
 Equivalent product submissions,
 native defaults and same-account step aliases use the shared route, including
@@ -330,9 +344,21 @@ Raw deferred step-account matching and tool-only boundary validation remain inta
 Replaced defaults never select ambient credentials.
 OAuth-home delivery attaches the enrollment-owned volume. Codex/Claude nonsecret
 shell settings use the existing project-value guard and admitted configuration
-artifact; native executable wrappers restore them after child environment filtering
-without overriding private HOME or editing the enrolled home. Protected environment,
-file or HOME choices retain their native adapter until an equivalent handoff exists.
+artifact for OAuth and API-key Profiles, retaining exact literal values.
+Newly admitted environment templates carry only workspace and runtime
+support-directory context, rendered through the shared Profile template renderer
+after the attempt's native workspace path is known. Recorded literal values keep
+their original interpretation. Native executable wrappers restore values after child environment filtering
+without overriding private HOME or editing the enrolled home. Codex OAuth
+preferences and nonsecret files authored for a run-support or enrolled HOME use
+the same artifact and renderer in the native owner's private app-server HOME.
+Selected inherited instruction links become private files; untouched entries stay
+visible. Environment templates referencing those files bind to that private HOME
+at native launch; generic support paths and recorded literals retain their meaning.
+Credential, hook, cache and history paths cannot be replaced. Native
+model/provider/tool authority and enrollment remain intact. Protected settings,
+native model-default suppression, uncarried tool/auth configuration and other
+HOME choices retain their adapter until an equivalent handoff exists.
 Recorded plans retain their original materializer identity.
 Profile-bound execution and its OAuth host launcher admit no new plans;
 they retain queued starts, retries and cleanup under their recorded authority. Supported
@@ -342,13 +368,25 @@ declared Claude environment bundle and Codex Responses file configuration, run
 on the shared lifecycle with their endpoint, model pins and non-secret tuning.
 New plans reference a verified artifact containing those settings per credential
 slot, so queued starts and frozen successors keep their admitted configuration
-after a Profile edit. Fresh scheduled occurrences resolve current settings.
+after a Profile edit. Refused successor cleanup preserves the original artifact.
+Fresh scheduled occurrences resolve current settings without changing recorded
+step selections.
 Secret values still resolve
 after acquisition under the existing credential-generation fence. Older plans
 without this snapshot retain their recorded interpretation.
-Codex developer instructions, project-instruction discovery and history preferences
-also reach its private session config. Native Profile aliases translate a requested
-model once during shared compilation, using the same lookup as direct launch.
+Codex reasoning summaries, verbosity, context and compaction limits, personality,
+developer instructions, project-instruction discovery and history preferences reach
+its private session config for OAuth and API-key Profiles; native Codex validates
+and normalizes these values. API-key Codex Profiles can carry preferences
+without declaring another provider and add nonsecret files within their private
+HOME, including global instructions. Their declared key and endpoint stay selected;
+unresolved native model-default suppression retains its route. The same
+renderer serves direct and packaged launches; the native wrapper writes only into
+its private home, retains frozen settings and reuses a completed projection on
+process restart. An interrupted append stops visibly until step recovery provisions
+a fresh home, preserving the original credential and history owners. Native Profile aliases translate explicit model overrides once during shared
+compilation, using the same lookup as direct launch. Resolved defaults and tiers
+keep their selected model.
 Tool/authentication and launch settings
 without an equivalent projection retain their native route.
 Explicit same-epoch Codex context reuse forks durable native history through

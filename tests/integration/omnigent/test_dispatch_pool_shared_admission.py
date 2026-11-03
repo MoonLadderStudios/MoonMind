@@ -91,6 +91,8 @@ def _submission(payload, *, fixed_serialized, runtime):
     selected = parameters["workflow"]["runtime"]
     selected.pop("profileSelector")
     selected["providerProfileRef"] = native_fixture.PROFILE
+    if "workspace" in parameters:
+        parameters["workspaceSpec"] = parameters.pop("workspace")
     return {
         "workflowType": "MoonMind.UserWorkflow",
         "initialParameters": {
@@ -103,7 +105,7 @@ def _submission(payload, *, fixed_serialized, runtime):
 
 async def execute_selected_pool_source(
     native_journey, monkeypatch, *, scenario="ordinary", include_successor=False,
-    fixed_serialized=False,
+    fixed_serialized=False, explicit_scratch=False,
 ):
     """Exercise the first admitted pool turn, optionally retaining a second step."""
     journey = native_journey
@@ -222,6 +224,10 @@ async def execute_selected_pool_source(
                         },
                         "publishMode": "none",
                         **({"repository": repository} if repository else {}),
+                        **(
+                            {"workspace": {"workspaceSource": {"kind": "scratch"}}}
+                            if explicit_scratch else {}
+                        ),
                     },
                 }, fixed_serialized=fixed_serialized, runtime=runtime),
             )
@@ -374,7 +380,7 @@ async def execute_selected_pool_source(
                 )
             ).one()
             assert row.lease_state == "held" and row.execution_plan_ref is None
-            return
+            return None
         assert result["disposition"] == "shared", result
         shared = AgentExecutionRequest.model_validate(result["request"])
         assert shared.agent_kind == "external" and shared.agent_id == "omnigent"
@@ -417,7 +423,7 @@ async def execute_selected_pool_source(
             assert shared.parameters["publishMode"] == "pr"
             assert shared.parameters["publishBaseBranch"] == "selected-target"
             assert shared.parameters["commitMessage"] == "Publish selected pool work"
-            return
+            return None
         assert plan.payload.harnessId == journey.harness
         if scenario == "model_alias":
             assert request.parameters["model"] == "selected-pool-alias"

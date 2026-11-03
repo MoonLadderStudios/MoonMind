@@ -24,7 +24,7 @@ from moonmind.workflows.temporal.service import TemporalExecutionService
 from tests.integration.omnigent import test_generic_native_durable_journey as native_fixture
 from tests.integration.omnigent.test_generic_native_durable_journey import _DURABLE_SKILL_NAME, PROFILE
 from tests.unit.api.routers.test_execution_saved_profile_boundaries import agent_requests
-from tests.unit.api.routers.test_executions import _override_user_dependencies
+from tests.helpers.execution_api import _override_user_dependencies
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 native_journey = native_fixture.native_journey
@@ -36,7 +36,8 @@ session_factory = native_fixture.session_factory
     ("opencode-native", "opencode-native"), ("codex-native", "claude-native"),
     ("claude-native", "codex-native"), ("opencode-native", "codex-native"),
 ], indirect=["native_journey"])
-async def test_independent_profile_and_harness_get_their_own_shared_plan(native_journey, step_harness, monkeypatch):
+@pytest.mark.parametrize("explicit_root_target", [False, True])
+async def test_independent_profile_and_harness_get_their_own_shared_plan(native_journey, step_harness, explicit_root_target, monkeypatch):
     journey = native_journey
     monkeypatch.setattr(settings.workflow, "default_runtime", "omnigent")
     monkeypatch.setattr(settings.workflow, "github_repository", "")
@@ -82,6 +83,11 @@ async def test_independent_profile_and_harness_get_their_own_shared_plan(native_
                         {"id": "selected", "instructions": "Use the step account.", "type": "skill", "skill": {"id": _DURABLE_SKILL_NAME}, "runtime": {"mode": step_mode, "providerProfileRef": selected_profile, "model": "example/step-model"}},
                     ]},
                 "publishMode": "none", "workspace": {"workspaceSource": {"kind": "scratch"}},
+                **({"requestedTargetId": {
+                    "codex-native": "codex.generic-omnigent",
+                    "claude-native": "claude.generic-omnigent",
+                    "opencode-native": "opencode.generic-omnigent",
+                }[journey.harness]} if explicit_root_target else {}),
             }})
         assert response.status_code == 201, response.text
         record = await session.get(TemporalExecutionCanonicalRecord, response.json()["workflowId"])
@@ -96,6 +102,8 @@ async def test_independent_profile_and_harness_get_their_own_shared_plan(native_
         assert selected.planRef != root.planRef
         assert root.payload.harnessId == journey.harness
         assert selected.payload.harnessId == step_harness
+        if explicit_root_target:
+            assert root.payload.runtimeProviderRollout.targetId == record.parameters["workflow"]["runtime"]["targetId"]
         assert root.payload.credentialBindings["primary-model"].providerProfileRef == PROFILE
         assert selected.payload.credentialBindings["primary-model"].providerProfileRef == selected_profile
         assert selected.payload.modelConfig.qualifiedId == "example/step-model"

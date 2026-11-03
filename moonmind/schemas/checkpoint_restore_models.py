@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
+
+from moonmind.workflows.executions.repository_contract import RepositoryIdentity
 
 from .workspace_locator_models import ManagedWorkspaceLocator, SandboxWorkspaceLocator
-
 
 RESTORATION_EVIDENCE_CONTENT_TYPE = (
     "application/vnd.moonmind.managed-workspace-restoration+json;version=1"
@@ -53,7 +54,32 @@ class RestoreDestination(BaseModel):
 class SandboxRestoreDestination(SandboxWorkspaceLocator):
     relative_path: Literal["repo"] = Field("repo", alias="relativePath")
     repository: str | None = Field(None, pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+    repository_identity: RepositoryIdentity | None = Field(
+        None, alias="repositoryIdentity"
+    )
     step_execution_id: str = Field(alias="stepExecutionId", min_length=1)
+
+    @model_serializer(mode="wrap")
+    def serialize_repository_identity(self, handler):
+        payload = handler(self)
+        # Retained restore receipts hash the decoded request. An omitted
+        # identity must keep those historical bytes and idempotency keys.
+        if self.repository_identity is None:
+            payload.pop("repositoryIdentity", None)
+            payload.pop("repository_identity", None)
+        return payload
+
+    @model_validator(mode="after")
+    def validate_repository_identity(self) -> "SandboxRestoreDestination":
+        if self.repository_identity is not None and (
+            not self.repository
+            or self.repository.casefold()
+            != self.repository_identity.display_name.casefold()
+        ):
+            raise ValueError(
+                "repository identity conflicts with the restore repository"
+            )
+        return self
 
 
 class ManagedWorkspaceRestoreRequest(BaseModel):

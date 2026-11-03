@@ -578,6 +578,51 @@ async def test_refreshed_scope_choice_survives_saved_scheduling(boundary, scope_
     assert saved == original
 
 
+@pytest.mark.parametrize("mapped_scope_marker", [False, True])
+@pytest.mark.parametrize("scope_value", [False, True])
+async def test_nested_project_scope_preserves_current_and_retained_readiness(
+    boundary, monkeypatch, mapped_scope_marker, scope_value
+):
+    workflow, calls, sessions = boundary
+    async with sessions() as session:
+        catalog = PresetCatalogService(session)
+        await catalog.sync_seed_templates(seed_dir=Path("api_service/data/presets"))
+        expanded = await catalog.expand_template(
+            slug="github-project-implement",
+            inputs={"include_all_authors": scope_value},
+            context={"repository": "o/r"},
+        )
+        current = await catalog.get_template(slug="github-project-implement")
+    saved = parameters()
+    saved["requiredCapabilities"] = current["requiredCapabilities"]
+    saved["task"]["appliedStepTemplates"] = [expanded["appliedTemplate"]]
+    original = deepcopy(saved)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda marker: (
+            mapped_scope_marker
+            if marker == run_module.GITHUB_ISSUE_SEARCH_MAPPED_SCOPE_PATCH
+            else True
+        ),
+    )
+    if mapped_scope_marker:
+        assert (
+            await workflow._run_planning_stage(
+                parameters=saved, input_ref=None, plan_ref="art_saved_plan"
+            )
+            == "art_saved_plan"
+        )
+    else:
+        with pytest.raises(ApplicationError, match="plan refresh") as raised:
+            await workflow._run_planning_stage(
+                parameters=saved, input_ref=None, plan_ref="art_saved_plan"
+            )
+        assert raised.value.type == "saved_preset_capabilities_stale"
+    assert calls == [ACTIVITY]
+    assert saved == original
+
+
 async def test_continued_run_keeps_pinned_search_behavior(boundary, monkeypatch):
     """Durable continuations keep admitted progress without a scope refresh."""
     workflow, calls, sessions = boundary

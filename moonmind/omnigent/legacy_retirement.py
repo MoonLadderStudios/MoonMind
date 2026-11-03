@@ -195,7 +195,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         missingOutcome=(
             "OAuth Profiles with protected or untranslated per-run environment, file or HOME settings; "
             "Codex key Profiles the Omnigent provider config cannot carry "
-            "exactly: additional files, uncarried tool/launch settings, authentication "
+            "exactly: files outside the declared private Codex HOME, uncarried tool/launch settings, authentication "
             "outside the selected key SecretRef, or endpoints the existing "
             "egress policy does not admit. Declared single-provider Responses "
             "configuration, including the rendered managed MiniMax recipe, "
@@ -595,42 +595,6 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         missingOutcome=(
             "A projection for retained direct and embedded sessions whose"
             " recorded events only this classifier reads."
-        ),
-    ),
-    LegacyPathRecord(
-        pathId="omnigent.legacy.embedded_host_transport",
-        owner="omnigent-control-plane",
-        description=(
-            "Retired embedded host/runner transport admission enforcement "
-            "(MoonLadderStudios/MoonMind#3955): the trusted selection and "
-            "HTTP boundaries that reject new sessions, hosts, and credential "
-            "consumers through the experimental embedded transport with an "
-            "actionable proxy alternative. Retained sessions drain through "
-            "their recorded mode/endpoint and cleanup owner. "
-            "Proxy mode is the supported topology."
-        ),
-        retirementClass=RetirementClass.NEW_ADMISSION_DISABLED,
-        surfaces=(
-            "python:moonmind.omnigent.bridge_config:"
-            "assert_new_embedded_transport_admission_allowed",
-            "python:moonmind.omnigent.bridge_config:embedded_transport_retirement",
-            "python:api_service.api.routers.omnigent_bridge:"
-            "_reject_new_embedded_transport_admission",
-            "python:api_service.api.routers.omnigent_bridge:"
-            "_require_new_embedded_transport_admission",
-        ),
-        consumer=(
-            "Retained embedded sessions, host leases and pending cleanup "
-            "authority draining through their recorded mode, endpoint and "
-            "cleanup owner."
-        ),
-        removalCondition=(
-            "``/embedded-transport-drain`` reports drained on every "
-            "deployment: zero active embedded sessions and host leases and "
-            "observed-empty pending cleanup. Admitted-key create retries "
-            "reattach only rows that count as active embedded sessions, so a "
-            "drained report also rules out a retry recreating a consumer. "
-            "Read-only history decoding and ``embedded=1`` native UI remain."
         ),
     ),
 )

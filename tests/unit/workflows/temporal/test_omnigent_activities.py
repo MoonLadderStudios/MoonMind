@@ -101,9 +101,13 @@ async def test_prepare_child_execution_plan_recompiles_child_skill_authority(
     async def fake_compile_and_persist_execution_plan(**kwargs):
         kwargs["db_session"].commit.assert_not_awaited()
         observed["compile"] = kwargs
-        return SimpleNamespace(
+        return omnigent_execution_plan_service.PersistedOmnigentExecutionPlan(
+            artifact_access=access_for_test("user-1"),
+            envelope=SimpleNamespace(),
             binding=child_binding,
+            artifact_refs=("art-child-plan", "art-child-skills"),
             resolved_skillset_ref="art-child-skills",
+            resolved_skillset_digest="sha256:" + "e" * 64,
         )
 
     class FakeDbSession:

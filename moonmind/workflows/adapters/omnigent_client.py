@@ -380,8 +380,10 @@ class OmnigentHttpClient:
     ) -> None:
         """``connect_outage_grace_seconds`` lets a durable caller ride out a
         server restart: requests whose connection could not be established are
-        re-sent until the grace ends. The grace is one window per client, so a
-        server that stays down costs a single wait rather than one per call.
+        re-sent until the grace ends. Read-only GET responses can also be
+        reread after a transport failure; delivered writes are never replayed.
+        The grace is one window per client, so a server that stays down costs
+        a single wait rather than one per call.
         The default of zero keeps interactive and health callers fail-fast.
         """
 
@@ -676,7 +678,7 @@ class OmnigentHttpClient:
                     self._connect_outage_deadline = None
                     yield event
             except OmnigentClientError as exc:
-                if await self._await_connect_outage_retry(
+                if await self._await_transport_outage_retry(
                     exc, window_started_at=window_started_at
                 ):
                     continue
@@ -967,8 +969,8 @@ class OmnigentHttpClient:
                     method, path, request_timeout=request_timeout, **kwargs
                 )
             except OmnigentClientError as exc:
-                if await self._await_connect_outage_retry(
-                    exc, window_started_at=window_started_at
+                if await self._await_transport_outage_retry(
+                    exc, window_started_at=window_started_at, method=method
                 ):
                     continue
                 raise
@@ -1087,8 +1089,8 @@ class OmnigentHttpClient:
             try:
                 response = await self._request_resource_once(method, path)
             except OmnigentClientError as exc:
-                if await self._await_connect_outage_retry(
-                    exc, window_started_at=window_started_at
+                if await self._await_transport_outage_retry(
+                    exc, window_started_at=window_started_at, method=method
                 ):
                     continue
                 raise
@@ -1195,22 +1197,29 @@ class OmnigentHttpClient:
     def _redact(self, value: str) -> str:
         return redact_sensitive_text(self._redactor.scrub(value))
 
-    async def _await_connect_outage_retry(
+    async def _await_transport_outage_retry(
         self,
         exc: OmnigentClientError,
         *,
         window_started_at: float | None = None,
+        method: str | None = None,
     ) -> bool:
-        """Wait before re-sending a request the server never received.
+        """Bound safe observation retries by the existing outage window.
 
-        Only a failed connect proves the request was not delivered; any answer,
-        including an HTTP error or a broken read, ends the outage and is never
-        replayed here. The outage window is anchored at the first attempt so
-        the configured grace bounds the whole wait instead of starting after
-        the first connect timeout completes.
+        Failed connects precede delivery. A broken GET response can also be
+        reread, but a delivered write is never replayed. A partially consumed
+        live-tail stream has no replay cursor and is left to its caller's
+        snapshot reconciliation. HTTP error responses remain authoritative.
+        The window is anchored at the first attempt, not the first failure.
         """
 
-        if not isinstance(exc.__cause__, _CONNECT_OUTAGE_ERRORS):
+        safe_read_failure = method == "GET" and isinstance(
+            exc.__cause__, (httpx.ReadError, httpx.RemoteProtocolError)
+        )
+        if (
+            not isinstance(exc.__cause__, _CONNECT_OUTAGE_ERRORS)
+            and not safe_read_failure
+        ):
             self._connect_outage_deadline = None
             return False
         if self._connect_outage_grace_seconds <= 0:

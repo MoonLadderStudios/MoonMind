@@ -15,11 +15,12 @@ MoonLadderStudios/MoonMind#3955, and is intentionally absent from this list.)
 
 from __future__ import annotations
 
-import ast
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+
+from tests.helpers.import_inventory import imports
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -41,20 +42,7 @@ RUNTIME_VALIDATOR_MODULES = (
 
 
 def _imports(relative_path: str) -> tuple[str, ...]:
-    module = relative_path.removesuffix(".py").replace("/", ".")
-    tree = ast.parse((REPO_ROOT / relative_path).read_text(encoding="utf-8"))
-    imported: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported.extend(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            if node.level:
-                package = module.split(".")[: -node.level]
-                imported.append(".".join([*package, node.module]))
-            else:
-                imported.append(node.module)
-    return tuple(imported)
-
+    return imports(REPO_ROOT, relative_path)
 
 def test_faultlab_lives_in_tools_not_in_production_package() -> None:
     assert not OLD_FAULTLAB_DIR.exists(), (

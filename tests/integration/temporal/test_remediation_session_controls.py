@@ -11,7 +11,7 @@ from api_service.services.remediation_actions import TemporalRemediationControlP
 from api_service.services.remediation_session_controls import (
     RemediationSessionControlService,
 )
-from moonmind.omnigent.bridge_config import OmnigentBridgeConfig
+from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_EMBEDDED, OmnigentBridgeConfig
 from moonmind.omnigent.bridge_proxy import OmnigentBridgeSessionProxy
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.control_plane.repositories import OmnigentControlPlaneStore
@@ -341,7 +341,7 @@ async def test_rotated_session_generation_at_effect_boundary_never_forwards(tmp_
         assert provider.effects == 0
 
 
-async def test_retained_interrupt_is_unavailable_without_disabling_execution_controls(
+async def test_retained_controls_are_unavailable_without_disabling_execution_controls(
     tmp_path, mock_client_adapter
 ):
     from api_service.services.remediation_capabilities import (
@@ -356,7 +356,10 @@ async def test_retained_interrupt_is_unavailable_without_disabling_execution_con
         bridge, *_ = await _fixture(
             session, tmp_path, workflow_id=target.workflow_id, run_id=target.run_id
         )
-        bridge.metadata_ = {**bridge.metadata_, "hostProtocolMode": "embedded"}
+        bridge.metadata_ = {
+            **bridge.metadata_,
+            "hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED,
+        }
         await session.commit()
         link = await session.get(
             models.TemporalExecutionRemediationLink, remediation.workflow_id
@@ -367,6 +370,11 @@ async def test_retained_interrupt_is_unavailable_without_disabling_execution_con
         assert (
             "omnigent_bridge_mode_unsupported"
             in rows["session.interrupt_turn"]["blockedReasons"]
+        )
+        assert not rows["session.cancel"]["requestable"]
+        assert (
+            "omnigent_bridge_mode_unsupported"
+            in rows["session.cancel"]["blockedReasons"]
         )
         assert rows["execution.pause"]["requestable"]
 
@@ -593,42 +601,32 @@ async def test_sequential_remediations_have_distinct_canonical_commands(tmp_path
         assert provider.effects == 2
 
 
-async def test_embedded_cancel_supplies_recorded_drain_facade(tmp_path, monkeypatch):
-    from unittest.mock import AsyncMock
+@pytest.mark.parametrize("kind", ["session.interrupt_turn", "session.cancel"])
+async def test_retired_session_control_never_claims_or_forwards(tmp_path, kind):
+    from sqlalchemy import select
 
     async with temporal_db(tmp_path) as session:
         bridge, _store, provider, owner, target = await _fixture(session, tmp_path)
-        bridge.metadata_ = {**bridge.metadata_, "hostProtocolMode": "embedded"}
+        bridge.metadata_ = {
+            **bridge.metadata_,
+            "hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED,
+        }
         await session.commit()
-        from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_EMBEDDED
-
-        owner._config = OmnigentBridgeConfig(
-            enabled=False,
-            compatibility={"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
-        )
-        facade = object()
-        build = __import__("unittest.mock", fromlist=["Mock"]).Mock(return_value=facade)
-        monkeypatch.setattr(
-            "api_service.api.routers.omnigent_bridge_composition.build_embedded_host_facade",
-            build,
-        )
-        apply = AsyncMock(return_value={"ok": True})
-        monkeypatch.setattr(
-            "api_service.api.routers.omnigent_bridge._apply_owned_session_control",
-            apply,
-        )
-        result = await owner.execute(
-            action_request={
-                "actionKind": "session.cancel",
-                "actionId": "stop-1",
-                "remediationWorkflowId": "repair-embedded",
-                "params": {},
-            },
-            target=target,
-        )
-        assert result["status"] == "accepted"
-        assert apply.await_args.kwargs["control_facade"] is facade
-        build.assert_called_once_with(owner._config, drain_retained_sessions=True)
+        with pytest.raises(ValueError, match="retired"):
+            await owner.execute(
+                action_request={
+                    "actionKind": kind,
+                    "actionId": "late-control",
+                    "remediationWorkflowId": "repair-retired",
+                    "params": {},
+                },
+                target=target,
+            )
+        assert provider.effects == 0
+        assert (
+            await session.execute(select(models.OmnigentCommand))
+        ).scalars().all() == []
+        assert bridge.status == "running"
 
 
 async def test_concurrent_session_discovery_requires_exact_selector(
