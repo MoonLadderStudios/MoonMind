@@ -502,7 +502,11 @@ async def test_self_contained_cold_restore_needs_no_source_credential_or_host(
         authority_root=tmp_path / "authority", artifact_store=store
     )
     if sandbox_without_origin:
-        from moonmind.workflows.temporal.runtime.workspace_locators import SandboxWorkspaceRecord, SandboxWorkspaceRecordStore
+        from moonmind.workflows.temporal.runtime.workspace_locators import (
+            SandboxWorkspaceRecord,
+            SandboxWorkspaceRecordStore,
+        )
+
         workspace_id = hashlib.sha256(b"recovery:implement-2").hexdigest()[:24]
         SandboxWorkspaceRecordStore(service.root).ensure(SandboxWorkspaceRecord(workspace_id, "recovery", "implement-2", "repo"))
         request["destination"] = {"kind": "sandbox", "workspaceId": workspace_id, "stepExecutionId": "implement-2"}
@@ -512,7 +516,8 @@ async def test_self_contained_cold_restore_needs_no_source_credential_or_host(
     restored = tmp_path / "authority" / "new-run" / "repo"
     if sandbox_without_origin:
         restored = service.root / "temporal_sandbox" / workspace_id / "repo"
-        assert not subprocess.check_output(["git", "remote"], cwd=restored)
+        remotes = subprocess.check_output(["git", "remote"], cwd=restored)
+        assert not remotes
     restored_head = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=restored, text=True
     ).strip()
@@ -640,7 +645,11 @@ async def test_cold_restore_needing_origin_objects_uses_source_run_admitted_acce
     )
 
     if authority == "missing_repository":
-        from moonmind.workflows.temporal.runtime.workspace_locators import SandboxWorkspaceRecord, SandboxWorkspaceRecordStore
+        from moonmind.workflows.temporal.runtime.workspace_locators import (
+            SandboxWorkspaceRecord,
+            SandboxWorkspaceRecordStore,
+        )
+
         workspace_id = hashlib.sha256(b"recovery:implement-2").hexdigest()[:24]
         SandboxWorkspaceRecordStore(service.root).ensure(SandboxWorkspaceRecord(workspace_id, "recovery", "implement-2", "repo"))
         request["destination"] = {"kind": "sandbox", "workspaceId": workspace_id, "stepExecutionId": "implement-2"}
