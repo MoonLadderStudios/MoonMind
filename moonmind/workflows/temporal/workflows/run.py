@@ -799,6 +799,7 @@ RUN_WORKFLOW_SCOPED_SESSION_CLEAR_BETWEEN_STEPS_PATCH = (
 RUN_SHARED_RUNTIME_CONTEXT_PATCH = "run-shared-native-context-continuation-v1"
 RUN_SHARED_STEP_RECOVERY_PATCH = "run-shared-step-recovery-v1"
 RUN_SHARED_STEP_CHECKPOINT_SOURCE_PATCH = "run-shared-step-checkpoint-source-v1"
+RUN_SHARED_STEP_CONFIGURATION_PATCH = "run-shared-step-recorded-configuration-v1"
 RUN_DISPATCH_POOL_CONTEXT_PATCH = "run-dispatch-pool-shared-context-v1"
 RUN_DISPATCH_FIXED_CONTEXT_PATCH = "run-dispatch-fixed-shared-context-v1"
 RUN_DISPATCH_CHECKPOINT_SOURCE_PATCH = "run-dispatch-checkpoint-source-v1"
@@ -23394,12 +23395,24 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 parameters["publishMode"] = "none"
             else:
                 parameters["repositoryMutationRequired"] = True
-        if shared_checkpoint_required:
-            raw_metadata = parameters.get("metadata")
+        record_step_configuration = self._workflow_patch_enabled(RUN_SHARED_STEP_CONFIGURATION_PATCH)
+        raw_metadata = parameters.get("metadata")
+        raw_hints = raw_metadata.get("moonmind") if isinstance(raw_metadata, Mapping) else None
+        if shared_checkpoint_required or (
+            record_step_configuration and isinstance(raw_hints, Mapping)
+            and "sharedStepCheckpointRef" in raw_hints
+        ):
             metadata = dict(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
-            raw_hints = metadata.get("moonmind")
             hints = dict(raw_hints) if isinstance(raw_hints, Mapping) else {}
-            hints["sharedCheckpointRequired"] = True
+            if record_step_configuration:
+                hints.pop("sharedStepCheckpointRef", None)
+            if shared_checkpoint_required:
+                hints["sharedCheckpointRequired"] = True
+                previous_checkpoint = self._previous_step_checkpoint_refs.get(node_id)
+                if record_step_configuration and previous_checkpoint:
+                    # The archive restores bytes; its canonical checkpoint also
+                    # identifies the already-admitted plan for this logical step.
+                    hints["sharedStepCheckpointRef"] = previous_checkpoint
             metadata["moonmind"] = hints
             parameters["metadata"] = metadata
         publish_mode = str(parameters.get("publishMode") or "").strip().lower()

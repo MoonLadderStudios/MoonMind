@@ -441,7 +441,8 @@ async def test_interrupted_git_checkpoint_child_payloads_survive_real_replay(mon
     "successor", "cancelled", "unavailable", "identity",
     "scratch-retained", "scratch-successor",
 ])
-async def test_selected_pool_child_save_drives_the_existing_step_owner_and_replays(monkeypatch, mode):
+@pytest.mark.parametrize("recorded_configuration", [False, True], ids=["retained-request", "frozen-configuration"])
+async def test_selected_pool_child_save_drives_the_existing_step_owner_and_replays(monkeypatch, mode, recorded_configuration):
     cancel = mode == "cancelled"
     blocked = mode in {"unavailable", "identity"}
     explicit_scratch = mode.startswith("scratch-")
@@ -465,11 +466,12 @@ async def test_selected_pool_child_save_drives_the_existing_step_owner_and_repla
         return await execute_child(name, request, **kwargs)
 
     monkeypatch.setattr(workflow, "execute_child_workflow", observe_child)
-    record_patches = _SHARED_RECOVERY_PATCHES
+    new_patches = _SHARED_RECOVERY_PATCHES | {run_workflow_module.RUN_SHARED_STEP_CONFIGURATION_PATCH}
+    record_patches = new_patches if recorded_configuration else _SHARED_RECOVERY_PATCHES
     if mode == "scratch-retained":
         record_patches = record_patches - {"run-shared-step-checkpoint-source-v1"}
     _enable(monkeypatch, record_patches)
-    name = f"shared-checkpoint-{mode}"
+    name = f"shared-checkpoint-{mode}-{recorded_configuration}"
     async with await WorkflowEnvironment.start_time_skipping(data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER) as env:
         agent_worker, admission_worker = _workers(env)
         async with agent_worker, admission_worker, Worker(
@@ -493,6 +495,9 @@ async def test_selected_pool_child_save_drives_the_existing_step_owner_and_repla
         assert second.profile_selector == first.profile_selector
         assert second.workspace_spec["workspaceCheckpointRestoreRef"] == "artifact://art_shared_child_save_1"
         assert second.parameters["metadata"]["moonmind"]["sharedCheckpointRequired"] is True
+        assert second.parameters["metadata"]["moonmind"].get("sharedStepCheckpointRef") == (
+            "artifact://art_shared_child_save_1" if recorded_configuration else None
+        )
         if mode == "scratch-retained":
             assert second.workspace_spec["workspaceSource"] == {"kind": "scratch"}
         elif explicit_scratch:
@@ -510,7 +515,8 @@ async def test_selected_pool_child_save_drives_the_existing_step_owner_and_repla
     recorded = [request.model_dump(mode="json", by_alias=True) for request in emitted]
     emitted.clear()
     _SAVED_READS.clear()
-    _enable(monkeypatch, _SHARED_RECOVERY_PATCHES)
+    # Current workers must replay requests recorded before this new hint too.
+    _enable(monkeypatch, new_patches)
     await Replayer(
         workflows=[_InterruptedStepFixture], workflow_runner=UnsandboxedWorkflowRunner(),
         data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
