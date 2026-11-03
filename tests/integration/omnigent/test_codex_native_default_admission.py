@@ -1,7 +1,7 @@
 """A Codex Profile's native model-default choice survives product admission."""
 
-from copy import deepcopy
 import json
+from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -19,13 +19,13 @@ from api_service.services.omnigent_agent_bootstrap_service import (
     reconcile_bootstrap_agent_profile,
 )
 from api_service.services.omnigent_execution_plan_service import (
-    compile_frozen_execution_plan,
     changed_admitted_intent,
+    compile_frozen_execution_plan,
 )
 from moonmind.config.settings import settings
 from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
-from moonmind.omnigent.settings import resolved_server_url
 from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
+from moonmind.omnigent.settings import resolved_server_url
 from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
     OmnigentResolvedTarget,
@@ -33,13 +33,13 @@ from moonmind.workflows.adapters.omnigent_agent_adapter import (
     build_omnigent_session_create_payload,
 )
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
-from moonmind.workflows.temporal.service import TemporalExecutionService
 from moonmind.workflows.temporal.artifacts import (
     ArtifactAccessContext,
     ArtifactTransactionOwnership,
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from moonmind.workflows.temporal.service import TemporalExecutionService
 from tests.integration.omnigent import (
     test_generic_native_durable_journey as native_fixture,
 )
@@ -51,6 +51,66 @@ from tests.unit.api.routers.test_executions import _override_user_dependencies
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 native_journey = native_fixture.native_journey
 session_factory = native_fixture.session_factory
+
+
+@pytest.mark.parametrize(
+    "native_journey",
+    [
+        {
+            "harness": "codex-native",
+            "codexNativeDefault": True,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("model_choice", ["omitted", "root-model", "step-model"])
+async def test_dispatch_selected_native_default_preserves_authored_model_provenance(
+    native_journey,
+    monkeypatch,
+    model_choice,
+):
+    from api_service.services import native_pool_execution_plan as pool_plans
+    from tests.integration.omnigent.test_dispatch_pool_shared_admission import (
+        execute_selected_pool_source,
+    )
+
+    journey = native_journey
+    async with journey.session_factory() as session:
+        provider = await session.get(
+            ManagedAgentProviderProfile, native_fixture.PROFILE
+        )
+        provider.default_model = None
+        provider.model_tiers = []
+        await session.commit()
+    journey.server.native_default = model_choice == "omitted"
+    compile_plan = pool_plans.compile_and_persist_execution_plan
+
+    async def verify_selection(**kwargs):
+        compiled = await compile_plan(**kwargs)
+        assert (
+            compiled.envelope.payload.modelConfig.normalizedOptions.get(
+                "codexNativeDefault"
+            )
+            is True
+        ) == (model_choice == "omitted"), {
+            key: kwargs["initial_parameters"].get(key)
+            for key in ("model", "requestedModel", "modelSource")
+        }
+        return compiled
+
+    monkeypatch.setattr(
+        pool_plans, "compile_and_persist_execution_plan", verify_selection
+    )
+    await execute_selected_pool_source(
+        journey,
+        monkeypatch,
+        runtime_selection={"model": journey.server.model}
+        if model_choice == "root-model"
+        else {},
+        step_runtime={"model": journey.server.model}
+        if model_choice == "step-model"
+        else None,
+    )
 
 
 @pytest.mark.parametrize(
@@ -111,12 +171,22 @@ async def test_frozen_native_default_runs_and_saves_through_the_shared_lifecycle
 
 
 @pytest.mark.parametrize("native_journey", ["codex-native"], indirect=True)
-@pytest.mark.parametrize("model_choice", ["omitted", "same-default", "different-model"])
+@pytest.mark.parametrize(
+    ("model_choice", "profile_default"),
+    [
+        ("omitted", "gpt-profile-default"),
+        ("same-default", "gpt-profile-default"),
+        ("different-model", "gpt-profile-default"),
+        ("omitted", None),
+        ("different-model", None),
+        ("explicit-tier", None),
+        ("step-model", None),
+    ],
+)
 async def test_native_default_profile_uses_shared_admission_without_losing_explicit_models(
-    native_journey, monkeypatch, model_choice
+    native_journey, monkeypatch, model_choice, profile_default
 ):
     journey = native_journey
-    profile_default = "gpt-profile-default"
     monkeypatch.setattr(settings.workflow, "default_runtime", "codex_cli")
     monkeypatch.setattr(settings.workflow, "github_repository", "")
     inventory = await OmnigentHttpClient(base_url=resolved_server_url()).list_agents()
@@ -125,7 +195,11 @@ async def test_native_default_profile_uses_shared_admission_without_losing_expli
             ManagedAgentProviderProfile, native_fixture.PROFILE
         )
         provider.default_model = profile_default
-        provider.model_tiers = []
+        provider.model_tiers = (
+            [{"model": "gpt-tier-one"}, {"model": journey.server.model}]
+            if model_choice == "explicit-tier"
+            else []
+        )
         provider.default_model_tier = 1
         provider.command_behavior = {"suppress_default_model_flag": True}
         await session.commit()
@@ -140,12 +214,22 @@ async def test_native_default_profile_uses_shared_admission_without_losing_expli
         app.dependency_overrides[get_async_session] = lambda: session
         _override_user_dependencies(app, is_superuser=True)
         runtime = {"mode": "codex_cli", "providerProfileRef": native_fixture.PROFILE}
-        if model_choice != "omitted":
+        if model_choice in {"same-default", "different-model"}:
             runtime["model"] = (
                 profile_default
                 if model_choice == "same-default"
                 else journey.server.model
             )
+        if model_choice == "explicit-tier":
+            runtime["modelTier"] = 2
+        step = {
+            "id": "work",
+            "type": "skill",
+            "instructions": "Perform the accepted task.",
+            "skill": {"id": native_fixture._DURABLE_SKILL_NAME},
+        }
+        if model_choice == "step-model":
+            step["runtime"] = {"model": journey.server.model}
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -158,14 +242,7 @@ async def test_native_default_profile_uses_shared_admission_without_losing_expli
                         "workflow": {
                             "instructions": "Keep my Codex native model-default choice.",
                             "runtime": runtime,
-                            "steps": [
-                                {
-                                    "id": "work",
-                                    "type": "skill",
-                                    "instructions": "Perform the accepted task.",
-                                    "skill": {"id": native_fixture._DURABLE_SKILL_NAME},
-                                }
-                            ],
+                            "steps": [step],
                         },
                     },
                 },
@@ -186,7 +263,8 @@ async def test_native_default_profile_uses_shared_admission_without_losing_expli
             plan.payload.credentialBindings["primary-model"].providerProfileRef
             == native_fixture.PROFILE
         )
-        if model_choice == "different-model":
+        pinned = model_choice in {"different-model", "explicit-tier", "step-model"}
+        if pinned:
             assert plan.payload.modelConfig.qualifiedId == journey.server.model
         await session.refresh(provider)
         assert provider.command_behavior == {"suppress_default_model_flag": True}
@@ -221,7 +299,7 @@ async def test_native_default_profile_uses_shared_admission_without_losing_expli
             transport=httpx.MockTransport(native_create),
         )
         await native.create_session(payload)
-        expected = journey.server.model if model_choice == "different-model" else None
+        expected = journey.server.model if pinned else None
         assert delivered[0].get("model_override") == expected
         assert delivered[0]["host_id"] == "selected-host"
         assert request.parameters == before

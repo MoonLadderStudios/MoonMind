@@ -2044,8 +2044,13 @@ async def compile_and_persist_execution_plan(
     if harness_id == "codex-native" and native_default is not None:
         from moonmind.workflows.executions.model_resolver import codex_uses_native_default
 
+        # Admission keeps omission separately from its resolved comparison
+        # model. A specialized step or explicit tier owns its own selection.
+        authored_model = raw_selected_model
+        if initial_parameters.get("modelSource") not in {"task_override", "requested_tier"}:
+            authored_model = initial_parameters.get("requestedModel", raw_selected_model)
         if codex_uses_native_default(
-            suppress_default_model_flag=True, requested_model=raw_selected_model,
+            suppress_default_model_flag=True, requested_model=authored_model,
             resolved_model=selected_model, profile_default_model=native_default.profileDefaultModel,
         ):
             model_options["codexNativeDefault"] = True

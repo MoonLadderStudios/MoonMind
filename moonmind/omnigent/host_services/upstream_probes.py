@@ -29,12 +29,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from moonmind.omnigent.codex_login import CODEX_CONFIGURATION_READ_PROBE
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
 )
 from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
-from moonmind.omnigent.codex_login import CODEX_CONFIGURATION_READ_PROBE
 
 # Select the layout before importing: a broken helper or dependency in the
 # selected layout must fail attestation, never fall back to another layout.
