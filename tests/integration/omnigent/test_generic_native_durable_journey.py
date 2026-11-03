@@ -21,6 +21,7 @@ import json
 import os
 import shutil
 import tarfile
+from contextlib import aclosing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -1035,7 +1036,13 @@ async def _compile_plan(
     env_bundle=False,
     codex_config=False,
     session_settings=None,
+    additional_files=None,
     oauth_tuning=None,
+    api_key_tuning=None,
+    oauth_private_config=False,
+    private_profile_config=False,
+    private_configuration_home=None,
+    declare_configuration_home=True,
     instructions="Generate a report.",
 ):
     # Reuse the durable Skill producer, then expose its immutable body through
@@ -1089,7 +1096,7 @@ async def _compile_plan(
         fields["clear_env_keys"] = list(isolation.keys)
         fields["env_template"] = {
             "ANTHROPIC_AUTH_TOKEN": {"from_secret_ref": "provider_api_key"},
-            "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
+            "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
             "API_TIMEOUT_MS": "3000000",
             "ANTHROPIC_SMALL_FAST_MODEL": "model",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
@@ -1100,7 +1107,15 @@ async def _compile_plan(
         )
 
         templates = minimax_file_templates()
+        # Exercise file-backed provider tuning with a default-admitted endpoint.
+        # Optional providers have their own explicit-policy materializer tests.
+        templates[0]["content_template"]["model_providers"]["minimax"][
+            "base_url"
+        ] = "https://api.openai.com/v1"
+
+
         templates[0]["content_template"].update(session_settings or {})
+        templates.extend(additional_files or [])
         templates[0]["content_template"]["model"] = "model"
         templates[0]["content_template"]["profiles"]["m27"]["model"] = "model"
         fields.update(
@@ -1113,6 +1128,9 @@ async def _compile_plan(
     if oauth_tuning:
         assert oauth and runtime_id in {"codex_cli", "claude_code"}
         fields["env_template"] = dict(oauth_tuning)
+    if api_key_tuning:
+        assert api_key and runtime_id in {"codex_cli", "claude_code"}
+        fields["env_template"] = {**(fields.get("env_template") or {}), **api_key_tuning}
     profile = ManagedAgentProviderProfile(
         profile_id=PROFILE,
         runtime_id=runtime_id,
@@ -1142,6 +1160,16 @@ async def _compile_plan(
             mapping=get_first_party_oauth_profile(runtime_id, provider_id),
             validated_at=datetime.now(UTC),
         )
+    if oauth_private_config or private_profile_config:
+        assert runtime_id == "codex_cli"
+        assert oauth or private_profile_config
+        configuration_home = private_configuration_home or "{{runtime_support_dir}}/codex-home"
+        profile.home_path_overrides = {"CODEX_HOME": configuration_home} if declare_configuration_home else {}
+        profile.file_templates = [{
+            "path": configuration_home + "/config.toml", "format": "toml",
+            "merge_strategy": "deep_merge", "permissions": "0600",
+            "content_template": dict(session_settings or {}),
+        }, *(additional_files or [])]
     async with session_factory() as session:
         artifacts = TemporalArtifactService(TemporalArtifactRepository(session))
         _snapshot_row, skill_snapshot_bytes = await artifacts.read(
@@ -1315,7 +1343,13 @@ async def native_journey(
                 env_bundle=env_bundle,
                 codex_config=codex_config,
                 session_settings=selection.get("sessionSettings"),
+                additional_files=selection.get("additionalFiles"),
                 oauth_tuning=selection.get("oauthTuning"),
+                api_key_tuning=selection.get("apiKeyTuning"),
+                oauth_private_config=bool(selection.get("oauthPrivateConfiguration")),
+                private_profile_config=bool(selection.get("privateProfileConfiguration")),
+                private_configuration_home=selection.get("privateConfigurationHome"),
+                declare_configuration_home=selection.get("declareConfigurationHome", True),
                 instructions=instructions,
             )
         # Verify the public HTTP enums survive discovery, alongside the real
@@ -1518,6 +1552,213 @@ async def test_registered_generic_native_turn_saves_result_and_cleans_owned_reso
     await assert_native_turn_saved_and_cleaned(native_journey, terminal_status)
 
 
+def interrupt_observation_after_dispatch(journey, monkeypatch, error_type):
+    from moonmind.workflows.adapters.omnigent_client import (
+        OmnigentClientError,
+        OmnigentHttpClient,
+    )
+
+    original_stream = OmnigentHttpClient.stream_events
+    interrupted = asyncio.Event()
+
+    async def broken_stream(client, session_id, *, on_admitted=None):
+        async with aclosing(
+            original_stream(client, session_id, on_admitted=on_admitted)
+        ) as stream:
+            async for event in stream:
+                if journey.server.first_message_posted.is_set():
+                    error = error_type(
+                        "controlled observation disconnect",
+                        request=httpx.Request(
+                            "GET",
+                            f"https://omnigent.test/v1/sessions/{session_id}/stream",
+                        ),
+                    )
+                    interrupted.set()
+                    raise OmnigentClientError(
+                        "controlled observation disconnect"
+                    ) from error
+                yield event
+
+    # Only the external live-tail transport fails. Compilation, provider leases,
+    # turn submission, ordered snapshot reconciliation, saves and cleanup remain
+    # the production owners used by the ordinary native journey.
+    monkeypatch.setattr(OmnigentHttpClient, "stream_events", broken_stream)
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._TERMINAL_RECONCILIATION_INTERVAL_SECONDS", 0.005
+    )
+    return interrupted
+
+
+@pytest.mark.parametrize(
+    "native_journey",
+    ["codex-native", "claude-native", "opencode-native"],
+    indirect=True,
+)
+@pytest.mark.parametrize("error_type", [httpx.ReadError, httpx.RemoteProtocolError])
+@pytest.mark.parametrize("remain_running", [False, True])
+async def test_accepted_turn_reconciles_a_broken_observation_stream(
+    native_journey, monkeypatch, error_type, remain_running, caplog
+):
+    interrupt_observation_after_dispatch(native_journey, monkeypatch, error_type)
+    if remain_running:
+        original_snapshot = native_journey.server.snapshot
+        observing_active_turn = True
+        active_observations = 0
+        observed_active_turn = asyncio.Event()
+
+        def active_snapshot(session_id):
+            nonlocal active_observations
+            snapshot = original_snapshot(session_id)
+            if (
+                observing_active_turn
+                and native_journey.server.first_message_posted.is_set()
+            ):
+                active_observations += 1
+                if active_observations >= 3:
+                    observed_active_turn.set()
+                snapshot.update(
+                    status="running",
+                    active_response_id="native-turn-in-progress",
+                    active_response={
+                        "id": "native-turn-in-progress",
+                        "status": "in_progress",
+                    },
+                )
+            return snapshot
+
+        monkeypatch.setattr(native_journey.server, "snapshot", active_snapshot)
+        compute = asyncio.create_task(
+            native_journey.realizer.execute(native_journey.request, native_journey.plan)
+        )
+        try:
+            await asyncio.wait_for(observed_active_turn.wait(), timeout=5)
+            assert not compute.done()
+            assert native_journey.server.host_alive
+            assert not native_journey.server.stopped_sessions
+            assert len(native_journey.server.session_ids) == 1
+            assert (
+                sum(e["type"] == "message" for e in native_journey.server.events) == 1
+            )
+            observing_active_turn = False
+            await asyncio.wait_for(compute, timeout=5)
+        finally:
+            if not compute.done():
+                compute.cancel()
+            await asyncio.gather(compute, return_exceptions=True)
+
+    result = await assert_native_turn_saved_and_cleaned(native_journey)
+    assert "observation stream interrupted after dispatch" in caplog.text
+    external_state = json.loads(
+        await native_journey.gateway.read_text(result.metadata["externalStateRef"])
+    )
+    diagnostic = external_state["observationDiagnostics"][0]
+    assert diagnostic["code"] == "omnigent_stream_read_interrupted"
+    assert diagnostic["transportError"] == error_type.__name__
+    assert diagnostic["message"] == "controlled observation disconnect"
+
+
+@pytest.mark.parametrize(
+    "native_journey",
+    ["codex-native", "claude-native", "opencode-native"],
+    indirect=True,
+)
+@pytest.mark.parametrize("error_type", [httpx.ReadError, httpx.RemoteProtocolError])
+async def test_cancel_during_observation_recovery_saves_work_without_replay(
+    native_journey, monkeypatch, error_type
+):
+    journey = native_journey
+    interrupted = interrupt_observation_after_dispatch(journey, monkeypatch, error_type)
+    monkeypatch.setattr(
+        "moonmind.omnigent.activity_ownership.delivery_was_revoked", lambda: False
+    )
+    original_snapshot = journey.server.snapshot
+    observed_incomplete_snapshot = asyncio.Event()
+    incomplete_observations = 0
+
+    def incomplete_snapshot(session_id):
+        nonlocal incomplete_observations
+        snapshot = original_snapshot(session_id)
+        if interrupted.is_set() and not journey.server.stopped_sessions:
+            # An idle projection without the marked transcript cannot prove
+            # completion, even though the controlled provider wrote output.
+            snapshot.update(status="idle", items=[], active_response_id=None)
+            incomplete_observations += 1
+            if incomplete_observations >= 3:
+                observed_incomplete_snapshot.set()
+        return snapshot
+
+    monkeypatch.setattr(journey.server, "snapshot", incomplete_snapshot)
+    capture_refs = {}
+    write_json = journey.gateway.write_json
+
+    async def record_capture(**kwargs):
+        ref = await write_json(**kwargs)
+        capture_refs[kwargs["name"]] = ref
+        return ref
+
+    monkeypatch.setattr(journey.gateway, "write_json", record_capture)
+    execution = asyncio.create_task(
+        journey.realizer.execute(journey.request, journey.plan)
+    )
+    try:
+        await asyncio.wait_for(observed_incomplete_snapshot.wait(), timeout=5)
+        assert not execution.done()
+        assert journey.server.host_alive
+        assert not journey.server.stopped_sessions
+        execution.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(execution, timeout=5)
+    finally:
+        if not execution.done():
+            execution.cancel()
+        await asyncio.gather(execution, return_exceptions=True)
+
+    assert len(journey.server.session_ids) == 1 and journey.docker.create_count == 1
+    assert sum(e["type"] == "message" for e in journey.server.events) == 1
+    assert journey.server.route_calls.count("sessions.stream") == 1
+    assert not journey.server.host_alive
+    assert len(journey.manager.inspections) == 1
+    assert not journey.manager.acquired and not journey.manager.signals
+    binding = await journey.services.runtime_binding_store.get(
+        stable_binding_id(
+            execution_plan_ref=journey.plan.planRef,
+            idempotency_key=journey.request.idempotency_key,
+        )
+    )
+    assert binding.state is RuntimeBindingState.cleaned
+    saved = binding.phaseResults["saved"]
+    archive = await journey.gateway.read_bytes(saved["archiveRef"])
+    with tarfile.open(fileobj=io.BytesIO(archive)) as bundle:
+        assert bundle.extractfile(RESULT_PATH).read() == GENERATED
+    external_ref = capture_refs["checkpoint.omnigent.external_state.json"]
+    external = json.loads(await journey.gateway.read_text(external_ref))
+    assert external["firstMessage"]["posted"] is True
+    diagnostic = external["observationDiagnostics"][0]
+    assert diagnostic["transportError"] == error_type.__name__
+    assert diagnostic["code"] == "omnigent_stream_read_interrupted"
+    manifest = json.loads(
+        await journey.gateway.read_text(
+            capture_refs["output.omnigent.capture_manifest.json"]
+        )
+    )
+    assert manifest["terminalStatus"] == "canceled"
+    host_removed = journey.events.index(("host_remove", journey.docker.container_name))
+    writes = {
+        ref.removeprefix("artifact:").lstrip("/"): index
+        for index, (kind, ref) in enumerate(journey.events)
+        if kind == "artifact_write"
+    }
+    for ref in (saved["archiveRef"], external_ref):
+        assert writes[ref.removeprefix("artifact:").lstrip("/")] < host_removed
+    async with journey.session_factory() as session:
+        provider_lease = await session.get(
+            ProviderProfileSlotLease, journey.provider_lease_id
+        )
+        assert provider_lease.lease_state == "held"
+        assert provider_lease.released_at is None
+
+
 @pytest.mark.parametrize("native_journey", [{
     "harness": "codex-native-file-config",
     "sessionSettings": {
@@ -1532,6 +1773,87 @@ async def test_declared_codex_session_preferences_survive_shared_lifecycle(nativ
     assert document["developer_instructions"] == "Preserve completed work and the requested account."
     assert document["history"] == {"persistence": "none", "max_bytes": 1048576}
     assert document["project_doc_fallback_filenames"] == ["PROJECT.md"]
+
+
+@pytest.mark.parametrize("native_journey", [{
+    "harness": "codex-native-api-key", "privateProfileConfiguration": True,
+    "sessionSettings": {"developer_instructions": "Keep the admitted key Profile preferences."},
+    "additionalFiles": [{
+        "path": "{{runtime_support_dir}}/codex-home/AGENTS.md", "format": "text",
+        "merge_strategy": "append", "permissions": "0600", "content_template": "Admitted key Profile file.\n",
+    }],
+}], indirect=True)
+async def test_plain_api_key_private_preferences_use_the_existing_shared_provider(native_journey):
+    journey = native_journey
+    async with journey.session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, PROFILE)
+        profile.file_templates = []
+        profile.home_path_overrides = {}
+        await session.commit()
+    await assert_native_turn_saved_and_cleaned(journey)
+    configuration = journey.docker.codex_configuration
+    assert configuration["privateHomeOnly"] is True
+    assert configuration["document"] == {"developer_instructions": "Keep the admitted key Profile preferences."}
+    assert configuration["additionalFiles"][0]["content_template"] == "Admitted key Profile file.\n"
+
+
+@pytest.mark.parametrize(("native_journey", "private_reference"), [({
+    "harness": "codex-native", "static": static, "oauthPrivateConfiguration": True,
+    "privateConfigurationHome": configuration_home,
+    "declareConfigurationHome": declare_home,
+    "sessionSettings": {
+        "developer_instructions": "Keep the admitted OAuth preferences.",
+        "model_reasoning_summary": "concise", "model_verbosity": "low",
+        "model_context_window": 128000, "model_auto_compact_token_limit": 96000,
+        "personality": "pragmatic",
+    },
+    "additionalFiles": [{
+        "path": configuration_home + "/AGENTS.md", "format": "text",
+        "merge_strategy": "append", "permissions": "0600", "content_template": "Admitted file.\n",
+    }],
+    "oauthTuning": {
+        "PROJECT_RUNTIME_STYLE": "  exact $(not-executed) literal  ",
+        **({"PROJECT_CONFIG_FILE": configuration_home + "/AGENTS.md"}
+           if configuration_home.startswith("{{runtime_support_dir}}/") else {}),
+    },
+}, configuration_home.startswith("{{runtime_support_dir}}/"))
+for static in (False, True) for configuration_home, declare_home in (
+    ("{{runtime_support_dir}}/codex-home", True),
+    ("/home/app/.codex", True),
+    ("/home/app/.codex", False),
+)], indirect=["native_journey"])
+@pytest.mark.parametrize("edit_after_admission", [False, True])
+async def test_admitted_oauth_private_configuration_reaches_shared_lifecycle(native_journey, private_reference, edit_after_admission):
+    journey = native_journey
+    if edit_after_admission:
+        async with journey.session_factory() as session:
+            profile = await session.get(ManagedAgentProviderProfile, PROFILE)
+            profile.file_templates = []
+            profile.home_path_overrides = {"CODEX_HOME": "/later-home"}
+            profile.env_template = {"PROJECT_CONFIG_FILE": "/later-reference"}
+            await session.commit()
+    if journey.static_mode:
+        from tests.integration.omnigent.test_generic_static_host_journey import (
+            assert_static_native_turn_saved_and_retained,
+        )
+
+        await assert_static_native_turn_saved_and_retained(journey)
+    else:
+        await assert_native_turn_saved_and_cleaned(journey)
+    configuration = json.loads(journey.docker.launch_env["MOONMIND_CODEX_PROFILE_CONFIGURATION"])
+    assert configuration["document"] == {
+        "developer_instructions": "Keep the admitted OAuth preferences.",
+        "model_reasoning_summary": "concise", "model_verbosity": "low",
+        "model_context_window": 128000, "model_auto_compact_token_limit": 96000,
+        "personality": "pragmatic",
+    }
+    assert configuration["additionalFiles"][0]["content_template"] == "Admitted file.\n"
+    assert configuration.get("environmentTemplates", {}) == (
+        {"PROJECT_CONFIG_FILE": "{{runtime_support_dir}}/AGENTS.md"} if private_reference else {}
+    )
+    assert journey.docker.launch_env["PROJECT_RUNTIME_STYLE"] == "  exact $(not-executed) literal  "
+    assert journey.docker.launch_env["CODEX_HOME"] == "/home/app/.codex"
+    assert "codex-configuration.py prepare" in journey.docker.script
 
 
 @pytest.mark.parametrize("native_journey", [{
@@ -1558,6 +1880,47 @@ async def test_admitted_claude_oauth_tuning_reaches_the_shared_runner(
     assert environment["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
     assert "API_TIMEOUT_MS" in environment["OMNIGENT_RUNNER_ENV_PASSTHROUGH"].split(",")
     assert not any("api_key" in item.lower() for item in environment)
+
+
+@pytest.mark.parametrize("native_journey", [
+    {"harness": harness, "static": static, "oauthTuning": {
+        "PROJECT_REPORT_ROOT": "{{workspace_path}}/reports",
+        "PROJECT_SUPPORT_ROOT": "{{runtime_support_dir}}",
+        "PROJECT_RUNTIME_STYLE": "literal $(not-executed)",
+    }}
+    for harness in ("codex-native", "claude-native")
+    for static in (False, True)
+], indirect=True)
+async def test_admitted_oauth_environment_templates_use_the_attempt_context(native_journey):
+    journey = native_journey
+    async with journey.session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, PROFILE)
+        profile.env_template = {"PROJECT_REPORT_ROOT": "later Profile edit"}
+        await session.commit()
+    if journey.static_mode:
+        from tests.integration.omnigent.test_generic_static_host_journey import (
+            assert_static_native_turn_saved_and_retained,
+        )
+
+        await assert_static_native_turn_saved_and_retained(journey)
+    else:
+        await assert_native_turn_saved_and_cleaned(journey)
+    assert journey.docker.launch_env["PROJECT_REPORT_ROOT"] == "/workspaces/run/reports"
+    assert journey.docker.launch_env["PROJECT_SUPPORT_ROOT"] == "/home/app/.omnigent/moonmind/runtime-context"
+    assert journey.docker.launch_env["PROJECT_RUNTIME_STYLE"] == "literal $(not-executed)"
+
+
+@pytest.mark.parametrize("native_journey", [
+    {"harness": harness, "apiKeyTuning": {"PROJECT_RUNTIME_STYLE": "  exact $(not-executed) literal  "}}
+    for harness in ("codex-native-api-key", "claude-native-api-key", "codex-native-file-config")
+], indirect=True)
+async def test_admitted_api_key_shell_values_keep_the_selected_snapshot(native_journey):
+    async with native_journey.session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, PROFILE)
+        profile.env_template = {**profile.env_template, "PROJECT_RUNTIME_STYLE": "later Profile edit"}
+        await session.commit()
+    await assert_native_turn_saved_and_cleaned(native_journey)
+    assert native_journey.docker.launch_env["PROJECT_RUNTIME_STYLE"] == "  exact $(not-executed) literal  "
 
 
 @pytest.mark.parametrize("native_journey", [
@@ -1932,10 +2295,7 @@ async def assert_native_turn_saved_and_cleaned(
             "claude-native": ("anthropic", "https://api.anthropic.com"),
             "codex-native": ("openai", "https://api.openai.com/v1"),
         }[journey.harness]
-        if getattr(journey, "env_bundle", False):
-            base_url = "https://api.minimax.io/anthropic"
         if getattr(journey, "codex_config", False):
-            base_url = "https://api.minimax.io/v1"
             configuration = docker.codex_configuration
             assert configuration["document"]["model"] == "model"
             assert configuration["provider"]["request_max_retries"] == 4
@@ -2302,3 +2662,60 @@ async def test_credential_maintenance_drains_generic_host_mounting_oauth_home(
     assert "journey_oauth" in docker.volumes
     # A repeated maintenance attempt finds nothing left to drain.
     assert await janitor.drain_profile(PROFILE) == {"drained": 0}
+
+
+@pytest.mark.parametrize("native_journey", [{
+    "harness": "codex-native-file-config",
+    "additionalFiles": [{
+        "path": "{{runtime_support_dir}}/codex-home/AGENTS.md",
+        "format": "text", "merge_strategy": "append", "permissions": "0600",
+        "content_template": "Use the admitted global instructions.\n",
+    }],
+}], indirect=True)
+@pytest.mark.parametrize("refresh", [None, False, True], ids=["queued", "frozen", "fresh-scheduled"])
+async def test_profile_files_keep_queued_and_fresh_configuration_authority(native_journey, refresh):
+    from copy import deepcopy
+    from moonmind.workflows.temporal.artifacts import ArtifactTransactionOwnership
+
+    journey = native_journey
+    snapshot = json.loads(await journey.gateway.read_admitted_input(
+        journey.plan.payload.agentProfileSnapshotRef, request=journey.request,
+    ))
+    parameters = json.loads(await journey.gateway.read_admitted_input(
+        journey.plan.payload.authority.taskInputSnapshotRef, request=journey.request,
+    ))
+    async with journey.session_factory() as session:
+        provider = await session.get(ManagedAgentProviderProfile, PROFILE)
+        templates = deepcopy(provider.file_templates)
+        templates[-1]["content_template"] = "Later edited instructions.\n"
+        provider.file_templates = templates
+        await session.flush()
+        if refresh is not None:
+            artifacts = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                transaction_ownership=ArtifactTransactionOwnership.CALLER,
+            )
+            compiled = await plan_writer.compile_frozen_execution_plan(
+                db_session=session, artifact_service=artifacts,
+                workflow_id=journey.request.correlation_id, principal="system",
+                snapshot=snapshot, provider_profile=provider, initial_parameters=parameters,
+                binding=journey.request.omnigent_execution_plan,
+                access=access_for_test("system", admitted_principal=f"workflow:{journey.request.correlation_id}"),
+                refresh_step_selections=refresh,
+            )
+            saved = compiled.envelope.payload.providerConfigurationSnapshot
+            _row, body = await artifacts.read(
+                artifact_id=saved.artifactRef.removeprefix("artifact:"),
+                access=access_for_test("system"),
+            )
+            configuration = json.loads(body)["primary-model"]["endpoint"]["codexConfiguration"]
+            changed = plan_writer.changed_admitted_intent(journey.plan.payload, compiled.envelope.payload)
+            assert ("providerConfiguration" in changed) is refresh
+        await session.commit()
+    if refresh is None:
+        await assert_native_turn_saved_and_cleaned(journey)
+        configuration = journey.docker.codex_configuration
+    expected = "Later edited instructions.\n" if refresh else "Use the admitted global instructions.\n"
+    assert configuration["additionalFiles"][0]["content_template"] == expected
+    assert configuration["additionalFiles"][0]["path"] == "{{runtime_support_dir}}/AGENTS.md"
+    assert expected not in journey.plan.payload.model_dump_json()

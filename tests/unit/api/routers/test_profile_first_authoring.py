@@ -22,7 +22,9 @@ from api_service.services import omnigent_execution_plan_service as plans
 from api_service.services.profile_execution_selection import (
     select_execution_configuration,
 )
-from tests.unit.api.routers.test_executions import _build_execution_record
+from tests.helpers.execution_api import (
+    _build_execution_record,
+)
 from tests.unit.api.routers.test_executions import (
     client as client,  # noqa: PLC0414 - pytest fixture
 )

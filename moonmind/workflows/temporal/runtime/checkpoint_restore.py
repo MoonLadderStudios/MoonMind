@@ -763,6 +763,23 @@ class ManagedCheckpointRestoreService:
             try:
                 if self.repository_source_root is not None:
                     repo_url = str(self.repository_source_root)
+                elif (
+                    isinstance(req.destination, SandboxRestoreDestination)
+                    and req.destination.repository_identity is not None
+                ):
+                    from moonmind.omnigent.host_services.github_credentials import (
+                        github_clone_source_from_identity,
+                    )
+
+                    try:
+                        repo_url = github_clone_source_from_identity(
+                            req.destination.repository_identity
+                        )
+                    except ValueError as exc:
+                        raise CheckpointRestoreError(
+                            "CHECKPOINT_REPOSITORY_UNAVAILABLE",
+                            "admitted repository remote is unsafe",
+                        ) from exc
                 elif req.destination.repository:
                     repo_url = f"https://github.com/{req.destination.repository}.git"
                 else:
@@ -776,7 +793,10 @@ class ManagedCheckpointRestoreService:
                         self._git(["remote", "add", "origin", repo_url], staging)
                 else:
                     if repo_url is None:
-                        raise CheckpointRestoreError("CHECKPOINT_REPOSITORY_UNAVAILABLE", "checkpoint needs its admitted origin repository")
+                        raise CheckpointRestoreError(
+                            "CHECKPOINT_REPOSITORY_UNAVAILABLE",
+                            "checkpoint needs its admitted origin repository",
+                        )
                     clone_env: Mapping[str, str] | None = None
                     if self.repository_source_root is None:
                         # Origin objects come through the repository access the
@@ -785,6 +805,15 @@ class ManagedCheckpointRestoreService:
                         # ambient token. The credential reaches Git only through
                         # an in-memory helper, not disk or argv.
                         admitted = await self._admitted_git_read(req)
+                        if (
+                            isinstance(req.destination, SandboxRestoreDestination)
+                            and req.destination.repository_identity is not None
+                            and admitted.remote.casefold() != repo_url.casefold()
+                        ):
+                            raise CheckpointRestoreError(
+                                "CHECKPOINT_REPOSITORY_UNAVAILABLE",
+                                "source access conflicts with the admitted repository identity",
+                            )
                         repo_url = admitted.remote
                         if admitted.token:
                             clone_env = build_github_token_git_environment(
@@ -794,7 +823,8 @@ class ManagedCheckpointRestoreService:
                             )
                     self._git(
                         ["clone", "--no-checkout", repo_url, str(staging)],
-                        code="CHECKPOINT_REPOSITORY_UNAVAILABLE", env=clone_env,
+                        code="CHECKPOINT_REPOSITORY_UNAVAILABLE",
+                        env=clone_env,
                     )
                 if history and history.get("ref"):
                     bundle = await self._read(
@@ -802,13 +832,21 @@ class ManagedCheckpointRestoreService:
                         content_types={"application/x-git-bundle"},
                         access=access,
                     )
-                    if _digest(bundle) != history.get("digest") or history.get("headCommit") != req.checkpoint.base_commit:
-                        raise CheckpointRestoreError("CHECKPOINT_ARCHIVE_CORRUPTED", "selected history identity mismatch")
+                    if (
+                        _digest(bundle) != history.get("digest")
+                        or history.get("headCommit") != req.checkpoint.base_commit
+                    ):
+                        raise CheckpointRestoreError(
+                            "CHECKPOINT_ARCHIVE_CORRUPTED",
+                            "selected history identity mismatch",
+                        )
                     bundle_path = staging / ".git" / "checkpoint.bundle"
                     bundle_path.write_bytes(bundle)
                     try:
                         self._git(["bundle", "verify", str(bundle_path)], staging)
-                        self._git(["fetch", "--no-tags", str(bundle_path), "HEAD"], staging)
+                        self._git(
+                            ["fetch", "--no-tags", str(bundle_path), "HEAD"], staging
+                        )
                     finally:
                         bundle_path.unlink(missing_ok=True)
                 self._git(

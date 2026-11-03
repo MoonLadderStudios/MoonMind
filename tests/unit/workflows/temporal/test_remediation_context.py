@@ -3553,6 +3553,21 @@ def test_remediation_authority_serialization_preserves_opaque_refs_and_relative_
         "artifact://not-an-artifact-id",
         "https://example.test/object?X-Amz-Signature=raw-secret",
     ],
+    ids=[
+        "absolute-path",
+        "embedded-path",
+        "artifact-subpath",
+        "artifact-query",
+        "artifact-userinfo",
+        "artifact-with-path",
+        "artifact-fragment",
+        "artifact-with-header",
+        "invalid-leading-bits",
+        "invalid-character",
+        "lowercase-id",
+        "malformed-id",
+        "signed-url",
+    ],
 )
 def test_remediation_authority_serialization_does_not_exempt_sensitive_or_invalid_refs(value):
     serialized = remediation_actions._redact_payload({"instructionRef": value})

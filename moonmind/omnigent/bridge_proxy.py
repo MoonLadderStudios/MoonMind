@@ -30,6 +30,9 @@ from typing import Any, AsyncIterator, Protocol
 from pydantic import BaseModel, ConfigDict, Field
 
 from moonmind.omnigent.bridge_config import (
+    EMBEDDED_TRANSPORT_RETIRED_CODE,
+    EMBEDDED_TRANSPORT_RETIRED_MESSAGE,
+    HOST_PROTOCOL_MODE_EMBEDDED,
     HOST_PROTOCOL_MODE_PROXY,
     OmnigentBridgeConfig,
 )
@@ -485,6 +488,20 @@ class OmnigentBridgeSessionProxy:
                 "workflow; refusing cross-owner reuse",
                 failure_class="user_error",
                 status_code=409,
+            )
+        metadata = getattr(row, "metadata_", None)
+        if (
+            isinstance(metadata, dict)
+            and metadata.get("hostProtocolMode") == HOST_PROTOCOL_MODE_EMBEDDED
+        ):
+            # An old key may arrive after the deployment has selected proxy
+            # mode. It retains its recorded identity and must never be reused
+            # against the current upstream or turned into a fresh session.
+            raise OmnigentBridgeError(
+                EMBEDDED_TRANSPORT_RETIRED_MESSAGE,
+                failure_class="user_error",
+                status_code=410,
+                code=EMBEDDED_TRANSPORT_RETIRED_CODE,
             )
 
     async def get_session(self, session_id: str) -> dict[str, Any]:

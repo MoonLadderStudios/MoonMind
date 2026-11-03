@@ -484,6 +484,7 @@ AGENT_RUN_POOL_PARENT_HANDOFF_PATCH_ID = "agent-run-pool-parent-handoff-v1"
 AGENT_RUN_POOL_CONTEXT_RECEIPT_PATCH_ID = "agent-run-pool-context-receipt-v1"
 AGENT_RUN_POOL_CANONICAL_WORKSPACE_HANDOFF_PATCH_ID = "agent-run-pool-canonical-workspace-handoff-v1"
 AGENT_RUN_SHARED_POOL_STEP_RETRY_PATCH_ID = "agent-run-shared-pool-step-retry-v1"
+AGENT_RUN_POOL_CHECKPOINT_SOURCE_PATCH_ID = "agent-run-pool-checkpoint-source-v1"
 AGENT_RUN_MANAGED_NO_PROGRESS_RECONCILIATION_PATCH_ID = (
     "agent-run-managed-no-progress-reconciliation-v1"
 )
@@ -6813,6 +6814,27 @@ class MoonMindAgentRun:
             return reference
         return None
 
+    def _pool_cooldown_retry_request(
+        self, native_request: AgentExecutionRequest
+    ) -> AgentExecutionRequest:
+        request = native_request.model_copy(deep=True)
+        request.execution_budget = self._execution_budget
+        if self._workflow_patch_enabled(AGENT_RUN_POOL_CONTEXT_RECEIPT_PATCH_ID):
+            saved_workspace = self._saved_pool_workspace_ref(self.final_result)
+            if saved_workspace is not None:
+                request.workspace_spec["workspaceCheckpointRestoreRef"] = saved_workspace
+                if (
+                    (request.workspace_spec.get("workspaceSource") or {}).get("kind")
+                    == "scratch"
+                    and self._workflow_patch_enabled(
+                        AGENT_RUN_POOL_CHECKPOINT_SOURCE_PATCH_ID
+                    )
+                ):
+                    # Saved work replaces the original scratch workspace. Keep
+                    # pre-patch retry requests unchanged during history replay.
+                    request.workspace_spec.pop("workspaceSource")
+        return request
+
     def _with_dispatch_pool_context(self, result: AgentRunResult) -> AgentRunResult:
         original = self._pool_native_request
         if (
@@ -9702,15 +9724,9 @@ class MoonMindAgentRun:
                     else:
                         # Retained parents keep their recorded provider retry
                         # decision and original selector/account/budget.
-                        request = self._pool_native_request.model_copy(deep=True)
-                        request.execution_budget = self._execution_budget
-                        if self._workflow_patch_enabled(AGENT_RUN_POOL_CONTEXT_RECEIPT_PATCH_ID):
-                            saved_workspace = self._saved_pool_workspace_ref(self.final_result)
-                            if saved_workspace is not None:
-                                request.workspace_spec = {
-                                    **request.workspace_spec,
-                                    "workspaceCheckpointRestoreRef": saved_workspace,
-                                }
+                        request = self._pool_cooldown_retry_request(
+                            self._pool_native_request
+                        )
                         self._pool_native_request = None
                         self.agent_kind = "managed"
                         self.run_id = None

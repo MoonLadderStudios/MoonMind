@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from moonmind.omnigent.workspace_sources import compile_workspace_source
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.workflows import agent_run as module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
@@ -21,8 +22,9 @@ from tests.unit.workflows.temporal.workflows.test_agent_run_omnigent_capacity_ad
 @pytest.mark.parametrize("cooldown", [False, True])
 @pytest.mark.parametrize("account_selection", ["pool", "fixed", "implicit"])
 @pytest.mark.parametrize("parent_step_recovery", [False, True], ids=["retained-parent", "step-owner"])
+@pytest.mark.parametrize("explicit_scratch", [False, True])
 async def test_pool_step_uses_shared_loop_and_preserves_retry_authority(
-    monkeypatch, runtime, cooldown, account_selection, parent_step_recovery
+    monkeypatch, runtime, cooldown, account_selection, parent_step_recovery, explicit_scratch
 ):
     _configure_workflow_runtime(monkeypatch)
     run = MoonMindAgentRun()
@@ -36,6 +38,9 @@ async def test_pool_step_uses_shared_loop_and_preserves_retry_authority(
         idempotencyKey="accepted-step",
         instructionRef="Preserve the accepted task.",
         parameters={"publishMode": "none"},
+        workspaceSpec=(
+            {"workspaceSource": {"kind": "scratch"}} if explicit_scratch else {}
+        ),
         stepExecution={
             "workflowId": "parent",
             "runId": "parent-run",
@@ -51,6 +56,9 @@ async def test_pool_step_uses_shared_loop_and_preserves_retry_authority(
         if name == "prepare_shared_execution_plan":
             selected = deepcopy(payload["request"])
             prepared.append(selected)
+            source = compile_workspace_source(selected["workspaceSpec"])
+            if cooldown and runtime == "codex_cli" and len(prepared) > 1:
+                assert source.kind == "checkpoint"
             selected.update(
                 agentKind="external",
                 agentId="omnigent",
@@ -118,7 +126,7 @@ async def test_pool_step_uses_shared_loop_and_preserves_retry_authority(
                         + "a" * 64,
                     },
                     savedWorkspaceCheckpoint={
-                        "archiveRef": "artifact:accepted-workspace"
+                        "archiveRef": "artifact://accepted-workspace"
                     },
                 )
             if cooldown and len(executions) == 1:
@@ -165,12 +173,12 @@ async def test_pool_step_uses_shared_loop_and_preserves_retry_authority(
         )
         assert (
             result.metadata["dispatchPoolContext"]["workspaceCheckpointRestoreRef"]
-            == "artifact:accepted-workspace"
+            == "artifact://accepted-workspace"
         )
         if cooldown and not parent_step_recovery:
             assert (
                 executions[1].workspace_spec["workspaceCheckpointRestoreRef"]
-                == "artifact:accepted-workspace"
+                == "artifact://accepted-workspace"
             )
     assert len(executions) == len(prepared) == (2 if cooldown and not parent_step_recovery else 1)
     assert all(

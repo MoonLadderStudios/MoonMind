@@ -14,6 +14,7 @@ import json
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 import pytest
 
 from moonmind.schemas.agent_runtime_models import (
@@ -27,6 +28,29 @@ from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def policy_clock(monkeypatch):
+    """Advance policy intervals without changing asyncio's process/pipe clock.
+
+    These cases still terminate real children. The real-duration supervision,
+    pipe-drain and Temporal ActivityTaskTimedOut witnesses run separately.
+    """
+    from moonmind.workflows.temporal.runtime import supervisor as module
+
+    elapsed = [time.monotonic()]
+    real_sleep = asyncio.sleep
+
+    async def tick(seconds):
+        elapsed[0] += seconds
+        await real_sleep(0)
+
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: elapsed[0]))
+    monkeypatch.setattr(
+        module, "asyncio", SimpleNamespace(**{**vars(asyncio), "sleep": tick})
+    )
+
 
 class _StubArtifactStorage:
     """Minimal file-based artifact storage for tests."""
@@ -153,9 +177,11 @@ async def test_heartbeat_and_wait_within_budget_expires_without_progress(
 # see that, so it terminated at the base budget and the work was lost.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_heartbeat_and_wait_within_budget_extends_while_progressing(
     tmp_path: Path,
+    policy_clock,
 ):
     """Observed progress extends past the base budget, up to the ceiling."""
     supervisor, store, _ = _make_supervisor(tmp_path)
@@ -203,9 +229,11 @@ async def test_heartbeat_and_wait_within_budget_extends_while_progressing(
 # killed for activity the supervisor simply had not looked for yet.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_due_progress_is_sampled_before_the_stall_verdict_terminates(
     tmp_path: Path,
+    policy_clock,
 ):
     """A refresh that finds fresh progress rescues the run from a stale verdict."""
     supervisor, store, _ = _make_supervisor(tmp_path)
@@ -250,7 +278,9 @@ async def test_due_progress_is_sampled_before_the_stall_verdict_terminates(
 
 
 @pytest.mark.asyncio
-async def test_refresh_cannot_extend_a_run_past_the_ceiling(tmp_path: Path):
+async def test_refresh_cannot_extend_a_run_past_the_ceiling(
+    tmp_path: Path, policy_clock
+):
     """The hard ceiling is exempt: no observed progress extends past it."""
     supervisor, store, _ = _make_supervisor(tmp_path)
 
