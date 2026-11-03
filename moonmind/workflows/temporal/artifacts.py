@@ -2963,24 +2963,28 @@ class TemporalArtifactRepository:
     async def note_deletion_attempt(
         self, *, artifact_id: str, error: str | None
     ) -> None:
-        intent = await self._session.get(
-            db_models.TemporalArtifactDeletionIntent, artifact_id
+        # A sweep page can retain an intent after another cleanup owner has
+        # cleared it. Update the current row atomically: an absent intent is
+        # already reconciled, and concurrent attempts must not lose increments.
+        intent = db_models.TemporalArtifactDeletionIntent
+        await self._session.execute(
+            update(intent)
+            .where(intent.artifact_id == artifact_id)
+            .values(
+                attempts=intent.attempts + 1,
+                last_error=error,
+                updated_at=datetime.now(UTC),
+            )
+            .execution_options(synchronize_session="fetch")
         )
-        if intent is None:
-            return
-        intent.attempts = int(intent.attempts or 0) + 1
-        intent.last_error = error
-        intent.updated_at = datetime.now(UTC)
-        await self._session.flush()
 
     @_artifact_authority_boundary
     async def clear_deletion_intent(self, artifact_id: str) -> None:
-        intent = await self._session.get(
-            db_models.TemporalArtifactDeletionIntent, artifact_id
+        await self._session.execute(
+            delete(db_models.TemporalArtifactDeletionIntent)
+            .where(db_models.TemporalArtifactDeletionIntent.artifact_id == artifact_id)
+            .execution_options(synchronize_session="fetch")
         )
-        if intent is not None:
-            await self._session.delete(intent)
-            await self._session.flush()
 
     @_artifact_authority_boundary
     async def list_pending_deletion_intents(
