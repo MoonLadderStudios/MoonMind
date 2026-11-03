@@ -318,10 +318,21 @@ Raw deferred step-account matching and tool-only boundary validation remain inta
 Replaced defaults never select ambient credentials.
 OAuth-home delivery attaches the enrollment-owned volume. Codex/Claude nonsecret
 shell settings use the existing project-value guard and admitted configuration
-artifact; native executable wrappers restore them after child environment filtering
-without overriding private HOME or editing the enrolled home. Templated or protected
-environment, file or HOME choices retain their native adapter until an equivalent
-handoff exists.
+artifact for OAuth and API-key Profiles, retaining exact literal values.
+Newly admitted environment templates carry only workspace and runtime
+support-directory context, rendered through the shared Profile template renderer
+after the attempt's native workspace path is known. Recorded literal values keep
+their original interpretation. Native executable wrappers restore values after child environment filtering
+without overriding private HOME or editing the enrolled home. Codex OAuth
+preferences and nonsecret files authored for a run-support or enrolled HOME use
+the same artifact and renderer in the native owner's private app-server HOME.
+Selected inherited instruction links become private files; untouched entries stay
+visible. Environment templates referencing those files bind to that private HOME
+at native launch; generic support paths and recorded literals retain their meaning.
+Credential, hook, cache and history paths cannot be replaced. Native
+model/provider/tool authority and enrollment remain intact. Protected settings,
+native model-default suppression, uncarried tool/auth configuration and other
+HOME choices retain their adapter until an equivalent handoff exists.
 Recorded plans retain their original materializer identity.
 Profile-bound execution and its OAuth host launcher admit no new plans;
 they retain queued starts, retries and cleanup under their recorded authority. Supported
@@ -337,10 +348,19 @@ step selections.
 Secret values still resolve
 after acquisition under the existing credential-generation fence. Older plans
 without this snapshot retain their recorded interpretation.
-Codex developer instructions, project-instruction discovery and history preferences
-also reach its private session config. Native Profile aliases translate explicit
-model overrides once during shared compilation, using the same lookup as direct
-launch. Resolved defaults and tiers keep their selected model.
+Codex reasoning summaries, verbosity, context and compaction limits, personality,
+developer instructions, project-instruction discovery and history preferences reach
+its private session config for OAuth and API-key Profiles; native Codex validates
+and normalizes these values. API-key Codex Profiles can carry preferences
+without declaring another provider and add nonsecret files within their private
+HOME, including global instructions. Their declared key and endpoint stay selected;
+unresolved native model-default suppression retains its route. The same
+renderer serves direct and packaged launches; the native wrapper writes only into
+its private home, retains frozen settings and reuses a completed projection on
+process restart. An interrupted append stops visibly until step recovery provisions
+a fresh home, preserving the original credential and history owners. Native Profile aliases translate explicit model overrides once during shared
+compilation, using the same lookup as direct launch. Resolved defaults and tiers
+keep their selected model.
 Tool/authentication and launch settings
 without an equivalent projection retain their native route.
 Explicit same-epoch Codex context reuse forks durable native history through

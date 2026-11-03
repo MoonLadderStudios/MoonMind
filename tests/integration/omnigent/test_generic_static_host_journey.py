@@ -163,7 +163,10 @@ async def test_static_prelaunch_failure_releases_allocation_and_preserves_reside
 async def test_static_native_turn_preserves_physical_state_and_saved_result(
     native_journey, terminal
 ):
-    scene = native_journey
+    await assert_static_native_turn_saved_and_retained(native_journey, terminal)
+
+
+async def assert_static_native_turn_saved_and_retained(scene, terminal="idle"):
     scene.server.terminal_status = terminal
     result = await scene.realizer.execute(scene.request, scene.plan)
     assert (result.failure_class is None) == (terminal == "idle")
