@@ -346,8 +346,10 @@ step selections.
 Secret values still resolve
 after acquisition under the existing credential-generation fence. Older plans
 without this snapshot retain their recorded interpretation.
-Codex developer instructions, project-instruction discovery and history preferences
-also reach its private session config. API-key Codex Profiles can carry preferences
+Codex reasoning summaries, verbosity, context and compaction limits, personality,
+developer instructions, project-instruction discovery and history preferences reach
+its private session config for OAuth and API-key Profiles; native Codex validates
+and normalizes these values. API-key Codex Profiles can carry preferences
 without declaring another provider and add nonsecret files within their private
 HOME, including global instructions. Their declared key and endpoint stay selected;
 unresolved native model-default suppression retains its route. The same
