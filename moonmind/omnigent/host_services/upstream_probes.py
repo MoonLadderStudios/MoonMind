@@ -1,7 +1,7 @@
 """Retained in-host probes for behavior the Omnigent host tunnel does not serve.
 
 Exact-host attestation prefers the supported tunnel endpoint
-``GET /v1/hosts/{id}/harnesses/{harness}/model-options``. Three facts it
+``GET /v1/hosts/{id}/harnesses/{harness}/model-options``. Four facts it
 needs have no supported upstream surface yet, so this module is the one place
 that runs upstream helpers inside the admitted host image:
 
@@ -11,6 +11,7 @@ that runs upstream helpers inside the admitted host image:
   spells exactly: the tunnel returns rows but no served verdict;
 - the runner environment: Omnigent exposes no command that executes under the
   environment ``HostConnect`` gives a runner.
+- Codex's configured default when it is hidden from the visible catalogue.
 
 Each probe returns one structured result to its caller and fails typed when
 the expected helper is absent (``OMNIGENT_HARNESS_BUILD_MISMATCH``), so a
@@ -18,7 +19,8 @@ changed upstream layout is reported as the missing behavior it is.
 
 Removal: delete the matching probe when the host tunnel serves an
 ``opencode-native`` catalog, returns a served verdict for a requested model,
-or offers runner-environment execution. The pre-0.13 module locations in the
+offers runner-environment execution, or includes the configured Codex default
+independently of picker visibility. The pre-0.13 module locations in the
 layout selectors can go once no admitted host runs Omnigent older than 0.13.
 """
 
@@ -27,6 +29,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from moonmind.omnigent.codex_login import CODEX_CONFIGURATION_READ_PROBE
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
@@ -131,6 +134,35 @@ def _catalog_unavailable(message: str) -> HarnessPlatformError:
         code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
         transient=True,
     )
+
+
+async def read_codex_native_default(
+    *, backend: DockerCommandBackend, container_name: str,
+) -> str | None:
+    """Read a hidden default through the native owner and public CLI protocol.
+
+    This only runs when the host's visible catalogue names no default. It
+    sends no turn, does not request token refresh, and emits no config bodies.
+    """
+    code, stdout, _stderr = await backend.run(
+        ["docker", "exec", container_name, "/opt/venv/bin/python", "-c",
+         CODEX_CONFIGURATION_READ_PROBE, "/home/app/.codex"],
+        timeout_seconds=30.0, check=False,
+    )
+    try:
+        result = json.loads(stdout) if code == 0 else {}
+    except (ValueError, TypeError):
+        result = {}
+    if isinstance(result, dict) and result.get("status") == "unsupported":
+        raise HarnessPlatformError(
+            "Codex native model-default observation is unavailable in the exact host",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+        )
+    if isinstance(result, dict) and result.get("status") == "ready":
+        model = result.get("model")
+        if isinstance(model, str) and model.strip() and not any(c in model for c in "\r\n\0"):
+            return model
+    raise _catalog_unavailable("Codex native model-default observation could not be read")
 
 
 async def read_opencode_model_options(

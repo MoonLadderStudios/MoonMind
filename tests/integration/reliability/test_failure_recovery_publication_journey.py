@@ -481,7 +481,7 @@ async def test_failed_middle_step_retains_bytes_and_resumes_only_unfinished_phas
                     launchPolicyRef="same-launch",
                     capturePolicy={},
                     modelConfig=SimpleNamespace(
-                        qualifiedId="same-model", effort="high"
+                        qualifiedId="same-model", effort="high", normalizedOptions={}
                     ),
                 ),
             )

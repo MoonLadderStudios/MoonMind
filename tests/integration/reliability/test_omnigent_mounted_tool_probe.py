@@ -243,7 +243,7 @@ async def test_declared_tool_probe_reaches_exact_host(
             payload=SimpleNamespace(
                 harnessId=harness_id,
                 harnessImplementationRef="test@1",
-                modelConfig=SimpleNamespace(qualifiedId="test/model"),
+                modelConfig=SimpleNamespace(qualifiedId="test/model", normalizedOptions={}),
             )
         ),
         spec=spec,
