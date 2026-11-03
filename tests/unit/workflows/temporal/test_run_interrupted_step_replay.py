@@ -434,7 +434,8 @@ async def test_interrupted_git_checkpoint_child_payloads_survive_real_replay(mon
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["successor", "cancelled", "unavailable", "identity"])
-async def test_selected_pool_child_save_drives_the_existing_step_owner_and_replays(monkeypatch, mode):
+@pytest.mark.parametrize("recorded_configuration", [False, True], ids=["retained-request", "frozen-configuration"])
+async def test_selected_pool_child_save_drives_the_existing_step_owner_and_replays(monkeypatch, mode, recorded_configuration):
     cancel = mode == "cancelled"
     blocked = mode in {"unavailable", "identity"}
     expected_count = 1 if cancel or blocked else 2
@@ -456,8 +457,9 @@ async def test_selected_pool_child_save_drives_the_existing_step_owner_and_repla
         return await execute_child(name, request, **kwargs)
 
     monkeypatch.setattr(workflow, "execute_child_workflow", observe_child)
-    _enable(monkeypatch, _SHARED_RECOVERY_PATCHES)
-    name = f"shared-checkpoint-{mode}"
+    new_patches = _SHARED_RECOVERY_PATCHES | {run_workflow_module.RUN_SHARED_STEP_CONFIGURATION_PATCH}
+    _enable(monkeypatch, new_patches if recorded_configuration else _SHARED_RECOVERY_PATCHES)
+    name = f"shared-checkpoint-{mode}-{recorded_configuration}"
     async with await WorkflowEnvironment.start_time_skipping(data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER) as env:
         agent_worker, admission_worker = _workers(env)
         async with agent_worker, admission_worker, Worker(
@@ -479,6 +481,9 @@ async def test_selected_pool_child_save_drives_the_existing_step_owner_and_repla
         assert second.profile_selector == first.profile_selector
         assert second.workspace_spec["workspaceCheckpointRestoreRef"] == "artifact://checkpoints/shared-child-save-1"
         assert second.parameters["metadata"]["moonmind"]["sharedCheckpointRequired"] is True
+        assert second.parameters["metadata"]["moonmind"].get("sharedStepCheckpointRef") == (
+            "artifact://checkpoints/shared-child-save-1" if recorded_configuration else None
+        )
         assert second.execution_budget.logical_step_id == first.execution_budget.logical_step_id
         assert second.execution_budget.budget == first.execution_budget.budget
         assert second.execution_budget.recovery_count == 1
@@ -488,6 +493,8 @@ async def test_selected_pool_child_save_drives_the_existing_step_owner_and_repla
     recorded = [request.model_dump(mode="json", by_alias=True) for request in emitted]
     emitted.clear()
     _SAVED_READS.clear()
+    # Current workers must replay requests recorded before this new hint too.
+    _enable(monkeypatch, new_patches)
     await Replayer(
         workflows=[_InterruptedStepFixture], workflow_runner=UnsandboxedWorkflowRunner(),
         data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,

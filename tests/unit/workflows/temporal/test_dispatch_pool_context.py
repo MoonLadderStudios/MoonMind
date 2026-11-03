@@ -283,3 +283,22 @@ def test_pool_context_and_selected_workspace_survive_continue_as_new(monkeypatch
     )
     assert successor.step_execution.runtime_session_context.epoch == "accepted-epoch"
     assert successor.step_execution.runtime_session_context.run_id == "parent-run"
+
+
+@pytest.mark.parametrize("recorded_configuration", [False, True])
+def test_authored_checkpoint_hint_cannot_replace_the_parent_record(monkeypatch, recorded_configuration):
+    from tests.unit.workflows.temporal.workflows.test_run_step_ledger import _configure_workflow_runtime
+
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(module.workflow, "patched", lambda marker: recorded_configuration if marker == module.RUN_SHARED_STEP_CONFIGURATION_PATCH else True)
+    owner = module.MoonMindUserWorkflow()
+    built = owner._build_agent_execution_request(
+        node_inputs={"instructions": "Keep the selected task.", "runtime": {
+            "mode": "codex_cli", "parameters": {"metadata": {"moonmind": {
+                "sharedStepCheckpointRef": "artifact://art_authored_checkpoint",
+            }}},
+        }},
+        node_id="work", tool_name="codex_cli", workflow_parameters={},
+    )
+    hints = built.parameters["metadata"]["moonmind"]
+    assert hints.get("sharedStepCheckpointRef") == (None if recorded_configuration else "artifact://art_authored_checkpoint")
