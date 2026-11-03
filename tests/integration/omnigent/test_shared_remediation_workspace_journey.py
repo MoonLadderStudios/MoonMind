@@ -292,12 +292,11 @@ async def test_shared_remediation_restores_head_then_latest_attempt_save(
     step_id = request.step_execution.workflow_id + ":run:implement:execution:2"
     monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda marker: True)
     owner = run_workflow_module.MoonMindUserWorkflow()
-    owner._step_checkpoint_workspace_evidence_by_boundary["implement"] = {"after_execution": {
-        "checkpointRef": saved["checkpointRef"], "workspaceArchiveRef": saved["archiveRef"],
-        "workspaceKind": saved["kind"], "workspaceDigest": saved["workspaceDigest"],
-        "workspaceIdentityDigest": saved["workspaceIdentityDigest"], "checkpointManifestRef": saved["manifestRef"],
-        "baseCommit": saved["baseCommit"],
-    }}
+    async def read_saved_checkpoint(activity, payload, **kwargs):
+        assert activity == "artifact.read", "a deleted worker workspace cannot be recaptured"
+        return await journey.gateway.read_bytes(payload.artifact_ref)
+    monkeypatch.setattr(run_workflow_module, "execute_typed_activity", read_saved_checkpoint)
+    assert await owner._adopt_shared_child_saved_checkpoint("implement", request, interrupted)
     owner._carry_interrupted_omnigent_step_workspace("implement", next_attempt=2)
     restore_ref = owner._interrupted_step_restore_refs[owner._step_execution_launch_block_key("implement", 2)]
     assert restore_ref == saved["checkpointRef"]
