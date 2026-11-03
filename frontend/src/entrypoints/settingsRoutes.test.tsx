@@ -130,10 +130,13 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
     expect(await screen.findByRole('heading', { name: 'Providers & Secrets' })).toBeTruthy();
     await waitFor(() => expect(requestedUrls).toContain('/api/v1/provider-profiles'));
     expect(requestedUrls).toContain('/api/v1/secrets');
-    expect(requestedUrls.some((url) => url.startsWith('/api/v1/settings/catalog'))).toBe(false);
     expect(requestedUrls).not.toContain('/me');
     expect(requestedUrls).not.toContain('/api/system/worker-pause');
     expect(screen.queryByLabelText('Generated user and workspace settings')).toBeNull();
+    // Only the new-work defaults card reads the catalog; Instance's full
+    // generated-settings manager is not mounted here.
+    expect(screen.queryByRole('region', { name: 'Generated settings' })).toBeNull();
+    expect(screen.queryByLabelText('Search settings')).toBeNull();
     expect(screen.queryByLabelText('Worker Operations')).toBeNull();
     expect(screen.getByRole('radio', { name: 'Default tier' })).toBeTruthy();
   });

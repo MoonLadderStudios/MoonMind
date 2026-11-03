@@ -195,7 +195,7 @@ exclusive mutable identity may lock it to `1` with an explanation.
 
 `Use as Harness default` (`is_default`) is visible selection intent. It never
 makes a disabled or not-launch-ready profile the default, stays scoped to
-`runtime_id`, and does not select a Backend. When creation includes credential
+`runtime_id`, and does not select a Backend or the instance Default Harness. When creation includes credential
 setup, the default is assigned only after readiness succeeds; otherwise the
 request stays pending or the checkbox is unavailable with an explanation.
 

@@ -6,6 +6,7 @@ import type { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
 import { ProvidersSecretsSettingsPage, InstanceSettingsPage } from './settings';
 import { readDashboardPreferences, updateDashboardPreferences } from '../utils/dashboardPreferences';
+import { profileAction } from '../components/settings/profileActionsTestHelpers';
 
 const renderProvidersPage = (payload: BootPayload) => renderWithClient(
   <BrowserRouter><ProvidersSecretsSettingsPage payload={payload} /></BrowserRouter>,
@@ -119,6 +120,63 @@ describe('MoonLadderStudios/MoonMind#4019 Source Control on Providers & Secrets'
     for (const [, init] of probeCalls) {
       expect(JSON.parse(String((init as RequestInit).body)).connectionId).toBe('personal-github');
     }
+  });
+});
+
+describe('Providers & Secrets defaults for new work', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('shows the Default Harness beside the Default Provider Profile and explains precedence', async () => {
+    window.history.pushState({}, 'Settings', '/settings/providers-secrets');
+    const descriptor = (key: string, title: string, extra: Record<string, unknown>) => ({
+      key, title, category: 'Workflow', section: 'user-workspace', description: null,
+      effective_value: null, source: 'config_or_default', source_explanation: 'Resolved from application settings.',
+      apply_mode: 'next_workflow', activation_state: 'active', active: true, sensitive: false, read_only: false,
+      requires_reload: false, requires_worker_restart: false, requires_process_restart: false, applies_to: [],
+      order: 10, audit: { store_old_value: true, store_new_value: true, redact: false }, value_version: 1,
+      diagnostics: [], ...extra,
+    });
+    vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      const respond = (body: unknown) => ({ ok: true, status: 200, json: async () => body }) as Response;
+      if (url.startsWith('/api/v1/settings/catalog')) {
+        return respond({
+          section: 'user-workspace',
+          categories: {
+            Workflow: [
+              descriptor('workflow.default_runtime', 'Default Harness', {
+                type: 'enum', ui: 'select', effective_value: 'codex_cli',
+                options: [
+                  { value: 'omnigent', label: 'OpenCode' },
+                  { value: 'codex_cli', label: 'Codex' },
+                  { value: 'claude_code', label: 'Claude Code' },
+                ],
+              }),
+              descriptor('workflow.default_publish_mode', 'Default Publish Mode', {
+                type: 'enum', ui: 'select', effective_value: 'pr', options: [{ value: 'pr', label: 'Pull Request' }],
+              }),
+              descriptor('workflow.default_provider_profile_ref', 'Default Provider Profile', {
+                type: 'string', ui: 'provider_profile_picker', order: 70,
+              }),
+            ],
+          },
+        });
+      }
+      if (url.startsWith('/api/v1/provider-profiles')) return respond([]);
+      return respond({ items: [] });
+    });
+    renderProvidersPage({ page: 'settings-providers-secrets', apiBase: '/api', initialData: {} });
+
+    const card = await screen.findByRole('region', { name: 'Defaults for new work' });
+    const harness = (await within(card).findByLabelText('Default Harness')) as HTMLSelectElement;
+    expect(harness.value).toBe('codex_cli');
+    expect(harness.selectedOptions[0]?.textContent).toBe('Codex');
+    expect(within(card).getByLabelText('Default Provider Profile')).toBeTruthy();
+    expect(within(card).queryByLabelText('Default Publish Mode')).toBeNull();
+    expect(card.textContent).toContain('uses the Default Provider Profile when one is set, otherwise the Default Harness');
+    expect(card.textContent).toContain('choices made when launching work always take precedence');
   });
 });
 
@@ -331,7 +389,7 @@ describe('MoonLadderStudios/MoonMind#3788 Settings Provider Profile Harness filt
     await screen.findByRole('heading', { name: 'Profiles' });
 
     selectRuntimeFilter('claude_code');
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
 
     const harnessSelect = screen.getByLabelText('Harness') as HTMLSelectElement;
     expect(harnessSelect.value).toBe('claude_code');

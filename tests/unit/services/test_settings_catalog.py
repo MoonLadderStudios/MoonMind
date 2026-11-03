@@ -75,11 +75,14 @@ def test_catalog_returns_exposed_descriptor_metadata_and_omits_unexposed_setting
     assert default_runtime.requires_process_restart is False
     assert default_runtime.depends_on == []
     assert default_runtime.audit.store_old_value is True
-    assert default_runtime.options
-    assert {option.value for option in default_runtime.options} >= {
-        "codex",
-        "codex_cli",
-    }
+    assert default_runtime.title == "Default Harness"
+    # One option per harness; Omnigent is the backend, not a harness choice,
+    # and the legacy ``codex`` alias is not a second Codex option.
+    assert [(option.value, option.label) for option in default_runtime.options] == [
+        ("omnigent", "OpenCode"),
+        ("codex_cli", "Codex"),
+        ("claude_code", "Claude Code"),
+    ]
 
     all_keys = {
         descriptor.key
@@ -246,6 +249,45 @@ def _assert_reload_requirement(response, *, key: str) -> None:
     assert requirement.requires_reload is True
     assert requirement.apply_mode == "worker_reload"
     assert requirement.applies_to
+
+
+@pytest.mark.asyncio
+async def test_default_harness_runtime_alias_is_canonical_on_read_and_write(
+    settings_session_maker,
+):
+    async with settings_session_maker() as settings_session:
+        # An override saved while the catalog still offered the alias.
+        settings_session.add(
+            SettingsOverride(key="workflow.default_runtime", value_json="codex")
+        )
+        await settings_session.commit()
+        service = SettingsCatalogService(
+            env={},
+            session=settings_session,
+            workspace_policy=SettingsWorkspacePolicy(
+                allowed_runtimes=("codex", "claude")
+            ),
+        )
+
+        stored = await service.effective_value_async("workflow.default_runtime")
+        assert stored.value == "codex_cli"
+        assert stored.diagnostics == []
+        defaults = await service.workflow_creation_defaults()
+        assert defaults.default_runtime == "codex_cli"
+
+        saved = await service.apply_overrides(
+            changes={"workflow.default_runtime": "claude"},
+            expected_versions={"workflow.default_runtime": stored.value_version},
+        )
+        assert saved.values["workflow.default_runtime"].value == "claude_code"
+        row = (
+            await settings_session.execute(
+                select(SettingsOverride).where(
+                    SettingsOverride.key == "workflow.default_runtime"
+                )
+            )
+        ).scalar_one()
+        assert row.value_json == "claude_code"
 
 
 @pytest.mark.asyncio
