@@ -1814,7 +1814,7 @@ async def test_plain_api_key_private_preferences_use_the_existing_shared_provide
     assert configuration["additionalFiles"][0]["content_template"] == "Admitted key Profile file.\n"
 
 
-@pytest.mark.parametrize("native_journey", [{
+@pytest.mark.parametrize(("native_journey", "private_reference"), [({
     "harness": "codex-native", "static": static, "oauthPrivateConfiguration": True,
     "privateConfigurationHome": configuration_home,
     "declareConfigurationHome": declare_home,
@@ -1828,19 +1828,26 @@ async def test_plain_api_key_private_preferences_use_the_existing_shared_provide
         "path": configuration_home + "/AGENTS.md", "format": "text",
         "merge_strategy": "append", "permissions": "0600", "content_template": "Admitted file.\n",
     }],
-} for static in (False, True) for configuration_home, declare_home in (
+    "oauthTuning": {
+        "PROJECT_RUNTIME_STYLE": "  exact $(not-executed) literal  ",
+        **({"PROJECT_CONFIG_FILE": configuration_home + "/AGENTS.md"}
+           if configuration_home.startswith("{{runtime_support_dir}}/") else {}),
+    },
+}, configuration_home.startswith("{{runtime_support_dir}}/"))
+for static in (False, True) for configuration_home, declare_home in (
     ("{{runtime_support_dir}}/codex-home", True),
     ("/home/app/.codex", True),
     ("/home/app/.codex", False),
-)], indirect=True)
+)], indirect=["native_journey"])
 @pytest.mark.parametrize("edit_after_admission", [False, True])
-async def test_admitted_oauth_private_configuration_reaches_shared_lifecycle(native_journey, edit_after_admission):
+async def test_admitted_oauth_private_configuration_reaches_shared_lifecycle(native_journey, private_reference, edit_after_admission):
     journey = native_journey
     if edit_after_admission:
         async with journey.session_factory() as session:
             profile = await session.get(ManagedAgentProviderProfile, PROFILE)
             profile.file_templates = []
             profile.home_path_overrides = {"CODEX_HOME": "/later-home"}
+            profile.env_template = {"PROJECT_CONFIG_FILE": "/later-reference"}
             await session.commit()
     if journey.static_mode:
         from tests.integration.omnigent.test_generic_static_host_journey import (
@@ -1858,6 +1865,10 @@ async def test_admitted_oauth_private_configuration_reaches_shared_lifecycle(nat
         "personality": "pragmatic",
     }
     assert configuration["additionalFiles"][0]["content_template"] == "Admitted file.\n"
+    assert configuration.get("environmentTemplates", {}) == (
+        {"PROJECT_CONFIG_FILE": "{{runtime_support_dir}}/AGENTS.md"} if private_reference else {}
+    )
+    assert journey.docker.launch_env["PROJECT_RUNTIME_STYLE"] == "  exact $(not-executed) literal  "
     assert journey.docker.launch_env["CODEX_HOME"] == "/home/app/.codex"
     assert "codex-configuration.py prepare" in journey.docker.script
 

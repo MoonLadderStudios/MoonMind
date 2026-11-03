@@ -372,7 +372,9 @@ class ProviderLaunchEnvironment(BaseModel):
     def _validate_codex_configuration(cls, value):
         if value is not None:
             from moonmind.provider_profiles.codex_configuration import validate_oauth_configuration
+            from moonmind.omnigent.host_services.runtime_scripts import validate_provider_literal_launch_environment
 
+            validate_provider_literal_launch_environment(value.get("environmentTemplates") or {})
             return validate_oauth_configuration(value)
         return None
 
@@ -399,6 +401,10 @@ class ProviderLaunchEnvironment(BaseModel):
     def _validate_environment_ownership(self):
         if self.environmentTemplates and set(self.environmentTemplates) & set(self.launchEnvironment):
             raise ValueError("Profile environment value has conflicting literal/template ownership")
+        if self.codexConfiguration and set(self.codexConfiguration.get("environmentTemplates") or {}) & (
+            set(self.launchEnvironment) | set(self.environmentTemplates or {})
+        ):
+            raise ValueError("Profile environment value has conflicting private-HOME ownership")
         return self
 
 
@@ -406,6 +412,8 @@ def _oauth_launch_environment(profile, *, configuration=None):
     from moonmind.provider_profiles.template_renderer import template_context_names
 
     values = dict(getattr(profile, "env_template", None) or {})
+    for key in (configuration or {}).get("environmentTemplates") or {}:
+        values.pop(key, None)
     templates = {key: value for key, value in values.items() if template_context_names(value)}
     return ProviderLaunchEnvironment(
         launchEnvironment={key: value for key, value in values.items() if key not in templates},
