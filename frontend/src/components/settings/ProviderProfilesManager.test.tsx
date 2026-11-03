@@ -34,6 +34,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { DashboardToastProvider } from '../dashboard/DashboardToast';
 import { runtimeDefaultTierDraft } from '../../utils/providerProfileTiers';
 import { SettingsDraftGuardProvider } from './SettingsDraftGuard';
+import { findProfileAction, openProfileActions, profileAction, queryProfileAction } from './profileActionsTestHelpers';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -1060,7 +1061,7 @@ describe('ProviderProfilesManager form controls', () => {
   it('uses one cancel action while editing', () => {
     renderProviderProfilesManager([profile]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
 
     expect(screen.getAllByRole('button', { name: 'Cancel edit' })).toHaveLength(1);
     expect(screen.queryByRole('button', { name: 'Reset form' })).toBeNull();
@@ -1069,7 +1070,7 @@ describe('ProviderProfilesManager form controls', () => {
   it('renders Codex OAuth concurrency as a fixed exclusive capacity', () => {
     renderProviderProfilesManager([{ ...codexOauthProfile, max_parallel_runs: 7 }]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
 
     const maxParallelRuns = screen.getByLabelText(/Max parallel runs/) as HTMLInputElement;
     expect(maxParallelRuns.disabled).toBe(true);
@@ -1125,12 +1126,7 @@ describe('ProviderProfilesManager form controls', () => {
 
     renderProviderProfilesManagerWithQuery([profile, secondaryProfile]);
 
-    const editButtons = screen.getAllByRole('button', { name: 'Edit' });
-    const secondaryEditButton = editButtons[1];
-    if (!secondaryEditButton) {
-      throw new Error('Expected secondary provider profile edit button');
-    }
-    fireEvent.click(secondaryEditButton);
+    fireEvent.click(profileAction('Edit', 'codex-secondary'));
     const runtimeDefaultCheckbox = screen.getByLabelText('Harness default') as HTMLInputElement;
     expect(runtimeDefaultCheckbox.checked).toBe(false);
 
@@ -1157,8 +1153,8 @@ describe('ProviderProfilesManager form controls', () => {
 
     await waitFor(() => {
       const rows = screen.getAllByRole('row');
-      expect(rows[1]?.textContent).not.toContain('Harness default');
-      expect(rows[2]?.textContent).toContain('Harness default');
+      expect(rows[1]?.textContent).not.toContain('Default Codex CLI profile');
+      expect(rows[2]?.textContent).toContain('Default Codex CLI profile');
     });
   });
 
@@ -1173,7 +1169,7 @@ describe('ProviderProfilesManager form controls', () => {
 
     renderProviderProfilesManager([profile]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     const effortSelect = screen.getByLabelText('Tier 1 effort') as HTMLSelectElement;
     expect(effortSelect.value).toBe('__runtime_default__');
 
@@ -1214,7 +1210,7 @@ describe('ProviderProfilesManager form controls', () => {
     };
 
     renderProviderProfilesManager([staleProfile]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
 
     await screen.findByText(/Model discovery is refreshing/);
     const modelSelect = screen.getByLabelText('Tier 1 model') as HTMLSelectElement;
@@ -1242,7 +1238,7 @@ describe('ProviderProfilesManager form controls', () => {
     });
 
     renderProviderProfilesManager([profile]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
 
     const modelSelect = await screen.findByLabelText('Tier 1 model') as HTMLSelectElement;
     // Model discovery is non-blocking, so the select renders before the backend's
@@ -1334,7 +1330,7 @@ describe('ProviderProfilesManager form controls', () => {
 
     renderProviderProfilesManager([codexOauthProfile]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'OAuth codex-oauth' }));
+    fireEvent.click(profileAction('OAuth', 'codex-oauth'));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -1376,7 +1372,7 @@ describe('ProviderProfilesManager form controls', () => {
 
     renderProviderProfilesManager([codexOauthProfile]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'OAuth codex-oauth' }));
+    fireEvent.click(profileAction('OAuth', 'codex-oauth'));
 
     const dialog = await screen.findByRole('dialog', {
       name: 'Tmate OAuth session',
@@ -1409,7 +1405,7 @@ describe('ProviderProfilesManager form controls', () => {
 
     renderProviderProfilesManager([codexOauthProfile]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'OAuth codex-oauth' }));
+    fireEvent.click(profileAction('OAuth', 'codex-oauth'));
 
     const dialog = await screen.findByRole('dialog', {
       name: 'Tmate OAuth session',
@@ -1448,7 +1444,7 @@ describe('ProviderProfilesManager form controls', () => {
 
     renderProviderProfilesManager([codexOauthProfile]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'OAuth codex-oauth' }));
+    fireEvent.click(profileAction('OAuth', 'codex-oauth'));
 
     const dialog = await screen.findByRole('dialog', {
       name: 'Tmate OAuth session',
@@ -1490,10 +1486,10 @@ describe('ProviderProfilesManager form controls', () => {
     const { queryClient } = renderProviderProfilesManager([codexOauthProfile]);
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
-    fireEvent.click(screen.getByRole('button', { name: 'OAuth codex-oauth' }));
+    fireEvent.click(profileAction('OAuth', 'codex-oauth'));
 
     expect(await screen.findByText('OAuth: Awaiting User')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Finalize codex-oauth' }));
+    fireEvent.click(profileAction('Finalize', 'codex-oauth'));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -1503,7 +1499,7 @@ describe('ProviderProfilesManager form controls', () => {
     });
     expect(await screen.findByText('OAuth: Succeeded')).toBeTruthy();
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
-    expect(screen.queryByRole('button', { name: 'Retry codex-oauth' })).toBeNull();
+    expect(queryProfileAction('Retry', 'codex-oauth')).toBeNull();
   });
 
   it('refreshes provider profiles when an OAuth terminal finalizes in another tab', async () => {
@@ -1554,10 +1550,10 @@ describe('ProviderProfilesManager form controls', () => {
 
     renderProviderProfilesManager([codexOauthProfile]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'OAuth codex-oauth' }));
+    fireEvent.click(profileAction('OAuth', 'codex-oauth'));
 
     expect(await screen.findByText('OAuth: Failed')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry codex-oauth' }));
+    fireEvent.click(profileAction('Retry', 'codex-oauth'));
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
         '/api/v1/oauth-sessions/oas_settings_failed/reconnect',
@@ -1569,9 +1565,9 @@ describe('ProviderProfilesManager form controls', () => {
   it('shows distinct Claude credential method actions for supported claude_anthropic rows', () => {
     renderProviderProfilesManager([claudeCredentialProfile]);
 
-    expect(screen.getByRole('button', { name: 'OAuth claude-anthropic' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic' })).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: 'OAuth claude-anthropic' })).toHaveLength(1);
+    expect(profileAction('OAuth', 'claude-anthropic')).toBeTruthy();
+    expect(profileAction('Use Anthropic API key', 'claude-anthropic')).toBeTruthy();
+    expect(within(openProfileActions('claude-anthropic')).getAllByRole('menuitem', { name: 'OAuth' })).toHaveLength(1);
     expect(screen.getByText('Setup required')).toBeTruthy();
     expect(screen.getByText(/Reason: Missing credentials/i)).toBeTruthy();
     expect(screen.getByText('Claude credentials not connected')).toBeTruthy();
@@ -1594,8 +1590,13 @@ describe('ProviderProfilesManager form controls', () => {
     ]);
 
     expect(screen.getByText('Setup required')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'OAuth codex-openai-oauth' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Enable' })).toHaveProperty('disabled', true);
+    expect(profileAction('OAuth', 'codex-openai-oauth')).toBeTruthy();
+    // Readiness keeps Enable listed but unavailable, with its reason.
+    const enable = queryProfileAction('Enable', 'codex-openai-oauth')!;
+    expect(enable.getAttribute('aria-disabled')).toBe('true');
+    expect(enable.textContent).toContain('Complete credential setup before enabling this profile.');
+    fireEvent.click(enable);
+    expect(screen.getByRole('menu', { name: 'codex-openai-oauth actions' })).toBeTruthy();
   });
 
   it('enrolls a Codex OpenAI API key through the provider API-key endpoint', async () => {
@@ -1613,11 +1614,7 @@ describe('ProviderProfilesManager form controls', () => {
     } as Response);
 
     renderProviderProfilesManager([codexApiKeySetupProfile]);
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: 'Use OpenAI API key codex-openai-api-key',
-      }),
-    );
+    fireEvent.click(profileAction('Use OpenAI API key', 'codex-openai-api-key'));
     expect(
       screen.getByRole('dialog', {
         name: 'OpenAI API key enrollment for codex-openai-api-key',
@@ -1649,14 +1646,14 @@ describe('ProviderProfilesManager form controls', () => {
     renderProviderProfilesManager([connectedClaudeCredentialProfile]);
 
     expect(
-      screen.getByRole('button', { name: 'OAuth claude-anthropic-connected' }),
+      profileAction('OAuth', 'claude-anthropic-connected'),
     ).toBeTruthy();
     expect(
-      screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic-connected' }),
+      profileAction('Use Anthropic API key', 'claude-anthropic-connected'),
     ).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Validate OAuth claude-anthropic-connected' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Disconnect OAuth claude-anthropic-connected' })).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: 'OAuth claude-anthropic-connected' })).toHaveLength(1);
+    expect(profileAction('Validate OAuth', 'claude-anthropic-connected')).toBeTruthy();
+    expect(profileAction('Disconnect OAuth', 'claude-anthropic-connected')).toBeTruthy();
+    expect(within(openProfileActions('claude-anthropic-connected')).getAllByRole('menuitem', { name: 'OAuth' })).toHaveLength(1);
     expect(screen.getByText('Claude OAuth ready')).toBeTruthy();
   });
 
@@ -1673,12 +1670,12 @@ describe('ProviderProfilesManager form controls', () => {
       },
     ]);
 
-    expect(screen.queryByRole('button', { name: /^OAuth / })).toBeNull();
+    expect(queryProfileAction(/^OAuth$/, 'claude-without-metadata')).toBeNull();
     expect(
-      screen.getByRole('button', { name: 'Use Anthropic API key claude-without-metadata' }),
+      profileAction('Use Anthropic API key', 'claude-without-metadata'),
     ).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /Validate OAuth/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Disconnect OAuth/ })).toBeNull();
+    expect(queryProfileAction(/Validate OAuth/, 'claude-without-metadata')).toBeNull();
+    expect(queryProfileAction(/Disconnect OAuth/, 'claude-without-metadata')).toBeNull();
   });
 
   it('shows Claude status without lifecycle actions when metadata has no actions', () => {
@@ -1696,10 +1693,10 @@ describe('ProviderProfilesManager form controls', () => {
     ]);
 
     expect(screen.getByText('Claude enrollment pending')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /^OAuth / })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Use Anthropic API key/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Validate OAuth/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Disconnect OAuth/ })).toBeNull();
+    expect(queryProfileAction(/^OAuth$/, 'claude-status-only')).toBeNull();
+    expect(queryProfileAction(/Use Anthropic API key/, 'claude-status-only')).toBeNull();
+    expect(queryProfileAction(/Validate OAuth/, 'claude-status-only')).toBeNull();
+    expect(queryProfileAction(/Disconnect OAuth/, 'claude-status-only')).toBeNull();
   });
 
   it('runs Claude OAuth lifecycle actions through API endpoints', async () => {
@@ -1709,7 +1706,7 @@ describe('ProviderProfilesManager form controls', () => {
     } as Response);
     const { onNotice } = renderProviderProfilesManager([connectedClaudeCredentialProfile]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Validate OAuth claude-anthropic-connected' }));
+    fireEvent.click(profileAction('Validate OAuth', 'claude-anthropic-connected'));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -1722,7 +1719,7 @@ describe('ProviderProfilesManager form controls', () => {
       text: 'Claude OAuth validated for "claude-anthropic-connected".',
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Disconnect OAuth claude-anthropic-connected' }));
+    fireEvent.click(profileAction('Disconnect OAuth', 'claude-anthropic-connected'));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -1747,7 +1744,7 @@ describe('ProviderProfilesManager form controls', () => {
 
     renderProviderProfilesManager([claudeCredentialProfile]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'OAuth claude-anthropic' }));
+    fireEvent.click(profileAction('OAuth', 'claude-anthropic'));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -1775,7 +1772,7 @@ describe('ProviderProfilesManager form controls', () => {
   it('opens an Anthropic API-key enrollment drawer without terminal OAuth wording', () => {
     renderProviderProfilesManager([claudeCredentialProfile]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic' }));
+    fireEvent.click(profileAction('Use Anthropic API key', 'claude-anthropic'));
 
     const dialog = screen.getByRole('dialog', {
       name: 'Anthropic API key enrollment for claude-anthropic',
@@ -1790,7 +1787,7 @@ describe('ProviderProfilesManager form controls', () => {
   it('advances to secure token paste and blocks empty submission', async () => {
     const { onNotice } = renderProviderProfilesManager([claudeCredentialProfile]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic' }));
+    fireEvent.click(profileAction('Use Anthropic API key', 'claude-anthropic'));
     fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
 
     expect(screen.getByText('awaiting token paste')).toBeTruthy();
@@ -1824,7 +1821,7 @@ describe('ProviderProfilesManager form controls', () => {
 
     renderProviderProfilesManager([claudeCredentialProfile]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic' }));
+    fireEvent.click(profileAction('Use Anthropic API key', 'claude-anthropic'));
     fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
     fireEvent.change(screen.getByLabelText('Anthropic API key'), {
       target: { value: submittedToken },
@@ -1874,7 +1871,7 @@ describe('ProviderProfilesManager form controls', () => {
       secondClaudeProfile,
     ]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic' }));
+    fireEvent.click(profileAction('Use Anthropic API key', 'claude-anthropic'));
     fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
     fireEvent.change(screen.getByLabelText('Anthropic API key'), {
       target: { value: submittedToken },
@@ -1889,7 +1886,7 @@ describe('ProviderProfilesManager form controls', () => {
     });
 
     fireEvent.click(
-      screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic-secondary' }),
+      profileAction('Use Anthropic API key', 'claude-anthropic-secondary'),
     );
 
     resolveCommit({
@@ -1917,7 +1914,7 @@ describe('ProviderProfilesManager form controls', () => {
   it('clears pasted token state after cancellation', () => {
     renderProviderProfilesManager([claudeCredentialProfile]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic' }));
+    fireEvent.click(profileAction('Use Anthropic API key', 'claude-anthropic'));
     fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
     fireEvent.change(screen.getByLabelText('Anthropic API key'), {
       target: { value: 'sk-ant-cancelled-token' },
@@ -1926,7 +1923,7 @@ describe('ProviderProfilesManager form controls', () => {
 
     expect(screen.queryByRole('dialog')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic' }));
+    fireEvent.click(profileAction('Use Anthropic API key', 'claude-anthropic'));
     fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
 
     expect((screen.getByLabelText('Anthropic API key') as HTMLInputElement).value).toBe('');
@@ -1945,7 +1942,7 @@ describe('ProviderProfilesManager form controls', () => {
 
     renderProviderProfilesManager([claudeCredentialProfile]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic' }));
+    fireEvent.click(profileAction('Use Anthropic API key', 'claude-anthropic'));
     fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
     fireEvent.change(screen.getByLabelText('Anthropic API key'), {
       target: { value: submittedToken },
@@ -2147,9 +2144,7 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.getByText('codex-diagnostic')).toBeTruthy();
     expect(screen.getByText('Readiness: Blocked')).toBeTruthy();
     expect(screen.getByText('Provider profile has launch blockers.')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Disable' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Actions for / })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Create profile' })).toBeNull();
     expect(screen.queryByText('Create Provider Profile')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Add profile' })).toBeNull();
@@ -2601,7 +2596,7 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
     } as ProviderProfile;
 
     renderProviderProfilesManager([profileWithUnknownRole]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
 
     expect((screen.getByLabelText('Show advanced options') as HTMLInputElement).checked).toBe(true);
 
@@ -2638,7 +2633,7 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
     });
     renderProviderProfilesManager([staleProfile]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
 
     expect((screen.getByLabelText('Show advanced options') as HTMLInputElement).checked).toBe(true);
     expect(screen.getByText('Unknown existing method: secret_ref → config_bundle. The stored contract remains inspectable and is not replaced by a supported method automatically.')).toBeTruthy();
@@ -2838,7 +2833,7 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
     });
     renderProviderProfilesManager([editableOpenAiProfile('codex-edit')]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     await chooseProvider('minimax');
     await waitFor(() => expect(pendingProfileTiers).toHaveLength(2));
 
@@ -2872,8 +2867,8 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
       editableOpenAiProfile('codex-second'),
     ]);
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0]!);
-    fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[1]!);
+    fireEvent.click(profileAction('Edit', 'codex-first'));
+    fireEvent.click(profileAction('Edit', 'codex-second'));
     await waitFor(() => expect(pendingByProfile.has('codex-second')).toBe(true));
 
     await act(async () => pendingByProfile.get('codex-first')!(staleTierCapabilities('First profile tier choices')));
@@ -2966,7 +2961,7 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
 
   it('renders tier editor section with ordered cards and default state', () => {
     renderProviderProfilesManager([tierProfile]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     expect(screen.getByText('Model & effort tiers')).toBeTruthy();
     expect(screen.getAllByText(/Tier 1/)[0]).toBeTruthy();
     expect(screen.getByLabelText('Tier 2 label')).toBeTruthy();
@@ -2976,7 +2971,7 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
 
   it('offers one Add tier action after the ordered tier list', () => {
     renderProviderProfilesManager([tierProfile]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     const addButton = screen.getByRole('button', { name: 'Add tier' });
     const tierList = screen.getByRole('list', { name: 'Model and effort tiers' });
     expect(tierList.compareDocumentPosition(addButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -2985,7 +2980,7 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
 
   it('offers a max effort above xhigh when capabilities are unavailable', () => {
     renderProviderProfilesManager([tierProfile]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     const effort = screen.getByLabelText('Tier 1 effort') as HTMLSelectElement;
     expect(Array.from(effort.options).map((o) => o.value)).toEqual(['__runtime_default__', 'low', 'medium', 'high', 'xhigh', 'max']);
     fireEvent.change(effort, { target: { value: 'max' } });
@@ -3009,7 +3004,7 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
       return { ok: true, json: async () => tierProfile } as Response;
     });
     renderProviderProfilesManager([tierProfile]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     const effort = screen.getByLabelText('Tier 3 effort') as HTMLSelectElement;
     await waitFor(() => expect(Array.from(effort.options).map((o) => o.textContent)).toEqual(['Runtime default — medium', 'Low', 'Medium', 'High', 'Extra high', 'Max']));
     fireEvent.change(effort, { target: { value: 'max' } });
@@ -3048,7 +3043,7 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
       return { ok: true, json: async () => profile } as Response;
     });
     const { onNotice } = renderProviderProfilesManager([profile]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     const seededEffort = screen.getByLabelText('Tier 1 effort') as HTMLSelectElement;
     const otherEffort = screen.getByLabelText('Tier 2 effort') as HTMLSelectElement;
     await waitFor(() => expect(within(seededEffort).getByRole('option', { name: 'Max' }).hasAttribute('disabled')).toBe(true));
@@ -3080,7 +3075,7 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
       return { ok: true, json: async () => profile } as Response;
     });
     renderProviderProfilesManager([profile]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     const effort = screen.getByLabelText('Tier 1 effort') as HTMLSelectElement;
     await waitFor(() => expect(within(effort).getByRole('option', { name: 'Max (unavailable)' }).hasAttribute('disabled')).toBe(true));
     expect(effort.value).toBe('max');
@@ -3094,7 +3089,7 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
 
   it('can append and duplicate tiers without renumbering existing tiers', async () => {
     renderProviderProfilesManager([tierProfile]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     fireEvent.click(screen.getByRole('button', { name: 'Add tier' }));
     expect(screen.getByLabelText('Tier 4 label')).toBeTruthy();
     expect(screen.getByText('4 tiers · Default: Tier 2')).toBeTruthy();
@@ -3111,14 +3106,14 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
       default_model_tier: 1,
     };
     renderProviderProfilesManager([singleTier]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     const removeBtn = screen.getByLabelText('Remove Tier 1') as HTMLButtonElement;
     expect(removeBtn.disabled).toBe(true);
   });
 
   it('middle-tier removal previews ordinal changes', async () => {
     renderProviderProfilesManager([tierProfile]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     fireEvent.click(screen.getByLabelText('Remove Tier 2'));
     expect(await screen.findByText('Remove Tier 2?')).toBeTruthy();
     expect(screen.getByText('Tier 3: Docs → becomes Tier 2')).toBeTruthy();
@@ -3127,7 +3122,7 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
 
   it('removing default requires reviewed replacement default', async () => {
     renderProviderProfilesManager([tierProfile]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     fireEvent.click(screen.getByLabelText('Remove Tier 2'));
     expect(await screen.findByText('Choose a replacement default tier:')).toBeTruthy();
     const replacement = screen.getAllByLabelText(/Tier \d/ as unknown as string);
@@ -3143,7 +3138,7 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
       return { ok: true, json: async () => ({ ...tierProfile, model_tiers: tierProfile.model_tiers, default_model_tier: 2 }) } as Response;
     });
     renderProviderProfilesManager([tierProfile]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     fireEvent.change(screen.getByLabelText('Tier 1 label'), { target: { value: 'Plan updated' } });
     fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
     await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
@@ -3162,9 +3157,9 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
 
   it('offers one Edit action that focuses the editor with saved settings and tiers', async () => {
     renderProviderProfilesManager([tierProfile]);
-    const actions = within(screen.getByRole('table')).getAllByRole('button').map((button) => button.textContent);
+    const actions = within(openProfileActions('tier-profile')).getAllByRole('menuitem').map((item) => item.textContent);
     expect(actions.filter((label) => label?.includes('Edit'))).toEqual(['Edit']);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     const heading = screen.getByRole('heading', { name: 'Edit Profile: tier-profile' });
     await waitFor(() => expect(document.activeElement).toBe(heading));
     expect((screen.getByLabelText(/Max parallel runs/) as HTMLInputElement).value).toBe('1');
@@ -3184,7 +3179,7 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
     };
     const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({ ok: true, json: async () => profile } as Response);
     renderProviderProfilesManager([profile]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     fireEvent.change(screen.getByLabelText('Tier 1 effort'), { target: { value: 'high' } });
     fireEvent.change(screen.getByLabelText(/Max parallel runs/), { target: { value: '3' } });
     fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
@@ -3204,7 +3199,7 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
   it('leaves untouched tier policy out of an ordinary field update', async () => {
     const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({ ok: true, json: async () => tierProfile } as Response);
     renderProviderProfilesManager([tierProfile]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     fireEvent.change(screen.getByLabelText(/Max parallel runs/), { target: { value: '2' } });
     fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
     await waitFor(() => expect(fetchSpy.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH')).toBe(true));
@@ -3217,12 +3212,12 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
   it('cancel discards tier and field edits without saving', () => {
     const fetchSpy = vi.spyOn(window, 'fetch');
     renderProviderProfilesManager([tierProfile]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     fireEvent.change(screen.getByLabelText('Tier 1 label'), { target: { value: 'Changed' } });
     fireEvent.change(screen.getByLabelText(/Max parallel runs/), { target: { value: '4' } });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel edit' }));
     expect(fetchSpy.mock.calls.some(([, init]) => ['PATCH', 'PUT', 'POST'].includes(String((init as RequestInit | undefined)?.method)))).toBe(false);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     expect((screen.getByLabelText('Tier 1 label') as HTMLInputElement).value).toBe('Plan');
     expect((screen.getByLabelText(/Max parallel runs/) as HTMLInputElement).value).toBe('1');
   });
@@ -3230,7 +3225,7 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
   it('blocks Save on invalid tier JSON and keeps the raw text in the draft', async () => {
     const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({ ok: true, json: async () => tierProfile } as Response);
     const { onNotice } = renderProviderProfilesManager([tierProfile]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     fireEvent.change(screen.getByLabelText('Tier 1 label'), { target: { value: 'Plan updated' } });
     const parameters = screen.getByLabelText('Tier 1 parameters') as HTMLTextAreaElement;
     fireEvent.change(parameters, { target: { value: '{"temperature": ' } });
@@ -3269,7 +3264,7 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
         </MemoryRouter>
       </QueryClientProvider>,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     fireEvent.change(screen.getByLabelText('Tier 2 annotations'), { target: { value: '{"note": "unfinished' } });
     const unload = new Event('beforeunload', { cancelable: true });
     window.dispatchEvent(unload);
@@ -3294,7 +3289,7 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
     };
     vi.spyOn(window, 'fetch').mockResolvedValue({ ok: false, status: 503, json: async () => ({ detail: 'Model discovery unavailable.' }) } as Response);
     renderProviderProfilesManager([claudeProfile]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     await screen.findByText('Model discovery unavailable.');
     const model = screen.getByLabelText('Tier 1 model') as HTMLSelectElement;
     expect(model.value).toBe('claude-opus-5-5');
@@ -3306,7 +3301,7 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
     const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({ ok: true, json: async () => brokenProfile } as Response);
     renderProviderProfilesManager([brokenProfile]);
     expect(screen.getByText('Tier policy unavailable · needs repair')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     expect(screen.getByText('Invalid saved default: Tier 1')).toBeTruthy();
     expect((screen.getByLabelText('Tier 1 effort') as HTMLSelectElement).value).toBe('__runtime_default__');
     fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
@@ -3324,7 +3319,7 @@ describe('MoonLadderStudios/MoonMind#3348 tier editor', () => {
         <ProviderProfilesManager profiles={[tierProfile]} secretSlugs={[]} onNotice={vi.fn()} queryClient={queryClient} canWriteProviderProfiles={false} />
       </QueryClientProvider>,
     );
-    expect(screen.queryByRole('button', { name: /^Edit/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Actions for / })).toBeNull();
     expect(screen.getByText('3 tiers · Default: Tier 2')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Add tier' })).toBeNull();
     // collection summary expansion is accessible without edit mode
@@ -3421,7 +3416,7 @@ describe('MoonLadderStudios/MoonMind#3815 cross-boundary verification (#3822 cov
       readiness: { status: 'blocked', launch_ready: false, summary: 'blocked', checks: [{ id: 'secret_refs', label: 'SecretRef', status: 'error', message: 'missing' }] },
     };
     renderProviderProfilesManager([blockedProfile]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     const checkbox = screen.getByLabelText('Use as Harness default') as HTMLInputElement;
     expect(checkbox.disabled).toBe(true);
     expect(screen.getByText(/Default assignment is disabled until launch readiness succeeds/)).toBeTruthy();
@@ -3437,7 +3432,7 @@ describe('MoonLadderStudios/MoonMind#3815 cross-boundary verification (#3822 cov
       readiness: { status: 'blocked', launch_ready: false, summary: 'blocked', checks: [{ id: 'secret_refs', label: 'SecretRef', status: 'error', message: 'missing' }] },
     };
     renderProviderProfilesManager([currentDefault]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     const checkbox = screen.getByLabelText('Use as Harness default') as HTMLInputElement;
     expect(checkbox.checked).toBe(true);
     expect(checkbox.disabled).toBe(false);
@@ -3564,8 +3559,8 @@ describe('MoonLadderStudios/MoonMind#3815 cross-boundary verification (#3822 cov
     // Draft a new, unrelated profile while A's OAuth session is in flight.
     fireEvent.click(screen.getByRole('button', { name: 'Add profile' }));
     fireEvent.change(screen.getByLabelText(/Profile ID/), { target: { value: 'profile-b' } });
-    fireEvent.click(screen.getByRole('button', { name: 'OAuth profile-a' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Finalize profile-a' }));
+    fireEvent.click(profileAction('OAuth', 'profile-a'));
+    fireEvent.click(await findProfileAction('Finalize', 'profile-a'));
     await screen.findByText('OAuth: Succeeded');
 
     expect(fetchSpy).toHaveBeenCalledWith(
@@ -3603,7 +3598,7 @@ describe('MoonLadderStudios/MoonMind#3815 cross-boundary verification (#3822 cov
       },
     } as ProviderProfile;
     renderProviderProfilesManager([editable]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     fireEvent.click(screen.getByLabelText('Show advanced options'));
     await screen.findByText('Reset advanced options to recommended');
     fireEvent.click(screen.getByText('Reset advanced options to recommended'));
@@ -3658,7 +3653,7 @@ describe('MoonLadderStudios/MoonMind#3815 cross-boundary verification (#3822 cov
       },
     } as ProviderProfile;
     renderProviderProfilesManager([customProfile]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     expect((screen.getByLabelText('Show advanced options') as HTMLInputElement).checked).toBe(true);
     expect(screen.getByDisplayValue('db://custom-secret')).toBeTruthy();
   });
@@ -4571,7 +4566,7 @@ describe('MoonLadderStudios/MoonMind#4002 remediation gaps (R2-R6,R8)', () => {
     );
     const { onNotice, queryClient } = renderProviderProfilesManager([claudeProfile, secondClaudeProfile]);
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
-    fireEvent.click(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic' }));
+    fireEvent.click(profileAction('Use Anthropic API key', 'claude-anthropic'));
     fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
     fireEvent.change(screen.getByLabelText('Anthropic API key'), { target: { value: 'sk-ant-close-test' } });
     fireEvent.click(screen.getByRole('button', { name: 'Validate and save Anthropic API key' }));
@@ -4605,7 +4600,7 @@ describe('MoonLadderStudios/MoonMind#4002 remediation gaps (R2-R6,R8)', () => {
       expect.objectContaining({ text: expect.stringContaining('cancelled') }),
     );
     fireEvent.click(
-      screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic-secondary' }),
+      profileAction('Use Anthropic API key', 'claude-anthropic-secondary'),
     );
     expect(
       screen.getByRole('dialog', {
@@ -5114,7 +5109,7 @@ describe('OpenCode enrollment validation progress', () => {
   }
 
   async function openOpencodePaste(profileId: string) {
-    fireEvent.click(screen.getByRole('button', { name: `Use OpenCode API key ${profileId}` }));
+    fireEvent.click(profileAction('Use OpenCode API key', profileId));
     fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
     fireEvent.change(screen.getByLabelText('OpenCode API key'), { target: { value: 'test-opencode-key' } });
     fireEvent.click(screen.getByRole('button', { name: 'Validate and save OpenCode API key' }));
@@ -5527,5 +5522,121 @@ describe('MoonLadderStudios/MoonMind#4001 backend Harness/Provider choices and P
     fireEvent.click(screen.getByRole('button', { name: 'Retry loading choices' }));
     await waitFor(() => expect(harnessSelect().disabled).toBe(false));
     expect(profileIdInput().value).toBe('authored-id');
+  });
+});
+
+describe('Provider Profile row actions menu', () => {
+  const menuProfile: ProviderProfile = {
+    profile_id: 'codex-menu',
+    runtime_id: 'codex_cli',
+    provider_id: 'openai',
+    credential_source: 'oauth_volume',
+    runtime_materialization_mode: 'oauth_home',
+    secret_refs: {},
+    volume_ref: 'codex_auth_volume',
+    volume_mount_path: '/home/app/.codex',
+    max_parallel_runs: 1,
+    cooldown_after_429_seconds: 300,
+    rate_limit_policy: 'backoff',
+    enabled: true,
+    is_default: false,
+    auth_state: 'connected',
+    disabled_reason: null,
+  };
+
+  function trigger(): HTMLElement {
+    return screen.getByRole('button', { name: 'Actions for codex-menu' });
+  }
+
+  it('lists the row actions behind one ellipsis trigger', () => {
+    renderProviderProfilesManager([menuProfile]);
+    const row = screen.getByText('codex-menu', { selector: 'td *' }).closest('tr')!;
+    expect(within(row).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual([
+      'Actions for codex-menu',
+    ]);
+    expect(trigger().getAttribute('aria-haspopup')).toBe('menu');
+    expect(trigger().getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(trigger());
+    const menu = screen.getByRole('menu', { name: 'codex-menu actions' });
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.getAttribute('aria-label'))).toEqual([
+      'OAuth',
+      'Use OpenAI API key',
+      'Edit',
+      'Disable',
+      'Delete',
+    ]);
+  });
+
+  it('supports keyboard opening, arrow navigation, and Escape with focus returned to the trigger', async () => {
+    renderProviderProfilesManager([menuProfile]);
+    trigger().focus();
+    fireEvent.keyDown(trigger(), { key: 'ArrowDown' });
+    const menu = screen.getByRole('menu', { name: 'codex-menu actions' });
+    await waitFor(() => expect(document.activeElement).toBe(within(menu).getByRole('menuitem', { name: 'OAuth' })));
+
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(within(menu).getByRole('menuitem', { name: 'Use OpenAI API key' }));
+    fireEvent.keyDown(menu, { key: 'ArrowUp' });
+    expect(document.activeElement).toBe(within(menu).getByRole('menuitem', { name: 'OAuth' }));
+
+    fireEvent.keyDown(menu, { key: 'Escape' });
+    expect(screen.queryByRole('menu', { name: 'codex-menu actions' })).toBeNull();
+    expect(document.activeElement).toBe(trigger());
+  });
+
+  it('closes on an outside pointer press without running an action', () => {
+    const fetchSpy = vi.spyOn(window, 'fetch');
+    renderProviderProfilesManager([menuProfile]);
+    fireEvent.click(trigger());
+    expect(screen.getByRole('menu', { name: 'codex-menu actions' })).toBeTruthy();
+
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole('menu', { name: 'codex-menu actions' })).toBeNull();
+    expect(fetchSpy.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method)).toBe(false);
+  });
+
+  it('keeps a pending action listed as unavailable with its reason', async () => {
+    let releaseOAuth: (response: Response) => void = () => undefined;
+    vi.spyOn(window, 'fetch').mockImplementation((input) => {
+      if (String(input) === '/api/v1/oauth-sessions') {
+        return new Promise<Response>((resolve) => {
+          releaseOAuth = resolve;
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+    });
+    renderProviderProfilesManager([menuProfile]);
+
+    fireEvent.click(profileAction('OAuth', 'codex-menu'));
+    await waitFor(() => {
+      const oauth = queryProfileAction('OAuth', 'codex-menu');
+      expect(oauth?.getAttribute('aria-disabled')).toBe('true');
+      expect(oauth?.textContent).toContain('still running');
+    });
+    act(() => releaseOAuth({ ok: false, json: async () => ({ detail: 'stopped' }) } as Response));
+  });
+
+  it('deletes only after the destructive confirmation is accepted', async () => {
+    const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({ ok: true, json: async () => ({}) } as Response);
+    const deleteCalls = () =>
+      fetchSpy.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'DELETE');
+    renderProviderProfilesManager([menuProfile]);
+
+    fireEvent.click(profileAction('Delete', 'codex-menu'));
+    const dialog = screen.getByRole('dialog', { name: 'Delete provider profile' });
+    expect(dialog.textContent).toContain('Provider profile "codex-menu" will be deleted.');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Go back' }));
+    expect(screen.queryByRole('dialog', { name: 'Delete provider profile' })).toBeNull();
+    expect(deleteCalls()).toHaveLength(0);
+
+    fireEvent.click(profileAction('Delete', 'codex-menu'));
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Delete provider profile' })).getByRole('button', {
+        name: 'Delete profile',
+      }),
+    );
+    await waitFor(() => expect(deleteCalls()).toHaveLength(1));
+    expect(String(deleteCalls()[0]![0])).toBe('/api/v1/provider-profiles/codex-menu');
   });
 });

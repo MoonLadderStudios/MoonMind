@@ -1,7 +1,9 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
 import { SecretManager } from './SecretManager';
+import { SettingsDraftGuardProvider } from '../settings/SettingsDraftGuard';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -308,5 +310,131 @@ describe('SecretManager', () => {
     const actionsArea = actionsCell!.querySelector('div');
     expect(actionsArea).not.toBeNull();
     expect(actionsArea!.className).toContain('flex-wrap');
+  });
+
+  describe('focused add, edit, and rotate flow', () => {
+    function renderGuardedSecretManager(fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) })) {
+      vi.stubGlobal('fetch', fetchMock);
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const onNotice = vi.fn();
+      render(
+        <MemoryRouter>
+          <QueryClientProvider client={queryClient}>
+            <SettingsDraftGuardProvider>
+              <SecretManager
+                secrets={[
+                  {
+                    slug: 'github-pat-main',
+                    secretRef: 'db://github-pat-main',
+                    status: 'active',
+                    details: {},
+                    createdAt: '2026-04-28T00:00:00Z',
+                  },
+                ]}
+                onNotice={onNotice}
+                queryClient={queryClient}
+              />
+            </SettingsDraftGuardProvider>
+          </QueryClientProvider>
+        </MemoryRouter>,
+      );
+      return { fetchMock, onNotice };
+    }
+
+    it('shows stored secrets as the primary view with no creation form until Add secret', () => {
+      renderGuardedSecretManager();
+      expect(screen.getByRole('heading', { name: 'Stored secrets' })).toBeTruthy();
+      expect(screen.getByText('github-pat-main')).toBeTruthy();
+      expect(screen.queryByLabelText('Secret slug')).toBeNull();
+      expect(screen.queryByRole('dialog')).toBeNull();
+
+      const add = screen.getByRole('button', { name: 'Add secret' });
+      add.focus();
+      fireEvent.click(add);
+      const dialog = screen.getByRole('dialog', { name: 'Add secret' });
+      expect(dialog.getAttribute('aria-modal')).toBe('true');
+      expect(document.activeElement).toBe(screen.getByLabelText('Secret slug'));
+    });
+
+    it('saves a new secret and closes the dialog', async () => {
+      const { fetchMock, onNotice } = renderGuardedSecretManager();
+      screen.getByRole('button', { name: 'Add secret' }).focus();
+      fireEvent.click(screen.getByRole('button', { name: 'Add secret' }));
+      fireEvent.change(screen.getByLabelText('Secret slug'), { target: { value: 'OPENAI_API_KEY' } });
+      fireEvent.change(screen.getByLabelText('Secure value'), { target: { value: 'sk-new' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Encrypt and store secret' }));
+
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add secret' })).toBeNull());
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/v1/secrets',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ slug: 'OPENAI_API_KEY', plaintext: 'sk-new', details: {} }),
+        }),
+      );
+      expect(onNotice).toHaveBeenCalledWith({ level: 'ok', text: 'Secret saved successfully.' });
+      expect(screen.getByRole('button', { name: 'Add secret' })).toBe(document.activeElement);
+    });
+
+    it('keeps the dialog and draft open on validation and server failures', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: false, json: async () => ({ detail: 'Secret already exists.' }) });
+      renderGuardedSecretManager(fetchMock);
+      fireEvent.click(screen.getByRole('button', { name: 'Add secret' }));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Encrypt and store secret' }));
+      expect(within(screen.getByRole('dialog', { name: 'Add secret' })).getByRole('alert').textContent).toBe(
+        'Secret slug is required.',
+      );
+      fireEvent.change(screen.getByLabelText('Secret slug'), { target: { value: 'github-pat-main' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Encrypt and store secret' }));
+      expect(screen.getByRole('alert').textContent).toBe('Provide a secure value for the new secret.');
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      fireEvent.change(screen.getByLabelText('Secure value'), { target: { value: 'duplicate' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Encrypt and store secret' }));
+      await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Secret already exists.'));
+      expect((screen.getByLabelText('Secret slug') as HTMLInputElement).value).toBe('github-pat-main');
+      expect((screen.getByLabelText('Secure value') as HTMLInputElement).value).toBe('duplicate');
+    });
+
+    it('cancels a clean form at once and protects an entered value', () => {
+      const { fetchMock } = renderGuardedSecretManager();
+      fireEvent.click(screen.getByRole('button', { name: 'Add secret' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(screen.queryByRole('dialog', { name: 'Add secret' })).toBeNull();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Add secret' }));
+      fireEvent.change(screen.getByLabelText('Secure value'), { target: { value: 'typed-value' } });
+      fireEvent.keyDown(screen.getByRole('dialog', { name: 'Add secret' }), { key: 'Escape' });
+      expect(screen.getByRole('dialog', { name: 'Unsaved changes' })).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Stay' }));
+      expect((screen.getByLabelText('Secure value') as HTMLInputElement).value).toBe('typed-value');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Discard and continue' }));
+      expect(screen.queryByRole('dialog', { name: 'Add secret' })).toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('opens edit and rotate in context for the chosen secret', async () => {
+      const { fetchMock } = renderGuardedSecretManager();
+      fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+      const edit = screen.getByRole('dialog', { name: 'Update secret value: github-pat-main' });
+      expect((within(edit).getByLabelText('Secret slug') as HTMLInputElement).disabled).toBe(true);
+      expect(document.activeElement).toBe(within(edit).getByLabelText('Secure value'));
+      fireEvent.click(within(edit).getByRole('button', { name: 'Cancel' }));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Rotate' }));
+      const rotate = screen.getByRole('dialog', { name: 'Rotate Secret: github-pat-main' });
+      fireEvent.click(within(rotate).getByRole('button', { name: 'Rotate now' }));
+      expect(within(rotate).getByRole('alert').textContent).toBe('Provide a new secure value to rotate the secret.');
+      fireEvent.change(within(rotate).getByLabelText('New secure value'), { target: { value: 'rotated' } });
+      fireEvent.click(within(rotate).getByRole('button', { name: 'Rotate now' }));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: /Rotate Secret/ })).toBeNull());
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/v1/secrets/github-pat-main/rotate',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
   });
 });

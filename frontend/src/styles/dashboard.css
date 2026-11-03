@@ -1038,13 +1038,15 @@ h1 {
   min-height: 0;
 }
 
-/* MoonMind#4559: Instance/Operations share the dashboard sizing contract.
+/* Settings pages keep the shared readable page measure (as
+ * .dashboard-surface--page) and center inside the data-wide panel.
  * Generated settings rows pair a minmax(0,1fr) description column with a
  * control column; long mono keys, SecretRefs, and digests must wrap instead
  * of forcing the grid (or the whole page) wider than the viewport. */
 .settings-page {
   min-width: 0;
-  max-width: 100%;
+  max-width: min(72rem, 100%);
+  margin-inline: auto;
 }
 .settings-page code,
 .settings-page dd,
@@ -3472,6 +3474,22 @@ tbody tr:hover:where(:not(:disabled, [aria-disabled="true"])) {
   .stacked-records td[data-label="Actions"] > * {
     min-width: 0;
     max-width: 100%;
+  }
+
+  /* Stacked rows clip overflow, so an open Provider Profile actions menu
+   * expands in place below its trigger across the record width. */
+  .stacked-records .provider-profile-actions .td-workflow-actions-menu {
+    width: 100%;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .stacked-records .provider-profile-actions .td-workflow-actions-popover {
+    position: static;
+    width: 100%;
+    max-width: 100%;
+    max-height: none;
+    margin-top: 0.45rem;
   }
 
   .stacked-records td .flex.flex-wrap,
@@ -10312,6 +10330,10 @@ button.workflow-workspace-sidebar-row:active {
   overflow-wrap: anywhere;
   max-width: 100%;
 }
+/* The Managed Secret form dialog keeps a focused form width on wide screens. */
+.dashboard-content .managed-secret-dialog[role="dialog"]:not(.fixed) {
+  max-width: min(32rem, calc(100vw - 1.5rem));
+}
 
 /* Workflow Detail native Omnigent Chat route (MoonLadderStudios/MoonMind#3639).
    MoonMind owns a thin context bar; the native application fills the primary
@@ -10499,21 +10521,15 @@ button.workflow-workspace-sidebar-row:active {
   overflow-wrap: anywhere;
 }
 
-.omnigent-inventory td strong,
-.provider-profile-actions > button {
+.omnigent-inventory td strong {
   overflow-wrap: break-word;
 }
 
-/* Provider record actions share a full-width wrapping area so long labels
- * wrap at word boundaries in comfortably wide buttons. */
-.provider-profile-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.provider-profile-actions > button {
-  white-space: normal;
+/* Neither the horizontally scrollable wrapper nor the table's inherited
+ * `overflow: hidden` may clip an open profile actions menu. */
+.provider-profiles-table-wrap:has(.td-workflow-actions-popover),
+.provider-profiles-table:has(.td-workflow-actions-popover) {
+  overflow: visible;
 }
 
 /* Tier editor: one accessible list, visible numbers, restrained nesting.
@@ -10649,10 +10665,6 @@ button.workflow-workspace-sidebar-row:active {
 .provider-profile-form textarea,
 .omnigent-inventory input[type="search"] {
     font-size: 1rem;
-  }
-
-  .provider-profile-actions > button {
-    flex: 1 1 100%;
   }
 
   /* 44px ordinary activation areas on phones. Radios and checkboxes keep
