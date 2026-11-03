@@ -6776,29 +6776,37 @@ def test_omnigent_remediation_restores_head_before_agent_launch(
 
 @pytest.mark.parametrize("runtime", ["codex_cli", "claude_code"])
 @pytest.mark.parametrize("shared_recovery", [False, True])
+@pytest.mark.parametrize("explicit_scratch", [False, True])
+@pytest.mark.parametrize("checkpoint_source_patch", [False, True])
 def test_shared_pool_successor_keeps_its_trusted_checkpoint(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
     runtime: str,
     shared_recovery: bool,
+    explicit_scratch: bool,
+    checkpoint_source_patch: bool,
 ) -> None:
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "patched",
-        lambda marker: shared_recovery
-        if marker == "run-shared-step-recovery-v1" else True,
+        lambda marker: {
+            "run-shared-step-recovery-v1": shared_recovery,
+            "run-shared-step-checkpoint-source-v1": checkpoint_source_patch,
+        }.get(marker, True),
     )
     inputs = {
         "runtime": {"mode": runtime, "profileSelector": {"tagsAll": ["accepted"]}},
         "instructions": "Preserve the saved edits.",
     }
+    if explicit_scratch:
+        inputs["workspaceSpec"] = {"workspaceSource": {"kind": "scratch"}}
     args = dict(
         node_inputs=inputs,
         node_id="work",
         tool_name=runtime,
         workflow_parameters={},
         step_execution=2,
-        trusted_remediation_checkpoint_restore_ref="artifact://verified/child-save",
+        trusted_remediation_checkpoint_restore_ref="artifact://art_verified_child_save",
     )
     if not shared_recovery:
         with pytest.raises(ValueError, match="requires external/omnigent"):
@@ -6807,10 +6815,20 @@ def test_shared_pool_successor_keeps_its_trusted_checkpoint(
     request = mock_run_workflow._build_agent_execution_request(**args)
     assert request.agent_kind == "managed"
     assert request.agent_id == runtime
-    assert request.workspace_spec["workspaceCheckpointRestoreRef"] == "artifact://verified/child-save"
+    assert request.workspace_spec["workspaceCheckpointRestoreRef"] == "artifact://art_verified_child_save"
     assert request.parameters["metadata"]["moonmind"]["sharedCheckpointRequired"] is True
     assert request.profile_selector.tags_all == ["accepted"]
     assert "metadata" not in inputs
+    if explicit_scratch:
+        assert inputs["workspaceSpec"]["workspaceSource"] == {"kind": "scratch"}
+    if explicit_scratch and not checkpoint_source_patch:
+        assert request.workspace_spec["workspaceSource"] == {"kind": "scratch"}
+    else:
+        from moonmind.omnigent.workspace_sources import compile_workspace_source
+
+        assert "workspaceSource" not in request.workspace_spec
+        source = compile_workspace_source(request.workspace_spec)
+        assert source.checkpoint_ref == "artifact://art_verified_child_save"
 
 
 def test_authored_native_checkpoint_does_not_claim_shared_recovery(
