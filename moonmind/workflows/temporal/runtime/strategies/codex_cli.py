@@ -189,6 +189,7 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
             suppress_default_model_flag=suppress_default_model_flag,
             requested_model=requested_model, resolved_model=model,
             profile_default_model=getattr(profile, "default_model", None),
+            model_source=((request.parameters or {}).get("modelTierResolution") or {}).get("modelSource"),
         ):
             model = None
         if model:

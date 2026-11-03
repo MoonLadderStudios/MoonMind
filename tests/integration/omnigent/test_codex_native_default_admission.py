@@ -180,6 +180,7 @@ async def test_frozen_native_default_runs_and_saves_through_the_shared_lifecycle
         ("omitted", None),
         ("different-model", None),
         ("explicit-tier", None),
+        ("explicit-tier", "example/model"),
         ("step-model", None),
     ],
 )

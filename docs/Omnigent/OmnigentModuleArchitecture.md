@@ -356,8 +356,8 @@ without declaring another provider and add nonsecret files within their private
 HOME, including global instructions. Their declared key and endpoint stay selected.
 Codex model-default suppression is frozen with the selected Profile: omitted
 models and an explicitly repeated Profile default delegate to the native harness,
-while a different explicit model keeps its pin. The exact credential-bound host
-must advertise one native default or report an explicit configured default
+while different explicit models and selected tiers keep their pins. The exact
+credential-bound host must advertise one native default or report a configured default
 through its public native launch/CLI read. Hidden configured models keep their
 meaning; missing or ambiguous defaults remain failures.
 The admitted comparison model and the observed native default remain distinct
