@@ -679,7 +679,8 @@ def bind_omnigent_model_selection(
     *,
     model: str | None,
     effort: str | None,
-    codex_native_default: bool = False,
+    harness_id: str | None = None,
+    model_options: Mapping[str, Any] | None = None,
 ) -> AgentExecutionRequest:
     """Carry the admitted pair into the session request without new resolution.
 
@@ -706,6 +707,10 @@ def bind_omnigent_model_selection(
     def selection_value(raw: object) -> str | None:
         return str(raw or "").strip() or None
 
+    codex_native_default = (
+        harness_id == "codex-native"
+        and (model_options or {}).get("codexNativeDefault") is True
+    )
     parameters = dict(request.parameters or {})
     omnigent = selection_mapping(
         parameters.get("omnigent"), field_name="parameters.omnigent"
