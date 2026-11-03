@@ -11,6 +11,7 @@ the patches must replay as well.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import timedelta
 from typing import Any
 
@@ -20,6 +21,8 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.temporal_models import StepExecutionIdentityModel
+from moonmind.workflows.temporal.step_checkpoints import build_step_checkpoint_payload
 from moonmind.workflows.temporal.activity_catalog import WORKFLOW_TASK_QUEUE
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
@@ -51,10 +54,39 @@ _WORKSPACE_PATCHES = _BASE_PATCHES | {
     RUN_INTERRUPTED_STEP_DEADLINE_PATCH,
 }
 _CURRENT_PATCHES = _WORKSPACE_PATCHES | {RUN_INTERRUPTED_STEP_INSTALLED_ADMISSION_PATCH}
+_SHARED_RECOVERY_PATCHES = _CURRENT_PATCHES | {
+    "run-shared-step-recovery-v1", "run-shared-native-context-continuation-v1",
+    "run-dispatch-pool-shared-context-v1", "run-canonical-step-checkpoints-v1",
+    "run-durable-finalization-outcome-v1", "run-logical-step-execution-budget-v1",
+    "run-omnigent-canonical-git-workspace-handoff-v1",
+    "run-shared-step-checkpoint-source-v1",
+}
 _REAL_PATCHED = workflow.patched
 _CHILD_REQUESTS: list[AgentExecutionRequest] = []
 _ADMISSIONS: list[dict[str, Any]] = []
 _ADMISSION_RESULT: dict[str, Any] = {}
+_SAVED_READS: list[str] = []
+
+
+def _shared_workspace():
+    return {
+        "kind": "worktree_archive", "baseCommit": "a" * 40,
+        "archiveRef": _ARCHIVE, "archiveDigest": "sha256:" + "b" * 64,
+        "manifestRef": "artifact://checkpoints/manifest", "manifestDigest": "sha256:" + "c" * 64,
+        "workspaceDigest": "sha256:" + "d" * 64, "workspaceIdentityDigest": "sha256:" + "e" * 64,
+        "includesUntracked": True,
+    }
+
+
+def _shared_save(request):
+    return {
+        "workPreserved": True,
+        "runtimeBindingRef": "omnigent-runtime-binding:sha256:" + "f" * 64,
+        "savedWorkspaceCheckpoint": {
+            **_shared_workspace(),
+            "checkpointRef": f"artifact://art_shared_child_save_{request.step_execution.execution_ordinal}",
+        },
+    }
 
 
 def _binding(digit: str) -> dict[str, str]:
@@ -82,6 +114,7 @@ async def _admit_successor(payload: dict[str, Any]) -> dict[str, Any]:
 @workflow.defn(name="MoonMind.AgentRun")
 class _InterruptedAgentRun:
     excluded_wait_seconds = 0
+    shared_child_save = False
 
     @workflow.run
     async def run(self, request: AgentExecutionRequest) -> AgentRunResult:
@@ -98,29 +131,49 @@ class _InterruptedAgentRun:
             return AgentRunResult(
                 summary="Omnigent session host was replaced.",
                 failureClass="integration_error",
-                providerErrorCode="OMNIGENT_SESSION_HOST_LOST",
+                providerErrorCode="provider_capacity" if self.shared_child_save else "OMNIGENT_SESSION_HOST_LOST",
                 retryRecommendation="retry_step_execution",
                 metadata=(
                     {
-                        "executionBudget": budget.model_dump(mode="json", by_alias=True)
+                        **({"executionBudget": budget.model_dump(mode="json", by_alias=True)} if budget is not None else {}),
+                        **(_shared_save(request) if self.shared_child_save else {}),
                     }
-                    if budget is not None
-                    else {}
                 ),
             )
-        return AgentRunResult(summary="Completed on the successor attempt.")
+        return AgentRunResult(
+            summary="Completed on the successor attempt.",
+            metadata=_shared_save(request) if self.shared_child_save else {},
+        )
 
 
 async def _plan(activity_type: str, _payload: Any, **_kwargs: Any) -> bytes:
     assert activity_type == "artifact.read"
+    if _InterruptedStepFixture.shared_child_save:
+        reference = getattr(_payload, "artifact_ref", "")
+        if reference.startswith("art_shared_child_save_"):
+            _SAVED_READS.append(reference)
+            if _InterruptedStepFixture.child_save_failure == "unavailable":
+                raise ConnectionError("saved child checkpoint is temporarily unavailable")
+            return json.dumps(build_step_checkpoint_payload(
+                identity=StepExecutionIdentityModel(
+                    workflowId=workflow.info().workflow_id, runId=workflow.info().run_id,
+                    logicalStepId=_STEP,
+                    executionOrdinal=99 if _InterruptedStepFixture.child_save_failure == "identity" else int(reference.rsplit("_", 1)[1]),
+                ),
+                boundary="after_execution", task_input_snapshot_ref="art_original_task", plan_ref="artifact://original-plan",
+                workspace=_shared_workspace(), created_at=workflow.now(),
+            )).encode()
+    runtime = "codex_cli" if _InterruptedStepFixture.shared_child_save else "omnigent"
     return _mock_plan_payload(
         [
             {
                 "id": _STEP,
-                "tool": {"type": "agent_runtime", "name": "omnigent"},
+                "tool": {"type": "agent_runtime", "name": runtime},
                 "inputs": {
                     "instructions": "Implement the change.",
-                    "runtime": {"mode": "omnigent"},
+                    **({"workspaceSpec": {"workspaceSource": {"kind": "scratch"}}}
+                       if _InterruptedStepFixture.explicit_scratch else {}),
+                    "runtime": {"mode": runtime, **({"profileSelector": {"tagsAll": ["accepted-pool"]}} if _InterruptedStepFixture.shared_child_save else {})},
                     "timeoutPolicy": {
                         "timeout_seconds": 3600,
                         "max_timeout_seconds": 7200,
@@ -134,6 +187,10 @@ async def _plan(activity_type: str, _payload: Any, **_kwargs: Any) -> bytes:
 @workflow.defn(name="InterruptedStepReplayFixture")
 class _InterruptedStepFixture:
     git_checkpoint = False
+    shared_child_save = False
+    explicit_scratch = False
+    cancel_after_child = False
+    child_save_failure = None
 
     @workflow.run
     async def run(self) -> int:
@@ -169,16 +226,38 @@ class _InterruptedStepFixture:
             return None
 
         run._maybe_bind_workflow_scoped_session = bind_session
-        run._record_canonical_step_checkpoint = record_checkpoint
+        if self.shared_child_save:
+            async def no_worker_capture(logical_step_id, *, boundary, **kwargs):
+                assert boundary != "after_execution", "the shared worker was already cleaned"
+                return None
+            run._capture_canonical_step_checkpoint_workspace = no_worker_capture
+            if self.cancel_after_child:
+                record_primary = run._record_primary_execution_outcome
+                def cancel_after_result(logical_step_id, **kwargs):
+                    record_primary(logical_step_id, **kwargs)
+                    if kwargs["result_status"] != "COMPLETED":
+                        run._cancel_requested = True
+                run._record_primary_execution_outcome = cancel_after_result
+        else:
+            run._record_canonical_step_checkpoint = record_checkpoint
         run._record_step_execution_manifest = record_manifest
-        await run._run_execution_stage(
-            parameters={
-                "publishMode": "none",
-                "omnigentExecutionPlan": dict(_RECORDED),
-                "resolvedSkillsetRef": "art_skills_recorded",
-            },
-            plan_ref="plan-ref",
-        )
+        try:
+            await run._run_execution_stage(
+                parameters={
+                    "publishMode": "none",
+                    "omnigentExecutionPlan": dict(_RECORDED),
+                    "resolvedSkillsetRef": "art_skills_recorded",
+                },
+                plan_ref="plan-ref",
+            )
+        except ValueError as error:
+            if not self.child_save_failure:
+                raise
+            assert "saved work" in str(error).lower()
+            assert "no successor" in str(error).lower()
+            row = run._step_ledger_row_for(_STEP)
+            assert row["executionOutcome"]["status"] == "failed"
+            assert "art_shared_child_save_1" in row["finalizationOutcome"]["message"]
         return run._step_execution_for(_STEP) or 0
 
 
@@ -355,6 +434,90 @@ async def test_interrupted_git_checkpoint_child_payloads_survive_real_replay(mon
             # Check actual child command payloads as well as the SDK command
             # sequence; the SDK itself does not compare argument bytes.
             assert emitted == [None, expected]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", [
+    "successor", "cancelled", "unavailable", "identity",
+    "scratch-retained", "scratch-successor",
+])
+async def test_selected_pool_child_save_drives_the_existing_step_owner_and_replays(monkeypatch, mode):
+    cancel = mode == "cancelled"
+    blocked = mode in {"unavailable", "identity"}
+    explicit_scratch = mode.startswith("scratch-")
+    expected_count = 1 if cancel or blocked else 2
+    _patch_environment(monkeypatch)
+    monkeypatch.setattr(_InterruptedStepFixture, "shared_child_save", True)
+    monkeypatch.setattr(_InterruptedStepFixture, "explicit_scratch", explicit_scratch)
+    monkeypatch.setattr(_InterruptedStepFixture, "cancel_after_child", cancel)
+    monkeypatch.setattr(_InterruptedStepFixture, "child_save_failure", mode if blocked else None)
+    monkeypatch.setattr(_InterruptedAgentRun, "shared_child_save", True)
+    _ADMISSION_RESULT.clear()
+    _ADMISSION_RESULT.update(disposition="admitted", omnigentExecutionPlan=dict(_INSTALLED), resolvedSkillsetRef="art_skills_installed")
+    _CHILD_REQUESTS.clear()
+    _SAVED_READS.clear()
+    emitted = []
+    execute_child = workflow.execute_child_workflow
+
+    async def observe_child(name, request, **kwargs):
+        if name == "MoonMind.AgentRun":
+            emitted.append(request.model_copy(deep=True))
+        return await execute_child(name, request, **kwargs)
+
+    monkeypatch.setattr(workflow, "execute_child_workflow", observe_child)
+    record_patches = _SHARED_RECOVERY_PATCHES
+    if mode == "scratch-retained":
+        record_patches = record_patches - {"run-shared-step-checkpoint-source-v1"}
+    _enable(monkeypatch, record_patches)
+    name = f"shared-checkpoint-{mode}"
+    async with await WorkflowEnvironment.start_time_skipping(data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER) as env:
+        agent_worker, admission_worker = _workers(env)
+        async with agent_worker, admission_worker, Worker(
+            env.client, task_queue=name, workflows=[_InterruptedStepFixture],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handle = await env.client.start_workflow(_InterruptedStepFixture.run, id=name, task_queue=name)
+            assert await asyncio.wait_for(handle.result(), timeout=30) == expected_count
+            history = await handle.fetch_history()
+    assert len(_CHILD_REQUESTS) == len(emitted) == expected_count
+    first = emitted[0]
+    assert first.agent_id == "codex_cli" and first.profile_selector.tags_all == ["accepted-pool"]
+    assert first.parameters["metadata"]["moonmind"]["sharedStepRecovery"] is True
+    if explicit_scratch:
+        assert first.workspace_spec["workspaceSource"] == {"kind": "scratch"}
+    if expected_count == 2:
+        second = emitted[1]
+        assert second.step_execution.execution_ordinal == 2
+        assert second.step_execution.step_execution_id != first.step_execution.step_execution_id
+        assert second.idempotency_key != first.idempotency_key
+        assert second.profile_selector == first.profile_selector
+        assert second.workspace_spec["workspaceCheckpointRestoreRef"] == "artifact://art_shared_child_save_1"
+        assert second.parameters["metadata"]["moonmind"]["sharedCheckpointRequired"] is True
+        if mode == "scratch-retained":
+            assert second.workspace_spec["workspaceSource"] == {"kind": "scratch"}
+        elif explicit_scratch:
+            from moonmind.omnigent.workspace_sources import compile_workspace_source
+
+            assert "workspaceSource" not in second.workspace_spec
+            source = compile_workspace_source(second.workspace_spec)
+            assert source.checkpoint_ref == second.workspace_spec["workspaceCheckpointRestoreRef"]
+        assert second.execution_budget.logical_step_id == first.execution_budget.logical_step_id
+        assert second.execution_budget.budget == first.execution_budget.budget
+        assert second.execution_budget.recovery_count == 1
+        assert 1800 <= second.execution_budget.consumed_seconds <= 1810
+        assert second.execution_budget.remaining_seconds(second.execution_budget.admitted_at) <= 1800
+    assert _SAVED_READS == [f"art_shared_child_save_{i}" for i in range(1, len(emitted) + 1)]
+    recorded = [request.model_dump(mode="json", by_alias=True) for request in emitted]
+    emitted.clear()
+    _SAVED_READS.clear()
+    _enable(monkeypatch, _SHARED_RECOVERY_PATCHES)
+    await Replayer(
+        workflows=[_InterruptedStepFixture], workflow_runner=UnsandboxedWorkflowRunner(),
+        data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
+    ).replay_workflow(history)
+    # Check actual emitted child arguments: SDK replay alone does not compare them.
+    assert [request.model_dump(mode="json", by_alias=True) for request in emitted] == recorded
+    assert _SAVED_READS == [f"art_shared_child_save_{i}" for i in range(1, len(emitted) + 1)]
 
 
 @pytest.mark.asyncio
