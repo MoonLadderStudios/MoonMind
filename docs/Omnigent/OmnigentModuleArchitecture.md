@@ -329,8 +329,8 @@ the same artifact and renderer in the native owner's private app-server HOME.
 Selected inherited instruction links become private files; untouched entries stay
 visible. Credential, hook, cache and history paths cannot be replaced. Native
 model/provider/tool authority and enrollment remain intact. Protected settings,
-native model-default suppression, uncarried tool/auth configuration and other
-HOME choices retain their adapter until an equivalent handoff exists.
+uncarried tool/auth configuration and other HOME choices retain their adapter
+until an equivalent handoff exists.
 Recorded plans retain their original materializer identity.
 Profile-bound execution and its OAuth host launcher admit no new plans;
 they retain queued starts, retries and cleanup under their recorded authority. Supported
@@ -351,8 +351,15 @@ developer instructions, project-instruction discovery and history preferences re
 its private session config for OAuth and API-key Profiles; native Codex validates
 and normalizes these values. API-key Codex Profiles can carry preferences
 without declaring another provider and add nonsecret files within their private
-HOME, including global instructions. Their declared key and endpoint stay selected;
-unresolved native model-default suppression retains its route. The same
+HOME, including global instructions. Their declared key and endpoint stay selected.
+Codex model-default suppression is frozen with the selected Profile: omitted
+models and an explicitly repeated Profile default delegate to the native harness,
+while a different explicit model keeps its pin. The exact credential-bound host
+must advertise one native default or report an explicit configured default
+through its public native launch/CLI read. Hidden configured models keep their
+meaning; missing or ambiguous defaults remain failures.
+The admitted comparison model and the observed native default remain distinct
+in launch evidence. The same
 renderer serves direct and packaged launches; the native wrapper writes only into
 its private home, retains frozen settings and reuses a completed projection on
 process restart. An interrupted append stops visibly until step recovery provisions

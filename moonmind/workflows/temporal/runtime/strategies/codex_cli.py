@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.workflows.executions.model_resolver import codex_uses_native_default
 from moonmind.workflows.temporal.runtime.output_parser import (
     CodexCliOutputParser,
     ParsedOutput,
@@ -183,20 +184,13 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
             command_behavior.get("suppress_default_model_flag")
         )
 
-        model = None
-        resolved_model = self.get_model(profile, request)
-        if requested_model:
-            profile_default_model = (
-                str(getattr(profile, "default_model", None) or "").strip() or None
-            )
-            if not (
-                suppress_default_model_flag
-                and profile_default_model
-                and resolved_model == profile_default_model
-            ):
-                model = resolved_model
-        elif not suppress_default_model_flag:
-            model = resolved_model
+        model = self.get_model(profile, request)
+        if codex_uses_native_default(
+            suppress_default_model_flag=suppress_default_model_flag,
+            requested_model=requested_model, resolved_model=model,
+            profile_default_model=getattr(profile, "default_model", None),
+        ):
+            model = None
         if model:
             cmd.extend(["-m", model])
 

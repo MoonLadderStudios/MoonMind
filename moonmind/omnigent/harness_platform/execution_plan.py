@@ -679,6 +679,7 @@ def bind_omnigent_model_selection(
     *,
     model: str | None,
     effort: str | None,
+    codex_native_default: bool = False,
 ) -> AgentExecutionRequest:
     """Carry the admitted pair into the session request without new resolution.
 
@@ -686,6 +687,10 @@ def bind_omnigent_model_selection(
     across the shared session boundary and rejects contradictory authored inputs
     before consuming capacity or claiming delivery. The authored request is never
     mutated.
+
+    Codex native-default policy validates the same admitted model before
+    omitting its launch override. The native harness owns the realized default;
+    a different authored model still conflicts with the frozen plan.
     """
 
     def selection_mapping(raw: object, *, field_name: str) -> dict[str, Any]:
@@ -725,8 +730,9 @@ def bind_omnigent_model_selection(
                 "persisted execution plan",
                 code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
             )
-        parameters[root_field] = planned
-        session[session_field] = planned
+        delivered = None if root_field == "model" and codex_native_default else planned
+        parameters[root_field] = delivered
+        session[session_field] = delivered
     omnigent["session"] = session
     parameters["omnigent"] = omnigent
     return request.model_copy(update={"parameters": parameters})

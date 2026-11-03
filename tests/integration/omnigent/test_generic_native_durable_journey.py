@@ -51,7 +51,7 @@ from api_service.services.provider_profile_readiness import (
     provider_profile_launch_ready,
 )
 from moonmind.omnigent import credential_materializers, production
-from moonmind.omnigent.codex_login import CODEX_ACCOUNT_READ_PROBE
+from moonmind.omnigent.codex_login import CODEX_ACCOUNT_READ_PROBE, CODEX_CONFIGURATION_READ_PROBE
 from moonmind.omnigent.harness_platform.catalog_service import (
     DbHarnessCatalogRepository,
 )
@@ -131,6 +131,8 @@ class NativeTurnServer(FakeOmnigentServer):
         self.delivered_skill: bytes | None = None
         self.model = "example/model"
         self.additional_models = []
+        self.native_default = False
+        self.hidden_native_default = False
         self.host_alive = False
         self.stopped_sessions = set()
         self.foreign_consumers = []
@@ -228,7 +230,10 @@ class NativeTurnServer(FakeOmnigentServer):
         assert request.match_info["host_id"] == self.host_id
         assert request.match_info["harness"] == self.harness
         assert self.harness != "opencode-native"
-        return web.json_response({"models": [{"id": model} for model in [self.model, *self.additional_models]]})
+        return web.json_response({"models": [
+            {"id": model, **({"isDefault": model == self.model} if self.native_default else {})}
+            for model in (["visible-other-model"] if self.hidden_native_default else [self.model, *self.additional_models])
+        ]})
 
     async def list_agents(self, request):
         return web.json_response(
@@ -835,6 +840,10 @@ class NativeDocker(StaticCodexDocker):
                 assert self.server.harness == "codex-native"
                 assert self.mounts[argv[-1]]["src"] == "journey_oauth"
                 return 0, "ready\n", ""
+            if CODEX_CONFIGURATION_READ_PROBE in argv:
+                assert self.server.harness == "codex-native"
+                assert self.server.hidden_native_default
+                return 0, json.dumps({"status": "ready", "model": self.server.model}), ""
             if 'cat "$1/.moonmind-generation"' in " ".join(argv):
                 return 0, self.generations[self.mounts[argv[-1]]["src"]], ""
             # Image-local shell/runner probes are explicitly controlled here.
@@ -1043,6 +1052,7 @@ async def _compile_plan(
     private_profile_config=False,
     private_configuration_home=None,
     declare_configuration_home=True,
+    native_default=False,
     instructions="Generate a report.",
 ):
     # Reuse the durable Skill producer, then expose its immutable body through
@@ -1160,6 +1170,10 @@ async def _compile_plan(
             mapping=get_first_party_oauth_profile(runtime_id, provider_id),
             validated_at=datetime.now(UTC),
         )
+    if native_default:
+        assert runtime_id == "codex_cli"
+        profile.default_model = "example/model"
+        profile.command_behavior = {"suppress_default_model_flag": True}
     if oauth_private_config or private_profile_config:
         assert runtime_id == "codex_cli"
         assert oauth or private_profile_config
@@ -1299,6 +1313,8 @@ async def native_journey(
     workflow_id = "mm:generic-native-durable-journey"
     worker_root = tmp_path / "worker"
     server = NativeTurnServer(harness)
+    server.native_default = bool(selection.get("codexNativeDefault"))
+    server.hidden_native_default = bool(selection.get("hiddenNativeDefault"))
     running = await start_fake_omnigent_server(server)
     events = []
     gateway = NativeArtifactGateway(session_factory, events=events)
@@ -1350,6 +1366,7 @@ async def native_journey(
                 private_profile_config=bool(selection.get("privateProfileConfiguration")),
                 private_configuration_home=selection.get("privateConfigurationHome"),
                 declare_configuration_home=selection.get("declareConfigurationHome", True),
+                native_default=bool(selection.get("codexNativeDefault")),
                 instructions=instructions,
             )
         # Verify the public HTTP enums survive discovery, alongside the real
@@ -2204,7 +2221,10 @@ async def assert_native_turn_saved_and_cleaned(
         created["host_type"] == "external" and created["workspace"] == "/workspaces/run"
     )
     assert created["agent_id"] == journey.harness + "-agent"
-    assert created["model_override"] == plan.payload.modelConfig.qualifiedId
+    if plan.payload.modelConfig.normalizedOptions.get("codexNativeDefault") is True:
+        assert created.get("model_override") is None
+    else:
+        assert created["model_override"] == plan.payload.modelConfig.qualifiedId
     assert created["terminal_launch_args"] == (
         [
             "--permission-mode",

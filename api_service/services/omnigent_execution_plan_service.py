@@ -2005,6 +2005,7 @@ async def compile_and_persist_execution_plan(
     )
     provider_configuration_snapshot = None
     configuration_ref = None
+    admitted_provider_configurations = {}
     if isinstance(_recorded_provider_configuration_snapshot, ProviderConfigurationSnapshotRef):
         recorded = _recorded_provider_configuration_snapshot
         # This artifact belongs to the admitted plan, not this candidate's
@@ -2012,14 +2013,16 @@ async def compile_and_persist_execution_plan(
         _artifact, configuration_body = await artifact_service.read(
             artifact_id=recorded.artifactRef.removeprefix("artifact:"), access=access
         )
-        load_provider_configuration_snapshot(
+        admitted_provider_configurations = load_provider_configuration_snapshot(
             configuration_body, recorded, binding_set.bindings
         )
         provider_configuration_snapshot = recorded.model_dump(mode="json")
     elif _recorded_provider_configuration_snapshot == "capture" and config["materializerRef"] in PROVIDER_CONFIGURATION_MATERIALIZERS:
+        admitted_provider_configurations = {
+            "primary-model": snapshot_provider_configuration(provider_profile),
+        }
         configuration_body = provider_configuration_snapshot_bytes(
-            binding_set.bindings,
-            {"primary-model": snapshot_provider_configuration(provider_profile)},
+            binding_set.bindings, admitted_provider_configurations,
         )
         configuration_ref, configuration_digest = await persist_json_artifact(
             artifact_service=artifact_service,
@@ -2031,6 +2034,21 @@ async def compile_and_persist_execution_plan(
             "artifactRef": f"artifact:{configuration_ref}",
             "contentDigest": configuration_digest,
         }
+    model_options = dict(model_mapping.get("settings") or {})
+    # This launch choice comes from the account-bound frozen Profile, never
+    # an arbitrary model setting. A different explicit model keeps its pin.
+    model_options.pop("codexNativeDefault", None)
+    native_default = getattr(
+        admitted_provider_configurations.get("primary-model"), "codexNativeDefault", None,
+    )
+    if harness_id == "codex-native" and native_default is not None:
+        from moonmind.workflows.executions.model_resolver import codex_uses_native_default
+
+        if codex_uses_native_default(
+            suppress_default_model_flag=True, requested_model=raw_selected_model,
+            resolved_model=selected_model, profile_default_model=native_default.profileDefaultModel,
+        ):
+            model_options["codexNativeDefault"] = True
     plan = compile_execution_plan(
         agent_profile=resolved_profile,
         harness_catalog=catalog,
@@ -2055,7 +2073,7 @@ async def compile_and_persist_execution_plan(
             or None
         ),
         model_route_ref=str(getattr(provider_profile, "provider_id", "") or "") or None,
-        model_normalized_options=dict(model_mapping.get("settings") or {}),
+        model_normalized_options=model_options,
         workflow_requirements=list(required_capabilities),
         # Capability admission consumes deployment-owned declarations only.
         # A workflow request can require a capability, but it cannot make that

@@ -277,6 +277,8 @@ class GenericOmnigentHostRealizer:
             request,
             model=plan.payload.modelConfig.qualifiedId,
             effort=plan.payload.modelConfig.effort,
+            codex_native_default=(plan.payload.harnessId == "codex-native" and
+                                  plan.payload.modelConfig.normalizedOptions.get("codexNativeDefault") is True),
         )
         completed = await self._runtime_bindings.get(
             stable_binding_id(
@@ -2317,6 +2319,8 @@ class GenericOmnigentHostRealizer:
             request,
             model=plan.payload.modelConfig.qualifiedId,
             effort=plan.payload.modelConfig.effort,
+            codex_native_default=(plan.payload.harnessId == "codex-native" and
+                                  plan.payload.modelConfig.normalizedOptions.get("codexNativeDefault") is True),
         )
         host_id = str(host_context.get("omnigentHostId") or "").strip()
         if not host_id:
