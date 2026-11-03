@@ -222,7 +222,7 @@ with workflow.unsafe.imports_passed_through():
         validate_remediation_loop_agent_instructions,
     )
 
-from moonmind.core.artifacts import durable_artifact_ref
+from moonmind.core.artifacts import durable_artifact_ref, temporal_artifact_id
 from moonmind.workflows.skills.approval_policy import (
     ReviewRequest,
     StepGateResult,
@@ -7443,7 +7443,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return False
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.read")
         body = await execute_typed_activity(
-            "artifact.read", ArtifactReadInput(artifact_ref=reference),
+            "artifact.read",
+            ArtifactReadInput(artifact_ref=temporal_artifact_id(reference) or reference),
             **self._execute_kwargs_for_route(route),
         )
         if not isinstance(body, bytes) or len(body) > 4 * 1024 * 1024:
