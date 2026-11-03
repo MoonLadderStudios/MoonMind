@@ -131,6 +131,48 @@ def test_published_history_compaction_keeps_the_context_handoff():
         assert compact["metadata"][key] == payload["metadata"][key]
 
 
+@pytest.mark.parametrize("canonical_handoff", [False, True])
+@pytest.mark.parametrize("git_checkpoint", [False, True])
+def test_new_pool_handoffs_carry_complete_git_checkpoints(monkeypatch, canonical_handoff, git_checkpoint):
+    from moonmind.schemas.agent_runtime_models import AgentRunResult
+    from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+
+    child = MoonMindAgentRun()
+    child._pool_native_request = request().model_copy(update={"execution_profile_ref": "selected-account"})
+    monkeypatch.setattr(child, "_workflow_patch_enabled", lambda marker: canonical_handoff if marker == "agent-run-pool-canonical-workspace-handoff-v1" else True)
+    payload = result()
+    payload["metadata"].pop("dispatchPoolContext")
+    payload["metadata"]["savedWorkspaceCheckpoint"] = {
+        "archiveRef": "artifact:verified-archive",
+        "checkpointRef": "artifact:verified-checkpoint",
+        "baseCommit": "a" * 40 if git_checkpoint else None,
+    }
+    delivered = child._with_dispatch_pool_context(AgentRunResult.model_validate(payload))
+    assert delivered.metadata["dispatchPoolContext"]["workspaceCheckpointRestoreRef"] == (
+        "artifact:verified-checkpoint" if canonical_handoff and git_checkpoint else "artifact:verified-archive"
+    )
+
+
+@pytest.mark.parametrize("marker,parent_support,drained", [(False,True,True),(True,False,True),(True,True,False),(True,True,True)])
+def test_shared_cooldown_uses_the_existing_parent_step_owner(monkeypatch, marker, parent_support, drained):
+    from moonmind.schemas.agent_runtime_models import AgentRunResult
+    from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+
+    child = MoonMindAgentRun()
+    child._pool_native_request = request()
+    child._omnigent_capacity_state = "released" if drained else "held"
+    monkeypatch.setattr(child, "_workflow_patch_enabled", lambda patch: marker)
+    execution = request().model_copy(update={"agent_kind":"external","agent_id":"omnigent","parameters":{"metadata":{"moonmind":{"sharedStepRecovery":parent_support}}}})
+    source = AgentRunResult(failureClass="execution_error", providerErrorCode="429", retryRecommendation="retry", metadata={"savedWorkspaceCheckpoint":{"checkpointRef":"artifact:verified-save"},"workPreserved":True})
+    carried = child._shared_pool_step_retry_result(execution, source)
+    if marker and parent_support and drained:
+        assert carried.retry_recommendation == "retry_step_execution"
+        assert carried.model_dump(exclude={"retry_recommendation"}) == source.model_dump(exclude={"retry_recommendation"})
+    else:
+        assert carried is None
+    assert execution.parameters["metadata"]["moonmind"]["sharedStepRecovery"] is parent_support
+
+
 def test_older_converted_result_cannot_silently_become_a_fresh_native_context(
     monkeypatch,
 ):
@@ -241,3 +283,22 @@ def test_pool_context_and_selected_workspace_survive_continue_as_new(monkeypatch
     )
     assert successor.step_execution.runtime_session_context.epoch == "accepted-epoch"
     assert successor.step_execution.runtime_session_context.run_id == "parent-run"
+
+
+@pytest.mark.parametrize("recorded_configuration", [False, True])
+def test_authored_checkpoint_hint_cannot_replace_the_parent_record(monkeypatch, recorded_configuration):
+    from tests.unit.workflows.temporal.workflows.test_run_step_ledger import _configure_workflow_runtime
+
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(module.workflow, "patched", lambda marker: recorded_configuration if marker == module.RUN_SHARED_STEP_CONFIGURATION_PATCH else True)
+    owner = module.MoonMindUserWorkflow()
+    built = owner._build_agent_execution_request(
+        node_inputs={"instructions": "Keep the selected task.", "runtime": {
+            "mode": "codex_cli", "parameters": {"metadata": {"moonmind": {
+                "sharedStepCheckpointRef": "artifact://art_authored_checkpoint",
+            }}},
+        }},
+        node_id="work", tool_name="codex_cli", workflow_parameters={},
+    )
+    hints = built.parameters["metadata"]["moonmind"]
+    assert hints.get("sharedStepCheckpointRef") == (None if recorded_configuration else "artifact://art_authored_checkpoint")

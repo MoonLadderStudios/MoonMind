@@ -1159,3 +1159,204 @@ async def test_serving_boundaries_observe_consumer_use_for_sweeper(
             )
             assert sweep.soft_deleted_count == 0
             assert sweep.skipped_in_use_count >= 1
+
+
+@pytest.mark.parametrize("intent_state", ["present", "cleared", "absent"])
+@pytest.mark.parametrize("operation", ["note", "clear"])
+@pytest.mark.filterwarnings("error::sqlalchemy.exc.SAWarning")
+async def test_deletion_attempt_tolerates_concurrent_intent_cleanup(
+    tmp_path: Path, intent_state: str, operation: str
+) -> None:
+    """A stale cleanup page must not abort when another owner finishes first."""
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as seed:
+            service = _service(seed, tmp_path)
+            artifact = await _complete_artifact(service, principal="owner-1")
+            artifact_id = artifact.artifact_id
+            if intent_state != "absent":
+                await service._repository.record_deletion_intent(
+                    artifact_id=artifact_id, principal="service:lifecycle"
+                )
+            await seed.commit()
+        async with session_maker() as stale, session_maker() as other:
+            repository = TemporalArtifactRepository(stale)
+            # Hold the ORM instance just as a sweep's pending page does.
+            intents = await repository.list_pending_deletion_intents()
+            await stale.commit()
+            if intent_state == "cleared":
+                await TemporalArtifactRepository(other).clear_deletion_intent(
+                    artifact_id
+                )
+                await other.commit()
+            if operation == "note":
+                await repository.note_deletion_attempt(
+                    artifact_id=artifact_id, error="object-store unavailable"
+                )
+            else:
+                await repository.clear_deletion_intent(artifact_id)
+            await stale.commit()
+            assert all(intent.artifact_id == artifact_id for intent in intents)
+            if intent_state != "present" or operation == "clear":
+                same_session_intent = await repository.get_deletion_intent(artifact_id)
+                assert same_session_intent is None
+        async with session_maker() as verify:
+            service = _service(verify, tmp_path)
+            remaining = await service._repository.get_deletion_intent(artifact_id)
+            if intent_state != "present" or operation == "clear":
+                assert remaining is None
+            else:
+                assert remaining is not None
+                assert remaining.attempts == 1
+                assert remaining.last_error == "object-store unavailable"
+            _meta, payload = await service.read(
+                artifact_id=artifact_id, access=access_for_test("owner-1")
+            )
+            assert payload == b"saved-work-bytes"
+
+
+async def test_deletion_attempt_counts_both_owners_with_stale_pages(
+    tmp_path: Path,
+) -> None:
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as seed:
+            service = _service(seed, tmp_path)
+            artifact = await _complete_artifact(service, principal="owner-1")
+            artifact_id = artifact.artifact_id
+            await service._repository.record_deletion_intent(
+                artifact_id=artifact_id, principal="service:lifecycle"
+            )
+            await seed.commit()
+        async with session_maker() as stale, session_maker() as other:
+            repository = TemporalArtifactRepository(stale)
+            (intent,) = await repository.list_pending_deletion_intents()
+            await stale.commit()
+            await TemporalArtifactRepository(other).note_deletion_attempt(
+                artifact_id=artifact_id, error="first attempt"
+            )
+            await other.commit()
+            await repository.note_deletion_attempt(
+                artifact_id=artifact_id, error="second attempt"
+            )
+            await stale.commit()
+            assert intent.artifact_id == artifact_id
+        async with session_maker() as verify:
+            intent = await TemporalArtifactRepository(verify).get_deletion_intent(
+                artifact_id
+            )
+            assert intent is not None
+            assert intent.attempts == 2
+            assert intent.last_error == "second attempt"
+
+
+async def test_lifecycle_continues_after_another_owner_clears_pending_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as seed:
+            service = _service(seed, tmp_path)
+            artifacts = [
+                await _complete_artifact(service, principal="owner-1") for _ in range(2)
+            ]
+            for artifact in artifacts:
+                await service._repository.record_deletion_intent(
+                    artifact_id=artifact.artifact_id, principal="service:lifecycle"
+                )
+            await seed.commit()
+        async with session_maker() as stale:
+            service = _service(stale, tmp_path)
+            original_list = service._repository.list_pending_deletion_intents
+            cleared_ids = []
+
+            async def list_with_competing_cleanup(*, limit=500):
+                intents = await original_list(limit=limit)
+                await stale.commit()
+                async with session_maker() as other:
+                    await TemporalArtifactRepository(other).clear_deletion_intent(
+                        intents[0].artifact_id
+                    )
+                    await other.commit()
+                cleared_ids.append(intents[0].artifact_id)
+                return intents
+
+            monkeypatch.setattr(
+                service._repository,
+                "list_pending_deletion_intents",
+                list_with_competing_cleanup,
+            )
+            reconciled = await service.reconcile_deletion_intents(
+                principal="service:lifecycle"
+            )
+            assert reconciled == 0
+        async with session_maker() as verify:
+            service = _service(verify, tmp_path)
+            for artifact in artifacts:
+                intent = await service._repository.get_deletion_intent(
+                    artifact.artifact_id
+                )
+                if artifact.artifact_id in cleared_ids:
+                    assert intent is None
+                else:
+                    assert intent is not None
+                    assert intent.attempts == 1
+                    assert (
+                        intent.last_error == "tombstone-missing: db commit never landed"
+                    )
+                _meta, payload = await service.read(
+                    artifact_id=artifact.artifact_id, access=access_for_test("owner-1")
+                )
+                assert payload == b"saved-work-bytes"
+
+
+@pytest.mark.filterwarnings("error::sqlalchemy.exc.SAWarning")
+async def test_reconciliation_recreates_cleared_intent_before_retrying_storage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as seed:
+            service = _service(seed, tmp_path)
+            artifact = await _complete_artifact(service, principal="owner-1")
+            artifact_id = artifact.artifact_id
+            storage_key = artifact.storage_key
+            artifact.hard_deleted_at = datetime.now(UTC)
+            artifact.tombstoned_at = datetime.now(UTC)
+            artifact.status = TemporalArtifactStatus.DELETED
+            await service._repository.record_deletion_intent(
+                artifact_id=artifact_id, principal="service:lifecycle"
+            )
+            await seed.commit()
+        async with session_maker() as stale:
+            service = _service(stale, tmp_path)
+            original_list = service._repository.list_pending_deletion_intents
+
+            async def list_with_competing_cleanup(*, limit=500):
+                intents = await original_list(limit=limit)
+                await stale.commit()
+                async with session_maker() as other:
+                    await TemporalArtifactRepository(other).clear_deletion_intent(
+                        artifact_id
+                    )
+                    await other.commit()
+                return intents
+
+            def unavailable_store(storage_key):
+                raise OSError("object-store unavailable")
+
+            monkeypatch.setattr(
+                service._repository,
+                "list_pending_deletion_intents",
+                list_with_competing_cleanup,
+            )
+            monkeypatch.setattr(service._store, "delete", unavailable_store)
+            reconciled = await service.reconcile_deletion_intents(
+                principal="service:lifecycle"
+            )
+            assert reconciled == 0
+        async with session_maker() as verify:
+            intent = await TemporalArtifactRepository(verify).get_deletion_intent(
+                artifact_id
+            )
+            assert intent is not None
+            assert intent.attempts == 1
+            assert intent.last_error == "OSError:object-store unavailable"
+            retained_bytes = service._store.read_bytes(storage_key)
+            assert retained_bytes == b"saved-work-bytes"

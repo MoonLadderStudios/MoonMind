@@ -1,4 +1,6 @@
 import hashlib
+import json
+import os
 from pathlib import Path
 
 import pytest
@@ -234,3 +236,167 @@ async def test_two_cold_attempts_preserve_cumulative_markers_after_source_destru
         ("artifact://workspace/C1", "workflow-1:step-2:restore"),
         ("artifact://workspace/C2", "workflow-1:step-3:restore"),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("live", [False, True])
+async def test_same_attempt_retry_keeps_candidate_edits_without_another_restore(tmp_path, live):
+    restorer = _Restorer({"artifact://workspace/C1": {"accepted.txt": "base"}})
+    owner = SandboxRemediationWorkspaceOwner(tmp_path, restorer=restorer)
+    owner.record_loop_head(_head())
+    if live:
+        from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
+        from moonmind.workflows.temporal.runtime.workspace_locators import (
+            resolve_sandbox_workspace_locator,
+        )
+
+        record = SandboxWorkspaceRecord(
+            workspace_id="previous-attempt", workflow_id="workflow-1",
+            step_execution_id="step-1", relative_path="repo",
+        )
+        owner.records.ensure(record)
+        source = resolve_sandbox_workspace_locator(
+            SandboxWorkspaceLocator(kind="sandbox", workspaceId=record.workspace_id, relativePath="repo"),
+            workspace_root=tmp_path, expected_workspace_id=record.workspace_id,
+            owner_record=record, expected_workflow_id="workflow-1", expected_step_execution_id="step-1",
+            must_exist=False,
+        )
+        source.mkdir(parents=True)
+        source.joinpath("accepted.txt").write_text("base")
+        owner.record_live_workspace(RemediationLiveWorkspace(
+            loop_id="loop-01", branch_ref="checkpoint-branch:loop-01",
+            checkpoint_ref="artifact://workspace/C1", workspace_digest=_DIGEST,
+            head_version=2, workspace_id=record.workspace_id, workflow_id=record.workflow_id,
+            step_execution_id=record.step_execution_id,
+        ))
+    binding = _binding()
+    result = await owner.admit_and_resolve(
+        binding=binding, workflow_id="workflow-1", step_execution_id="step-2",
+    )
+    candidate = Path(result["workspacePath"])
+    candidate.joinpath("accepted.txt").write_text("verified edits after initial preparation")
+    owner = SandboxRemediationWorkspaceOwner(tmp_path, restorer=restorer)
+    repeated = await owner.admit_and_resolve(
+        binding=binding, workflow_id="workflow-1", step_execution_id="step-2",
+    )
+    assert repeated == {**result, "reusedAttempt": True}
+    assert candidate.joinpath("accepted.txt").read_text() == "verified edits after initial preparation"
+    assert len(restorer.calls) == (0 if live else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rename_completed", [False, True])
+async def test_live_transfer_reconciles_an_interrupted_rename(tmp_path, monkeypatch, rename_completed):
+    from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
+    from moonmind.workflows.temporal.runtime.workspace_locators import (
+        resolve_sandbox_workspace_locator,
+    )
+
+    restorer = _Restorer({"artifact://workspace/C1": {"accepted.txt": "base"}})
+    owner = SandboxRemediationWorkspaceOwner(tmp_path, restorer=restorer)
+    owner.record_loop_head(_head())
+    record = SandboxWorkspaceRecord(
+        workspace_id="source-before-transfer", workflow_id="workflow-1",
+        step_execution_id="step-1", relative_path="repo",
+    )
+    owner.records.ensure(record)
+    source = resolve_sandbox_workspace_locator(
+        SandboxWorkspaceLocator(kind="sandbox", workspaceId=record.workspace_id, relativePath="repo"),
+        workspace_root=tmp_path, expected_workspace_id=record.workspace_id,
+        owner_record=record, expected_workflow_id="workflow-1", expected_step_execution_id="step-1",
+        must_exist=False,
+    )
+    source.mkdir(parents=True)
+    source.joinpath("accepted.txt").write_text("base")
+    owner.record_live_workspace(RemediationLiveWorkspace(
+        loop_id="loop-01", branch_ref="checkpoint-branch:loop-01",
+        checkpoint_ref="artifact://workspace/C1", workspace_digest=_DIGEST,
+        head_version=2, workspace_id=record.workspace_id, workflow_id=record.workflow_id,
+        step_execution_id=record.step_execution_id,
+    ))
+    original_replace = os.replace
+    def interrupted_replace(old, new):
+        if Path(old) == source:
+            if rename_completed:
+                original_replace(old, new)
+            raise OSError("transfer acknowledgement interrupted")
+        return original_replace(old, new)
+    monkeypatch.setattr(os, "replace", interrupted_replace)
+    with pytest.raises(OSError, match="acknowledgement interrupted"):
+        await owner.admit_and_resolve(binding=_binding(), workflow_id="workflow-1", step_execution_id="step-2")
+    monkeypatch.setattr(os, "replace", original_replace)
+    owner = SandboxRemediationWorkspaceOwner(tmp_path, restorer=restorer)
+    result = await owner.admit_and_resolve(binding=_binding(), workflow_id="workflow-1", step_execution_id="step-2")
+    assert result["workspaceState"] == "live_reused"
+    assert Path(result["workspacePath"]).joinpath("accepted.txt").read_text() == "base"
+    assert restorer.calls == []
+
+
+@pytest.mark.asyncio
+async def test_unacknowledged_candidate_is_preserved_without_admission_proof(tmp_path):
+    restorer = _Restorer({"artifact://workspace/C1": {"accepted.txt": "earlier head"}})
+    owner = SandboxRemediationWorkspaceOwner(tmp_path, restorer=restorer)
+    owner.record_loop_head(_head())
+    binding = _binding()
+    locator = binding.destination_workspace_locator
+    owner.records.ensure(SandboxWorkspaceRecord(
+        workspace_id=locator.workspace_id, workflow_id="workflow-1",
+        step_execution_id="step-2", relative_path="repo",
+    ))
+    candidate = tmp_path / "temporal_sandbox" / locator.workspace_id / "repo"
+    candidate.mkdir(parents=True)
+    candidate.joinpath("accepted.txt").write_text("Only surviving candidate edits")
+    with pytest.raises(RemediationWorkspaceError, match="REMEDIATION_WORKSPACE_ADMISSION_UNCERTAIN"):
+        await owner.admit_and_resolve(binding=binding, workflow_id="workflow-1", step_execution_id="step-2")
+    assert candidate.joinpath("accepted.txt").read_text() == "Only surviving candidate edits"
+    assert restorer.calls == []
+
+
+@pytest.mark.asyncio
+async def test_cold_restore_reconciles_lost_acknowledgement(tmp_path):
+    class InterruptedRestorer(_Restorer):
+        async def restore(self, **kwargs):
+            result = await super().restore(**kwargs)
+            if len(self.calls) == 1:
+                raise OSError("restore acknowledgement interrupted")
+            return result
+
+    restorer = InterruptedRestorer({"artifact://workspace/C1": {"accepted.txt": "verified head"}})
+    owner = SandboxRemediationWorkspaceOwner(tmp_path, restorer=restorer)
+    owner.record_loop_head(_head())
+    with pytest.raises(OSError, match="acknowledgement interrupted"):
+        await owner.admit_and_resolve(binding=_binding(), workflow_id="workflow-1", step_execution_id="step-2")
+    owner = SandboxRemediationWorkspaceOwner(tmp_path, restorer=restorer)
+    result = await owner.admit_and_resolve(binding=_binding(), workflow_id="workflow-1", step_execution_id="step-2")
+    assert Path(result["workspacePath"]).joinpath("accepted.txt").read_text() == "verified head"
+    assert len(restorer.calls) == 2
+    await owner.admit_and_resolve(binding=_binding(), workflow_id="workflow-1", step_execution_id="step-2")
+    assert len(restorer.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_retained_cold_receipt_keeps_the_original_candidate(tmp_path):
+    head, binding = _head(), _binding()
+    restorer = _Restorer({head.checkpoint_ref: {"accepted.txt": "earlier head"}})
+    owner = SandboxRemediationWorkspaceOwner(tmp_path, restorer=restorer)
+    owner.record_loop_head(head)
+    locator = binding.destination_workspace_locator
+    owner.records.ensure(SandboxWorkspaceRecord(
+        workspace_id=locator.workspace_id, workflow_id="workflow-1",
+        step_execution_id="step-2", relative_path="repo",
+    ))
+    candidate = tmp_path / "temporal_sandbox" / locator.workspace_id / "repo"
+    candidate.mkdir(parents=True)
+    candidate.joinpath("accepted.txt").write_text("Edits retained from the old owner")
+    # The pre-migration receipt has no workspaceState discriminator.
+    receipt = {
+        "checkpointRef": head.checkpoint_ref, "workspaceDigest": head.workspace_digest,
+        "baseCommit": head.base_commit, "manifestRef": head.manifest_ref,
+        "loopId": head.loop_id, "branchRef": head.branch_ref, "headVersion": head.head_version,
+        "restoreEvidenceRef": "artifact://restore/prior",
+    }
+    owner.records.store_root.joinpath(f"{locator.workspace_id}.restore.json").write_text(json.dumps(receipt))
+    result = await owner.admit_and_resolve(binding=binding, workflow_id="workflow-1", step_execution_id="step-2")
+    assert result["restoreEvidenceRef"] == receipt["restoreEvidenceRef"]
+    assert candidate.joinpath("accepted.txt").read_text() == "Edits retained from the old owner"
+    assert restorer.calls == []

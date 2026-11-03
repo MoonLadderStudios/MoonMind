@@ -358,43 +358,7 @@ class SandboxRemediationWorkspaceOwner:
         if binding.workflow_id != workflow_id or binding.step_execution_id != step_execution_id:
             raise RemediationWorkspaceError("REMEDIATION_WORKSPACE_OWNER_MISMATCH", "binding belongs to a different execution")
         head = await self._authoritative_head(binding)
-        live_resolution = self._try_live_reuse(binding, head)
-        if live_resolution is not None:
-            live_path, _live_locator = live_resolution
-            locator = binding.destination_workspace_locator
-            record = SandboxWorkspaceRecord(
-                workspace_id=locator.workspace_id,
-                workflow_id=workflow_id,
-                step_execution_id=step_execution_id,
-                relative_path=locator.relative_path,
-            )
-            self.records.ensure(record)
-            destination = resolve_sandbox_workspace_locator(
-                locator,
-                workspace_root=self.root,
-                expected_workspace_id=locator.workspace_id,
-                owner_record=record,
-                expected_workflow_id=workflow_id,
-                expected_step_execution_id=step_execution_id,
-                must_exist=False,
-            )
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            if destination.exists():
-                if destination.resolve() != live_path.resolve():
-                    raise RemediationWorkspaceError(
-                        "REMEDIATION_WORKSPACE_DESTINATION_CONFLICT",
-                        "attempt destination already contains unrelated state",
-                    )
-            else:
-                # Transfer the validated branch workspace into attempt-local
-                # ownership. Host cleanup still owns neither location.
-                os.replace(live_path, destination)
-            return {
-                "workspaceLocator": locator.model_dump(by_alias=True, mode="json"),
-                "workspacePath": str(destination), "workspaceState": "live_reused",
-                "restoreEvidenceRef": None,
-            }
-
+        repository = ((head.restore_request or {}).get("destination") or {}).get("repository")
         locator = binding.destination_workspace_locator
         record = SandboxWorkspaceRecord(
             workspace_id=locator.workspace_id, workflow_id=workflow_id,
@@ -406,30 +370,110 @@ class SandboxRemediationWorkspaceOwner:
             owner_record=record, expected_workflow_id=workflow_id,
             expected_step_execution_id=step_execution_id, must_exist=False,
         )
+        checkpoint_expected = {
+            "checkpointRef": head.checkpoint_ref, "workspaceDigest": head.workspace_digest,
+            "baseCommit": head.base_commit, "manifestRef": head.manifest_ref,
+        }
+        expected = {
+            **checkpoint_expected,
+            "loopId": head.loop_id, "branchRef": head.branch_ref, "headVersion": head.head_version,
+        }
+        receipt = self.records.store_root / f"{locator.workspace_id}.restore.json"
+        try:
+            if receipt.is_symlink():
+                raise ValueError("workspace admission receipt is a symlink")
+            evidence = json.loads(receipt.read_text())
+        except FileNotFoundError:
+            evidence = None
+        except (OSError, ValueError) as exc:
+            raise RemediationWorkspaceError("REMEDIATION_WORKSPACE_AUTHORITY_INVALID", "workspace admission receipt is invalid") from exc
+        if evidence is not None:
+            if not isinstance(evidence, Mapping) or any(evidence.get(key) != value for key, value in expected.items()):
+                raise RemediationWorkspaceError("REMEDIATION_WORKSPACE_RESTORE_MISMATCH", "workspace admission belongs to a different loop head")
+            state = evidence.get("workspaceState", "cold_restored")
+            reused_attempt = state != "live_reuse_pending"
+            if state == "live_reuse_pending":
+                live = self._try_live_reuse(binding, head)
+                if destination.exists():
+                    if live is not None and live[0].resolve() != destination.resolve():
+                        raise RemediationWorkspaceError("REMEDIATION_WORKSPACE_DESTINATION_CONFLICT", "both transfer source and destination exist")
+                elif live is not None:
+                    if live[1].workspace_id != evidence.get("sourceWorkspaceId"):
+                        raise RemediationWorkspaceError("REMEDIATION_WORKSPACE_OWNER_MISMATCH", "pending transfer has a different source owner")
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(live[0], destination)
+                if destination.exists():
+                    evidence = {**expected, "workspaceState": "live_reused", "restoreEvidenceRef": None}
+                    self._atomic_json(receipt, evidence)
+                    state = "live_reused"
+            if state not in {"cold_restored", "cold_restore_pending", "live_reused", "live_reuse_pending"} or (
+                state == "cold_restored" and not evidence.get("restoreEvidenceRef")
+            ):
+                raise RemediationWorkspaceError("REMEDIATION_WORKSPACE_AUTHORITY_INVALID", "workspace admission receipt is incomplete")
+            if destination.exists() and state in {"cold_restored", "live_reused"}:
+                resolved = resolve_sandbox_workspace_locator(
+                    locator, workspace_root=self.root, expected_workspace_id=locator.workspace_id,
+                    owner_record=record, expected_workflow_id=workflow_id,
+                    expected_step_execution_id=step_execution_id,
+                )
+                return {
+                    "workspaceLocator": locator.model_dump(by_alias=True, mode="json"),
+                    "workspacePath": str(resolved), "workspaceState": state,
+                    "restoreEvidenceRef": evidence.get("restoreEvidenceRef"),
+                    "reusedAttempt": reused_attempt,
+                    "repository": repository,
+                }
+
+        live_resolution = self._try_live_reuse(binding, head)
+        if live_resolution is not None:
+            live_path, live_locator = live_resolution
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.exists() and destination.resolve() != live_path.resolve():
+                raise RemediationWorkspaceError("REMEDIATION_WORKSPACE_DESTINATION_CONFLICT", "attempt destination already contains unrelated state")
+            # Record transfer intent before the rename. A redelivery reconciles
+            # that effect instead of replacing candidate edits from the head.
+            self._atomic_json(receipt, {
+                **expected, "workspaceState": "live_reuse_pending",
+                "sourceWorkspaceId": live_locator.workspace_id, "restoreEvidenceRef": None,
+            })
+            if not destination.exists():
+                os.replace(live_path, destination)
+            self._atomic_json(receipt, {**expected, "workspaceState": "live_reused", "restoreEvidenceRef": None})
+            return {
+                "workspaceLocator": locator.model_dump(by_alias=True, mode="json"),
+                "workspacePath": str(destination), "workspaceState": "live_reused",
+                "restoreEvidenceRef": None,
+                "repository": repository,
+            }
+
         if self.restorer is None:
             raise RemediationWorkspaceError("REMEDIATION_WORKSPACE_RESTORE_UNAVAILABLE", "checkpoint restore boundary is not configured")
+        if destination.exists() and evidence is None:
+            raise RemediationWorkspaceError(
+                "REMEDIATION_WORKSPACE_ADMISSION_UNCERTAIN",
+                "existing candidate has no admission proof; preserve it for verified recovery",
+            )
+        # A lost restore acknowledgement must reconcile the canonical data
+        # plane's idempotency record, rather than adopt a partial directory.
+        self._atomic_json(receipt, {**expected, "workspaceState": "cold_restore_pending"})
         result = await self.restorer.restore(
             head=head, destination=destination,
             idempotency_key=f"{workflow_id}:{step_execution_id}:restore",
             binding=binding,
         )
-        expected = {
-            "checkpointRef": head.checkpoint_ref, "workspaceDigest": head.workspace_digest,
-            "baseCommit": head.base_commit, "manifestRef": head.manifest_ref,
-        }
-        if any(result.get(key) != value for key, value in expected.items()) or not result.get("restoreEvidenceRef"):
+        if any(result.get(key) != value for key, value in checkpoint_expected.items()) or not result.get("restoreEvidenceRef"):
             raise RemediationWorkspaceError("REMEDIATION_WORKSPACE_RESTORE_MISMATCH", "restore result does not match the durable loop head")
         resolved = resolve_sandbox_workspace_locator(
             locator, workspace_root=self.root, expected_workspace_id=locator.workspace_id,
             owner_record=record, expected_workflow_id=workflow_id,
             expected_step_execution_id=step_execution_id,
         )
-        evidence = {**expected, "restoreEvidenceRef": result["restoreEvidenceRef"], "loopId": head.loop_id, "branchRef": head.branch_ref, "headVersion": head.head_version}
-        self._atomic_json(self.records.store_root / f"{locator.workspace_id}.restore.json", evidence)
+        self._atomic_json(receipt, {**expected, "workspaceState": "cold_restored", "restoreEvidenceRef": result["restoreEvidenceRef"]})
         return {
             "workspaceLocator": locator.model_dump(by_alias=True, mode="json"),
             "workspacePath": str(resolved), "workspaceState": "cold_restored",
             "restoreEvidenceRef": result["restoreEvidenceRef"],
+            "repository": repository,
         }
 
 

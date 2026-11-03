@@ -292,6 +292,23 @@ _CODEX_KEY_ENV = frozenset({"OPENAI_API_KEY"})
 _CODEX_CARRIED_LITERAL_ENV = frozenset({"OPENAI_BASE_URL"})
 
 
+class CodexNativeDefaultSelection(BaseModel):
+    """The Profile default whose explicit CLI flag the operator suppresses."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    profileDefaultModel: str | None = None
+
+
+def _codex_native_default_selection(profile):
+    if str(getattr(profile, "runtime_id", "")) == "codex_cli" and (
+        getattr(profile, "command_behavior", None) or {}
+    ).get("suppress_default_model_flag"):
+        return CodexNativeDefaultSelection(
+            profileDefaultModel=str(getattr(profile, "default_model", None) or "").strip() or None,
+        )
+    return None
+
+
 class ProviderConfigEndpoint(BaseModel):
     """Secret-free endpoint an API-key Provider Profile declares.
 
@@ -309,6 +326,9 @@ class ProviderConfigEndpoint(BaseModel):
     secretRole: str = Field(alias="secretRole")
     baseUrl: str = Field(alias="baseUrl")
     defaultModel: str | None = Field(None, alias="defaultModel")
+    codexNativeDefault: CodexNativeDefaultSelection | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
     modelPins: dict[str, str] = Field(default_factory=dict, alias="modelPins")
     codexConfiguration: dict[str, Any] | None = Field(
         None,
@@ -337,6 +357,26 @@ class ProviderLaunchEnvironment(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     launchEnvironment: dict[str, str] = Field(default_factory=dict)
+    codexNativeDefault: CodexNativeDefaultSelection | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+    environmentTemplates: dict[str, str] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+    codexConfiguration: dict[str, Any] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+
+    @field_validator("codexConfiguration")
+    @classmethod
+    def _validate_codex_configuration(cls, value):
+        if value is not None:
+            from moonmind.provider_profiles.codex_configuration import validate_oauth_configuration
+            from moonmind.omnigent.host_services.runtime_scripts import validate_provider_literal_launch_environment
+
+            validate_provider_literal_launch_environment(value.get("environmentTemplates") or {})
+            return validate_oauth_configuration(value)
+        return None
 
     @field_validator("launchEnvironment")
     @classmethod
@@ -346,6 +386,41 @@ class ProviderLaunchEnvironment(BaseModel):
         )
 
         return validate_provider_literal_launch_environment(value)
+
+    @field_validator("environmentTemplates")
+    @classmethod
+    def _validate_environment_templates(cls, value):
+        if value is None:
+            return None
+        from moonmind.omnigent.host_services.runtime_scripts import validate_provider_literal_launch_environment
+        from moonmind.provider_profiles.template_renderer import validate_environment_template_context
+
+        return validate_environment_template_context(validate_provider_literal_launch_environment(value))
+
+    @model_validator(mode="after")
+    def _validate_environment_ownership(self):
+        if self.environmentTemplates and set(self.environmentTemplates) & set(self.launchEnvironment):
+            raise ValueError("Profile environment value has conflicting literal/template ownership")
+        if self.codexConfiguration and set(self.codexConfiguration.get("environmentTemplates") or {}) & (
+            set(self.launchEnvironment) | set(self.environmentTemplates or {})
+        ):
+            raise ValueError("Profile environment value has conflicting private-HOME ownership")
+        return self
+
+
+def _oauth_launch_environment(profile, *, configuration=None):
+    from moonmind.provider_profiles.template_renderer import template_context_names
+
+    values = dict(getattr(profile, "env_template", None) or {})
+    for key in (configuration or {}).get("environmentTemplates") or {}:
+        values.pop(key, None)
+    templates = {key: value for key, value in values.items() if template_context_names(value)}
+    return ProviderLaunchEnvironment(
+        launchEnvironment={key: value for key, value in values.items() if key not in templates},
+        environmentTemplates=templates or None,
+        codexConfiguration=configuration,
+        codexNativeDefault=_codex_native_default_selection(profile),
+    )
 
 
 PROVIDER_CONFIGURATION_MATERIALIZERS = frozenset(
@@ -359,8 +434,17 @@ class ProviderConfigurationSlot(BaseModel):
     providerProfileRef: str
     materializerRef: Literal["omnigent-provider-config@1", "claude-oauth-home@1", "codex-oauth-home@1"]
     endpoint: ProviderConfigEndpoint | None
+    codexNativeDefault: CodexNativeDefaultSelection | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
     launchEnvironment: dict[str, str] = Field(
         default_factory=dict, exclude_if=lambda value: not value,
+    )
+    environmentTemplates: dict[str, str] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+    codexConfiguration: dict[str, Any] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
     )
 
     @model_validator(mode="after")
@@ -368,8 +452,15 @@ class ProviderConfigurationSlot(BaseModel):
         if self.materializerRef in {"claude-oauth-home@1", "codex-oauth-home@1"}:
             if self.endpoint is not None:
                 raise ValueError("OAuth configuration cannot replace its credential owner")
-            ProviderLaunchEnvironment(launchEnvironment=self.launchEnvironment)
-        elif self.launchEnvironment:
+            if self.codexConfiguration is not None and self.materializerRef != "codex-oauth-home@1":
+                raise ValueError("Codex preferences require their enrolled Codex home")
+            if self.codexNativeDefault is not None and self.materializerRef != "codex-oauth-home@1":
+                raise ValueError("Codex model-default selection requires its Codex materializer")
+            ProviderLaunchEnvironment(
+                launchEnvironment=self.launchEnvironment, codexConfiguration=self.codexConfiguration,
+                environmentTemplates=self.environmentTemplates,
+            )
+        elif self.launchEnvironment or self.codexConfiguration is not None or self.environmentTemplates is not None or self.codexNativeDefault is not None:
             raise ValueError("provider-config tuning belongs to its endpoint")
         return self
 
@@ -380,9 +471,20 @@ def provider_configuration_snapshot_bytes(bindings, configurations) -> bytes:
             providerProfileRef=bindings[slot].providerProfileRef,
             materializerRef=bindings[slot].materializerRef,
             endpoint=endpoint if not isinstance(endpoint, ProviderLaunchEnvironment) else None,
+            codexNativeDefault=(
+                endpoint.codexNativeDefault if isinstance(endpoint, ProviderLaunchEnvironment) else None
+            ),
             launchEnvironment=(
                 endpoint.launchEnvironment
                 if isinstance(endpoint, ProviderLaunchEnvironment) else {}
+            ),
+            codexConfiguration=(
+                endpoint.codexConfiguration
+                if isinstance(endpoint, ProviderLaunchEnvironment) else None
+            ),
+            environmentTemplates=(
+                endpoint.environmentTemplates
+                if isinstance(endpoint, ProviderLaunchEnvironment) else None
             ),
         ).model_dump(mode="json")
         for slot, endpoint in configurations.items()
@@ -420,7 +522,11 @@ def load_provider_configuration_snapshot(content, snapshot, bindings):
         ):
             raise ValueError("provider configuration snapshot account does not match")
         result[slot] = (
-            ProviderLaunchEnvironment(launchEnvironment=saved.launchEnvironment)
+            ProviderLaunchEnvironment(
+                launchEnvironment=saved.launchEnvironment, codexConfiguration=saved.codexConfiguration,
+                environmentTemplates=saved.environmentTemplates,
+                codexNativeDefault=saved.codexNativeDefault,
+            )
             if saved.materializerRef in {"claude-oauth-home@1", "codex-oauth-home@1"} else saved.endpoint
         )
     return result
@@ -441,12 +547,18 @@ def untranslated_oauth_launch_options(profile: Any) -> str | None:
         or _enum_value(getattr(profile, "credential_source", None)) != "oauth_volume"
     ):
         return None
-    fields = ["file_templates"] if getattr(profile, "file_templates", None) else []
+    fields = []
+    private_configuration = None
+    if getattr(profile, "file_templates", None):
+        if str(profile.runtime_id) == "codex_cli":
+            from moonmind.provider_profiles.codex_configuration import oauth_configuration_for_profile
+
+            private_configuration, _reason = oauth_configuration_for_profile(profile)
+        if private_configuration is None:
+            fields.append("file_templates")
     if getattr(profile, "env_template", None):
         try:
-            environment = ProviderLaunchEnvironment(launchEnvironment=profile.env_template)
-            if any("{{" in value for value in environment.launchEnvironment.values()):
-                fields.append("env_template")
+            _oauth_launch_environment(profile)
         except ValueError:
             fields.append("env_template")
     home_overrides = dict(getattr(profile, "home_path_overrides", None) or {})
@@ -462,7 +574,7 @@ def untranslated_oauth_launch_options(profile: Any) -> str | None:
         if (
             not target
             or getattr(profile, "volume_mount_path", None) != target
-            or any(
+            or private_configuration is None and any(
                 key not in oauth_home_path_keys(runtime) or value != target
                 for key, value in home_overrides.items()
             )
@@ -486,9 +598,12 @@ def snapshot_provider_configuration(
             raise HarnessPlatformError(
                 reason, code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
             )
-        return ProviderLaunchEnvironment(
-            launchEnvironment=dict(getattr(profile, "env_template", None) or {}),
-        )
+        configuration = None
+        if getattr(profile, "file_templates", None):
+            from moonmind.provider_profiles.codex_configuration import oauth_configuration_for_profile
+
+            configuration, _reason = oauth_configuration_for_profile(profile)
+        return _oauth_launch_environment(profile, configuration=configuration)
     if not is_api_key_launch_profile(profile):
         return None
     endpoint, reason = provider_config_endpoint(profile)
@@ -497,7 +612,7 @@ def snapshot_provider_configuration(
             f"API-key Provider Profile cannot run on Omnigent: {reason}",
             code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
         )
-    return endpoint
+    return endpoint.model_copy(update={"codexNativeDefault": _codex_native_default_selection(profile)})
 
 
 def _omnigent_egress_admits(url: str) -> bool:
@@ -540,7 +655,7 @@ def _declared_key_launch(
     """Split an API-key Profile's launch environment into key role and literals.
 
     Returns ``(key_role, literals, "")`` when the declared environment is one
-    key SecretRef plus literals the provider config has a field for, or
+    key SecretRef plus provider fields and validated nonsecret project values, or
     ``("", {}, reason)`` naming why it cannot be carried exactly.
     """
 
@@ -548,10 +663,6 @@ def _declared_key_launch(
         return "", {}, f"not a {harness_label} Provider Profile"
     if _enum_value(getattr(profile, "credential_source", None)) != "secret_ref":
         return "", {}, "not a SecretRef Provider Profile"
-    if getattr(profile, "file_templates", None) or getattr(
-        profile, "home_path_overrides", None
-    ):
-        return "", {}, "file templates and home path overrides are direct-launch only"
     secret_refs = dict(getattr(profile, "secret_refs", None) or {})
     key_role = ""
     literals: dict[str, str] = {}
@@ -564,14 +675,19 @@ def _declared_key_launch(
                 return "", {}, f"secret role {role!r} has no SecretRef"
             key_role = role
         elif isinstance(value, str) and value.strip() and "{{" not in value:
-            literals[name] = value.strip()
+            literals[name] = value.strip() if name in carried_literal_env else value
         else:
             return "", {}, f"{name} is not a literal value"
     if not key_role:
         return "", {}, f"no {' or '.join(sorted(key_env))} SecretRef"
     uncarried = sorted(set(literals) - carried_literal_env)
     if uncarried:
-        return "", {}, f"launch environment {uncarried} has no provider-config field"
+        from moonmind.omnigent.host_services.runtime_scripts import validate_provider_literal_launch_environment
+
+        try:
+            validate_provider_literal_launch_environment({key: literals[key] for key in uncarried})
+        except ValueError:
+            return "", {}, f"launch environment {uncarried} cannot use nonsecret delivery"
     return key_role, literals, ""
 
 
@@ -585,6 +701,9 @@ def claude_provider_config_endpoint(
     translation moves a Profile off its direct launch; anything else keeps it
     there with that reason.
     """
+
+    if getattr(profile, "file_templates", None) or getattr(profile, "home_path_overrides", None):
+        return None, "file templates and home path overrides are direct-launch only"
 
     from moonmind.omnigent.host_services.runtime_scripts import (
         PROVIDER_LITERAL_LAUNCH_ENV,
@@ -609,7 +728,7 @@ def claude_provider_config_endpoint(
             {
                 key: value
                 for key, value in literals.items()
-                if key in PROVIDER_LITERAL_LAUNCH_ENV
+                if key in PROVIDER_LITERAL_LAUNCH_ENV or key not in _CLAUDE_CARRIED_LITERAL_ENV
             }
         )
     except ValueError as error:
@@ -649,29 +768,36 @@ def codex_provider_config_endpoint(
         or _enum_value(getattr(profile, "credential_source", None)) != "secret_ref"
     ):
         return None, "not a SecretRef Codex Provider Profile"
+    private_preferences = None
     if getattr(profile, "file_templates", None) or getattr(
         profile, "home_path_overrides", None
     ):
         from moonmind.provider_profiles.codex_configuration import (
-            configuration_for_profile,
+            configuration_for_profile, oauth_configuration_for_profile,
         )
 
         configuration, reason = configuration_for_profile(profile)
         if configuration is None:
-            return None, reason
-        base_url = str(configuration["provider"].get("base_url") or "").rstrip("/")
-        if not _omnigent_egress_admits(base_url):
-            return None, "the Omnigent egress profile does not admit the endpoint"
-        return (
-            ProviderConfigEndpoint(
-                family="openai",
-                secretRole=configuration["secretRole"],
-                baseUrl=base_url,
-                defaultModel=configuration["document"].get("model"),
-                codexConfiguration=configuration,
-            ),
-            "",
-        )
+            # Preferences need no second provider declaration. Model-default
+            # policy is captured separately with this account's configuration.
+            private_preferences, _ = oauth_configuration_for_profile(profile)
+            if private_preferences is None:
+                return None, reason
+        else:
+            base_url = str(configuration["provider"].get("base_url") or "").rstrip("/")
+            if not _omnigent_egress_admits(base_url):
+                return None, "the Omnigent egress profile does not admit the endpoint"
+            return (
+                ProviderConfigEndpoint(
+                    family="openai",
+                    secretRole=configuration["secretRole"],
+                    baseUrl=base_url,
+                    defaultModel=configuration["document"].get("model"),
+                    launchEnvironment=configuration.pop("launchEnvironment", {}),
+                    codexConfiguration=configuration,
+                ),
+                "",
+            )
     key_role, literals, reason = _declared_key_launch(
         profile,
         runtime_id="codex_cli",
@@ -685,7 +811,11 @@ def codex_provider_config_endpoint(
     if not _omnigent_egress_admits(base_url):
         return None, "the Omnigent egress profile does not admit the endpoint"
     return (
-        ProviderConfigEndpoint(family="openai", secretRole=key_role, baseUrl=base_url),
+        ProviderConfigEndpoint(
+            family="openai", secretRole=key_role, baseUrl=base_url,
+            codexConfiguration=private_preferences,
+            launchEnvironment={key: value for key, value in literals.items() if key not in _CODEX_CARRIED_LITERAL_ENV},
+        ),
         "",
     )
 

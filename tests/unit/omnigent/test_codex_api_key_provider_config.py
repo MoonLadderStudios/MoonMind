@@ -90,6 +90,17 @@ def test_custom_endpoint_is_carried_when_egress_admits_it():
     assert endpoint.baseUrl == "https://eu.api.openai.com/v1"
 
 
+def test_profile_shell_literal_keeps_its_value_and_selected_provider():
+    endpoint, reason = codex_provider_config_endpoint(_api_key_profile(env_template={
+        "OPENAI_API_KEY": {"from_secret_ref": "openai_api_key"},
+        "PROJECT_RUNTIME_STYLE": "  exact $(not-executed) literal  ",
+    }))
+    assert endpoint is not None, reason
+    assert endpoint.baseUrl == "https://api.openai.com/v1"
+    assert endpoint.secretRole == "openai_api_key"
+    assert endpoint.launchEnvironment == {"PROJECT_RUNTIME_STYLE": "  exact $(not-executed) literal  "}
+
+
 # The seeded MiniMax Codex Profile brings its own config.toml provider table
 # (Chat Completions wire, retry and idle tuning) through a file template.
 _MINIMAX_CODEX = {

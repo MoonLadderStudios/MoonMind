@@ -189,6 +189,18 @@ async def _read_exact_host_model_options(
     return model_options, "omnigent-host-tunnel"
 
 
+def _codex_native_default_model(options: Any) -> str | None:
+    rows = options.get("models") if isinstance(options, dict) else None
+    defaults = [row for row in rows or [] if isinstance(row, dict) and row.get("isDefault") is True]
+    if len(defaults) != 1:
+        return None
+    for key in ("id", "model"):
+        value = defaults[0].get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
 async def confirm_exact_host_model(
     *,
     backend: DockerCommandBackend,
@@ -196,6 +208,8 @@ async def confirm_exact_host_model(
     harness_id: str,
     model_options: Any,
     selected_model: str,
+    codex_native_default: bool = False,
+    observed_codex_default: str | None = None,
 ) -> tuple[list[str], bool]:
     """Return the host's advertised model ids and whether it serves the selection.
 
@@ -209,6 +223,8 @@ async def confirm_exact_host_model(
     rule for exactly these rows instead of MoonMind re-deriving it.
     """
 
+    if codex_native_default and harness_id != "codex-native":
+        raise ValueError("native Codex model-default selection requires its Codex harness")
     if harness_id not in {"claude-native", "codex-native"}:
         available = sorted(_model_ids(model_options))
         return available, selected_model in available
@@ -223,6 +239,13 @@ async def confirm_exact_host_model(
         }
     )
     if harness_id == "codex-native":
+        if codex_native_default:
+            native_default = _codex_native_default_model(model_options)
+            if native_default is None and not any(row.get("isDefault") is True for row in rows):
+                # An explicit configured default can be runnable but hidden
+                # from the picker. Its public native read is separate evidence.
+                return available, bool(observed_codex_default)
+            return available, native_default is not None and native_default in available
         return available, selected_model in available
     if not rows:
         return available, False
@@ -1174,12 +1197,19 @@ class DockerOmnigentHostAttestor:
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
             ) from exc
         selected_model = plan.payload.modelConfig.qualifiedId
+        codex_native_default = (
+            plan.payload.harnessId == "codex-native"
+            and plan.payload.modelConfig.normalizedOptions.get("codexNativeDefault") is True
+        )
+        selection_label = "native Codex default" if codex_native_default else selected_model
         model_evidence: dict[str, Any] = {
             "omnigentHostId": host_id,
             "harnessId": plan.payload.harnessId,
             "selectedModel": selected_model,
             "attempts": [],
         }
+        if codex_native_default:
+            model_evidence["selectionPolicy"] = "codex-native-default"
         # A cold catalog is an observation, not permanent model authority.
         # OpenCode can exit zero with its bundled catalog after a failed
         # refresh. Re-read before releasing this exact host/credential lease;
@@ -1199,6 +1229,17 @@ class DockerOmnigentHostAttestor:
                         harness_id=plan.payload.harnessId,
                     )
                 )
+                native_default_model = None
+                if codex_native_default:
+                    native_default_model = _codex_native_default_model(model_options)
+                    rows = model_options.get("models") if isinstance(model_options, dict) else []
+                    if native_default_model is None and not any(
+                        isinstance(row, dict) and row.get("isDefault") is True for row in rows or []
+                    ):
+                        native_default_model = await upstream_probes.read_codex_native_default(
+                            backend=self._backend, container_name=launch_result["containerName"],
+                        )
+                        model_options_source += "+codex-native-default-read"
                 available_models, selected_model_present = (
                     await confirm_exact_host_model(
                         backend=self._backend,
@@ -1206,6 +1247,8 @@ class DockerOmnigentHostAttestor:
                         harness_id=plan.payload.harnessId,
                         model_options=model_options,
                         selected_model=selected_model,
+                        codex_native_default=codex_native_default,
+                        observed_codex_default=native_default_model,
                     )
                 )
                 observation.update(
@@ -1216,6 +1259,8 @@ class DockerOmnigentHostAttestor:
                 model_evidence.update(
                     availableModels=available_models, source=model_options_source
                 )
+                if codex_native_default:
+                    model_evidence["nativeDefaultModel"] = native_default_model
             except HarnessPlatformError as exc:
                 if (
                     exc.code
@@ -1246,7 +1291,7 @@ class DockerOmnigentHostAttestor:
                 # No read completed, so absence was never observed. Keep the
                 # unavailable cause instead of asking for another model.
                 failure = HarnessPlatformError(
-                    f"model catalog for {selected_model} could not be read on the "
+                    f"model catalog for {selection_label} could not be read on the "
                     f"exact host in {_MODEL_ATTESTATION_MAX_ATTEMPTS} attempts",
                     code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
                     transient=True,
@@ -1257,7 +1302,7 @@ class DockerOmnigentHostAttestor:
                 related = [
                     model
                     for model in model_evidence.get("availableModels", [])
-                    if model.startswith(selected_model + "-")
+                    if not codex_native_default and selected_model and model.startswith(selected_model + "-")
                 ][:3]
                 selection_hint = (
                     ". Related IDs reported by this host: "
@@ -1267,7 +1312,7 @@ class DockerOmnigentHostAttestor:
                     else ""
                 )
                 failure = HarnessPlatformError(
-                    f"selected model {selected_model} could not be confirmed on the "
+                    f"selected model {selection_label} could not be confirmed on the "
                     f"exact host after {_MODEL_ATTESTATION_MAX_ATTEMPTS} catalog "
                     f"reads{selection_hint}",
                     code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,

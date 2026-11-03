@@ -22,9 +22,7 @@ from moonmind.omnigent.harness_platform import execution_plan, stores
 from moonmind.workflows.temporal.activities import (
     omnigent_session_activities as admission,
 )
-from moonmind.workflows.temporal.activities.omnigent_activities import (
-    _OnDemandTemporalArtifactService,
-)
+from moonmind.workflows.temporal.scoped_artifacts import ScopedTemporalArtifactService
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
 from moonmind.workflows.temporal.artifacts import (
     ArtifactAccessContext,
@@ -148,7 +146,7 @@ async def test_new_plan_reaches_registered_admission_without_writer_reader_sha_m
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         maker = async_sessionmaker(engine, expire_on_commit=False)
-        artifacts = _OnDemandTemporalArtifactService(maker)
+        artifacts = ScopedTemporalArtifactService(maker)
         input_ref, input_digest = await _task_input(artifacts)
         monkeypatch.setattr(
             service,
@@ -298,7 +296,7 @@ async def test_stable_upstream_agent_source_survives_admission(tmp_path, monkeyp
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         maker = async_sessionmaker(engine, expire_on_commit=False)
-        artifacts = _OnDemandTemporalArtifactService(maker)
+        artifacts = ScopedTemporalArtifactService(maker)
         input_ref, input_digest = await _task_input(artifacts)
         monkeypatch.setattr(
             service,
@@ -370,7 +368,7 @@ async def test_plan_compiled_by_the_previous_writer_still_admits(tmp_path, monke
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         maker = async_sessionmaker(engine, expire_on_commit=False)
-        artifacts = _OnDemandTemporalArtifactService(maker)
+        artifacts = ScopedTemporalArtifactService(maker)
         input_ref, input_digest = await _task_input(artifacts)
         monkeypatch.setattr(
             service,
