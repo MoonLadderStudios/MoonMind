@@ -28,6 +28,8 @@ OAUTH_CONFIGURATION_ENV = "MOONMIND_CODEX_PROFILE_CONFIGURATION"
 _SESSION_SETTINGS = {
     "developer_instructions", "hide_agent_reasoning", "show_raw_agent_reasoning",
     "project_doc_max_bytes", "project_doc_fallback_filenames", "history",
+    "model_reasoning_summary", "model_verbosity", "model_context_window",
+    "model_auto_compact_token_limit", "personality",
 }
 
 
@@ -328,11 +330,6 @@ def configuration_for_profile(profile):
             "model_provider",
             "model_providers",
             "model_reasoning_effort",
-            "model_reasoning_summary",
-            "model_verbosity",
-            "model_context_window",
-            "model_auto_compact_token_limit",
-            "personality",
         }
         if set(document) - supported_settings:
             return (

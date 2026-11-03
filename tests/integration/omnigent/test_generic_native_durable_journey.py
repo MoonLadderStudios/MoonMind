@@ -1801,7 +1801,12 @@ async def test_plain_api_key_private_preferences_use_the_existing_shared_provide
     "harness": "codex-native", "static": static, "oauthPrivateConfiguration": True,
     "privateConfigurationHome": configuration_home,
     "declareConfigurationHome": declare_home,
-    "sessionSettings": {"developer_instructions": "Keep the admitted OAuth preferences."},
+    "sessionSettings": {
+        "developer_instructions": "Keep the admitted OAuth preferences.",
+        "model_reasoning_summary": "concise", "model_verbosity": "low",
+        "model_context_window": 128000, "model_auto_compact_token_limit": 96000,
+        "personality": "pragmatic",
+    },
     "additionalFiles": [{
         "path": configuration_home + "/AGENTS.md", "format": "text",
         "merge_strategy": "append", "permissions": "0600", "content_template": "Admitted file.\n",
@@ -1829,7 +1834,12 @@ async def test_admitted_oauth_private_configuration_reaches_shared_lifecycle(nat
     else:
         await assert_native_turn_saved_and_cleaned(journey)
     configuration = json.loads(journey.docker.launch_env["MOONMIND_CODEX_PROFILE_CONFIGURATION"])
-    assert configuration["document"] == {"developer_instructions": "Keep the admitted OAuth preferences."}
+    assert configuration["document"] == {
+        "developer_instructions": "Keep the admitted OAuth preferences.",
+        "model_reasoning_summary": "concise", "model_verbosity": "low",
+        "model_context_window": 128000, "model_auto_compact_token_limit": 96000,
+        "personality": "pragmatic",
+    }
     assert configuration["additionalFiles"][0]["content_template"] == "Admitted file.\n"
     assert journey.docker.launch_env["CODEX_HOME"] == "/home/app/.codex"
     assert "codex-configuration.py prepare" in journey.docker.script

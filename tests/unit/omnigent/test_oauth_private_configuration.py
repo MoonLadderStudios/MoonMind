@@ -16,6 +16,38 @@ from tests.unit.api_service.test_oauth_profile_launch_options import private_cod
 from tests.unit.omnigent.test_oauth_home_materializers import FakeDockerBackend, _context, _home
 
 
+@pytest.mark.parametrize("settings", [
+    {"model_reasoning_summary": "concise"},
+    {"model_verbosity": "low"},
+    {"model_context_window": 128000},
+    {"model_auto_compact_token_limit": 96000},
+    {"personality": "pragmatic"},
+    {
+        "model_reasoning_summary": "concise", "model_verbosity": "low",
+        "model_context_window": 128000, "model_auto_compact_token_limit": 96000,
+        "personality": "pragmatic",
+    },
+])
+def test_oauth_session_preferences_match_api_key_delivery(settings):
+    from moonmind.provider_profiles.codex_configuration import (
+        configuration_for_profile,
+        oauth_configuration_for_profile,
+    )
+    from tests.unit.omnigent.test_codex_profile_configuration import profile
+
+    api_key = profile()
+    api_key.file_templates[0]["content_template"].update(settings)
+    control, reason = configuration_for_profile(api_key)
+    assert control is not None, reason
+    assert {key: control["document"][key] for key in settings} == settings
+
+    selected, _ = private_codex_profile()
+    selected.file_templates[0]["content_template"] = dict(settings)
+    configuration, reason = oauth_configuration_for_profile(selected)
+    assert configuration is not None, reason
+    assert configuration["document"] == settings
+
+
 @pytest.mark.asyncio
 async def test_private_configuration_keeps_the_enrolled_home_and_its_cleanup_owner():
     selected, _ = private_codex_profile()
@@ -44,6 +76,12 @@ def test_private_configuration_runs_only_in_native_private_home(tmp_path, use_en
         home_path=("{{runtime_support_dir}}/codex-home" if source_home == "per-run" else "/home/app/.codex"),
         declare_home=source_home != "implicit-enrolled",
     )
+    session_settings = {
+        "model_reasoning_summary": "concise", "model_verbosity": "low",
+        "model_context_window": 128000, "model_auto_compact_token_limit": 96000,
+        "personality": "pragmatic",
+    }
+    selected.file_templates[0]["content_template"].update(session_settings)
     tuning = snapshot_provider_configuration(selected)
     home, skills, binaries = (tmp_path / name for name in ("home", "skills", "bin"))
     for directory in (home, skills, binaries):
@@ -81,6 +119,7 @@ def test_private_configuration_runs_only_in_native_private_home(tmp_path, use_en
         "home=pathlib.Path(os.environ['CODEX_HOME'])\n"
         "config=tomllib.loads((home/'config.toml').read_text())\n"
         "print(json.dumps({'home':home.name,'model':config['model'],"
+        "'session':{key:config[key] for key in " + repr(list(session_settings)) + "},"
         "'preferences':config.get('developer_instructions'),"
         "'instructions':(home/'AGENTS.md').read_text()}))\n"
     )
@@ -124,6 +163,7 @@ def test_private_configuration_runs_only_in_native_private_home(tmp_path, use_en
         rows = [json.loads(line) for line in result.stdout.splitlines()]
         assert rows == [{
             "home": name, "model": "admitted-plan", "preferences": "Runtime-owned instructions.\n\nPreserve accepted work.",
+            "session": session_settings,
             "instructions": "Enrollment instructions.\nSelected global instructions.\n",
         } for name in ("private-one", "private-two")]
         assert configuration_projection.stat().st_mode & 0o777 == 0o600
