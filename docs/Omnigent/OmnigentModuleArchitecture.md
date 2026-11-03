@@ -327,7 +327,9 @@ without overriding private HOME or editing the enrolled home. Codex OAuth
 preferences and nonsecret files authored for a run-support or enrolled HOME use
 the same artifact and renderer in the native owner's private app-server HOME.
 Selected inherited instruction links become private files; untouched entries stay
-visible. Credential, hook, cache and history paths cannot be replaced. Native
+visible. Environment templates referencing those files bind to that private HOME
+at native launch; generic support paths and recorded literals retain their meaning.
+Credential, hook, cache and history paths cannot be replaced. Native
 model/provider/tool authority and enrollment remain intact. Protected settings,
 native model-default suppression, uncarried tool/auth configuration and other
 HOME choices retain their adapter until an equivalent handoff exists.

@@ -82,6 +82,15 @@ def test_private_configuration_runs_only_in_native_private_home(tmp_path, use_en
         "personality": "pragmatic",
     }
     selected.file_templates[0]["content_template"].update(session_settings)
+    private_reference = delivery == "oauth-home" and source_home == "per-run"
+    if private_reference:
+        selected.env_template = {
+            "PROJECT_CONFIG_FILE": "{{runtime_support_dir}}/codex-home/AGENTS.md",
+            "PROJECT_SPACED_FILE": "{{ runtime_support_dir }}/codex-home/AGENTS.md",
+            "PROJECT_GENERIC_ROOT": "{{runtime_support_dir}}/reports",
+            "PROJECT_SIBLING_ROOT": "{{runtime_support_dir}}/codex-home-other",
+            "PROJECT_WORKSPACE": "{{workspace_path}}/reports",
+        }
     tuning = snapshot_provider_configuration(selected)
     home, skills, binaries = (tmp_path / name for name in ("home", "skills", "bin"))
     for directory in (home, skills, binaries):
@@ -110,7 +119,12 @@ def test_private_configuration_runs_only_in_native_private_home(tmp_path, use_en
         handle = {
             "credentialGeneration": 4, "materializerRef": "codex-oauth-home@1",
             "attachments": [{"targetPath": "/home/app/.codex"}],
-            "runtimeEnvironment": {"MOONMIND_CODEX_PROFILE_CONFIGURATION": json.dumps(tuning.codexConfiguration)},
+            "runtimeEnvironment": {
+                **tuning.launchEnvironment,
+                "PROJECT_LITERAL_PATH": "{{runtime_support_dir}}/codex-home/AGENTS.md",
+                "MOONMIND_CODEX_PROFILE_CONFIGURATION": json.dumps(tuning.codexConfiguration),
+            },
+            "runtimeEnvironmentTemplates": tuning.environmentTemplates,
         }
     binaries.joinpath("python3").symlink_to(sys.executable)
     native = binaries / "codex"
@@ -118,10 +132,20 @@ def test_private_configuration_runs_only_in_native_private_home(tmp_path, use_en
         f"#!{sys.executable}\nimport json,os,pathlib,tomllib\n"
         "home=pathlib.Path(os.environ['CODEX_HOME'])\n"
         "config=tomllib.loads((home/'config.toml').read_text())\n"
+        "reference=os.environ.get('PROJECT_CONFIG_FILE')\n"
+        "reference=pathlib.Path(reference) if reference else None\n"
         "print(json.dumps({'home':home.name,'model':config['model'],"
         "'session':{key:config[key] for key in " + repr(list(session_settings)) + "},"
         "'preferences':config.get('developer_instructions'),"
-        "'instructions':(home/'AGENTS.md').read_text()}))\n"
+        "'instructions':(home/'AGENTS.md').read_text(),"
+        "'reference':str(reference) if reference else None,"
+        "'referenceExists':reference.is_file() if reference else None,"
+        "'referenceText':reference.read_text() if reference and reference.is_file() else None,"
+        "'spacedReference':os.environ.get('PROJECT_SPACED_FILE'),"
+        "'genericRoot':os.environ.get('PROJECT_GENERIC_ROOT'),"
+        "'siblingRoot':os.environ.get('PROJECT_SIBLING_ROOT'),"
+        "'workspace':os.environ.get('PROJECT_WORKSPACE'),"
+        "'literal':os.environ.get('PROJECT_LITERAL_PATH')}))\n"
     )
     native.chmod(0o700)
     omnigent = binaries / "omnigent"
@@ -146,12 +170,13 @@ def test_private_configuration_runs_only_in_native_private_home(tmp_path, use_en
         skill_attachment={"targetPath": str(skills)},
         step_execution_id="workflow:run:work:execution:1",
         enable_codex_runtime=True, control_credential_available=False,
+        workspace_path=str(tmp_path),
     )
     environment = {key: value.replace("/home/app", str(home)) for key, value in environment.items()}
     result = subprocess.run(
         ["/bin/sh", "-ceu", script.replace("/home/app", str(home)), "--", "http://test-omnigent"],
         env={**os.environ, **environment, "PATH": f"{binaries}:{os.environ['PATH']}"},
-        text=True, capture_output=True,
+        text=True, capture_output=True, cwd=tmp_path,
     )
     assert {path.name: path.read_bytes() for path in enrolled.iterdir()} == before
     if use_enrolled_home:
@@ -165,9 +190,61 @@ def test_private_configuration_runs_only_in_native_private_home(tmp_path, use_en
             "home": name, "model": "admitted-plan", "preferences": "Runtime-owned instructions.\n\nPreserve accepted work.",
             "session": session_settings,
             "instructions": "Enrollment instructions.\nSelected global instructions.\n",
+            "reference": str(home / name / "AGENTS.md") if private_reference else None,
+            "referenceExists": True if private_reference else None,
+            "referenceText": "Enrollment instructions.\nSelected global instructions.\n" if private_reference else None,
+            "spacedReference": str(home / name / "AGENTS.md") if private_reference else None,
+            "genericRoot": str(home / ".omnigent/moonmind/runtime-context/reports") if private_reference else None,
+            "siblingRoot": str(home / ".omnigent/moonmind/runtime-context/codex-home-other") if private_reference else None,
+            "workspace": str(tmp_path / "reports") if private_reference else None,
+            "literal": "{{runtime_support_dir}}/codex-home/AGENTS.md" if delivery == "oauth-home" else None,
         } for name in ("private-one", "private-two")]
         assert configuration_projection.stat().st_mode & 0o777 == 0o600
         assert not any(path.is_symlink() for path in enrolled.iterdir())
+
+
+@pytest.mark.parametrize("key", ["HOME", "CODEX_HOME", "GITHUB_TOKEN", "OMNIGENT_CODEX_PATH"])
+def test_private_environment_references_cannot_replace_native_authority(key):
+    selected, _ = private_codex_profile()
+    selected.env_template = {key: "{{runtime_support_dir}}/codex-home/AGENTS.md"}
+    with pytest.raises(HarnessPlatformError):
+        snapshot_provider_configuration(selected)
+
+
+def test_mixed_private_and_generic_support_references_keep_the_native_route():
+    from api_service.services.profile_execution_selection import (
+        configuration_accepts_profile,
+        profile_has_native_inventory_route,
+    )
+    from moonmind.provider_profiles.codex_configuration import oauth_configuration_for_profile
+
+    selected, configuration = private_codex_profile()
+    selected.env_template = {
+        "PROJECT_FILES": "{{runtime_support_dir}}/codex-home/AGENTS.md:{{runtime_support_dir}}/reports",
+    }
+    private, reason = oauth_configuration_for_profile(selected)
+    assert private is None and "untranslated support path" in reason
+    assert not configuration_accepts_profile(configuration[1].document, selected)
+    assert profile_has_native_inventory_route(selected, [configuration])
+
+
+@pytest.mark.parametrize("environment", [
+    {"HOME": "{{runtime_support_dir}}/AGENTS.md"},
+    {"PROJECT_CONFIG_FILE": "{{provider_api_key}}/AGENTS.md"},
+])
+def test_private_environment_projection_revalidates_native_authority(environment):
+    selected, _ = private_codex_profile()
+    configuration = snapshot_provider_configuration(selected).codexConfiguration
+    configuration["environmentTemplates"] = environment
+    with pytest.raises(ValueError):
+        OmnigentRuntimeScriptService().build_entrypoint(
+            credential_handles=[{
+                "materializerRef": "codex-oauth-home@1", "attachments": [],
+                "runtimeEnvironment": {"MOONMIND_CODEX_PROFILE_CONFIGURATION": json.dumps(configuration)},
+            }],
+            skill_attachment={"targetPath": "/opt/skills"},
+            step_execution_id="workflow:run:work:execution:1", enable_codex_runtime=True,
+        )
 
 
 @pytest.mark.parametrize("materializer", ["claude-oauth-home@1", "omnigent-provider-config@1"])
