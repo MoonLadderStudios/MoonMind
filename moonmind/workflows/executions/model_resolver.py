@@ -58,9 +58,10 @@ def apply_profile_model_alias(profile: Any | None, model: str | None) -> str | N
 def codex_uses_native_default(
     *, suppress_default_model_flag: bool, requested_model: str | None,
     resolved_model: str | None, profile_default_model: str | None,
+    model_source: str | None = None,
 ) -> bool:
     """Use the same default omission rule for direct and shared Codex launches."""
-    if not suppress_default_model_flag:
+    if not suppress_default_model_flag or model_source == "requested_tier":
         return False
     if not str(requested_model or "").strip():
         return True

@@ -2052,6 +2052,7 @@ async def compile_and_persist_execution_plan(
         if codex_uses_native_default(
             suppress_default_model_flag=True, requested_model=authored_model,
             resolved_model=selected_model, profile_default_model=native_default.profileDefaultModel,
+            model_source=initial_parameters.get("modelSource"),
         ):
             model_options["codexNativeDefault"] = True
     plan = compile_execution_plan(
