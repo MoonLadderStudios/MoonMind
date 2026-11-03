@@ -1,12 +1,19 @@
 """Run adopts only the actual child's scoped save after its worker is gone."""
 
-from copy import deepcopy
 import json
+from copy import deepcopy
+from unittest.mock import AsyncMock
 
 import pytest
+from temporalio.testing import ActivityEnvironment
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.schemas.temporal_models import StepExecutionIdentityModel
+from moonmind.workflows.temporal.artifacts import (
+    ArtifactAccessContext,
+    TemporalArtifactActivities,
+    TemporalArtifactNotFoundError,
+)
 from moonmind.workflows.temporal.step_checkpoints import build_step_checkpoint_payload
 from moonmind.workflows.temporal.workflows import run as module
 from tests.unit.workflows.temporal.workflows.test_run_step_ledger import (
@@ -94,6 +101,43 @@ async def test_remote_child_save_finalizes_without_recapturing_the_deleted_worke
     assert owner._step_checkpoint_refs_by_boundary["work"]["after_execution"] == "artifact://accepted/root"
     owner._carry_interrupted_omnigent_step_workspace("work", next_attempt=2)
     assert owner._interrupted_step_restore_refs[owner._step_execution_launch_block_key("work", 2)] == "artifact://accepted/root"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reference", ["art_child_save", "artifact://art_child_save"])
+async def test_child_checkpoint_read_uses_activity_id_and_retains_successor_uri(
+    saved_child,
+    monkeypatch,
+    reference,
+):
+    owner, request, result, descriptor, _ = saved_child
+    result.metadata["savedWorkspaceCheckpoint"]["checkpointRef"] = reference
+
+    async def read_saved_descriptor(*, artifact_id, access):
+        if artifact_id != "art_child_save":
+            raise TemporalArtifactNotFoundError(artifact_id)
+        return None, json.dumps(descriptor).encode()
+
+    service = AsyncMock()
+    service.read.side_effect = read_saved_descriptor
+    activities = TemporalArtifactActivities(service)
+    environment = ActivityEnvironment()
+
+    async def read_activity(activity, payload, **kwargs):
+        assert activity == "artifact.read"
+        return await environment.run(activities.artifact_read, payload)
+
+    monkeypatch.setattr(module, "execute_typed_activity", read_activity)
+    assert await owner._adopt_shared_child_saved_checkpoint("work", request, result)
+    service.read.assert_awaited_once_with(
+        artifact_id="art_child_save",
+        access=ArtifactAccessContext.for_execution(environment.info.workflow_id),
+    )
+    assert owner._step_checkpoint_refs["work"] == "artifact://art_child_save"
+    owner._carry_interrupted_omnigent_step_workspace("work", next_attempt=2)
+    assert owner._interrupted_step_restore_refs[
+        owner._step_execution_launch_block_key("work", 2)
+    ] == "artifact://art_child_save"
 
 
 @pytest.mark.asyncio
