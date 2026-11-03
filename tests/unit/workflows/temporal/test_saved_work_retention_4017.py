@@ -1197,7 +1197,8 @@ async def test_deletion_attempt_tolerates_concurrent_intent_cleanup(
             await stale.commit()
             assert all(intent.artifact_id == artifact_id for intent in intents)
             if intent_state != "present" or operation == "clear":
-                assert await repository.get_deletion_intent(artifact_id) is None
+                same_session_intent = await repository.get_deletion_intent(artifact_id)
+                assert same_session_intent is None
         async with session_maker() as verify:
             service = _service(verify, tmp_path)
             remaining = await service._repository.get_deletion_intent(artifact_id)
@@ -1282,10 +1283,10 @@ async def test_lifecycle_continues_after_another_owner_clears_pending_intent(
                 "list_pending_deletion_intents",
                 list_with_competing_cleanup,
             )
-            assert (
-                await service.reconcile_deletion_intents(principal="service:lifecycle")
-                == 0
+            reconciled = await service.reconcile_deletion_intents(
+                principal="service:lifecycle"
             )
+            assert reconciled == 0
         async with session_maker() as verify:
             service = _service(verify, tmp_path)
             for artifact in artifacts:
@@ -1346,10 +1347,10 @@ async def test_reconciliation_recreates_cleared_intent_before_retrying_storage(
                 list_with_competing_cleanup,
             )
             monkeypatch.setattr(service._store, "delete", unavailable_store)
-            assert (
-                await service.reconcile_deletion_intents(principal="service:lifecycle")
-                == 0
+            reconciled = await service.reconcile_deletion_intents(
+                principal="service:lifecycle"
             )
+            assert reconciled == 0
         async with session_maker() as verify:
             intent = await TemporalArtifactRepository(verify).get_deletion_intent(
                 artifact_id
@@ -1357,4 +1358,5 @@ async def test_reconciliation_recreates_cleared_intent_before_retrying_storage(
             assert intent is not None
             assert intent.attempts == 1
             assert intent.last_error == "OSError:object-store unavailable"
-            assert service._store.read_bytes(storage_key) == b"saved-work-bytes"
+            retained_bytes = service._store.read_bytes(storage_key)
+            assert retained_bytes == b"saved-work-bytes"
