@@ -34,6 +34,7 @@ import { filterSettingsQueryForTarget } from '../lib/dashboardRoutes';
 import { resetDashboardPreferences } from '../utils/dashboardPreferences';
 
 const NON_PROFILE_OWNING_RUNTIMES = new Set(['omnigent']);
+const NEW_WORK_DEFAULT_KEYS = ['workflow.default_runtime', 'workflow.default_provider_profile_ref'] as const;
 
 interface Notice {
   level: 'ok' | 'error';
@@ -182,6 +183,19 @@ function ProvidersSecretsSettingsContent({ payload }: { payload: BootPayload }) 
       />
 
       <NoticeBanner notice={notice} />
+
+      <GeneratedSettingsSection
+        keys={NEW_WORK_DEFAULT_KEYS}
+        title="Defaults for new work"
+        description={
+          <p>
+            New work that selects neither a harness nor a Provider Profile uses the Default
+            Provider Profile when one is set, otherwise the Default Harness. Within a harness,
+            the profile marked as that harness&apos;s default in Profiles is preferred. Harness
+            and profile choices made when launching work always take precedence.
+          </p>
+        }
+      />
 
       {providerProfilesQuery.isLoading ? (
         <LoadingPlaceholder surface="settings" region="provider profiles" variant="table" density="compact" preserveContext />

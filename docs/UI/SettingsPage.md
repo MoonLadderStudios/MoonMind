@@ -27,7 +27,7 @@ Settings is also a **data-driven control plane**, not a hand-maintained collecti
 
 ## 2. Scope
 
-This document covers placement of configuration pages in the Settings dropdown, routes and redirects, the shared page shell, page-level loading and failure boundaries, descriptor-driven settings rendering, edit/preview/save/reset UX, placement of Provider Profile, Managed Secret, OAuth, Source Control, and Operations surfaces, and permission, redaction, accessibility, and unsaved-change behavior.
+This document covers the configuration pages' placement, routes, shell, and failure boundaries; descriptor-driven settings and their save UX; the specialist surfaces; and permission, redaction, accessibility, and unsaved-change behavior.
 
 The detailed Provider Profile create and edit form is described in [ProviderProfileCreation.md](./ProviderProfileCreation.md), and model/effort tier editing in [ProviderProfileModelEffortTierSettings.md](./ProviderProfileModelEffortTierSettings.md). Backend setting eligibility, resolution, persistence, secret storage, provider execution, operational command semantics, authorization, and server validation are described in the backend documents linked above.
 
@@ -144,9 +144,9 @@ Switching an editor in place (editing another Provider Profile, changing the Har
 
 ### 6.2 Responsive behavior
 
-Configuration pages follow the shared responsive design in [DashboardDesignSystem.md](./DashboardDesignSystem.md): one modest phone gutter, restrained section padding, shrinkable single-column grids, and viewport-bounded overlays. Native `fieldset`/`legend` grouping is kept, but fieldsets opt out of the intrinsic `min-content` minimum so forms fit narrow viewports; inputs are `min-width: 0` and `max-width: 100%`; generated-settings rows pair a `minmax(0, 1fr)` description column with the control column; and long keys, SecretRefs, and digests wrap instead of stretching the grid. Enrollment drawers, confirmations, and tier dialogs are viewport-bounded with a single scroll container and wrapping footer actions.
+Configuration pages follow the shared responsive design in [DashboardDesignSystem.md](./DashboardDesignSystem.md): content centered in the 72rem dashboard page measure, one modest phone gutter, restrained section padding, shrinkable single-column grids, and viewport-bounded overlays. Native `fieldset`/`legend` grouping is kept, but fieldsets opt out of the intrinsic `min-content` minimum so forms fit narrow viewports; inputs are `min-width: 0` and `max-width: 100%`; generated-settings rows pair a `minmax(0, 1fr)` description column with the control column; and long keys, SecretRefs, and digests wrap instead of stretching the grid. Enrollment drawers, confirmations, and tier dialogs are viewport-bounded with a single scroll container and wrapping footer actions.
 
-On narrow viewports, saved Provider Profile, Managed Secret, and worker shard health records stack each label above its value with actions in a full-width wrapping area below. This is CSS on the same table, not a second list, so records keep one data and action owner. Tier rows keep the group name in the legend with Duplicate/Remove in a separate wrapping action area. `frontend/src/browser/mobileOverflow.browser.test.tsx` renders Providers & Secrets, Instance, and Operations in the dashboard shell and checks them for mobile overflow and reachable actions, plus the tier edit/save journey and the enrollment drawers (single scroll container, Escape returns focus to the opening action, the profile draft survives).
+On narrow viewports, saved Provider Profile, Managed Secret, and worker shard health records stack each label above its value with actions below; stacked rows clip overflow, so a profile's actions menu opens in place. This is CSS on the same table, not a second list, so records keep one owner. Tier rows keep the group name in the legend with Duplicate/Remove in a separate wrapping action area. `frontend/src/browser/mobileOverflow.browser.test.tsx` and `settingsMobileGutters.browser.test.tsx` check these pages in the dashboard shell for overflow, reachable actions, gutters, and the centered measure, including the tier edit journey and enrollment drawers.
 
 ---
 
@@ -156,13 +156,18 @@ On narrow viewports, saved Provider Profile, Managed Secret, and worker shard he
 
 This page contains:
 
+- **Defaults for new work**: the Default Harness and Default Provider Profile instance settings, also listed on Instance;
 - Provider Profiles, the durable Harness/Provider connection and launch configuration, with model and effort tier policy editing inside the normal profile editor;
 - Managed Secrets, secret health, and SecretRef role bindings and validation;
 - OAuth-backed profile lifecycle entry points;
 - provider credential health and readiness, and Harness/Provider binding diagnostics (Backend provenance lives in execution details); and
 - **Source Control** connections for repository access, kept separate from Provider Profiles.
 
-Each saved profile row shows identity, readiness, active use, and capacity problems by default. Credential source, materialization, OAuth volume and mount path, cooldown, and SecretRefs sit in that row's Details disclosure. The create form opens from **Add profile** rather than staying open below the table; it shows directly only when no profile is listed. The launch-readiness summary lists a permission only when it disables an action.
+New work that selects neither a harness nor a profile uses the Default Provider Profile if set, otherwise the Default Harness (OpenCode, Codex, or Claude Code; stored `omnigent` is OpenCode on the Omnigent Backend). Launch choices take precedence. `Use as Harness default` only marks the preferred profile within its harness.
+
+Each saved profile row shows identity, readiness, active use, and capacity problems by default. Credential source, materialization, OAuth volume and mount path, cooldown, and SecretRefs sit in that row's Details disclosure. Row actions sit in one ellipsis menu, the shared actions menu; pending or readiness-blocked actions stay listed under Unavailable with their reason, and Delete asks for confirmation. The create form opens from **Add profile** rather than staying open below the table; it shows directly only when no profile is listed. The launch-readiness summary lists a permission only when it disables an action.
+
+Stored secrets is the primary Managed Secrets view; **Add secret**, Edit, and Rotate open a focused dialog that keeps errors with the draft and confirms discarding an entered value.
 
 A page-local Harness filter offers **All harnesses** plus backend-supported Harness choices. It narrows the visible profiles, while readiness counts use the full collection unless labeled as filtered. The `runtime` URL parameter and `runtime_id` API values remain the inputs for Harness ownership; they do not select a Backend. [Harness, Provider Profile, and Backend Selection](./HarnessProfileBackendSelection.md) describes this vocabulary and authoring defaults.
 
@@ -184,7 +189,7 @@ Each create, save, disable, enable, and assignment carries a stable `requestId`,
 Creation uses one standard form with progressive disclosure, described in [ProviderProfileCreation.md](./ProviderProfileCreation.md). The visible decisions are: Profile ID (auto-suggested, reviewed before creation), Harness and Provider (backend-owned choices, Provider scoped to Harness), optional account label, authentication method and connection action, model and effort tier policy, max parallel runs, and an optional `Use as Harness default` intent when readiness permits.
 
 - Selectors show friendly labels but submit canonical IDs. Choice discovery reuses creation-capability authority, so it works before any profile or launch-ready host exists. The Settings Harness filter can seed a permitted creation Harness but does not redefine saved ownership.
-- The Harness control submits `runtime_id` such as `codex_cli`, `claude_code`, or `opencode`. Omnigent is a Backend, so it never becomes `runtime_id=omnigent`, and choosing a profile default does not change the deployment Backend default.
+- The Harness control submits a harness `runtime_id` (`codex_cli`, `claude_code`, `opencode`), never the Backend `omnigent`.
 - Profile ID suggestions follow backend constraints and stop updating once the user edits them; refreshes and account-label changes do not overwrite a user-authored ID. Format or uniqueness conflicts keep the draft and require reviewed resubmission rather than an automatically suffixed retry.
 - `Show advanced options` (an unchecked native checkbox) reveals credential source and materialization metadata, structured SecretRef bindings, volume reference and mount metadata, cooldown after provider 429 responses, rate-limit policy, command behavior, routing tags and priority, and launch-shaping diagnostics. OAuth and API-key actions remain visible.
 - `clear_env_keys` is backend-owned launch-security metadata, displayed read-only rather than as a freeform preference.
@@ -335,7 +340,7 @@ Patterns the design avoids, and why:
 
 **State ownership.** Page-scoped state lives on its page: Harness filtering on Providers & Secrets, worker command state on Operations. There is no cross-page selection state; browser navigation moves between destinations.
 
-**Component ownership.** Provider Profile create/edit belongs to Providers & Secrets, generated settings to Instance, and operational commands to Operations.
+**Component ownership.** Provider Profile create/edit belongs to Providers & Secrets, generated settings to Instance (Providers & Secrets reuses the component for its two new-work defaults), and operational commands to Operations.
 
 ### 14.1 Tests
 

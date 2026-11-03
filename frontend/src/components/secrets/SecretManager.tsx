@@ -1,8 +1,9 @@
 import { Button } from '../Button';
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { QueryClient, useMutation } from '@tanstack/react-query';
 
 import { useSettingsDraftGuard, useSettingsDraftRegistration } from '../settings/SettingsDraftGuard';
+import { trapTabWithin } from '../../lib/focusTrap';
 import { formatStatusLabel } from '../../utils/formatters';
 
 const SECRET_DRAFT_ID = 'managed-secret-editor';
@@ -53,6 +54,64 @@ export function isBrokenReferenceStatus(status: string | undefined): boolean {
   return Boolean(status) && _BROKEN_REFERENCE_STATUSES.has(String(status));
 }
 
+/**
+ * Focused modal for adding, editing, or rotating one secret. Escape and Cancel
+ * go through `onClose`, which protects an unsaved value; focus returns to the
+ * control that opened the dialog.
+ */
+function SecretDialog({
+  titleId,
+  title,
+  error,
+  onClose,
+  children,
+}: {
+  titleId: string;
+  title: string;
+  error: string | null;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const dialogRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const firstField = dialogRef.current?.querySelector<HTMLElement>('input:not(:disabled)');
+    (firstField ?? dialogRef.current)?.focus();
+    return () => opener?.focus();
+  }, []);
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+    trapTabWithin(dialogRef.current, event);
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4" role="presentation">
+      <section
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="managed-secret-dialog max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+        onKeyDown={onKeyDown}
+      >
+        <h4 id={titleId} className="break-words text-lg font-semibold text-slate-900 dark:text-white">
+          {title}
+        </h4>
+        {error ? (
+          <p role="alert" className="mt-3 text-sm text-rose-700 dark:text-rose-400">
+            {error}
+          </p>
+        ) : null}
+        {children}
+      </section>
+    </div>
+  );
+}
+
 // Slugs are free-form, so `/`, `?`, `#` and spaces must not reshape the URL.
 function secretPath(slug: string): string {
   return `/api/v1/secrets/${encodeURIComponent(slug)}`;
@@ -66,6 +125,8 @@ export function SecretManager({
   const [slug, setSlug] = useState('');
   const [plaintext, setPlaintext] = useState('');
   const [isEditing, setIsEditing] = useState(false);
+  const [isAdding, setIsAdding] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
   const [rotatePromptOpen, setRotatePromptOpen] = useState(false);
   const [rotatePromptSlug, setRotatePromptSlug] = useState('');
   const [rotatePromptVal, setRotatePromptVal] = useState('');
@@ -78,6 +139,8 @@ export function SecretManager({
     setSlug('');
     setPlaintext('');
     setIsEditing(false);
+    setIsAdding(false);
+    setFormError(null);
     setRotatePromptOpen(false);
     setRotatePromptSlug('');
     setRotatePromptVal('');
@@ -94,9 +157,24 @@ export function SecretManager({
       () => {
         setSlug(targetSlug);
         setPlaintext('');
+        setFormError(null);
         setIsEditing(true);
       },
       `Edit ${targetSlug}? Your unsaved secret draft will be discarded.`,
+      [SECRET_DRAFT_ID],
+    );
+  };
+
+  const addSecret = () => {
+    setSlug('');
+    setPlaintext('');
+    setFormError(null);
+    setIsAdding(true);
+  };
+  const closeSecretDialog = () => {
+    requestDeparture(
+      discardSecretDraft,
+      'Close this secret form? The value you entered will be discarded.',
       [SECRET_DRAFT_ID],
     );
   };
@@ -125,7 +203,7 @@ export function SecretManager({
       discardSecretDraft();
       queryClient.invalidateQueries({ queryKey: ['secrets'] });
     },
-    onError: (error: Error) => onNotice({ level: 'error', text: error.message }),
+    onError: (error: Error) => setFormError(error.message),
   });
 
   const updateOp = useMutation({
@@ -152,7 +230,7 @@ export function SecretManager({
       discardSecretDraft();
       queryClient.invalidateQueries({ queryKey: ['secrets'] });
     },
-    onError: (error: Error) => onNotice({ level: 'error', text: error.message }),
+    onError: (error: Error) => setFormError(error.message),
   });
 
   const rotateOp = useMutation({
@@ -179,7 +257,7 @@ export function SecretManager({
       discardSecretDraft();
       queryClient.invalidateQueries({ queryKey: ['secrets'] });
     },
-    onError: (error: Error) => onNotice({ level: 'error', text: error.message }),
+    onError: (error: Error) => setFormError(error.message),
   });
 
   const deleteOp = useMutation({
@@ -227,16 +305,15 @@ export function SecretManager({
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!slug) {
-      onNotice({ level: 'error', text: 'Secret slug is required.' });
+      setFormError('Secret slug is required.');
       return;
     }
     if (!plaintext) {
-      onNotice({
-        level: 'error',
-        text: isEditing
+      setFormError(
+        isEditing
           ? 'Provide a new secure value to update the secret.'
           : 'Provide a secure value for the new secret.',
-      });
+      );
       return;
     }
     if (isEditing) {
@@ -371,10 +448,12 @@ export function SecretManager({
         </p>
       </div>
 
-      <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
-        <section className="rounded-3xl border border-slate-200 dark:border-slate-800">
-          <div className="border-b border-slate-200 dark:border-slate-800 px-5 py-4">
+      <section className="mt-6 rounded-3xl border border-slate-200 dark:border-slate-800">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 px-5 py-4">
             <h4 className="text-base font-semibold text-slate-900 dark:text-white">Stored secrets</h4>
+            <Button variant="primary" size="sm" type="button" onClick={addSecret}>
+              Add secret
+            </Button>
           </div>
           <div className="managed-secrets-table-wrap stacked-records-wrap overflow-x-auto px-5 py-4">
             <table className="managed-secrets-table stacked-records w-full text-left text-sm border-collapse">
@@ -433,6 +512,7 @@ export function SecretManager({
                             onClick={() => {
                               setRotatePromptSlug(secret.slug);
                               setRotatePromptVal('');
+                              setFormError(null);
                               setRotatePromptOpen(true);
                             }}
                           >
@@ -476,118 +556,109 @@ export function SecretManager({
               </tbody>
             </table>
           </div>
-        </section>
+      </section>
 
-        <section className="rounded-3xl border border-slate-200 dark:border-slate-800">
-          <div className="border-b border-slate-200 dark:border-slate-800 px-5 py-4">
-            <h4 className="text-base font-semibold text-slate-900 dark:text-white">
-              {isEditing ? 'Update secret value' : 'Add new secret'}
-            </h4>
-          </div>
-          <div className="px-5 py-4">
-            <form className="stack" onSubmit={handleSubmit}>
-              <div className="field">
-                <label htmlFor="secSlug" className="text-slate-700 dark:text-slate-300">Secret slug</label>
-                <input
-                  id="secSlug"
-                  type="text"
-                  placeholder="e.g. OPENAI_API_KEY"
-                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={slug}
-                  onChange={(event) => setSlug(event.target.value)}
-                  disabled={isEditing || createOp.isPending || updateOp.isPending}
-                />
-                <div className="field-hint text-slate-500 dark:text-slate-400">The unique locator used by the `db://` resolver.</div>
+      {isAdding || isEditing ? (
+        <SecretDialog
+          titleId="managed-secret-editor-title"
+          title={isEditing ? `Update secret value: ${slug}` : 'Add secret'}
+          error={formError}
+          onClose={closeSecretDialog}
+        >
+          <form className="stack mt-4" onSubmit={handleSubmit} noValidate>
+            <div className="field">
+              <label htmlFor="secSlug" className="text-slate-700 dark:text-slate-300">Secret slug</label>
+              <input
+                id="secSlug"
+                type="text"
+                placeholder="e.g. OPENAI_API_KEY"
+                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                value={slug}
+                onChange={(event) => setSlug(event.target.value)}
+                disabled={isEditing || createOp.isPending || updateOp.isPending}
+              />
+              <div className="field-hint text-slate-500 dark:text-slate-400">The unique locator used by the `db://` resolver.</div>
+            </div>
+
+            <div className="field mt-4">
+              <label htmlFor="secPlaintext" className="text-slate-700 dark:text-slate-300">Secure value</label>
+              <input
+                id="secPlaintext"
+                type="password"
+                placeholder={isEditing ? '••••••••' : 'Enter raw secret string'}
+                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                value={plaintext}
+                onChange={(event) => setPlaintext(event.target.value)}
+                disabled={createOp.isPending || updateOp.isPending}
+              />
+              <div className="field-hint text-slate-500 dark:text-slate-400">
+                Stored strictly as ciphertext. The raw value is never rendered back.
               </div>
+            </div>
 
-              <div className="field mt-4">
-                <label htmlFor="secPlaintext" className="text-slate-700 dark:text-slate-300">Secure value</label>
-                <input
-                  id="secPlaintext"
-                  type="password"
-                  placeholder={isEditing ? '••••••••' : 'Enter raw secret string'}
-                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={plaintext}
-                  onChange={(event) => setPlaintext(event.target.value)}
-                  disabled={createOp.isPending || updateOp.isPending}
-                />
-                <div className="field-hint text-slate-500 dark:text-slate-400">
-                  Stored strictly as ciphertext. The raw value is never rendered back.
-                </div>
-              </div>
-
-              <div className="flex flex-wrap gap-2 mt-6">
-                <Button variant="primary"
-                  type="submit"
-                  className="inline-flex items-center justify-center text-sm"
-                  disabled={createOp.isPending || updateOp.isPending}
-                >
-                  {isEditing ? 'Save new value' : 'Encrypt and store secret'}
-                </Button>
-
-                {isEditing ? (
-                  <Button variant="ghost"
-                    type="button"
-                    onClick={() => {
-                      setIsEditing(false);
-                      setSlug('');
-                      setPlaintext('');
-                    }}
-                  >
-                    Cancel
-                  </Button>
-                ) : null}
-              </div>
-            </form>
-          </div>
-        </section>
-      </div>
+            <div className="mt-6 flex flex-wrap justify-end gap-2">
+              <Button variant="ghost" type="button" onClick={closeSecretDialog}>
+                Cancel
+              </Button>
+              <Button variant="primary"
+                type="submit"
+                className="inline-flex items-center justify-center text-sm"
+                disabled={createOp.isPending || updateOp.isPending}
+              >
+                {isEditing ? 'Save new value' : 'Encrypt and store secret'}
+              </Button>
+            </div>
+          </form>
+        </SecretDialog>
+      ) : null}
 
       {rotatePromptOpen ? (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[1000]">
-          <div className="bg-mm-panel/90 p-6 rounded-3xl shadow-2xl border border-mm-border/80 max-w-md w-full mx-4">
-            <h3 className="text-xl font-semibold text-slate-900 dark:text-white">Rotate Secret: {rotatePromptSlug}</h3>
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (rotatePromptVal) {
-                  rotateOp.mutate({
-                    slug: rotatePromptSlug,
-                    plaintext: rotatePromptVal,
-                  });
-                }
-              }}
-              className="mt-6 space-y-4"
-            >
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-slate-700 dark:text-slate-300">New secure value</label>
-                <input
-                  type="password"
-                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
-                  value={rotatePromptVal}
-                  onChange={(event) => setRotatePromptVal(event.target.value)}
-                  autoFocus
-                  required
-                />
-              </div>
-              <div className="flex flex-wrap justify-end gap-3 mt-8">
-                <Button variant="ghost"
-                  type="button"
-                  onClick={() => {
-                    setRotatePromptOpen(false);
-                    setRotatePromptSlug('');
-                    setRotatePromptVal('');
-                  }}
-                >
-                  Cancel
-                </Button>
-                <Button variant="primary" type="submit" className="inline-flex items-center justify-center text-sm">
-                  Rotate now
-                </Button>
-              </div>
-            </form>
-          </div>
-        </div>
+        <SecretDialog
+          titleId="managed-secret-rotate-title"
+          title={`Rotate Secret: ${rotatePromptSlug}`}
+          error={formError}
+          onClose={closeSecretDialog}
+        >
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!rotatePromptVal) {
+                setFormError('Provide a new secure value to rotate the secret.');
+                return;
+              }
+              rotateOp.mutate({
+                slug: rotatePromptSlug,
+                plaintext: rotatePromptVal,
+              });
+            }}
+            className="mt-4 space-y-4"
+            noValidate
+          >
+            <div className="space-y-2">
+              <label htmlFor="secRotateValue" className="text-sm font-medium text-slate-700 dark:text-slate-300">New secure value</label>
+              <input
+                id="secRotateValue"
+                type="password"
+                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                value={rotatePromptVal}
+                onChange={(event) => setRotatePromptVal(event.target.value)}
+                disabled={rotateOp.isPending}
+              />
+            </div>
+            <div className="mt-6 flex flex-wrap justify-end gap-2">
+              <Button variant="ghost" type="button" onClick={closeSecretDialog}>
+                Cancel
+              </Button>
+              <Button variant="primary"
+                type="submit"
+                className="inline-flex items-center justify-center text-sm"
+                disabled={rotateOp.isPending}
+              >
+                Rotate now
+              </Button>
+            </div>
+          </form>
+        </SecretDialog>
       ) : null}
     </div>
   );

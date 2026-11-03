@@ -24,6 +24,7 @@ import {
   ProviderProfilesManager,
   type ProviderProfile,
 } from './ProviderProfilesManager';
+import { profileAction } from './profileActionsTestHelpers';
 
 type CreationCapabilities = NonNullable<ProviderProfile['creation_capabilities']>;
 
@@ -650,7 +651,7 @@ describe('MoonLadderStudios/MoonMind#3822 Provider Profile standard-creation mat
     });
     const { onNotice } = renderManager([profile]);
     expect(screen.getByText('opencode_api_key')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: `Use OpenCode API key ${profileId}` }));
+    fireEvent.click(profileAction('Use OpenCode API key', profileId));
     fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
     fireEvent.change(screen.getByLabelText('OpenCode API key'), { target: { value: 'test-secret-first' } });
     fireEvent.click(screen.getByRole('button', { name: 'Validate and save OpenCode API key' }));
@@ -688,7 +689,7 @@ describe('MoonLadderStudios/MoonMind#3822 Provider Profile standard-creation mat
       return baseFetch(input, init);
     });
     renderManager([profile]);
-    fireEvent.click(screen.getByRole('button', { name: `Use OpenCode API key ${profileId}` }));
+    fireEvent.click(profileAction('Use OpenCode API key', profileId));
     fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
     fireEvent.change(screen.getByLabelText('OpenCode API key'), { target: { value: 'test-private-key' } });
     fireEvent.click(screen.getByRole('button', { name: 'Validate and save OpenCode API key' }));
@@ -718,7 +719,7 @@ describe('MoonLadderStudios/MoonMind#3822 Provider Profile standard-creation mat
       return baseFetch(input, init);
     });
     const { onNotice } = renderManager([profile]);
-    fireEvent.click(screen.getByRole('button', { name: `Use OpenCode API key ${profileId}` }));
+    fireEvent.click(profileAction('Use OpenCode API key', profileId));
     fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
     fireEvent.change(screen.getByLabelText('OpenCode API key'), { target: { value: 'test-private-key' } });
     fireEvent.click(screen.getByRole('button', { name: 'Validate and save OpenCode API key' }));
@@ -1224,7 +1225,7 @@ describe('MoonLadderStudios/MoonMind#3822 existing-profile compatibility', () =>
     });
 
     renderManager([legacyProfile]);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(profileAction('Edit'));
     fireEvent.click(screen.getByLabelText('Show advanced options'));
 
     // The invalid stored policy stays visible, attributed, and read-only.

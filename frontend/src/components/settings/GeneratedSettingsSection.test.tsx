@@ -690,3 +690,114 @@ describe('GeneratedSettingsSection', () => {
     expect(screen.getByLabelText('Default Publish Mode')).toBeTruthy();
   });
 });
+
+describe('GeneratedSettingsSection keyed card', () => {
+  const NEW_WORK_KEYS = ['workflow.default_runtime', 'workflow.default_provider_profile_ref'] as const;
+  const publishMode = workspaceCatalog.categories.Workflow[0]!;
+  const defaultHarness = (effective: string, version: number) => ({
+    ...publishMode,
+    key: 'workflow.default_runtime',
+    title: 'Default Harness',
+    description: 'Harness used for new work that selects neither a harness nor a Provider Profile.',
+    default_value: 'omnigent',
+    effective_value: effective,
+    source: effective === 'omnigent' ? 'config_or_default' : 'instance_override',
+    activation_state: 'active',
+    active: true,
+    requires_reload: false,
+    options: [
+      { value: 'omnigent', label: 'OpenCode' },
+      { value: 'codex_cli', label: 'Codex' },
+      { value: 'claude_code', label: 'Claude Code' },
+    ],
+    order: 10,
+    value_version: version,
+  });
+  const defaultProfile = {
+    ...publishMode,
+    key: 'workflow.default_provider_profile_ref',
+    title: 'Default Provider Profile',
+    type: 'string',
+    ui: 'provider_profile_picker',
+    default_value: null,
+    effective_value: null,
+    options: null,
+    order: 70,
+    value_version: 1,
+  };
+
+  let saved = 'omnigent';
+  let version = 1;
+  let fetchSpy: MockInstance;
+
+  beforeEach(() => {
+    saved = 'omnigent';
+    version = 1;
+    fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.includes('/api/v1/settings/catalog')) {
+        return Promise.resolve(jsonResponse({
+          section: 'user-workspace',
+          categories: { Workflow: [publishMode, defaultHarness(saved, version), defaultProfile] },
+        }));
+      }
+      if (url === '/api/v1/settings' && init?.method === 'PATCH') {
+        saved = JSON.parse(String(init.body)).changes['workflow.default_runtime'];
+        version += 1;
+        return Promise.resolve(jsonResponse({ values: {} }));
+      }
+      if (url === '/api/v1/provider-profiles') return Promise.resolve(jsonResponse([]));
+      return Promise.resolve(jsonResponse({ error: 'not_found', message: 'not found' }, false, 404));
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('shows only the named settings under its heading without search or filters', async () => {
+    renderWithClient(
+      <GeneratedSettingsSection keys={NEW_WORK_KEYS} title="Defaults for new work" description="Explains precedence." />,
+    );
+
+    const card = await screen.findByRole('region', { name: 'Defaults for new work' });
+    expect(within(card).getByRole('heading', { name: 'Defaults for new work' })).toBeTruthy();
+    expect(within(card).getByText('Explains precedence.')).toBeTruthy();
+    expect(within(card).getByLabelText('Default Harness')).toBeTruthy();
+    expect(within(card).getByLabelText('Default Provider Profile')).toBeTruthy();
+    expect(within(card).queryByLabelText('Default Publish Mode')).toBeNull();
+    expect(within(card).queryByLabelText('Search settings')).toBeNull();
+    const options = within(card.querySelector('[data-setting-key="workflow.default_runtime"]') as HTMLElement)
+      .getAllByRole('option')
+      .map((option) => option.textContent);
+    expect(options).toEqual(['OpenCode', 'Codex', 'Claude Code']);
+  });
+
+  it('saves the default harness and shows the saved choice after reload', async () => {
+    renderWithClient(<GeneratedSettingsSection keys={NEW_WORK_KEYS} title="Defaults for new work" />);
+    const control = (await screen.findByLabelText('Default Harness')) as HTMLSelectElement;
+    expect(control.value).toBe('omnigent');
+
+    fireEvent.change(control, { target: { value: 'claude_code' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/settings',
+        expect.objectContaining({
+          method: 'PATCH',
+          body: JSON.stringify({
+            changes: { 'workflow.default_runtime': 'claude_code' },
+            expected_versions: { 'workflow.default_runtime': 1 },
+            reason: 'Updated from Settings.',
+          }),
+        }),
+      );
+    });
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull());
+    await waitFor(() =>
+      expect((screen.getByLabelText('Default Harness') as HTMLSelectElement).value).toBe('claude_code'),
+    );
+    expect(screen.getAllByText('Instance override').length).toBeGreaterThan(0);
+  });
+});

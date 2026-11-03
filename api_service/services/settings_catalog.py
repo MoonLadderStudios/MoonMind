@@ -24,6 +24,7 @@ from api_service.db.models import (
     SettingsOverride,
 )
 from moonmind.config.settings import AppSettings, settings as app_settings
+from moonmind.runtime_identity import normalize_runtime_id
 
 if TYPE_CHECKING:
     from api_service.services.settings_change_publisher import SettingsChangePublisher
@@ -474,23 +475,37 @@ class SettingRegistryEntry:
     audit: SettingAuditPolicy = field(default_factory=SettingAuditPolicy)
 
 
+_DEFAULT_RUNTIME_KEY = "workflow.default_runtime"
+
+
+def _canonical_setting_value(key: str, value: Any) -> Any:
+    """Store and show runtime aliases (``codex``) as their canonical harness id."""
+
+    if key == _DEFAULT_RUNTIME_KEY and isinstance(value, str) and value.strip():
+        return normalize_runtime_id(value)
+    return value
+
+
 _REGISTRY: tuple[SettingRegistryEntry, ...] = (
     SettingRegistryEntry(
-        key="workflow.default_runtime",
-        title="Default Runtime",
-        description="Runtime used when a workflow does not explicitly request one.",
+        key=_DEFAULT_RUNTIME_KEY,
+        title="Default Harness",
+        description=(
+            "Harness used for new work that selects neither a harness nor a "
+            "Provider Profile. Omnigent launches every harness."
+        ),
         category="Workflow",
         section="user-workspace",
         value_type="enum",
         ui="select",
-        default_value="codex",
+        default_value="omnigent",
         settings_path=("workflow", "default_runtime"),
         env_aliases=("WORKFLOW_DEFAULT_RUNTIME", "MOONMIND_DEFAULT_RUNTIME"),
         apply_mode="next_workflow",
+        # Values are the serialized runtime ids; ``omnigent`` launches OpenCode.
         options=(
-            ("omnigent", "Omnigent"),
-            ("codex", "Codex"),
-            ("codex_cli", "Codex CLI"),
+            ("omnigent", "OpenCode"),
+            ("codex_cli", "Codex"),
             ("claude_code", "Claude Code"),
         ),
         applies_to=("workflow_creation", "workflow_runtime"),
@@ -574,8 +589,8 @@ _REGISTRY: tuple[SettingRegistryEntry, ...] = (
         key="workflow.default_provider_profile_ref",
         title="Default Provider Profile",
         description=(
-            "Provider profile reference used when a task or runtime request does "
-            "not select a profile explicitly."
+            "Provider Profile used for new work that does not select one. When "
+            "set, its harness takes precedence over the Default Harness."
         ),
         category="Workflow",
         section="user-workspace",
@@ -1255,6 +1270,9 @@ class SettingsCatalogService:
         confirmation: str | None,
     ) -> dict[str, Any]:
         expected_versions = expected_versions or {}
+        changes = {
+            key: _canonical_setting_value(key, value) for key, value in changes.items()
+        }
         entries: dict[str, SettingRegistryEntry] = {}
         validation_issues: list[SettingValidationIssue] = []
 
@@ -1398,6 +1416,9 @@ class SettingsCatalogService:
         if self._session is None:
             raise RuntimeError("settings override persistence requires a DB session")
         expected_versions = expected_versions or {}
+        changes = {
+            key: _canonical_setting_value(key, value) for key, value in changes.items()
+        }
         entries: dict[str, SettingRegistryEntry] = {}
         validated: dict[str, Any] = {}
         validation_issues: list[SettingValidationIssue] = []
@@ -2176,7 +2197,7 @@ class SettingsCatalogService:
                 self._migration_diagnostics_by_key[entry.key] = type_migration
                 return None, "instance_override", override.value_version, True
             return (
-                override.value_json,
+                _canonical_setting_value(entry.key, override.value_json),
                 "instance_override",
                 override.value_version,
                 True,
@@ -2194,9 +2215,14 @@ class SettingsCatalogService:
                     "state": rule.state,
                 },
             )
-            return row.value_json, "instance_override", row.value_version, True
+            return (
+                _canonical_setting_value(entry.key, row.value_json),
+                "instance_override",
+                row.value_version,
+                True,
+            )
         value, source = self._resolve_value(entry)
-        return value, source, 1, False
+        return _canonical_setting_value(entry.key, value), source, 1, False
 
     def _type_migration_diagnostic(
         self,
@@ -3109,11 +3135,12 @@ class SettingsCatalogService:
     ) -> list[SettingValidationIssue]:
         issues: list[SettingValidationIssue] = []
         policy = self._workspace_policy
-        runtime = changes.get("workflow.default_runtime")
+        runtime = changes.get(_DEFAULT_RUNTIME_KEY)
         if (
             isinstance(runtime, str)
             and policy.allowed_runtimes is not None
-            and runtime not in policy.allowed_runtimes
+            and normalize_runtime_id(runtime)
+            not in {normalize_runtime_id(item) for item in policy.allowed_runtimes}
         ):
             issues.append(
                 self._validation_issue(

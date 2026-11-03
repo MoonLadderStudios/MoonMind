@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import type { BootPayload } from '../boot/parseBootPayload';
 import { act, fireEvent, renderWithClient, screen, waitFor, within } from '../utils/test-utils';
 import { ProvidersSecretsSettingsPage, InstanceSettingsPage } from './settings';
+import { profileAction } from '../components/settings/profileActionsTestHelpers';
 
 const generatedDescriptor = {
   key: 'workflow.default_publish_mode',
@@ -68,7 +69,9 @@ const savedSecrets = ['alpha', 'beta'].map((slug) => ({
 function rowAction(text: string, action: string): HTMLElement {
   const row = screen.getByText(text, { selector: 'td, td *' }).closest('tr');
   if (!row) throw new Error(`no row for ${text}`);
-  return within(row).getByRole('button', { name: action });
+  const button = within(row).queryByRole('button', { name: action });
+  // Provider Profile actions sit behind the row's ellipsis menu.
+  return button ?? profileAction(action, text);
 }
 
 const providersSecretsPayload = {
@@ -212,6 +215,7 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
       </BrowserRouter>,
     );
 
+    fireEvent.click(await screen.findByRole('button', { name: 'Add secret' }));
     const slug = await screen.findByLabelText('Secret slug') as HTMLInputElement;
     fireEvent.change(slug, { target: { value: 'draft-secret' } });
 
@@ -225,7 +229,7 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
     fireEvent.click(link);
     fireEvent.click(screen.getByRole('button', { name: 'Discard and leave' }));
     await waitFor(() => expect(window.location.pathname).toBe('/settings/operations'));
-    expect(slug.value).toBe('');
+    expect(screen.queryByRole('dialog', { name: 'Add secret' })).toBeNull();
   });
 
   it('keeps the unsaved-changes dialog keyboard-modal and restores focus on Escape', async () => {
@@ -378,6 +382,7 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
     it('asks only about the Provider Profile draft when editing another profile, and discards only it', async () => {
       renderProvidersSecrets();
       await screen.findByText('profile-b', { selector: 'td, td *' });
+      fireEvent.click(screen.getByRole('button', { name: 'Add secret' }));
       const slug = screen.getByLabelText('Secret slug') as HTMLInputElement;
       fireEvent.change(slug, { target: { value: 'draft-secret' } });
 
@@ -427,6 +432,7 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
     it('changes the Harness filter without asking about unrelated drafts', async () => {
       renderProvidersSecrets();
       await screen.findByText('profile-b', { selector: 'td, td *' });
+      fireEvent.click(screen.getByRole('button', { name: 'Add secret' }));
       fireEvent.change(screen.getByLabelText('Secret slug'), { target: { value: 'draft-secret' } });
 
       fireEvent.change(screen.getByLabelText('Harness filter'), { target: { value: 'codex_cli' } });
@@ -440,13 +446,15 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
       fireEvent.click(await screen.findByRole('button', { name: 'Add profile' }));
       const profileId = await screen.findByLabelText(/Profile ID/) as HTMLInputElement;
       fireEvent.change(profileId, { target: { value: 'draft-profile' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Add secret' }));
       const slug = screen.getByLabelText('Secret slug') as HTMLInputElement;
       fireEvent.change(slug, { target: { value: 'draft-secret' } });
 
       fireEvent.click(destinationLink('/settings/operations'));
       fireEvent.click(screen.getByRole('button', { name: 'Discard and leave' }));
       await waitFor(() => expect(window.location.pathname).toBe('/settings/operations'));
-      expect(slug.value).toBe('');
+      // Discarding the secret draft also closes the secret dialog.
+      expect(screen.queryByLabelText('Secret slug')).toBeNull();
       // Discarding the profile draft also closes the Add profile editor.
       expect(screen.queryByLabelText(/Profile ID/)).toBeNull();
     });
