@@ -84,7 +84,10 @@ def test_publication_transport_diagnostics_fail_closed(diagnostic, retryable):
             "The requested URL returned error: 502",
             True,
         ),
-        ("remote: Internal Server Error\nfatal: the remote end hung up unexpectedly", True),
+        (
+            "remote: Internal Server Error\nfatal: the remote end hung up unexpectedly",
+            True,
+        ),
         ("error: RPC failed; curl 56 Recv failure: Connection reset by peer", True),
         (
             "fatal: unable to access 'https://github.com/o/r.git/': "
@@ -118,9 +121,7 @@ def test_publication_transport_diagnostics_fail_closed(diagnostic, retryable):
 def test_publication_failure_transience_is_classified_from_git_diagnostics(
     stderr, transient
 ):
-    from moonmind.omnigent.workspace_publication import (
-        publication_failure_is_transient,
-    )
+    from moonmind.omnigent.workspace_publication import publication_failure_is_transient
 
     message = f"repository publication command failed: {stderr}"
     assert publication_failure_is_transient(message) is transient
@@ -575,12 +576,42 @@ async def test_pr_handoff_keeps_published_remediation_instead_of_stale_archive(
         async def read_chunks(self, **_kwargs):
             return SimpleNamespace(), iter((archive,))
 
-    await OmnigentWorkspaceMaterializer(
-        command_runner=AsyncMock(side_effect=AssertionError("must reuse checkout")),
+    async def retain_checkout(argv, input_bytes=None):
+        # Exercise the real branch receipt command; cloning or initializing a
+        # replacement checkout remains forbidden for a published candidate.
+        assert input_bytes is None, "must reuse checkout"
+        assert argv[:6] == ["docker", "run", "--rm", "--network", "none", "--read-only"]
+        positional = argv[argv.index("--") + 1 :]
+        assert positional == [
+            f"/work/{workspace.relative_to(tmp_path).as_posix()}",
+            "candidate",
+            "retain",
+        ]
+        completed = subprocess.run(
+            [
+                "/bin/sh",
+                "-ceu",
+                argv[argv.index("-ceu") + 1],
+                "--",
+                str(workspace),
+                *positional[1:],
+            ],
+            capture_output=True,
+            text=True,
+        )
+        return completed.returncode, completed.stdout, completed.stderr
+
+    materializer = OmnigentWorkspaceMaterializer(
+        command_runner=retain_checkout,
         workspace_root=tmp_path,
         artifact_service=Artifacts(),
-    ).materialize(request, runtime_uid=os.getuid(), runtime_gid=os.getgid())
+    )
+    await materializer.materialize(
+        request, runtime_uid=os.getuid(), runtime_gid=os.getgid()
+    )
     assert (workspace / "work.txt").read_text() == "verified remediation\n"
+    assert git("rev-parse", "HEAD", cwd=workspace) == verified_sha
+    assert git("branch", "--show-current", cwd=workspace) == "candidate"
     assert git("status", "--porcelain", cwd=workspace) == ""
 
     pr_url = "https://github.com/example/repository/pull/7"
@@ -604,6 +635,16 @@ async def test_pr_handoff_keeps_published_remediation_instead_of_stale_archive(
     assert evidence["pull_request_url"] == pr_url
     assert git("rev-parse", "candidate", cwd=origin) == verified_sha
     assert git("rev-list", "--count", "main..candidate", cwd=origin) == "2"
+
+    git("checkout", "-b", "agent/later-work", cwd=workspace)
+    (workspace / "work.txt").write_text("later agent edit\n")
+    await materializer.materialize(
+        request, runtime_uid=os.getuid(), runtime_gid=os.getgid()
+    )
+    assert git("branch", "--show-current", cwd=workspace) == "agent/later-work"
+    assert git("rev-parse", "HEAD", cwd=workspace) == verified_sha
+    assert (workspace / "work.txt").read_text() == "later agent edit\n"
+    assert git("status", "--porcelain", cwd=workspace) == "M work.txt"
 
     comments = []
 
@@ -763,7 +804,11 @@ async def test_publish_clean_single_branch_candidate(
     assert evidence["push_head_sha"] == candidate_sha
     assert evidence["push_commit_count"] == (0 if no_new_commits else 1)
     assert evidence["remote_verified"] is True
-    if publish_mode == "pr" and candidate_authority == "accepted" and not no_new_commits:
+    if (
+        publish_mode == "pr"
+        and candidate_authority == "accepted"
+        and not no_new_commits
+    ):
         assert evidence["push_branch"] == "candidate"
         assert "moonmind-job-" not in git("branch", cwd=origin)
     if publish_mode == "branch":
@@ -1356,8 +1401,9 @@ async def test_pr_candidate_reconciles_lost_ack_and_never_overwrites_competing_t
     )
     assert git("rev-parse", "HEAD", cwd=workspace) == candidate_sha
     assert sorted(
-        git("for-each-ref", "--format=%(refname:short)", "refs/heads", cwd=origin)
-        .splitlines()
+        git(
+            "for-each-ref", "--format=%(refname:short)", "refs/heads", cwd=origin
+        ).splitlines()
     ) == sorted([candidate_branch, "main", "release"])
 
 
