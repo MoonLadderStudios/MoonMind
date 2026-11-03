@@ -309,7 +309,10 @@ canonical save after worker cleanup; it does not recapture the deleted tree or
 rebind the delivered runtime journal. Cancellation starts no successor. Failed save
 adoption stops automatic restart and retains its checkpoint reference in recovery
 diagnostics. A selected Profile that cannot restore this save reports the missing
-capability instead of starting from different inputs.
+capability instead of starting from different inputs. A replacement grant for
+that same logical step and account recovers its Profile configuration through the
+canonical checkpoint's verified plan; fresh steps and different selected accounts
+admit current settings. A replay patch preserves older request payloads.
 Fresh native steps with equivalent configuration use this same fenced handoff
 after fixed, implicit or pool account selection, without rewriting their stored
 submission. Older parents without the handoff retain their recorded commands.
