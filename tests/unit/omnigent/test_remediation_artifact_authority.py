@@ -23,8 +23,8 @@ from moonmind.omnigent.remediation_workspace import (
     RemediationWorkspaceError,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.workflows.temporal.scoped_artifacts import ScopedTemporalArtifactService
 from moonmind.workflows.temporal.activities.omnigent_activities import (
-    _OnDemandTemporalArtifactService,
     omnigent_execute_activity,
 )
 from moonmind.workflows.temporal.activity_runtime import (
@@ -122,7 +122,7 @@ def _request(artifact_id, *, with_step=True):
 
 
 async def _consume(sessions, artifact_id, *, consumer, tmp_path, monkeypatch):
-    service = _OnDemandTemporalArtifactService(sessions)
+    service = ScopedTemporalArtifactService(sessions)
     if consumer == "head":
         return await ArtifactRemediationHeadLoader(
             service, workflow_id="workflow-1"
@@ -298,7 +298,7 @@ async def test_scoped_head_read_preserves_owner_and_version_fences(artifacts, tm
     owner = SandboxRemediationWorkspaceOwner(
         tmp_path / "workspaces",
         head_loader=ArtifactRemediationHeadLoader(
-            _OnDemandTemporalArtifactService(artifacts), workflow_id="workflow-1"
+            ScopedTemporalArtifactService(artifacts), workflow_id="workflow-1"
         ),
     )
     binding = _binding().model_copy(

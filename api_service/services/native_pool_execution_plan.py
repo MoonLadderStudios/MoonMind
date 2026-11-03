@@ -20,16 +20,20 @@ from api_service.services.omnigent_agent_profile_selection import (
     resolve_default_agent_profile_snapshot,
 )
 from api_service.services.omnigent_execution_plan_service import (
+    changed_admitted_intent,
+    changed_repository_selection,
     compile_and_persist_execution_plan,
 )
 from api_service.services.profile_execution_selection import (
     profile_harness_id,
     profile_route_runtime,
 )
+from moonmind.core.artifacts import temporal_artifact_id
 from moonmind.omnigent.bridge_artifacts import (
     link_verified_execution_plan_inputs_in_session,
 )
 from moonmind.omnigent.harness_platform.execution_plan import (
+    OmnigentExecutionPlanEnvelope,
     verify_execution_plan_envelope,
 )
 from moonmind.omnigent.harness_platform.stores import SessionExecutionPlanStore
@@ -41,6 +45,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     OmnigentExecutionPlanBinding,
 )
+from moonmind.schemas.temporal_models import StepExecutionCheckpointModel
 from moonmind.runtime_identity import normalize_runtime_id
 from moonmind.workflows.executions.runtime_target_selection import (
     AuthoringSurface,
@@ -74,6 +79,77 @@ def _with_frozen_launch_parameters(parameters, saved):
         result.pop(key, None)
     result.update(deepcopy(dict(saved)))
     return result
+
+
+async def _recorded_step_plan(
+    session, artifacts, access, request, *, snapshot_ref, snapshot_digest
+):
+    """Read a prior attempt's plan through its scoped, verified checkpoint."""
+    metadata = request.parameters.get("metadata")
+    hints = metadata.get("moonmind") if isinstance(metadata, Mapping) else None
+    hints = hints if isinstance(hints, Mapping) else {}
+    reference = hints.get("sharedStepCheckpointRef")
+    if not reference:
+        return None
+    if (
+        not isinstance(reference, str)
+        or len(reference) > 1024
+        or temporal_artifact_id(reference) is None
+    ):
+        raise ValueError("recorded pool checkpoint reference is invalid")
+    step = request.step_execution
+    if step.execution_ordinal <= 1 or hints.get("sharedCheckpointRequired") is not True:
+        raise ValueError("recorded pool configuration requires a replacement step")
+    _row, body = await artifacts.read(
+        artifact_id=temporal_artifact_id(reference), access=access
+    )
+    if len(body) > 4 * 1024 * 1024:
+        raise ValueError("recorded pool checkpoint exceeds its bound")
+    checkpoint = StepExecutionCheckpointModel.model_validate_json(body)
+    source = checkpoint.source
+    if (
+        checkpoint.boundary != "after_execution"
+        or source.workflow_id != step.workflow_id
+        or source.run_id != step.run_id
+        or source.logical_step_id != step.logical_step_id
+        or source.execution_ordinal >= step.execution_ordinal
+        or temporal_artifact_id(checkpoint.task_input_snapshot_ref)
+        != temporal_artifact_id(snapshot_ref)
+        or not checkpoint.plan_ref
+        or not checkpoint.plan_digest
+    ):
+        raise ValueError("recorded pool checkpoint belongs to another step or input")
+    _row, body = await artifacts.read(
+        artifact_id=temporal_artifact_id(checkpoint.plan_ref), access=access
+    )
+    plan = verify_execution_plan_envelope(
+        OmnigentExecutionPlanEnvelope.model_validate_json(body)
+    )
+    if (
+        "sha256:" + plan.planRef.rsplit(":", 1)[-1] != checkpoint.plan_digest
+        or temporal_artifact_id(plan.payload.authority.taskInputSnapshotRef)
+        != temporal_artifact_id(snapshot_ref)
+        or plan.payload.authority.taskInputSnapshotDigest != snapshot_digest
+    ):
+        raise ValueError("recorded pool plan conflicts with its checkpoint or input")
+    stored = await SessionExecutionPlanStore(session).load(plan.planRef)
+    if stored is None:
+        raise ValueError("checkpoint plan was not admitted by the execution-plan owner")
+    primary = plan.payload.credentialBindings.get("primary-model")
+    if primary is None or primary.providerProfileRef != request.execution_profile_ref:
+        # A deliberate pool rotation admits the new account's configuration.
+        return None
+    _row, body = await artifacts.read(
+        artifact_id=temporal_artifact_id(plan.payload.agentProfileSnapshotRef),
+        access=access,
+    )
+    snapshot = json.loads(body)
+    if (
+        not isinstance(snapshot, Mapping)
+        or snapshot.get("providerProfileRef") != request.execution_profile_ref
+    ):
+        raise ValueError("recorded pool Agent Profile conflicts with its account")
+    return plan, snapshot
 
 
 def _request_digest(request, original_profile):
@@ -284,11 +360,6 @@ async def prepare_selected_pool_plan(
         )
         if not target.available or target.path_class != "generic_omnigent":
             return {"disposition": "native", "reason": "shared_harness_not_available"}
-        if await profile_route_runtime(session, None, profile) != "omnigent":
-            return {
-                "disposition": "native",
-                "reason": "selected_profile_has_no_equivalent_shared_configuration",
-            }
         if (
             request.checkpoint_recovery
             or request.remediation_workspace
@@ -341,6 +412,19 @@ async def prepare_selected_pool_plan(
         )
         original_digest = "sha256:" + sha256(_body).hexdigest()
         principal = original.created_by_principal
+        recorded = await _recorded_step_plan(
+            session, artifacts, access, request,
+            snapshot_ref=snapshot_ref,
+            snapshot_digest=original_digest,
+        )
+        if (
+            recorded is None
+            and await profile_route_runtime(session, None, profile) != "omnigent"
+        ):
+            return {
+                "disposition": "native",
+                "reason": "selected_profile_has_no_equivalent_shared_configuration",
+            }
         selected = request.model_copy(deep=True)
         from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 
@@ -400,13 +484,13 @@ async def prepare_selected_pool_plan(
             key: deepcopy(selected.parameters[key])
             for key in _LAUNCH_PARAMETER_KEYS if key in selected.parameters
         }
-        snapshot = await resolve_default_agent_profile_snapshot(
-            session,
-            provider_profile_ref=profile_id,
-            launch_policy_ref=None,
-            consumer_type="workflow",
-            consumer_id=f"{workflow_id}:{request.step_execution.logical_step_id}",
-            user=None,
+        snapshot = (
+            recorded[1] if recorded else await resolve_default_agent_profile_snapshot(
+                session, provider_profile_ref=profile_id, launch_policy_ref=None,
+                consumer_type="workflow",
+                consumer_id=f"{workflow_id}:{request.step_execution.logical_step_id}",
+                user=None,
+            )
         )
         parameters = compile_agent_profile_snapshot_parameters(
             _with_frozen_launch_parameters(canonical.parameters, launch_parameters), snapshot=snapshot,
@@ -416,8 +500,18 @@ async def prepare_selected_pool_plan(
             effort=selected.parameters.get("effort"),
             targetRuntime="omnigent",
         )
+        # A selected step can override the root's authored model choice.
+        if resolution.get("modelSource"):
+            parameters["modelSource"] = resolution["modelSource"]
         if request.workspace_spec:
             parameters["workspaceSpec"] = deepcopy(request.workspace_spec)
+        if recorded:
+            recorded_plan = recorded[0]
+            parameters.update(
+                model=recorded_plan.payload.modelConfig.qualifiedId,
+                effort=recorded_plan.payload.modelConfig.effort,
+                modelSource="recorded_step_plan",
+            )
         admitted = await compile_and_persist_execution_plan(
             session_factory=None,
             execution_plan_store=SessionExecutionPlanStore(session),
@@ -436,7 +530,26 @@ async def prepare_selected_pool_plan(
             _compile_step_plans=False,
             recorded_skillset_ref=request.resolved_skillset_ref
             or request.step_execution.resolved_skillset_ref,
+            **(
+                {"_recorded_provider_configuration_snapshot": recorded[0].payload.providerConfigurationSnapshot}
+                if recorded else {}
+            ),
         )
+        if recorded:
+            changed = changed_admitted_intent(recorded[0].payload, admitted.envelope.payload)
+            changed += await changed_repository_selection(
+                artifact_service=artifacts, principal=principal,
+                recorded=recorded[0].payload, admitted=admitted.envelope.payload,
+                access=access._with_verified_inputs(
+                    temporal_artifact_id(ref) for ref in admitted.artifact_refs
+                ),
+            )
+            # The verified save replaces the interrupted workspace. Other
+            # request authority remains the admitted step's authority.
+            if any(field != "workspace" for field in changed):
+                raise ValueError(
+                    "replacement pool plan changes recorded intent: " + ", ".join(changed)
+                )
         binding, plan, skill_ref = (
             admitted.binding,
             admitted.envelope,

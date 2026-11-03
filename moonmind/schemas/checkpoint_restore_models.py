@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
+
+from moonmind.workflows.executions.repository_contract import RepositoryIdentity
 
 from .workspace_locator_models import ManagedWorkspaceLocator, SandboxWorkspaceLocator
-
 
 RESTORATION_EVIDENCE_CONTENT_TYPE = (
     "application/vnd.moonmind.managed-workspace-restoration+json;version=1"
@@ -52,8 +53,33 @@ class RestoreDestination(BaseModel):
 
 class SandboxRestoreDestination(SandboxWorkspaceLocator):
     relative_path: Literal["repo"] = Field("repo", alias="relativePath")
-    repository: str = Field(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+    repository: str | None = Field(None, pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+    repository_identity: RepositoryIdentity | None = Field(
+        None, alias="repositoryIdentity"
+    )
     step_execution_id: str = Field(alias="stepExecutionId", min_length=1)
+
+    @model_serializer(mode="wrap")
+    def serialize_repository_identity(self, handler):
+        payload = handler(self)
+        # Retained restore receipts hash the decoded request. An omitted
+        # identity must keep those historical bytes and idempotency keys.
+        if self.repository_identity is None:
+            payload.pop("repositoryIdentity", None)
+            payload.pop("repository_identity", None)
+        return payload
+
+    @model_validator(mode="after")
+    def validate_repository_identity(self) -> "SandboxRestoreDestination":
+        if self.repository_identity is not None and (
+            not self.repository
+            or self.repository.casefold()
+            != self.repository_identity.display_name.casefold()
+        ):
+            raise ValueError(
+                "repository identity conflicts with the restore repository"
+            )
+        return self
 
 
 class ManagedWorkspaceRestoreRequest(BaseModel):
@@ -64,7 +90,7 @@ class ManagedWorkspaceRestoreRequest(BaseModel):
     checkpoint: WorktreeArchiveCheckpoint
     destination: RestoreDestination | SandboxRestoreDestination
     workspace_policy: Literal[
-        "restore_pre_execution", "restore_publication_candidate"
+        "restore_pre_execution", "restore_publication_candidate", "restore_step_input"
     ] = Field(alias="workspacePolicy")
     resume_phase: Literal[
         "rerun_failed_step", "continue_to_remediation", "resume_publication"
@@ -96,10 +122,20 @@ class ManagedWorkspaceRestoreRequest(BaseModel):
     def validate_distinct_identities(self) -> "ManagedWorkspaceRestoreRequest":
         if self.restores_original_owner:
             return self
+        step_input = self.workspace_policy == "restore_step_input"
+        if step_input and (
+            self.resume_phase != "rerun_failed_step"
+            or self.source.checkpoint_boundary not in {"after_execution", "before_publication"}
+            or not isinstance(self.source.source_workspace_locator, SandboxWorkspaceLocator)
+            or not isinstance(self.destination, SandboxRestoreDestination)
+            or self.source.model_dump(include={"workflow_id", "run_id", "logical_step_id", "execution_ordinal"})
+                == self.recovery_identity.model_dump()
+        ):
+            raise ValueError("step input restore requires a distinct sandbox Step Execution")
         if (self.source.workflow_id, self.source.run_id) == (
             self.recovery_identity.workflow_id,
             self.recovery_identity.run_id,
-        ):
+        ) and not step_input:
             raise ValueError(
                 "source and recovery workflow/run identities must be distinct"
             )

@@ -588,6 +588,7 @@ class DockerOmnigentHostLauncher:
                 for item in host_class.declaredHarnessImplementations
             ),
             runtime_environment=supplied_runtime_environment,
+            workspace_path=str(spec.workspaceAttachment.get("targetPath") or "") or None,
         )
         command = [
             "docker",

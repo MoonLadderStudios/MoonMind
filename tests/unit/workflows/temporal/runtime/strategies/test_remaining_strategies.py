@@ -991,6 +991,27 @@ class TestCodexCliBuildCommand:
         cmd = s.build_command(profile, request)
         assert cmd == ["codex", "exec", "-m", "qwen/qwen3-coder-plus:free", "Go"]
 
+    def test_suppress_default_model_flag_keeps_explicit_default_equivalent_tier(self) -> None:
+        from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
+
+        strategy = CodexCliStrategy()
+        profile = _make_profile(
+            runtime_id="codex_cli",
+            command_template=["codex", "exec"],
+            default_model="qwen/qwen3.6-plus",
+        )
+        profile.command_behavior = {"suppress_default_model_flag": True}
+        profile.model_tiers = [{"model": "qwen/qwen3.6-plus"}]
+        profile.profile_id = "codex-tier-profile"
+        request = _make_request(instruction_ref="Go", parameters={"modelTier": 1})
+        ManagedRuntimeLauncher._apply_resolved_tier_policy(
+            request=request, profile=profile, strategy=strategy,
+        )
+
+        assert strategy.build_command(profile, request) == [
+            "codex", "exec", "-m", "qwen/qwen3.6-plus", "Go",
+        ]
+
 class TestCodexCliShapeEnvironment:
     def test_passes_through_codex_keys(self) -> None:
         s = CodexCliStrategy()

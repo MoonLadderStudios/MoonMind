@@ -110,6 +110,7 @@ def _submission(payload, *, fixed_serialized, runtime):
 async def execute_selected_pool_source(
     native_journey, monkeypatch, *, scenario="ordinary", include_successor=False,
     fixed_serialized=False, explicit_scratch=False,
+    runtime_selection=None, step_runtime=None,
 ):
     """Exercise the first admitted pool turn, optionally retaining a second step."""
     journey = native_journey
@@ -206,11 +207,11 @@ async def execute_selected_pool_source(
                                 }} if work_branch_scenario else {}),
                                 **({"parameters": {"native_option": "accepted-explicit-native-option"}}
                                    if scenario == "explicit_native_option" else {}),
-                                **(
+                                **(runtime_selection if runtime_selection is not None else (
                                     {"modelTier": 1}
                                     if scenario in {"tier_resolution", "native_tier_option", "tier_environment"} or tier_launch
                                     else {"model": "selected-pool-alias" if scenario == "model_alias" else journey.server.model}
-                                ),
+                                )),
                             },
                             "steps": [
                                 {
@@ -218,6 +219,7 @@ async def execute_selected_pool_source(
                                     "instructions": "Generate a report.",
                                     "type": "skill",
                                     "skill": {"id": native_fixture._DURABLE_SKILL_NAME},
+                                    **({"runtime": step_runtime} if step_runtime is not None else {}),
                                     **(
                                         {
                                             "publishMode": "pr",

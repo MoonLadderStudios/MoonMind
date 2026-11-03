@@ -166,6 +166,25 @@ cannot drift apart, without a second implementation to pair against.
 | Workspace checkpoint/restore | `remediation_workspace.py::RemediationWorkspaceOwner` | `SandboxRemediationWorkspaceOwner` | Conformance |
 | Secret resolution | `secret_resolution.py::SecretResolver` | root resolver chain | Conformance |
 
+The generic workspace port and retained coordinator use the same remediation
+owner and canonical checkpoint restore service. The port validates the controller
+head, execution identity and admitted Profile/launch snapshot before transferring
+or restoring its attempt-owned workspace. Preparation retries preserve candidate
+edits; interrupted transfers reconcile their recorded intent. New Git save
+handoffs use the canonical checkpoint to restore HEAD, index and worktree,
+including deletions, after local workspace loss. They carry the admitted
+repository identity so self-contained saves retain Enterprise remotes without
+acquiring source credentials. Recorded archive handoffs retain their additive
+interpretation. Restored directories and contents transfer to the
+selected runtime UID. An existing candidate without admission
+proof is preserved with an explicit uncertainty error. Both paths use the scoped
+Temporal artifact adapter; model and repository credentials remain separate.
+Fresh repository preparation selects the authored local target branch through
+the same volume owner and records completion in repository-local metadata.
+Redelivery preserves later candidate branches and edits; an unproven existing
+candidate is retained with an uncertainty error instead of being reset.
+Checkpoint restores retain their saved branch and history.
+
 The stable runtime binding store and legacy harness binding store currently
 share a table and binding-ID prefix, but not a serialized authority schema.
 Generic recovery inventory selects only stable rows, identified by their
@@ -281,9 +300,20 @@ model-resolution evidence without another account choice or capacity unit. Later
 Profile edits cannot change that evidence; ordinary explicit metadata keeps its
 existing precedence over tier defaults. Codex same-epoch successors carry the selected
 account, durable context and verified saved workspace through the parent,
-including Continue-As-New and provider cooldown retries. Restoring that workspace
-replaces its inherited scratch source; replay preserves older recorded requests.
-Old parents without this handoff keep native dispatch.
+including Continue-As-New. Restoring a verified saved workspace on a continuation
+or parent-owned retry replaces its inherited scratch source; replay preserves
+older recorded requests. Old parents without this handoff keep native dispatch.
+After a drained shared turn reports provider cooldown, new parents restart the
+logical step through its existing retry owner and remaining budget. The parent
+verifies and adopts the child's scoped
+canonical save after worker cleanup; it does not recapture the deleted tree or
+rebind the delivered runtime journal. Cancellation starts no successor. Failed save
+adoption stops automatic restart and retains its checkpoint reference in recovery
+diagnostics. A selected Profile that cannot restore this save reports the missing
+capability instead of starting from different inputs. A replacement grant for
+that same logical step and account recovers its Profile configuration through the
+canonical checkpoint's verified plan; fresh steps and different selected accounts
+admit current settings. A replay patch preserves older request payloads.
 Fresh native steps with equivalent configuration use this same fenced handoff
 after fixed, implicit or pool account selection, without rewriting their stored
 submission. Older parents without the handoff retain their recorded commands.
@@ -324,10 +354,21 @@ Raw deferred step-account matching and tool-only boundary validation remain inta
 Replaced defaults never select ambient credentials.
 OAuth-home delivery attaches the enrollment-owned volume. Codex/Claude nonsecret
 shell settings use the existing project-value guard and admitted configuration
-artifact; native executable wrappers restore them after child environment filtering
-without overriding private HOME or editing the enrolled home. Templated or protected
-environment, file or HOME choices retain their native adapter until an equivalent
-handoff exists.
+artifact for OAuth and API-key Profiles, retaining exact literal values.
+Newly admitted environment templates carry only workspace and runtime
+support-directory context, rendered through the shared Profile template renderer
+after the attempt's native workspace path is known. Recorded literal values keep
+their original interpretation. Native executable wrappers restore values after child environment filtering
+without overriding private HOME or editing the enrolled home. Codex OAuth
+preferences and nonsecret files authored for a run-support or enrolled HOME use
+the same artifact and renderer in the native owner's private app-server HOME.
+Selected inherited instruction links become private files; untouched entries stay
+visible. Environment templates referencing those files bind to that private HOME
+at native launch; generic support paths and recorded literals retain their meaning.
+Credential, hook, cache and history paths cannot be replaced. Native
+model/provider/tool authority and enrollment remain intact. Protected settings,
+uncarried tool/auth configuration and other HOME choices retain their adapter
+until an equivalent handoff exists.
 Recorded plans retain their original materializer identity.
 Profile-bound execution and its OAuth host launcher admit no new plans;
 they retain queued starts, retries and cleanup under their recorded authority. Supported
@@ -343,10 +384,26 @@ step selections.
 Secret values still resolve
 after acquisition under the existing credential-generation fence. Older plans
 without this snapshot retain their recorded interpretation.
-Codex developer instructions, project-instruction discovery and history preferences
-also reach its private session config. Native Profile aliases translate explicit
-model overrides once during shared compilation, using the same lookup as direct
-launch. Resolved defaults and tiers keep their selected model.
+Codex reasoning summaries, verbosity, context and compaction limits, personality,
+developer instructions, project-instruction discovery and history preferences reach
+its private session config for OAuth and API-key Profiles; native Codex validates
+and normalizes these values. API-key Codex Profiles can carry preferences
+without declaring another provider and add nonsecret files within their private
+HOME, including global instructions. Their declared key and endpoint stay selected.
+Codex model-default suppression is frozen with the selected Profile: omitted
+models and an explicitly repeated Profile default delegate to the native harness,
+while different explicit models and selected tiers keep their pins. The exact
+credential-bound host must advertise one native default or report a configured default
+through its public native launch/CLI read. Hidden configured models keep their
+meaning; missing or ambiguous defaults remain failures.
+The admitted comparison model and the observed native default remain distinct
+in launch evidence. The same
+renderer serves direct and packaged launches; the native wrapper writes only into
+its private home, retains frozen settings and reuses a completed projection on
+process restart. An interrupted append stops visibly until step recovery provisions
+a fresh home, preserving the original credential and history owners. Native Profile aliases translate explicit model overrides once during shared
+compilation, using the same lookup as direct launch. Resolved defaults and tiers
+keep their selected model.
 Tool/authentication and launch settings
 without an equivalent projection retain their native route.
 Explicit same-epoch Codex context reuse forks durable native history through

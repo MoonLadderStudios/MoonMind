@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from moonmind.workflows.skills.run_projection import step_execution_artifact_access
+from moonmind.workflows.temporal.scoped_artifacts import ScopedTemporalArtifactService
 
 import logging
 import os
@@ -32,55 +33,6 @@ _IMMUTABLE_RECOVERY_DIMENSIONS = (
     "repositoryBranch",
     "publishMode",
 )
-
-
-class _OnDemandTemporalArtifactService:
-    """Open one DB session per artifact operation at an Activity boundary."""
-
-    def __init__(self, session_factory: Any) -> None:
-        self._session_factory = session_factory
-
-    async def _invoke(self, method: str, **kwargs: Any) -> Any:
-        from moonmind.workflows.temporal.artifacts import (
-            TemporalArtifactRepository,
-            TemporalArtifactService,
-        )
-
-        async with self._session_factory() as artifact_session:
-            service = TemporalArtifactService(
-                TemporalArtifactRepository(artifact_session),
-                transaction_ownership=ArtifactTransactionOwnership.STANDALONE,
-            )
-            return await getattr(service, method)(**kwargs)
-
-    async def create(self, **kwargs: Any) -> Any:
-        return await self._invoke("create", **kwargs)
-
-    async def read(self, *, artifact_id: str, **kwargs: Any) -> Any:
-        return await self._invoke("read", artifact_id=artifact_id, **kwargs)
-
-    async def get_metadata(self, *, artifact_id: str, **kwargs: Any) -> Any:
-        return await self._invoke("get_metadata", artifact_id=artifact_id, **kwargs)
-
-    async def read_chunks(self, *, artifact_id: str, **kwargs: Any) -> Any:
-        return await self._invoke("read_chunks", artifact_id=artifact_id, **kwargs)
-
-    async def write_complete(self, *, artifact_id: str, **kwargs: Any) -> Any:
-        return await self._invoke("write_complete", artifact_id=artifact_id, **kwargs)
-
-    async def soft_delete(self, *, artifact_id: str, **kwargs: Any) -> Any:
-        return await self._invoke("soft_delete", artifact_id=artifact_id, **kwargs)
-
-    async def dependency_proof(self, **kwargs: Any) -> Any:
-        # Metadata/integrity proof only, never a child read grant. Preserve
-        # this adapter's existing standalone session per operation contract.
-        return await self._invoke("dependency_proof", **kwargs)
-
-    async def record_verified_dependencies(self, **kwargs: Any) -> Any:
-        return await self._invoke("record_verified_dependencies", **kwargs)
-
-    async def verified_dependencies(self, **kwargs: Any) -> Any:
-        return await self._invoke("verified_dependencies", **kwargs)
 
 
 def _parent_repository_binding_set(parent_plan: Any) -> Any:
@@ -1305,7 +1257,7 @@ async def _omnigent_execute_activity(
             client=http_client,
             upstream_header_allowlist=resolved_proxy_forward_headers(),
         )
-        artifact_service = _OnDemandTemporalArtifactService(async_session_maker)
+        artifact_service = ScopedTemporalArtifactService(async_session_maker)
         from moonmind.omnigent.remediation_workspace import (
             ArtifactRemediationHeadLoader,
             ManagedServiceRemediationRestorer,
@@ -1484,7 +1436,7 @@ async def _reconcile_oauth_hosts(
             client=client,
             run_store=OmnigentBridgeSessionStore(async_session_maker),
             lease_client=ProviderProfileLeaseClient(TemporalClientAdapter()),
-            artifact_gateway=_OnDemandTemporalArtifactService(async_session_maker),
+            artifact_gateway=ScopedTemporalArtifactService(async_session_maker),
             runtime_binding_store=DbRuntimeBindingStore(async_session_maker),
             control_plane_store=OmnigentControlPlaneStore(async_session_maker),
         )

@@ -1,4 +1,4 @@
-"""Observe stored Codex logins and record proven expiry in profile readiness."""
+"""Read Codex readiness/defaults and record proven enrollment expiry."""
 
 import logging
 from datetime import UTC, datetime
@@ -32,22 +32,47 @@ except Exception:
 # succeed from local state while workspace routing rejects the same login.
 # Use the public CLI protocol, send no turn, and print no account/error bodies.
 # Serialize the shared auth markers: refresh rejection may carry no HTTP status.
-CODEX_ACCOUNT_READ_PROBE = (
+_CODEX_APP_SERVER_READ_PROBE = (
     f"AUTH_FAILURE_MARKERS = {provider_auth_failure_markers()!r}\n"
     + """\
-import asyncio, json, os, re, signal, sys
+import asyncio, importlib, importlib.util, json, os, re, signal, sys
 
 async def main():
     process = None
     verdict = "unavailable"
     try:
+        command = ["codex"]
+        if READ_CONFIGURATION:
+            os.environ["CODEX_HOME"] = sys.argv[1]
+            # Resolve the same public native launch shape as the runner. Its
+            # explicit provider default can be hidden from the visible picker.
+            try:
+                native = importlib.import_module(
+                    "omnigent.harnesses.codex_native.app_server"
+                    if importlib.util.find_spec("omnigent.harnesses") is not None
+                    else "omnigent.codex_native_app_server"
+                )
+                launch = native.resolve_native_codex_launch(model=None)
+            except (ImportError, AttributeError, TypeError):
+                print(json.dumps({"status": "unsupported"}))
+                return
+            if launch.profile is not None:
+                print(json.dumps({"status": "unsupported"}))
+                return
+            if isinstance(launch.model, str) and launch.model.strip():
+                print(json.dumps({"status": "ready", "model": launch.model}))
+                return
+            for override in launch.config_overrides:
+                command.extend(["-c", override])
+        command.append("app-server")
         process = await asyncio.create_subprocess_exec(
-            "codex", "app-server",
+            *command,
             env={**os.environ, "CODEX_HOME": sys.argv[1]},
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
             start_new_session=True,
+            limit=1024 * 1024 if READ_CONFIGURATION else 64 * 1024,
         )
 
         async def request(request_id, method, params):
@@ -63,14 +88,25 @@ async def main():
                 if isinstance(message, dict) and message.get("id") == request_id:
                     return message
 
-        async def read_account():
+        async def observe():
             initialized = await request(1, "initialize", {
-                "clientInfo": {"name": "moonmind-login-preflight", "version": "1"},
+                "clientInfo": {"name": "moonmind-model-preflight" if READ_CONFIGURATION else "moonmind-login-preflight", "version": "1"},
             })
             if "error" in initialized or not isinstance(initialized.get("result"), dict):
                 return "unavailable"
             process.stdin.write(b'{"method":"initialized"}\\n')
             await process.stdin.drain()
+            if READ_CONFIGURATION:
+                response = await request(2, "config/read", {"includeLayers": False})
+                error = response.get("error")
+                if isinstance(error, dict) and error.get("code") in {-32600, -32602}:
+                    response = await request(3, "config/read", {})
+                result = response.get("result")
+                config = result.get("config") if isinstance(result, dict) else None
+                model = config.get("model") if isinstance(config, dict) else None
+                if isinstance(model, str) and model.strip():
+                    return {"status": "ready", "model": model}
+                return {"status": "unavailable"}
             response = await request(2, "account/read", {"refreshToken": False})
 
             def unauthorized(error):
@@ -102,7 +138,7 @@ async def main():
                 return "missing_login"
             return "unavailable"
 
-        verdict = await asyncio.wait_for(read_account(), timeout=20)
+        verdict = await asyncio.wait_for(observe(), timeout=20)
     except Exception:
         pass
     finally:
@@ -119,11 +155,14 @@ async def main():
                 except ProcessLookupError:
                     pass
                 await process.wait()
-    print(verdict)
+    print(json.dumps(verdict if isinstance(verdict, dict) else {"status": verdict}) if READ_CONFIGURATION else verdict)
 
 asyncio.run(main())
 """
 )
+
+CODEX_ACCOUNT_READ_PROBE = "READ_CONFIGURATION = False\n" + _CODEX_APP_SERVER_READ_PROBE
+CODEX_CONFIGURATION_READ_PROBE = "READ_CONFIGURATION = True\n" + _CODEX_APP_SERVER_READ_PROBE
 
 
 async def record_ended_codex_login(

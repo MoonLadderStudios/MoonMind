@@ -47,9 +47,7 @@ from moonmind.omnigent.runtime_bindings import (
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.activities import omnigent_session_activities as reader
-from moonmind.workflows.temporal.activities.omnigent_activities import (
-    _OnDemandTemporalArtifactService,
-)
+from moonmind.workflows.temporal.scoped_artifacts import ScopedTemporalArtifactService
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
     TemporalArtifactService,
@@ -155,7 +153,7 @@ async def app_context(tmp_path, monkeypatch):
         "_build_store_from_settings",
         staticmethod(lambda: LocalTemporalArtifactStore(tmp_path / "artifacts")),
     )
-    artifacts = _OnDemandTemporalArtifactService(sessions)
+    artifacts = ScopedTemporalArtifactService(sessions)
 
     async def read_bytes(ref):
         _metadata, payload = await artifacts.read(

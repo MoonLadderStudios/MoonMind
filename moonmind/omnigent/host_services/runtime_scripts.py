@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import shlex
+import json
 from pathlib import Path
 from typing import Any
+
+OAUTH_CONFIGURATION_ENV = "MOONMIND_CODEX_PROFILE_CONFIGURATION"
 
 PROVIDER_LITERAL_LAUNCH_ENV = frozenset(
     {
@@ -155,6 +158,7 @@ class OmnigentRuntimeScriptService:
         enable_claude_runtime: bool = False,
         enable_codex_runtime: bool = False,
         runtime_environment: dict[str, str] | None = None,
+        workspace_path: str | None = None,
     ) -> tuple[str, dict[str, str]]:
         generation_checks: list[str] = []
         for handle in credential_handles:
@@ -224,9 +228,55 @@ class OmnigentRuntimeScriptService:
             "MOONMIND_CODEX_PROFILE_CONFIG_FILE",
         }
         codex_configuration = False
+        oauth_configuration = None
+        private_environment_keys: set[str] = set()
         provider_environment: dict[str, str] = {}
         for handle in credential_handles:
             selected_environment = dict(handle.get("runtimeEnvironment") or {})
+            templates = handle.get("runtimeEnvironmentTemplates")
+            if templates:
+                if not (
+                    handle.get("materializerRef") == "codex-oauth-home@1" and enable_codex_runtime
+                    or handle.get("materializerRef") == "claude-oauth-home@1" and enable_claude_runtime
+                ):
+                    raise ValueError("Profile environment templates require their enrolled materializer")
+                if not workspace_path or not workspace_path.startswith("/"):
+                    raise ValueError("Profile environment templates require the admitted workspace path")
+                from moonmind.provider_profiles.template_renderer import (
+                    ProfileTemplateRenderer, validate_environment_template_context,
+                )
+                from moonmind.provider_profiles.codex_configuration import render_toml
+
+                templates = validate_environment_template_context(validate_provider_literal_launch_environment(templates))
+                if set(templates) & set(selected_environment):
+                    raise ValueError("conflicting credential environment template")
+                selected_environment.update(ProfileTemplateRenderer(toml_serializer=render_toml).render_environment(
+                    templates, {"workspace_path": workspace_path, "runtime_support_dir": _RUNTIME_CONTEXT_DIR},
+                ))
+            serialized = selected_environment.pop(OAUTH_CONFIGURATION_ENV, None)
+            if serialized is not None:
+                if handle.get("materializerRef") != "codex-oauth-home@1" or not enable_codex_runtime:
+                    raise ValueError("private Codex preferences require their enrolled Codex materializer")
+                configuration = json.loads(serialized)
+                if not isinstance(configuration, dict) or configuration.get("privateHomeOnly") is not True:
+                    raise ValueError("OAuth Codex configuration requires private-HOME delivery")
+                private_templates = configuration.get("environmentTemplates") or {}
+                if private_templates:
+                    from moonmind.provider_profiles.template_renderer import validate_environment_template_context
+
+                    validate_environment_template_context(validate_provider_literal_launch_environment(private_templates))
+                    if set(private_templates) & (set(selected_environment) | set(templates or {})):
+                        raise ValueError("conflicting private Codex environment template")
+                    private_environment_keys.update(private_templates)
+                # The materializer freezes this validated nonsecret value.
+                # The same portable helper validates it again before writes.
+                configuration = json.dumps(configuration)
+                if oauth_configuration is not None and oauth_configuration != configuration:
+                    raise ValueError("conflicting private Codex configurations")
+                oauth_configuration = configuration
+                provider_environment[OAUTH_CONFIGURATION_ENV] = configuration
+                environment[OAUTH_CONFIGURATION_ENV] = configuration
+                codex_configuration = True
             literals = {
                 key: value
                 for key, value in selected_environment.items()
@@ -284,6 +334,14 @@ class OmnigentRuntimeScriptService:
                         )
                     codex_configuration = True
                 environment[key] = str(value)
+        if oauth_configuration is not None:
+            if private_environment_keys & set(provider_environment):
+                raise ValueError("conflicting private Codex runtime environment")
+            if "MOONMIND_CODEX_PROFILE_CONFIG_FILE" in environment:
+                raise ValueError("private Codex configuration conflicts with a provider configuration")
+            environment["MOONMIND_CODEX_PROFILE_CONFIG_FILE"] = (
+                f"{_RUNTIME_CONTEXT_DIR}/provider-{OAUTH_CONFIGURATION_ENV}"
+            )
         profile_environment = dict(provider_environment)
         codex_wrapper = codex_configuration or require_codex_context or (
             enable_codex_runtime and bool(profile_environment)
@@ -408,7 +466,7 @@ class OmnigentRuntimeScriptService:
                 "'exec /opt/moonmind-tools/bin/moonmind \"$@\"' "
                 f"> {_RUNTIME_BIN_DIR}/moonmind; chmod 0700 {_RUNTIME_BIN_DIR}/moonmind; "
             )
-        codex_setup = f"rm -f {_RUNTIME_BIN_DIR}/codex {runtime_context_dir}/codex-configuration.py; "
+        codex_setup = f"rm -f {_RUNTIME_BIN_DIR}/codex {runtime_context_dir}/codex-configuration.py {runtime_context_dir}/template_renderer.py; "
         if codex_wrapper:
             source_path = (
                 Path(__file__).resolve().parents[2]
@@ -417,9 +475,12 @@ class OmnigentRuntimeScriptService:
             )
             source = source_path.read_text()
             helper = f"{runtime_context_dir}/codex-configuration.py"
+            renderer_source = source_path.with_name("template_renderer.py").read_text()
+            renderer = f"{runtime_context_dir}/template_renderer.py"
             codex_setup += (
                 f'codex_binary=$(command -v codex); test -n "$codex_binary"; '
                 f"printf '%s\\n' {shlex.quote(source)} > {helper}; chmod 0700 {helper}; "
+                f"printf '%s\\n' {shlex.quote(renderer_source)} > {renderer}; chmod 0600 {renderer}; "
                 f'python3 {helper} prepare "${{MOONMIND_CODEX_PROFILE_CONFIG_FILE:--}}" "$codex_binary" {_RUNTIME_BIN_DIR}/codex {context_wrapper}; '
             )
         claude_wrapper = f"{_RUNTIME_BIN_DIR}/claude"
