@@ -59,6 +59,7 @@ _SHARED_RECOVERY_PATCHES = _CURRENT_PATCHES | {
     "run-dispatch-pool-shared-context-v1", "run-canonical-step-checkpoints-v1",
     "run-durable-finalization-outcome-v1", "run-logical-step-execution-budget-v1",
     "run-omnigent-canonical-git-workspace-handoff-v1",
+    "run-shared-step-checkpoint-source-v1",
 }
 _REAL_PATCHED = workflow.patched
 _CHILD_REQUESTS: list[AgentExecutionRequest] = []
@@ -83,7 +84,7 @@ def _shared_save(request):
         "runtimeBindingRef": "omnigent-runtime-binding:sha256:" + "f" * 64,
         "savedWorkspaceCheckpoint": {
             **_shared_workspace(),
-            "checkpointRef": f"artifact://checkpoints/shared-child-save-{request.step_execution.execution_ordinal}",
+            "checkpointRef": f"artifact://art_shared_child_save_{request.step_execution.execution_ordinal}",
         },
     }
 
@@ -149,7 +150,7 @@ async def _plan(activity_type: str, _payload: Any, **_kwargs: Any) -> bytes:
     assert activity_type == "artifact.read"
     if _InterruptedStepFixture.shared_child_save:
         reference = getattr(_payload, "artifact_ref", "")
-        if reference.startswith("artifact://checkpoints/shared-child-save-"):
+        if reference.startswith("art_shared_child_save_"):
             _SAVED_READS.append(reference)
             if _InterruptedStepFixture.child_save_failure == "unavailable":
                 raise ConnectionError("saved child checkpoint is temporarily unavailable")
@@ -157,7 +158,7 @@ async def _plan(activity_type: str, _payload: Any, **_kwargs: Any) -> bytes:
                 identity=StepExecutionIdentityModel(
                     workflowId=workflow.info().workflow_id, runId=workflow.info().run_id,
                     logicalStepId=_STEP,
-                    executionOrdinal=99 if _InterruptedStepFixture.child_save_failure == "identity" else int(reference.rsplit("-", 1)[1]),
+                    executionOrdinal=99 if _InterruptedStepFixture.child_save_failure == "identity" else int(reference.rsplit("_", 1)[1]),
                 ),
                 boundary="after_execution", task_input_snapshot_ref="art_original_task", plan_ref="artifact://original-plan",
                 workspace=_shared_workspace(), created_at=workflow.now(),
@@ -170,6 +171,8 @@ async def _plan(activity_type: str, _payload: Any, **_kwargs: Any) -> bytes:
                 "tool": {"type": "agent_runtime", "name": runtime},
                 "inputs": {
                     "instructions": "Implement the change.",
+                    **({"workspaceSpec": {"workspaceSource": {"kind": "scratch"}}}
+                       if _InterruptedStepFixture.explicit_scratch else {}),
                     "runtime": {"mode": runtime, **({"profileSelector": {"tagsAll": ["accepted-pool"]}} if _InterruptedStepFixture.shared_child_save else {})},
                     "timeoutPolicy": {
                         "timeout_seconds": 3600,
@@ -185,6 +188,7 @@ async def _plan(activity_type: str, _payload: Any, **_kwargs: Any) -> bytes:
 class _InterruptedStepFixture:
     git_checkpoint = False
     shared_child_save = False
+    explicit_scratch = False
     cancel_after_child = False
     child_save_failure = None
 
@@ -253,7 +257,7 @@ class _InterruptedStepFixture:
             assert "no successor" in str(error).lower()
             row = run._step_ledger_row_for(_STEP)
             assert row["executionOutcome"]["status"] == "failed"
-            assert "shared-child-save-1" in row["finalizationOutcome"]["message"]
+            assert "art_shared_child_save_1" in row["finalizationOutcome"]["message"]
         return run._step_execution_for(_STEP) or 0
 
 
@@ -433,13 +437,18 @@ async def test_interrupted_git_checkpoint_child_payloads_survive_real_replay(mon
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["successor", "cancelled", "unavailable", "identity"])
+@pytest.mark.parametrize("mode", [
+    "successor", "cancelled", "unavailable", "identity",
+    "scratch-retained", "scratch-successor",
+])
 async def test_selected_pool_child_save_drives_the_existing_step_owner_and_replays(monkeypatch, mode):
     cancel = mode == "cancelled"
     blocked = mode in {"unavailable", "identity"}
+    explicit_scratch = mode.startswith("scratch-")
     expected_count = 1 if cancel or blocked else 2
     _patch_environment(monkeypatch)
     monkeypatch.setattr(_InterruptedStepFixture, "shared_child_save", True)
+    monkeypatch.setattr(_InterruptedStepFixture, "explicit_scratch", explicit_scratch)
     monkeypatch.setattr(_InterruptedStepFixture, "cancel_after_child", cancel)
     monkeypatch.setattr(_InterruptedStepFixture, "child_save_failure", mode if blocked else None)
     monkeypatch.setattr(_InterruptedAgentRun, "shared_child_save", True)
@@ -456,7 +465,10 @@ async def test_selected_pool_child_save_drives_the_existing_step_owner_and_repla
         return await execute_child(name, request, **kwargs)
 
     monkeypatch.setattr(workflow, "execute_child_workflow", observe_child)
-    _enable(monkeypatch, _SHARED_RECOVERY_PATCHES)
+    record_patches = _SHARED_RECOVERY_PATCHES
+    if mode == "scratch-retained":
+        record_patches = record_patches - {"run-shared-step-checkpoint-source-v1"}
+    _enable(monkeypatch, record_patches)
     name = f"shared-checkpoint-{mode}"
     async with await WorkflowEnvironment.start_time_skipping(data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER) as env:
         agent_worker, admission_worker = _workers(env)
@@ -471,30 +483,41 @@ async def test_selected_pool_child_save_drives_the_existing_step_owner_and_repla
     first = emitted[0]
     assert first.agent_id == "codex_cli" and first.profile_selector.tags_all == ["accepted-pool"]
     assert first.parameters["metadata"]["moonmind"]["sharedStepRecovery"] is True
+    if explicit_scratch:
+        assert first.workspace_spec["workspaceSource"] == {"kind": "scratch"}
     if expected_count == 2:
         second = emitted[1]
         assert second.step_execution.execution_ordinal == 2
         assert second.step_execution.step_execution_id != first.step_execution.step_execution_id
         assert second.idempotency_key != first.idempotency_key
         assert second.profile_selector == first.profile_selector
-        assert second.workspace_spec["workspaceCheckpointRestoreRef"] == "artifact://checkpoints/shared-child-save-1"
+        assert second.workspace_spec["workspaceCheckpointRestoreRef"] == "artifact://art_shared_child_save_1"
         assert second.parameters["metadata"]["moonmind"]["sharedCheckpointRequired"] is True
+        if mode == "scratch-retained":
+            assert second.workspace_spec["workspaceSource"] == {"kind": "scratch"}
+        elif explicit_scratch:
+            from moonmind.omnigent.workspace_sources import compile_workspace_source
+
+            assert "workspaceSource" not in second.workspace_spec
+            source = compile_workspace_source(second.workspace_spec)
+            assert source.checkpoint_ref == second.workspace_spec["workspaceCheckpointRestoreRef"]
         assert second.execution_budget.logical_step_id == first.execution_budget.logical_step_id
         assert second.execution_budget.budget == first.execution_budget.budget
         assert second.execution_budget.recovery_count == 1
         assert 1800 <= second.execution_budget.consumed_seconds <= 1810
         assert second.execution_budget.remaining_seconds(second.execution_budget.admitted_at) <= 1800
-    assert _SAVED_READS == [f"artifact://checkpoints/shared-child-save-{i}" for i in range(1, len(emitted) + 1)]
+    assert _SAVED_READS == [f"art_shared_child_save_{i}" for i in range(1, len(emitted) + 1)]
     recorded = [request.model_dump(mode="json", by_alias=True) for request in emitted]
     emitted.clear()
     _SAVED_READS.clear()
+    _enable(monkeypatch, _SHARED_RECOVERY_PATCHES)
     await Replayer(
         workflows=[_InterruptedStepFixture], workflow_runner=UnsandboxedWorkflowRunner(),
         data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
     ).replay_workflow(history)
     # Check actual emitted child arguments: SDK replay alone does not compare them.
     assert [request.model_dump(mode="json", by_alias=True) for request in emitted] == recorded
-    assert _SAVED_READS == [f"artifact://checkpoints/shared-child-save-{i}" for i in range(1, len(emitted) + 1)]
+    assert _SAVED_READS == [f"art_shared_child_save_{i}" for i in range(1, len(emitted) + 1)]
 
 
 @pytest.mark.asyncio
