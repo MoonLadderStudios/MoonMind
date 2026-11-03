@@ -139,8 +139,10 @@ async def test_work_branch_metadata_does_not_select_the_physical_checkout(
     prepared = await launcher._prepare_workspace_path(
         run_id="native-branch-parity", request=request, workspace_path=None,
     )
-    assert subprocess.check_output(["git", "-C", prepared, "branch", "--show-current"], text=True).strip() == (target_branch or "main")
-    assert "review-metadata-only" not in subprocess.check_output(["git", "-C", prepared, "show-ref", "--heads"], text=True)
+    current_branch = subprocess.check_output(["git", "-C", prepared, "branch", "--show-current"], text=True).strip()
+    local_heads = subprocess.check_output(["git", "-C", prepared, "show-ref", "--heads"], text=True)
+    assert current_branch == (target_branch or "main")
+    assert "review-metadata-only" not in local_heads
     assert request.parameters["workBranch"] == "review-metadata-only"
 
 
