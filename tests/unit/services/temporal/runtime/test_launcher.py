@@ -116,6 +116,37 @@ def _make_request(**overrides) -> AgentExecutionRequest:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("target_branch", [None, "feature/authored-checkout"])
+async def test_work_branch_metadata_does_not_select_the_physical_checkout(
+    tmp_path, target_branch
+):
+    source = tmp_path / "source"
+    subprocess.run(["git", "init", "-b", "main", str(source)], check=True, capture_output=True)
+    (source / "accepted.txt").write_text("accepted baseline")
+    subprocess.run(["git", "-C", str(source), "add", "accepted.txt"], check=True)
+    subprocess.run(
+        ["git", "-C", str(source), "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "Baseline"],
+        check=True, capture_output=True,
+    )
+    workspace = {"repository": str(source), "startingBranch": "main"}
+    if target_branch:
+        workspace["targetBranch"] = target_branch
+    request = _make_request(
+        workspace_spec=workspace,
+        parameters={"workBranch": "review-metadata-only", "workBranchId": "refs/heads/review-metadata-only", "workBranchOrigin": "review_mapping"},
+    )
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path / "managed_runs"))
+    prepared = await launcher._prepare_workspace_path(
+        run_id="native-branch-parity", request=request, workspace_path=None,
+    )
+    current_branch = subprocess.check_output(["git", "-C", prepared, "branch", "--show-current"], text=True).strip()
+    local_heads = subprocess.check_output(["git", "-C", prepared, "show-ref", "--heads"], text=True)
+    assert current_branch == (target_branch or "main")
+    assert "review-metadata-only" not in local_heads
+    assert request.parameters["workBranch"] == "review-metadata-only"
+
+
+@pytest.mark.asyncio
 async def test_prepare_workspace_does_not_select_an_unrelated_checkout(tmp_path):
     store = ManagedRunStore(tmp_path / "managed_runs")
     launcher = ManagedRuntimeLauncher(store)
@@ -376,7 +407,11 @@ async def test_default_repository_readiness_rejects_unknown_skill_capability(tmp
 
 
 @pytest.mark.asyncio
-async def test_default_repository_readiness_returns_exact_resolved_metadata(tmp_path):
+@pytest.mark.parametrize("work_branch_metadata", [
+    {},
+    {"workBranch": "review-metadata-only", "workBranchId": "refs/heads/review-metadata-only", "workBranchOrigin": " REVIEW_MAPPING "},
+])
+async def test_default_repository_readiness_returns_exact_resolved_metadata(tmp_path, work_branch_metadata):
     evidence = RepositoryClientEvidence(
         toolBundleRef="repository-client:git-system",
         clientVersion="2.46.0",
@@ -392,18 +427,27 @@ async def test_default_repository_readiness_returns_exact_resolved_metadata(tmp_
     )
     launcher._observe_git_client = AsyncMock(return_value=evidence)
     launcher._observe_git_remote_tip = AsyncMock(return_value="abcdef0123456789")
+    request = _repository_readiness_request(publish_mode="none")
+    request.parameters.update(work_branch_metadata)
     with patch(
         "moonmind.auth.github_credentials.resolve_github_credential",
         AsyncMock(return_value=ResolvedGitHubCredential(token="test-token")),
     ):
         resolved = await launcher._ensure_repository_ready_for_launch(
-            _repository_readiness_request(publish_mode="none"), None
+            request, None
         )
     assert resolved is not None
     assert resolved.prepared_revision.commit_sha == "abcdef0123456789"
     assert resolved.remote_tip_expectation["revision"]["commitSha"] == "abcdef0123456789"
     assert resolved.client_evidence == evidence
     assert resolved.compatible_server_versions == ()
+    assert resolved.prepared_branch.name == "main"
+    if work_branch_metadata:
+        assert resolved.work_branch.name == "review-metadata-only"
+        assert resolved.work_branch.id == "refs/heads/review-metadata-only"
+        assert resolved.work_branch.origin == "review_mapping"
+    else:
+        assert resolved.work_branch is None
 
 
 @pytest.mark.asyncio

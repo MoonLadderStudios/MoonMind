@@ -16,7 +16,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal, cast
+from typing import Any
 
 from moonmind.auth.github_credentials import GitHubCredentialSource
 from moonmind.repositories.lore_adapter import LoreRepositoryProviderAdapter
@@ -66,6 +66,7 @@ from moonmind.workflows.executions.repository_contract import (
     materialize_resolved_repository_target,
     reconcile_default_git_connection,
     repository_name_from_value,
+    repository_work_branch_arguments,
     resolve_selected_git_credential,
 )
 from moonmind.workflows.skills.run_projection import (
@@ -555,29 +556,7 @@ class ManagedRuntimeLauncher:
             skill_caps = ()
         if not isinstance(tool_caps, (list, tuple)):
             tool_caps = ()
-        work_branch_origin_raw = str(
-            parameters.get("workBranchOrigin") or ""
-        ).strip().lower()
-        allowed_work_branch_origins = {
-            "generated",
-            "selected",
-            "review_mapping",
-            "historical_branch",
-        }
-        if work_branch_origin_raw and (
-            work_branch_origin_raw not in allowed_work_branch_origins
-        ):
-            raise RepositoryContractError(
-                "REPOSITORY_TARGET_INVALID",
-                f"unsupported work branch origin {work_branch_origin_raw!r}",
-            )
-        work_branch_origin = cast(
-            Literal[
-                "generated", "selected", "review_mapping", "historical_branch"
-            ]
-            | None,
-            work_branch_origin_raw or None,
-        )
+        work_branch_arguments = repository_work_branch_arguments(parameters)
 
         expected_remote_tip: str | None = None
         if operation != "read":
@@ -656,13 +635,7 @@ class ManagedRuntimeLauncher:
             evidence=observed,
             client_policy=connection.client_policy,
             publish_mode=publish_mode,
-            work_branch=(
-                str(parameters.get("workBranch") or "").strip() or None
-            ),
-            work_branch_id=(
-                str(parameters.get("workBranchId") or "").strip() or None
-            ),
-            work_branch_origin=work_branch_origin,
+            **work_branch_arguments,
             projection=connection.projection,
         )
 

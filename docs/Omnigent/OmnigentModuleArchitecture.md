@@ -317,7 +317,13 @@ admit current settings. A replay patch preserves older request payloads.
 Fresh native steps with equivalent configuration use this same fenced handoff
 after fixed, implicit or pool account selection, without rewriting their stored
 submission. Older parents without the handoff retain their recorded commands.
-Untranslated native context/workspaces and tier parameters retain their adapter.
+Supported tier publication and repository-capability defaults use the
+same frozen grant handoff, with the native resolver's explicit-parameter precedence.
+Retries preserve both supplied and absent defaults after Profile edits. Repository
+work-branch parameters retain authoring metadata in that handoff; physical
+checkout branches come from the workspace specification on both paths.
+Invalid repository metadata and untranslated native context/workspaces,
+environment overrides and other tier options retain their adapter.
 An admitted shared context cannot fall back to a fresh direct session when a
 later Profile edit introduces unsupported settings; the step reports that gap.
 Fixed step accounts, harnesses and distinct model/effort pairs have
