@@ -5,15 +5,21 @@ from __future__ import annotations
 import asyncio
 import threading
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from temporalio.testing import ActivityEnvironment
 
 from api_service.db.models import Base, TemporalArtifactStatus
 from moonmind.workflows.temporal.artifacts import (
+    LIFECYCLE_SWEEP_TIME_BUDGET,
+    LifecycleSweepSummary,
     LocalTemporalArtifactStore,
     TemporalArtifactActivities,
     TemporalArtifactRepository,
@@ -22,6 +28,22 @@ from moonmind.workflows.temporal.artifacts import (
 )
 
 pytestmark = [pytest.mark.asyncio]
+
+
+def _activity_environment(*, elapsed_minutes: int = 0) -> ActivityEnvironment:
+    environment = ActivityEnvironment()
+    now = datetime.now(UTC)
+    environment.info = replace(
+        environment.info,
+        scheduled_time=now - timedelta(minutes=elapsed_minutes),
+        current_attempt_scheduled_time=now,
+        started_time=now,
+        schedule_to_close_timeout=timedelta(minutes=50),
+        start_to_close_timeout=timedelta(minutes=45),
+        attempt=2 if elapsed_minutes else 1,
+    )
+    return environment
+
 
 @asynccontextmanager
 async def temporal_db(tmp_path: Path):
@@ -225,6 +247,76 @@ async def test_lifecycle_sweep_activity_drains_and_reports_completion(
             assert summary.drained is True
 
 
+@pytest.mark.parametrize("elapsed_minutes", [0, 24])
+async def test_lifecycle_activity_uses_remaining_original_window(
+    elapsed_minutes: int,
+) -> None:
+    environment = _activity_environment(elapsed_minutes=elapsed_minutes)
+    summary = LifecycleSweepSummary("sweep", 0, 0, 0, drained=False)
+    service = SimpleNamespace(drain_lifecycle=AsyncMock(return_value=summary))
+    result = await environment.run(
+        TemporalArtifactActivities(service).artifact_lifecycle_sweep,
+        principal="service:lifecycle",
+    )
+
+    budget = service.drain_lifecycle.call_args.kwargs["time_budget"]
+    assert budget == LIFECYCLE_SWEEP_TIME_BUDGET - (
+        environment.info.started_time - environment.info.scheduled_time
+    )
+    assert result is summary
+
+
+async def test_expired_retry_keeps_committed_deletions_and_pinned_bytes(
+    tmp_path: Path,
+) -> None:
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+                lifecycle_hard_delete_after_seconds=0,
+            )
+            artifact_ids = await _create_expired_artifacts(service, 4)
+            pinned_id = artifact_ids.pop()
+            await service.pin(
+                artifact_id=pinned_id, principal="user-1", reason="retained evidence"
+            )
+            first = await service.sweep_lifecycle(
+                principal="service:lifecycle", run_id="before-replacement", limit=1
+            )
+            assert first.hard_deleted_count == 1
+            rows = [await service._repository.get_artifact(i) for i in artifact_ids]
+            committed = [row for row in rows if row.hard_deleted_at is not None]
+            assert len(committed) == 1
+            committed_at = committed[0].hard_deleted_at
+            activities = TemporalArtifactActivities(service)
+
+            expired_retry = await _activity_environment(elapsed_minutes=45).run(
+                activities.artifact_lifecycle_sweep,
+                principal="service:lifecycle",
+                run_id="expired-retry",
+            )
+
+            assert expired_retry.pages == 0
+            assert expired_retry.drained is False
+            assert expired_retry.hard_deleted_count == 0
+            assert sum(row.hard_deleted_at is not None for row in rows) == 1
+
+            next_pass = await _activity_environment().run(
+                activities.artifact_lifecycle_sweep,
+                principal="service:lifecycle",
+                run_id="next-scheduled-pass",
+            )
+
+            assert next_pass.hard_deleted_count == 2
+            assert next_pass.drained is True
+            assert committed[0].hard_deleted_at == committed_at
+            assert committed[0].last_lifecycle_run_id == "before-replacement"
+            pinned = await service._repository.get_artifact(pinned_id)
+            assert pinned.status is TemporalArtifactStatus.COMPLETE
+            assert service._store.read_bytes(pinned.storage_key) == b"payload-3"
+
+
 async def test_lifecycle_drain_continues_through_a_deletion_intent_backlog(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -271,13 +363,9 @@ async def test_lifecycle_sweep_activity_heartbeats_within_a_page(
 ) -> None:
     """A slow page must not outlive the heartbeat timeout between heartbeats."""
 
-    from temporalio import activity
-
     heartbeats: list[object] = []
-    monkeypatch.setattr(activity, "in_activity", lambda: True)
-    monkeypatch.setattr(
-        activity, "heartbeat", lambda *details: heartbeats.append(details)
-    )
+    environment = _activity_environment()
+    environment.on_heartbeat = lambda *details: heartbeats.append(details)
 
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -297,7 +385,8 @@ async def test_lifecycle_sweep_activity_heartbeats_within_a_page(
             monkeypatch.setattr(service._store, "delete", observed_delete)
 
             activities = TemporalArtifactActivities(service)
-            summary = await activities.artifact_lifecycle_sweep(
+            summary = await environment.run(
+                activities.artifact_lifecycle_sweep,
                 principal="service:storage-maintenance"
             )
 
@@ -404,8 +493,6 @@ async def test_lifecycle_drain_reports_stalled_deletion_intent_backlog(
 async def test_lifecycle_sweep_activity_heartbeats_during_slow_page(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, slow_operation: str
 ) -> None:
-    from temporalio.testing import ActivityEnvironment
-
     from moonmind.workflows.temporal import activity_runtime
 
     monkeypatch.setattr(
@@ -455,7 +542,7 @@ async def test_lifecycle_sweep_activity_heartbeats_during_slow_page(
                 monkeypatch.setattr(
                     service._repository, method_name, slow_database_operation
                 )
-            environment = ActivityEnvironment()
+            environment = _activity_environment()
             environment.on_heartbeat = observe_heartbeat
             task = asyncio.create_task(
                 environment.run(
@@ -479,8 +566,6 @@ async def test_lifecycle_sweep_activity_heartbeats_during_slow_page(
 async def test_lifecycle_sweep_activity_tolerates_heartbeat_backpressure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from temporalio import activity
-
     heartbeats = 0
 
     def heartbeat(*details: object) -> None:
@@ -488,8 +573,8 @@ async def test_lifecycle_sweep_activity_tolerates_heartbeat_backpressure(
         heartbeats += 1
         raise asyncio.QueueFull
 
-    monkeypatch.setattr(activity, "in_activity", lambda: True)
-    monkeypatch.setattr(activity, "heartbeat", heartbeat)
+    environment = _activity_environment()
+    environment.on_heartbeat = heartbeat
 
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -500,7 +585,8 @@ async def test_lifecycle_sweep_activity_tolerates_heartbeat_backpressure(
             )
             await _create_expired_artifacts(service, 1)
             activities = TemporalArtifactActivities(service)
-            summary = await activities.artifact_lifecycle_sweep(
+            summary = await environment.run(
+                activities.artifact_lifecycle_sweep,
                 principal="service:lifecycle"
             )
 
