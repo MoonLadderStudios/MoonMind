@@ -12,7 +12,9 @@ and the admitted body, so an Activity retry or a restarted step reuses it and
 the adapter's footer reconciliation runs before any repeat POST. Every outcome
 is persisted as an ``output.primary`` result artifact; an uncertain delivery
 keeps the exact work and its next automated action instead of reporting
-success.
+success. Only a completed footer lookup can show the note is absent, so a
+refused lookup, or a retried or continued operation that stops before its
+lookup, stays uncertain rather than undelivered.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from typing import Any, Awaitable, Callable, Literal, Mapping
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from temporalio import activity
 
 from moonmind.integrations.gitlab.adapter import GitLabMRAdapter
 from moonmind.integrations.gitlab.client import (
@@ -260,20 +263,29 @@ class _Attempt:
             }
 
     async def run(self) -> ToolResult:
+        error: _Outcome | None = None
         try:
             adapter, clients = await self._open_adapter()
         except _Outcome as outcome:
-            return await self._finish("failed", error=outcome)
-        error: _Outcome | None = None
-        try:
-            await self._read(adapter)
-            if self.request.note is not None:
-                await self._post_note(adapter)
-        except _Outcome as outcome:
             error = outcome
-        finally:
-            for client in clients:
-                await client.aclose()
+        else:
+            try:
+                await self._read(adapter)
+                if self.request.note is not None:
+                    await self._post_note(adapter)
+            except _Outcome as outcome:
+                error = outcome
+            finally:
+                for client in clients:
+                    await client.aclose()
+        if (
+            error is not None
+            and self.note["deliveryState"] == "not_attempted"
+            and self._continues_earlier_attempt()
+        ):
+            # An earlier attempt's note may have landed, and this one stopped
+            # before its footer lookup could show otherwise.
+            self._hand_off("reconciliation_not_reached")
         if self.note["deliveryState"] == "uncertain":
             return await self._finish("uncertain", error=error)
         return await self._finish("failed" if error else "completed", error=error)
@@ -390,24 +402,49 @@ class _Attempt:
             outcome = _error_of(exc)
             if outcome.retryable:
                 # The POST may have landed: the retry reconciles first.
-                self.note.update(
-                    deliveryState="uncertain", reason="acknowledgment_lost"
-                )
-            else:
-                # Refused before or by the POST: this attempt created no note.
+                self._hand_off("acknowledgment_lost")
+            elif exc.action == "post_note":
+                # GitLab refused the POST after a complete lookup found no
+                # footer: no note exists for this operation.
                 self.note.update(deliveryState="not_delivered")
+            else:
+                # A refused lookup (expired token, identity rejection) is no
+                # evidence that an earlier attempt's note did not land.
+                self._hand_off("note_lookup_refused")
             raise outcome from None
         handoff = result.get("automation_handoff")
         if handoff is not None:
-            self.note.update(
-                deliveryState="uncertain",
-                reason=handoff["reason"],
-                automationHandoff={**handoff, "nextAction": self._next_action()},
-            )
+            self._hand_off(handoff["reason"], handoff)
             return
         self.note.update(
             deliveryState="reconciled" if result.get("reconciled") else "delivered",
             noteId=result.get("note_id"),
+        )
+
+    def _continues_earlier_attempt(self) -> bool:
+        """A Temporal retry or an explicit continuation may already have posted."""
+
+        note = self.request.note
+        if note is None:
+            return False
+        if note.operation_id is not None:
+            return True
+        return activity.in_activity() and activity.info().attempt > 1
+
+    def _hand_off(
+        self, reason: str, adapter_handoff: Mapping[str, Any] | None = None
+    ) -> None:
+        """Delivery is uncertain: keep the operation and its next action."""
+
+        self.note.update(
+            deliveryState="uncertain",
+            reason=reason,
+            automationHandoff={
+                "operation_id": self.note["operationId"],
+                "reason": reason,
+                **(adapter_handoff or {}),
+                "nextAction": self._next_action(),
+            },
         )
 
     def _next_action(self) -> dict[str, Any]:
@@ -511,8 +548,9 @@ class _Attempt:
         if outcome == "uncertain" and error is not None and error.retryable:
             raise ToolFailure(
                 "EXTERNAL_FAILED",
-                f"GitLab note {self.note['operationId']} acknowledgment was lost; "
-                "the retry reconciles its footer before posting.",
+                f"GitLab note {self.note['operationId']} delivery is uncertain "
+                f"({self.note['reason']}); the retry reconciles its footer "
+                "before posting.",
                 True,
                 details={
                     "operationId": self.note["operationId"],
