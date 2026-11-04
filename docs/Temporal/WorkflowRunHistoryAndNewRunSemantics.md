@@ -140,7 +140,7 @@ Before resetting, MoonMind requires that:
 - the latest run is the run the operator saw (`sourceRunId`, refused as `run_changed`) and is closed as failed, canceled, terminated, or timed out (`run_not_failed`);
 - the run is not a child owned by a parent workflow (`child_workflow`), because the parent owns its lifecycle;
 - a GitHub issue claim remains unreleased and GitHub confirms ownership of an open issue with no blocking status or hold (`issue_claim_released`, `issue_claim_unavailable`). An expired lease additionally requires no later attempt before reacquisition; live claims retain normal contender ordering. Retry confirms `status: in-progress`, restoring it after expiry cleanup if needed, preserves attempt identity and retry allowance, and holds the local claim lock through reset;
-- the history up to the chosen step replays against the installed workflow code (`history_not_replayable`), checked with the Temporal replayer before any reset, so an incompatible code change refuses the retry and leaves the failed run untouched;
+- the history up to the chosen step replays against the installed workflow code with both its recorded and a fresh reset run identity (`history_not_replayable`). Completed child saves retain their recorded parent identity during replay; new children use the reset run's identity. A failed check refuses the retry and leaves the failed run untouched;
 - the recorded Omnigent plan's inputs can be verified and linked before reset (`input_artifacts_unavailable`). Retained runs missing their original grants recover the exact input closure from the Temporal start input; current projection parameters cannot replace it. Incomplete delegation rolls back without resetting the run;
 - the history is still retained (`history_unavailable`).
 
@@ -150,7 +150,7 @@ Issue leases cross remediation Continue-As-New boundaries. Before dispatch, olde
 
 ### 7A.4 What is not repeated
 
-Steps before the chosen step are not re-executed: their activity and child-workflow results come from replayed history. Effects the chosen step or a later step performed before the failure, such as a pushed branch or an opened pull request, are not undone, and those steps meet that state when they run again. A run can be retried only while Temporal retains its history.
+Steps before the chosen step are not re-executed: their activity and child-workflow results come from replayed history. A completed agent child's recorded parent and Step Execution identities remain authoritative for its runtime context and saved checkpoint; newly executed steps use the successor run identity. Effects the chosen step or a later step performed before the failure, such as a pushed branch or an opened pull request, are not undone, and those steps meet that state when they run again. A run can be retried only while Temporal retains its history.
 
 ## 8. Continue-As-New outside a requested new run
 
