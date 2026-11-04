@@ -11,6 +11,7 @@ Implementation reference: MoonLadderStudios/MoonMind#3475.
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Literal, Mapping
 
@@ -20,6 +21,10 @@ from moonmind.schemas.agent_runtime_models import AUTO_RUNTIME_SENTINEL
 
 
 _SHA256_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+# Shared with the bounded-story evaluator so both loops name a spent wall clock
+# the same way.
+WALL_CLOCK_BUDGET_EXHAUSTED = "wall_clock_budget_exhausted"
 
 
 class _Contract(BaseModel):
@@ -87,6 +92,16 @@ class RemediationLoopBudgets(_Contract):
     cost_budget: int | None = Field(default=None, alias="costBudget", ge=0)
 
 
+# Provider, token and cost use reach this loop only as agent-reported numbers,
+# which cannot bound spending. Accepting a limit that nothing enforces would
+# promise a stop that never happens.
+_UNSUPPORTED_RESOURCE_BUDGETS = (
+    ("providerBudget", "provider_budget"),
+    ("tokenBudget", "token_budget"),
+    ("costBudget", "cost_budget"),
+)
+
+
 class RemediationTerminalPolicy(_Contract):
     fully_implemented: Literal["advance"] = Field(alias="fullyImplemented")
     additional_work_needed: Literal["continue_when_allowed", "stop"] = Field(
@@ -125,6 +140,22 @@ class RemediationLoopSpec(_Contract):
         if not value:
             raise ValueError("loopId is required")
         return value
+
+
+def validate_remediation_loop_resource_limits(spec: RemediationLoopSpec) -> None:
+    """Reject loop limits that have no authoritative consumption measure."""
+
+    unsupported = [
+        alias
+        for alias, field_name in _UNSUPPORTED_RESOURCE_BUDGETS
+        if getattr(spec.budgets, field_name) is not None
+    ]
+    if unsupported:
+        raise ValueError(
+            f"budgets.{', budgets.'.join(unsupported)} cannot be enforced: the "
+            "remediation loop has no authoritative provider, token, or cost "
+            "accounting. Set them to null; maxWallClockSeconds bounds the loop."
+        )
 
 
 def validate_remediation_loop_agent_instructions(spec: RemediationLoopSpec) -> None:
@@ -188,6 +219,20 @@ class RemediationLoopState(_Contract):
         default=None, alias="continuationReason"
     )
     continue_as_new_count: int = Field(default=0, alias="continueAsNewCount", ge=0)
+    # Workflow time of the loop's first verifier decision. Wall-clock use is
+    # measured from here and travels with the state, so no retry, restart or
+    # Continue-As-New can restart the clock. Absent for loops admitted before
+    # the limit was enforced; those keep running without one.
+    admitted_at: datetime | None = Field(default=None, alias="admittedAt")
+
+    @field_validator("admitted_at")
+    @classmethod
+    def _utc_origin(cls, value: datetime | None) -> datetime | None:
+        return (
+            value.replace(tzinfo=UTC)
+            if value is not None and value.tzinfo is None
+            else value
+        )
 
     @model_validator(mode="after")
     def _attempt_counter_matches_ordinal(self) -> "RemediationLoopState":
@@ -206,6 +251,15 @@ class RemediationLoopState(_Contract):
         if value is not None and not value.startswith("artifact://"):
             raise ValueError("loop evidence must use an artifact:// reference")
         return value
+
+
+RemediationBudgetDimension = Literal[
+    "remediation_attempts",
+    "consecutive_no_progress_attempts",
+    "repeated_failure_signature",
+    "evidence_retries",
+    "wall_clock",
+]
 
 
 class RemediationContinuationDecision(_Contract):
@@ -230,6 +284,9 @@ class RemediationContinuationDecision(_Contract):
     progress_ref: str | None = Field(default=None, alias="progressRef")
     retry_kind: Literal["evidence", "contract_repair"] | None = Field(
         default=None, alias="retryKind"
+    )
+    exhausted_dimension: RemediationBudgetDimension | None = Field(
+        default=None, alias="exhaustedDimension"
     )
 
     @model_validator(mode="after")
@@ -423,12 +480,48 @@ def should_continue_as_new(
     )
 
 
+def remediation_loop_wall_clock(
+    *, spec: RemediationLoopSpec, state: RemediationLoopState, now: datetime
+) -> dict[str, object] | None:
+    """Return the loop's limit, consumed, remaining and exhausted wall clock.
+
+    ``None`` means the loop has no enforceable wall-clock limit: either none
+    was configured or the loop predates its durable origin.
+    """
+
+    limit = spec.budgets.max_wall_clock_seconds
+    if limit is None or state.admitted_at is None:
+        return None
+    consumed = max(0.0, (now - state.admitted_at).total_seconds())
+    return {
+        "admittedAt": state.admitted_at.isoformat(),
+        "limitSeconds": limit,
+        "consumedSeconds": int(consumed),
+        "remainingSeconds": max(0, int(limit - consumed)),
+        "exhausted": consumed >= limit,
+    }
+
+
+def remediation_loop_remaining_seconds(
+    *, spec: RemediationLoopSpec, state: RemediationLoopState, now: datetime
+) -> float | None:
+    """Seconds the loop may still spend on new operations; ``None`` is unbounded."""
+
+    limit = spec.budgets.max_wall_clock_seconds
+    if limit is None or state.admitted_at is None:
+        return None
+    return limit - max(0.0, (now - state.admitted_at).total_seconds())
+
+
 def project_remediation_loop(
-    *, spec: RemediationLoopSpec, state: RemediationLoopState
+    *,
+    spec: RemediationLoopSpec,
+    state: RemediationLoopState,
+    now: datetime | None = None,
 ) -> dict[str, object]:
     """Return the compact API/UI projection; never include evidence bodies."""
 
-    return {
+    projection: dict[str, object] = {
         "loopId": state.loop_id,
         "status": state.phase.value,
         "attemptOrdinal": state.attempt_ordinal,
@@ -444,6 +537,14 @@ def project_remediation_loop(
             by_alias=True, mode="json"
         ),
     }
+    wall_clock = (
+        remediation_loop_wall_clock(spec=spec, state=state, now=now)
+        if now is not None
+        else None
+    )
+    if wall_clock is not None:
+        projection["wallClockBudget"] = wall_clock
+    return projection
 
 
 def resolve_loop_runtime(
@@ -584,11 +685,25 @@ def decide_remediation_continuation(
     recoverable_evidence: bool = False,
     recommended_next_action: str | None = None,
     evidence_recovery_enabled: bool = True,
+    now: datetime | None = None,
+    cancel_requested: bool = False,
 ) -> RemediationContinuationDecision:
-    """Return the one deterministic routing decision for verifier evidence."""
+    """Return the one deterministic routing decision for verifier evidence.
+
+    Acceptance and explicit stops are judged first. A canceled run admits no
+    further operation. Otherwise another operation is admitted only while every
+    enforced budget, including the loop's wall clock at ``now``, still has
+    allowance; the decision names the spent dimension.
+    """
 
     if state.loop_id != spec.loop_id:
         raise ValueError("loop state does not belong to loop specification")
+    remaining = (
+        remediation_loop_remaining_seconds(spec=spec, state=state, now=now)
+        if now is not None
+        else None
+    )
+    wall_clock_spent = remaining is not None and remaining <= 0
     normalized = verdict.strip().upper()
     common = {
         "loopId": spec.loop_id,
@@ -637,34 +752,91 @@ def decide_remediation_continuation(
                 "nextPhase": recommended_next_action,
             }
         )
+    if cancel_requested and (
+        retryable_block or normalized in {"ADDITIONAL_WORK_NEEDED", "NO_DETERMINATION"}
+    ):
+        return RemediationContinuationDecision.model_validate(
+            {
+                **common,
+                "continueLoop": False,
+                "reason": "cancellation_requested",
+                "nextPhase": "stopped_remaining_work",
+            }
+        )
     if normalized == "NO_DETERMINATION" or retryable_block:
-        can_retry = (
+        retry_permitted = (
             recoverable_evidence
             and spec.terminal_policy.no_determination == "retry_evidence_or_stop"
-            and state.consumed_budgets.evidence_retries < spec.budgets.max_evidence_retries
         )
+        retries_spent = (
+            state.consumed_budgets.evidence_retries >= spec.budgets.max_evidence_retries
+        )
+        can_retry = retry_permitted and not retries_spent and not wall_clock_spent
+        exhausted: str | None = None
+        if retry_permitted and retries_spent:
+            exhausted = "evidence_retries"
+        elif retry_permitted and wall_clock_spent:
+            exhausted = "wall_clock"
         return RemediationContinuationDecision.model_validate(
             {
                 **common,
                 "continueLoop": can_retry,
-                "reason": "recoverable_evidence_retry" if can_retry else "evidence_unavailable",
-                "nextPhase": "verification_pending" if can_retry else ("blocked" if evidence_recovery_enabled else "needs_human"),
+                "reason": (
+                    "recoverable_evidence_retry"
+                    if can_retry
+                    else (
+                        WALL_CLOCK_BUDGET_EXHAUSTED
+                        if exhausted == "wall_clock"
+                        else "evidence_unavailable"
+                    )
+                ),
+                "nextPhase": (
+                    "verification_pending"
+                    if can_retry
+                    else ("blocked" if evidence_recovery_enabled else "needs_human")
+                ),
                 "retryKind": "evidence" if can_retry else None,
+                "exhaustedDimension": exhausted,
             }
         )
     if normalized != "ADDITIONAL_WORK_NEEDED":
         raise ValueError(f"unsupported verifier verdict: {verdict}")
 
     consumed = state.consumed_budgets
-    allowed = (
-        spec.terminal_policy.additional_work_needed == "continue_when_allowed"
-        and consumed.attempts < spec.budgets.hard_max_attempts
-        and consumed.consecutive_semantic_no_progress
-        < spec.budgets.max_consecutive_semantic_no_progress
-        and consumed.repeated_failure_signature
-        < spec.budgets.max_repeated_failure_signature
+    exhausted = next(
+        (
+            dimension
+            for dimension, spent in (
+                (
+                    "remediation_attempts",
+                    consumed.attempts >= spec.budgets.hard_max_attempts,
+                ),
+                (
+                    "consecutive_no_progress_attempts",
+                    consumed.consecutive_semantic_no_progress
+                    >= spec.budgets.max_consecutive_semantic_no_progress,
+                ),
+                (
+                    "repeated_failure_signature",
+                    consumed.repeated_failure_signature
+                    >= spec.budgets.max_repeated_failure_signature,
+                ),
+                ("wall_clock", wall_clock_spent),
+            )
+            if spent
+        ),
+        None,
     )
-    reason = "verification_requested_remediation" if allowed else "remediation_budget_or_progress_exhausted"
+    policy_allows = (
+        spec.terminal_policy.additional_work_needed == "continue_when_allowed"
+    )
+    allowed = policy_allows and exhausted is None
+    if allowed:
+        reason = "verification_requested_remediation"
+    elif policy_allows and exhausted == "wall_clock":
+        reason = WALL_CLOCK_BUDGET_EXHAUSTED
+    else:
+        reason = "remediation_budget_or_progress_exhausted"
     return RemediationContinuationDecision.model_validate(
         {
             **common,
@@ -672,6 +844,57 @@ def decide_remediation_continuation(
             "reason": reason,
             "nextAttempt": consumed.attempts + 1 if allowed else None,
             "nextPhase": "remediation_pending" if allowed else "stopped_remaining_work",
+            "exhaustedDimension": exhausted,
+        }
+    )
+
+
+def refuse_exhausted_remediation_operation(
+    *, spec: RemediationLoopSpec, state: RemediationLoopState, now: datetime
+) -> RemediationContinuationDecision | None:
+    """Stop an admitted operation that the loop no longer has time to start.
+
+    A pair admitted while time remained can reach dispatch after the deadline,
+    for example after an operator pause or once remediation used the rest.
+    The stop keeps the latest candidate and verifier evidence as they are.
+    """
+
+    remaining = remediation_loop_remaining_seconds(spec=spec, state=state, now=now)
+    if remaining is None or remaining > 0:
+        return None
+    return RemediationContinuationDecision.model_validate(
+        {
+            "loopId": spec.loop_id,
+            "currentAttempt": state.attempt_ordinal,
+            "verdict": state.latest_verdict or "ADDITIONAL_WORK_NEEDED",
+            "continueLoop": False,
+            "reason": WALL_CLOCK_BUDGET_EXHAUSTED,
+            "nextPhase": "stopped_remaining_work",
+            "workspaceHeadRef": state.workspace_head_ref,
+            "gateResultRef": state.latest_verification_ref or "",
+            "remainingWorkRef": state.latest_progress_ref,
+            "exhaustedDimension": "wall_clock",
+        }
+    )
+
+
+def apply_operation_refusal(
+    state: RemediationLoopState,
+    *,
+    decision: RemediationContinuationDecision,
+    decision_ref: str,
+) -> RemediationLoopState:
+    """Record a dispatch-time stop without consuming or rewriting attempts."""
+
+    if decision.continue_loop or decision.loop_id != state.loop_id:
+        raise ValueError("operation refusal must stop this loop")
+    if not decision_ref.startswith("artifact://"):
+        raise ValueError("continuation decision must use an artifact:// reference")
+    return state.model_copy(
+        update={
+            "phase": decision.next_phase,
+            "continuation_decision_ref": decision_ref,
+            "continuation_reason": decision.reason,
         }
     )
 

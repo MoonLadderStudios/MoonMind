@@ -209,17 +209,22 @@ with workflow.unsafe.imports_passed_through():
         RemediationLoopPhase,
         RemediationLoopSpec,
         RemediationLoopState,
+        WALL_CLOCK_BUDGET_EXHAUSTED,
+        apply_operation_refusal,
         materialize_attempt_nodes,
         materialize_evidence_retry_node,
         project_remediation_loop,
         record_semantic_progress,
         record_verification_evidence,
+        refuse_exhausted_remediation_operation,
+        remediation_loop_remaining_seconds,
         remediation_step_execution_id,
         resolve_loop_runtime,
         should_continue_as_new,
         start_remediation_attempt,
         start_verification,
         validate_remediation_loop_agent_instructions,
+        validate_remediation_loop_resource_limits,
     )
 
 from moonmind.core.artifacts import durable_artifact_ref, temporal_artifact_id
@@ -1102,6 +1107,10 @@ RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH = "run-remediation-loop-continue-as-n
 RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH = (
     "run-remediation-loop-artifact-ref-normalization-v1"
 )
+# The dynamic loop enforces its admitted wall clock and rejects resource limits
+# it cannot measure. Loops recorded without the marker carry no origin and keep
+# their original routing and evidence-wait commands.
+RUN_REMEDIATION_LOOP_RESOURCE_LIMITS_PATCH = "run-remediation-loop-resource-limits-v1"
 # A failed assessment stops the plan before its success-ordered issue-status
 # node. Record the controlling terminal with the existing durable finalizer;
 # retained histories keep their original terminal command sequence.
@@ -3044,16 +3053,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
     ) -> dict[str, Any]:
         """Return the successor policy bounded by the Step's remaining ceiling."""
 
-        remaining = max(1, int(budget.max_seconds - consumed_seconds))
-        base = min(budget.base_seconds, remaining)
         return {
             **dict(timeout_policy or {}),
-            **ExecutionBudget(
-                base_seconds=base,
-                max_seconds=remaining,
-                progress_stall_seconds=min(budget.progress_stall_seconds, base),
-                mode=budget.mode,
-            ).as_timeout_policy(),
+            **budget.within(budget.max_seconds - consumed_seconds).as_timeout_policy(),
         }
 
     def _carry_interrupted_omnigent_step_workspace(
@@ -4265,6 +4267,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         spec = RemediationLoopSpec.model_validate(dict(controllers[0]))
         if require_agent_instructions:
             validate_remediation_loop_agent_instructions(spec)
+        if workflow.patched(RUN_REMEDIATION_LOOP_RESOURCE_LIMITS_PATCH):
+            validate_remediation_loop_resource_limits(spec)
         # Loop tools are authored as ``auto``: they inherit the run's resolved
         # runtime from the controller plan node so every materialized attempt
         # routes exactly like the authored steps of the same run. An unresolvable
@@ -4440,6 +4444,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         state_payload = state.model_dump(by_alias=True, mode="json")
         if not workflow.patched(RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH):
             state_payload.pop("latestProgressSignature", None)
+        if state_payload.get("admittedAt") is None:
+            state_payload.pop("admittedAt", None)
         continuation: dict[str, Any] = {
             "schemaVersion": 1,
             "linkedRecoveryRetired": self._linked_recovery_retired,
@@ -4553,6 +4559,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         projection = project_remediation_loop(
             spec=spec,
             state=state,
+            now=workflow.now() if state.admitted_at is not None else None,
         )
         pairs: dict[int, dict[str, object]] = {}
         for row in self._step_ledger_rows:
@@ -4899,6 +4906,106 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         _, runtime_block = resolve_loop_runtime(self._remediation_loop_runtime)
         return runtime_block
 
+    def _is_remediation_loop_operation(self, node: Mapping[str, Any]) -> bool:
+        spec = self._remediation_loop_spec
+        return spec is not None and (
+            self._node_annotations_mapping(node).get("remediationLoopId")
+            == spec.loop_id
+        )
+
+    def _bound_remediation_loop_request(
+        self, request: AgentExecutionRequest
+    ) -> AgentExecutionRequest:
+        """Grant one loop operation no more time than the loop has left.
+
+        The Step's own budget still applies when it is smaller. The finishing
+        allowance for saving and cleanup stays separate, so a deadline reached
+        mid-operation still preserves the candidate.
+        """
+
+        spec, state = self._remediation_loop_spec, self._remediation_loop_state
+        if spec is None or state is None:
+            return request
+        remaining = remediation_loop_remaining_seconds(
+            spec=spec, state=state, now=workflow.now()
+        )
+        if remaining is None:
+            return request
+        budget = resolve_execution_budget(
+            agent_kind=request.agent_kind, timeout_policy=request.timeout_policy
+        )
+        return request.model_copy(
+            update={
+                "timeout_policy": {
+                    **request.timeout_policy,
+                    **budget.within(remaining).as_timeout_policy(),
+                }
+            }
+        )
+
+    async def _refuse_exhausted_remediation_operation(
+        self, node: Mapping[str, Any]
+    ) -> str | None:
+        """Stop the loop instead of starting an operation it has no time for."""
+
+        spec, state = self._remediation_loop_spec, self._remediation_loop_state
+        if (
+            spec is None
+            or state is None
+            or not self._is_remediation_loop_operation(node)
+        ):
+            return None
+        decision = refuse_exhausted_remediation_operation(
+            spec=spec, state=state, now=workflow.now()
+        )
+        if decision is None:
+            return None
+        decision_ref = self._bounded_story_loop_artifact_ref(
+            await self._write_json_artifact(
+                name=(
+                    "reports/remediation_decision_"
+                    f"{spec.loop_id}_attempt_{state.attempt_ordinal}_refused.json"
+                ),
+                payload=decision.model_dump(by_alias=True, mode="json"),
+            )
+        )
+        if decision_ref is None:
+            raise ValueError(
+                "remediation loop refusal requires an artifact continuation decision"
+            )
+        state = apply_operation_refusal(
+            state, decision=decision, decision_ref=decision_ref
+        )
+        self._remediation_loop_state = state
+        self._sync_remediation_loop_projection()
+        summary = (
+            f"Skipped {node.get('title') or node.get('id')} because the "
+            "remediation loop's wall-clock budget of "
+            f"{spec.budgets.max_wall_clock_seconds}s was exhausted before it "
+            "could start; the latest candidate and verifier evidence are preserved."
+        )
+        self._workflow_control_stop = {
+            "kind": "workflow_gate",
+            "reasonCode": WALL_CLOCK_BUDGET_EXHAUSTED,
+            "logicalStepId": str(node.get("id") or ""),
+            "verdict": decision.verdict,
+            "terminalDisposition": "failed_with_remaining_work",
+            "gateResultRef": decision.gate_result_ref or None,
+            "continuationDecisionRef": decision_ref,
+            "remainingWorkRef": decision.remaining_work_ref,
+            "workspaceHeadRef": decision.workspace_head_ref,
+            "exhaustedBudgetDimension": "wall_clock",
+            "publicationAttempted": False,
+            "metrics": {
+                "failureKind": "workflow_gate",
+                "gateVerdict": decision.verdict,
+                "gateReason": WALL_CLOCK_BUDGET_EXHAUSTED,
+                "candidatePreserved": bool(decision.workspace_head_ref),
+                "remediationAdmitted": False,
+            },
+        }
+        return summary
+
     async def _evaluate_dynamic_remediation_verification(
         self,
         *,
@@ -4998,6 +5105,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             raise ValueError(
                 "dynamic remediation verification requires an artifact gate result"
             )
+        if (
+            state.admitted_at is None
+            and state.phase == RemediationLoopPhase.INITIAL_VERIFICATION_PENDING
+            and workflow.patched(RUN_REMEDIATION_LOOP_RESOURCE_LIMITS_PATCH)
+        ):
+            # The loop's clock starts at its first verifier decision. The
+            # initial implementation and verification ran under their own
+            # Step budgets, and long authored plans must not spend the loop's.
+            state = state.model_copy(update={"admitted_at": workflow.now()})
+        resource_limited = state.admitted_at is not None
         if state.phase in {
             RemediationLoopPhase.INITIAL_VERIFICATION_PENDING,
             RemediationLoopPhase.VERIFICATION_PENDING,
@@ -5028,12 +5145,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             remaining_work_ref=remaining_work_ref,
             progress_ref=remaining_work_ref,
             recoverable_evidence=recoverable_evidence,
-            evidence_recovery_enabled=workflow.patched("run-materialize-evidence-retry-v1"),
+            evidence_recovery_enabled=workflow.patched(
+                "run-materialize-evidence-retry-v1"
+            ),
             recommended_next_action=(
                 recommended_next_action
                 if workflow.patched(RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH)
                 else None
             ),
+            now=workflow.now() if resource_limited else None,
+            cancel_requested=resource_limited and self._cancel_requested,
         )
         decision_ref = await self._write_json_artifact(
             name=(
@@ -5183,7 +5304,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._sync_progress_snapshot(updated_at=workflow.now())
         if continue_after_admission:
             await workflow.wait_condition(workflow.all_handlers_finished)
-            self._continue_remediation_loop_as_new(ordered_nodes=ordered_nodes)
+            # A new run would not know this one was canceled and would start
+            # the admitted pair.
+            if not (resource_limited and self._cancel_requested):
+                self._continue_remediation_loop_as_new(ordered_nodes=ordered_nodes)
 
         return admitted
 
@@ -10088,8 +10212,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             draft_context.get("policy") if isinstance(draft_context, Mapping) else None
         )
         if policy == "draft_pr_on_additional_work_needed":
+            loop_state = self._remediation_loop_state
             explanation = (
-                "the bounded remediation budget was exhausted with remaining "
+                "the remediation loop's wall-clock budget was exhausted with "
+                "remaining implementation work"
+                if loop_state is not None
+                and loop_state.continuation_reason == WALL_CLOCK_BUDGET_EXHAUSTED
+                else "the bounded remediation budget was exhausted with remaining "
                 "implementation work"
             )
             if (
@@ -13434,6 +13563,21 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     self._refresh_step_readiness(updated_at=workflow.now())
                     self._update_memo()
                     continue
+            refused_summary = await self._refuse_exhausted_remediation_operation(node)
+            if refused_summary:
+                self._plan_blocked_message = refused_summary
+                self._publish_status = "not_required"
+                self._publish_reason = refused_summary
+                self._publish_context["publicationBlockedBy"] = "moonspec_verify"
+                self._summary = refused_summary
+                self._mark_remaining_plan_steps_skipped(
+                    ordered_nodes=ordered_nodes,
+                    completed_index=index - 2,
+                    summary=refused_summary,
+                )
+                self._refresh_step_readiness(updated_at=workflow.now())
+                self._update_memo()
+                break
             if workflow.patched(
                 RUN_ISSUE_IMPLEMENT_PR_HANDOFF_AUTHORITY_PATCH
             ):
@@ -13879,6 +14023,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                     trusted_remediation_checkpoint_restore_ref
                                 ),
                             )
+                            if self._is_remediation_loop_operation(node):
+                                request = self._bound_remediation_loop_request(request)
                             agent_request_for_context = request
                             if (
                                 node_id == self._recovery_failed_step_id
@@ -15784,6 +15930,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             }
                         ):
                             transition_reason = continuation_decision["reason"]
+                        elif (
+                            loop_state is not None
+                            and loop_state.continuation_reason
+                            == WALL_CLOCK_BUDGET_EXHAUSTED
+                        ):
+                            transition_reason = WALL_CLOCK_BUDGET_EXHAUSTED
                         elif isinstance(consumed_payload, Mapping) and int(
                             consumed_payload.get("consecutiveNoProgressAttempts", 0)
                             or 0
@@ -15850,15 +16002,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 remaining_work_ref
                             )
                         feasibility = self._publication_feasibility(execution_result)
-                        exhausted_budget_dimension = (
-                            "consecutive_no_progress_attempts"
-                            if transition_reason == "no_progress_attempts_exhausted"
-                            else (
-                                "remediation_attempts"
-                                if transition_reason == "remediation_budget_exhausted"
-                                else None
-                            )
-                        )
+                        exhausted_budget_dimension = {
+                            "no_progress_attempts_exhausted": (
+                                "consecutive_no_progress_attempts"
+                            ),
+                            "remediation_budget_exhausted": "remediation_attempts",
+                            WALL_CLOCK_BUDGET_EXHAUSTED: "wall_clock",
+                        }.get(transition_reason)
                         self._workflow_control_stop = {
                             "kind": "workflow_gate",
                             "reasonCode": transition_reason,
@@ -15937,6 +16087,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             "semantic_no_progress_exhausted": (
                                 "Skipped because consecutive remediation cycles "
                                 "produced no new progress."
+                            ),
+                            WALL_CLOCK_BUDGET_EXHAUSTED: (
+                                "Skipped because the remediation loop's wall-clock "
+                                "budget of "
+                                f"{self._remediation_loop_spec.budgets.max_wall_clock_seconds}s "
+                                "was exhausted."
+                                if self._remediation_loop_spec is not None
+                                else blocking_gate_reason
                             ),
                             "terminal_gate_verdict": (
                                 "Skipped because verification returned "

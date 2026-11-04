@@ -143,6 +143,22 @@ class ExecutionBudget(BaseModel):
             mode="flat",
         )
 
+    def within(self, remaining_seconds: float) -> "ExecutionBudget":
+        """This budget limited to what an enclosing allowance still has left.
+
+        An interrupted Step's successor and each remediation-loop operation get
+        their allowance this way, so neither can outlive its owner's deadline.
+        """
+
+        remaining = max(1, int(remaining_seconds))
+        base_seconds = min(self.base_seconds, remaining)
+        return ExecutionBudget(
+            base_seconds=base_seconds,
+            max_seconds=min(self.max_seconds, remaining),
+            progress_stall_seconds=min(self.progress_stall_seconds, base_seconds),
+            mode=self.mode,
+        )
+
     def deadline_seconds(self, last_progress_seconds: float | None = None) -> float:
         """Effective deadline on the logical step's productive-time clock."""
 

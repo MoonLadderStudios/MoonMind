@@ -339,8 +339,9 @@ budget; concrete code findings use the existing same-PR remediation owner.
 
 The continuation decision is persisted before further dispatch. Pending jobs and
 unchanged missing capabilities wait without charging implementation attempts.
-The existing loop wall-clock limit remains controlling; where it is omitted,
-the post-publication observation window is one hour. Exhaustion retains the PR,
+The loop's wall-clock limit, measured from its first verifier decision and
+carried across Continue-As-New, remains controlling; where it is omitted, the
+post-publication observation window is one hour. Exhaustion retains the PR,
 precise missing proof, owner, counters and next action without claiming another
 continuation has been scheduled. Cancellation, explicit human decisions and
 operator pauses retain their existing meanings. Retained histories do not gain

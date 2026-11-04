@@ -1,4 +1,5 @@
 import inspect
+import json
 from datetime import timedelta
 from typing import Any
 
@@ -19,6 +20,7 @@ from moonmind.workflows.temporal.remediation_loop import (
     RemediationLoopSpec,
     RemediationLoopState,
     apply_continuation_decision,
+    capture_remediation_candidate,
 )
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.run import (
@@ -37,6 +39,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_REMEDIATION_CONTINUE_MANAGED_SESSION_PATCH,
     RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH,
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
+    RUN_REMEDIATION_LOOP_RESOURCE_LIMITS_PATCH,
     RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
     RUN_REFRESH_MOONSPEC_BLOCK_AFTER_REMEDIATION_DECISION_PATCH,
     RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
@@ -1188,6 +1191,155 @@ async def test_workflow_owned_remediation_head_histories_replay() -> None:
     )
     await replayer.replay_workflow(legacy_history)
     await replayer.replay_workflow(current_history)
+
+
+async def _wall_clock_loop_routes() -> list[str | None]:
+    """Drive the production controller across its loop deadline on Temporal time."""
+
+    parent = MoonMindRunWorkflow()
+    parent._initialize_remediation_loop_controller(
+        ordered_nodes=[
+            {
+                "id": "controller",
+                "tool": {"type": "agent_runtime", "name": "codex_cli"},
+                "inputs": {"runtime": {"mode": "codex_cli"}},
+                "annotations": {
+                    "remediationLoop": {
+                        "loopId": "loop",
+                        "remediationTool": {
+                            "type": "agent_runtime",
+                            "name": "auto",
+                            "inputs": {"instructions": "Remediate."},
+                        },
+                        "verificationTool": {
+                            "type": "agent_runtime",
+                            "name": "auto",
+                            "inputs": {"instructions": "Verify."},
+                        },
+                        "workspacePolicy": "continue_from_loop_head",
+                        "budgets": {"hardMaxAttempts": 6, "maxWallClockSeconds": 60},
+                        "terminalPolicy": {
+                            "fullyImplemented": "advance",
+                            "additionalWorkNeeded": "continue_when_allowed",
+                            "blocked": "stop",
+                            "noDetermination": "retry_evidence_or_stop",
+                            "failedUnrecoverable": "stop",
+                        },
+                        "sideEffectPolicy": "workflow_owned",
+                        "publicationPolicy": "evaluate_after_terminal",
+                    }
+                },
+            }
+        ]
+    )
+
+    async def persist(*, name: str, payload: dict[str, Any], **_kwargs: Any) -> str:
+        return await workflow.execute_activity(
+            "remediation-wall-clock.fixture.persist",
+            {"name": name, "payload": payload},
+            start_to_close_timeout=timedelta(seconds=10),
+        )
+
+    parent._write_json_artifact = persist
+    nodes: list[dict[str, Any]] = []
+    routes: list[str | None] = []
+    for ordinal in range(2):
+        if ordinal:
+            # Attempt 1 outlives the loop's wall clock.
+            await workflow.sleep(61)
+            parent._remediation_loop_state = capture_remediation_candidate(
+                parent._remediation_loop_state
+            )
+        await parent._evaluate_dynamic_remediation_verification(
+            ordered_nodes=nodes,
+            verdict="ADDITIONAL_WORK_NEEDED",
+            gate_result_ref=f"artifact://gate/V{ordinal}",
+            remaining_work_ref=f"artifact://remaining/R{ordinal}",
+            headless_workspace_spec={"repository": "org/repo", "branch": "work"},
+        )
+        routes.append(parent._remediation_loop_state.continuation_reason)
+    return routes
+
+
+@workflow.defn(name="MMRemediationLoopWallClockReplayFixture")
+class _RemediationLoopWallClockReplayFixture:
+    @workflow.run
+    async def run(self) -> list[str | None]:
+        return await _wall_clock_loop_routes()
+
+
+@activity.defn(name="remediation-wall-clock.fixture.persist")
+async def _persist_wall_clock_decision(record: dict[str, Any]) -> str:
+    return "artifact://decision/" + record["name"].rsplit("/", 1)[-1]
+
+
+@pytest.mark.asyncio
+async def test_remediation_loop_wall_clock_pre_and_post_patch_histories_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_patched = workflow.patched
+    histories, routes = {}, {}
+    for history_kind in ("legacy", "current"):
+        if history_kind == "legacy":
+            # Record what a worker without the limit produced.
+            monkeypatch.setattr(
+                workflow,
+                "patched",
+                lambda patch_id: (
+                    False
+                    if patch_id == RUN_REMEDIATION_LOOP_RESOURCE_LIMITS_PATCH
+                    else real_patched(patch_id)
+                ),
+            )
+        else:
+            monkeypatch.setattr(workflow, "patched", real_patched)
+        queue = f"test-remediation-wall-clock-{history_kind}"
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue=queue,
+                workflows=[_RemediationLoopWallClockReplayFixture],
+                activities=[_persist_wall_clock_decision],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ):
+                handle = await env.client.start_workflow(
+                    _RemediationLoopWallClockReplayFixture.run,
+                    id=queue,
+                    task_queue=queue,
+                )
+                routes[history_kind] = await handle.result()
+                histories[history_kind] = await handle.fetch_history()
+    monkeypatch.setattr(workflow, "patched", real_patched)
+
+    assert routes["legacy"] == [
+        "verification_requested_remediation",
+        "verification_requested_remediation",
+    ]
+    assert routes["current"] == [
+        "verification_requested_remediation",
+        "wall_clock_budget_exhausted",
+    ]
+    patch_ids = {
+        history_kind: {
+            json.loads(
+                event.marker_recorded_event_attributes.details["patch-data"]
+                .payloads[0]
+                .data
+            )["id"]
+            for event in history.events
+            if event.HasField("marker_recorded_event_attributes")
+            and event.marker_recorded_event_attributes.marker_name == "core_patch"
+        }
+        for history_kind, history in histories.items()
+    }
+    assert RUN_REMEDIATION_LOOP_RESOURCE_LIMITS_PATCH not in patch_ids["legacy"]
+    assert RUN_REMEDIATION_LOOP_RESOURCE_LIMITS_PATCH in patch_ids["current"]
+    replayer = Replayer(
+        workflows=[_RemediationLoopWallClockReplayFixture],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    await replayer.replay_workflow(histories["legacy"])
+    await replayer.replay_workflow(histories["current"])
 
 
 @pytest.mark.asyncio

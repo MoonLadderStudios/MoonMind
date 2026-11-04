@@ -153,14 +153,16 @@ async def _verify(
             node_inputs=inputs,
         ),
     )
-    request = owner._build_agent_execution_request(
-        node_inputs=inputs,
-        node_id=node_id,
-        node_annotations=owner._node_annotations_mapping(node),
-        tool_name=str((node.get("tool") or {}).get("name") or ""),
-        resolved_skillset_ref=skillset,
-        workflow_parameters=parameters,
-        attempt_reason="evidence_arrived",
+    request = owner._bound_remediation_loop_request(
+        owner._build_agent_execution_request(
+            node_inputs=inputs,
+            node_id=node_id,
+            node_annotations=owner._node_annotations_mapping(node),
+            tool_name=str((node.get("tool") or {}).get("name") or ""),
+            resolved_skillset_ref=skillset,
+            workflow_parameters=parameters,
+            attempt_reason="evidence_arrived",
+        )
     )
     refs = list(observation.get("evidenceRefs") or [])
     manifest = str(
@@ -253,14 +255,20 @@ async def resume_published_issue_evidence(
         return
     prior = dict(context.get("issueEvidenceContinuation") or {})
     started = prior.get("startedAt") or workflow.now().isoformat()
-    # Existing loop wall-clock budget bounds external evidence waits too.
+    # The loop's wall clock bounds external evidence waits too. Its durable
+    # origin survives Continue-As-New; a loop without a recorded origin keeps
+    # using this run's start.
     from datetime import datetime
 
-    budget_origin = (
-        getattr(workflow.info(), "start_time", datetime.fromisoformat(started))
-        if spec.budgets.max_wall_clock_seconds
-        else datetime.fromisoformat(started)
-    )
+    resource_limited = state.admitted_at is not None
+    if spec.budgets.max_wall_clock_seconds and resource_limited:
+        budget_origin = state.admitted_at
+    elif spec.budgets.max_wall_clock_seconds:
+        budget_origin = getattr(
+            workflow.info(), "start_time", datetime.fromisoformat(started)
+        )
+    else:
+        budget_origin = datetime.fromisoformat(started)
     deadline = budget_origin + timedelta(
         seconds=spec.budgets.max_wall_clock_seconds or 3600
     )
@@ -344,6 +352,9 @@ async def resume_published_issue_evidence(
                     # The bounded poll interval elapsed; collect evidence again.
                     pass
                 continue
+            if resource_limited and workflow.now() >= deadline:
+                # The collection outlived the loop; start no verifier.
+                break
             if (
                 not record.get("verificationDueAfterImplementation")
                 and state.consumed_budgets.evidence_retries
@@ -399,6 +410,7 @@ async def resume_published_issue_evidence(
                 (parsed.invalid or parsed.degraded)
                 and state.consumed_budgets.contract_repairs
                 < spec.budgets.max_contract_repairs
+                and not (resource_limited and workflow.now() >= deadline)
             ):
                 # Malformed reporting consumes only its existing repair budget.
                 # It cannot rerun implementation or replenish evidence retries.
@@ -534,6 +546,8 @@ async def resume_published_issue_evidence(
                 ),
                 recoverable_evidence=False,
                 recommended_next_action=parsed.recommended_next_action,
+                now=workflow.now() if resource_limited else None,
+                cancel_requested=resource_limited and owner._cancel_requested,
             )
             decision_ref = await owner._write_json_artifact(
                 name="reports/issue_evidence_gate_decision.json",
@@ -574,7 +588,7 @@ async def resume_published_issue_evidence(
                 if not (
                     decision.continue_loop
                     and state.phase == RemediationLoopPhase.REMEDIATION_PENDING
-                ):
+                ) or (resource_limited and owner._cancel_requested):
                     return
                 # The existing loop owns code-repair authority and budgets; a
                 # genuine verifier finding enters its admitted same-PR pair.

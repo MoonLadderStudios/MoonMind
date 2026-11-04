@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from moonmind.schemas.temporal_models import (
@@ -8,11 +10,13 @@ from moonmind.schemas.temporal_models import (
     build_step_execution_idempotency_key,
 )
 from moonmind.workflows.temporal.remediation_loop import (
+    WALL_CLOCK_BUDGET_EXHAUSTED,
     ConsumedRemediationBudgets,
     RemediationLoopPhase,
     RemediationLoopSpec,
     RemediationLoopState,
     apply_continuation_decision,
+    apply_operation_refusal,
     capture_remediation_candidate,
     decide_remediation_continuation,
     materialize_attempt_nodes,
@@ -20,12 +24,15 @@ from moonmind.workflows.temporal.remediation_loop import (
     project_remediation_loop,
     record_semantic_progress,
     record_verification_evidence,
+    refuse_exhausted_remediation_operation,
+    remediation_loop_remaining_seconds,
     remediation_step_execution_id,
     resolve_loop_runtime,
     should_continue_as_new,
     start_remediation_attempt,
     start_verification,
     validate_remediation_loop_agent_instructions,
+    validate_remediation_loop_resource_limits,
 )
 
 _LOOP_RUNTIME = {
@@ -451,3 +458,245 @@ def test_continue_as_new_preserves_consumed_budget_threshold() -> None:
     )
     assert carried.attempt_ordinal == 3
     assert carried.workspace_head_ref == "artifact://workspace/C1"
+
+
+_ORIGIN = datetime(2026, 11, 1, 9, 0, tzinfo=UTC)
+
+
+def _timed(spec: RemediationLoopSpec, seconds: int = 7200) -> RemediationLoopSpec:
+    return spec.model_copy(
+        update={
+            "budgets": spec.budgets.model_copy(
+                update={"max_wall_clock_seconds": seconds}
+            )
+        }
+    )
+
+
+def _admitted(**kwargs) -> RemediationLoopState:
+    return _state(**kwargs).model_copy(update={"admitted_at": _ORIGIN})
+
+
+def test_wall_clock_stops_semantic_admission_between_attempts() -> None:
+    spec, state = _timed(_spec(6)), _admitted(attempts=2)
+
+    before = decide_remediation_continuation(
+        spec=spec,
+        state=state,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://gate/V2",
+        remaining_work_ref="artifact://remaining/R2",
+        now=_ORIGIN + timedelta(seconds=7199),
+    )
+    crossed = decide_remediation_continuation(
+        spec=spec,
+        state=state,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://gate/V2",
+        remaining_work_ref="artifact://remaining/R2",
+        now=_ORIGIN + timedelta(seconds=7200),
+    )
+
+    assert before.continue_loop and before.next_attempt == 3
+    assert before.exhausted_dimension is None
+    assert not crossed.continue_loop
+    assert crossed.reason == WALL_CLOCK_BUDGET_EXHAUSTED
+    assert crossed.exhausted_dimension == "wall_clock"
+    assert crossed.next_phase == RemediationLoopPhase.STOPPED_REMAINING_WORK
+    # The stop retains the cumulative candidate and the latest evidence.
+    assert crossed.workspace_head_ref == "artifact://workspace/C1"
+    assert crossed.gate_result_ref == "artifact://gate/V2"
+    assert crossed.remaining_work_ref == "artifact://remaining/R2"
+    stopped = apply_continuation_decision(
+        state, decision=crossed, decision_ref="artifact://decision/D2"
+    )
+    assert stopped.consumed_budgets == state.consumed_budgets
+    assert stopped.admitted_at == _ORIGIN
+
+
+def test_wall_clock_stops_evidence_retry_without_charging_it() -> None:
+    decision = decide_remediation_continuation(
+        spec=_timed(_spec()),
+        state=_admitted(attempts=1),
+        verdict="NO_DETERMINATION",
+        gate_result_ref="artifact://gate/missing",
+        recoverable_evidence=True,
+        now=_ORIGIN + timedelta(hours=3),
+    )
+
+    assert not decision.continue_loop and decision.retry_kind is None
+    assert decision.reason == WALL_CLOCK_BUDGET_EXHAUSTED
+    assert decision.exhausted_dimension == "wall_clock"
+    assert decision.next_phase == RemediationLoopPhase.BLOCKED
+
+
+@pytest.mark.parametrize(
+    ("verdict", "action", "reason"),
+    [
+        ("FULLY_IMPLEMENTED", None, "verification_accepted"),
+        ("ADDITIONAL_WORK_NEEDED", "needs_human", "verification_requested_needs_human"),
+        ("BLOCKED", None, "verification_blocked"),
+    ],
+)
+def test_acceptance_and_explicit_stops_keep_their_meaning_after_deadline(
+    verdict, action, reason
+) -> None:
+    decision = decide_remediation_continuation(
+        spec=_timed(_spec()),
+        state=_admitted(),
+        verdict=verdict,
+        gate_result_ref="artifact://gate/latest",
+        recommended_next_action=action,
+        now=_ORIGIN + timedelta(hours=3),
+    )
+
+    assert decision.reason == reason
+    assert decision.exhausted_dimension is None
+
+
+def test_loop_without_durable_origin_keeps_its_original_routing() -> None:
+    decision = decide_remediation_continuation(
+        spec=_timed(_spec(), 1),
+        state=_state(),
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://gate/latest",
+        now=_ORIGIN + timedelta(days=1),
+    )
+
+    assert decision.continue_loop
+    assert (
+        remediation_loop_remaining_seconds(
+            spec=_timed(_spec(), 1), state=_state(), now=_ORIGIN
+        )
+        is None
+    )
+
+
+def test_count_budget_stops_name_the_exhausted_dimension() -> None:
+    attempts = decide_remediation_continuation(
+        spec=_timed(_spec(2)),
+        state=_admitted(attempts=2),
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://gate/latest",
+        now=_ORIGIN + timedelta(hours=5),
+    )
+    evidence = decide_remediation_continuation(
+        spec=_spec(),
+        state=_state(evidence_retries=1),
+        verdict="NO_DETERMINATION",
+        gate_result_ref="artifact://gate/missing",
+        recoverable_evidence=True,
+    )
+
+    assert attempts.reason == "remediation_budget_or_progress_exhausted"
+    assert attempts.exhausted_dimension == "remediation_attempts"
+    assert evidence.reason == "evidence_unavailable"
+    assert evidence.exhausted_dimension == "evidence_retries"
+
+
+@pytest.mark.parametrize("dimension", ["providerBudget", "tokenBudget", "costBudget"])
+def test_unenforceable_resource_limits_fail_admission(dimension: str) -> None:
+    payload = _spec().model_dump(by_alias=True, mode="json")
+    payload["budgets"][dimension] = 0
+
+    with pytest.raises(ValueError, match=rf"budgets\.{dimension} cannot be enforced"):
+        validate_remediation_loop_resource_limits(
+            RemediationLoopSpec.model_validate(payload)
+        )
+
+
+def test_wall_clock_and_null_resource_limits_are_admitted() -> None:
+    payload = _timed(_spec()).model_dump(by_alias=True, mode="json")
+    payload["budgets"].update(providerBudget=None, tokenBudget=None, costBudget=None)
+
+    validate_remediation_loop_resource_limits(
+        RemediationLoopSpec.model_validate(payload)
+    )
+
+
+def test_projection_reports_wall_clock_limit_consumed_and_remaining() -> None:
+    spec, state = _timed(_spec()), _admitted()
+
+    running = project_remediation_loop(
+        spec=spec, state=state, now=_ORIGIN + timedelta(seconds=1800)
+    )["wallClockBudget"]
+    spent = project_remediation_loop(
+        spec=spec, state=state, now=_ORIGIN + timedelta(seconds=7300)
+    )["wallClockBudget"]
+
+    assert running == {
+        "admittedAt": _ORIGIN.isoformat(),
+        "limitSeconds": 7200,
+        "consumedSeconds": 1800,
+        "remainingSeconds": 5400,
+        "exhausted": False,
+    }
+    assert spent["remainingSeconds"] == 0 and spent["exhausted"] is True
+    assert "wallClockBudget" not in project_remediation_loop(spec=spec, state=state)
+
+
+def test_loop_origin_survives_continue_as_new_serialization() -> None:
+    carried = RemediationLoopState.model_validate(
+        _admitted(attempts=3).model_dump(by_alias=True, mode="json")
+    )
+
+    assert carried.admitted_at == _ORIGIN
+    assert (
+        remediation_loop_remaining_seconds(
+            spec=_timed(_spec(6)),
+            state=carried,
+            now=_ORIGIN + timedelta(seconds=7000),
+        )
+        == 200
+    )
+
+
+@pytest.mark.parametrize(
+    ("verdict", "recoverable"),
+    [("ADDITIONAL_WORK_NEEDED", False), ("NO_DETERMINATION", True)],
+)
+def test_canceled_run_admits_no_further_operation(verdict, recoverable) -> None:
+    decision = decide_remediation_continuation(
+        spec=_spec(6),
+        state=_state(attempts=1),
+        verdict=verdict,
+        gate_result_ref="artifact://gate/latest",
+        recoverable_evidence=recoverable,
+        cancel_requested=True,
+    )
+
+    assert not decision.continue_loop
+    assert decision.reason == "cancellation_requested"
+    assert decision.next_attempt is None and decision.retry_kind is None
+
+
+def test_admitted_operation_is_refused_once_the_deadline_passes() -> None:
+    spec = _timed(_spec(6))
+    state = _admitted(attempts=1).model_copy(
+        update={
+            "phase": RemediationLoopPhase.REMEDIATION_RUNNING,
+            "latest_verdict": "ADDITIONAL_WORK_NEEDED",
+            "latest_progress_ref": "artifact://remaining/R1",
+        }
+    )
+
+    assert (
+        refuse_exhausted_remediation_operation(
+            spec=spec, state=state, now=_ORIGIN + timedelta(seconds=7199)
+        )
+        is None
+    )
+    refusal = refuse_exhausted_remediation_operation(
+        spec=spec, state=state, now=_ORIGIN + timedelta(seconds=7200)
+    )
+    assert refusal is not None and not refusal.continue_loop
+    assert refusal.exhausted_dimension == "wall_clock"
+    assert refusal.workspace_head_ref == "artifact://workspace/C1"
+    assert refusal.gate_result_ref == "artifact://verification/V1"
+    assert refusal.remaining_work_ref == "artifact://remaining/R1"
+    stopped = apply_operation_refusal(
+        state, decision=refusal, decision_ref="artifact://decision/refused"
+    )
+    assert stopped.phase == RemediationLoopPhase.STOPPED_REMAINING_WORK
+    assert stopped.continuation_reason == WALL_CLOCK_BUDGET_EXHAUSTED
+    assert stopped.consumed_budgets == state.consumed_budgets

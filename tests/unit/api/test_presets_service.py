@@ -3574,6 +3574,24 @@ async def test_seed_catalog_issue_implement_work_pr_renders_remediation_budget(
     assert len(expanded["steps"]) == len(expanded_six["steps"])
 
 
+@pytest.mark.parametrize("dimension", ["providerBudget", "tokenBudget", "costBudget"])
+async def test_remediation_loop_admission_rejects_unenforceable_limits(
+    dimension,
+) -> None:
+    from tests.unit.workflows.temporal.test_remediation_loop import _spec
+
+    loop = _spec().model_dump(by_alias=True, mode="json")
+    loop["budgets"].update(maxWallClockSeconds=7200, **{dimension: 10})
+
+    with pytest.raises(
+        PresetValidationError,
+        match=rf"Invalid remediation loop contract: budgets\.{dimension} cannot be enforced",
+    ):
+        _validate_moonspec_remediation_topology(
+            [{"annotations": {"remediationLoop": loop}}]
+        )
+
+
 async def test_remediation_topology_rejects_partial_active_pair() -> None:
     steps = [
         {

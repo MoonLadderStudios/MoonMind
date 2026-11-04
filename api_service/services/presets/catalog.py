@@ -54,6 +54,7 @@ from moonmind.workflows.executions.preset_readiness import SavedPresetCapabiliti
 from moonmind.workflows.temporal.remediation_loop import (
     RemediationLoopSpec,
     validate_remediation_loop_agent_instructions,
+    validate_remediation_loop_resource_limits,
 )
 
 _FORBIDDEN_STEP_KEYS = frozenset(
@@ -1900,6 +1901,7 @@ def _validate_moonspec_remediation_topology(steps: list[dict[str, Any]]) -> None
         try:
             loop_spec = RemediationLoopSpec.model_validate(loop_specs[0])
             validate_remediation_loop_agent_instructions(loop_spec)
+            validate_remediation_loop_resource_limits(loop_spec)
         except ValueError as exc:
             raise PresetValidationError(
                 f"Invalid remediation loop contract: {exc}"

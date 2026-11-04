@@ -111,6 +111,25 @@ def test_published_policy_round_trips_the_whole_budget():
     assert republished == original
 
 
+@pytest.mark.parametrize("mode", ["progress_aware", "flat"])
+def test_budget_within_an_outer_allowance_never_exceeds_it(mode):
+    budget = resolve_execution_budget(
+        timeout_policy={"timeout_seconds": 3600, "execution_budget_mode": mode}
+    )
+
+    bounded = budget.within(1200.7)
+    roomy = budget.within(10**6)
+
+    assert bounded.max_seconds == bounded.base_seconds == 1200
+    assert bounded.progress_stall_seconds <= bounded.base_seconds
+    assert bounded.mode == mode
+    assert resolve_execution_budget(timeout_policy=bounded.as_timeout_policy()) == (
+        bounded
+    )
+    assert roomy == budget
+    assert budget.within(0).max_seconds == 1
+
+
 # ---------------------------------------------------------------------------
 # Budget evaluation
 # ---------------------------------------------------------------------------

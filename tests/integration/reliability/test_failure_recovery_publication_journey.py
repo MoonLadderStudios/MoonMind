@@ -118,6 +118,7 @@ async def test_failed_middle_step_retains_bytes_and_resumes_only_unfinished_phas
         run_module.RUN_REMEDIATION_RUN_SCOPED_STEP_IDS_PATCH,
         "run-remediation-current-evidence-inputs-v1",
         "run-materialize-evidence-retry-v1",
+        run_module.RUN_REMEDIATION_LOOP_RESOURCE_LIMITS_PATCH,
     }
     monkeypatch.setattr(run_module.workflow, "patched", lambda patch: patch in enabled)
     counts = {"prepare": 0, "failed_compute": 0, "repair": 0, "save": 0, "restore": 0}
@@ -290,7 +291,11 @@ async def test_failed_middle_step_retains_bytes_and_resumes_only_unfinished_phas
             update={
                 "remediation_tool": spec.remediation_tool.model_copy(
                     update={"inputs": tool_inputs}
-                )
+                ),
+                # The issue presets' two-hour loop limit.
+                "budgets": spec.budgets.model_copy(
+                    update={"max_wall_clock_seconds": 7200}
+                ),
             }
         )
         controller = {
@@ -357,6 +362,8 @@ async def test_failed_middle_step_retains_bytes_and_resumes_only_unfinished_phas
             remaining_work_ref=remaining,
             workspace_head=head.model_dump(by_alias=True),
         )
+        loop_origin = workflow._remediation_loop_state.admitted_at
+        assert loop_origin == now
 
         for ordinal in (1, 2):
             repair, verifier = nodes[-2:]
@@ -377,6 +384,14 @@ async def test_failed_middle_step_retains_bytes_and_resumes_only_unfinished_phas
                 tool_name="omnigent",
                 workflow_parameters=parameters,
                 step_execution=1,
+            )
+            # The repair is granted no more than the loop still has.
+            assert workflow._is_remediation_loop_operation(repair)
+            assert (
+                workflow._bound_remediation_loop_request(request).timeout_policy[
+                    "max_timeout_seconds"
+                ]
+                == 7200
             )
             step_id = request.step_execution.step_execution_id
             workspace_id = hashlib.sha256(
@@ -591,6 +606,8 @@ async def test_failed_middle_step_retains_bytes_and_resumes_only_unfinished_phas
                 replacement._write_json_artifact = lambda *, name, payload: put(payload)
                 workflow = replacement
                 assert workflow._remediation_loop_state.consumed_budgets.attempts == 1
+                # Worker replacement keeps the loop's clock origin.
+                assert workflow._remediation_loop_state.admitted_at == loop_origin
                 saved.remove_source()
                 before_retry = copy.deepcopy(counts)
                 unavailable_gate = await put(
@@ -638,6 +655,12 @@ async def test_failed_middle_step_retains_bytes_and_resumes_only_unfinished_phas
                 "evidenceRetries"
             ]
             == 1
+        )
+        assert (
+            workflow._publish_context["remediationLoop"]["wallClockBudget"][
+                "admittedAt"
+            ]
+            == loop_origin.isoformat()
         )
         assert (saved.source_repo / "candidate.txt").read_bytes() == b"C0\nA\nB\n"
         assert (

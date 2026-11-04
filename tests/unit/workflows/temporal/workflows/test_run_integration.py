@@ -37,8 +37,10 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
     RUN_PUBLISH_REPAIR_FEEDBACK_PATCH,
     RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH,
+    RUN_DYNAMIC_REMEDIATION_LOOP_CONTROLLER_PATCH,
     RUN_REMEDIATION_LOOP_ARTIFACT_REF_NORMALIZATION_PATCH,
     RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH,
+    RUN_REMEDIATION_LOOP_RESOURCE_LIMITS_PATCH,
     RUN_REMEDIATION_EXPLICIT_EVIDENCE_INPUTS_PATCH,
     RUN_REMEDIATION_ATTEMPT_CONTEXT_INPUTS_PATCH,
     RUN_REMEDIATION_MANAGED_SESSION_SOURCE_IDENTITY_PATCH,
@@ -10256,3 +10258,558 @@ async def test_issue_handoff_accepts_same_repository_alias_on_landed_target(
     execute.assert_not_awaited()
     assert gate == original_gate
     assert owner._assessment_context["assessmentVerdict"] == "PARTIALLY_IMPLEMENTED"
+
+
+_LOOP_ORIGIN = datetime(2026, 11, 1, 9, 0, tzinfo=timezone.utc)
+
+
+class _LoopClock:
+    """Controlled workflow time that only moves when a test advances it."""
+
+    def __init__(self, start: datetime) -> None:
+        self.value = start
+
+    def __call__(self) -> datetime:
+        return self.value
+
+    def advance(self, seconds: int) -> None:
+        self.value += timedelta(seconds=seconds)
+
+
+def _timed_loop_payload(seconds: int = 7200, **budgets: Any) -> dict[str, Any]:
+    payload = _dynamic_loop_spec_payload()
+    payload["budgets"] = {
+        **payload["budgets"],
+        "maxWallClockSeconds": seconds,
+        **budgets,
+    }
+    return payload
+
+
+def _resource_limited(*extra: str) -> Callable[[str], bool]:
+    enabled = {RUN_REMEDIATION_LOOP_RESOURCE_LIMITS_PATCH, *extra}
+    return lambda patch_id: patch_id in enabled
+
+
+def _loop_operation_request(
+    *, agent_kind: str = "managed", agent_id: str = "codex_cli", **policy: Any
+) -> AgentExecutionRequest:
+    return AgentExecutionRequest(
+        agentKind=agent_kind,
+        agentId=agent_id,
+        correlationId="wf-1",
+        idempotencyKey="wf-1:loop-operation",
+        timeoutPolicy=policy,
+    )
+
+
+def _recording_decisions(workflow_instance: MoonMindRunWorkflow) -> list[dict]:
+    decisions: list[dict] = []
+
+    async def write(*, name: str, payload: dict, **_kwargs: Any) -> str:
+        decisions.append({"name": name, **payload})
+        return f"artifact://decision/{len(decisions)}"
+
+    workflow_instance._write_json_artifact = write
+    return decisions
+
+
+@pytest.mark.asyncio
+async def test_dynamic_loop_wall_clock_bounds_operations_and_stops_between_attempts(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.workflows.temporal.remediation_loop import (
+        capture_remediation_candidate,
+    )
+
+    clock = _LoopClock(_LOOP_ORIGIN)
+    monkeypatch.setattr(run_workflow_module.workflow, "now", clock)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _resource_limited())
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[_loop_controller_node(_timed_loop_payload())]
+    )
+    mock_run_workflow._step_ledger_rows = []
+    decisions = _recording_decisions(mock_run_workflow)
+    nodes: list[dict[str, Any]] = []
+
+    # The first verifier decision starts the loop's clock and admits attempt 1.
+    assert await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://gate/V0",
+        remaining_work_ref="artifact://remaining/R0",
+    )
+    assert mock_run_workflow._remediation_loop_state.admitted_at == _LOOP_ORIGIN
+    remediation, verification = nodes
+    assert mock_run_workflow._is_remediation_loop_operation(remediation)
+    assert mock_run_workflow._is_remediation_loop_operation(verification)
+
+    # During the attempt each new operation gets only what the loop has left,
+    # however large its own Step budget is.
+    clock.advance(7000)
+    managed = mock_run_workflow._bound_remediation_loop_request(
+        _loop_operation_request()
+    )
+    external = mock_run_workflow._bound_remediation_loop_request(
+        _loop_operation_request(
+            agent_kind="external", agent_id="omnigent", timeout_seconds=21600
+        )
+    )
+    for request in (managed, external):
+        assert request.timeout_policy["timeout_seconds"] == 200
+        assert request.timeout_policy["max_timeout_seconds"] == 200
+    assert (
+        await mock_run_workflow._refuse_exhausted_remediation_operation(verification)
+        is None
+    )
+
+    # Between attempts the next verifier decision crosses the deadline.
+    mock_run_workflow._remediation_loop_state = capture_remediation_candidate(
+        mock_run_workflow._remediation_loop_state
+    )
+    clock.advance(200)
+    admitted = await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://gate/V1",
+        remaining_work_ref="artifact://remaining/R1",
+    )
+
+    assert admitted is False
+    assert nodes == [remediation, verification]
+    state = mock_run_workflow._remediation_loop_state
+    assert state.phase == "stopped_remaining_work"
+    assert state.continuation_reason == "wall_clock_budget_exhausted"
+    assert state.consumed_budgets.attempts == 1
+    assert state.admitted_at == _LOOP_ORIGIN
+    assert decisions[-1]["reason"] == "wall_clock_budget_exhausted"
+    assert decisions[-1]["exhaustedDimension"] == "wall_clock"
+    assert decisions[-1]["gateResultRef"] == "artifact://gate/V1"
+    assert decisions[-1]["remainingWorkRef"] == "artifact://remaining/R1"
+    projection = mock_run_workflow._publish_context["remediationLoop"]
+    assert projection["continuationReason"] == "wall_clock_budget_exhausted"
+    assert projection["wallClockBudget"] == {
+        "admittedAt": _LOOP_ORIGIN.isoformat(),
+        "limitSeconds": 7200,
+        "consumedSeconds": 7200,
+        "remainingSeconds": 0,
+        "exhausted": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_dynamic_loop_operation_admitted_before_deadline_is_refused_after_it(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = _LoopClock(_LOOP_ORIGIN)
+    monkeypatch.setattr(run_workflow_module.workflow, "now", clock)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", _resource_limited())
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[_loop_controller_node(_timed_loop_payload(60))]
+    )
+    mock_run_workflow._step_ledger_rows = []
+    decisions = _recording_decisions(mock_run_workflow)
+    nodes: list[dict[str, Any]] = []
+    assert await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://gate/V0",
+        remaining_work_ref="artifact://remaining/R0",
+    )
+
+    # An operator pause holds the admitted remediation past the deadline.
+    clock.advance(61)
+    summary = await mock_run_workflow._refuse_exhausted_remediation_operation(nodes[0])
+
+    assert summary and "wall-clock budget of 60s was exhausted" in summary
+    assert decisions[-1]["name"].endswith("_attempt_1_refused.json")
+    assert decisions[-1]["exhaustedDimension"] == "wall_clock"
+    state = mock_run_workflow._remediation_loop_state
+    assert state.phase == "stopped_remaining_work"
+    assert state.consumed_budgets.attempts == 1
+    stop = mock_run_workflow._workflow_control_stop
+    assert stop["reasonCode"] == "wall_clock_budget_exhausted"
+    assert stop["exhaustedBudgetDimension"] == "wall_clock"
+    assert stop["gateResultRef"] == "artifact://gate/V0"
+    assert stop["remainingWorkRef"] == "artifact://remaining/R0"
+    assert stop["continuationDecisionRef"] == state.continuation_decision_ref
+    # Nodes outside the loop are never refused for its budget.
+    assert (
+        await mock_run_workflow._refuse_exhausted_remediation_operation(
+            {"id": "publish", "annotations": {}}
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dimension", ["providerBudget", "tokenBudget", "costBudget"])
+@pytest.mark.parametrize("patched", [True, False], ids=["new-history", "legacy-replay"])
+async def test_dynamic_loop_rejects_unenforceable_limits_at_admission(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+    dimension: str,
+    patched: bool,
+) -> None:
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        _resource_limited() if patched else (lambda _patch_id: False),
+    )
+    controller = _loop_controller_node(_timed_loop_payload(**{dimension: 0}))
+
+    if patched:
+        with pytest.raises(
+            ValueError, match=rf"budgets\.{dimension} cannot be enforced"
+        ):
+            mock_run_workflow._initialize_remediation_loop_controller(
+                ordered_nodes=[controller]
+            )
+        assert mock_run_workflow._remediation_loop_spec is None
+    else:
+        # Retained histories admitted before enforcement replay unchanged.
+        mock_run_workflow._initialize_remediation_loop_controller(
+            ordered_nodes=[controller]
+        )
+        assert mock_run_workflow._remediation_loop_spec is not None
+
+
+@pytest.mark.asyncio
+async def test_dynamic_loop_origin_survives_continue_as_new_and_cancel_starts_no_successor(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.workflows.temporal.remediation_loop import (
+        capture_remediation_candidate,
+    )
+
+    clock = _LoopClock(_LOOP_ORIGIN)
+    monkeypatch.setattr(run_workflow_module.workflow, "now", clock)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        _resource_limited(RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH),
+    )
+    loop = _timed_loop_payload()
+    loop["continueAsNewAttemptThreshold"] = 1
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[_loop_controller_node(loop)]
+    )
+    mock_run_workflow._step_ledger_rows = []
+    _recording_decisions(mock_run_workflow)
+    continued: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "continue_as_new",
+        lambda payload, **_kwargs: continued.append(payload),
+    )
+    nodes: list[dict[str, Any]] = []
+    for ordinal in range(2):
+        if ordinal:
+            mock_run_workflow._remediation_loop_state = capture_remediation_candidate(
+                mock_run_workflow._remediation_loop_state
+            )
+            clock.advance(100)
+        assert await mock_run_workflow._evaluate_dynamic_remediation_verification(
+            ordered_nodes=nodes,
+            verdict="ADDITIONAL_WORK_NEEDED",
+            gate_result_ref=f"artifact://gate/V{ordinal}",
+            remaining_work_ref=f"artifact://remaining/R{ordinal}",
+        )
+    # Attempt 1 completed, so attempt 2 is carried into a new run.
+    carried = continued[-1]["remediation_loop_continuation"]
+    assert carried["state"]["attemptOrdinal"] == 2
+    assert datetime.fromisoformat(carried["state"]["admittedAt"]) == _LOOP_ORIGIN
+
+    # The continued run restores the original origin; it never restarts it.
+    clock.advance(4900)
+    successor = MoonMindRunWorkflow()
+    successor._initialize_remediation_loop_controller(
+        ordered_nodes=[_loop_controller_node(loop)]
+    )
+    successor._remediation_loop_continuation = json.loads(json.dumps(carried))
+    successor._restore_remediation_loop_continuation(ordered_nodes=[])
+    state = successor._remediation_loop_state
+    assert state.admitted_at == _LOOP_ORIGIN
+    assert state.continue_as_new_count == 1
+    assert (
+        successor._publish_context["remediationLoop"]["wallClockBudget"][
+            "consumedSeconds"
+        ]
+        == 5000
+    )
+
+    # Cancellation during the decision write admits a pair but starts no
+    # successor run, and a canceled decision admits nothing at all.
+    successor._remediation_loop_state = capture_remediation_candidate(state)
+    successor._step_ledger_rows = []
+    decisions = _recording_decisions(successor)
+    write = successor._write_json_artifact
+
+    async def cancel_while_writing(**kwargs: Any) -> str:
+        successor._cancel_requested = True
+        return await write(**kwargs)
+
+    successor._write_json_artifact = cancel_while_writing
+    continued.clear()
+    successor_nodes: list[dict[str, Any]] = []
+    assert await successor._evaluate_dynamic_remediation_verification(
+        ordered_nodes=successor_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://gate/V1",
+        remaining_work_ref="artifact://remaining/R1",
+    )
+    assert continued == []
+
+    successor._remediation_loop_state = capture_remediation_candidate(
+        successor._remediation_loop_state
+    )
+    successor._write_json_artifact = write
+    canceled_nodes: list[dict[str, Any]] = []
+    assert not await successor._evaluate_dynamic_remediation_verification(
+        ordered_nodes=canceled_nodes,
+        verdict="ADDITIONAL_WORK_NEEDED",
+        gate_result_ref="artifact://gate/V2",
+        remaining_work_ref="artifact://remaining/R2",
+    )
+    assert canceled_nodes == [] and continued == []
+    assert decisions[-1]["reason"] == "cancellation_requested"
+
+
+def _continued_loop_plan(
+    loop: dict[str, Any],
+    *,
+    remediation_done: bool = False,
+    runtime: dict[str, Any] = _LOOP_RUNTIME,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    from moonmind.workflows.temporal.remediation_loop import (
+        RemediationLoopSpec,
+        materialize_attempt_nodes,
+    )
+    from moonmind.workflows.temporal.step_ledger import build_initial_step_rows
+
+    controller = _loop_controller_node(loop)
+    controller["annotations"]["issueImplementRole"] = "moonspec-remediation-loop"
+    remediation, verification = materialize_attempt_nodes(
+        spec=RemediationLoopSpec.model_validate(loop),
+        ordinal=2,
+        workspace_head_ref="artifact://workspace/C1",
+        runtime=runtime,
+    )
+    final = {
+        "id": "final-status",
+        "tool": {"type": "agent_runtime", "name": "openclaw"},
+        "inputs": {"instructions": "Finalize status."},
+    }
+    nodes = [controller, remediation, verification, final]
+    rows = build_initial_step_rows(
+        ordered_nodes=nodes,
+        dependency_map={
+            str(node["id"]): list(node.get("dependsOn", [])) for node in nodes
+        },
+        updated_at=_LOOP_ORIGIN,
+    )
+    for row, node in zip(rows, nodes, strict=True):
+        row["annotations"] = dict(node.get("annotations") or {})
+    rows[0]["status"] = "skipped"
+    if remediation_done:
+        rows[1]["status"], rows[2]["status"] = "completed", "ready"
+    else:
+        rows[1]["status"] = "ready"
+    continuation = {
+        "schemaVersion": 1,
+        "state": {
+            "loopId": loop["loopId"],
+            "attemptOrdinal": 2,
+            "phase": (
+                "verification_pending" if remediation_done else "remediation_running"
+            ),
+            "workspaceHeadRef": "artifact://workspace/C1",
+            "latestVerificationRef": "artifact://gate/V1",
+            "latestVerdict": "ADDITIONAL_WORK_NEEDED",
+            "latestProgressRef": "artifact://remaining/R1",
+            "continuationDecisionRef": "artifact://decision/D1",
+            "consumedBudgets": {"attempts": 2},
+            "admittedAt": _LOOP_ORIGIN.isoformat(),
+        },
+        "orderedNodes": nodes,
+        "stepLedgerRows": rows,
+    }
+    return nodes, continuation
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_refuses_loop_operation_after_continued_deadline(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pair admitted before Continue-As-New cannot start after the carried deadline."""
+
+    loop = _timed_loop_payload()
+    nodes, continuation = _continued_loop_plan(loop)
+    launched: list[str] = []
+
+    # Plan artifacts carry annotations inside node inputs.
+    planned_controller = {
+        **nodes[0],
+        "inputs": {**nodes[0]["inputs"], "annotations": nodes[0]["annotations"]},
+    }
+
+    async def fake_execute_activity(activity_type: str, _payload: Any, **_kwargs: Any):
+        assert activity_type == "artifact.read"
+        return _mock_plan_payload([planned_controller])
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str, _request: Any, **kwargs: Any
+    ):
+        launched.append(str(kwargs.get("id") or ""))
+        return {"summary": "Step completed.", "metadata": {}, "output_refs": []}
+
+    async def noop_step_manifest(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_activity", fake_execute_activity
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        _resource_limited(RUN_DYNAMIC_REMEDIATION_LOOP_CONTROLLER_PATCH),
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: _LOOP_ORIGIN + timedelta(seconds=7300),
+    )
+    monkeypatch.setattr(
+        mock_run_workflow, "_record_step_execution_manifest", noop_step_manifest
+    )
+    decisions = _recording_decisions(mock_run_workflow)
+    mock_run_workflow._remediation_loop_continuation = continuation
+
+    await mock_run_workflow._run_execution_stage(
+        parameters={"publishMode": "none"}, plan_ref="plan-1"
+    )
+
+    assert launched == []
+    assert [
+        mock_run_workflow._step_ledger_row_for(str(node["id"]))["status"]
+        for node in nodes[1:]
+    ] == ["skipped", "skipped", "skipped"]
+    state = mock_run_workflow._remediation_loop_state
+    assert state.admitted_at == _LOOP_ORIGIN
+    assert state.continue_as_new_count == 1
+    assert state.phase == "stopped_remaining_work"
+    assert state.consumed_budgets.attempts == 2
+    assert decisions[-1]["exhaustedDimension"] == "wall_clock"
+    stop = mock_run_workflow._workflow_control_stop
+    assert stop["reasonCode"] == "wall_clock_budget_exhausted"
+    assert stop["workspaceHeadRef"] == "artifact://workspace/C1"
+    assert stop["gateResultRef"] == "artifact://gate/V1"
+    assert mock_run_workflow._publish_context["publicationBlockedBy"] == (
+        "moonspec_verify"
+    )
+    assert "wall-clock budget of 7200s" in mock_run_workflow._summary
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_stops_loop_when_verifier_crosses_deadline(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The active verifier is bounded; its verdict then stops the loop by time."""
+
+    loop = _timed_loop_payload()
+    # Codex would first open a workflow-scoped session child.
+    nodes, continuation = _continued_loop_plan(
+        loop, remediation_done=True, runtime={"mode": "claude_code"}
+    )
+    planned_controller = {
+        **nodes[0],
+        "inputs": {**nodes[0]["inputs"], "annotations": nodes[0]["annotations"]},
+    }
+    clock = _LoopClock(_LOOP_ORIGIN + timedelta(seconds=7000))
+    requests: list[Any] = []
+
+    async def fake_execute_activity(activity_type: str, _payload: Any, **_kwargs: Any):
+        assert activity_type == "artifact.read"
+        return _mock_plan_payload([planned_controller])
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str, request: Any, **_kwargs: Any
+    ):
+        requests.append(request)
+        clock.advance(300)  # Verification finishes after the loop deadline.
+        return {
+            "summary": "Verification completed.",
+            "metadata": {
+                "moonSpecVerify": {
+                    "verdict": "ADDITIONAL_WORK_NEEDED",
+                    "gateResultRef": "artifact://gate/V2",
+                    "remainingWorkRef": "artifact://remaining/R2",
+                }
+            },
+            "output_refs": [],
+        }
+
+    async def noop_step_manifest(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def resolved_skillset(**_kwargs: Any) -> str:
+        return "artifact://resolved-verifier-skillset"
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_activity", fake_execute_activity
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        _resource_limited(
+            RUN_DYNAMIC_REMEDIATION_LOOP_CONTROLLER_PATCH,
+            run_workflow_module.RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH,
+        ),
+    )
+    monkeypatch.setattr(
+        mock_run_workflow, "_resolve_agent_node_skillset_ref", resolved_skillset
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "now", clock)
+    monkeypatch.setattr(
+        mock_run_workflow, "_record_step_execution_manifest", noop_step_manifest
+    )
+    decisions = _recording_decisions(mock_run_workflow)
+    mock_run_workflow._remediation_loop_continuation = continuation
+
+    await mock_run_workflow._run_execution_stage(
+        parameters={"publishMode": "none"}, plan_ref="plan-1"
+    )
+
+    # The verifier started with 200s left and was granted only those 200s.
+    assert len(requests) == 1
+    assert requests[0].timeout_policy["max_timeout_seconds"] == 200
+    state = mock_run_workflow._remediation_loop_state
+    assert state.phase == "stopped_remaining_work"
+    assert state.consumed_budgets.attempts == 2
+    assert decisions[-1]["reason"] == "wall_clock_budget_exhausted"
+    stop = mock_run_workflow._workflow_control_stop
+    assert stop["reasonCode"] == "wall_clock_budget_exhausted"
+    assert stop["exhaustedBudgetDimension"] == "wall_clock"
+    assert stop["continuationDecisionRef"] == state.continuation_decision_ref
+    assert stop["gateResultRef"] == "artifact://gate/V2"
+    projection = mock_run_workflow._publish_context["remediationLoop"]
+    assert projection["continuationReason"] == "wall_clock_budget_exhausted"
+    assert projection["wallClockBudget"]["exhausted"] is True
+    assert mock_run_workflow._step_ledger_row_for("final-status")["status"] == (
+        "skipped"
+    )

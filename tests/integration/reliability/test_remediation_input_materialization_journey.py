@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from uuid import uuid4
@@ -543,6 +543,10 @@ async def receipt_journey(tmp_path):
         await engine.dispose()
 
 
+# The loop's two-hour clock started an hour before the controller's time.
+_LOOP_ORIGIN = datetime(2026, 10, 31, 23, tzinfo=UTC)
+
+
 def _controller(monkeypatch):
     monkeypatch.setattr(run_module.workflow, "patched", lambda _name: True)
     monkeypatch.setattr(
@@ -571,7 +575,7 @@ def _controller(monkeypatch):
         remediationTool={"type": "agent_runtime", "name": "omnigent"},
         verificationTool={"type": "agent_runtime", "name": "omnigent"},
         workspacePolicy="continue_from_loop_head",
-        budgets={"hardMaxAttempts": 3},
+        budgets={"hardMaxAttempts": 3, "maxWallClockSeconds": 7200},
         terminalPolicy={
             "fullyImplemented": "advance",
             "additionalWorkNeeded": "continue_when_allowed",
@@ -587,6 +591,7 @@ def _controller(monkeypatch):
         phase="verification_pending",
         attemptOrdinal=1,
         consumedBudgets={"attempts": 1, "evidenceRetries": 1, "activityRetries": 1},
+        admittedAt=_LOOP_ORIGIN,
     )
     return parent
 
@@ -988,7 +993,7 @@ async def test_original_validation_is_consumed_after_cleanup_without_duplicate_j
     assert _git(journey.workspace, "status", "--porcelain") == ""
 
 
-@pytest.mark.parametrize("stop", ["cancel", "hold"])
+@pytest.mark.parametrize("stop", ["cancel", "hold", "wall_clock"])
 async def test_stop_boundaries_keep_receipts_candidate_and_original_budgets(
     receipt_journey, monkeypatch, stop
 ):
@@ -1004,6 +1009,43 @@ async def test_stop_boundaries_keep_receipts_candidate_and_original_budgets(
         assert result["state"] == "canceled"
         assert journey.jobs[-1].workloads == []
         assert all(command[0] != "start" for command in journey.jobs[-1].commands)
+    elif stop == "wall_clock":
+        from moonmind.workflows.temporal.remediation_loop import (
+            decide_remediation_continuation,
+            refuse_exhausted_remediation_operation,
+        )
+
+        parent = journey.parent
+        # Continue-As-New carried the loop's origin, not this run's start.
+        assert datetime.fromisoformat(journey.carried["state"]["admittedAt"]) == (
+            _LOOP_ORIGIN
+        )
+        assert parent._remediation_loop_state.admitted_at == _LOOP_ORIGIN
+        with monkeypatch.context() as patch:
+            _controller(patch)
+            bounded = parent._bound_remediation_loop_request(journey.request)
+        # The verifier admitted an hour into the loop gets only the hour left.
+        assert bounded.timeout_policy["max_timeout_seconds"] == 3600
+        deadline = _LOOP_ORIGIN + timedelta(seconds=7200)
+        decision = decide_remediation_continuation(
+            spec=parent._remediation_loop_spec,
+            state=parent._remediation_loop_state,
+            verdict="ADDITIONAL_WORK_NEEDED",
+            gate_result_ref=journey.published["stepEvidenceRefs"][0],
+            now=deadline,
+        )
+        refusal = refuse_exhausted_remediation_operation(
+            spec=parent._remediation_loop_spec,
+            state=parent._remediation_loop_state,
+            now=deadline,
+        )
+        for stopped in (decision, refusal):
+            assert not stopped.continue_loop
+            assert stopped.exhausted_dimension == "wall_clock"
+            assert stopped.workspace_head_ref == (
+                parent._remediation_loop_state.workspace_head_ref
+            )
+        assert len(journey.jobs) == 1
     else:
         from moonmind.workflows.temporal.remediation_loop import (
             decide_remediation_continuation,

@@ -69,7 +69,12 @@ def _activity_options():
     }
 
 
-async def _run_owner(*, current: bool, implementation_gap: bool = False):
+async def _run_owner(
+    *,
+    current: bool,
+    implementation_gap: bool = False,
+    carried_loop_seconds: int | None = None,
+):
     published = await workflow.execute_activity(
         "issue-evidence.fixture.publish", {}, **_activity_options()
     )
@@ -121,6 +126,20 @@ async def _run_owner(*, current: bool, implementation_gap: bool = False):
         )
         # Implementation has already consumed the admitted wall-clock budget.
         await workflow.sleep(2)
+    if carried_loop_seconds is not None:
+        # A Continue-As-New run inherits a loop that started long before it.
+        owner._remediation_loop_spec = owner._remediation_loop_spec.model_copy(
+            update={
+                "budgets": owner._remediation_loop_spec.budgets.model_copy(
+                    update={"max_wall_clock_seconds": 7200}
+                )
+            }
+        )
+        owner._remediation_loop_state = owner._remediation_loop_state.model_copy(
+            update={
+                "admitted_at": workflow.now() - timedelta(seconds=carried_loop_seconds)
+            }
+        )
     if current:
         # This is the production patch boundary and owner, not a test replica.
         await owner._resume_published_issue_evidence(
@@ -155,6 +174,13 @@ class _IneligibleOwner:
     @workflow.run
     async def run(self) -> dict:
         return await _run_owner(current=True, implementation_gap=True)
+
+
+@workflow.defn(name="CarriedLoopOriginEvidenceReplayFixture")
+class _CarriedOriginOwner:
+    @workflow.run
+    async def run(self) -> dict:
+        return await _run_owner(current=True, carried_loop_seconds=7150)
 
 
 @workflow.defn(name="MoonMind.AgentRun")
@@ -482,3 +508,55 @@ async def test_partial_inventory_wait_survives_worker_restart_and_real_replay():
     await replayer.replay_workflow(pending)
     await replayer.replay_workflow(history)
     assert (len(calls), len(saved), len(verified)) == before
+
+
+@pytest.mark.asyncio
+async def test_carried_loop_origin_bounds_evidence_wait_and_verifier_allowance():
+    activities, calls, saved, verified = _activities()
+    queue = "issue-evidence-carried-origin"
+    async with (
+        await WorkflowEnvironment.start_time_skipping(
+            data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER
+        ) as env,
+        Worker(env.client, task_queue=queue + "-activities", activities=activities),
+        Worker(env.client, task_queue=INTEGRATIONS_TASK_QUEUE, activities=activities),
+        Worker(
+            env.client,
+            task_queue=queue + "-children",
+            workflows=[_VerifierChild],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ),
+        Worker(
+            env.client,
+            task_queue=queue,
+            workflows=[_CarriedOriginOwner],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ),
+    ):
+        handle = await env.client.start_workflow(
+            _CarriedOriginOwner.run, id=queue, task_queue=queue
+        )
+        result = await asyncio.wait_for(handle.result(), 30)
+        history = await handle.fetch_history()
+    # This run started moments ago, but the loop it continues has only 50s left:
+    # one verifier gets that allowance and the partial wait ends at the deadline
+    # instead of a fresh two hours from this run's start.
+    assert len(verified) == 1
+    policy = verified[0].timeout_policy
+    assert 40 <= policy["max_timeout_seconds"] <= 50
+    assert policy["timeout_seconds"] == policy["max_timeout_seconds"]
+    assert result["continuation"]["status"] == "blocked"
+    assert "budget expired" in result["continuation"]["summary"]
+    assert result["draftPreserved"] and result["headSha"] == _HEAD
+    assert result["implementationAttempts"] == 0
+    # The repeated partial bytes wait for new evidence until the deadline.
+    assert [row.get("action", "collect") for row in calls] == [
+        "collect",
+        "verify_candidate",
+        "collect",
+    ]
+    await Replayer(
+        workflows=[_CarriedOriginOwner],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+        data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
+    ).replay_workflow(history)
