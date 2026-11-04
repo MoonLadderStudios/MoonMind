@@ -1285,11 +1285,25 @@ def build_daemon_workspace_branch_argv(
     runtime_uid: int, runtime_gid: int, image: str, allow_initialization: bool,
 ) -> list[str]:
     """Prepare a fresh local branch, then preserve candidate changes on redelivery."""
-    if not _SAFE_VOLUME.fullmatch(volume) or len(target_branch) > 400:
+    from moonmind.omnigent.host_services.launcher import docker_attachment_mount
+
+    target = Path(target_in_volume)
+    if (
+        not _SAFE_VOLUME.fullmatch(volume)
+        or len(target_branch) > 400
+        or target.is_absolute()
+        or not target.parts
+        or runtime_uid <= 0
+        or runtime_gid <= 0
+    ):
         raise HarnessPlatformError(
             "workspace branch preparation authority is unavailable or unsafe",
             code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
         )
+    mount = docker_attachment_mount({
+        "kind": "volume", "sourceRef": volume, "targetPath": "/work",
+        "subPath": target.as_posix(), "accessMode": "read-write",
+    })
     script = (
         "set -eu; umask 077; "
         'git() { env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 '
@@ -1310,9 +1324,9 @@ def build_daemon_workspace_branch_argv(
     )
     return [
         "docker", "run", "--rm", "--network", "none", "--read-only",
-        "--user", f"{runtime_uid}:{runtime_gid}", "-v", f"{volume}:/work",
+        "--user", f"{runtime_uid}:{runtime_gid}", "--mount", mount,
         "--entrypoint", "/bin/sh", image, "-ceu", script, "--",
-        "/work/" + target_in_volume.lstrip("/"), target_branch,
+        "/work", target_branch,
         "initialize" if allow_initialization else "retain",
     ]
 
