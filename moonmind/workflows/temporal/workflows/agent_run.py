@@ -6902,6 +6902,10 @@ class MoonMindAgentRun:
     def pause(self) -> None:
         self._paused = True
 
+    @workflow.signal(name="Pause")
+    def pause_from_parent(self) -> None:
+        self.pause()
+
     @pause.validator
     def validate_pause(self) -> None:
         if self._paused:
@@ -6912,6 +6916,10 @@ class MoonMindAgentRun:
     @workflow.update(name="Resume")
     def resume(self) -> None:
         self._paused = False
+
+    @workflow.signal(name="Resume")
+    def resume_from_parent(self) -> None:
+        self.resume()
 
     @resume.validator
     def validate_resume(self) -> None:

@@ -1479,6 +1479,7 @@ RUN_LAUNCH_PROVIDER_PROFILE_PROJECTION_RETRY_PATCH = (
 # Existing launch-result histories must retain their later upsert position.
 RUN_GRANTED_PROFILE_PROGRESS_PATCH = "run-granted-profile-progress-v1"
 RUN_PAUSED_AGENT_PROGRESS_PATCH = "run-paused-agent-progress-v1"
+RUN_CHILD_LIFECYCLE_SIGNALS_PATCH = "run-child-lifecycle-signals-v1"
 RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH = "run-json-artifact-write-complete-v1"
 RUN_TEMPORAL_PR_RESOLVER_OWNERSHIP_PATCH = "run-temporal-pr-resolver-ownership-v1"
 RUN_PR_RESOLVER_CAPABILITY_PREFLIGHT_PATCH = "run-pr-resolver-capability-preflight-v1"
@@ -27795,6 +27796,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             if not await self._forward_lifecycle_update_to_active_child("Pause"):
                 self._paused = False
                 self._waiting_reason = previous_waiting_reason
+                if self._workflow_patch_enabled(RUN_CHILD_LIFECYCLE_SIGNALS_PATCH):
+                    raise exceptions.ApplicationError(
+                        "Failed to forward Pause update to active child workflow.",
+                        type="WorkflowControlDeliveryFailed",
+                    )
                 raise RuntimeError(
                     "Failed to forward Pause update to active child workflow."
                 )
@@ -27836,6 +27842,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             if not await self._forward_lifecycle_update_to_active_child("Resume"):
                 self._paused = previous_paused
                 self._waiting_reason = previous_waiting_reason
+                if self._workflow_patch_enabled(RUN_CHILD_LIFECYCLE_SIGNALS_PATCH):
+                    raise exceptions.ApplicationError(
+                        "Failed to forward Resume update to active child workflow.",
+                        type="WorkflowControlDeliveryFailed",
+                    )
                 raise RuntimeError(
                     "Failed to forward Resume update to active child workflow."
                 )
@@ -28006,7 +28017,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             self._active_agent_child_workflow_id
         )
         try:
-            await handle.execute_update(update_name)
+            # The SDK's workflow-side external handle sends signals; only a
+            # client handle can issue updates. Keep recorded histories on their
+            # original branch, and deliver new control intent durably.
+            if self._workflow_patch_enabled(RUN_CHILD_LIFECYCLE_SIGNALS_PATCH):
+                await handle.signal(update_name)
+            else:
+                await handle.execute_update(update_name)
         except Exception as exc:
             self._get_logger().warning(
                 "Failed to forward %s update to active child workflow %s: %s",
