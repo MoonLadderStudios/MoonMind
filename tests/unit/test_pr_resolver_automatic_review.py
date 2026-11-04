@@ -106,6 +106,145 @@ def test_captured_pr4773_automatic_review_opens_the_current_head_gate(
     )
 
 
+def _current_format_capture():
+    return json.loads(
+        FIXTURE.with_name("codex_automatic_review_with_state.json").read_text()
+    )
+
+
+@pytest.mark.parametrize("full_table_sha", [False, True])
+def test_captured_machine_state_summary_qualifies_the_exact_reviewed_head(
+    snapshot_module, monkeypatch, full_table_sha
+):
+    captured = _current_format_capture()
+    if full_table_sha:
+        captured["comments"][0]["body"] = captured["comments"][0]["body"].replace(
+            "`17799e0`", "`" + captured["head_sha"] + "`"
+        )
+    evidence = _evidence(snapshot_module, monkeypatch, captured)
+    assert evidence["freshReviewForHead"] is True
+    assert evidence["completionKind"] == "automatic_summary"
+    assert evidence["completionId"] == 6639737323
+    assert evidence["automaticSummary"]["reviewedCommitSha"] == captured["head_sha"]
+    assert evidence["automaticSummary"]["reactionId"] == 625970988
+    assert evidence["requestPending"] is False
+    assert evidence["requestFailed"] is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("commit_sha", "a" * 40),
+        ("commit_sha", "17799e0" + "a" * 33),
+        ("commit_sha", "17799e0"),
+        ("commit_sha", None),
+        ("status", "running"),
+        ("status", "failed"),
+        ("status", None),
+        ("has_any_findings", True),
+        ("has_any_findings", None),
+        ("has_any_findings", "false"),
+        ("has_any_findings", 0),
+        ("has_unresolved_findings", True),
+        ("has_unresolved_findings", None),
+        ("has_unresolved_findings", "false"),
+        ("has_unresolved_findings", 0),
+    ],
+)
+def test_machine_state_cannot_disagree_with_clean_current_head_completion(
+    snapshot_module, monkeypatch, field, value
+):
+    captured = _current_format_capture()
+    summary = captured["comments"][0]
+    lines = summary["body"].splitlines()
+    prefix, suffix = "<!-- codex-review-state:v1 ", " -->"
+    state = json.loads(lines[1][len(prefix) : -len(suffix)])
+    state["code_review"][field] = value
+    lines[1] = prefix + json.dumps(state) + suffix
+    summary["body"] = "\n".join(lines)
+    assert (
+        _evidence(snapshot_module, monkeypatch, captured)["freshReviewForHead"] is False
+    )
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "malformed",
+        "unknown-version",
+        "duplicate",
+        "array",
+        "missing-code-review",
+        "nonobject-code-review",
+        "duplicate-json-key",
+    ],
+)
+def test_malformed_or_ambiguous_machine_state_cannot_complete(
+    snapshot_module, monkeypatch, fault
+):
+    captured = _current_format_capture()
+    lines = captured["comments"][0]["body"].splitlines()
+    if fault == "malformed":
+        lines[1] = "<!-- codex-review-state:v1 {invalid} -->"
+    elif fault == "unknown-version":
+        lines[1] = lines[1].replace(":v1 ", ":v2 ")
+    elif fault == "duplicate":
+        lines.insert(1, lines[1])
+    elif fault == "array":
+        lines[1] = "<!-- codex-review-state:v1 [] -->"
+    elif fault == "missing-code-review":
+        lines[1] = "<!-- codex-review-state:v1 {} -->"
+    elif fault == "nonobject-code-review":
+        lines[1] = '<!-- codex-review-state:v1 {"code_review":"completed"} -->'
+    else:
+        lines[1] = lines[1].replace(
+            '"has_any_findings":false',
+            '"has_any_findings":true,"has_any_findings":false',
+        )
+    captured["comments"][0]["body"] = "\n".join(lines)
+    assert (
+        _evidence(snapshot_module, monkeypatch, captured)["freshReviewForHead"] is False
+    )
+
+
+@pytest.mark.parametrize(
+    "blocker",
+    ["reaction-absent", "human", "wrong-repo", "later-refusal", "later-request"],
+)
+def test_machine_state_does_not_replace_independent_review_authority(
+    snapshot_module, monkeypatch, blocker
+):
+    captured = _current_format_capture()
+    if blocker == "reaction-absent":
+        captured["reactions"] = []
+    elif blocker == "human":
+        captured["comments"][0]["user"] = "operator"
+    elif blocker == "wrong-repo":
+        captured["comments"][0]["url"] = captured["comments"][0]["url"].replace(
+            "MoonLadderStudios/MoonMind", "other/repo"
+        )
+    else:
+        refusal = blocker == "later-refusal"
+        captured["comments"].append(
+            _feedback(
+                captured,
+                body=(
+                    "You have reached your Codex usage limits for code reviews."
+                    if refusal
+                    else "@codex review"
+                ),
+                at="2026-11-04T19:16:20Z",
+                user="chatgpt-codex-connector[bot]" if refusal else "operator",
+            )
+        )
+    evidence = _evidence(snapshot_module, monkeypatch, captured)
+    assert evidence["freshReviewForHead"] is False
+    if blocker == "later-refusal":
+        assert evidence["requestFailed"] is True
+    elif blocker == "later-request":
+        assert evidence["requestPending"] is True
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
