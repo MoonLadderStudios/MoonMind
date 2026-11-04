@@ -83,6 +83,13 @@ def default_registry_tool_payload(*, name: str) -> dict[str, Any]:
             },
         }
 
+    if name == "gitlab.merge_request":
+        from moonmind.workflows.skills.gitlab_merge_request import (
+            build_gitlab_merge_request_tool_definition_payload,
+        )
+
+        return build_gitlab_merge_request_tool_definition_payload()
+
     if is_container_job_tool(name):
         return build_container_job_tool_definition_payload(name=name)
 
