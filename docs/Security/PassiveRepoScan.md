@@ -187,7 +187,7 @@ The versioned JSON contracts live in `moonmind/security/assessments.py`:
   `retained-report` tool consumes these observations through `reportRefs`; it
   also accepts this document's passive scanner JSON, using snapshot-relative
   file paths as scope assets. Native passive evidence expires for comparison
-  after one day; its original artifact retention is unchanged.
+  after one day; its artifact retention follows the roots that seal it.
 - `security-comparison/v1`: the observation, retained findings, scoped triage,
   counts and baseline/scan artifact references. Identity never depends on a
   presentation title or severity.
@@ -230,6 +230,23 @@ structured comparison and saved scanner evidence. `scanOutcome` and
 `publicationOutcome` remain separate: a publication failure returns the
 durable refs and diagnostics without changing the scanner outcome. Live
 cloud/model qualification is separate from these controlled artifact journeys.
+
+Before a scan, comparison or summary is reused or published, the producer
+seals what it cites through the artifact
+[dependency owner](../Temporal/WorkflowArtifactSystemDesign.md#143-lifecycle-manager).
+A scan seals the input and native report bytes it read. A comparison seals its
+scan, its baseline's bytes, and earlier evidence it still cites whose digest
+the baseline's seal verified. A summary seals its comparison and evidence;
+review and review evidence are optional, so they never hold retention.
+Missing, unauthorized, corrupt or mismatched required evidence fails the seal,
+and a retry keeps an existing seal. While a root is pinned, unexpired or held
+by a saved schedule's input root, cleanup cannot remove what it seals;
+releasing the root returns that evidence to its own retention. The baseline
+edge keeps that comparison only, not its lineage, so recurring history does
+not accumulate. Lifecycle backfill seals finished roots published without a
+seal when their scan inputs reproduce the recorded work identity. GitHub alert
+scans, scans reused from a baseline and report text stay unsealed and follow
+their own retention.
 
 ### Imported GitHub alerts
 

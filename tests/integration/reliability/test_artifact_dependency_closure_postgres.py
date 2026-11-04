@@ -459,7 +459,7 @@ async def test_legacy_guard_is_original_producer_run_only(
             now=datetime.now(UTC), limit=10
         )
         assert (child_id in {item.artifact_id for item in expired}) is (not protected)
-        candidates = await service._repository.list_unsealed_saved_work_roots(
+        candidates = await service._repository.list_unsealed_retained_roots(
             now=datetime.now(UTC), limit=1
         )
         assert bool(candidates) is (not expired_root)
@@ -490,7 +490,7 @@ async def test_legacy_backfill_page_restart_preserves_unvisited_old_run(tmp_path
             first, _ = await _legacy_pair(session, store, name="first")
             second, child = await _legacy_pair(session, store, name="second")
             service = _service(session, store, standalone=True)
-            assert await service._backfill_saved_work_dependencies(
+            assert await service._backfill_retained_dependencies(
                 now=datetime.now(UTC), limit=1
             )
             assert (
@@ -501,7 +501,7 @@ async def test_legacy_backfill_page_restart_preserves_unvisited_old_run(tmp_path
         # Simulate a process stopping after its first committed bounded page.
         async with sessions() as session:
             service = _service(session, store, standalone=True)
-            assert not await service._backfill_saved_work_dependencies(
+            assert not await service._backfill_retained_dependencies(
                 now=datetime.now(UTC), limit=1
             )
             proof = await service._repository.get_verified_dependencies(second)
@@ -548,3 +548,201 @@ async def test_legacy_ownerless_first_page_does_not_starve_owned_root(tmp_path, 
             if "no recorded producer execution" in record.message
         ]
         assert len(warnings) == 1
+
+
+async def _age(sessions):
+    from datetime import UTC, datetime, timedelta
+
+    async with sessions() as session:
+        past = datetime.now(UTC) - timedelta(days=1)
+        for row in await session.scalars(select(TemporalArtifact)):
+            row.expires_at = past
+        await session.commit()
+
+
+async def _statuses(sessions):
+    async with sessions() as session:
+        return {
+            row.artifact_id: row.status.value
+            for row in await session.scalars(select(TemporalArtifact))
+        }
+
+
+async def test_pinned_assessment_comparison_retains_evidence_across_sessions(
+    tmp_path,
+):
+    """Issue #5155: a committed pin outlives independent expiry until released."""
+    from tests.integration.security.test_recurring_assessments import (
+        inputs,
+        invoke,
+        put,
+    )
+
+    store = LocalTemporalArtifactStore(tmp_path / "bytes")
+    async with isolated_postgres(list(Base.metadata.sorted_tables)) as sessions:
+        async with sessions() as session:
+            service = _service(session, store, standalone=True)
+            request, inventory, _ = await inputs(service)
+            first = await invoke(service, request)
+            first_inventory = request["inventoryRef"]
+            request.update(
+                inventoryRef=await put(service, inventory),
+                baselineRef=first["comparisonRef"],
+            )
+            second = await invoke(service, request)
+            root = second["comparisonRef"]
+            await service.pin(artifact_id=root, principal="operator", reason="audit")
+        retained = {
+            first_inventory,
+            request["inventoryRef"],
+            request["feedRef"],
+            second["scanRef"],
+            first["comparisonRef"],
+        }
+        await _age(sessions)
+        async with sessions() as cleanup:
+            service = _service(cleanup, store, standalone=True)
+            for ref in sorted(retained):
+                with pytest.raises(TemporalArtifactStateError, match="retained"):
+                    await service.soft_delete(artifact_id=ref, principal="operator")
+                await cleanup.rollback()
+            await service.sweep_lifecycle(principal="service:sweeper")
+        statuses = await _statuses(sessions)
+        assert {statuses[ref] for ref in retained} == {"complete"}
+        assert statuses[first["scanRef"]] == "deleted"
+
+        async with sessions() as release:
+            await _service(release, store, standalone=True).unpin(
+                artifact_id=root, principal="operator"
+            )
+        await _age(sessions)
+        async with sessions() as cleanup:
+            await _service(cleanup, store, standalone=True).sweep_lifecycle(
+                principal="service:sweeper"
+            )
+        statuses = await _statuses(sessions)
+        assert {statuses[ref] for ref in retained | {root}} == {"deleted"}
+
+
+@pytest.mark.parametrize("cleanup", ["committed_first", "in_flight"])
+async def test_assessment_seal_and_independent_cleanup_have_one_winner(
+    tmp_path, cleanup
+):
+    """Cleanup between the producer's read and seal is never certified."""
+    from temporalio.exceptions import ApplicationError
+
+    from tests.artifact_access import access_for_test
+    from tests.integration.security.test_recurring_assessments import inputs, invoke
+
+    store = LocalTemporalArtifactStore(tmp_path / "bytes")
+    async with isolated_postgres(list(Base.metadata.sorted_tables)) as sessions:
+        async with sessions() as session, sessions() as deleting:
+            service = _service(session, store, standalone=True)
+            request, _, _ = await inputs(service)
+            target = request["inventoryRef"]
+            seal = service.record_verified_dependencies
+
+            async def racing(**kwargs):
+                await _service(deleting, store).soft_delete(
+                    artifact_id=target, principal="operator"
+                )
+                if cleanup == "committed_first":
+                    await deleting.commit()
+                return await seal(**kwargs)
+
+            service.record_verified_dependencies = racing
+            with pytest.raises(ApplicationError):
+                await invoke(service, request)
+            service.record_verified_dependencies = seal
+            execution = {
+                "namespace": "default",
+                "workflow_id": "assessment",
+                "run_id": "run",
+            }
+            (scan,) = await service.list_for_execution(
+                **execution,
+                link_type="security.scan",
+                access=access_for_test("workflow:assessment"),
+            )
+            assert (
+                await service._repository.get_verified_dependencies(scan.artifact_id)
+                is None
+            )
+            if cleanup == "committed_first":
+                with pytest.raises(ApplicationError):
+                    await invoke(service, request)
+                assert (
+                    await service._repository.get_verified_dependencies(
+                        scan.artifact_id
+                    )
+                    is None
+                )
+                return
+            # The busy row lock was retryable; the abandoned cleanup kept the
+            # input, so the retry seals it from the saved scan.
+            await deleting.rollback()
+            result = await invoke(service, request)
+            assert result["scanRef"] == scan.artifact_id
+        async with sessions() as late:
+            with pytest.raises(TemporalArtifactStateError, match="retained"):
+                await _service(late, store).soft_delete(
+                    artifact_id=target, principal="operator"
+                )
+
+
+async def test_retained_assessment_roots_backfill_across_page_restart(
+    tmp_path, monkeypatch
+):
+    """Unsealed finished assessment roots seal from their schema, page by page."""
+    from datetime import UTC, datetime
+
+    from api_service.db.models import (
+        MoonMindWorkflowState,
+        TemporalExecutionCanonicalRecord,
+        TemporalWorkflowType,
+    )
+    from moonmind.workflows.skills import security_assessment
+    from tests.integration.security.test_recurring_assessments import inputs, invoke
+
+    async def pre_seal_producer(self, root, dependencies):
+        return None
+
+    monkeypatch.setattr(
+        security_assessment.AssessmentExecution, "seal", pre_seal_producer
+    )
+    store = LocalTemporalArtifactStore(tmp_path / "bytes")
+    async with isolated_postgres(list(Base.metadata.sorted_tables)) as sessions:
+        async with sessions() as session:
+            service = _service(session, store, standalone=True)
+            request, _, _ = await inputs(service)
+            result = await invoke(service, request)
+            session.add(
+                TemporalExecutionCanonicalRecord(
+                    namespace="default",
+                    workflow_id="assessment",
+                    run_id="run",
+                    workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                    owner_id="operator",
+                    state=MoonMindWorkflowState.COMPLETED,
+                    entry="run",
+                )
+            )
+            await session.commit()
+        # The first bounded page commits before a simulated process restart.
+        async with sessions() as session:
+            await _service(
+                session, store, standalone=True
+            )._backfill_retained_dependencies(now=datetime.now(UTC), limit=1)
+        async with sessions() as session:
+            service = _service(session, store, standalone=True)
+            assert not await service._backfill_retained_dependencies(
+                now=datetime.now(UTC), limit=1
+            )
+            proof = await service._repository.get_verified_dependencies(
+                result["comparisonRef"]
+            )
+            assert {entry.artifact_id for entry in proof} == {
+                result["scanRef"],
+                request["inventoryRef"],
+                request["feedRef"],
+            }
