@@ -268,7 +268,6 @@ describe("Create history identity after discarding remediation", () => {
     const submittedInstructions = loseAcknowledgment ? "Preserve the edited repair before retrying." : draft.instructions;
     if (loseAcknowledgment) {
       fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: submittedInstructions } });
-      fireEvent.change(screen.getByLabelText("Authority"), { target: { value: "observe_only" } });
       fireEvent.click(screen.getByLabelText("Diagnostics"));
       fireEvent.change(screen.getByLabelText(/^Repository$/), { target: { value: "MoonLadderStudios/MoonMind" } });
       fireEvent.change(screen.getByLabelText("Branch"), { target: { value: "repair/edited" } });
@@ -293,7 +292,6 @@ describe("Create history identity after discarding remediation", () => {
     expect((screen.getByLabelText("Pinned run") as HTMLInputElement).value).toBe("target-run");
     expect((screen.getByLabelText("Instructions") as HTMLTextAreaElement).value).toBe(submittedInstructions);
     if (loseAcknowledgment) {
-      expect((screen.getByLabelText("Authority") as HTMLSelectElement).value).toBe("observe_only");
       expect((screen.getByLabelText("Diagnostics") as HTMLInputElement).checked).toBe(false);
       expect((screen.getByLabelText(/^Repository$/) as HTMLInputElement).value).toBe("MoonLadderStudios/MoonMind");
       expect((screen.getByLabelText("Branch") as HTMLInputElement).value).toBe("repair/edited");
@@ -315,7 +313,12 @@ describe("Create history identity after discarding remediation", () => {
     if (loseAcknowledgment) expect(requests[1]).toEqual(requests[0]);
     expect(requests[0]).toMatchObject({ payload: { task: {
       instructions: submittedInstructions,
-      remediation: { target: draft.remediation.target, authorityMode: loseAcknowledgment ? "observe_only" : draft.remediation.authorityMode },
+      remediation: {
+        target: draft.remediation.target,
+        mode: "snapshot",
+        authorityMode: "observe_only",
+        evidencePolicy: { includeDiagnostics: !loseAcknowledgment },
+      },
     } } });
     expect(readRemediationCreateDraft(draftId)).toBeNull();
   });

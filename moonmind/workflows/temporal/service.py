@@ -375,9 +375,9 @@ def _workflow_start_task_queue(parameters: Mapping[str, Any]) -> str | None:
 ALLOWED_REMEDIATION_AUTHORITY_MODES = frozenset(
     {"observe_only", "approval_gated", "admin_auto"}
 )
-ALLOWED_REMEDIATION_MODES = frozenset(
-    {"snapshot", "live_follow", "snapshot_then_follow"}
-)
+# Live observation reaches only the operator follow API, for
+# ``snapshot_then_follow``; the Omnigent agent receives no follow tool.
+ALLOWED_REMEDIATION_MODES = frozenset({"snapshot", "snapshot_then_follow"})
 MAX_REMEDIATION_STEP_SELECTORS = 25
 # Closed runs are queried by replaying their history on a worker.
 _REMEDIATION_STEP_LEDGER_QUERY_TIMEOUT_SECONDS = 15.0
