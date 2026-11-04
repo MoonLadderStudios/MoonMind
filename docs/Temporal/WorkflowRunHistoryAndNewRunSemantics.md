@@ -150,7 +150,7 @@ Issue leases cross remediation Continue-As-New boundaries. Before dispatch, olde
 
 ### 7A.4 What is not repeated
 
-Steps before the chosen step are not re-executed: their activity and child-workflow results come from replayed history. Effects the chosen step or a later step performed before the failure, such as a pushed branch or an opened pull request, are not undone, and those steps meet that state when they run again. A run can be retried only while Temporal retains its history.
+Steps before the chosen step are not re-executed: their activity and child-workflow results come from replayed history. A completed agent child's recorded parent and Step Execution identities remain authoritative for its runtime context and saved checkpoint; newly executed steps use the successor run identity. Effects the chosen step or a later step performed before the failure, such as a pushed branch or an opened pull request, are not undone, and those steps meet that state when they run again. A run can be retried only while Temporal retains its history.
 
 ## 8. Continue-As-New outside a requested new run
 

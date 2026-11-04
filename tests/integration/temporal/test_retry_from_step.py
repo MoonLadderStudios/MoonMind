@@ -53,13 +53,16 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integrat
 TASK_QUEUE = "retry-from-step-test"
 STEPS = ("step-1", "step-2", "step-3", "step-4")
 STEP_CALLS: list[str] = []
+STEP_RUN_IDS: dict[str, list[str]] = {}
 FAILING_STEP: dict[str, str | None] = {"step": "step-3"}
 CHILD_SAVES: dict[str, bytes] = {}
+CHILD_SAVE_CALLS: list[StepExecutionIdentityModel] = []
 
 
 @activity.defn(name="retry_probe.run_step")
 async def run_step(step_id: str) -> str:
     STEP_CALLS.append(step_id)
+    STEP_RUN_IDS.setdefault(step_id, []).append(activity.info().workflow_run_id)
     if step_id == FAILING_STEP["step"]:
         raise ApplicationError(f"{step_id} failed", non_retryable=True)
     return f"{step_id} ok"
@@ -124,6 +127,12 @@ class StepWorkflow:
 
 @activity.defn(name="retry_probe.child_save")
 async def child_save(identity: StepExecutionIdentityModel) -> dict:
+    CHILD_SAVE_CALLS.append(identity)
+    step_execution_id = (
+        f"{identity.workflow_id}:{identity.run_id}:"
+        f"{identity.logical_step_id}:execution:{identity.execution_ordinal}"
+    )
+    runtime_binding_ref = "omnigent-runtime-binding:sha256:" + "f" * 64
     workspace = {
         "kind": "worktree_archive", "baseCommit": "a" * 40,
         "archiveRef": "artifact://archive", "archiveDigest": "sha256:" + "b" * 64,
@@ -139,12 +148,22 @@ async def child_save(identity: StepExecutionIdentityModel) -> dict:
     )).encode()
     return {
         "runId": identity.run_id,
+        "recordedStepExecution": identity.model_dump(by_alias=True, mode="json"),
         "result": AgentRunResult(summary="Saved child work", metadata={
             "workPreserved": True,
             "parentWorkflowId": identity.workflow_id,
             "parentTemporalRunId": identity.run_id,
             "parentRunId": identity.run_id,
-            "runtimeBindingRef": "omnigent-runtime-binding:sha256:" + "f" * 64,
+            "childWorkflowId": f"{identity.workflow_id}:saved-step-child",
+            "childRunId": f"child-run:{identity.run_id}",
+            "runtimeBindingRef": runtime_binding_ref,
+            "runtimeSessionContext": {
+                "workflowId": identity.workflow_id,
+                "runId": identity.run_id,
+                "stepExecutionId": step_execution_id,
+                "runtimeBindingRef": runtime_binding_ref,
+                "epoch": step_execution_id,
+            },
             "savedWorkspaceCheckpoint": {**workspace, "checkpointRef": reference},
         }).model_dump(by_alias=True, mode="json"),
     }
@@ -181,10 +200,18 @@ class SharedCheckpointWorkflow(StepWorkflow):
         return await super().run()
 
     async def after_step(self, step_id: str) -> None:
-        if step_id != "step-1":
-            return
         info = workflow.info()
         owner = self._checkpoint_owner
+        if step_id != "step-1":
+            fresh = owner._build_agent_execution_request(
+                node_inputs={"runtime": {"mode": "omnigent"}}, node_id=step_id,
+                tool_name="omnigent", workflow_parameters={},
+            )
+            assert fresh.step_execution.run_id == info.run_id
+            assert fresh.step_execution.step_execution_id == (
+                f"{info.workflow_id}:{info.run_id}:{step_id}:execution:1"
+            )
+            return
         owner._mark_step_running(step_id, updated_at=workflow.now(), summary="Saved work")
         request = AgentExecutionRequest(
             agentKind="external", agentId="omnigent", correlationId=info.workflow_id,
@@ -195,6 +222,20 @@ class SharedCheckpointWorkflow(StepWorkflow):
                 "stepExecutionId": f"{info.workflow_id}:{info.run_id}:{step_id}:execution:1",
                 "runtimeContextPolicy": "fresh_agent_run",
             },
+        )
+        request = owner._restore_replayed_agent_step_identity(
+            request, self._save["result"],
+            child_workflow_id=f"{info.workflow_id}:saved-step-child",
+        )
+        owner._record_shared_runtime_context(request, self._save["result"])
+        recorded = StepExecutionIdentityModel.model_validate(
+            self._save["recordedStepExecution"]
+        )
+        assert request.step_execution.run_id == recorded.run_id
+        assert owner._shared_runtime_context.run_id == recorded.run_id
+        assert (
+            owner._shared_runtime_context.step_execution_id
+            == request.step_execution.step_execution_id
         )
         assert await owner._adopt_shared_child_saved_checkpoint(
             step_id, request, self._save["result"],
@@ -269,6 +310,8 @@ async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
     tmp_path, monkeypatch, journey, expired_claim, workflow_class,
 ):
     STEP_CALLS.clear()
+    STEP_RUN_IDS.clear()
+    CHILD_SAVE_CALLS.clear()
     FAILING_STEP["step"] = "step-3"
     # The service replays the kept history on the installed workflow classes.
     monkeypatch.setattr(retry_from_step, "_replay_workflows", lambda: [workflow_class])
@@ -351,6 +394,9 @@ async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
                     await handle.result()
                 failed_run_id = (await handle.describe()).run_id
                 assert STEP_CALLS == ["step-1", "step-2", "step-3"]
+                if workflow_class is SharedCheckpointWorkflow:
+                    assert len(CHILD_SAVE_CALLS) == 1
+                    assert CHILD_SAVE_CALLS[0].run_id == failed_run_id
 
                 FAILING_STEP["step"] = None
                 STEP_CALLS.clear()
@@ -393,6 +439,14 @@ async def test_failed_run_restarts_from_the_failed_step_and_keeps_earlier_steps(
                     # Earlier steps came from history; only the failed step and
                     # its successors ran again.
                     assert STEP_CALLS == ["step-3", "step-4"]
+                    assert STEP_RUN_IDS == {
+                        "step-1": [failed_run_id],
+                        "step-2": [failed_run_id],
+                        "step-3": [failed_run_id, new_run_id],
+                        "step-4": [new_run_id],
+                    }
+                    if workflow_class is SharedCheckpointWorkflow:
+                        assert len(CHILD_SAVE_CALLS) == 1
                     assert (
                         await retried.describe()
                     ).status == WorkflowExecutionStatus.COMPLETED

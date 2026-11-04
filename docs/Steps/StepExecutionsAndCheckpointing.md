@@ -109,7 +109,7 @@ A manifest or checkpoint whose ID does not match its identity fields is rejected
 
 ### 5.2 Cross-run lineage
 
-Retry from a step creates no cross-run lineage: the reset run keeps the workflow identity, replays the steps before the retried one, and allocates new run-scoped identities for the steps that run again. The v1 manifest keeps its `lineage` and `recoverySource` fields so stored manifests still validate, but new executions leave them empty.
+Retry from a step keeps the workflow identity and replays completed steps before the retried one. Their child results retain the recorded parent binding for runtime-context validation and checkpoint reuse; steps that run again receive new run-scoped identities. This creates no cross-run lineage. The v1 manifest retains `lineage` and `recoverySource` for stored evidence; new executions leave them empty.
 
 ### 5.3 Idempotency keys
 
