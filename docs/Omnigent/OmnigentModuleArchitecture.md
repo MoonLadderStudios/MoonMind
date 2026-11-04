@@ -180,7 +180,9 @@ selected runtime UID. An existing candidate without admission
 proof is preserved with an explicit uncertainty error. Both paths use the scoped
 Temporal artifact adapter; model and repository credentials remain separate.
 Fresh repository preparation selects the authored local target branch through
-the same volume owner and records completion in repository-local metadata.
+the same volume owner and records completion in repository-local metadata. Its
+unprivileged helper mounts only the admitted repository subtree, retaining the
+private parent permissions and isolation of sibling attempts.
 Redelivery preserves later candidate branches and edits; an unproven existing
 candidate is retained with an uncertainty error instead of being reset.
 Checkpoint restores retain their saved branch and history.

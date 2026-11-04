@@ -581,9 +581,17 @@ async def test_pr_handoff_keeps_published_remediation_instead_of_stale_archive(
         # replacement checkout remains forbidden for a published candidate.
         assert input_bytes is None, "must reuse checkout"
         assert argv[:6] == ["docker", "run", "--rm", "--network", "none", "--read-only"]
+        mount = dict(
+            part.split("=", 1)
+            for part in argv[argv.index("--mount") + 1].split(",")
+        )
+        assert mount["type"] == "volume"
+        assert mount["src"] == materializer._workspace_volume
+        assert mount["volume-subpath"] == workspace.relative_to(tmp_path).as_posix()
+        assert mount["dst"] == "/work"
         positional = argv[argv.index("--") + 1 :]
         assert positional == [
-            f"/work/{workspace.relative_to(tmp_path).as_posix()}",
+            mount["dst"],
             "candidate",
             "retain",
         ]
