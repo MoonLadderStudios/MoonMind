@@ -132,8 +132,10 @@ An older-commit review is not fresh for a new head. ProgressSignature includes h
 The portable collector also recognizes Codex's automatic PR-opened completion
 summary without manufacturing an explicit request. The registered bot must
 publish the supported completed Code Review table on the exact repository/PR.
-An abbreviated reviewed commit is accepted only after the complete PR commit
-inventory proves one match and GitHub resolves it to the exact current head.
+An optional machine-state header must agree with the table and name a completed,
+finding-free review of the full commit; it never replaces the confirming reaction.
+An abbreviated reviewed commit without that header requires a complete PR commit
+inventory proving one match and GitHub resolution to the exact current head.
 For PRs above 250 commits, a paginated exact base/head comparison supplies the
 inventory instead of the capped PR endpoint; count or uniqueness failures stay
 blocked. Automatic chronology uses GitHub's comment/completion/reaction times
