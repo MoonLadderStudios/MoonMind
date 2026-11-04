@@ -1617,8 +1617,9 @@ def _never_started_client(
     "agent_name", ["opencode-native-ui", "codex-native-ui", "claude-native-ui"]
 )
 @pytest.mark.parametrize("crash_at", [None, "journal", "harvest"])
+@pytest.mark.parametrize("native_failure", ["reauth", "quota"])
 async def test_provider_rejection_after_injection_completion(
-    monkeypatch, tmp_path, agent_name, crash_at
+    monkeypatch, tmp_path, agent_name, crash_at, native_failure
 ):
     """The injection response must not hide a later native failure behind polling."""
     replay = json.loads(
@@ -1627,6 +1628,11 @@ async def test_provider_rejection_after_injection_completion(
             / "fixtures/omnigent/provider_rejection_after_injection.json"
         ).read_text()
     )
+    if native_failure == "quota":
+        replay["events"][2]["error"] = {
+            "code": "native_turn_error",
+            "message": "You've hit your session limit · resets 12:30pm (UTC)",
+        }
     marker = "MoonMind-Omnigent-Run:\n  correlationId: corr-1\n  idempotencyKey: idem-1"
     base = _never_started_client(marker, stream_shape="silent", streamed={"value": 0})
     retrying = False
@@ -1676,9 +1682,9 @@ async def test_provider_rejection_after_injection_completion(
             return {"items": [{"id": "agent-1", "name": agent_name}]}
 
         async def stream_events(self, session_id):
-            assert (
-                not retrying
-            ), "journaled terminal evidence must precede SSE reattachment"
+            assert not retrying, (
+                "journaled terminal evidence must precede SSE reattachment"
+            )
             await self.posted.wait()
             for event in replay["events"]:
                 yield event
@@ -1688,6 +1694,7 @@ async def test_provider_rejection_after_injection_completion(
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", Client)
+
     # Keep the production watchdog budget: this test classifies native failure,
     # and journal I/O must not race an unrelated 50ms turn-start deadline.
     # The test-level timeout still bounds a regression that resumes polling.
@@ -1728,16 +1735,27 @@ async def test_provider_rejection_after_injection_completion(
     )
     assert posts == ["session-1"]
     assert result.failure_class == "integration_error"
-    assert result.retry_recommendation == "reauthenticate"
-    assert result.provider_error_code == "codex_reauth_required"
-    assert "requires explicit opt in" in result.summary
+    if native_failure == "quota":
+        assert result.retry_recommendation == "retry_after_cooldown"
+        assert result.provider_error_code == "native_turn_error"
+        assert result.provider_failure["providerErrorClass"] == "rate_limit"
+        assert result.retry_disposition == "wait"
+        from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+
+        assert MoonMindAgentRun._result_requires_provider_cooldown(result)
+        assert "hit your session limit" in result.summary
+    else:
+        assert result.retry_recommendation == "reauthenticate"
+        assert result.provider_error_code == "codex_reauth_required"
+        assert "requires explicit opt in" in result.summary
     assert "never started" not in result.summary
     assert result.diagnostics_ref and result.output_refs
     assert store.terminal_calls[-1]["status"] == "failed"
     assert (
-        "requires explicit opt in"
-        in store.terminal_calls[-1]["terminalRefs"]["summary"]
-    )
+        "hit your session limit"
+        if native_failure == "quota"
+        else "requires explicit opt in"
+    ) in store.terminal_calls[-1]["terminalRefs"]["summary"]
 
 
 @pytest.mark.parametrize(
@@ -3038,6 +3056,72 @@ def test_build_omnigent_result_is_terminal_failure_with_provider_error() -> None
     assert all(not ref.startswith("omnigent://") for ref in result.output_refs)
     assert not result.diagnostics_ref.startswith("omnigent://")
     assert result.metadata["normalizedStatus"] == "failed"
+
+
+@pytest.mark.parametrize("terminal_status", ["completed", "canceled", "timed_out"])
+def test_stale_native_quota_error_does_not_override_other_terminal_states(
+    terminal_status,
+):
+    result = build_omnigent_result(
+        request=_request(),
+        terminal_status=terminal_status,
+        session_id="sess-1",
+        agent_id="agent-1",
+        final_snapshot={
+            "last_task_error": {
+                "code": "native_turn_error",
+                "message": "You've hit your session limit",
+            }
+        },
+        event_count=1,
+        capture_bundle=_bundle(),
+    )
+    assert result.provider_failure is None
+    assert result.retry_recommendation is None
+
+
+@pytest.mark.parametrize(
+    "structured_error",
+    [
+        {"code": "401"},
+        {"provider_error_class": "auth"},
+        {"providerErrorClass": "auth"},
+    ],
+)
+def test_native_provider_structured_failure_precedes_text_fallback(structured_error):
+    result = build_omnigent_result(
+        request=_request(),
+        terminal_status="failed",
+        session_id="sess-1",
+        agent_id="agent-1",
+        final_snapshot={
+            "last_task_error": {
+                "code": "native_turn_error",
+                "message": "You've hit your session limit",
+                **structured_error,
+            }
+        },
+        event_count=1,
+        capture_bundle=_bundle(),
+    )
+    assert result.provider_failure["providerErrorClass"] == "auth"
+    assert result.retry_recommendation == "reauthenticate"
+    assert result.retry_disposition == "no_retry"
+
+
+def test_transcript_quota_text_is_not_native_error_authority():
+    result = build_omnigent_result(
+        request=_request(),
+        terminal_status="failed",
+        session_id="sess-1",
+        agent_id="agent-1",
+        final_snapshot={"summary": "You've hit your session limit"},
+        event_count=1,
+        capture_bundle=_bundle(),
+    )
+    assert result.failure_class == "execution_error"
+    assert result.provider_failure is None
+    assert result.retry_recommendation is None
 
 
 def test_build_omnigent_result_uses_valid_failure_class_for_timeout() -> None:
@@ -4965,12 +5049,25 @@ async def test_run_omnigent_execution_reconciles_idle_snapshot_from_heartbeat(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "failure_code", ["provider_failure", "codex_reauth_required", None]
+    ("failure_code", "provider_failure"),
+    [
+        ("provider_failure", None),
+        ("codex_reauth_required", None),
+        (None, None),
+        (
+            "native_turn_error",
+            {
+                "providerErrorClass": "rate_limit",
+                "providerErrorCode": "native_turn_error",
+            },
+        ),
+    ],
 )
 async def test_run_omnigent_execution_preserves_durable_failed_terminal_on_retry(
     monkeypatch,
     tmp_path,
     failure_code,
+    provider_failure,
 ) -> None:
     terminal_calls: list[str] = []
 
@@ -4990,6 +5087,7 @@ async def test_run_omnigent_execution_preserves_durable_failed_terminal_on_retry
             "failureClass": "execution_error",
             "failureCode": failure_code,
             "summary": "durable provider failure",
+            "providerFailure": provider_failure,
         }
         metadata_: dict[str, object] = {}
 
@@ -5042,6 +5140,7 @@ async def test_run_omnigent_execution_preserves_durable_failed_terminal_on_retry
                     "code": "later_turn_error",
                     "message": "unrelated turn",
                 },
+                "providerFailure": {"providerErrorClass": "auth"},
             }
 
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
@@ -5069,14 +5168,21 @@ async def test_run_omnigent_execution_preserves_durable_failed_terminal_on_retry
     assert result.metadata["normalizedStatus"] == "failed"
     assert result.failure_class == (
         "integration_error"
-        if failure_code == "codex_reauth_required"
+        if failure_code == "codex_reauth_required" or provider_failure
         else "execution_error"
     )
     assert result.summary == "durable provider failure"
     assert result.provider_error_code == failure_code
     assert result.retry_recommendation == (
-        "reauthenticate" if failure_code == "codex_reauth_required" else None
+        "retry_after_cooldown"
+        if provider_failure
+        else "reauthenticate"
+        if failure_code == "codex_reauth_required"
+        else None
     )
+    if provider_failure:
+        assert result.provider_failure["providerErrorClass"] == "rate_limit"
+        assert result.retry_disposition == "wait"
     assert terminal_calls == ["failed"]
 
 
