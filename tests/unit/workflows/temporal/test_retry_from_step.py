@@ -399,7 +399,8 @@ def test_completed_result_does_not_rewind_past_a_later_capture():
     history.checkpoint(failed=False)
     with pytest.raises(RetryFromStepUnavailable) as raised:
         plan_retry_from_step(
-            events=history.events, ledger_rows=_completed_with_failed_save(),
+            events=history.events,
+            ledger_rows=_completed_with_failed_save(),
             decode_memo_value=_decode,
         )
     assert raised.value.reason == "finalization_boundary_unavailable"
