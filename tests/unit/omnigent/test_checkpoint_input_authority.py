@@ -54,6 +54,17 @@ from moonmind.workflows.temporal.step_checkpoints import build_step_checkpoint_p
         ("schedule", "invalid-json"),
         ("schedule", "missing-digest"),
         ("schedule", "missing-definition"),
+        ("create-inline", None),
+        ("schedule-inline", None),
+        ("create-inline", "wrong-input"),
+        ("create-inline", "other-workflow-uri"),
+        ("create-inline", "other-run-uri"),
+        ("create-inline", "prefixed-uri"),
+        ("create-inline", "unknown-origin"),
+        ("create-inline", "missing-wrapper"),
+        ("create-inline", "bytes-digest"),
+        ("create-inline", "missing-digest"),
+        ("schedule-inline", "missing-definition"),
     ],
 )
 async def test_saved_step_input_follows_immutable_admitted_snapshot(
@@ -66,32 +77,48 @@ async def test_saved_step_input_follows_immutable_admitted_snapshot(
         logicalStepId="implement",
         executionOrdinal=1,
     )
+    scheduled = input_kind.startswith("schedule")
+    inline = input_kind.endswith("-inline")
+    input_ref = (
+        "temporal://workflow/run/task-input"
+        if inline
+        else "artifact:art_workflow_input"
+    )
+    saved_input_ref = {
+        "other-workflow-uri": "temporal://another-workflow/run/task-input",
+        "other-run-uri": "temporal://workflow/another-run/task-input",
+        "prefixed-uri": "artifact://temporal://workflow/run/task-input",
+    }.get(fault, input_ref)
     saved = build_step_checkpoint_payload(
         identity=source_identity,
         boundary="before_publication",
-        task_input_snapshot_ref="artifact:art_workflow_input",
+        task_input_snapshot_ref=saved_input_ref,
         workspace={"kind": "git_commit", "baseCommit": "a" * 40},
         created_at=datetime.now(UTC),
         plan_ref="artifact:art_workflow_plan",
     )
     saved_body = json.dumps(saved).encode()
-    frozen = (
-        {
-            "source": {"kind": "schedule", "definitionId": "schedule-1"},
-            "target": {"inputArtifactRef": "art_workflow_input"},
-        }
-        if input_kind == "schedule"
-        else {
-            "source": {"kind": "manual"},
-            "draft": {"inputArtifactRef": "artifact://art_workflow_input"},
-        }
-    )
+    wrapper_key = "target" if scheduled else "draft"
+    frozen = {
+        "source": (
+            {"kind": "schedule", "definitionId": "schedule-1"}
+            if scheduled
+            else {"kind": "create" if inline else "manual"}
+        ),
+        wrapper_key: (
+            {"authoredWorkflowInput": {"instructions": "Verify the saved work."}}
+            if inline
+            else {"inputArtifactRef": "artifact://art_workflow_input"}
+        ),
+    }
     if fault == "wrong-input":
-        frozen["target" if input_kind == "schedule" else "draft"][
-            "inputArtifactRef"
-        ] = "artifact:art_other_input"
+        frozen[wrapper_key]["inputArtifactRef"] = "artifact:art_other_input"
     if fault == "missing-definition":
         frozen["source"].pop("definitionId")
+    if fault == "unknown-origin":
+        frozen["source"]["kind"] = "unrecognized"
+    if fault == "missing-wrapper":
+        frozen.pop(wrapper_key)
     frozen_body = (
         b"invalid-json" if fault == "invalid-json" else json.dumps(frozen).encode()
     )
@@ -190,7 +217,17 @@ async def test_saved_step_input_follows_immutable_admitted_snapshot(
     if fault:
         error = (
             CheckpointRestoreError
-            if fault in {"wrong-input", "missing-digest", "missing-definition"}
+            if fault
+            in {
+                "wrong-input",
+                "missing-digest",
+                "missing-definition",
+                "other-workflow-uri",
+                "other-run-uri",
+                "prefixed-uri",
+                "unknown-origin",
+                "missing-wrapper",
+            }
             else (
                 TemporalArtifactStateError
                 if fault == "incomplete"
@@ -206,6 +243,11 @@ async def test_saved_step_input_follows_immutable_admitted_snapshot(
             "incomplete": "not readable",
             "unavailable": "cannot be read",
             "invalid-json": "snapshot is invalid",
+            "other-workflow-uri": "not bound",
+            "other-run-uri": "not bound",
+            "prefixed-uri": "not bound",
+            "unknown-origin": "not bound",
+            "missing-wrapper": "not bound",
         }[fault]
         with pytest.raises(error, match=message):
             await read_checkpoint()
@@ -215,7 +257,7 @@ async def test_saved_step_input_follows_immutable_admitted_snapshot(
         return
     checkpoint = await read_checkpoint()
     assert checkpoint.source == source_identity
-    assert checkpoint.task_input_snapshot_ref == "artifact:art_workflow_input"
+    assert checkpoint.task_input_snapshot_ref == input_ref
     assert reads == (
         ["art_saved"] if input_kind == "direct" else ["art_saved", "art_product_input"]
     )
@@ -223,16 +265,17 @@ async def test_saved_step_input_follows_immutable_admitted_snapshot(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("verifier_run_id", ["run-1", "retry-run"])
+@pytest.mark.parametrize("input_kind", ["schedule", "create-inline"])
 async def test_scheduled_verifier_restores_the_implementation_save(
-    tmp_path, monkeypatch, verifier_run_id
+    tmp_path, monkeypatch, verifier_run_id, input_kind
 ):
-    """Replay the scheduled implement -> verify handoff through real artifacts.
+    """Replay implement -> verify input handoffs through real artifacts.
 
-    A recurring run's admitted snapshot wraps the schedule's workflow input,
-    while the implementation step saves that inner input. The verifier step
-    restores the implementation's saved Git candidate into its own sandbox
-    through the production capture, checkpoint, and artifact authority, both
-    in the original run and after "Retry from failed step" resets it.
+    A recurring run's snapshot wraps its workflow-input artifact. An inline
+    authored run instead names its workflow/run's canonical input URI. In both
+    cases the verifier restores the saved Git candidate through production
+    capture, checkpoint and artifact authority, in the original run and after
+    "Retry from failed step" resets it.
     """
 
     monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
@@ -306,18 +349,31 @@ async def test_scheduled_verifier_restores_the_implementation_save(
                 )
                 return artifact.artifact_id
 
-            workflow_input = await operator_input(
-                b'{"title": "Scheduled search"}',
-                content_type="application/json; charset=utf-8",
-                metadata={"label": "Submitted Workflow Input"},
-            )
-            snapshot_body = json.dumps(
-                {
+            if input_kind == "schedule":
+                workflow_input = await operator_input(
+                    b'{"title": "Scheduled search"}',
+                    content_type="application/json; charset=utf-8",
+                    metadata={"label": "Submitted Workflow Input"},
+                )
+                frozen_input = {
                     "snapshotVersion": 1,
                     "source": {"kind": "schedule", "definitionId": "schedule-1"},
                     "target": {"inputArtifactRef": workflow_input},
                 }
-            ).encode()
+            else:
+                # This is the existing canonical checkpoint producer's fallback
+                # when the authored workflow has no separate input artifact.
+                workflow_input = f"temporal://{workflow_id}/{run_id}/task-input"
+                frozen_input = {
+                    "snapshotVersion": 1,
+                    "source": {"kind": "create"},
+                    "draft": {
+                        "authoredWorkflowInput": {
+                            "instructions": "Verify the implemented repository."
+                        }
+                    },
+                }
+            snapshot_body = json.dumps(frozen_input).encode()
             snapshot = await operator_input(
                 snapshot_body,
                 content_type="application/json",
