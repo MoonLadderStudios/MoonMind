@@ -17,8 +17,10 @@ workflow code over the kept history before anything is reset.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import Any
+from uuid import uuid4
 
 from temporalio.api.enums.v1 import EventType, WorkflowTaskFailedCause
 from temporalio.api.history.v1 import HistoryEvent
@@ -396,18 +398,30 @@ async def replay_failure_before_reset(
         MOONMIND_TEMPORAL_DATA_CONVERTER,
     )
 
-    prefix = WorkflowHistory(
-        history.workflow_id,
-        [event for event in history.events if event.event_id <= until_event_id],
-    )
-    result = await Replayer(
+    events = [event for event in history.events if event.event_id <= until_event_id]
+    replayer = Replayer(
         workflows=_replay_workflows(),
         data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
         workflow_runner=UnsandboxedWorkflowRunner(),
-    ).replay_workflow(prefix, raise_on_replay_failure=False)
-    if result.replay_failure is None:
-        return None
-    return str(result.replay_failure)[:1000]
+    )
+    result = await replayer.replay_workflow(
+        WorkflowHistory(history.workflow_id, events), raise_on_replay_failure=False
+    )
+    if result.replay_failure is not None:
+        return str(result.replay_failure)[:1000]
+    # The SDK replayer derives workflow.info().run_id from this start field.
+    # Temporal assigns a reset a fresh ID while keeping earlier results; a
+    # replay only under the original ID misses identity-dependent divergence.
+    if events and events[0].HasField("workflow_execution_started_event_attributes"):
+        reset_start = deepcopy(events[0])
+        reset_start.workflow_execution_started_event_attributes.original_execution_run_id = str(uuid4())
+        result = await replayer.replay_workflow(
+            WorkflowHistory(history.workflow_id, [reset_start, *events[1:]]),
+            raise_on_replay_failure=False,
+        )
+        if result.replay_failure is not None:
+            return str(result.replay_failure)[:1000]
+    return None
 
 
 __all__ = [

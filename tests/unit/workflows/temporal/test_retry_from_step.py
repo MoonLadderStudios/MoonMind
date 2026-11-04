@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from temporalio.api.enums.v1 import EventType, WorkflowTaskFailedCause
 from temporalio.api.history.v1 import HistoryEvent
+from temporalio.client import WorkflowHistory
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
@@ -16,6 +19,7 @@ from moonmind.workflows.temporal.retry_from_step import (
     plan_retry_from_step,
     retry_candidates,
     retry_reset_reason,
+    replay_failure_before_reset,
     step_boundaries,
 )
 
@@ -343,3 +347,32 @@ def test_a_retry_accepted_before_its_response_was_saved_is_recognized() -> None:
     assert accepted(successor, source_run_id="run-x") is None
     assert accepted(successor[:1]) is None
     assert accepted([]) is None
+
+
+@pytest.mark.asyncio
+async def test_preflight_refuses_history_that_only_replays_with_its_original_run_id(
+    monkeypatch,
+):
+    started = HistoryEvent(event_id=1)
+    started.workflow_execution_started_event_attributes.original_execution_run_id = "source-run"
+    history = WorkflowHistory("workflow", [started, HistoryEvent(event_id=2)])
+    original = started.SerializeToString()
+    observed = []
+
+    class Replayer:
+        def __init__(self, **kwargs):
+            pass
+
+        async def replay_workflow(self, prefix, **kwargs):
+            assert len(prefix.events) == 1
+            run_id = prefix.events[0].workflow_execution_started_event_attributes.original_execution_run_id
+            observed.append(run_id)
+            return SimpleNamespace(
+                replay_failure=None if run_id == "source-run" else "reset identity does not replay",
+            )
+
+    monkeypatch.setattr("temporalio.worker.Replayer", Replayer)
+    assert await replay_failure_before_reset(history, until_event_id=1) == "reset identity does not replay"
+    assert observed[0] == "source-run"
+    assert len(observed) == 2 and observed[1] != "source-run"
+    assert started.SerializeToString() == original
