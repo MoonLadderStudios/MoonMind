@@ -1,6 +1,6 @@
 # Security Tools and Assessment Workflows
 
-This describes MoonMind's security program. The [passive repository scan](PassiveRepoScan.md), repository scanner jobs, Trivy feed snapshots, image and SBOM jobs, cloud posture jobs, web and API assessment jobs, imported GitHub alerts, the security Skills, and recurring `security.assess` comparisons are implemented. The conditional tools are not installed.
+This describes MoonMind's security program. The [passive repository scan](PassiveRepoScan.md), repository scanner jobs, Trivy feed snapshots, image and SBOM jobs, cloud posture jobs, web and API assessment jobs, [game math assessments](GameMathAssessment.md), imported GitHub alerts, the security Skills, and recurring `security.assess` comparisons are implemented. The conditional tools are not installed.
 
 ## Purpose and ownership
 
@@ -144,7 +144,7 @@ Model credentials, source-repository credentials, scanner-image pull credentials
 
 Passive source analysis runs with `networkMode: none`, using prepared rule/data snapshots. Feed refresh, image acquisition, cloud APIs, and live-target assessment receive only their admitted destinations through the existing [restricted-egress owner](RestrictedEgress.md). Docker bridge mode alone is insufficient. Target enforcement addresses DNS resolution, redirects, alternate routes, private destinations, and control-plane/metadata access. Internal applications may be admitted explicitly without opening unrelated private networks.
 
-Scanner jobs are bounded CLI executions; a persistent cross-turn browser or proxy endpoint is a separate capability added only for a concrete need.
+Scanner jobs are bounded CLI executions, not persistent browser or proxy endpoints.
 
 ## Evidence, findings, and remediation
 
