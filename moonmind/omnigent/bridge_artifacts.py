@@ -532,6 +532,47 @@ async def ensure_verified_execution_plan_dependencies(
     )
 
 
+async def read_frozen_task_input_snapshot(
+    service,
+    *,
+    snapshot_ref: str,
+    snapshot_digest: str,
+    access: ArtifactAccessContext,
+):
+    """Read a plan-admitted snapshot, checking stored and actual byte digests.
+
+    The caller supplies references from verified immutable plan authority,
+    never a replacement chosen from mutable runtime parameters.
+    """
+    snapshot_id = TemporalOmnigentArtifactGateway._artifact_id(snapshot_ref)
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactError
+
+    try:
+        snapshot_artifact, body = await service.read(
+            artifact_id=snapshot_id, access=access._with_verified_inputs((snapshot_id,))
+        )
+    except TemporalArtifactError as exc:
+        raise OmnigentArtifactError(
+            f"frozen task-input snapshot cannot be read: {exc}"
+        ) from exc
+    expected_digest = snapshot_digest.removeprefix("sha256:")
+    if snapshot_artifact.sha256 != expected_digest:
+        raise OmnigentArtifactError("frozen task-input snapshot authority mismatch")
+    if (
+        str(getattr(snapshot_artifact.status, "value", snapshot_artifact.status))
+        != "complete"
+    ):
+        from moonmind.workflows.temporal.artifacts import TemporalArtifactStateError
+
+        raise TemporalArtifactStateError("frozen task-input snapshot is not readable")
+    if hashlib.sha256(body).hexdigest() != expected_digest:
+        raise OmnigentArtifactError("frozen task-input snapshot digest mismatch")
+    try:
+        return json.loads(body)
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise OmnigentArtifactError("frozen task-input snapshot is invalid") from exc
+
+
 async def _frozen_planning_input_refs(
     repository,
     service,
@@ -562,33 +603,10 @@ async def _frozen_planning_input_refs(
     else:
         snapshot_ref = authority.taskInputSnapshotRef
         snapshot_digest = authority.taskInputSnapshotDigest
-    snapshot_id = TemporalOmnigentArtifactGateway._artifact_id(snapshot_ref)
-    from moonmind.workflows.temporal.artifacts import TemporalArtifactError
-
-    try:
-        snapshot_artifact, body = await service.read(
-            artifact_id=snapshot_id, access=access._with_verified_inputs((snapshot_id,))
-        )
-    except TemporalArtifactError as exc:
-        raise OmnigentArtifactError(
-            f"frozen task-input snapshot cannot be read: {exc}"
-        ) from exc
-    expected_digest = snapshot_digest.removeprefix("sha256:")
-    if snapshot_artifact.sha256 != expected_digest:
-        raise OmnigentArtifactError("frozen task-input snapshot authority mismatch")
-    if (
-        str(getattr(snapshot_artifact.status, "value", snapshot_artifact.status))
-        != "complete"
-    ):
-        from moonmind.workflows.temporal.artifacts import TemporalArtifactStateError
-
-        raise TemporalArtifactStateError("frozen task-input snapshot is not readable")
-    if hashlib.sha256(body).hexdigest() != expected_digest:
-        raise OmnigentArtifactError("frozen task-input snapshot digest mismatch")
-    try:
-        frozen = json.loads(body)
-    except (ValueError, UnicodeDecodeError) as exc:
-        raise OmnigentArtifactError("frozen task-input snapshot is invalid") from exc
+    frozen = await read_frozen_task_input_snapshot(
+        service, snapshot_ref=snapshot_ref, snapshot_digest=snapshot_digest,
+        access=access,
+    )
     source = frozen.get("source") if isinstance(frozen, dict) else None
     if not isinstance(source, dict):
         if planning_parameters is not None:
