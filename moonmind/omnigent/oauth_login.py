@@ -5,10 +5,10 @@ from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 
-#: Runtime -> (provider, label) of the OAuth-home enrollments this may disable.
+#: Runtime -> provider of the OAuth-home enrollments this may disable.
 _OAUTH_LOGIN_ENROLLMENTS = {
-    "codex_cli": ("openai", "Codex"),
-    "claude_code": ("anthropic", "Claude"),
+    "codex_cli": "openai",
+    "claude_code": "anthropic",
 }
 
 # Run as ``python3 -c <probe> <claude home>``. Print only a verdict, never
@@ -52,7 +52,7 @@ async def record_ended_oauth_login(
     checking its generation so an old host cannot invalidate a reconnect.
     Recording failure must not replace the original authentication failure.
     """
-    provider_id, label = _OAUTH_LOGIN_ENROLLMENTS[runtime_id]
+    provider_id = _OAUTH_LOGIN_ENROLLMENTS[runtime_id]
     try:
         from sqlalchemy import select
 
@@ -110,9 +110,8 @@ async def record_ended_oauth_login(
         # Retain only generation and exception type, never credential-derived
         # identifiers or exception text.
         logger.warning(
-            "Could not record ended %s login: "
+            "Could not record ended OAuth login: "
             "credential_generation=%s error_type=%s",
-            label,
             credential_generation,
             type(exc).__name__,
         )

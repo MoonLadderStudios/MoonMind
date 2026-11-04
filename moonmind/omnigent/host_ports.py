@@ -338,7 +338,7 @@ class OmnigentHostAttestationPort(Protocol):
         credential_handles: list[dict[str, Any]],
     ) -> HarnessPlatformError | None:
         """Return a reconnect error when the exact host proves its login ended."""
-        ...
+        pass
 
 
 @runtime_checkable
