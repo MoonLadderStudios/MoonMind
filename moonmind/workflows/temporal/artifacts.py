@@ -463,8 +463,8 @@ class ArtifactReadPolicy:
     preview_artifact_ref: ArtifactRef | None
     default_read_ref: ArtifactRef
 
-# One hourly lifecycle pass keeps draining pages for at most this long; the
-# activity's start-to-close timeout leaves headroom for the final page.
+# One hourly Activity window, including queue time and retries. Its recorded
+# timeouts leave headroom for the final page and result delivery.
 LIFECYCLE_SWEEP_TIME_BUDGET = timedelta(minutes=40)
 
 @dataclass(slots=True, frozen=True)
@@ -7889,6 +7889,24 @@ class TemporalArtifactActivities:
             _await_with_activity_heartbeats,
         )
 
+        time_budget = LIFECYCLE_SWEEP_TIME_BUDGET
+        if activity.in_activity():
+            info = activity.info()
+            elapsed = max(timedelta(), info.started_time - info.scheduled_time)
+            time_budget = max(timedelta(), time_budget - elapsed)
+        if not time_budget:
+            # Earlier attempts committed their own pages. Leave remaining work
+            # for the next scheduled pass without claiming it has drained.
+            logger.info("Artifact lifecycle sweep window exhausted; work deferred")
+            return LifecycleSweepSummary(
+                run_id=run_id or str(uuid4()),
+                expired_candidate_count=0,
+                soft_deleted_count=0,
+                hard_deleted_count=0,
+                pages=0,
+                drained=False,
+            )
+
         heartbeat_payload = {"pages": 0}
 
         def heartbeat() -> None:
@@ -7909,7 +7927,7 @@ class TemporalArtifactActivities:
             self._service.drain_lifecycle(
                 principal=principal,
                 run_id=run_id,
-                time_budget=LIFECYCLE_SWEEP_TIME_BUDGET,
+                time_budget=time_budget,
                 on_page=page_done,
                 on_progress=heartbeat,
             ),
