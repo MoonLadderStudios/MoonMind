@@ -11799,6 +11799,18 @@ async def _admit_repository_tool_selections(
     initial_parameters[ADMISSIONS_PARAMETER] = admissions
 
 
+def _refuse_authored_repository_tool_admissions(parameters: Mapping[str, Any]) -> None:
+    """Keep ``_admit_repository_tool_selections`` the only admission writer."""
+
+    from moonmind.workflows.skills.gitlab_merge_request import ADMISSIONS_PARAMETER
+
+    if ADMISSIONS_PARAMETER in parameters:
+        raise _invalid_workflow_request(
+            "Repository tool admissions are recorded by submission, not "
+            "supplied by the request."
+        )
+
+
 async def _create_execution_from_workflow_request(
     *,
     request: CreateJobRequest,
@@ -13130,6 +13142,7 @@ async def _resolve_recurring_runtime_selection(
         raise _invalid_workflow_request(
             "Step execution plans must be compiled by workflow admission."
         )
+    _refuse_authored_repository_tool_admissions(parameter_payload)
 
     try:
         validate_workflow_runtime_targets(request_payload)
@@ -15506,6 +15519,7 @@ async def create_execution(
 
         request = CreateExecutionRequest.model_validate(payload)
         # Rejected before a recurring definition or execution can store it.
+        _refuse_authored_repository_tool_admissions(request.initial_parameters)
         assessment_scope = _admitted_assessment_scope_parameter(
             request.initial_parameters.get("assessmentScope"),
             principal=(principal_context or {}).get("verified_principal"),
@@ -15725,6 +15739,12 @@ async def create_execution(
                         "persistence complete before scheduling."
                     ),
                 },
+            )
+        if existing is None:
+            await _admit_repository_tool_selections(
+                session,
+                principal=_execution_principal(user),
+                initial_parameters=skill_validation.parameters,
             )
 
         record = await service.create_execution(
@@ -19539,6 +19559,7 @@ async def continue_in_new_workflow(
     result are never mutated, and no message is posted into the source session.
     """
 
+    _refuse_authored_repository_tool_admissions(payload.initial_parameters or {})
     destination_namespace = service.namespace
     if not isinstance(destination_namespace, str) or not destination_namespace.strip():
         raise HTTPException(status_code=503, detail="Destination namespace is unavailable")

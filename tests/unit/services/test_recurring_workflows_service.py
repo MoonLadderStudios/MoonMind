@@ -238,6 +238,10 @@ async def test_create_definition_creates_temporal_schedule(
                                 "email": "forged@example.invalid",
                             },
                         },
+                        # Only submission admits repository tool selections.
+                        "repositoryToolAdmissions": [
+                            {"tool": "gitlab.merge_request", "principalRef": "forged"}
+                        ],
                         "repository": "MoonLadderStudios/MoonMind",
                         "targetRuntime": "codex",
                         "task": {
@@ -283,6 +287,11 @@ async def test_create_definition_creates_temporal_schedule(
             assert (
                 "_publicationGitIdentity" not in definition.target["initialParameters"]
             )
+            for parameters in (
+                definition.target["initialParameters"],
+                call_kwargs["workflow_input"]["initial_parameters"],
+            ):
+                assert "repositoryToolAdmissions" not in parameters
             assert (
                 call_kwargs["workflow_input"]["initial_parameters"]["task"][
                     "instructions"
