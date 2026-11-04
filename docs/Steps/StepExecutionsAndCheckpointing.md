@@ -48,7 +48,7 @@ The workflow derives the runtime capability snapshot from its selected runtime b
 
 ### 2.3 Durable capture and reads
 
-Checkpoint Activities adapt Temporal artifact IDs (`art_...`, `artifact:art_...`, `artifact://art_...`) to the durable URI form of Omnigent checkpoint identities, preserve captured bytes, and compute digests from those bytes. Malformed or unavailable capture keeps a negative recovery-capability projection.
+Checkpoint Activities adapt Temporal artifact IDs (`art_...`, `artifact:art_...`, `artifact://art_...`) to durable checkpoint identities and compute digests from captured bytes. A Step checkpoint names the workflow input; when product admission wraps that input in a schedule or authored snapshot, restore verifies the immutable snapshot's digest and input pointer. Current metadata cannot replace that pointer. Malformed or unavailable evidence keeps recovery unavailable.
 
 New checkpoint and workspace artifacts link to the actual Activity's workflow and run, and reads carry that trusted scope through normal artifact authorization, so caller-supplied identities cannot select another workflow or run. Checkpoint discovery reads the owning run's step ledger and rejects a ledger from another execution. That live read is best-effort: if Temporal history is unavailable it falls back to checkpoints already persisted in the memo, parameters, or finish summary, while a mismatched or malformed ledger remains an error. These adapters never repair historical evidence; recovery still requires its original input, plan, integrity, capability, side-effect, and cleanup evidence.
 
