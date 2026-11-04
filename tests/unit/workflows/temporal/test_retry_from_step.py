@@ -74,7 +74,14 @@ class _History:
             attributes.upserted_memo.fields[key].CopyFrom(_CONVERTER.to_payload(value))
         self.events.append(event)
 
-    def checkpoint(self, step_id="step-3", *, ordinal=1, failed=True) -> int:
+    def checkpoint(
+        self,
+        step_id="step-3",
+        *,
+        ordinal=1,
+        failed=True,
+        activity="workspace.capture_checkpoint",
+    ) -> int:
         task = self.workflow_task()
         event = HistoryEvent(
             event_id=self._next_id(),
@@ -82,7 +89,7 @@ class _History:
         )
         attributes = event.activity_task_scheduled_event_attributes
         attributes.workflow_task_completed_event_id = task
-        attributes.activity_type.name = "workspace.capture_checkpoint"
+        attributes.activity_type.name = activity
         attributes.input.payloads.append(
             _CONVERTER.to_payload(
                 {
@@ -336,6 +343,29 @@ def test_completed_execution_retries_only_its_failed_checkpoint() -> None:
     assert plan.logical_step_id == "step-3"
     assert plan.reset_event_id == capture_task > wt_by_order[3]
     assert plan.replay_until_event_id == capture_task - 1
+
+
+def test_managed_runtime_capture_failure_is_a_checkpoint_retry_boundary() -> None:
+    history, wt_by_order = _three_step_failure()
+    capture_task = history.checkpoint(
+        activity="agent_runtime.capture_workspace_checkpoint"
+    )
+    plan = plan_retry_from_step(
+        events=history.events,
+        ledger_rows=_completed_with_failed_save(),
+        decode_memo_value=_decode,
+    )
+    assert plan.reset_event_id == capture_task > wt_by_order[3]
+
+
+def test_failed_publication_still_restarts_the_step() -> None:
+    history, tasks = _three_step_failure()
+    rows = _completed_with_failed_save()
+    rows[2]["finalizationOutcome"]["phase"] = "publication"
+    plan = plan_retry_from_step(
+        events=history.events, ledger_rows=rows, decode_memo_value=_decode
+    )
+    assert plan.reset_event_id == tasks[3]
 
 
 @pytest.mark.parametrize("step_id,ordinal", [("another-step", 1), ("step-3", 2)])

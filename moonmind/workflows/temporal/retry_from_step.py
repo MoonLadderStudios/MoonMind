@@ -32,6 +32,15 @@ STEP_ID_MEMO_KEY = "mm_current_step_id"
 
 RETRYABLE_CLOSE_STATES = frozenset({"failed", "canceled", "terminated", "timed_out"})
 
+# Sandbox and managed-runtime workspaces share the capture identity payload.
+_CHECKPOINT_CAPTURE_ACTIVITIES = frozenset(
+    {"workspace.capture_checkpoint", "agent_runtime.capture_workspace_checkpoint"}
+)
+_CHECKPOINT_FINALIZATION_PHASES = {
+    "after_execution_checkpoint": "after_execution",
+    "before_publication_checkpoint": "before_publication",
+}
+
 
 class RetryFromStepUnavailable(ValueError):
     """A retry cannot be planned; ``reason`` is a stable, user-facing code."""
@@ -231,7 +240,7 @@ def _checkpoint_captures(
             attributes = event.activity_task_scheduled_event_attributes
             task_id = int(attributes.workflow_task_completed_event_id)
             if (
-                attributes.activity_type.name != "workspace.capture_checkpoint"
+                attributes.activity_type.name not in _CHECKPOINT_CAPTURE_ACTIVITIES
                 or task_id not in tasks
                 or len(attributes.input.payloads) != 1
             ):
@@ -273,16 +282,14 @@ def _retry_boundary(
 ) -> StepBoundary:
     finalization = row.get("finalizationOutcome") or {}
     execution = row.get("executionOutcome") or {}
+    boundary = _CHECKPOINT_FINALIZATION_PHASES.get(finalization.get("phase"))
     if not (
         row.get("status") == "completed"
         and execution.get("status") == "succeeded"
         and finalization.get("status") == "failed"
+        and boundary
     ):
         return start
-    boundary = {
-        "after_execution_checkpoint": "after_execution",
-        "before_publication_checkpoint": "before_publication",
-    }.get(finalization.get("phase"))
     matches = [
         capture
         for capture in _checkpoint_captures(events, decode_memo_value)
