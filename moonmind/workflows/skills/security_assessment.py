@@ -27,6 +27,7 @@ from moonmind.security.assessments import (
     content_key,
 )
 from moonmind.security.cloud_assessments import CloudAssessmentSummary
+from moonmind.security.game_math import GameMathAssessment
 from moonmind.security.github_alerts import alert_observation, correlate_alerts
 from moonmind.security.image_assessments import ImageAssessmentSummary
 from moonmind.security.web_assessments import WebAssessmentSummary
@@ -468,6 +469,65 @@ def _cloud_observation(
     )
 
 
+def _game_math_observation(
+    request, summary: GameMathAssessment, ref: str, created_at: datetime
+) -> Observation:
+    """Specification violations as game-math coverage of one game.
+
+    Coverage is complete only when every check reached a decision, so
+    insufficient precision or a stopped run stays partial. The summary's own
+    invariants refuse a consistent outcome over partial evidence.
+    """
+    if summary.game_ref not in request.scope.assets:
+        raise ValueError("game outside admitted assessment scope")
+    rules = {row.rule for row in summary.violations}
+    if any(row.declared_rtp is not None for row in summary.theoretical):
+        rules.add("declared-rtp")
+    if any(row.declared_immediate_bust is not None for row in summary.theoretical):
+        rules.add("declared-immediate-bust")
+    simulation = summary.simulation
+    if summary.settlement_cases or (simulation and simulation.source == "records"):
+        rules |= {"settlement", "outcome-support"}
+    if simulation is not None:
+        rules.add("simulated-rtp")
+    return Observation(
+        scope=request.scope,
+        observed_at=created_at,
+        expires_at=created_at + timedelta(days=1),
+        findings=[
+            Finding(
+                source="game-math",
+                tool="game-math",
+                rule_id=row.rule,
+                asset=summary.game_ref,
+                native_id=row.identity,
+                evidence_refs=[ref],
+            )
+            for row in summary.violations
+        ],
+        coverage=[
+            Coverage(
+                source="game-math",
+                tool="game-math",
+                assets=[summary.game_ref],
+                rule_ids=sorted(rules),
+                all_rules=summary.covered,
+                # Absence is comparable only under the same specification,
+                # which carries its precision criteria.
+                config_ref=content_key(["game-math", summary.spec_digest]),
+                status="complete" if summary.covered else "partial",
+            )
+        ],
+        provenance={
+            "gameMathSummary": ref,
+            "gameMathSpec": summary.spec_digest,
+            "gameMathSource": summary.provenance.source_ref,
+            "gameMathApproval": summary.provenance.approval_ref or "unavailable",
+            "gameMathOutcome": summary.outcome,
+        },
+    )
+
+
 class AssessmentExecution:
 
     def __init__(
@@ -789,6 +849,34 @@ class AssessmentExecution:
                                     "limitations": sorted(cloud_summary.limitations),
                                     "verification": cloud_summary.verification,
                                     "interpretation": cloud_summary.interpretation,
+                                }
+                            )
+                        elif payload.get("schemaVersion") == "game-math-assessment/v1":
+                            game_summary = GameMathAssessment.model_validate(payload)
+                            observed_at = metadata.created_at
+                            if observed_at.tzinfo is None:
+                                observed_at = observed_at.replace(tzinfo=UTC)
+                            observation = _game_math_observation(
+                                request, game_summary, ref, observed_at
+                            )
+                            simulation = game_summary.simulation
+                            scanner_summaries.append(
+                                {
+                                    "scanner": "game-math",
+                                    "target": game_summary.game_ref,
+                                    "summaryRef": ref,
+                                    "nativeRefs": {"assessment": ref},
+                                    "coverage": observation.coverage[0].status,
+                                    "outcome": game_summary.outcome,
+                                    "execution": {
+                                        "simulation": (
+                                            simulation.stop_reason or simulation.status
+                                            if simulation
+                                            else "not_requested"
+                                        )
+                                    },
+                                    "limitations": sorted(game_summary.limitations),
+                                    "verification": game_summary.certification,
                                 }
                             )
                         elif payload.get("toolRef") == PASSIVE_SCAN_TOOL_REF:
