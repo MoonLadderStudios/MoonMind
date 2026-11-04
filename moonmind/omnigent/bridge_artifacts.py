@@ -14,7 +14,7 @@ import os.path
 import tempfile
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from re import sub
 from typing import Any
@@ -1753,26 +1753,36 @@ def _snapshot_provider_failure(
     snapshot: Mapping[str, Any],
 ) -> ProviderFailureEvent | None:
     """Normalize the owned terminal error, preserving structured provider facts."""
-    event = provider_failure_event_from_metadata(snapshot.get("providerFailure"))
-    if event is not None:
-        return event
-    task_error = snapshot.get("last_task_error")
-    if not isinstance(task_error, Mapping):
-        return None
-    error = dict(task_error)
-    if "providerErrorCode" not in error and "provider_error_code" not in error:
-        error["providerErrorCode"] = error.get("code")
-    event = provider_failure_event_from_metadata(error)
-    if event is None or (
-        event.provider_error_class is None
-        and event.retry_recommendation is None
-        and event.observation == "confirmed"
+    source = snapshot.get("providerFailure")
+    event = provider_failure_event_from_metadata(source)
+    if event is None:
+        task_error = snapshot.get("last_task_error")
+        if not isinstance(task_error, Mapping):
+            return None
+        source = dict(task_error)
+        if "providerErrorCode" not in source and "provider_error_code" not in source:
+            source["providerErrorCode"] = source.get("code")
+        event = provider_failure_event_from_metadata(source)
+        if event is None or (
+            event.provider_error_class is None
+            and event.retry_recommendation is None
+            and event.observation == "confirmed"
+            and event.retry_disposition == "unknown"
+        ):
+            classification = classify_provider_failure(source.get("message"))
+            if classification is not None:
+                source["providerErrorClass"] = classification.provider_error_class
+                event = provider_failure_event_from_metadata(source)
+    if (
+        event is not None
         and event.retry_disposition == "unknown"
+        and event.observation == "confirmed"
+        and "retryDisposition" not in source
+        and "retry_disposition" not in source
     ):
-        classification = classify_provider_failure(error.get("message"))
-        if classification is not None:
-            error["providerErrorClass"] = classification.provider_error_class
-            event = provider_failure_event_from_metadata(error)
+        # A classifier default is not an explicit provider retry policy. Keep
+        # the result's ordinary failure-class fallback through durable recovery.
+        event = replace(event, retry_disposition=None)
     return event
 
 

@@ -3111,6 +3111,63 @@ def test_native_provider_structured_failure_precedes_text_fallback(structured_er
     assert result.retry_disposition == "no_retry"
 
 
+@pytest.mark.parametrize("source", ["last_task_error", "providerFailure"])
+@pytest.mark.parametrize(
+    ("disposition_key", "disposition"),
+    [
+        (None, None),
+        ("retryDisposition", "unknown"),
+        ("retry_disposition", "no_retry"),
+        ("retryDisposition", "retry"),
+        ("retry_disposition", "wait"),
+    ],
+)
+def test_unclassified_native_failure_preserves_execution_retry(
+    monkeypatch, source, disposition_key, disposition
+):
+    from moonmind.schemas.agent_runtime_models import AgentRunResult
+    from moonmind.workflows.temporal.workflows import run as run_module
+
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _: True)
+    error = {
+        "providerErrorCode": "native_turn_error",
+        "providerRequestId": "request-1",
+        "rawErrorRef": "artifact://native-error",
+    }
+    if source == "last_task_error":
+        error.update(code="native_turn_error", message="provider rejected request")
+    if disposition_key:
+        error[disposition_key] = disposition
+    snapshot = {source: error}
+    refs = build_omnigent_terminal_refs(
+        _bundle(), terminal_status="failed", final_snapshot=snapshot
+    )
+    parent = run_module.MoonMindRunWorkflow()
+    for final_snapshot in (snapshot, {"providerFailure": refs["providerFailure"]}):
+        result = build_omnigent_result(
+            request=_request(),
+            terminal_status="failed",
+            session_id="sess-1",
+            agent_id="agent-1",
+            final_snapshot=final_snapshot,
+            event_count=1,
+            capture_bundle=_bundle(),
+        )
+        returned = AgentRunResult.model_validate_json(
+            result.model_dump_json(by_alias=True)
+        )
+        assert returned.failure_class == "execution_error"
+        assert returned.provider_error_code == "native_turn_error"
+        assert returned.provider_failure["providerRequestId"] == "request-1"
+        assert returned.provider_failure["rawErrorRef"] == "artifact://native-error"
+        assert returned.retry_disposition == (disposition or "retry")
+        assert parent._activity_result_retryable(
+            parent._map_agent_run_result(returned),
+            failure_message="execution_error",
+            tool_type="agent_runtime",
+        ) == (disposition in {None, "retry", "wait"})
+
+
 def test_transcript_quota_text_is_not_native_error_authority():
     result = build_omnigent_result(
         request=_request(),
