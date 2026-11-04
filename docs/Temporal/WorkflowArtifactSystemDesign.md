@@ -744,10 +744,10 @@ durable metadata. A lifecycle failure marks that maintenance run
 degraded and is retried by the next schedule rather than overwriting successful
 workspace cleanup evidence.
 
-Each sweep pages through expiry, pending uploads, deletion intents and tombstones
-for up to 40 minutes. Deletions commit per candidate to release locks; metadata
-purges commit bounded pages. Heartbeats continue during operations. Unresolved
-work remains observable for the next hourly pass.
+Sweeps drain pages within their original 40-minute Activity window, including
+queue time and retries. Exhaustion reports `drained=false`. Deletions commit per
+candidate; metadata purges commit bounded pages. Heartbeats continue during
+operations; unresolved work remains observable for the next hourly pass.
 
 Retention is assigned on creation/linking. Migrations shorten expiry only when
 every link matches the changed class, measured from the latest link, never before
