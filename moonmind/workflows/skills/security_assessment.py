@@ -39,14 +39,28 @@ from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.skills.tool_plan_contracts import ToolFailure, ToolResult
 from moonmind.workflows.temporal.artifacts import (
     ArtifactAccessContext,
+    ArtifactDependency,
     TemporalArtifactAuthorizationError,
-    TemporalArtifactBytesMissingError,
     TemporalArtifactNotFoundError,
+    TemporalArtifactStateError,
 )
 from moonmind.workflows.temporal.report_artifacts import build_report_bundle_result
 
 TOOL_NAME = "security.assess"
 _MAX_INPUT_BYTES = 8 * 1024 * 1024
+# Retaining a comparison keeps its baseline's exact bytes, not the baseline's
+# own lineage: evidence a comparison still cites is sealed directly, so every
+# recurring occurrence does not retain all earlier history.
+BASELINE_ROLE = "security.baseline"
+# Tool selections whose work identity is reproducible from a scan's own record;
+# a live GitHub import also hashes its admitted request, which is not recorded.
+_RECORDED_TOOLS = (
+    (),
+    ("inventory-feed",),
+    ("retained-report",),
+    ("inventory-feed", "retained-report"),
+    ("retained-report", "inventory-feed"),
+)
 
 
 def _check_cancelled() -> None:
@@ -487,6 +501,8 @@ class AssessmentExecution:
             "workflow_id": context["workflow_id"],
             "run_id": context["run_id"],
         }
+        # Digests of the exact bytes this execution read or wrote.
+        self.digests: dict[str, str] = {}
 
     async def read(self, ref: str) -> tuple[Any, bytes]:
         _check_cancelled()
@@ -496,7 +512,35 @@ class AssessmentExecution:
             raise ToolFailure(
                 "INVALID_INPUT", "Security artifact exceeds the input bound.", False
             )
+        self.digests[ref] = hashlib.sha256(body).hexdigest()
         return artifact, body
+
+    async def digest(self, ref: str) -> str:
+        if ref not in self.digests:
+            await self.read(ref)
+        return self.digests[ref]
+
+    async def seal(self, root: str, dependencies) -> None:
+        """Certify the exact evidence a root cites before it is reused or published.
+
+        An existing seal is immutable, so a retry keeps it. Missing, denied,
+        corrupt or mismatched required evidence fails the seal.
+        """
+        if await _proof(self.service, root, self.access) is None:
+            await _record(self.service, root, await dependencies(), self.access)
+
+    async def _scan_dependencies(self, refs, work, history):
+        return [
+            *(
+                ArtifactDependency(ref, self.digests[ref], True, "security.input")
+                for ref in refs
+            ),
+            *[
+                ArtifactDependency(ref, await self.digest(ref), True, "security.native")
+                for ref in _native_refs(work)
+            ],
+            *_history_evidence(_scan_citations(work), history),
+        ]
 
     async def write(
         self, payload: bytes, *, kind: str, key: str, content_type="application/json"
@@ -516,6 +560,7 @@ class AssessmentExecution:
                 "step_id": self.context["node_id"],
             },
         )
+        self.digests[artifact.artifact_id] = hashlib.sha256(payload).hexdigest()
         return artifact.artifact_id
 
     async def saved(self, *, kind: str, key: str) -> tuple[str, dict] | None:
@@ -569,21 +614,36 @@ class AssessmentExecution:
         inputs = {ref: await self.read(ref) for ref in refs}
         baseline = None
         baseline_unavailable = False
+        # Evidence identities the baseline's own seal already verified.
+        history: dict[str, str] = {}
         diagnostics = []
         scan_diagnostics = []
         if request.baseline_ref:
             try:
                 _, raw = await self.read(request.baseline_ref)
-                baseline = Comparison.model_validate_json(raw).model_dump(
+                parsed = Comparison.model_validate_json(raw).model_dump(
                     mode="json", by_alias=True
                 )
+                # Admission consumes the baseline's seal rather than rediscovering
+                # its references; expired or corrupt bytes are not a baseline.
+                proof = await self.service.dependency_proof(
+                    root_artifact_id=request.baseline_ref, access=self.access
+                )
+                history = {
+                    entry.artifact_id: entry.sha256
+                    for entry in proof or ()
+                    if entry.required
+                }
+                history[request.baseline_ref] = self.digests[request.baseline_ref]
+                baseline = parsed
             except (
                 TemporalArtifactNotFoundError,
                 TemporalArtifactAuthorizationError,
-                TemporalArtifactBytesMissingError,
+                TemporalArtifactStateError,
                 ValidationError,
                 ValueError,
             ) as exc:
+                history = {}
                 baseline_unavailable = True
                 diagnostics.append(
                     {"boundary": "baseline", "error": type(exc).__name__}
@@ -615,6 +675,9 @@ class AssessmentExecution:
         if saved:
             scan_ref, work = saved
             observation = Observation.model_validate(work["observation"])
+            await self.seal(
+                scan_ref, lambda: self._scan_dependencies(refs, work, history)
+            )
         else:
             observations = []
             outcomes = []
@@ -896,6 +959,9 @@ class AssessmentExecution:
             if github_alerts is not None:
                 work["githubAlerts"] = github_alerts["projection"]
             scan_ref = await self.write(_json(work), kind="security.scan", key=scan_key)
+            await self.seal(
+                scan_ref, lambda: self._scan_dependencies(refs, work, history)
+            )
         comparison = compare_observations(
             observation,
             baseline,
@@ -919,6 +985,26 @@ class AssessmentExecution:
                 key=report_key,
             )
         )
+
+        async def comparison_dependencies():
+            entries = [
+                ArtifactDependency(
+                    scan_ref, await self.digest(scan_ref), True, "security.scan"
+                ),
+                *_history_evidence(_comparison_citations(comparison), history),
+            ]
+            if baseline is not None:
+                entries.append(
+                    ArtifactDependency(
+                        request.baseline_ref,
+                        history[request.baseline_ref],
+                        True,
+                        BASELINE_ROLE,
+                    )
+                )
+            return entries
+
+        await self.seal(comparison_ref, comparison_dependencies)
         # Interpretation is a separate, optional artifact phase. It cannot
         # change native finding identity, coverage, authority, or the scan key.
         review = None
@@ -1018,6 +1104,34 @@ class AssessmentExecution:
                     key=summary_key,
                     content_type="text/markdown",
                 )
+
+            async def summary_dependencies():
+                # Interpretation is optional: it never holds native retention.
+                optional = [request.review_ref] if review_readable else []
+                if review is not None:
+                    optional += review.evidence_refs()
+                return [
+                    ArtifactDependency(
+                        comparison_ref,
+                        await self.digest(comparison_ref),
+                        True,
+                        "security.comparison",
+                    ),
+                    *[
+                        ArtifactDependency(
+                            ref, await self.digest(ref), True, "security.evidence"
+                        )
+                        for ref in evidence
+                    ],
+                    *(
+                        ArtifactDependency(
+                            ref, self.digests[ref], False, "security.review"
+                        )
+                        for ref in optional
+                    ),
+                ]
+
+            await self.seal(summary_ref, summary_dependencies)
             for ref, link_type in (
                 (comparison_ref, "report.structured"),
                 *((ref, "report.evidence") for ref in evidence),
@@ -1055,6 +1169,162 @@ class AssessmentExecution:
 
 def _json(payload: Any) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+
+
+def _native_refs(work: Mapping[str, Any]) -> list[str]:
+    """Native reports a scan root cites in its scanner and GitHub fields."""
+    refs = [
+        ref
+        for summary in work.get("scannerSummaries", [])
+        for ref in summary["nativeRefs"].values()
+    ]
+    if work.get("githubAlerts") is not None:
+        refs.append(work["githubAlerts"]["nativeRef"])
+    return refs
+
+
+def _scan_citations(work: Mapping[str, Any]) -> set[str]:
+    return {
+        ref
+        for finding in work["observation"]["findings"]
+        for ref in finding["evidenceRefs"]
+    }
+
+
+def _comparison_citations(comparison: Mapping[str, Any]) -> set[str]:
+    return {
+        ref for row in comparison["findings"] for ref in row["finding"]["evidenceRefs"]
+    } | {
+        ref
+        for row in comparison["decisions"]
+        for ref in row["decision"]["evidenceRefs"]
+    }
+
+
+def _history_evidence(
+    cited: set[str], history: Mapping[str, str]
+) -> list[ArtifactDependency]:
+    """Cited earlier evidence, with the digest its baseline's seal verified.
+
+    Other citations are not guessed into artifacts: a retained report is
+    sealed as an input, while its own references remain its producer's.
+    """
+    return [
+        ArtifactDependency(ref, history[ref], True, "security.evidence")
+        for ref in sorted(cited & history.keys())
+    ]
+
+
+async def seal_retained_assessment_root(
+    service: Any, *, artifact: Any, payload: bytes, access: ArtifactAccessContext
+) -> None:
+    """Seal a scan or comparison root its producer published without a seal.
+
+    Only exact identities are certified: a scan's inputs must reproduce its
+    recorded work identity, and a comparison requires its sealed scan. Any
+    other root stays unsealed; completed scanners are never replayed.
+    """
+    document = json.loads(payload)
+    if document.get("schemaVersion") != "security-comparison/v1":
+        entries = await _retained_scan_dependencies(service, document, access)
+    else:
+        comparison = Comparison.model_validate(document)
+        if not comparison.scan_ref:
+            raise TemporalArtifactStateError("Retained comparison has no scan")
+        scan, scan_payload = await service.read(
+            artifact_id=comparison.scan_ref, access=access
+        )
+        if await _proof(service, comparison.scan_ref, access) is None:
+            await _record(
+                service,
+                scan.artifact_id,
+                await _retained_scan_dependencies(
+                    service, json.loads(scan_payload), access
+                ),
+                access,
+            )
+        entries = [
+            ArtifactDependency(scan.artifact_id, scan.sha256, True, "security.scan")
+        ]
+        history: dict[str, str] = {}
+        if comparison.baseline_status == "available" and comparison.baseline_ref:
+            history = {
+                entry.artifact_id: entry.sha256
+                for entry in await _proof(service, comparison.baseline_ref, access)
+                or ()
+                if entry.required
+            }
+            history[comparison.baseline_ref] = await _current_digest(
+                service, comparison.baseline_ref, access
+            )
+            entries.append(
+                ArtifactDependency(
+                    comparison.baseline_ref,
+                    history[comparison.baseline_ref],
+                    True,
+                    BASELINE_ROLE,
+                )
+            )
+        entries += _history_evidence(_comparison_citations(document), history)
+    await _record(service, artifact.artifact_id, entries, access)
+
+
+async def _retained_scan_dependencies(service, work, access):
+    observation = Observation.model_validate(work["observation"])
+    if "retained_completed_work" in work["originalOutcomes"]:
+        # Its evidence came from a baseline this root does not record.
+        raise TemporalArtifactStateError("Retained scan baseline is unknown")
+    inputs = [
+        value
+        for _, value in sorted(
+            (int(key[5:]), value)
+            for key, value in observation.provenance.items()
+            if re.fullmatch(r"input\d+", key)
+        )
+    ]
+    digests = {ref: await _current_digest(service, ref, access) for ref in inputs}
+    scope = observation.scope.model_dump(mode="json")
+    if observation.provenance.get("assessmentWork") not in {
+        content_key({"scope": scope, "tools": list(tools), "inputs": digests})
+        for tools in _RECORDED_TOOLS
+    }:
+        raise TemporalArtifactStateError(
+            "Retained scan inputs do not reproduce its work identity"
+        )
+    return [
+        *(
+            ArtifactDependency(ref, digests[ref], True, "security.input")
+            for ref in inputs
+        ),
+        *[
+            ArtifactDependency(
+                ref,
+                await _current_digest(service, ref, access),
+                True,
+                "security.native",
+            )
+            for ref in _native_refs(work)
+        ],
+    ]
+
+
+async def _current_digest(service, ref, access) -> str:
+    # Completed artifacts are immutable; the owner still verifies stored bytes.
+    item, *_ = await service.get_metadata(artifact_id=ref, access=access)
+    return item.sha256
+
+
+async def _proof(service, ref, access):
+    return await service.dependency_proof(root_artifact_id=ref, access=access)
+
+
+async def _record(service, root, entries, access) -> None:
+    await service.record_verified_dependencies(
+        root_artifact_id=root,
+        dependencies=entries,
+        access=access,
+        bytes_only_roles={BASELINE_ROLE},
+    )
 
 
 def _summary(comparison: dict) -> str:

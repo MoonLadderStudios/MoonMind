@@ -754,8 +754,10 @@ every link matches the changed class, measured from the latest link, never befor
 creation. Pins and live claims protect every artifact. Non-terminal bridge sessions
 also protect recovery journals; ordinary retention resumes when sessions end.
 
-Trusted plan, Skill and saved-work producers seal a flat dependency set with the
-owning transaction: logical IDs, original digests, requiredness and roles. Server-owned
+Trusted plan, Skill, saved-work and security assessment producers seal a flat
+dependency set with the owning transaction: logical IDs, original digests,
+requiredness and roles. A bytes-only role keeps just that cited root; its own
+closure follows its lifetime, so cited history does not accumulate. Server-owned
 completion and request digests distinguish verified-empty, historical-unsealed and
 corrupt closures. Repeating the same direct request reuses its original closure;
 later child seals cannot redefine it. Admission, retention and recovery consume this
@@ -778,10 +780,11 @@ Current Skill pointers retain their revisions; obsolete unowned content remains
 reclaimable through the existing lifecycle and ordered artifact/alias locks.
 
 Before expiry selection, bounded lifecycle pages backfill retained saved-work roots
-from their original manifests and producer-run links. Failed seals roll back and
-remain observable. Until sealing succeeds, only already-linked artifacts from that
-exact namespace/workflow/original run receive temporary protection while the root
-is live. This guard creates no grants and ends when the root is sealed or retired.
+from their original manifests, and finished assessment roots from their own schemas,
+using producer-run links. Failed seals roll back and remain observable. Until a
+saved-work root seals, only already-linked artifacts from that exact
+namespace/workflow/original run receive temporary protection while the root is
+live. This guard creates no grants and ends when the root is sealed or retired.
 
 `ArtifactTransactionOwnership.CALLER` flushes without committing admission, retry
 or schedule transactions. `STANDALONE` commits independently. Start/reset follows
