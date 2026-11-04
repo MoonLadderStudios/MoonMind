@@ -3791,12 +3791,18 @@ class TemporalExecutionService:
             )
 
         if parameters_patch is not None:
-            # Attribution is server-admitted intent, not an editable input.
-            # Exclude it before Temporal dispatch and canonical-record merging.
+            # Attribution and repository connection admissions are
+            # server-admitted intent, not editable inputs. Exclude them before
+            # Temporal dispatch and canonical-record merging.
             parameters_patch = {
                 key: value
                 for key, value in parameters_patch.items()
-                if key not in {"_publicationGitIdentity", "publicationGitIdentityAdmission"}
+                if key
+                not in {
+                    "_publicationGitIdentity",
+                    "publicationGitIdentityAdmission",
+                    "repositoryToolAdmissions",
+                }
             }
 
         record = await self._require_source_execution(workflow_id)

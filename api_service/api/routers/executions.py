@@ -11755,6 +11755,50 @@ def _validate_repository_submission_compatibility(
             )
 
 
+async def _admit_repository_tool_selections(
+    session: Any, *, principal: str, initial_parameters: dict[str, Any]
+) -> None:
+    """Admit each GitLab step's connection selection with the submitting principal.
+
+    Activities act for the run as ``workflow:<id>``, so they use this recorded
+    admission rather than their own principal; a selection this principal may
+    not use, or an unassigned project, refuses the submission.
+    """
+
+    from api_service.services.repository_connections import RepositoryConnectionService
+    from moonmind.workflows.executions.repository_contract import RepositoryRouteError
+    from moonmind.workflows.skills.gitlab_merge_request import (
+        ADMISSIONS_PARAMETER,
+        TOOL_NAME,
+        selected_connections,
+    )
+
+    selections = selected_connections(initial_parameters)
+    if not selections:
+        return
+    if session is None:
+        raise _invalid_workflow_request(
+            f"{TOOL_NAME} steps need their repository connection admitted."
+        )
+    service = RepositoryConnectionService(session)
+    admissions = []
+    for connection_ref, project in selections:
+        try:
+            admitted = await service.admit_selected_use(
+                connection_ref,
+                project,
+                principal_ref=principal,
+                principal_scope=("system", None),
+            )
+        except RepositoryRouteError as exc:
+            raise _invalid_workflow_request(
+                f"{TOOL_NAME} cannot use repository connection {connection_ref} "
+                f"for {project}: {exc}"
+            ) from exc
+        admissions.append({"tool": TOOL_NAME, **admitted})
+    initial_parameters[ADMISSIONS_PARAMETER] = admissions
+
+
 async def _create_execution_from_workflow_request(
     *,
     request: CreateJobRequest,
@@ -12530,6 +12574,11 @@ async def _create_execution_from_workflow_request(
             },
         )
     initial_parameters = skill_validation.parameters
+    await _admit_repository_tool_selections(
+        session,
+        principal=_execution_principal(user),
+        initial_parameters=initial_parameters,
+    )
     if isinstance(payload.get("batchDigest"), str) and payload.get("batchDigest", "").strip():
         initial_parameters.setdefault("batchDigest", payload["batchDigest"].strip())
     if isinstance(payload.get("batchTarget"), Mapping):

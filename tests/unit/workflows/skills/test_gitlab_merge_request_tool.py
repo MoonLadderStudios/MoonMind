@@ -1,18 +1,25 @@
 """The registered GitLab merge-request tool through dispatch, connection and durability.
 
-Every test is hermetic: the GitLab instance is an ``httpx.MockTransport``, the
-selected repository connection is a recorded model, the Secrets-System read is
-an injected resolver behind the real bound acquisition, and results persist
-through a real SQLite-backed Temporal artifact service.
+Every test is hermetic: the GitLab instance is an ``httpx.MockTransport`` and
+results persist through a real SQLite-backed Temporal artifact service. Most
+tests inject a recorded connection model and a Secrets-System resolver behind
+the real bound acquisition; the served-enrollment journey instead records the
+connection through the Source Control routes and runs the registered handler
+with its production loader and Secrets resolver.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
+import pytest_asyncio
+from fastapi import Depends, FastAPI
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
@@ -111,6 +118,8 @@ class _GitLab:
 
     def __init__(self, *, notes=(), note_pages=1, per_page=20) -> None:
         self.requests: list[httpx.Request] = []
+        # Project paths this instance reports, for assignment verification.
+        self.projects = {PROJECT: 99, "group/subgroup/docs": 100}
         self.notes = list(notes)
         self.note_pages = note_pages
         self.per_page = per_page
@@ -127,6 +136,12 @@ class _GitLab:
         path = request.url.path
         if path in self.status_for:
             return httpx.Response(self.status_for[path], json={"message": "x"})
+        project = path.removeprefix("/api/v4/projects/")
+        if request.method == "GET" and project in self.projects:
+            return httpx.Response(
+                200,
+                json={"id": self.projects[project], "path_with_namespace": project},
+            )
         if request.method == "POST":
             body = json.loads(request.content)["body"]
             note = {"id": 4999 + len(self.posts), "body": body}
@@ -170,11 +185,11 @@ def _tool(gitlab: _GitLab, secrets: _Secrets, *, connection=None, load=None):
     connection = connection or _recorded_connection()
     loaded: list[tuple[str, str]] = []
 
-    async def _load(connection_ref: str, repository: str):
-        loaded.append((connection_ref, repository))
+    async def _load(connection_ref: str, repository: str, *, workflow_id: str):
+        loaded.append((connection_ref, repository, workflow_id))
         if load is not None:
             return await load(connection_ref, repository)
-        return connection
+        return connection, "principal:admitted"
 
     tool = GitLabMergeRequestTool(
         load_connection=_load,
@@ -207,7 +222,16 @@ def _snapshot(inputs):
     return parameters, snapshot
 
 
-async def _dispatch(tool, inputs, service, *, attempt=None):
+async def _dispatch(
+    tool,
+    inputs,
+    service,
+    *,
+    attempt=None,
+    workflow_id=WORKFLOW_ID,
+    run_id="run-1",
+    principal="system:workflow-owner",
+):
     """One mm.tool.execute attempt through the worker's real dispatch owner.
 
     ``attempt`` runs the activity itself as that Temporal retry attempt.
@@ -226,11 +250,11 @@ async def _dispatch(tool, inputs, service, *, attempt=None):
             "inputs": inputs,
         },
         "registry_snapshot": snapshot,
-        "principal": "system:workflow-owner",
+        "principal": principal,
         "context": {
             "namespace": "default",
-            "workflow_id": WORKFLOW_ID,
-            "run_id": "run-1",
+            "workflow_id": workflow_id,
+            "run_id": run_id,
             "node_id": "gitlab",
         },
     }
@@ -241,12 +265,12 @@ async def _dispatch(tool, inputs, service, *, attempt=None):
     return await environment.run(activities.mm_tool_execute, **invocation)
 
 
-async def _records(service) -> list[dict]:
-    access = ArtifactAccessContext.for_execution(WORKFLOW_ID)
+async def _records(service, *, workflow_id=WORKFLOW_ID, run_id="run-1") -> list[dict]:
+    access = ArtifactAccessContext.for_execution(workflow_id)
     artifacts = await service.list_for_execution(
         namespace="default",
-        workflow_id=WORKFLOW_ID,
-        run_id="run-1",
+        workflow_id=workflow_id,
+        run_id=run_id,
         link_type="output.primary",
         access=access,
     )
@@ -351,7 +375,7 @@ async def test_registered_invocation_reads_and_posts_one_note_with_durable_resul
     note = outputs["note"]
     assert note["deliveryState"] == "delivered"
     assert note["noteId"] == 5000
-    assert tool.loaded == [("gitlab-main", PROJECT)]
+    assert tool.loaded == [("gitlab-main", PROJECT, WORKFLOW_ID)]
     assert secrets.reads == ["db://GITLAB_TOKEN"]
     assert len(gitlab.posts) == 1
     assert gitlab.posts[0].url.raw_path == MR_RAW_PATH + b"/notes"
@@ -478,7 +502,9 @@ async def test_cross_instance_redirect_and_expired_credential_are_bounded(tmp_pa
     async with temporal_db(tmp_path) as session:
         service = _service(session, tmp_path)
         tool = GitLabMergeRequestTool(
-            load_connection=lambda _ref, _repo: _async(_recorded_connection()),
+            load_connection=lambda _ref, _repo, **_run: _async(
+                (_recorded_connection(), "principal:admitted")
+            ),
             resolve_secret=_Secrets(),
             http_transport=httpx.MockTransport(
                 lambda request: (
@@ -545,7 +571,9 @@ async def test_partial_status_is_reported_incomplete(tmp_path):
         return original(request)
 
     tool = GitLabMergeRequestTool(
-        load_connection=lambda _ref, _repo: _async(_recorded_connection()),
+        load_connection=lambda _ref, _repo, **_run: _async(
+            (_recorded_connection(), "principal:admitted")
+        ),
         resolve_secret=_Secrets(),
         http_transport=httpx.MockTransport(_paged_pipelines),
     )
@@ -729,3 +757,507 @@ async def test_exhausted_pagination_preserves_operation_and_next_action(tmp_path
     assert record["outcome"] == "uncertain"
     # The exact admitted work survives for the automated continuation.
     assert record["note"]["body"] == "Summary"
+
+
+# ---------------------------------------------------------------------------
+# Served enrollment, verified assignment, and the production loader
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def served(tmp_path, monkeypatch):
+    """The served Source Control and execution routes on one database.
+
+    Connections are enrolled and assigned, and runs submitted, through their
+    routes under operator admission; a real ``TemporalExecutionService``
+    records each run (only the Temporal start is mocked). The tool then runs
+    for that run under its execution-scoped principal, reading the same
+    database through the production admission reader and Secrets resolver,
+    and every GitLab client reaches only the hermetic instance.
+    """
+
+    from unittest.mock import AsyncMock, MagicMock
+    from uuid import uuid4
+
+    from api_service.api.routers import executions
+    from api_service.api.routers import repository_connections as routes
+    from api_service.db import base as db_base
+    from api_service.db.models import Base
+    from api_service.services.secrets import SecretsService
+    from api_service.services.settings_catalog import SettingsCatalogService
+    from moonmind.config.settings import settings
+    from moonmind.workflows.temporal.service import TemporalExecutionService
+    from tests.unit.api.test_executions_temporal import _override_user_dependencies
+
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path}/connections.db", future=True
+    )
+    maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    monkeypatch.setattr(db_base, "async_session_maker", maker)
+    monkeypatch.setattr(
+        "moonmind.auth.resolvers.db_resolver.async_session_maker", maker
+    )
+    monkeypatch.setattr(
+        "moonmind.auth.github_app_setup._deployment_git_client_policy",
+        lambda: {
+            "pinnedVersion": "2.46.0",
+            "toolBundleRef": "repository-client:git-system",
+            "executableSha256": "sha256:git",
+        },
+    )
+    # A tool-only run needs no agent runtime, saved settings, or object store.
+    monkeypatch.setattr(settings.workflow, "default_runtime", "codex_cli")
+    monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
+    monkeypatch.setattr(
+        settings.workflow, "temporal_artifact_root", str(tmp_path / "submitted")
+    )
+
+    async def _no_overrides(_service, *, keys, **_kwargs):
+        return {}
+
+    monkeypatch.setattr(SettingsCatalogService, "_get_overrides", _no_overrides)
+    secret_reads: list[str] = []
+    read_secret = SecretsService.get_secret
+
+    async def _read_secret(_cls, session, slug, **kwargs):
+        secret_reads.append(slug)
+        return await read_secret(session, slug, **kwargs)
+
+    monkeypatch.setattr(SecretsService, "get_secret", classmethod(_read_secret))
+
+    temporal = MagicMock()
+    temporal.start_workflow = AsyncMock(
+        side_effect=lambda **_kwargs: SimpleNamespace(run_id=uuid4().hex)
+    )
+    temporal.namespace_retention_seconds = AsyncMock(return_value=86400)
+    temporal.describe_workflow = AsyncMock(return_value=None)
+
+    app = FastAPI()
+    app.include_router(routes.router, prefix="/api/v1/repository-connections")
+    app.include_router(executions.router)
+
+    async def _session():
+        async with maker() as session:
+            yield session
+
+    async def _service(session=Depends(db_base.get_async_session)):
+        return TemporalExecutionService(session, client_adapter=temporal)
+
+    _override_user_dependencies(app, is_superuser=False)
+    app.dependency_overrides[db_base.get_async_session] = _session
+    app.dependency_overrides[executions._get_service] = _service
+    app.dependency_overrides[executions.get_temporal_client] = lambda: AsyncMock()
+
+    gitlab = _GitLab()
+    real_client = httpx.AsyncClient
+    async with real_client(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        monkeypatch.setattr(
+            httpx,
+            "AsyncClient",
+            lambda **kwargs: real_client(
+                transport=httpx.MockTransport(gitlab), **kwargs
+            ),
+        )
+        yield SimpleNamespace(
+            client=client,
+            gitlab=gitlab,
+            secret_reads=secret_reads,
+            maker=maker,
+            temporal=temporal,
+        )
+    await engine.dispose()
+
+
+async def _enroll_and_assign(client, assignments):
+    created = await client.post(
+        "/api/v1/repository-connections/pat",
+        json={
+            "requestId": "req-gitlab",
+            "connectionId": "gitlab-main",
+            "displayName": "GitLab",
+            "token": TOKEN,
+            "hostingService": "generic_git",
+            "endpointRef": ENDPOINT,
+            "allowedOperations": ["read", "review_request"],
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert TOKEN not in created.text
+    view = created.json()
+    for index, (project, operations) in enumerate(assignments):
+        view = await _assign(client, project, operations, request_id=f"req-{index}")
+    return view
+
+
+async def _assign(client, project, operations, *, request_id, revision=1):
+    assigned = await client.post(
+        "/api/v1/repository-connections/gitlab-main/assignments",
+        json={
+            "requestId": request_id,
+            "repository": project,
+            "operations": list(operations),
+            "revision": revision,
+        },
+    )
+    assert assigned.status_code == 200, assigned.text
+    return assigned.json()
+
+
+async def _submit(client, *inputs_list):
+    """Submit one run whose steps are GitLab tool steps; return the response."""
+
+    return await client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "workflow": {
+                    "instructions": "Read the merge request and post the summary.",
+                    "steps": [
+                        {
+                            "id": f"gitlab-{index}",
+                            "type": "tool",
+                            "tool": {"id": TOOL_NAME, "inputs": inputs},
+                        }
+                        for index, inputs in enumerate(inputs_list)
+                    ],
+                }
+            },
+        },
+    )
+
+
+async def _recorded_run(maker, workflow_id):
+    from api_service.db.models import TemporalExecutionCanonicalRecord
+
+    async with maker() as session:
+        record = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+    assert record is not None
+    return record
+
+
+async def _run_step(served, tmp_path, inputs):
+    """Submit a run, then execute its GitLab step as the run's Activity would."""
+
+    submitted = await _submit(served.client, inputs)
+    assert submitted.status_code == 201, submitted.text
+    record = await _recorded_run(served.maker, submitted.json()["workflowId"])
+    return record, await _execute_for(record, tmp_path, inputs)
+
+
+async def _execute_for(record, tmp_path, inputs):
+    async with temporal_db(tmp_path) as session:
+        service = _service(session, tmp_path)
+        result = await _dispatch(
+            GitLabMergeRequestTool(),
+            inputs,
+            service,
+            workflow_id=record.workflow_id,
+            run_id=record.run_id,
+            # The execution-scoped principal ``MoonMind.UserWorkflow`` uses.
+            principal=f"workflow:{record.workflow_id}",
+        )
+        records = await _records(
+            service, workflow_id=record.workflow_id, run_id=record.run_id
+        )
+    return result, records
+
+
+@pytest.mark.asyncio
+async def test_served_enrollment_submission_and_run_reach_the_registered_tool(
+    served, tmp_path
+):
+    view = await _enroll_and_assign(
+        served.client, [(PROJECT, ("read", "review_request"))]
+    )
+
+    assert view["hostingService"] == "generic_git"
+    assert view["endpoint"] == ENDPOINT
+    assert view["credentialKind"] == "personal_access_token"
+    assert view["assignments"] == [
+        {
+            "repository": PROJECT,
+            "providerRepoId": "99",
+            "operations": ["read", "review_request"],
+            "revision": 1,
+            "verified": True,
+        }
+    ]
+    # The assignment was verified with the connection's own token.
+    (lookup,) = served.gitlab.requests
+    assert lookup.method == "GET"
+    assert lookup.url.raw_path == b"/api/v4/projects/group%2Fsubgroup%2Fproject"
+    slug = "repository-connection/gitlab-main/credential-1"
+    assert served.secret_reads == [slug]
+
+    record, (result, records) = await _run_step(
+        served, tmp_path, _inputs(note={"body": "Summary"})
+    )
+
+    # Submission recorded what its admitted principal may use; the run's
+    # Activity carried that admission, not its own workflow principal.
+    from api_service.auth_providers import instance_operator_principal
+
+    assert record.parameters["repositoryToolAdmissions"] == [
+        {
+            "tool": TOOL_NAME,
+            "connectionRef": "gitlab-main",
+            "repository": PROJECT,
+            "principalRef": instance_operator_principal(),
+            "scopeType": "system",
+            "scopeRef": None,
+            "providerRepoId": "99",
+            "assignmentRevision": 1,
+        }
+    ]
+    assert result.status == "COMPLETED", result.outputs
+    assert result.outputs["mr"]["title"] == "Small slice"
+    assert result.outputs["readsComplete"] is True
+    note = result.outputs["note"]
+    assert note["deliveryState"] == "delivered"
+    assert len(served.gitlab.posts) == 1
+    assert (
+        f"operation:{note['operationId']}"
+        in json.loads(served.gitlab.posts[0].content)["body"]
+    )
+    assert served.secret_reads == [slug, slug]
+    (persisted,) = records
+    assert result.outputs["resultArtifactRef"]
+    assert persisted["execution"]["workflowId"] == record.workflow_id
+    assert persisted["note"]["deliveryState"] == "delivered"
+    assert TOKEN not in json.dumps(persisted)
+
+
+async def _seed_foreign_connection(maker):
+    """A connection recorded for another principal, assigned to the project."""
+
+    from api_service.services.repository_connections import RepositoryConnectionService
+    from moonmind.workflows.executions.repository_contract import (
+        RepositoryAssignment,
+        RepositoryIdentity,
+    )
+
+    foreign = ("principal:foreign", ("system", None))
+    connection = _recorded_connection(
+        id="gitlab-foreign",
+        ownership={
+            "ownerRef": foreign[0],
+            "scopeType": "system",
+            "allowedPrincipalRefs": [foreign[0]],
+        },
+    )
+    async with maker() as session:
+        service = RepositoryConnectionService(session)
+        await service.create_connection(
+            connection,
+            actor_ref=foreign[0],
+            request_id="seed-foreign",
+            principal_ref=foreign[0],
+            principal_scope=foreign[1],
+        )
+        await service.set_assignment(
+            RepositoryAssignment(
+                connectionId="gitlab-foreign",
+                identity=RepositoryIdentity(
+                    endpoint=ENDPOINT, providerRepoId="99", displayName=PROJECT
+                ),
+                operations=("read",),
+                verified=True,
+            ),
+            actor_ref=foreign[0],
+            request_id="seed-foreign-assignment",
+            principal_ref=foreign[0],
+            principal_scope=foreign[1],
+        )
+
+
+@pytest.mark.asyncio
+async def test_unadmitted_principals_and_selections_are_refused_at_submission(
+    served,
+):
+    await _enroll_and_assign(served.client, [(PROJECT, ("read",))])
+    await _seed_foreign_connection(served.maker)
+
+    # The operator may not use a connection recorded for another principal.
+    foreign = await _submit(served.client, _inputs(connectionRef="gitlab-foreign"))
+    unassigned = await _submit(
+        served.client, _inputs(project="group/subgroup/docs", read=["mr"])
+    )
+    unknown = await _submit(served.client, _inputs(connectionRef="gitlab-other"))
+
+    for refused in (foreign, unassigned, unknown):
+        assert refused.status_code == 422, refused.text
+        assert TOOL_NAME in refused.json()["detail"]["message"]
+    assert "not admitted" in foreign.json()["detail"]["message"]
+    assert "not assigned" in unassigned.json()["detail"]["message"]
+    assert "not recorded" in unknown.json()["detail"]["message"]
+    served.temporal.start_workflow.assert_not_awaited()
+    async with served.maker() as session:
+        from sqlalchemy import func, select
+
+        from api_service.db.models import TemporalExecutionCanonicalRecord
+
+        runs = (
+            await session.execute(
+                select(func.count()).select_from(TemporalExecutionCanonicalRecord)
+            )
+        ).scalar_one()
+    assert runs == 0
+
+
+@pytest.mark.asyncio
+async def test_execution_scoped_principal_is_not_connection_authority(served, tmp_path):
+    """A run whose admission names its own workflow principal is refused."""
+
+    from moonmind.workflows.temporal.service import TemporalExecutionService
+
+    await _enroll_and_assign(served.client, [(PROJECT, ("read",))])
+    async with served.maker() as session:
+        record = await TemporalExecutionService(
+            session, client_adapter=served.temporal
+        ).create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=None,
+            title="Self-admitted run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={"workflow": {"instructions": "Read the MR."}},
+            idempotency_key=None,
+        )
+        workflow_id = record.workflow_id
+    async with served.maker() as session:
+        from api_service.db.models import TemporalExecutionCanonicalRecord
+
+        canonical = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+        canonical.parameters = {
+            **canonical.parameters,
+            "repositoryToolAdmissions": [
+                {
+                    "tool": TOOL_NAME,
+                    "connectionRef": "gitlab-main",
+                    "repository": PROJECT,
+                    "principalRef": f"workflow:{workflow_id}",
+                    "scopeType": "system",
+                    "scopeRef": None,
+                    "providerRepoId": "99",
+                    "assignmentRevision": 1,
+                }
+            ],
+        }
+        await session.commit()
+    reads, requests = len(served.secret_reads), len(served.gitlab.requests)
+
+    result, _records_ = await _execute_for(
+        await _recorded_run(served.maker, workflow_id),
+        tmp_path,
+        _inputs(read=["mr"]),
+    )
+
+    assert result.outputs["error"]["code"] == "REPOSITORY_DENIED"
+    assert "not admitted" in result.outputs["error"]["message"]
+    assert len(served.secret_reads) == reads
+    assert len(served.gitlab.requests) == requests
+
+
+@pytest.mark.asyncio
+async def test_run_activity_refuses_authority_its_admission_does_not_carry(
+    served, tmp_path
+):
+    await _enroll_and_assign(served.client, [(PROJECT, ("read",))])
+    reads, requests = len(served.secret_reads), len(served.gitlab.requests)
+
+    # Read-only assignment: the admitted note cannot be posted.
+    _record, (read_only, _records_) = await _run_step(
+        served, tmp_path, _inputs(note={"body": "Summary"})
+    )
+    # Another instance than the admitted connection's.
+    _record, (other, _records_) = await _run_step(
+        served,
+        tmp_path,
+        _inputs(endpoint="https://gitlab-other.example.com", read=["mr"]),
+    )
+    # A selection the run never admitted, though the project is assigned.
+    record, _ = await _run_step(served, tmp_path, _inputs(read=["mr"]))
+    unadmitted, _records_ = await _execute_for(
+        record, tmp_path, _inputs(project="group/subgroup/docs", read=["mr"])
+    )
+
+    assert read_only.outputs["error"]["code"] == "BOUND_DENIED"
+    assert read_only.outputs["note"]["deliveryState"] == "not_attempted"
+    assert other.outputs["error"]["code"] == "gitlab_identity_rejected"
+    assert unadmitted.outputs["error"]["code"] == "REPOSITORY_DENIED"
+    assert "did not admit" in unadmitted.outputs["error"]["message"]
+    # Only the admitted read ran; none of the refusals read the secret.
+    assert len(served.secret_reads) == reads + 1
+    assert len(served.gitlab.requests) == requests + 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["disabled", "operations", "retargeted"])
+async def test_connection_changes_after_admission_refuse_the_run(
+    served, tmp_path, change
+):
+    await _enroll_and_assign(served.client, [(PROJECT, ("read",))])
+    submitted = await _submit(served.client, _inputs(read=["mr"]))
+    assert submitted.status_code == 201, submitted.text
+    record = await _recorded_run(served.maker, submitted.json()["workflowId"])
+    client = served.client
+    if change == "disabled":
+        disabled = await client.post(
+            "/api/v1/repository-connections/gitlab-main/disable",
+            json={"requestId": "req-disable"},
+        )
+        assert disabled.status_code == 200, disabled.text
+    elif change == "operations":
+        await _assign(
+            client, PROJECT, ("read", "review_request"), request_id="req-widen"
+        )
+    else:
+        removed = await client.post(
+            "/api/v1/repository-connections/gitlab-main/assignments/remove",
+            json={
+                "requestId": "req-remove",
+                "providerRepoId": "99",
+                "repository": PROJECT,
+            },
+        )
+        assert removed.status_code == 200, removed.text
+        # The path now names a different, recreated project.
+        served.gitlab.projects[PROJECT] = 199
+        await _assign(client, PROJECT, ("read",), request_id="req-retarget")
+    reads, requests = len(served.secret_reads), len(served.gitlab.requests)
+
+    result, records = await _execute_for(record, tmp_path, _inputs(read=["mr"]))
+
+    assert result.status == "FAILED"
+    assert result.outputs["error"]["code"] == "REPOSITORY_DENIED"
+    expected = "not active" if change == "disabled" else "changed after admission"
+    assert expected in result.outputs["error"]["message"]
+    assert len(served.secret_reads) == reads
+    assert len(served.gitlab.requests) == requests
+    assert [r["outcome"] for r in records] == ["failed"]
+
+
+@pytest.mark.asyncio
+async def test_run_without_a_recorded_admission_gets_no_authority(served, tmp_path):
+    await _enroll_and_assign(served.client, [(PROJECT, ("read",))])
+
+    async with temporal_db(tmp_path) as session:
+        result = await _dispatch(
+            GitLabMergeRequestTool(),
+            _inputs(read=["mr"]),
+            _service(session, tmp_path),
+            workflow_id="mm:unrecorded",
+            principal="workflow:mm:unrecorded",
+        )
+
+    assert result.status == "FAILED"
+    assert result.outputs["error"]["code"] == "REPOSITORY_CONNECTION_UNAVAILABLE"
+    assert len(served.secret_reads) == 1
+    assert len(served.gitlab.requests) == 1
