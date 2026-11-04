@@ -28,6 +28,7 @@ from api_service.auth_providers import get_instance_access
 from api_service.db.base import get_async_session
 from moonmind.auth.github_app import GITHUB_REPOSITORY_NAME_PATTERN
 from moonmind.auth.github_app_setup import GitHubAppSetupService, SetupConfiguration
+from moonmind.integrations.gitlab.identity import GITLAB_PROJECT_PATH_PATTERN
 from moonmind.workflows.executions.repository_contract import (
     REPOSITORY_POLICY_CONFLICT,
     REPOSITORY_SETUP_REQUIRED,
@@ -339,6 +340,8 @@ async def complete_github_app_setup(
 _SYSTEM_SCOPE: tuple[str, str | None] = ("system", None)
 _CONNECTION_ID_PATTERN = r"^[a-z0-9][a-z0-9-]{0,62}$"
 _REPOSITORY_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_GITLAB_PROJECT = re.compile(GITLAB_PROJECT_PATH_PATTERN)
+_GITHUB_ENDPOINT = "https://github.com"
 _PAT_SECRET_PROVIDER = "db"
 
 CredentialKind = Literal["personal_access_token", "github_app", "deployment", "other"]
@@ -390,7 +393,11 @@ class ConnectionRequestStatus(BaseModel):
 
 
 class PatConnectionCreateRequest(BaseModel):
-    """Create a named PAT connection; the token becomes a Managed Secret."""
+    """Create a named PAT connection; the token becomes a Managed Secret.
+
+    GitHub is the default and always uses github.com. ``generic_git`` records
+    a token connection to the GitLab instance named by ``endpointRef``.
+    """
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -400,6 +407,12 @@ class PatConnectionCreateRequest(BaseModel):
     token: SecretStr
     allowed_operations: list[RepositoryOperation] = Field(
         default_factory=lambda: ["read"], alias="allowedOperations", min_length=1
+    )
+    hosting_service: Literal["github", "generic_git"] = Field(
+        default="github", alias="hostingService"
+    )
+    endpoint_ref: str | None = Field(
+        default=None, alias="endpointRef", min_length=1, max_length=500
     )
 
 
@@ -514,6 +527,29 @@ async def _view_for(
     service: Any, connection: RepositoryConnection
 ) -> RepositoryConnectionView:
     return _connection_view(connection, await service.list_assignments(connection.id))
+
+
+def _pat_endpoint(request: PatConnectionCreateRequest) -> str:
+    """The trusted endpoint, checked before a secret is staged."""
+
+    from moonmind.integrations.gitlab.errors import GitLabIdentityError
+    from moonmind.integrations.gitlab.identity import gitlab_instance_endpoint
+
+    if request.hosting_service == "github":
+        if request.endpoint_ref is not None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"GitHub token connections use {_GITHUB_ENDPOINT}.",
+            )
+        return _GITHUB_ENDPOINT
+    if request.endpoint_ref is None:
+        raise HTTPException(
+            status_code=422, detail="A GitLab connection needs its instance endpoint."
+        )
+    try:
+        return gitlab_instance_endpoint(request.endpoint_ref)
+    except GitLabIdentityError as exc:
+        raise HTTPException(status_code=422, detail=exc.args[0]) from exc
 
 
 def _pat_secret_slug(connection_id: str, credential_revision: int) -> str:
@@ -676,6 +712,7 @@ async def create_pat_connection(
 
     principal = _admitted_principal(_user)
     token = _transient_token(request.token)
+    endpoint = _pat_endpoint(request)
     service = RepositoryConnectionService(db)
     slug = _pat_secret_slug(request.connection_id, 1)
     connection = RepositoryConnection.model_validate(
@@ -684,7 +721,7 @@ async def create_pat_connection(
             "id": request.connection_id,
             "provider": "git",
             "displayName": request.display_name.strip(),
-            "endpointRef": "https://github.com",
+            "endpointRef": endpoint,
             "allowedOperations": list(dict.fromkeys(request.allowed_operations)),
             "clientPolicy": _deployment_git_client_policy(),
             "credential": {
@@ -699,7 +736,7 @@ async def create_pat_connection(
                 "scopeType": "system",
                 "allowedPrincipalRefs": [principal],
             },
-            "hostingService": "github",
+            "hostingService": request.hosting_service,
         }
     )
     try:
@@ -949,6 +986,89 @@ async def observe_github_repository(
     }
 
 
+async def observe_gitlab_project(
+    connection: RepositoryConnection, project: str, *, principal_ref: str
+) -> dict[str, str]:
+    """Read one GitLab project's identity with the connection's own token.
+
+    The instance is checked before the secret is read, and a redirect to
+    another instance is refused without forwarding the token. Raises
+    ``HTTPException``: 422 when the connection cannot read the project,
+    503 when GitLab or the credential store is unavailable.
+    """
+
+    from urllib.parse import quote
+
+    from moonmind.auth.bound_acquisition import (
+        BOUND_ISSUER_FAILED,
+        BOUND_UNAVAILABLE,
+        BoundAccessError,
+    )
+    from moonmind.auth.github_app_wiring import acquire_bound_credential_for_connection
+    from moonmind.integrations.gitlab.client import (
+        GitLabClient,
+        connection_from_bound_credential,
+    )
+    from moonmind.integrations.gitlab.errors import GitLabToolError
+    from moonmind.integrations.gitlab.identity import gitlab_instance_endpoint
+
+    action = "read_project"
+    try:
+        endpoint = gitlab_instance_endpoint(connection.endpoint_ref, action=action)
+        acquired = await acquire_bound_credential_for_connection(
+            connection,
+            operations=("read",),
+            principal_ref=principal_ref,
+            execution_owner=f"repository-assignment:{connection.id}",
+            repository_display=project,
+        )
+        try:
+            resolved = connection_from_bound_credential(
+                acquired,
+                endpoint=endpoint,
+                admitted_endpoints=(endpoint,),
+                action=action,
+            )
+        finally:
+            acquired.credential.clear()
+    except BoundAccessError as exc:
+        raise HTTPException(
+            status_code=(
+                503 if exc.code in {BOUND_ISSUER_FAILED, BOUND_UNAVAILABLE} else 422
+            ),
+            detail=str(exc),
+        ) from exc
+    except GitLabToolError as exc:
+        raise HTTPException(status_code=422, detail=exc.args[0]) from exc
+    client = GitLabClient(connection=resolved)
+    try:
+        payload = await client.request_json(
+            method="GET", path=f"/projects/{quote(project, safe='')}", action=action
+        )
+    except GitLabToolError as exc:
+        if exc.code == "gitlab_transient" or exc.status_code >= 500:
+            raise HTTPException(
+                status_code=503,
+                detail="GitLab is unavailable; existing assignments are unchanged.",
+            ) from exc
+        raise HTTPException(
+            status_code=422,
+            detail=f"This connection cannot read {project} ({exc.args[0]})",
+        ) from exc
+    finally:
+        await client.aclose()
+    observed = payload if isinstance(payload, Mapping) else {}
+    if not str(observed.get("id") or ""):
+        raise HTTPException(
+            status_code=503,
+            detail="GitLab did not report a project identity; try again.",
+        )
+    return {
+        "id": str(observed["id"]),
+        "fullName": str(observed.get("path_with_namespace") or project),
+    }
+
+
 @router.post(
     "/{connection_id}/assignments",
     response_model=RepositoryConnectionView,
@@ -962,13 +1082,17 @@ async def set_repository_assignment(
     db: Annotated[AsyncSession, Depends(get_async_session)],
     _user: Annotated[Any, Depends(get_instance_access)],
 ) -> RepositoryConnectionView:
-    """Assign only a repository this connection itself can read."""
+    """Assign only a repository this connection itself can read.
+
+    A generic Git connection is a GitLab instance: it assigns
+    ``group/subgroup/project`` paths verified through the GitLab API.
+    """
 
     from api_service.services.repository_connections import RepositoryConnectionService
 
     principal = _admitted_principal(_user)
     repository = request.repository.strip()
-    if not _REPOSITORY_NAME.fullmatch(repository):
+    if not _GITLAB_PROJECT.fullmatch(repository):
         raise HTTPException(status_code=422, detail="Use the owner/name form.")
     service = RepositoryConnectionService(db)
     try:
@@ -979,7 +1103,14 @@ async def set_repository_assignment(
             raise HTTPException(
                 status_code=404, detail="Repository connection not found."
             )
-        if connection.credential.source == "github_app":
+        gitlab = connection.hosting_service == "generic_git"
+        if not gitlab and not _REPOSITORY_NAME.fullmatch(repository):
+            raise HTTPException(status_code=422, detail="Use the owner/name form.")
+        if gitlab:
+            observed = await observe_gitlab_project(
+                connection, repository, principal_ref=principal
+            )
+        elif connection.credential.source == "github_app":
 
             async def read_active_revision(selected_id: str) -> Any:
                 from moonmind.auth.bound_acquisition import (

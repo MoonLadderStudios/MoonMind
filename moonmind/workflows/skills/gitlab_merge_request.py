@@ -1,11 +1,12 @@
 """Deterministic GitLab merge-request tool: bounded reads plus one admitted note.
 
 ``gitlab.merge_request`` runs ``GitLabMRAdapter`` on the trusted
-``mm.tool.execute`` path. The step names one recorded repository connection;
-the connection service admits only a verified assignment of the project and
-its operations, and the existing bound acquisition reads the connection's own
-SecretRef. Nothing here discovers ambient tokens or accepts credentials from
-inputs.
+``mm.tool.execute`` path. The step names one recorded repository connection.
+Submission admits that selection for the run with the submitting principal
+(``admit_selected_use``); the Activity, acting for the run under its
+execution-scoped principal, reloads exactly that recorded admission, and the
+existing bound acquisition reads the connection's own SecretRef. Nothing here
+discovers ambient tokens or accepts credentials from inputs.
 
 The note's operation identity is derived from the workflow, the logical step,
 and the admitted body, so an Activity retry or a restarted step reuses it and
@@ -37,6 +38,8 @@ from moonmind.integrations.gitlab.identity import resolve_gitlab_identity
 from moonmind.workflows.skills.tool_plan_contracts import ToolFailure, ToolResult
 
 TOOL_NAME = "gitlab.merge_request"
+#: Server-written run parameter recording each admitted connection selection.
+ADMISSIONS_PARAMETER = "repositoryToolAdmissions"
 _RESULT_SCHEMA = "moonmind.gitlab-merge-request-result.v1"
 _READS = ("mr", "discussions", "status")
 _MAX_NOTE_CHARS = 100_000
@@ -44,7 +47,8 @@ _RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 # Retryable acquisition failures: the credential store or issuer is down.
 _RETRYABLE_BOUND_CODES = frozenset({"BOUND_ISSUER_FAILED", "BOUND_UNAVAILABLE"})
 
-ConnectionLoader = Callable[[str, str], Awaitable[Any]]
+#: ``(connectionRef, project, workflow_id=...)`` -> ``(connection, principal)``.
+ConnectionLoader = Callable[..., Awaitable[tuple[Any, str]]]
 
 
 class GitLabNoteInput(BaseModel):
@@ -156,16 +160,76 @@ def note_operation_id(*, workflow_id: str, logical_step_id: str, body: str) -> s
     return f"mm-note-{digest[:32]}"
 
 
-async def _load_recorded_connection(connection_ref: str, repository: str) -> Any:
-    """The recorded connection narrowed to the project's verified assignment."""
+def selected_connections(parameters: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """The ``(connectionRef, project)`` selections a run's GitLab steps make."""
 
+    workflow = parameters.get("workflow") or parameters.get("task") or {}
+    steps = workflow.get("steps") if isinstance(workflow, Mapping) else None
+    selections: list[tuple[str, str]] = []
+    for step in steps if isinstance(steps, list) else ():
+        if not isinstance(step, Mapping):
+            continue
+        tool = step.get("tool") or step.get("skill")
+        if not isinstance(tool, Mapping):
+            continue
+        if str(tool.get("id") or tool.get("name") or "").strip() != TOOL_NAME:
+            continue
+        inputs = tool.get("inputs") or tool.get("args")
+        if not isinstance(inputs, Mapping):
+            continue
+        selection = (
+            str(inputs.get("connectionRef") or "").strip(),
+            str(inputs.get("project") or "").strip(),
+        )
+        if all(selection) and selection not in selections:
+            selections.append(selection)
+    return selections
+
+
+async def _load_admitted_connection(
+    connection_ref: str, project: str, *, workflow_id: str
+) -> tuple[Any, str]:
+    """The connection the run admitted for this project, and its admitting principal.
+
+    The Activity acts as ``workflow:<id>``, which no operator connection
+    admits, so it reads the run's recorded admission through the existing
+    owner of admitted run records (the nearest recorded run on its Temporal
+    parent chain) rather than presenting its own or any other identity.
+    """
+
+    from api_service.db.base import async_session_maker
+    from api_service.services.repository_connections import RepositoryConnectionService
+    from moonmind.workflows.executions.repository_contract import (
+        REPOSITORY_DENIED,
+        RepositoryRouteError,
+    )
     from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
-        load_repository_connection_for_launch,
+        _admitted_repository_record,
     )
 
-    return await load_repository_connection_for_launch(
-        connection_ref, repository=repository
+    _owner, _run_id, parameters = await _admitted_repository_record(workflow_id)
+    admission = next(
+        (
+            entry
+            for entry in parameters.get(ADMISSIONS_PARAMETER) or ()
+            if isinstance(entry, Mapping)
+            and entry.get("tool") == TOOL_NAME
+            and entry.get("connectionRef") == connection_ref
+            and entry.get("repository") == project
+        ),
+        None,
     )
+    if admission is None:
+        raise RepositoryRouteError(
+            REPOSITORY_DENIED,
+            f"run {workflow_id!r} did not admit repository connection "
+            f"{connection_ref!r} for {project}; no other authority is assumed",
+        )
+    async with async_session_maker() as session:
+        connection = await RepositoryConnectionService(
+            session
+        ).admitted_selected_connection(admission)
+    return connection, str(admission["principalRef"])
 
 
 class _Outcome(Exception):
@@ -196,7 +260,7 @@ class GitLabMergeRequestTool:
         resolve_secret: Callable[[str], Any] | None = None,
         http_transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        self._load_connection = load_connection or _load_recorded_connection
+        self._load_connection = load_connection or _load_admitted_connection
         # ``None`` selects the Secrets-System resolver of bound acquisition.
         self._resolve_secret = resolve_secret
         self._transport = http_transport
@@ -301,22 +365,15 @@ class _Attempt:
             RepositoryContractError,
             RepositoryRouteError,
         )
-        from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
-            _LAUNCH_CONNECTION_PRINCIPAL,
-        )
 
         request = self.request
         action = "post_note" if request.note is not None else "read_mr"
         try:
-            connection = await self.tool._load_connection(
-                request.connection_ref, request.project
+            connection, admitted_principal = await self.tool._load_connection(
+                request.connection_ref,
+                request.project,
+                workflow_id=self.execution["workflow_id"],
             )
-            if connection is None:
-                raise _Outcome(
-                    "REPOSITORY_CONNECTION_UNAVAILABLE",
-                    f"repository connection {request.connection_ref!r} is not "
-                    "recorded; no other connection is substituted",
-                )
             if (
                 connection.provider != "git"
                 or connection.hosting_service != "generic_git"
@@ -343,7 +400,7 @@ class _Attempt:
                     if request.note is not None
                     else ("read",)
                 ),
-                principal_ref=_LAUNCH_CONNECTION_PRINCIPAL,
+                principal_ref=admitted_principal,
                 execution_owner=self.execution["workflow_id"],
                 operation_id=f"{TOOL_NAME}:{self.execution['workflow_id']}:"
                 f"{self.context['node_id']}",
