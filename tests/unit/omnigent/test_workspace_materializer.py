@@ -1295,8 +1295,8 @@ async def test_materializer_reuses_overlapping_completed_checkout(
                 "branch": "main",
             }
         ),
-        runtime_uid=os.getuid(),
-        runtime_gid=os.getgid(),
+        runtime_uid=_CONTROLLED_UID,
+        runtime_gid=_CONTROLLED_GID,
         plan=object(),
     )
 

@@ -72,6 +72,16 @@ def test_redelivery_preserves_a_later_agent_branch_and_uncommitted_work(tmp_path
     assert (repo / "README.md").read_text() == "preserve candidate edits\n"
 
 
+@pytest.mark.parametrize("target", ["", ".", "/repo", "../repo", "owned/../repo", "owned,readonly/repo"])
+def test_branch_preparation_rejects_a_mount_outside_its_workspace(target):
+    with pytest.raises(module.HarnessPlatformError):
+        module.build_daemon_workspace_branch_argv(
+            volume="fixture-workspaces", target_in_volume=target,
+            target_branch="feature/selected", runtime_uid=_CONTROLLED_UID,
+            runtime_gid=_CONTROLLED_GID, image="fixture-unused", allow_initialization=True,
+        )
+
+
 @pytest.mark.parametrize("target", ["-B", "invalid..branch", "other-work"])
 def test_unproven_existing_workspace_is_preserved_instead_of_switching(tmp_path, target):
     repo = _repository(tmp_path)
