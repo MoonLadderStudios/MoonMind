@@ -1293,8 +1293,6 @@ def build_daemon_workspace_branch_argv(
         or len(target_branch) > 400
         or target.is_absolute()
         or not target.parts
-        or runtime_uid <= 0
-        or runtime_gid <= 0
     ):
         raise HarnessPlatformError(
             "workspace branch preparation authority is unavailable or unsafe",
