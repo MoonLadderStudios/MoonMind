@@ -3084,6 +3084,8 @@ def test_stale_native_quota_error_does_not_override_other_terminal_states(
     "structured_error",
     [
         {"code": "401"},
+        {"provider_error_code": "401"},
+        {"providerErrorCode": "401"},
         {"provider_error_class": "auth"},
         {"providerErrorClass": "auth"},
     ],

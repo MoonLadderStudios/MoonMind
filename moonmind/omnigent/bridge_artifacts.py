@@ -1760,7 +1760,8 @@ def _snapshot_provider_failure(
     if not isinstance(task_error, Mapping):
         return None
     error = dict(task_error)
-    error.setdefault("providerErrorCode", error.get("code"))
+    if "providerErrorCode" not in error and "provider_error_code" not in error:
+        error["providerErrorCode"] = error.get("code")
     event = provider_failure_event_from_metadata(error)
     if event is None or (
         event.provider_error_class is None
