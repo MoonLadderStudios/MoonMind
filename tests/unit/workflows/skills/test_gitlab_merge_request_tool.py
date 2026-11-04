@@ -8,11 +8,13 @@ through a real SQLite-backed Temporal artifact service.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 
 import httpx
 import pytest
 from temporalio.exceptions import ApplicationError
+from temporalio.testing import ActivityEnvironment
 
 from moonmind.workflows.executions.repository_contract import (
     REPOSITORY_SETUP_REQUIRED,
@@ -205,29 +207,38 @@ def _snapshot(inputs):
     return parameters, snapshot
 
 
-async def _dispatch(tool, inputs, service):
-    """One mm.tool.execute attempt through the worker's real dispatch owner."""
+async def _dispatch(tool, inputs, service, *, attempt=None):
+    """One mm.tool.execute attempt through the worker's real dispatch owner.
+
+    ``attempt`` runs the activity itself as that Temporal retry attempt.
+    """
 
     dispatcher = SkillActivityDispatcher()
     register_gitlab_merge_request_tool_handler(dispatcher, tool=tool)
     _parameters, snapshot = _snapshot(inputs)
-    return await TemporalSkillActivities(
+    activities = TemporalSkillActivities(
         dispatcher=dispatcher, artifact_service=service
-    )._execute_skill_invocation(
-        invocation_payload={
+    )
+    invocation = {
+        "invocation_payload": {
             "id": "gitlab",
             "tool": {"type": "skill", "name": TOOL_NAME},
             "inputs": inputs,
         },
-        registry_snapshot=snapshot,
-        principal="system:workflow-owner",
-        context={
+        "registry_snapshot": snapshot,
+        "principal": "system:workflow-owner",
+        "context": {
             "namespace": "default",
             "workflow_id": WORKFLOW_ID,
             "run_id": "run-1",
             "node_id": "gitlab",
         },
-    )
+    }
+    if attempt is None:
+        return await activities._execute_skill_invocation(**invocation)
+    environment = ActivityEnvironment()
+    environment.info = dataclasses.replace(environment.info, attempt=attempt)
+    return await environment.run(activities.mm_tool_execute, **invocation)
 
 
 async def _records(service) -> list[dict]:
@@ -486,6 +497,8 @@ async def test_cross_instance_redirect_and_expired_credential_are_bounded(tmp_pa
     assert [r.url.host for r in redirecting.requests] == ["gitlab.example.com"]
     assert expired_result.status == "FAILED"
     assert expired_result.outputs["error"]["code"] == "gitlab_token_expired"
+    # A first attempt stopped by its reads never reached the note.
+    assert expired_result.outputs["note"]["deliveryState"] == "not_attempted"
     assert expired.posts == []
 
 
@@ -502,7 +515,12 @@ async def test_expired_credential_during_note_reconciliation_stays_visible(tmp_p
 
     assert result.status == "FAILED"
     assert result.outputs["error"]["code"] == "gitlab_token_expired"
-    assert result.outputs["note"]["deliveryState"] == "not_delivered"
+    # A refused footer lookup cannot show that a restarted step's note is absent.
+    note = result.outputs["note"]
+    assert note["deliveryState"] == "uncertain"
+    assert note["reason"] == "note_lookup_refused"
+    next_action = note["automationHandoff"]["nextAction"]
+    assert next_action["inputs"]["note"]["operationId"] == note["operationId"]
     assert expired.posts == []
 
 
@@ -581,6 +599,107 @@ async def test_lost_ack_and_restart_reconcile_page_two_footer_without_duplicate(
     assert states == ["reconciled", "uncertain"]
     uncertain = next(r for r in records if r["note"]["deliveryState"] == "uncertain")
     assert uncertain["note"]["reason"] == "acknowledgment_lost"
+    handoff = uncertain["note"]["automationHandoff"]
+    assert handoff["nextAction"]["inputs"]["note"]["operationId"] == (
+        uncertain["note"]["operationId"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("refusal", "code"),
+    [("expired", "gitlab_token_expired"), ("redirect", "gitlab_identity_rejected")],
+)
+async def test_lost_ack_then_refused_lookup_keeps_the_landed_note_uncertain(
+    tmp_path, refusal, code
+):
+    gitlab = _GitLab()
+    gitlab.post_status = 502
+
+    def _refuse_lookup_after_post(request: httpx.Request) -> httpx.Response:
+        if gitlab.posts and request.url.path == f"{MR_PATH}/notes":
+            gitlab.requests.append(request)
+            if refusal == "expired":
+                return httpx.Response(401, json={"message": "expired"})
+            return httpx.Response(302, headers={"location": "https://evil.example/n"})
+        return gitlab(request)
+
+    inputs = _inputs(read=[], note={"body": "Summary"})
+    async with temporal_db(tmp_path) as session:
+        service = _service(session, tmp_path)
+        with pytest.raises(ApplicationError) as lost:
+            await _dispatch(
+                _tool(_refuse_lookup_after_post, _Secrets()), inputs, service
+            )
+        assert lost.value.non_retryable is False
+        # Temporal's retry runs on a fresh worker, handler, and adapter.
+        retried = await _dispatch(
+            _tool(_refuse_lookup_after_post, _Secrets()), inputs, service, attempt=2
+        )
+        records = await _records(service)
+
+    # The first POST landed; the refused lookup authorizes no second one.
+    assert [note["id"] for note in gitlab.notes] == [5000]
+    assert len(gitlab.posts) == 1
+    assert retried.status == "FAILED"
+    assert retried.outputs["error"]["code"] == code
+    note = retried.outputs["note"]
+    assert note["deliveryState"] == "uncertain"
+    assert note["reason"] == "note_lookup_refused"
+    handoff = note["automationHandoff"]
+    assert handoff["operation_id"] == note["operationId"]
+    assert handoff["nextAction"]["tool"] == TOOL_NAME
+    assert handoff["nextAction"]["inputs"]["note"]["operationId"] == note["operationId"]
+    record = next(r for r in records if r["error"] is not None)
+    assert record["outcome"] == "uncertain"
+    assert record["note"]["operationId"] == note["operationId"]
+    assert record["note"]["body"] == "Summary"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("continuation", ["activity_retry", "explicit_operation"])
+async def test_retried_operation_stopped_before_lookup_stays_uncertain(
+    tmp_path, continuation
+):
+    gitlab = _GitLab()
+    gitlab.post_status = 502
+    inputs = _inputs(read=["mr"], note={"body": "Summary"})
+    async with temporal_db(tmp_path) as session:
+        service = _service(session, tmp_path)
+        with pytest.raises(ApplicationError):
+            await _dispatch(_tool(gitlab, _Secrets()), inputs, service)
+        (first,) = await _records(service)
+        operation_id = first["note"]["operationId"]
+        gitlab.status_for[MR_PATH] = 401
+        if continuation == "activity_retry":
+            retried = await _dispatch(
+                _tool(gitlab, _Secrets()), inputs, service, attempt=2
+            )
+        else:
+            # The handoff's continuation, from the durable result record.
+            retried = await _dispatch(
+                _tool(gitlab, _Secrets()),
+                _inputs(
+                    read=["mr"],
+                    note={"body": first["note"]["body"], "operationId": operation_id},
+                ),
+                service,
+            )
+        records = await _records(service)
+
+    assert len(gitlab.posts) == 1
+    assert retried.status == "FAILED"
+    assert retried.outputs["error"]["code"] == "gitlab_token_expired"
+    note = retried.outputs["note"]
+    assert note["operationId"] == operation_id
+    assert note["deliveryState"] == "uncertain"
+    assert note["reason"] == "reconciliation_not_reached"
+    assert note["automationHandoff"]["nextAction"]["inputs"]["note"] == {
+        "operationId": operation_id
+    }
+    record = next(r for r in records if r["error"] is not None)
+    assert record["outcome"] == "uncertain"
+    assert record["note"]["body"] == "Summary"
 
 
 @pytest.mark.asyncio
