@@ -305,6 +305,15 @@ orchestrator. The runtime adapter contributes these Claude-specific values:
 | Static service | `omnigent-host-claude` |
 | Readiness | exact-host Claude auth status plus matching generation and harness registration |
 
+A stored Claude login ends once its refresh token expires, which can happen
+while the profile sits unused; Claude Code then clears both tokens. When a
+launched host registers `claude-native` as `needs-auth`, MoonMind inspects the
+mounted home before cleanup. If it holds neither an unexpired access token nor
+an unexpired refresh token, the profile's current credential generation is
+marked `validation_failed`, so Settings offers `Connect with Claude OAuth` and
+new runs wait for validation instead of launching hosts. Any other `needs-auth`
+keeps the host's own verdict.
+
 Everything else is provider neutral: profile capacity, provider and host
 leases, deterministic on-demand ownership, static/on-demand policy,
 WorkspaceLocator resolution, bridge authorization, session identity, evidence
