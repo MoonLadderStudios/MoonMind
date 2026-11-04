@@ -27,6 +27,9 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from moonmind.workflows.temporal import github_issue_reconciliation as recon
+from moonmind.workflows.temporal.github_issue_attempts import (
+    OUTCOME_RUNTIME_UNAVAILABLE,
+)
 
 _PENDING_FILENAME = "pending_sync.json"
 _LAST_RUN_FILENAME = "last_run.json"
@@ -445,11 +448,11 @@ def _preservation_evidence_from_handoff(
             "revision": _string(preserved.get("savedSha")),
             "preservation_verified": True,
         }
-    # ``no_work`` is the canonical attempt outcome
-    # (``github_issue_attempts.ATTEMPT_OUTCOMES``). Matching any other
-    # spelling here silently withholds the explicit no-work evidence that a
-    # released attempt needs to pass the preservation gate.
-    if _string(newest.get("outcome")) == "no_work":
+    # A launch failure produces no work too, but uses a distinct outcome to
+    # preserve its cooldown without charging the issue's retry allowance.
+    # Both outcomes are emitted only after the finalizer verifies no work;
+    # writer-stop and mutation-settlement checks still gate the transition.
+    if _string(newest.get("outcome")) in {"no_work", OUTCOME_RUNTIME_UNAVAILABLE}:
         return {"save_method": "explicit_no_work", "trustworthy_no_work": True}
     return {}
 
